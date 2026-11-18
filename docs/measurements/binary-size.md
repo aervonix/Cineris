@@ -1,6 +1,6 @@
 # The shipped binary's size
 
-What the shipped binary (`cortex`, the `dist` profile) is made of, what each way of making it smaller saves and costs, and what step 33's size fix did ([decision 0036](../decisions/0036-the-shipped-binary-is-optimised-for-size.md)). Measured on 2026-11-16: the size study (read-only, at `main` `c225d64`, after step 23), then the fix, before and after, on the desk and on both hosted runners.
+What the shipped binary (`cineris`, the `dist` profile) is made of, what each way of making it smaller saves and costs, and what step 33's size fix did ([decision 0036](../decisions/0036-the-shipped-binary-is-optimised-for-size.md)). Measured on 2026-11-16: the size study (read-only, at `main` `c225d64`, after step 23), then the fix, before and after, on the desk and on both hosted runners.
 
 ## Method
 
@@ -53,7 +53,7 @@ Release build, desk, three rounds, against `opt-level = 3`:
 
 ### The cost of unwinding (a correction to decision 0012)
 
-[Decision 0012](../decisions/0012-release-profile.md) chose `panic = "unwind"` on a measured cost of 0.17 to 0.27 MB (2.5 to 3.7%), on a spike with the core dependency set. On the real binary it costs **2.2 MB on Linux** (2,166,784 bytes on musl, 2,164,720 on the desk's gnu build) and **6.5 MB on Windows** (6,457,856 bytes, a third of the binary): 8 to 25 times the spike's figure. The owner kept unwinding, and left decision 0012 as it is; this page holds the correction. What abort would cost: every `catch_unwind` in shipped code (the agent's tool boundary in `cortex-agent`'s `guarded.rs`, the interface's two catches, the repository map's three, `cortex-tools`' `blocking.rs` and process capture, `cortex-term` on Unix) would stop catching, and a panic in a Tokio task or in the highlighter's thread would end the process.
+[Decision 0012](../decisions/0012-release-profile.md) chose `panic = "unwind"` on a measured cost of 0.17 to 0.27 MB (2.5 to 3.7%), on a spike with the core dependency set. On the real binary it costs **2.2 MB on Linux** (2,166,784 bytes on musl, 2,164,720 on the desk's gnu build) and **6.5 MB on Windows** (6,457,856 bytes, a third of the binary): 8 to 25 times the spike's figure. The owner kept unwinding, and left decision 0012 as it is; this page holds the correction. What abort would cost: every `catch_unwind` in shipped code (the agent's tool boundary in `cineris-agent`'s `guarded.rs`, the interface's two catches, the repository map's three, `cineris-tools`' `blocking.rs` and process capture, `cineris-term` on Unix) would stop catching, and a panic in a Tokio task or in the highlighter's thread would end the process.
 
 ## What it is made of (`c225d64`, desk gnu, 16.1 MB)
 
@@ -62,7 +62,7 @@ Release build, desk, three rounds, against `opt-level = 3`:
 - **Read-only data, 1.60 MB (10%):** syntect's grammars 368 KB; ring's tables about 180 KB; `encoding_rs`'s CJK tables 118 KB; panic-location source paths 92 KB (66 KB of them the registry's and the standard library's); other text 323 KB.
 - **Position-independent relocations and pointer tables, 0.79 MB.**
 - **By owner:** our crates 6.65 MB; third-party 5.1 MB; the standard library 0.79 MB.
-- **The largest crates:** `cortex-tools` 793 KB, `cortex-core` 715 KB, `cortex-tui` 643 KB, `cortex-protocol` 633 KB, `tokio` 629 KB, `cortex-llm` 563 KB, `cortex-session` 538 KB, `cortex-agent` 525 KB, `ring` about 520 KB, `cortex-stats` 487 KB, `cortex-config` 479 KB, `regex-automata` 470 KB, `rustls` 446 KB, `serde_json` 384 KB.
+- **The largest crates:** `cineris-tools` 793 KB, `cineris-core` 715 KB, `cineris-tui` 643 KB, `cineris-protocol` 633 KB, `tokio` 629 KB, `cineris-llm` 563 KB, `cineris-session` 538 KB, `cineris-agent` 525 KB, `ring` about 520 KB, `cineris-stats` 487 KB, `cineris-config` 479 KB, `regex-automata` 470 KB, `rustls` 446 KB, `serde_json` 384 KB.
 
 ## Growth by commit
 
@@ -72,11 +72,11 @@ Desk gnu, Linux musl and Windows bytes, each against the commit before.
 |---|---:|---:|---:|---|
 | `d050503` | 14,111,096 | 14,246,888 | 16,882,688 | The base |
 | `bd2e6a1` | +9,968 | 0 | +8,192 | |
-| `e1ac07a` | +63,952 | | | Step 23's first part, before the binary was wired: configuration keys (`cortex-config` +30 KB, `toml` +13 KB) |
-| `a1f19cf` | +1,439,000 | | | "Start interactive mode in the binary": highlighting about +510 KB (grammars 368,467, syntect 62 KB, fancy-regex 61 KB, flate2, miniz and bincode 20 KB), `cortex-tui` +478 KB, `cortex-term` +63 KB, the binary +56 KB, the protocol +29 KB, std +47 KB, unwinding tables +102 KB, relocations +35 KB |
+| `e1ac07a` | +63,952 | | | Step 23's first part, before the binary was wired: configuration keys (`cineris-config` +30 KB, `toml` +13 KB) |
+| `a1f19cf` | +1,439,000 | | | "Start interactive mode in the binary": highlighting about +510 KB (grammars 368,467, syntect 62 KB, fancy-regex 61 KB, flate2, miniz and bincode 20 KB), `cineris-tui` +478 KB, `cineris-term` +63 KB, the binary +56 KB, the protocol +29 KB, std +47 KB, unwinding tables +102 KB, relocations +35 KB |
 | `9baacb6` | +34,640 | | +1,732,096 (step 23's first part in all) | |
 | `de5a686` | +64 | | | |
-| `c225d64` | +456,048 | +462,848 | +603,136 | Step 23's second part: `cortex-tui` +142 KB, core +51 KB, tokio +43 KB, the binary +34 KB, the protocol +33 KB, std +26 KB, policy +22 KB, tools +10 KB, unwinding +49 KB |
+| `c225d64` | +456,048 | +462,848 | +603,136 | Step 23's second part: `cineris-tui` +142 KB, core +51 KB, tokio +43 KB, the binary +34 KB, the protocol +33 KB, std +26 KB, policy +22 KB, tools +10 KB, unwinding +49 KB |
 
 Wave 11 in all: +2.00 MB on Linux (+14%), +2.34 MB on Windows.
 
@@ -104,7 +104,7 @@ Each figure is a median, then a 95th or 99th percentile where the budget is one,
 
 | Measure | Budget | Desk, before → after | Linux runner, before → after | Windows runner, before → after |
 |---|---|---|---|---|
-| Start to first frame, the real binary (`perf_start_to_first_frame_under_both_names`, `cortex`, 30 runs), median / 95th | 20 / 50 / 120 | 1.89 / 2.00 → **1.55 / 1.88** | 3.45 / 3.53 → **2.94 / 3.14** | 9.92 / 21.82 → **0.00 / 23.61** (ConPTY: see below) |
+| Start to first frame, the real binary (`perf_start_to_first_frame_under_both_names`, `cineris`, 30 runs), median / 95th | 20 / 50 / 120 | 1.89 / 2.00 → **1.55 / 1.88** | 3.45 / 3.53 → **2.94 / 3.14** | 9.92 / 21.82 → **0.00 / 23.61** (ConPTY: see below) |
 | Start to first frame, the terminal demo (`cargo xtask perf`), median / 95th | as above | 0.48 / 0.55 → **0.47 / 0.54** | 1.21 / 1.31 → **0.97 / 1.10** | 25.87 / 32.12 → **24.11 / 33.56** |
 | A key to its frame, idle, the real binary, median / 99th | 2 at the 99th (the harness's share under ConPTY) | 0.09 / 0.19 → **0.08 / 0.24** | 0.09 / 0.14 → **0.10 / 0.15** | 15.56 / 23.75 → **15.66 / 22.98** (ConPTY's ~16 ms) |
 | The editor's key, idle, the harness's share, 99th | 2 | 0.06 → **0.05** | 0.08 → **0.08** | 0.15 → **0.12** |
@@ -115,8 +115,8 @@ Each figure is a median, then a 95th or 99th percentile where the budget is one,
 | The map's warm pass on the pinned real-code corpus, nothing changed (pass and map together) | 150 | 25.9 → **28.4** (+10%) | 62.5 → **63.6** | 91.9 → **73.8** |
 | The map alone, from the cache on the disk | none | 9.0 → **8.7** | 13.8 → **15.6** | 18.2 → **15.9** |
 | **Decoding** a 5.7 MB stream through the SSE parser and the Anthropic decoder: 20,000 text deltas and a 1 MB tool call (`perf_decoding_a_long_answer_and_a_large_tool_call`, new) | none | 18.14 (315 MB/s) → **20.75** (275 MB/s, +14%) | 29.43 (194 MB/s) → **34.37** (166 MB/s, +17%) | 41.01 (139 MB/s) → **37.17** (154 MB/s) |
-| `cortex --version`, the `dist` binary, median / 95th | 5 / 15 / 50 | 0.53 / 0.60 → **0.48 / 0.59** | 1.01 / 1.09 → **1.24 / 1.40** | 6.27 / 6.85 → **4.82 / 5.09** |
-| Headless `cortex -p` to its request, the `dist` binary, median / 95th | 15 / 40 / 100 | 12.53 / 17.27 → **12.86 / 13.67** | 7.85 / 8.72 → **10.23 / 12.13** | 18.87 / 19.72 → **14.59 / 16.21** |
+| `cineris --version`, the `dist` binary, median / 95th | 5 / 15 / 50 | 0.53 / 0.60 → **0.48 / 0.59** | 1.01 / 1.09 → **1.24 / 1.40** | 6.27 / 6.85 → **4.82 / 5.09** |
+| Headless `cineris -p` to its request, the `dist` binary, median / 95th | 15 / 40 / 100 | 12.53 / 17.27 → **12.86 / 13.67** | 7.85 / 8.72 → **10.23 / 12.13** | 18.87 / 19.72 → **14.59 / 16.21** |
 
 What the table shows:
 
@@ -133,4 +133,4 @@ The perf tools build in `release` (`cargo xtask perf`, the `perf_` tests, `try -
 
 ## The outlook (the study)
 
-At `opt-level = 3` with unwinding, steps 24 to 34 were expected to add about 4.5 to 6 MB on Linux (to 20.5 to 22 MB) and about 1.3 times that on Windows (25 to 27 MB): steps 24 and 25 about 0.45 MB each, 27 0.3 to 0.5, 28 (QuickJS and `cortex-ext`) 1.3 to 1.6, 29 0.2 to 0.3, 30 (`rmcp` and `cortex-mcp`) 1.3 to 2.5, 32 to 34 0.2. At "s", our own code shrinks by about a quarter: step 34 near 14.5 to 16.3 MB on Linux and 17 to 19 MB on Windows. `panic = "abort"` stays in reserve for Windows.
+At `opt-level = 3` with unwinding, steps 24 to 34 were expected to add about 4.5 to 6 MB on Linux (to 20.5 to 22 MB) and about 1.3 times that on Windows (25 to 27 MB): steps 24 and 25 about 0.45 MB each, 27 0.3 to 0.5, 28 (QuickJS and `cineris-ext`) 1.3 to 1.6, 29 0.2 to 0.3, 30 (`rmcp` and `cineris-mcp`) 1.3 to 2.5, 32 to 34 0.2. At "s", our own code shrinks by about a quarter: step 34 near 14.5 to 16.3 MB on Linux and 17 to 19 MB on Windows. `panic = "abort"` stays in reserve for Windows.

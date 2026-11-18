@@ -1,6 +1,6 @@
 `/reload --now`, which would begin a new context epoch at once so that the keys waiting for one take effect, is not built.
 
-- Area: cortex-core
+- Area: cineris-core
 - Owner: a later step that adds an epoch on request to the loop
 
 | Item | Who | When |

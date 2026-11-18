@@ -1,6 +1,6 @@
 Text artifacts are redacted line by line, so a PEM private key is masked on one line only.
 
-- Area: cortex-session
+- Area: cineris-session
 - Owner: step 32
 
 | Item | Who | When |

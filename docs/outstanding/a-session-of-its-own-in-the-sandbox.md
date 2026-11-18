@@ -1,6 +1,6 @@
 `setsid` is faked in the sandbox, breaking terminal-making programs; a subreaper and cgroup kill would allow it.
 
-- Area: cortex-sandbox
+- Area: cineris-sandbox
 - Owner: step 32
 
 | Item | Who | When |

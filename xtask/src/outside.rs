@@ -4,12 +4,12 @@
 //!
 //! # `live` and `record`
 //!
-//! Both run ignored tests of `cortex-llm` (the `live` module of each
+//! Both run ignored tests of `cineris-llm` (the `live` module of each
 //! protocol's tests), which is where the HTTP client is. Doing it here
 //! would mean building the whole HTTP and TLS stack into this crate, which
 //! every CI job builds before it does anything else. For Anthropic, `live`
 //! then runs the one live run of the whole harness: an ignored system test
-//! of `cortex-cli` that starts the real binary headless (step 13b).
+//! of `cineris-cli` that starts the real binary headless (step 13b).
 //!
 //! Each takes the provider to talk to ([`PROVIDERS`]); without one it is
 //! Anthropic. The API key is never an argument and never in the
@@ -41,14 +41,14 @@ struct LiveProvider {
     name: &'static str,
     /// The environment variable that names the file its API key is in.
     key_file: &'static str,
-    /// Its smoke test and its recorder: ignored tests of `cortex-llm`.
+    /// Its smoke test and its recorder: ignored tests of `cineris-llm`.
     smoke: &'static str,
     record: &'static str,
     /// The free check of its usage endpoint, `live --refresh`: an ignored
-    /// test of `cortex-llm`. `None` for a provider with no endpoint.
+    /// test of `cineris-llm`. `None` for a provider with no endpoint.
     refresh: Option<&'static str>,
     /// Headless runs of the real binary against it: ignored tests of
-    /// `cortex-cli`'s system tests (`tests/system/live.rs`). `live` runs
+    /// `cineris-cli`'s system tests (`tests/system/live.rs`). `live` runs
     /// the first after the smoke test; `live --headless` runs them all.
     headless: &'static [&'static str],
 }
@@ -58,7 +58,7 @@ struct LiveProvider {
 const PROVIDERS: &[LiveProvider] = &[
     LiveProvider {
         name: "anthropic",
-        key_file: "CORTEX_LIVE_ANTHROPIC_KEY_FILE",
+        key_file: "CINERIS_LIVE_ANTHROPIC_KEY_FILE",
         smoke: "anthropic::live::live_smoke",
         record: "anthropic::live::live_record",
         refresh: None,
@@ -70,7 +70,7 @@ const PROVIDERS: &[LiveProvider] = &[
     },
     LiveProvider {
         name: "openrouter",
-        key_file: "CORTEX_LIVE_OPENROUTER_KEY_FILE",
+        key_file: "CINERIS_LIVE_OPENROUTER_KEY_FILE",
         smoke: "openai_chat::live::live_smoke_openrouter",
         record: "openai_chat::live::live_record_openrouter",
         refresh: Some("openai_chat::live::live_refresh_openrouter"),
@@ -78,7 +78,7 @@ const PROVIDERS: &[LiveProvider] = &[
     },
     LiveProvider {
         name: "deepseek",
-        key_file: "CORTEX_LIVE_DEEPSEEK_KEY_FILE",
+        key_file: "CINERIS_LIVE_DEEPSEEK_KEY_FILE",
         smoke: "openai_chat::live::live_smoke_deepseek",
         record: "openai_chat::live::live_record_deepseek",
         refresh: Some("openai_chat::live::live_refresh_deepseek"),
@@ -86,7 +86,7 @@ const PROVIDERS: &[LiveProvider] = &[
     },
     LiveProvider {
         name: "venice",
-        key_file: "CORTEX_LIVE_VENICE_KEY_FILE",
+        key_file: "CINERIS_LIVE_VENICE_KEY_FILE",
         smoke: "openai_chat::live::live_smoke_venice",
         record: "openai_chat::live::live_record_venice",
         refresh: Some("openai_chat::live::live_refresh_venice"),
@@ -108,18 +108,18 @@ fn live_provider(name: &str) -> Result<&'static LiveProvider> {
 }
 
 /// The environment variable the recorder reads its scenarios from.
-const SCENARIOS: &str = "CORTEX_LIVE_SCENARIOS";
+const SCENARIOS: &str = "CINERIS_LIVE_SCENARIOS";
 
 /// Set for a dry run: requests are built and printed, and none is sent.
-const DRY_RUN: &str = "CORTEX_LIVE_DRY_RUN";
+const DRY_RUN: &str = "CINERIS_LIVE_DRY_RUN";
 
 /// The file each live call's spend is added to, as a line of JSON.
-const LEDGER: &str = "CORTEX_LIVE_LEDGER";
+const LEDGER: &str = "CINERIS_LIVE_LEDGER";
 
 /// What a dry run prints when it has printed its request.
 const DRY_RUN_ENDED: &str = "dry run: nothing was sent.";
 
-/// Where the spend ledger is: `CORTEX_LIVE_LEDGER` if it is set, or a file
+/// Where the spend ledger is: `CINERIS_LIVE_LEDGER` if it is set, or a file
 /// in the user's state directory, outside every repository. On the desktop
 /// that `rx` runs on, the ledger is the desktop's.
 fn ledger() -> Result<std::path::PathBuf> {
@@ -137,9 +137,10 @@ fn ledger() -> Result<std::path::PathBuf> {
                     .map(|home| std::path::Path::new(&home).join(".local").join("state"))
             })
     };
-    let base = base
-        .ok_or("there is no state directory to keep the spend ledger in: set CORTEX_LIVE_LEDGER")?;
-    let directory = base.join("cortex-live");
+    let base = base.ok_or(
+        "there is no state directory to keep the spend ledger in: set CINERIS_LIVE_LEDGER",
+    )?;
+    let directory = base.join("cineris-live");
     fs::create_dir_all(&directory)
         .map_err(|error| format!("could not create {}: {error}", directory.display()))?;
     Ok(directory.join("spend.jsonl"))
@@ -235,25 +236,25 @@ fn spent(text: &str, since: Option<&str>) -> String {
 }
 
 /// The fuzz targets, and the fixtures each one starts from, a directory
-/// under the repository: a protocol's recorded streams in `cortex-llm`, the
-/// outline extractors' sample files in `cortex-index` (since the fixes of
+/// under the repository: a protocol's recorded streams in `cineris-llm`, the
+/// outline extractors' sample files in `cineris-index` (since the fixes of
 /// step 18's review), or the lines a client sends the RPC server in
-/// `cortex-rpc` (since step 27).
+/// `cineris-rpc` (since step 27).
 const FUZZ_TARGETS: &[(&str, &str)] = &[
     (
         "sse_parser",
-        "crates/cortex-llm/fixtures/anthropic-messages",
+        "crates/cineris-llm/fixtures/anthropic-messages",
     ),
     (
         "anthropic_decoder",
-        "crates/cortex-llm/fixtures/anthropic-messages",
+        "crates/cineris-llm/fixtures/anthropic-messages",
     ),
     (
         "openai_chat_decoder",
-        "crates/cortex-llm/fixtures/openai-chat",
+        "crates/cineris-llm/fixtures/openai-chat",
     ),
-    ("extractors", "crates/cortex-index/fixtures/outlines"),
-    ("rpc_decoder", "crates/cortex-rpc/fixtures/lines"),
+    ("extractors", "crates/cineris-index/fixtures/outlines"),
+    ("rpc_decoder", "crates/cineris-rpc/fixtures/lines"),
 ];
 
 /// How long each fuzz target runs when no time is given, in seconds.
@@ -280,7 +281,7 @@ fn require_key_file_in(
     }
 }
 
-/// Runs one ignored test of `cortex-llm`'s integration binary, and shows
+/// Runs one ignored test of `cineris-llm`'s integration binary, and shows
 /// its output.
 ///
 /// A test that was renamed is a test that does not run: cargo then runs
@@ -291,7 +292,7 @@ fn ignored_test(name: &str, variables: &[(&str, &str)]) -> Result<()> {
     run_ignored(
         &[
             "--package",
-            "cortex-llm",
+            "cineris-llm",
             "--features",
             "http",
             "--test",
@@ -473,7 +474,7 @@ pub(crate) fn live(arguments: &[String]) -> Result<()> {
     // The headless run of the binary adds its spend to the same ledger.
     match provider.headless.first() {
         Some(test) => run_ignored(
-            &["--package", "cortex-cli", "--test", "system"],
+            &["--package", "cineris-cli", "--test", "system"],
             test,
             &[(name, &path)],
         ),
@@ -482,7 +483,7 @@ pub(crate) fn live(arguments: &[String]) -> Result<()> {
 }
 
 /// The test binary the headless live tests are in.
-const HEADLESS_SELECTION: [&str; 4] = ["--package", "cortex-cli", "--test", "system"];
+const HEADLESS_SELECTION: [&str; 4] = ["--package", "cineris-cli", "--test", "system"];
 
 /// What `live --headless` was asked to run.
 #[derive(Debug)]
@@ -612,7 +613,7 @@ fn headless_tests(
 /// nothing and sends nothing.
 fn headless_dry_run(chosen: &Headless, var: impl Fn(&str) -> Option<std::ffi::OsString>) -> String {
     let variable = format!(
-        "CORTEX_LIVE_{}_KEY_FILE",
+        "CINERIS_LIVE_{}_KEY_FILE",
         chosen.provider.name.to_ascii_uppercase()
     );
     let mut text = format!(
@@ -666,7 +667,7 @@ pub(crate) fn record(arguments: &[String]) -> Result<()> {
         return run_ignored_with(
             &[
                 "--package",
-                "cortex-llm",
+                "cineris-llm",
                 "--features",
                 "http",
                 "--test",
@@ -682,7 +683,7 @@ pub(crate) fn record(arguments: &[String]) -> Result<()> {
     ignored_test(provider.record, &[(SCENARIOS, &scenarios), (name, &path)])
 }
 
-/// The system test of `cortex-cli` that keeps the tools the binary sends
+/// The system test of `cineris-cli` that keeps the tools the binary sends
 /// each provider (`docs/testing-and-ci.md`, "The toolbox fixtures").
 const TOOLBOX_CAPTURE: &str =
     "tools::sys_the_toolbox_the_binary_sends_is_the_one_its_fixtures_were_recorded_with";
@@ -710,7 +711,7 @@ fn record_toolbox(arguments: &[String]) -> Result<()> {
     };
     if chosen.is_empty() {
         return Err(
-            "no provider's key file is named in the environment (CORTEX_LIVE_<PROVIDER>_KEY_FILE), \
+            "no provider's key file is named in the environment (CINERIS_LIVE_<PROVIDER>_KEY_FILE), \
              so nothing would be recorded. Nothing was sent."
                 .to_owned(),
         );
@@ -725,9 +726,9 @@ fn record_toolbox(arguments: &[String]) -> Result<()> {
         names.join(", ")
     );
     run_test(
-        &["--package", "cortex-cli", "--test", "system"],
+        &["--package", "cineris-cli", "--test", "system"],
         TOOLBOX_CAPTURE,
-        &[("CORTEX_UPDATE_TOOLBOX", &names.join(","))],
+        &[("CINERIS_UPDATE_TOOLBOX", &names.join(","))],
         false,
     )?;
     let (name, path) = ledger_variable()?;
@@ -1020,12 +1021,12 @@ not a line of the ledger
         let none = |_: &str| None;
         let error = super::headless_tests(&[], none).unwrap_err();
         assert!(
-            error.contains("CORTEX_LIVE_ANTHROPIC_KEY_FILE is not set"),
+            error.contains("CINERIS_LIVE_ANTHROPIC_KEY_FILE is not set"),
             "{error}"
         );
         assert!(error.contains("Nothing was sent"), "{error}");
         let error = super::headless_tests(&strings(&["deepseek"]), none).unwrap_err();
-        assert!(error.contains("CORTEX_LIVE_DEEPSEEK_KEY_FILE"), "{error}");
+        assert!(error.contains("CINERIS_LIVE_DEEPSEEK_KEY_FILE"), "{error}");
         let error = super::headless_tests(&strings(&["venice"]), none).unwrap_err();
         assert!(
             error.contains("no headless live test against `venice`"),
@@ -1035,7 +1036,7 @@ not a line of the ledger
 
         // With one, every headless test of the provider.
         let named = |name: &str| {
-            (name == "CORTEX_LIVE_ANTHROPIC_KEY_FILE").then(|| std::ffi::OsString::from("k"))
+            (name == "CINERIS_LIVE_ANTHROPIC_KEY_FILE").then(|| std::ffi::OsString::from("k"))
         };
         let chosen = super::headless_tests(&[], named).unwrap();
         assert_eq!(chosen.provider.name, "anthropic");
@@ -1059,7 +1060,7 @@ not a line of the ledger
                 .collect()
         };
         let named = |name: &str| {
-            (name == "CORTEX_LIVE_ANTHROPIC_KEY_FILE").then(|| std::ffi::OsString::from("k"))
+            (name == "CINERIS_LIVE_ANTHROPIC_KEY_FILE").then(|| std::ffi::OsString::from("k"))
         };
         let none = |_: &str| None;
         let tests = |arguments: &[&str]| {
@@ -1105,26 +1106,26 @@ not a line of the ledger
         let text = super::headless_dry_run(&chosen, none);
         assert!(
             text.contains(
-                "would run: cargo test --locked --package cortex-cli --test system -- --ignored \
+                "would run: cargo test --locked --package cineris-cli --test system -- --ignored \
                  --exact live::live_headless_compaction --nocapture"
             ),
             "{text}"
         );
         assert!(text.contains("nothing built or sent"), "{text}");
         assert!(
-            text.contains("CORTEX_LIVE_ANTHROPIC_KEY_FILE is not set"),
+            text.contains("CINERIS_LIVE_ANTHROPIC_KEY_FILE is not set"),
             "{text}"
         );
         assert!(!text.contains("live_headless_run "), "{text}");
         assert!(super::headless_dry_run(&chosen, named).contains("is set"));
     }
 
-    /// Every ignored test of `cortex-cli`'s `tests/system/live.rs` is one
+    /// Every ignored test of `cineris-cli`'s `tests/system/live.rs` is one
     /// that `live --headless` runs: a new one is not left to be run by hand.
     #[test]
     fn every_headless_live_test_has_a_command() {
         let source = std::fs::read_to_string(
-            crate::workspace::root().join("crates/cortex-cli/tests/system/live.rs"),
+            crate::workspace::root().join("crates/cineris-cli/tests/system/live.rs"),
         )
         .unwrap();
         let mut in_file: Vec<String> = Vec::new();
@@ -1163,7 +1164,7 @@ not a line of the ledger
         let arguments = strings(&["text", "--provider", "deepseek", "switch"]);
         let (provider, scenarios) = record_arguments(&arguments).unwrap();
         assert_eq!(provider.name, "deepseek");
-        assert_eq!(provider.key_file, "CORTEX_LIVE_DEEPSEEK_KEY_FILE");
+        assert_eq!(provider.key_file, "CINERIS_LIVE_DEEPSEEK_KEY_FILE");
         assert_eq!(scenarios, ["text", "switch"]);
         for bad in [&["--provider"][..], &["--provider", "openai"], &["--all"]] {
             assert!(record_arguments(&strings(bad)).is_err(), "{bad:?}");
@@ -1176,7 +1177,7 @@ not a line of the ledger
                 assert_ne!(provider.smoke, other.smoke);
                 assert_ne!(provider.record, other.record);
             }
-            assert!(provider.key_file.starts_with("CORTEX_LIVE_"));
+            assert!(provider.key_file.starts_with("CINERIS_LIVE_"));
             assert!(provider.key_file.ends_with("_KEY_FILE"));
         }
         assert!(live(&strings(&["openrouter", "deepseek"])).is_err());

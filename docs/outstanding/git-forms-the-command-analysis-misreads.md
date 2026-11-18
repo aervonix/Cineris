@@ -1,6 +1,6 @@
 The command analysis misses `git config` run through an alias, and misreads `git diff` outside a repository.
 
-- Area: cortex-policy
+- Area: cineris-policy
 - Owner: step 32
 
 | Item | Who | When |

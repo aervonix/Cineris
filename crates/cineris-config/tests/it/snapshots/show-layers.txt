@@ -1,0 +1,115 @@
+## default
+compat.instructions = true
+compat.mcp = true
+compat.skills = true
+config_version = 1
+context.auto_compact = true
+context.background = true
+context.compact_at = 0.85
+context.instruction_names = []
+context.instructions_cap = 49152
+context.keep_recent_tokens = 0
+context.prepare_at = 0.7
+credentials.store = "auto"
+index.map = true
+index.map_tokens = 1500
+index.max_file_bytes = 1048576
+index.max_files = 20000
+index.pass_time = "2s"
+managed.locked = []
+model.reasoning = "summary"
+model.speed = "standard"
+model.speed_cooldown = "10m"
+model.speed_cooldown_min = "1m"
+model.speed_fallback = true
+model.speed_wait = "20s"
+permissions.mode = "supervised"
+permissions.rules = []
+project.learn = true
+project.profile_tokens = 1500
+retry.attempts = 5
+retry.backoff_base = "1s"
+retry.backoff_cap = "30s"
+retry.backoff_factor = 2.0
+retry.first_event_timeout = "1m"
+retry.idle_timeout = "1m30s"
+retry.max_wait = "2m"
+rpc.approval_timeout = "10m"
+rpc.stalled_client = "30s"
+sandbox.enabled = true
+sandbox.network = "off"
+sandbox.protect = []
+sandbox.write = []
+session.durability = "item"
+shell.env_remove = []
+shell.max_timeout = "30m"
+shell.timeout = "2m"
+stats.enabled = true
+stats.retention = 3
+tui.density = "comfortable"
+tui.glyphs = "auto"
+tui.presenter = "inline"
+tui.prose_width = 80
+tui.reasoning = "summary"
+tui.reduced_motion = false
+tui.theme = "auto"
+tui.tool_detail = 12
+tui.tool_output = "auto"
+tui.turn_summary = false
+usage.ranges = "calendar"
+usage.refresh = []
+usage.week_start = "monday"
+verify.commands = []
+verify.mode = "auto"
+verify.round_time = "2m"
+verify.rounds = 2
+verify.turn_time = "4m"
+
+## managed
+managed.locked = ["sandbox.enabled"]  # managed: ~/managed/config.toml:3
+permissions.rules = [
+    { action = "deny", effect = "write", match = "/etc/**" },  # managed: ~/managed/config.toml:9
+]
+sandbox.enabled = true                # managed: ~/managed/config.toml:6
+sandbox.protect = [
+    "/srv/keys",                      # managed: ~/managed/config.toml:7
+]
+
+## user
+limits.day.cost = 20.0                      # user: ~/cineris/config.toml:29
+model.effort = "medium"                     # user: ~/cineris/config.toml:7
+model.fast = "claude-haiku-5-5"             # user: ~/cineris/config.toml:6
+model.main = "claude-opus-5-5"              # user: ~/cineris/config.toml:5
+model.roles.fast.speed = "standard"         # user: ~/cineris/config.toml:10
+permissions.rules = [
+    { action = "allow", effect = "exec", match = "cargo test *" },  # user: ~/cineris/config.toml:23
+]
+profile = "review"                          # user: ~/cineris/config.toml:2
+providers.local.base_url = "http://localhost:11434"  # user: ~/cineris/config.toml:13
+providers.local.first_event_timeout = "5m"  # user: ~/cineris/config.toml:14
+providers.local.headers = { Authorization = { env = "LOCAL_TOKEN" }, X-Team = "[redacted]" }  # user: ~/cineris/config.toml:15
+retry.attempts = 3                          # user: ~/cineris/config.toml:18
+sandbox.enabled = false                     # user: ~/cineris/config.toml:21
+tui.theme = "dusk"                          # user: ~/cineris/config.toml:36
+
+## project
+model.main = "claude-sonnet-5-5"  # project: ~/work/app/.cineris/config.toml:2
+permissions.rules = [
+    { action = "deny", effect = "write", match = "**/.env*" },  # project: ~/work/app/.cineris/config.toml:4
+]
+
+## project-local
+retry.max_wait = "1m"  # project-local: ~/work/app/.cineris/config.local.toml:2
+
+## profile
+model.effort = "high"           # profile review (user: ~/cineris/config.toml:32)
+model.reasoning = "none"        # profile review (project: ~/work/app/.cineris/config.toml:10)
+permissions.mode = "read-only"  # profile review (user: ~/cineris/config.toml:33)
+
+## environment
+log.level = "info,cineris_llm=debug"  # environment: CINERIS_LOG
+
+## command-line
+model.judge = "claude-opus-5-5"  # command-line: --judge-model
+model.speed_wait = "5s"          # command-line: -c model.speed_wait
+

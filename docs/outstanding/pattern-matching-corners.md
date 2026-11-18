@@ -1,6 +1,6 @@
 `NamePattern` lower-casing and user shell options (`dotglob`, `globstar`, `nocaseglob`) make the pattern analysis match differently from the shell.
 
-- Area: cortex-policy
+- Area: cineris-policy
 - Owner: step 32
 
 | Item | Who | When |

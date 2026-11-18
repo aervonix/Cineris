@@ -1,6 +1,6 @@
 # After step 13b: the command line and headless mode
 
-Step 13b built `cortex-cli`: the command line, headless mode with its three output formats and its exit codes, the subcommands, signals and the hidden guard subcommand, with 20 unit tests (21 on Windows), 24 system tests through the real binary (23 on Windows) and 2 live tests, ignored. It added the subcommands' functions and the shell's version cache to `cortex-core` (`manage`, `shell_cache`), the reduction of tools for a strict variant to `cortex-llm` (`strict`), the headless records to `cortex-protocol`, the schema validator to `cortex-testkit`, and `cargo xtask startup`. It adds one direct dependency, `lexopt`, and two packages to a Unix build through Tokio's `signal` (`signal-hook-registry`, `errno`).
+Step 13b built `cineris-cli`: the command line, headless mode with its three output formats and its exit codes, the subcommands, signals and the hidden guard subcommand, with 20 unit tests (21 on Windows), 24 system tests through the real binary (23 on Windows) and 2 live tests, ignored. It added the subcommands' functions and the shell's version cache to `cineris-core` (`manage`, `shell_cache`), the reduction of tools for a strict variant to `cineris-llm` (`strict`), the headless records to `cineris-protocol`, the schema validator to `cineris-testkit`, and `cargo xtask startup`. It adds one direct dependency, `lexopt`, and two packages to a Unix build through Tokio's `signal` (`signal-hook-registry`, `errno`).
 
 ## At a desk
 
@@ -11,7 +11,7 @@ The desktop, through `rx`; another session shares it, and whether it was buildin
 | `cargo xtask ci`, tier 1 (unit) | 7.5 s of 20 s |
 | `cargo xtask ci`, tier 2 (integration) | 19.7 s of 40 s |
 | `cargo xtask ci`, tier 3 (system) | 3.7 s of 60 s |
-| `cortex-cli`'s own tests | 0.5 s of test time: 21 unit tests, 24 system tests |
+| `cineris-cli`'s own tests | 0.5 s of test time: 21 unit tests, 24 system tests |
 
 ## On the pull request
 
@@ -34,9 +34,9 @@ Pull request 33, last run at `4fa9174` on 2026-11-13, rebased on main at `762031
 
 | | Linux | Windows |
 |---|---|---|
-| Tier 1: `cortex-cli`'s unit tests, `cortex-llm`'s `strict`, `cortex-core`'s `shell_cache`, `xtask`'s `startup` | 0.1 s | 0.2 s |
-| Tier 2: the trust test of `cortex-core` | 0.02 s | 0.1 s |
-| Tier 3: `cortex-cli`'s system tests | 1.6 s | 9.1 s |
+| Tier 1: `cineris-cli`'s unit tests, `cineris-llm`'s `strict`, `cineris-core`'s `shell_cache`, `xtask`'s `startup` | 0.1 s | 0.2 s |
+| Tier 2: the trust test of `cineris-core` | 0.02 s | 0.1 s |
+| Tier 3: `cineris-cli`'s system tests | 1.6 s | 9.1 s |
 
 - **Before the shell's version was kept, the same system tests were 11.1 s on a fast Windows runner and the tier 85.3 s of 90 s on a slow one** (a warning, 95%): every headless run of a test asked PowerShell its version. One run in between, with the version asked on the side but not yet waited for at shutdown, was over its budget (99.9 s of 90 s, a warning) because one test waited 30 s for a version that a short run never kept; the fix is in the last commit.
 - **The blocking checks stay under five minutes on both OSes:** 56 s on Linux and 138 s on Windows in the last run.
@@ -49,10 +49,10 @@ Pull request 33, last run at `4fa9174` on 2026-11-13, rebased on main at `762031
 
 | What | Linux runner | Windows runner, first measurement | Windows runner, with the version kept | Budget, Linux / Windows |
 |---|---:|---:|---:|---:|
-| `cortex --version` | 0.37 ms (0.43) | 8.01 ms (9.13) | 4.63 ms (5.12) | 15 / 50 ms |
-| `cx --version` | 0.36 ms (0.42) | 11.08 ms (12.21) | 5.87 ms (6.06) | 15 / 50 ms |
-| headless `cortex -p`, to its request | 8.58 ms (10.83) | **211.69 ms (237.53)** | 32.14 ms (60.48) | 40 / 100 ms |
-| headless `cx -p`, to its request | 8.49 ms (10.78) | **213.72 ms (227.27)** | 34.10 ms (55.75) | 40 / 100 ms |
+| `cineris --version` | 0.37 ms (0.43) | 8.01 ms (9.13) | 4.63 ms (5.12) | 15 / 50 ms |
+| `cin --version` | 0.36 ms (0.42) | 11.08 ms (12.21) | 5.87 ms (6.06) | 15 / 50 ms |
+| headless `cineris -p`, to its request | 8.58 ms (10.83) | **211.69 ms (237.53)** | 32.14 ms (60.48) | 40 / 100 ms |
+| headless `cin -p`, to its request | 8.49 ms (10.78) | **213.72 ms (227.27)** | 34.10 ms (55.75) | 40 / 100 ms |
 | breakdown: with `--no-session` | 6.08 ms | 201.94 ms | 17.41 ms | |
 | breakdown: with a shell that starts fast (`sh`, `cmd`) | 8.81 ms | 32.07 ms | 20.50 ms | |
 | breakdown: with both | 6.12 ms | 18.86 ms | 9.17 ms | |
@@ -63,14 +63,14 @@ Pull request 33, last run at `4fa9174` on 2026-11-13, rebased on main at `762031
 
 ### At a desk
 
-`cargo xtask startup target/release/cortex --budget desktop`: 30 runs each after one that is not counted, the binary under its own name and under `cx`, a hard link beside it.
+`cargo xtask startup target/release/cineris --budget desktop`: 30 runs each after one that is not counted, the binary under its own name and under `cin`, a hard link beside it.
 
 | What | Median | 95th percentile | Budget |
 |---|---:|---:|---:|
-| `cortex --version` | 0.56 ms | 0.71 ms | 5 ms |
-| `cx --version` | 0.54 ms | 0.62 ms | 5 ms |
-| headless `cortex -p`, to its request | 12.77 ms | 13.47 ms | 15 ms |
-| headless `cx -p`, to its request | 12.74 ms | 13.70 ms | 15 ms |
+| `cineris --version` | 0.56 ms | 0.71 ms | 5 ms |
+| `cin --version` | 0.54 ms | 0.62 ms | 5 ms |
+| headless `cineris -p`, to its request | 12.77 ms | 13.47 ms | 15 ms |
+| headless `cin -p`, to its request | 12.74 ms | 13.70 ms | 15 ms |
 
 ## Breaks
 
@@ -112,7 +112,7 @@ One review, on Opus, of the whole diff against the spec, before the first push. 
 
 | Run | Before the fix | After it |
 |---|---|---|
-| `cargo xtask stress -p cortex-cli --count 200`, `signals::` only | 200 of 200 passed | 300 of 300, with `cortex-testkit`'s `server::` tests beside them |
+| `cargo xtask stress -p cineris-cli --count 200`, `signals::` only | 200 of 200 passed | 300 of 300, with `cineris-testkit`'s `server::` tests beside them |
 | Loaded, four loops | 1 failed of 200: the SIGTERM test, at `signals.rs:90` | |
 | Loaded, eight loops | 800 of 800 passed | 1000 of 1000 passed |
 | A 300 ms pause before the response's head, the Linux signal tests | both failed every time, the server's write a `BrokenPipe` | both passed, in 0.37 s, with the signal tests as they were on `main` |
@@ -121,4 +121,4 @@ The failure is rare by itself, so the pause is the evidence that tells the cases
 
 **On the pull request**, at `5d315c2`: `lint-linux` 46 s, `test-linux` 68 s, `lint-windows` 67 s, `test-windows` 142 s. The tiers, as time above process start against the budget: on Linux (4 ms a start), 5.5 s, 12.4 s and 11.9 s; on Windows (9 ms, a slow runner), 8.1 s, 24.4 s and 62.2 s of 90 s. The change adds one unit test, and takes nothing from the signal tests' time but the wait it removes.
 
-**`windows-try`** with `crate=cortex-cli`, `filter=signals::`, `count=200` (run 43456142065): the Windows signal tests, Ctrl-Break's among them, passed 200 times out of 200.
+**`windows-try`** with `crate=cineris-cli`, `filter=signals::`, `count=200` (run 43456142065): the Windows signal tests, Ctrl-Break's among them, passed 200 times out of 200.

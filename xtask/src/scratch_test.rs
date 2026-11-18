@@ -346,7 +346,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let command = super::nextest_command(
-            "cortex-stats",
+            "cineris-stats",
             "test(/^scratch_f::/)",
             &Options::default(),
             &words(&["-E", "test(/stuck/)", "--no-capture"]),
@@ -358,7 +358,7 @@ mod tests {
                 "run",
                 "--locked",
                 "-p",
-                "cortex-stats",
+                "cineris-stats",
                 "-E",
                 "(test(/^scratch_f::/)) and (test(/stuck/))",
                 "--no-capture",
@@ -366,7 +366,7 @@ mod tests {
         );
         // Without one, the module's filter alone.
         let command = super::nextest_command(
-            "cortex-stats",
+            "cineris-stats",
             "test(/^scratch_f::/)",
             &Options::default(),
             &[],
@@ -379,7 +379,7 @@ mod tests {
     }
 
     /// The arguments of nextest for a request of `package`'s file, as the
-    /// words after `-p cortex-stats`.
+    /// words after `-p cineris-stats`.
     fn after_the_package(arguments: &[&str]) -> Vec<String> {
         let request = Request::parse(&words(arguments)).unwrap();
         let command = super::nextest_command(
@@ -394,11 +394,11 @@ mod tests {
     #[test]
     fn a_cargo_profile_is_passed_to_nextest() {
         assert_eq!(
-            after_the_package(&["cortex-stats", "f.rs", "--cargo-profile", "release"]),
+            after_the_package(&["cineris-stats", "f.rs", "--cargo-profile", "release"]),
             words(&["--cargo-profile", "release", "-E", "test(/^scratch_f::/)"])
         );
         assert_eq!(
-            after_the_package(&["cortex-stats", "f.rs", "--cargo-profile=dist"]),
+            after_the_package(&["cineris-stats", "f.rs", "--cargo-profile=dist"]),
             words(&["--cargo-profile", "dist", "-E", "test(/^scratch_f::/)"])
         );
     }
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn the_ignored_tests_are_run_alone_one_at_a_time_with_their_output_under_the_perf_profile() {
         assert_eq!(
-            after_the_package(&["cortex-stats", "f.rs", "--ignored"]),
+            after_the_package(&["cineris-stats", "f.rs", "--ignored"]),
             words(&[
                 "--run-ignored",
                 "only",
@@ -419,13 +419,13 @@ mod tests {
         );
         // With the file's other tests when asked.
         assert_eq!(
-            after_the_package(&["cortex-stats", "f.rs", "--include-ignored"])[..2],
+            after_the_package(&["cineris-stats", "f.rs", "--include-ignored"])[..2],
             words(&["--run-ignored", "all"])
         );
         // A measurement in release, narrowed to one test.
         assert_eq!(
             after_the_package(&[
-                "cortex-stats",
+                "cineris-stats",
                 "f.rs",
                 "--cargo-profile",
                 "release",
@@ -452,7 +452,7 @@ mod tests {
     fn a_cargo_profile_or_ignored_tests_asked_for_on_both_sides_of_the_separator_are_refused() {
         let parse = |list: &[&str]| Request::parse(&words(list));
         let error = parse(&[
-            "cortex-stats",
+            "cineris-stats",
             "f.rs",
             "--cargo-profile",
             "release",
@@ -466,7 +466,7 @@ mod tests {
             "{error}"
         );
         let error = parse(&[
-            "cortex-stats",
+            "cineris-stats",
             "f.rs",
             "--ignored",
             "--",
@@ -475,9 +475,16 @@ mod tests {
         .unwrap_err();
         assert!(error.contains("`--run-ignored` is given twice"), "{error}");
         // Either alone, on either side, is taken.
-        parse(&["cortex-stats", "f.rs", "--", "--cargo-profile", "ci"]).unwrap();
-        parse(&["cortex-stats", "f.rs", "--", "--run-ignored", "only"]).unwrap();
-        parse(&["cortex-stats", "f.rs", "--cargo-profile", "ci", "--ignored"]).unwrap();
+        parse(&["cineris-stats", "f.rs", "--", "--cargo-profile", "ci"]).unwrap();
+        parse(&["cineris-stats", "f.rs", "--", "--run-ignored", "only"]).unwrap();
+        parse(&[
+            "cineris-stats",
+            "f.rs",
+            "--cargo-profile",
+            "ci",
+            "--ignored",
+        ])
+        .unwrap();
     }
 
     #[test]
@@ -485,7 +492,7 @@ mod tests {
         // nextest refuses a flag twice, and the caller's profile is theirs.
         assert_eq!(
             after_the_package(&[
-                "cortex-stats",
+                "cineris-stats",
                 "f.rs",
                 "--ignored",
                 "--",
@@ -505,7 +512,7 @@ mod tests {
         );
         // Output shown without the ignored tests.
         assert_eq!(
-            after_the_package(&["cortex-stats", "f.rs", "--no-capture"]),
+            after_the_package(&["cineris-stats", "f.rs", "--no-capture"]),
             words(&["--no-capture", "-E", "test(/^scratch_f::/)"])
         );
     }
@@ -514,13 +521,13 @@ mod tests {
     fn the_options_are_read_and_a_bad_one_is_refused() {
         let request = Request::parse(&words(&[
             "--ignored",
-            "cortex-core",
+            "cineris-core",
             "--cargo-profile",
             "release",
             "f.rs",
         ]))
         .unwrap();
-        assert_eq!(request.package, "cortex-core");
+        assert_eq!(request.package, "cineris-core");
         assert_eq!(
             request.options,
             Options {
@@ -660,10 +667,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let request =
-            Request::parse(&words(&["cortex-core", "f.rs", "--", "--no-capture"])).unwrap();
-        assert_eq!(request.package, "cortex-core");
+            Request::parse(&words(&["cineris-core", "f.rs", "--", "--no-capture"])).unwrap();
+        assert_eq!(request.package, "cineris-core");
         assert_eq!(request.rest, ["--no-capture"]);
-        assert!(Request::parse(&words(&["cortex-core"])).is_err());
+        assert!(Request::parse(&words(&["cineris-core"])).is_err());
         assert!(Request::parse(&words(&["-p", "x", "f.rs"])).is_err());
         assert_eq!(
             module_name(Path::new("/tmp/Review R4-check.rs")).unwrap(),

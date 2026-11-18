@@ -18,7 +18,7 @@ use crate::Result;
 /// One `<testcase>` of a report.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct TestCase {
-    /// nextest's binary id: `cortex-base`, `cortex-agent::it`, `cortex-cli::system`.
+    /// nextest's binary id: `cineris-base`, `cineris-agent::it`, `cineris-cli::system`.
     pub(crate) binary: String,
     pub(crate) name: String,
     pub(crate) seconds: f64,
@@ -160,7 +160,7 @@ pub(crate) struct Failure {
     /// code 101`, `test timeout`.
     pub(crate) kind: String,
     /// What the test wrote to its standard error: where the timeout report
-    /// of `cortex_testkit::watch` is.
+    /// of `cineris_testkit::watch` is.
     pub(crate) stderr: String,
     /// When the test started, as nextest wrote it (`2026-11-15T01:27:48.020+00:00`).
     pub(crate) started: String,
@@ -422,29 +422,29 @@ pub(crate) mod tests {
     /// its retry.
     pub(crate) const REPORT: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="nextest-run" tests="7" failures="2" errors="0" time="0.9">
-    <testsuite name="cortex-base" tests="1" disabled="0" errors="0" failures="0">
-        <testcase name="text::tests::wraps_at_the_width" classname="cortex-base" timestamp="2026-11-12T13:25:40.000+00:00" time="0.004">
+    <testsuite name="cineris-base" tests="1" disabled="0" errors="0" failures="0">
+        <testcase name="text::tests::wraps_at_the_width" classname="cineris-base" timestamp="2026-11-12T13:25:40.000+00:00" time="0.004">
         </testcase>
     </testsuite>
-    <testsuite name="cortex-agent::it" tests="3" disabled="0" errors="0" failures="2">
-        <testcase classname="cortex-agent::it" name="loop_::retries_after_a_stall" time="0.250"/>
-        <testcase name="loop_::stops_at_the_refused_call" classname="cortex-agent::it" time="0.031">
+    <testsuite name="cineris-agent::it" tests="3" disabled="0" errors="0" failures="2">
+        <testcase classname="cineris-agent::it" name="loop_::retries_after_a_stall" time="0.250"/>
+        <testcase name="loop_::stops_at_the_refused_call" classname="cineris-agent::it" time="0.031">
             <failure message="thread &apos;loop_::stops_at_the_refused_call&apos; panicked" type="test failure with exit code 101">assertion `left == right` failed
   left: [&quot;a&quot;]
  right: [&quot;a&quot;, &quot;b&quot;]</failure>
             <system-out>running 1 test</system-out>
         </testcase>
-        <testcase name="loop_::never_ends" classname="cortex-agent::it" time="10.002">
+        <testcase name="loop_::never_ends" classname="cineris-agent::it" time="10.002">
             <failure type="test timeout"/>
         </testcase>
     </testsuite>
-    <testsuite name="cortex-cli::system" tests="3" disabled="0" errors="0" failures="0">
-        <testcase name="sys_version_is_byte_identical_under_both_names" classname="cortex-cli::system" time="0.5">
-            <system-out>cortex 0.0.0</system-out>
+    <testsuite name="cineris-cli::system" tests="3" disabled="0" errors="0" failures="0">
+        <testcase name="sys_version_is_byte_identical_under_both_names" classname="cineris-cli::system" time="0.5">
+            <system-out>cineris 0.0.0</system-out>
         </testcase>
         <testcase name="rules::tests::sys_the_repository_follows_its_own_rules" classname="xtask::bin/xtask" time="0.125">
         </testcase>
-        <testcase name="timing_sensitive::sys_passes_the_second_time" classname="cortex-cli::system" time="0.2">
+        <testcase name="timing_sensitive::sys_passes_the_second_time" classname="cineris-cli::system" time="0.2">
             <flakyFailure message="first try" type="test failure with exit code 101">no</flakyFailure>
         </testcase>
     </testsuite>
@@ -474,16 +474,16 @@ pub(crate) mod tests {
         assert_eq!(
             parse(REPORT),
             [
-                case("cortex-base", "text::tests::wraps_at_the_width", 0.004),
-                case("cortex-agent::it", "loop_::retries_after_a_stall", 0.25),
+                case("cineris-base", "text::tests::wraps_at_the_width", 0.004),
+                case("cineris-agent::it", "loop_::retries_after_a_stall", 0.25),
                 failed(
-                    "cortex-agent::it",
+                    "cineris-agent::it",
                     "loop_::stops_at_the_refused_call",
                     0.031
                 ),
-                failed("cortex-agent::it", "loop_::never_ends", 10.002),
+                failed("cineris-agent::it", "loop_::never_ends", 10.002),
                 case(
-                    "cortex-cli::system",
+                    "cineris-cli::system",
                     "sys_version_is_byte_identical_under_both_names",
                     0.5
                 ),
@@ -495,7 +495,7 @@ pub(crate) mod tests {
                 TestCase {
                     retried: true,
                     ..case(
-                        "cortex-cli::system",
+                        "cineris-cli::system",
                         "timing_sensitive::sys_passes_the_second_time",
                         0.2
                     )
@@ -662,8 +662,8 @@ lost the race</stackTrace><system-out>running 1 test</system-out><system-err>noi
     fn two_runs_reports_merge_into_one_with_every_case_and_the_counts_summed() {
         let second = r#"<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="nextest-run" tests="1" failures="1" errors="0" time="2.5">
-    <testsuite name="cortex-tui::it" tests="1" disabled="0" errors="0" failures="1">
-        <testcase name="children::sys_the_shell_restores" classname="cortex-tui::it" time="2.5">
+    <testsuite name="cineris-tui::it" tests="1" disabled="0" errors="0" failures="1">
+        <testcase name="children::sys_the_shell_restores" classname="cineris-tui::it" time="2.5">
             <failure type="test timeout"/>
         </testcase>
     </testsuite>
@@ -708,19 +708,19 @@ lost the race</stackTrace><system-out>running 1 test</system-out><system-err>noi
     fn cases_put_in_the_place_of_others_leave_the_rest_and_the_counts_true() {
         let rerun = r#"<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="nextest-run" tests="2" failures="0" errors="0" time="0.2">
-    <testsuite name="cortex-agent::it" tests="2" disabled="0" errors="0" failures="0">
-        <testcase name="loop_::never_ends" classname="cortex-agent::it" timestamp="2026-11-16T09:00:00.000+00:00" time="0.040"/>
+    <testsuite name="cineris-agent::it" tests="2" disabled="0" errors="0" failures="0">
+        <testcase name="loop_::never_ends" classname="cineris-agent::it" timestamp="2026-11-16T09:00:00.000+00:00" time="0.040"/>
     </testsuite>
 </testsuites>
 "#;
         let tests = [
             (
-                "cortex-agent::it".to_owned(),
+                "cineris-agent::it".to_owned(),
                 "loop_::never_ends".to_owned(),
             ),
             // Not in the re-run's report: its case stays as it was.
             (
-                "cortex-agent::it".to_owned(),
+                "cineris-agent::it".to_owned(),
                 "loop_::stops_at_the_refused_call".to_owned(),
             ),
         ];
@@ -748,16 +748,16 @@ lost the race</stackTrace><system-out>running 1 test</system-out><system-err>noi
             "{combined}"
         );
         assert!(combined.contains(
-            r#"<testsuite name="cortex-agent::it" tests="3" disabled="0" errors="0" failures="1">"#
+            r#"<testsuite name="cineris-agent::it" tests="3" disabled="0" errors="0" failures="1">"#
         ));
         assert!(combined.contains(
-            r#"<testsuite name="cortex-base" tests="1" disabled="0" errors="0" failures="0">"#
+            r#"<testsuite name="cineris-base" tests="1" disabled="0" errors="0" failures="0">"#
         ));
         // A name that is only the end of another is another test.
         let none = super::replace_cases(
             REPORT,
             rerun,
-            &[("cortex-agent::it".to_owned(), "never_ends".to_owned())],
+            &[("cineris-agent::it".to_owned(), "never_ends".to_owned())],
         );
         assert_eq!(parse(&none), parse(REPORT));
     }

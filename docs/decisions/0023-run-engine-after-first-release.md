@@ -17,7 +17,7 @@ The vision names parallel attempts (several approaches in isolated worktrees, ju
 
 ## Decision
 
-- One engine, `cortex-runs`, designed in [architecture/16-run-engine.md](../architecture/16-run-engine.md): a run is an ordinary headless session in an isolated workspace; the engine adds isolation, scheduling, judging and comparison.
+- One engine, `cineris-runs`, designed in [architecture/16-run-engine.md](../architecture/16-run-engine.md): a run is an ordinary headless session in an isolated workspace; the engine adds isolation, scheduling, judging and comparison.
 - It is the first milestone after the first usable release.
 - The first release prepares for it: sessions record their base state and how each turn ended, each turn has a snapshot, the core runs several sessions at once, verification commands live in the project profile, and the statistics reserve a run event.
 

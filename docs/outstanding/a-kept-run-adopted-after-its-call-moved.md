@@ -1,6 +1,6 @@
 A read kept from a response sent again is used for its call even when the call was planned again onto another path: a stale result.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: step 28, or the next change to the round's cache
 
 | Item | Who | When |

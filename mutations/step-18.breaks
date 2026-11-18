@@ -1,6 +1,6 @@
-# Step 18: the repository map, in cortex-index, and what it added to
-# cortex-agent (the map in an epoch), cortex-tools (the outline tool) and
-# cortex-core (the index of a session).
+# Step 18: the repository map, in cineris-index, and what it added to
+# cineris-agent (the map in an epoch), cineris-tools (the outline tool) and
+# cineris-core (the index of a session).
 #
 # Each rule is broken here: the extractors' nesting, the cache's
 # invalidation, the caps, the walk's ignore rules, links and gate, the
@@ -9,238 +9,238 @@
 
 [break] a-brace-language-drops-nested-definitions
 rule: A definition whose body holds others (a type, an impl, an interface, a module) has what is inside it outlined, one level deeper.
-file: crates/cortex-index/src/extract/brace.rs
+file: crates/cineris-index/src/extract/brace.rs
 find: Body::Holds => Frame::Holds { entry: done.entry },
 replace: Body::Holds => Frame::Opaque { entry: done.entry },
 caught-by:
-    cortex-index extract::tests::methods_nest_in_their_impl_and_class_in_every_brace_language
-    cortex-index::it outlines::rust
+    cineris-index extract::tests::methods_nest_in_their_impl_and_class_in_every_brace_language
+    cineris-index::it outlines::rust
 
 [break] an-indentation-language-drops-nested-definitions
 rule: In Python and Ruby a class or a module holds what is indented under it; only a function's body is opaque.
-file: crates/cortex-index/src/extract/indent.rs
+file: crates/cineris-index/src/extract/indent.rs
 in: Blocks::opaque
 find: self.open.iter().any(|open| open.opaque)
 replace: !self.open.is_empty()
 caught-by:
-    cortex-index extract::tests::methods_nest_in_their_class_in_the_indentation_languages
-    cortex-index::it outlines::python
-    cortex-index::it outlines::ruby
+    cineris-index extract::tests::methods_nest_in_their_class_in_the_indentation_languages
+    cineris-index::it outlines::python
+    cineris-index::it outlines::ruby
 
 [break] a-function-body-is-outlined
 rule: Nothing inside a function's body is outlined: a local struct or a closure is not a definition of the file.
-file: crates/cortex-index/src/extract/brace.rs
+file: crates/cineris-index/src/extract/brace.rs
 find: Body::Opaque => Frame::Opaque { entry: done.entry }
 replace: Body::Opaque => Frame::Holds { entry: done.entry }
 caught-by:
-    cortex-index extract::tests::nothing_inside_a_function_body_is_outlined
+    cineris-index extract::tests::nothing_inside_a_function_body_is_outlined
 
 [break] a-brace-in-a-string-opens-a-block
 rule: The lexer blanks a string's content, so a brace in it is not counted.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: Lexer::code_at
 find: if let Some(quote) = syntax.quotes.iter().find(|quote| quote.mark == byte) {
 replace: if let Some(quote) = syntax.quotes.iter().find(|quote| quote.mark == byte && false) {
 caught-by:
-    cortex-index extract::tests::a_brace_in_a_string_or_a_comment_does_not_open_a_block
-    cortex-index lex::tests::comments_and_strings_are_blanked_and_keep_their_length
+    cineris-index extract::tests::a_brace_in_a_string_or_a_comment_does_not_open_a_block
+    cineris-index lex::tests::comments_and_strings_are_blanked_and_keep_their_length
 
 [break] the-cache-reads-every-file-again
 rule: A warm pass reads again only the files whose stamp changed or that were unsettled; an unchanged file keeps its record unopened.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: held_records
 find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
 replace: (false).then_some(cursor)
 caught-by:
-    cortex-index::it index::a_warm_pass_reads_only_what_changed
+    cineris-index::it index::a_warm_pass_reads_only_what_changed
 
 [break] the-cache-misses-a-changed-file
 rule: A file whose size, modification time or change time is not the cached one is read again.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: held_records
 find: (record.stamp == file.stamp && !record.flags.unsettled).then_some(cursor)
 replace: (record.path == file.relative && !record.flags.unsettled).then_some(cursor)
 caught-by:
-    cortex-index::it index::a_warm_pass_reads_only_what_changed
+    cineris-index::it index::a_warm_pass_reads_only_what_changed
 
 [break] an-unsettled-record-is-trusted
 rule: A file modified within two seconds of the pass that read it, or after it, is read again by every pass until it settles.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::read_one
 find: unsettled: stamp.modified > now - window
 replace: unsettled: false
 caught-by:
-    cortex-index::it index::a_file_written_again_within_its_time_step_is_read_again
-    cortex-index::it index::a_file_dated_after_the_clock_is_read_again_until_the_clock_passes_it
+    cineris-index::it index::a_file_written_again_within_its_time_step_is_read_again
+    cineris-index::it index::a_file_dated_after_the_clock_is_read_again_until_the_clock_passes_it
 
 [break] the-file-cap-is-not-enforced
 rule: A pass indexes at most max_files files, the ones nearest the top of the tree, and says it is partial.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: finish
 find: if all.len() > limits.max_files {
 replace: if false {
 caught-by:
-    cortex-index::it index::the_file_cap_keeps_the_top_of_the_tree_and_the_listing_cap_bounds_the_walk
+    cineris-index::it index::the_file_cap_keeps_the_top_of_the_tree_and_the_listing_cap_bounds_the_walk
 
 [break] the-listing-cap-is-not-enforced
 rule: A listing stops at max_listed entries, so a tree of millions costs a bounded walk.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: list_in_order
 find: if entries > limits.max_listed {
 replace: if false {
 caught-by:
-    cortex-index::it index::the_file_cap_keeps_the_top_of_the_tree_and_the_listing_cap_bounds_the_walk
+    cineris-index::it index::the_file_cap_keeps_the_top_of_the_tree_and_the_listing_cap_bounds_the_walk
 
 [break] the-byte-cap-is-not-enforced
 rule: A file larger than max_file_bytes is listed and not read.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::read_one
 find: if stamp.size > self.limits.max_file_bytes {
 replace: if false {
 caught-by:
-    cortex-index::it index::a_file_over_the_cap_is_listed_and_not_read_and_a_binary_one_has_no_outline
+    cineris-index::it index::a_file_over_the_cap_is_listed_and_not_read_and_a_binary_one_has_no_outline
 
 [break] the-time-cap-is-not-enforced
 rule: A pass stops at its time limit and the next carries on from what it wrote.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::pass_and_keep
 find: now.saturating_sub(began) >= limit
 replace: false
 caught-by:
-    cortex-index::it index::a_pass_out_of_time_writes_what_it_read_and_the_next_carries_on
+    cineris-index::it index::a_pass_out_of_time_writes_what_it_read_and_the_next_carries_on
 
 [break] a-pass-cut-short-while-listing-writes-the-cache
 rule: A pass whose listing was cut short writes nothing: the files it did not reach would lose their records.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::pass_and_keep
 find: if matches!(listing.partial, Some(Partial::Time | Partial::Stopped)) {
 replace: if false {
 caught-by:
-    cortex-index::it index::a_pass_stopped_while_listing_writes_nothing
+    cineris-index::it index::a_pass_stopped_while_listing_writes_nothing
 
 [break] the-gate-is-not-asked
 rule: A file the permission engine's gate does not let through is not indexed and not named in the map.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: Gathered::take
 find: if !gate.may_index(&abs) {
 replace: if false {
 caught-by:
-    cortex-index::it index::ignore_files_hidden_directories_and_the_gate_are_honoured
+    cineris-index::it index::ignore_files_hidden_directories_and_the_gate_are_honoured
 
 [break] the-ignore-files-are-not-read
 rule: A pass honours the ignore files search and list honour, .gitignore at every level whether or not the tree is a repository.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: walker
 find: .git_ignore(true)
 replace: .git_ignore(false)
 caught-by:
-    cortex-index::it index::ignore_files_hidden_directories_and_the_gate_are_honoured
-    cortex-index::it index::a_workspace_that_is_not_a_repository_and_non_ascii_names_are_indexed
+    cineris-index::it index::ignore_files_hidden_directories_and_the_gate_are_honoured
+    cineris-index::it index::a_workspace_that_is_not_a_repository_and_non_ascii_names_are_indexed
 
 [break] links-are-followed
 rule: A pass follows no link, inside the workspace or out of it.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: walker
 find: .follow_links(false)
 replace: .follow_links(true)
 caught-by:
-    cortex-index::it index::links_are_not_followed_inside_or_out_of_the_workspace
+    cineris-index::it index::links_are_not_followed_inside_or_out_of_the_workspace
 
 [break] a-cut-cache-is-trusted
 rule: A cache with no end line was cut short, and is read as no cache.
-file: crates/cortex-index/src/cache.rs
+file: crates/cineris-index/src/cache.rs
 in: CacheFile::parse
 find: if !ended {
 replace: if false {
 caught-by:
-    cortex-index cache::tests::a_cache_that_cannot_be_trusted_is_none
+    cineris-index cache::tests::a_cache_that_cannot_be_trusted_is_none
 
 [break] the-cache-is-not-private
 rule: The cache is written owner-only, every time.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::write
 find: owner_only: true
 replace: owner_only: false
 caught-by:
-    cortex-index::it index::the_cache_is_private_and_holds_no_more_than_the_workspace
+    cineris-index::it index::the_cache_is_private_and_holds_no_more_than_the_workspace
 
 [break] the-map-passes-its-budget
 rule: The map is never larger than its budget.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: render
 find: if body.len() + line.len() + 1 + reserve <= room {
 replace: if true {
 caught-by:
-    cortex-index::it map::a_map_at_exactly_its_budget_is_whole_and_one_byte_less_says_what_it_left_out
+    cineris-index::it map::a_map_at_exactly_its_budget_is_whole_and_one_byte_less_says_what_it_left_out
 
 [break] the-touched-files-order-leaks-into-the-map
 rule: The map is the same bytes for the same inputs: the touched files are a set, and their order does not matter.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: rank
 find: let touched: BTreeSet<&str> = request.touched.iter().map(String::as_str).collect();
 replace: let touched: BTreeSet<&str> = request.touched.iter().take(1).map(String::as_str).collect();
 caught-by:
-    cortex-index::it map::the_map_is_the_same_bytes_for_the_same_inputs
+    cineris-index::it map::the_map_is_the_same_bytes_for_the_same_inputs
 
 [break] a-second-map-in-an-epoch
 rule: An epoch is given one map: once its history holds one, none is asked for or given.
-file: crates/cortex-agent/src/turn/map.rs
+file: crates/cineris-agent/src/turn/map.rs
 in: Session::give_map
 find: if self.context.history.has_map() || self.map.none == Some(epoch) {
 replace: if self.map.none == Some(epoch) {
 caught-by:
-    cortex-agent::it map::a_map_ready_in_time_goes_just_before_the_first_prompt_once
-    cortex-agent::it map::a_compaction_gives_a_fresh_map_and_a_resume_keeps_it_as_the_history_was_sent
+    cineris-agent::it map::a_map_ready_in_time_goes_just_before_the_first_prompt_once
+    cineris-agent::it map::a_compaction_gives_a_fresh_map_and_a_resume_keeps_it_as_the_history_was_sent
 
 [break] a-summary-replays-the-old-map
 rule: After a summary the old epoch's map is not replayed with the turns it did not cover: the new epoch has its own.
-file: crates/cortex-agent/src/context/history.rs
+file: crates/cineris-agent/src/context/history.rs
 in: History::extend_projected
 find: if meta.map || meta.profile {
 replace: if meta.profile {
 caught-by:
-    cortex-agent context::tests::an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again
+    cineris-agent context::tests::an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again
 
 [break] a-reload-replays-the-old-map
 rule: A history read again from the log leaves out the old epoch's map after a summary, as the live session did.
-file: crates/cortex-agent/src/context/mod.rs
+file: crates/cineris-agent/src/context/mod.rs
 in: Context::load
 find: if index < at
 replace: if false
 caught-by:
-    cortex-agent context::tests::an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again
+    cineris-agent context::tests::an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again
 
 [break] the-map-is-not-a-map-notice
 rule: The map is a notice of its own source, which is what marks it as the epoch's map in the history.
-file: crates/cortex-agent/src/turn/map.rs
+file: crates/cineris-agent/src/turn/map.rs
 in: Session::give_map
 find: self.record_notice(turn, NoticeSource::Map, text).await
 replace: self.record_notice(turn, NoticeSource::Harness, text).await
 caught-by:
-    cortex-agent::it map::a_map_ready_in_time_goes_just_before_the_first_prompt_once
+    cineris-agent::it map::a_map_ready_in_time_goes_just_before_the_first_prompt_once
 
 [break] the-index-is-used-on-the-start-up-path
 rule: Nothing on the path that puts a session together reads the repository index: its first pass starts once the loop runs.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: Some(crate::repo_map::RepoIndex::new(
 replace: let _ = index.pass(&cancel, &|| false); Some(crate::repo_map::RepoIndex::new(
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core::it index::the_index_is_not_touched_until_the_session_is_open
+    cineris-core::it index::the_index_is_not_touched_until_the_session_is_open
 
 [break] the-outline-tool-reads-outside-the-workspace
 rule: The outline tool works inside the workspace only: a path outside it is refused when the call is planned, and nothing is read.
-file: crates/cortex-tools/src/outline.rs
+file: crates/cineris-tools/src/outline.rs
 in: OutlineTool::plan
 find: if !target.is_inside_workspace() {
 replace: if false {
 caught-by:
-    cortex-tools::it outline::a_path_outside_the_workspace_is_refused_and_nothing_is_read
+    cineris-tools::it outline::a_path_outside_the_workspace_is_refused_and_nothing_is_read
 
 [break] the-outline-tool-walks-past-the-gate
 rule: A directory's outline puts every entry to the read gate, so a file a rule protects is neither read nor named.
-file: crates/cortex-tools/src/outline.rs
+file: crates/cineris-tools/src/outline.rs
 in: outline_directory
 find:
     gate,
@@ -251,196 +251,196 @@ replace:
     cancel,
     &mut || {
 caught-by:
-    cortex-tools::it outline::a_directorys_outline_is_its_files_in_order_down_to_its_depth_past_the_gate
+    cineris-tools::it outline::a_directorys_outline_is_its_files_in_order_down_to_its_depth_past_the_gate
 
 # What the independent review of step 18 found, broken again.
 
 [break] the-map-trusts-another-sessions-cache
 rule: The map asks its own session's gate again, for a file and every directory above it: the cache is the project's, and another session's rules may have let more in.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: render
 find: allowed(&record.path)
 replace: true
 caught-by:
-    cortex-index::it index::the_map_asks_its_own_sessions_gate_again_whatever_the_cache_holds
+    cineris-index::it index::the_map_asks_its_own_sessions_gate_again_whatever_the_cache_holds
 
 [break] the-tree-is-in-byte-order
 rule: A directory's subdirectories follow it in the cache and are drawn under it in the map, whatever characters its neighbours' names hold.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::pass_and_keep
 find: dirs.sort_by(|(one, _), (other, _)| walk::path_order(one, other));
 replace:
 caught-by:
-    cortex-index::it tree_order::subdirectories_are_drawn_under_their_own_directory
+    cineris-index::it tree_order::subdirectories_are_drawn_under_their_own_directory
 
 [break] a-name-starts-a-line-of-its-own-in-the-map
 rule: A name with a line break or another character that acts unseen is written as an escape in the map, which is the harness's notice.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: file_line
 find: let mut line = format!("{}:", visible(&record.path));
 replace: let mut line = format!("{}:", record.path);
 caught-by:
-    cortex-index::it index::a_name_with_a_line_break_is_written_as_an_escape_in_the_map
+    cineris-index::it index::a_name_with_a_line_break_is_written_as_an_escape_in_the_map
 
 [break] a-reload-takes-the-date-from-any-notice
 rule: A history read again tells the date the harness's own date notice gave, not one an instruction file or the repository map happens to state.
-file: crates/cortex-agent/src/context/mod.rs
+file: crates/cineris-agent/src/context/mod.rs
 in: Context::load
 find: if notice.source == NoticeSource::Harness && notice.text.starts_with("Today's date is ")
 replace: if true
 caught-by:
-    cortex-agent context::tests::a_reload_takes_the_date_from_the_harnesss_own_notice_only
+    cineris-agent context::tests::a_reload_takes_the_date_from_the_harnesss_own_notice_only
 
 [break] a-pass-that-panics-stops-the-index
 rule: A pass that panics drops who waits unanswered (the loop asks again later), and leaves the index able to start another.
-file: crates/cortex-core/src/repo_map.rs
+file: crates/cineris-core/src/repo_map.rs
 in: Shared::work
 find: let Ok((report, snapshot)) = passed else {
 replace: let Ok((report, snapshot)) = Ok::<_, ()>(passed.unwrap_or_else(|panic| std::panic::resume_unwind(panic))) else {
 caught-by:
-    cortex-core repo_map::tests::a_pass_that_panics_answers_who_waits_and_lets_the_next_one_start
+    cineris-core repo_map::tests::a_pass_that_panics_answers_who_waits_and_lets_the_next_one_start
 
 [break] a-listing-is-cut-by-the-time
 rule: A listing is bounded by its cap on entries and not by the time, so that a pass whose listing outlasts its time still ends and writes.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: list_in_order
 find: if let Some(why) = control.stop_listing() {
 replace: if let Some(why) = control.stop() {
 caught-by:
-    cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
+    cineris-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
 
 [break] a-pass-out-of-time-reads-nothing
 rule: Every pass reads one file at least, whatever its time limit, so that the passes make progress between them.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::read_all
 find: Some(Partial::Time) if !started_reading => {}
 replace: Some(Partial::Time) if !started_reading && false => {}
 caught-by:
-    cortex-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
+    cineris-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
 
 [break] an-idle-slice-is-unbounded
 rule: An idle session carries on with unfinished work a few passes at most, however little each pass reads.
-file: crates/cortex-core/src/repo_map.rs
+file: crates/cineris-core/src/repo_map.rs
 in: Shared::work
 find: if state.unfinished && idle && progressed && idle_passes < IDLE_PASSES {
 replace: if state.unfinished && idle && progressed {
 caught-by:
-    cortex-core repo_map::tests::an_idle_slice_carries_on_a_bounded_number_of_passes
+    cineris-core repo_map::tests::an_idle_slice_carries_on_a_bounded_number_of_passes
 
 [break] a-pass-that-gave-way-ends-the-idle-slice
 rule: A pass that gave way to a turn which is over by the time the worker looks is carried on, since the turn's end left the idle slice to the running pass.
-file: crates/cortex-core/src/repo_map.rs
+file: crates/cineris-core/src/repo_map.rs
 in: Shared::work
 find: let progressed = gave_way || indexed.is_none_or(|before| report.indexed > before);
 replace: let progressed = indexed.is_none_or(|before| report.indexed > before);
 caught-by:
-    cortex-core repo_map::tests::a_pass_that_gave_way_to_a_turn_already_over_is_carried_on
+    cineris-core repo_map::tests::a_pass_that_gave_way_to_a_turn_already_over_is_carried_on
 
 [break] a-tiny-pass-time-is-used-as-set
 rule: A pass is given at least 250 ms to read, whatever the configuration says.
-file: crates/cortex-core/src/repo_map.rs
+file: crates/cineris-core/src/repo_map.rs
 in: limits
 find: pass_time.max(LEAST_PASS_TIME)
 replace: pass_time
 caught-by:
-    cortex-core repo_map::tests::the_pass_time_is_never_below_the_least
+    cineris-core repo_map::tests::the_pass_time_is_never_below_the_least
 
 [break] the-map-writes-a-line-separator-as-it-is
-rule: A character that would act unseen in a name (a line or paragraph separator, a zero-width one) is written as an escape in the map. The map writes names through `cortex_base::visible` since the fixes of step 18's review.
-file: crates/cortex-base/src/visible.rs
+rule: A character that would act unseen in a name (a line or paragraph separator, a zero-width one) is written as an escape in the map. The map writes names through `cineris_base::visible` since the fixes of step 18's review.
+file: crates/cineris-base/src/visible.rs
 in: acts_unseen
 find: '\u{2028}' | '\u{2029}'
 replace: '\u{2029}'
 caught-by:
-    cortex-base visible::tests::what_would_act_unseen_is_written_as_an_escape
+    cineris-base visible::tests::what_would_act_unseen_is_written_as_an_escape
 
 [break] the-outline-tool-writes-a-zero-width-character-as-it-is
-rule: A character that would act unseen in a name is written as an escape in the outline tool's listing, which writes names through `cortex_base::visible` since the fixes of step 18's review.
-file: crates/cortex-base/src/visible.rs
+rule: A character that would act unseen in a name is written as an escape in the outline tool's listing, which writes names through `cineris_base::visible` since the fixes of step 18's review.
+file: crates/cineris-base/src/visible.rs
 find: (0x200B, 0x200F)
 occurrence: 1
 replace: (0x200E, 0x200F)
 caught-by:
-    cortex-base visible::tests::the_table_of_format_characters_is_unicodes_for_its_version
+    cineris-base visible::tests::the_table_of_format_characters_is_unicodes_for_its_version
 
 [break] the-map-off-still-indexes
 rule: With the map off, a session starts no background pass and writes no cache.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 find: .filter(|_| loaded.settings.index.map)
 replace: .filter(|_| true)
 caught-by:
-    cortex-core::it index::with_the_map_off_no_pass_runs_in_the_background
+    cineris-core::it index::with_the_map_off_no_pass_runs_in_the_background
 
 [break] the-listing-on-threads-is-left-unsorted
 rule: A listing made on several threads is put in path order after, so that it is the listing the walk on one thread makes.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: finish
 find: all.sort_by(|one, other| path_order(&one.relative, &other.relative));
 replace: {}
 caught-by:
-    cortex-index::it index::the_listing_on_several_threads_is_the_listing_on_one
+    cineris-index::it index::the_listing_on_several_threads_is_the_listing_on_one
 
 [break] a-listing-at-its-cap-is-cut-where-the-threads-reach
 rule: A listing on several threads that meets its cap on entries is made again on one thread in name order, so that the cut is the same on every machine.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: list_on_threads
 find: return None;
 replace: return Some(finish(std::mem::take(&mut *handed.lock().unwrap_or_else(std::sync::PoisonError::into_inner)), Some(Partial::Listing), limits));
 caught-by:
-    cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
+    cineris-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
 
 [break] a-nested-ignore-file-is-missed-on-threads
 rule: The walk on the pass's threads honours a .gitignore at every level, as `search` and `list` do.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: list_on_threads
 find: walker(root_fs, root, gate)
 replace: walker(root_fs, root, gate).git_ignore(false)
 caught-by:
-    cortex-index::it index::the_listing_on_several_threads_is_the_listing_on_one
-    cortex-index walk::tests::the_walk_in_name_order_lists_what_the_walk_on_threads_lists
+    cineris-index::it index::the_listing_on_several_threads_is_the_listing_on_one
+    cineris-index walk::tests::the_walk_in_name_order_lists_what_the_walk_on_threads_lists
 
 [break] the-threads-of-a-listing-do-not-give-way
 rule: Each thread of a listing on several threads looks before each entry whether to give way to a turn, so that a pass on several threads stops as one on one thread does.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: list_on_threads
 find: if control.stop_listing().is_some() {
 replace: if false {
 caught-by:
-    cortex-index::it index::a_listing_on_several_threads_gives_way_at_each_threads_next_entry
+    cineris-index::it index::a_listing_on_several_threads_gives_way_at_each_threads_next_entry
 
 [break] the-path-order-is-the-bytes-order
 rule: The path order takes `/` as the least byte, so that it is the order of comparing the names one by one (`a`, `a/x`, `a-b`).
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: path_order
 find: let key = |byte: &u8| if *byte == b'/' { 0 } else { *byte };
 replace: let key = |byte: &u8| *byte;
 caught-by:
-    cortex-index::it tree_order::property_the_path_order_is_the_order_name_by_name
-    cortex-index::it tree_order::subdirectories_are_drawn_under_their_own_directory
+    cineris-index::it tree_order::property_the_path_order_is_the_order_name_by_name
+    cineris-index::it tree_order::subdirectories_are_drawn_under_their_own_directory
 
 [break] the-listing-cap-on-threads-is-not-enforced
 rule: A listing on several threads stops at max_listed entries too, and is then made again on one thread.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: list_on_threads
 find: if entries.fetch_add(1, AtomicOrdering::SeqCst) >= limits.max_listed {
 replace: if false {
 caught-by:
-    cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
+    cineris-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
 
 [break] a-listing-on-threads-is-cut-by-the-time
 rule: A listing on several threads is bounded by its cap on entries and not by the time, as the walk on one thread is.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: list_on_threads
 find: if control.stop_listing().is_some() {
 replace: if control.stop().is_some() {
 caught-by:
-    cortex-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
+    cineris-index::it index::a_listing_longer_than_the_time_limit_still_ends_and_the_reading_carries_on
 
 [break] a-capped-workspace-is-walked-on-threads-first
 rule: A workspace whose cache says its last listing met the cap is listed in name order at once, without a walk on threads to throw away.
-file: crates/cortex-index/src/walk.rs
+file: crates/cineris-index/src/walk.rs
 in: list
 find: if !capped
 replace: if true
 caught-by:
-    cortex-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads
+    cineris-index::it index::a_listing_at_its_cap_is_cut_in_name_order_on_any_number_of_threads

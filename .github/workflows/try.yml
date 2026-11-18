@@ -4,22 +4,22 @@
 # that has been pushed, and blocks nothing:
 #
 #   gh workflow run try --ref <branch> -f command=startup -f profile=dist
-#   gh workflow run try --ref <branch> -f os=windows -f command="test -p cortex-tools shell::"
-#   gh workflow run try --ref <branch> -f command="stress -p cortex-testkit" -f count=200 -f load=6 -f cores=2
-#   gh workflow run try --ref <branch> -f command="test -p cortex-agent" -f filter="test(/denials/); test(=x)"
+#   gh workflow run try --ref <branch> -f os=windows -f command="test -p cineris-tools shell::"
+#   gh workflow run try --ref <branch> -f command="stress -p cineris-testkit" -f count=200 -f load=6 -f cores=2
+#   gh workflow run try --ref <branch> -f command="test -p cineris-agent" -f filter="test(/denials/); test(=x)"
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f against=main -f count=5
-#   gh workflow run try --ref <branch> -f os=linux-22.04 -f command="test -p cortex-sandbox"
-#   gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-index"
-#   gh workflow run try --ref <branch> -f os=windows -f command="perf -p cortex-index" -f against=main
+#   gh workflow run try --ref <branch> -f os=linux-22.04 -f command="test -p cineris-sandbox"
+#   gh workflow run try --ref <branch> -f os=windows -f command="perf -p cineris-index"
+#   gh workflow run try --ref <branch> -f os=windows -f command="perf -p cineris-index" -f against=main
 #   gh workflow run try --ref <branch> -f command="size --check --against-main"
 #   gh workflow run try --ref <branch> -f os=linux -f command="size --breakdown --top 40"
 #   gh workflow run try --ref <branch> -f os=linux-22.04 -f command=partial-landlock
 #   gh workflow run try --ref <branch> -f os=linux -f command=ci
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=profile
 #   gh workflow run try --ref <branch> -f os=windows -f command=test -f testkit=starts
-#   gh workflow run try --ref <branch> -f os=windows -f command="test --dependents -p cortex-config"
+#   gh workflow run try --ref <branch> -f os=windows -f command="test --dependents -p cineris-config"
 #   gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7 --jobs 2"
-#   gh workflow run try --ref <branch> -f commit=<40-digit commit hash> -f command="test -p cortex-base"
+#   gh workflow run try --ref <branch> -f commit=<40-digit commit hash> -f command="test -p cineris-base"
 #   ci-wait --workflow try                    (from the branch, for its head commit)
 #
 # `commit` makes the branch's side of the run that commit (and not the
@@ -90,7 +90,7 @@ on:
         options: ["yes", "no"]
         default: "yes"
       testkit:
-        description: "A test-kit switch for the tests: profile (CORTEX_TESTKIT_PROFILE, each test's report kept as a file), starts (CORTEX_TESTKIT_STARTS, each process a test starts written down); neither with against. none: nothing set."
+        description: "A test-kit switch for the tests: profile (CINERIS_TESTKIT_PROFILE, each test's report kept as a file), starts (CINERIS_TESTKIT_STARTS, each process a test starts written down); neither with against. none: nothing set."
         type: choice
         options: [none, profile, starts]
         default: none
@@ -205,7 +205,7 @@ jobs:
       - name: Keep the corpus of real code beside the workspace
         if: startsWith(inputs.command, 'perf')
         shell: bash
-        run: echo "CORTEX_CORPUS_DIR=$RUNNER_TEMP/corpus" >> "$GITHUB_ENV"
+        run: echo "CINERIS_CORPUS_DIR=$RUNNER_TEMP/corpus" >> "$GITHUB_ENV"
       # `ci` runs `check`, whose last step is cargo-deny, and the nightly's
       # `advisories` is cargo-deny too; its `unused` is cargo-machete. Both
       # are prebuilt binaries the action checks against its checksums, at
@@ -246,9 +246,9 @@ jobs:
           # Only a `size` command is given the token, to read `main`'s record.
           GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
           # The test kit's switches, from a list: each is set or left empty.
-          CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
-          CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}/target/testkit-profile', github.workspace) || '' }}
-          CORTEX_TESTKIT_STARTS: ${{ inputs.testkit == 'starts' && inputs.against == '' && format('{0}/target/testkit-starts', github.workspace) || '' }}
+          CINERIS_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
+          CINERIS_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}/target/testkit-profile', github.workspace) || '' }}
+          CINERIS_TESTKIT_STARTS: ${{ inputs.testkit == 'starts' && inputs.against == '' && format('{0}/target/testkit-starts', github.workspace) || '' }}
         run: |
           set -o pipefail
           # The inputs added since a commit was made are passed only when
@@ -279,9 +279,9 @@ jobs:
           TRY_CAPTURE: ${{ inputs.capture }}
           TRY_LABEL: ${{ inputs.label }}
           GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
-          CORTEX_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
-          CORTEX_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}\target\testkit-profile', github.workspace) || '' }}
-          CORTEX_TESTKIT_STARTS: ${{ inputs.testkit == 'starts' && inputs.against == '' && format('{0}\target\testkit-starts', github.workspace) || '' }}
+          CINERIS_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
+          CINERIS_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}\target\testkit-profile', github.workspace) || '' }}
+          CINERIS_TESTKIT_STARTS: ${{ inputs.testkit == 'starts' && inputs.against == '' && format('{0}\target\testkit-starts', github.workspace) || '' }}
         run: |
           # A line cargo writes to its standard error is not an error here.
           $ErrorActionPreference = 'Continue'

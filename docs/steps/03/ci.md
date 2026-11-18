@@ -1,6 +1,6 @@
 # After step 3: the protocol crate
 
-Step 3 added the first real code (`cortex-protocol`, about 200 types) and the first third-party crates in a shipped crate: serde with its derive macro, and serde_json. `xtask` now depends on the protocol crate with its `schema` feature, which adds schemars. What a workspace build compiles went from 5 third-party packages to 17. Measured on the step's pull request on 2026-11-12, two runs, both with nothing to read from the cache for the new crates, because only the main branch writes caches:
+Step 3 added the first real code (`cineris-protocol`, about 200 types) and the first third-party crates in a shipped crate: serde with its derive macro, and serde_json. `xtask` now depends on the protocol crate with its `schema` feature, which adds schemars. What a workspace build compiles went from 5 third-party packages to 17. Measured on the step's pull request on 2026-11-12, two runs, both with nothing to read from the cache for the new crates, because only the main branch writes caches:
 
 | Job | Step 2, last cold run | Step 3, first run | Step 3, second run |
 |---|---|---|---|

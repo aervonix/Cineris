@@ -1,6 +1,6 @@
 A flaky entry names a command, not the test that flipped, so a check's retry runs the whole command and may call a real failure flaky.
 
-- Area: cortex-knowledge
+- Area: cineris-knowledge
 - Owner: step 52, with its per-ecosystem test selection
 
 | Item | Who | When |

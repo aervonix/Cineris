@@ -11,7 +11,7 @@
 //! head then base, so that what drifts during the job (a warmer disk, a
 //! busier neighbour) falls on both alike. Each run's output is read for the
 //! lines `perf: NAME VALUE UNIT` that a test prints with
-//! `cortex_testkit::numbers::report`; a measurement's figure on a side is the
+//! `cineris_testkit::numbers::report`; a measurement's figure on a side is the
 //! median over the rounds, and the report shows the range beside it, which is
 //! the noise a difference has to stand out of.
 //!
@@ -40,7 +40,7 @@ the tree at DIR (the base), once each, as `cargo xtask perf -p CRATE` builds
 them; runs them in turn on this machine, N rounds (3 when not given, 3 to 20)
 in alternating order, one test at a time with their output shown; and compares
 the measurements they print as lines `perf: NAME VALUE UNIT`
-(`cortex_testkit::numbers::report`): each side's median over the rounds and its
+(`cineris_testkit::numbers::report`): each side's median over the rounds and its
 range, the difference and whether the two sides' ranges are apart. A NAME
 narrows the tests, as it does for `perf -p`. NAME is what the base is called in
 the report (its directory when not given). `cargo xtask try` runs this on a
@@ -169,7 +169,7 @@ fn nextest_arguments(request: &Request, no_run: bool) -> Vec<String> {
 type Numbers = BTreeMap<(String, String), f64>;
 
 /// The measurements in a run's output (`perf: NAME VALUE UNIT`, as
-/// `cortex_testkit::numbers` writes them: the same rules, in a copy of their
+/// `cineris_testkit::numbers` writes them: the same rules, in a copy of their
 /// own because `xtask` does not build the test kit).
 pub(crate) fn numbers_in(output: &str) -> Numbers {
     let mut found: BTreeMap<(String, String), Vec<f64>> = BTreeMap::new();
@@ -390,7 +390,7 @@ pub(crate) fn render(results: &Results) -> String {
     if results.series.is_empty() {
         text.push_str(
             "\nNo test printed a line `perf: NAME VALUE UNIT`, so nothing is compared: \
-             `cortex_testkit::numbers::report` prints one.\n",
+             `cineris_testkit::numbers::report` prints one.\n",
         );
     }
     text.push_str(
@@ -606,9 +606,9 @@ mod tests {
                 "--cargo-profile",
                 "dist",
                 "-p",
-                "cortex-index",
+                "cineris-index",
                 "-p",
-                "cortex-tools",
+                "cineris-tools",
                 "warm",
             ]))
             .unwrap(),
@@ -617,7 +617,7 @@ mod tests {
                 label: Some("main".to_owned()),
                 rounds: 5,
                 profile: "dist".to_owned(),
-                packages: strings(&["cortex-index", "cortex-tools"]),
+                packages: strings(&["cineris-index", "cineris-tools"]),
                 names: strings(&["warm"]),
             }
         );
@@ -649,19 +649,19 @@ mod tests {
             "--base",
             "b",
             "-p",
-            "cortex-index",
+            "cineris-index",
             "warm",
             "cold",
         ]))
         .unwrap();
         assert_eq!(
             nextest_arguments(&request, true).join(" "),
-            "nextest run --locked --cargo-profile release --profile perf -p cortex-index \
+            "nextest run --locked --cargo-profile release --profile perf -p cineris-index \
              --run-ignored only -E test(/(^|::)perf_/) --no-run"
         );
         assert_eq!(
             nextest_arguments(&request, false).join(" "),
-            "nextest run --locked --cargo-profile release --profile perf -p cortex-index \
+            "nextest run --locked --cargo-profile release --profile perf -p cineris-index \
              --run-ignored only -E test(/(^|::)perf_/) --no-capture --test-threads 1 warm cold"
         );
     }
@@ -691,7 +691,7 @@ perf: index.rate 50.5 MB/s
         assert_eq!(
             numbers_in("perf: a.b 2.5 us\n")[&key("a.b", "us")],
             2.5,
-            "the line `cortex_testkit::numbers::line(\"a.b\", 2.5, \"us\")` makes"
+            "the line `cineris_testkit::numbers::line(\"a.b\", 2.5, \"us\")` makes"
         );
     }
 
@@ -817,7 +817,7 @@ perf: index.rate 50.5 MB/s
         Results {
             label: "main".to_owned(),
             profile: "release".to_owned(),
-            packages: strings(&["cortex-index"]),
+            packages: strings(&["cineris-index"]),
             rounds: 3,
             series: collect(&[
                 (
@@ -841,7 +841,7 @@ perf: index.rate 50.5 MB/s
         let text = render(&results());
         assert!(
             text.starts_with(
-                "The `perf_` tests of cortex-index on one machine, the head against main: 3 rounds, `release` build."
+                "The `perf_` tests of cineris-index on one machine, the head against main: 3 rounds, `release` build."
             ),
             "{text}"
         );

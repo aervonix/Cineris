@@ -1,5 +1,5 @@
-# Step 26: the Linux sandbox, in cortex-sandbox, and what it added to
-# cortex-core, cortex-policy and cortex-cli.
+# Step 26: the Linux sandbox, in cineris-sandbox, and what it added to
+# cineris-core, cineris-policy and cineris-cli.
 #
 # Each rule the sandbox enforces is broken here: what a command may write,
 # the network filter, failing closed, the state a session reports, the
@@ -8,528 +8,528 @@
 
 [break] write-root-widened-to-its-parent
 rule: A command may write only under the write roots, not beside them.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: landlock
 find: created = grant(created, root, handled, abi)?;
 replace: created = grant(created, root.parent().unwrap_or(root), handled, abi)?;
-# The backends are built only with cortex-core beside it.
-packages: cortex-sandbox, cortex-core
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_the_workspace_and_the_temporary_directory_are_writable_and_nothing_else
+    cineris-sandbox::it confined::sys_the_workspace_and_the_temporary_directory_are_writable_and_nothing_else
 
 [break] network-filter-not-loaded
 rule: With the network off, no socket reaches beyond the command's own processes.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: refused.insert(libc::SYS_socket, socket);
 replace: let _ = socket;
-# The backends are built only with cortex-core beside it.
-packages: cortex-sandbox, cortex-core
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
+    cineris-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
 
 [break] seccomp-not-applied
 rule: The system-call filter is applied with the file-system rules, or the command does not run.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: apply
 find: seccomp(policy.network).map_err(|error| format!("seccomp: {error}"))?;
 replace: let _ = policy.network;
-# The backends are built only with cortex-core beside it.
-packages: cortex-sandbox, cortex-core
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
-    cortex-sandbox::it confined::sys_a_new_user_namespace_is_refused
+    cineris-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
+    cineris-sandbox::it confined::sys_a_new_user_namespace_is_refused
 
 [break] landlock-failure-runs-the-command
 rule: Where the sandbox enforces, a failure to apply it fails the call: the command does not run unconfined.
-file: crates/cortex-sandbox/src/launch.rs
+file: crates/cineris-sandbox/src/launch.rs
 in: launch
 find: confine(&policy).map_err(Failure::sandbox)?;
 replace: let _ = confine(&policy);
-# The backends are built only with cortex-core beside it.
-packages: cortex-sandbox, cortex-core
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_landlock_that_cannot_be_applied_runs_nothing
-    cortex-sandbox::it confined::sys_a_seccomp_filter_that_does_not_load_runs_nothing
+    cineris-sandbox::it confined::sys_landlock_that_cannot_be_applied_runs_nothing
+    cineris-sandbox::it confined::sys_a_seccomp_filter_that_does_not_load_runs_nothing
 
 [break] landlock-error-ignored
 rule: A Landlock ruleset the kernel refuses stops the launcher.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: apply
 find: landlock(policy).map_err(|error| format!("Landlock: {error}"))?;
 replace: let _ = landlock(policy);
-# The backends are built only with cortex-core beside it.
-packages: cortex-sandbox, cortex-core
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_landlock_that_cannot_be_applied_runs_nothing
+    cineris-sandbox::it confined::sys_landlock_that_cannot_be_applied_runs_nothing
 
 [break] signals-not-scoped
 rule: From Landlock 6 a command cannot signal a process outside the sandbox.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: landlock
 find: if abi >= ABI::V6 {
 replace: if abi > ABI::V9 {
-# The backends are built only with cortex-core beside it.
-packages: cortex-sandbox, cortex-core
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_a_signal_to_a_process_outside_the_sandbox_is_refused
+    cineris-sandbox::it confined::sys_a_signal_to_a_process_outside_the_sandbox_is_refused
 
 [break] user-namespaces-allowed
 rule: A sandboxed command cannot make a user namespace.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: libc::SYS_unshare
 replace: libc::SYS_getpid
-# The backends are built only with cortex-core beside it.
-packages: cortex-sandbox, cortex-core
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_a_new_user_namespace_is_refused
+    cineris-sandbox::it confined::sys_a_new_user_namespace_is_refused
 
 [break] status-enforcing-without-landlock
 rule: A kernel without Landlock does not enforce, and the status says so.
-file: crates/cortex-sandbox/src/support.rs
+file: crates/cineris-sandbox/src/support.rs
 in: Support::assess
 find: Self::NoLandlock => Assessment::NotEnforcing(Unconfined::NoLandlock)
 replace: Self::NoLandlock => Assessment::Enforcing { landlock: 6, gaps: Vec::new() }
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox support::tests::versions_1_and_2_and_no_landlock_do_not_enforce
-    cortex-core::it sandbox::a_kernel_without_landlock_is_reported_and_refuses_autonomous
+    cineris-sandbox support::tests::versions_1_and_2_and_no_landlock_do_not_enforce
+    cineris-core::it sandbox::a_kernel_without_landlock_is_reported_and_refuses_autonomous
 
 [break] an-old-landlock-counts
 rule: Landlock 1 and 2 do not enforce: a command could empty any file the user can write.
-file: crates/cortex-sandbox/src/support.rs
+file: crates/cineris-sandbox/src/support.rs
 in: Support::assess
 find: Self::Landlock(version) if version >= MIN_LANDLOCK =>
 replace: Self::Landlock(version) if version >= 1 =>
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox support::tests::versions_1_and_2_and_no_landlock_do_not_enforce
-    cortex-core::it sandbox::an_old_landlock_does_not_count_and_says_what_it_lacks
+    cineris-sandbox support::tests::versions_1_and_2_and_no_landlock_do_not_enforce
+    cineris-core::it sandbox::an_old_landlock_does_not_count_and_says_what_it_lacks
 
 [break] autonomous-without-an-enforcing-sandbox
 rule: `autonomous` starts only where the sandbox enforces.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: parts.sandbox = sandbox_state;
 replace: parts.sandbox = SandboxState::Enforcing;
 caught-by:
-    cortex-core::it sandbox::a_kernel_without_landlock_is_reported_and_refuses_autonomous
-    cortex-core::it sandbox::an_old_landlock_does_not_count_and_says_what_it_lacks
+    cineris-core::it sandbox::a_kernel_without_landlock_is_reported_and_refuses_autonomous
+    cineris-core::it sandbox::an_old_landlock_does_not_count_and_says_what_it_lacks
 
 [break] enforcing-without-a-launcher
 rule: A core given no launcher has nothing to confine with, and reports the sandbox off.
-file: crates/cortex-core/src/sandbox.rs
+file: crates/cineris-core/src/sandbox.rs
 in: CoreSandbox::state
 find: Assessment::Enforcing { .. } if self.program.is_none() =>
 replace: Assessment::Enforcing { .. } if self.program.is_none() && !enabled =>
 caught-by:
-    cortex-core::it sandbox::the_sandbox_turned_off_or_without_a_launcher_is_off
+    cineris-core::it sandbox::the_sandbox_turned_off_or_without_a_launcher_is_off
 
 [break] confined-at-unrestricted
 rule: Nothing is confined at `unrestricted`, and the session's state says so.
-file: crates/cortex-core/src/sandbox.rs
+file: crates/cineris-core/src/sandbox.rs
 in: SessionSandbox::set_level
 find: let confine = self.made_with.is_some() && *level != Level::Unrestricted;
 replace: let confine = self.made_with.is_some();
 caught-by:
-    cortex-core::it sandbox::sys_at_unrestricted_a_command_is_not_confined
+    cineris-core::it sandbox::sys_at_unrestricted_a_command_is_not_confined
 
 [break] commands-never-confined
 rule: Below `unrestricted`, where the sandbox enforces, every command is started through the launcher.
-file: crates/cortex-core/src/sandbox.rs
+file: crates/cineris-core/src/sandbox.rs
 in: SessionSandbox::launcher
 find: if !self.confines() {
 replace: if true {
 caught-by:
-    cortex-core::it sandbox::sys_commands_are_confined_where_the_sandbox_enforces
+    cineris-core::it sandbox::sys_commands_are_confined_where_the_sandbox_enforces
 
 [break] temporary-directory-not-given
 rule: A confined command is given the session's private temporary directory as `TMPDIR`.
-file: crates/cortex-sandbox/src/launch.rs
+file: crates/cineris-sandbox/src/launch.rs
 in: become_command
 find: command.env("TMPDIR", temp);
 replace: let _ = temp;
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_the_workspace_and_the_temporary_directory_are_writable_and_nothing_else
-    cortex-core::it sandbox::sys_commands_are_confined_where_the_sandbox_enforces
+    cineris-sandbox::it confined::sys_the_workspace_and_the_temporary_directory_are_writable_and_nothing_else
+    cineris-core::it sandbox::sys_commands_are_confined_where_the_sandbox_enforces
 
 [break] temporary-directory-left-behind
 rule: The session's temporary directory goes when the session ends.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: Core::end
 find: sandbox.remove_temp();
 replace: let _ = &sandbox;
 caught-by:
-    cortex-core::it sandbox::sys_commands_are_confined_where_the_sandbox_enforces
+    cineris-core::it sandbox::sys_commands_are_confined_where_the_sandbox_enforces
 
 [break] protected-change-not-detected
 rule: A protected file whose content or stamp changed is reported as modified.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Entry::change_from
 find: self.stamp != old.stamp
 replace: false
 caught-by:
-    cortex-sandbox protect::tests::a_change_that_puts_the_modification_time_back_is_still_found
+    cineris-sandbox protect::tests::a_change_that_puts_the_modification_time_back_is_still_found
 
 [break] protected-names-not-found-below-the-root
 rule: Build configuration is protected at any depth.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Look::walk
 find: name if BUILD_FILES.contains(&name) => {
 replace: name if BUILD_FILES.contains(&name) && false => {
 caught-by:
-    cortex-sandbox protect::tests::protected_names_are_found_at_any_depth
+    cineris-sandbox protect::tests::protected_names_are_found_at_any_depth
 
 [break] nested-repository-not-looked-at
 rule: A nested repository's configuration and hooks are protected.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Look::walk
 find: ".git" if is_dir => self.record_git(child),
 replace: ".git" if is_dir => {}
 caught-by:
-    cortex-sandbox protect::tests::protected_names_are_found_at_any_depth
+    cineris-sandbox protect::tests::protected_names_are_found_at_any_depth
 
 [break] a-created-hook-not-reported
 rule: A protected path that was not there before the command is reported as created.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Snapshot::compare
 find: if !self.entries.contains_key(path) && self.covers(path) {
 replace: if !self.entries.contains_key(path) && self.covers(path) && false {
 caught-by:
-    cortex-sandbox protect::tests::a_hook_written_a_config_changed_and_a_file_removed_are_found
+    cineris-sandbox protect::tests::a_hook_written_a_config_changed_and_a_file_removed_are_found
 
 [break] policy-with-more-after-its-end
 rule: A policy with anything after `end` is refused whole.
-file: crates/cortex-sandbox/src/policy.rs
+file: crates/cineris-sandbox/src/policy.rs
 in: Policy::decode
 find: if !fields.rest.is_empty() {
 replace: if fields.rest.is_empty() && false {
 caught-by:
-    cortex-sandbox policy::tests::a_policy_cut_short_or_with_more_after_its_end_is_refused
+    cineris-sandbox policy::tests::a_policy_cut_short_or_with_more_after_its_end_is_refused
 
 [break] the-wrong-path-is-named
 rule: The model is told the path a refused write was for, not the program that reported it.
-file: crates/cortex-sandbox/src/explain.rs
+file: crates/cineris-sandbox/src/explain.rs
 in: line
 find: paths.into_iter().rev().find(|path| outside(policy, path))
 replace: paths.into_iter().find(|path| outside(policy, path))
 caught-by:
-    cortex-sandbox explain::tests::a_refused_write_outside_the_roots_is_named
+    cineris-sandbox explain::tests::a_refused_write_outside_the_roots_is_named
 
 [break] leaving-the-sandbox-without-an-approval
 rule: A command asked to run outside the sandbox is asked about at every level but `unrestricted`.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_unconfined
 find: if self.sandbox != SandboxState::Enforcing {
 replace: if true {
-packages: cortex-policy, cortex-core
+packages: cineris-policy, cineris-core
 caught-by:
-    cortex-policy::it levels::leaving_the_sandbox_is_asked_every_time_below_unrestricted
-    cortex-core::it sandbox::sys_a_command_leaves_the_sandbox_only_once_the_user_allows_it
+    cineris-policy::it levels::leaving_the_sandbox_is_asked_every_time_below_unrestricted
+    cineris-core::it sandbox::sys_a_command_leaves_the_sandbox_only_once_the_user_allows_it
 
 [break] the-shell-leaves-the-sandbox-without-saying-so
 rule: A shell call that leaves the sandbox declares it in its plan, so the engine is asked.
-file: crates/cortex-tools/src/shell/mod.rs
+file: crates/cineris-tools/src/shell/mod.rs
 in: ShellTool::plan
 find: plan = plan.with_effect(Effect::Unconfined);
 replace: plan = plan.with_concurrency(Concurrency::Exclusive);
-packages: cortex-tools, cortex-core
+packages: cineris-tools, cineris-core
 caught-by:
-    cortex-core::it sandbox::sys_a_command_leaves_the_sandbox_only_once_the_user_allows_it
+    cineris-core::it sandbox::sys_a_command_leaves_the_sandbox_only_once_the_user_allows_it
 
 [break] protected-paths-not-looked-at
 rule: Every confined command has its protected paths looked at before and after it.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
 find: .filter(|_| !unconfined)
 replace: .filter(|_| false)
 caught-by:
-    cortex-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
+    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
 
 [break] a-protected-change-is-not-kept-for-undo
 rule: What a changed protected path held before the command is kept in the round's checkpoint, so undo puts it back.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
 find: rounds.record_protected(&protected)
 replace: { let _ = protected; Vec::new() }
 caught-by:
-    cortex-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
+    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
 
 [break] a-protected-change-does-not-stop-the-turn
 rule: A confined command that changed protected paths stops its turn at the next call.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
 find: self.policy.stop_turn(cx.turn, note);
 replace: let _ = note;
 caught-by:
-    cortex-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
+    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
 
 [break] a-stopped-turn-goes-on
 rule: Once a turn is stopped, no later call of it is decided as anything but a stop.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: Policy::decide
 find: if let Some(reason) = self.stopped(call) {
 replace: if let Some(reason) = self.stopped(call).filter(|_| false) {
 caught-by:
-    cortex-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
+    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
 
 [break] an-incomplete-look-is-not-said
 rule: When the look at protected paths stops at its bound, the result says so.
-file: crates/cortex-core/src/sandbox.rs
+file: crates/cineris-core/src/sandbox.rs
 in: protected_note
 find: } else if !complete_after {
 replace: } else if !complete_after && false {
 caught-by:
-    cortex-core::it sandbox::sys_past_its_bound_the_look_at_protected_paths_warns_and_does_not_stop
+    cineris-core::it sandbox::sys_past_its_bound_the_look_at_protected_paths_warns_and_does_not_stop
 
 # What the independent review of step 26 found, each fix broken again.
 
 [break] a-process-leaves-the-tree
 rule: A confined process cannot leave the command's session: it dies with the tree.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: stay.insert(libc::SYS_setsid, Vec::new());
 replace: let _ = libc::SYS_setsid;
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_the_calls_that_would_undo_or_get_round_the_sandbox_are_refused
+    cineris-sandbox::it confined::sys_the_calls_that_would_undo_or_get_round_the_sandbox_are_refused
 
 [break] clone3-not-answered-as-missing
 rule: `clone3`, whose flags a filter cannot read, is answered as missing, so that a user namespace cannot be made through it.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: clone3.insert(libc::SYS_clone3, Vec::new());
 replace: let _ = &clone3;
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_the_calls_that_would_undo_or_get_round_the_sandbox_are_refused
+    cineris-sandbox::it confined::sys_the_calls_that_would_undo_or_get_round_the_sandbox_are_refused
 
 [break] io-uring-allowed
 rule: `io_uring`, which can make a socket without the `socket` call, is refused.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: libc::SYS_io_uring_setup
 replace: libc::SYS_vhangup
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_the_calls_that_would_undo_or_get_round_the_sandbox_are_refused
+    cineris-sandbox::it confined::sys_the_calls_that_would_undo_or_get_round_the_sandbox_are_refused
 
 [break] any-netlink-protocol
 rule: With the network off, netlink is open for its route protocol only.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: number(libc::NETLINK_ROUTE)?
 occurrence: 1
 replace: number(libc::NETLINK_USERSOCK)?
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
+    cineris-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
 
 [break] any-netlink-protocol-with-the-network-on
 rule: With the network on, netlink is still open for its route protocol only.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: number(libc::NETLINK_ROUTE)?
 occurrence: 2
 replace: number(libc::NETLINK_USERSOCK)?
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
+    cineris-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
 
 [break] a-linked-protected-directory-looked-through
 rule: A protected path reached through a link in the workspace is not looked through.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Watch::take
 find: if look.through_a_link(path) {
 replace: if false {
 caught-by:
-    cortex-sandbox protect::tests::a_linked_git_directory_is_not_looked_through
+    cineris-sandbox protect::tests::a_linked_git_directory_is_not_looked_through
 
 [break] an-incomplete-look-reports-what-it-did-not-reach
 rule: A path one of two looks did not reach is not reported as gone.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Snapshot::compare
 find: None if after.covers(path) =>
 replace: None if true =>
 caught-by:
-    cortex-sandbox protect::tests::a_look_that_stops_at_its_bound_reports_nothing_beyond_it
+    cineris-sandbox protect::tests::a_look_that_stops_at_its_bound_reports_nothing_beyond_it
 
 [break] a-mode-change-is-put-back-by-content
 rule: A change of mode is reported as one undo cannot put back.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Entry::change_from
 find: _ if self.stamp.mode != old.stamp.mode => Some(Before::Unknown)
 replace: _ if false => Some(Before::Unknown)
 caught-by:
-    cortex-sandbox protect::tests::a_change_of_mode_alone_is_found_and_cannot_be_put_back_by_content
+    cineris-sandbox protect::tests::a_change_of_mode_alone_is_found_and_cannot_be_put_back_by_content
 
 [break] undo-writes-through-a-link
 rule: Undo does not put a file back through a link: a directory on its way, or the file itself, that is a link now.
-file: crates/cortex-session/src/snapshot.rs
+file: crates/cineris-session/src/snapshot.rs
 in: through_a_link
 find: Ok(metadata) if metadata.file_type().is_symlink() => return Ok(true)
 replace: Ok(metadata) if metadata.file_type().is_symlink() => return Ok(false)
-packages: cortex-session, cortex-core
+packages: cineris-session, cineris-core
 caught-by:
-    cortex-session snapshot::tests::a_path_reached_through_a_link_is_not_put_back
-    cortex-core::it sandbox::sys_undo_does_not_write_through_a_link_a_command_planted
+    cineris-session snapshot::tests::a_path_reached_through_a_link_is_not_put_back
+    cineris-core::it sandbox::sys_undo_does_not_write_through_a_link_a_command_planted
 
 [break] a-stopped-turn-runs-another-command
 rule: Once a command stopped the turn, no call of the turn that changes anything runs, even one decided before the stop.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: StopsWithTurn::run
 find: && let Some(reason) = self.policy.stopped_turn(cx.turn)
 replace: && let Some(reason) = self.policy.stopped_turn(cx.turn).filter(|_| false)
 caught-by:
-    cortex-core::it sandbox::sys_a_stopped_turn_runs_no_more_commands_of_the_same_response
+    cineris-core::it sandbox::sys_a_stopped_turn_runs_no_more_commands_of_the_same_response
 
 [break] the-harness-files-inside-a-write-root
 rule: A write root that holds the harness's own files cannot be confined: the session reports the sandbox off.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: && holds_harness_files(
 replace: && false && holds_harness_files(
 caught-by:
-    cortex-core::it sandbox::a_workspace_that_holds_the_harness_files_is_not_confined
+    cineris-core::it sandbox::a_workspace_that_holds_the_harness_files_is_not_confined
 
 [break] a-change-of-level-leaves-the-sandbox-behind
 rule: A change of level takes the sandbox with it: confined below `unrestricted`, not at it.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: Core::put_engine
 find: live.sandbox.set_level(&level);
 replace: let _ = &level;
 caught-by:
-    cortex-core::it sandbox::sys_a_change_of_level_takes_the_sandbox_with_it
+    cineris-core::it sandbox::sys_a_change_of_level_takes_the_sandbox_with_it
 
 # Found by the second review of step 26.
 
 [break] a-session-member-outlives-the-tree
 rule: Every process of a command's session dies with the tree, one that made a process group of its own included.
-file: crates/cortex-sandbox/src/tree/unix.rs
+file: crates/cineris-sandbox/src/tree/unix.rs
 in: Inner::end
 find: if !kill_session(self.pid, cancel) {
 replace: if false && !kill_session(self.pid, cancel) {
 caught-by:
-    cortex-sandbox::it tree::sys_a_process_that_makes_a_group_of_its_own_is_still_killed_with_the_tree
+    cineris-sandbox::it tree::sys_a_process_that_makes_a_group_of_its_own_is_still_killed_with_the_tree
 
 [break] a-session-member-is-not-counted
 rule: A process of the command's session outside its group is still counted as running.
-file: crates/cortex-sandbox/src/tree/unix.rs
+file: crates/cineris-sandbox/src/tree/unix.rs
 in: count_group
 find: if (its_group == leader || its_session == leader) && state != "Z" && state != "X" {
 replace: if its_group == leader && state != "Z" && state != "X" {
 caught-by:
-    cortex-sandbox::it tree::sys_a_process_that_makes_a_group_of_its_own_is_still_killed_with_the_tree
+    cineris-sandbox::it tree::sys_a_process_that_makes_a_group_of_its_own_is_still_killed_with_the_tree
 
 [break] a-process-group-of-its-own-is-faked
 rule: A confined process may make a process group of its own (`timeout` needs one); only a session of its own is faked.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: stay.insert(libc::SYS_setsid, Vec::new());
 replace: stay.insert(libc::SYS_setsid, Vec::new()); stay.insert(libc::SYS_setpgid, Vec::new());
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_the_calls_that_would_undo_or_get_round_the_sandbox_are_refused
+    cineris-sandbox::it confined::sys_the_calls_that_would_undo_or_get_round_the_sandbox_are_refused
 
 [break] the-network-on-has-no-socket-filter
 rule: With the network on, a command may open only the internet's sockets and netlink's route protocol: no Unix socket, no other netlink protocol.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: refused.insert(libc::SYS_socket, socket);
 replace: if matches!(network, Network::Off) { refused.insert(libc::SYS_socket, socket); }
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
+    cineris-sandbox::it confined::sys_with_the_network_off_no_socket_reaches_anything
 
 [break] the-launcher-in-a-write-root
 rule: A write root that holds the program started as the launcher cannot be confined: a command could replace it.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: holds_harness_files
 find: || files.iter().any(|file| file.starts_with(&root))
 replace: || files.iter().any(|_| false)
 caught-by:
-    cortex-core::it sandbox::a_write_root_that_holds_the_launcher_is_not_confined
-    cortex-core::it sandbox::a_write_root_that_holds_the_user_configuration_a_link_leads_to_is_not_confined
+    cineris-core::it sandbox::a_write_root_that_holds_the_launcher_is_not_confined
+    cineris-core::it sandbox::a_write_root_that_holds_the_user_configuration_a_link_leads_to_is_not_confined
 
 [break] a-write-root-inside-the-harness-files
 rule: A write root inside one of the harness's own directories cannot be confined either.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: holds_harness_files
 find: .any(|dir| dir.starts_with(&root) || root.starts_with(dir))
 replace: .any(|dir| dir.starts_with(&root))
 caught-by:
-    cortex-core::it sandbox::a_write_root_inside_the_harness_files_is_not_confined
+    cineris-core::it sandbox::a_write_root_inside_the_harness_files_is_not_confined
 
 [break] a-look-the-command-cut-short-goes-on
 rule: A command that makes the look after it stop at its bound, where the look before did not, stops the turn.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
 find: if !changed.is_empty() || (complete.0 && !complete.1) {
 replace: if !changed.is_empty() {
 caught-by:
-    cortex-core::it sandbox::sys_a_command_that_makes_the_look_stop_short_stops_the_turn
+    cineris-core::it sandbox::sys_a_command_that_makes_the_look_stop_short_stops_the_turn
 
 [break] the-note-promises-undo-through-a-link
 rule: The note never says undo puts back a path that undo will refuse: one now reached through a link.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: Rounds::record_protected
 find: if !recorded || changed.mode_changed || reached_through_a_link(&self.root, &file) {
 replace: if !recorded || changed.mode_changed {
 caught-by:
-    cortex-core::it sandbox::sys_undo_does_not_write_through_a_link_a_command_planted
+    cineris-core::it sandbox::sys_undo_does_not_write_through_a_link_a_command_planted
 
 [break] a-change-of-mode-loses-the-content
 rule: A protected file whose content and mode a command changed keeps its content for undo; the mode is put back by hand.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Entry::change_from
 find: && self.content != old.content =>
 replace: && self.content != old.content && false =>
 caught-by:
-    cortex-sandbox protect::tests::a_change_of_content_and_mode_keeps_the_content
+    cineris-sandbox protect::tests::a_change_of_content_and_mode_keeps_the_content
 
 [break] a-change-of-mode-is-not-said
 rule: A change of mode is reported as one to put back by hand.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Snapshot::compare
 find: mode_changed: new.kind == old.kind
 replace: mode_changed: false && new.kind == old.kind
 caught-by:
-    cortex-sandbox protect::tests::a_change_of_content_and_mode_keeps_the_content
+    cineris-sandbox protect::tests::a_change_of_content_and_mode_keeps_the_content
 
 [break] a-linked-module-is-looked-through
 rule: The look never goes through a link: a module of `.git/modules` that is one is not looked into.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Look::record_git
 find: if is_dir {
 replace: if true {
 caught-by:
-    cortex-sandbox protect::tests::a_linked_module_or_worktree_is_not_looked_through
+    cineris-sandbox protect::tests::a_linked_module_or_worktree_is_not_looked_through
 
 [break] a-linked-worktree-is-looked-through
 rule: The look never goes through a link: a worktree of `.git/worktrees` that is one is not looked into.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Look::record_git
 find: if !is_dir {
 replace: if false {
 caught-by:
-    cortex-sandbox protect::tests::a_linked_module_or_worktree_is_not_looked_through
+    cineris-sandbox protect::tests::a_linked_module_or_worktree_is_not_looked_through
 
 [break] a-question-does-not-hold-later-calls-while-confined
 rule: While commands are confined, an answer may be to stop the turn, so nothing after an open question that changes anything starts until it is answered.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::answers_may_stop
 find: || self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
 replace:
 caught-by:
-    cortex-core::it sandbox::while_commands_are_confined_a_later_call_waits_for_the_open_question
+    cineris-core::it sandbox::while_commands_are_confined_a_later_call_waits_for_the_open_question
 
 [break] a-wrapped-tool-loses-its-preview
 rule: The guard around every tool keeps the tool's preview, so that a question about a change to a file still shows the change.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: StopsWithTurn::preview
 find: self.tool.preview(plan, cx)
 replace: { let _ = (plan, cx); None }
 caught-by:
-    cortex-core::it approvals::an_approval_for_a_change_to_a_file_shows_the_change_within_a_bound
+    cineris-core::it approvals::an_approval_for_a_change_to_a_file_shows_the_change_within_a_bound

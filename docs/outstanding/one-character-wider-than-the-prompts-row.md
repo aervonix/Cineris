@@ -1,6 +1,6 @@
 A letter with a long run of tag characters is one cluster whose escape is wider than the prompt's row, cut with `…`.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 25
 
 | Item | Who | When |

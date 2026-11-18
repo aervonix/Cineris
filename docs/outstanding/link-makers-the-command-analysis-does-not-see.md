@@ -1,6 +1,6 @@
 The command analysis misses links made by `env ln`, abbreviated `cp` options, and `cp -a`, `cp -R`, `mv`.
 
-- Area: cortex-policy
+- Area: cineris-policy
 - Owner: step 32
 
 | Item | Who | When |

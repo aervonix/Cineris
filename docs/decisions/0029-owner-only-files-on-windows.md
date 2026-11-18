@@ -1,4 +1,4 @@
-# 0029: Owner-only files on Windows are made in `cortex-base`, in its one module that may use `unsafe`
+# 0029: Owner-only files on Windows are made in `cineris-base`, in its one module that may use `unsafe`
 
 - **Status:** Accepted by the owner on 2026-11-12.
 - **Date:** 2026-11-12
@@ -7,7 +7,7 @@
 
 Session logs, credential files and state files must be readable by their user and nobody else ([security.md](../security.md)). On Linux that is a mode, `0600`, which the standard library can give a file as it creates it, and step 4 built it into `write_atomic` as the `owner_only` option.
 
-On Windows a new file takes the access rules of its folder. To give a file rules of its own, the rules have to be handed to the call that creates it, and the standard library has no way to do that. It takes the Windows API, which is `unsafe` to call. The lint rule so far allowed `unsafe` in `cortex-sandbox` and `cortex-term` only, so step 4 left `owner_only` doing nothing on Windows and listed the gap as outstanding.
+On Windows a new file takes the access rules of its folder. To give a file rules of its own, the rules have to be handed to the call that creates it, and the standard library has no way to do that. It takes the Windows API, which is `unsafe` to call. The lint rule so far allowed `unsafe` in `cineris-sandbox` and `cineris-term` only, so step 4 left `owner_only` doing nothing on Windows and listed the gap as outstanding.
 
 Steps 8 (sessions) and 9 (configuration and credentials) both promise owner-only files on both OSes, and run at the same time.
 
@@ -16,14 +16,14 @@ Steps 8 (sessions) and 9 (configuration and credentials) both promise owner-only
 | Option | For | Against |
 |---|---|---|
 | **Rely on the folder.** Files go under the user's profile (`%APPDATA%`, `%LOCALAPPDATA%`), whose default rules already keep other ordinary users out. | No code and no `unsafe`. | It is a default, not a guarantee. The data directory and the configuration path are configurable, a profile on a shared or redirected volume can have other rules, and the folder's list always includes the Administrators group and SYSTEM. "Owner-only on both OSes" would mean two different things, and no test could say which machine has which. |
-| **A helper in `cortex-sandbox`,** which may already use `unsafe`, called by `cortex-session` and `cortex-config`. | No change to the rule about where `unsafe` lives. | Two crates that have nothing to do with sandboxing would depend on the sandbox crate, against the dependency direction in [01-workspace.md](../architecture/01-workspace.md). And the atomic write, which is in `cortex-base`, could not use it, so every caller would have to protect the file itself after writing it, which leaves a moment when it is not protected. |
-| **Do it in `cortex-base`,** in one Windows-only module that is allowed `unsafe`. | One audited place. Every crate that writes a private file already depends on `cortex-base` and gets the same behaviour from the same option, `owner_only`, that already works on Linux. The access list goes to the call that creates the file, inside the atomic write. | The rule changes: `cortex-base`, the crate everything leans on, gains `unsafe` and a Windows-only dependency. |
+| **A helper in `cineris-sandbox`,** which may already use `unsafe`, called by `cineris-session` and `cineris-config`. | No change to the rule about where `unsafe` lives. | Two crates that have nothing to do with sandboxing would depend on the sandbox crate, against the dependency direction in [01-workspace.md](../architecture/01-workspace.md). And the atomic write, which is in `cineris-base`, could not use it, so every caller would have to protect the file itself after writing it, which leaves a moment when it is not protected. |
+| **Do it in `cineris-base`,** in one Windows-only module that is allowed `unsafe`. | One audited place. Every crate that writes a private file already depends on `cineris-base` and gets the same behaviour from the same option, `owner_only`, that already works on Linux. The access list goes to the call that creates the file, inside the atomic write. | The rule changes: `cineris-base`, the crate everything leans on, gains `unsafe` and a Windows-only dependency. |
 
 ## Decision
 
-**`cortex-base` makes owner-only files and directories on both OSes. On Windows it does so in one module, `private::windows`, which is the only place in the crate where `unsafe` is allowed.**
+**`cineris-base` makes owner-only files and directories on both OSes. On Windows it does so in one module, `private::windows`, which is the only place in the crate where `unsafe` is allowed.**
 
-- **The rule.** `unsafe_code` stays denied for the workspace. It is allowed per module in `cortex-sandbox` and `cortex-term`, and in exactly one module of `cortex-base`: `crates/cortex-base/src/private/windows.rs`. Every block has a `// SAFETY:` comment, which Clippy requires. Nothing else in `cortex-base` may use `unsafe`, and no other crate gains the right by this record.
+- **The rule.** `unsafe_code` stays denied for the workspace. It is allowed per module in `cineris-sandbox` and `cineris-term`, and in exactly one module of `cineris-base`: `crates/cineris-base/src/private/windows.rs`. Every block has a `// SAFETY:` comment, which Clippy requires. Nothing else in `cineris-base` may use `unsafe`, and no other crate gains the right by this record.
 - **The dependency.** `windows-sys`, the raw bindings Microsoft publishes, with the five API families the module calls and no more. It is compiled on Windows only.
 - **What "owner-only" is on Windows.** An access list with one entry, which allows the current user full control, with inheritance from the folder turned off, and the current user as the owner. That is what mode `0600` means, and `0700` for a directory.
 - **Nobody else is on the list.** Not SYSTEM and not the Administrators group. Both reach any file regardless: an administrator can take ownership, and backup software reads with a privilege that passes access lists by. Leaving them off breaks nothing that works and keeps the list equal to the Linux mode. If something is found that needs one of them, it is added by amending this record, not quietly.
@@ -31,7 +31,7 @@ Steps 8 (sessions) and 9 (configuration and credentials) both promise owner-only
 - **A private file never relies on its folder.** A directory the module creates hands its list down to what is created inside it later, as a second line of defence. But a directory that already exists is left exactly as it is, because its permissions may be the user's choice. So every private file is made private itself, through `private::create_new` or `write_atomic` with `owner_only`.
 - **`owner_only` means the same on both OSes, for a new file and for an existing one.** With it, the file the write leaves is owner-only. Step 4's Linux behaviour kept the mode of an existing file even with the option set, so a credentials file someone had created by hand as `0644` stayed readable by others after a key was written into it. That is changed: the option only ever tightens. Without the option nothing changes: a replaced file keeps its mode on Linux and takes its folder's rules on Windows.
 
-**The API** (`cortex_base::private`), all of it blocking:
+**The API** (`cineris_base::private`), all of it blocking:
 
 | Function | What it does |
 |---|---|
@@ -48,7 +48,7 @@ Steps 8 (sessions) and 9 (configuration and credentials) both promise owner-only
 
 ## What is given up
 
-- **`cortex-base` is no longer free of `unsafe`.** The module was reviewed independently before it was merged, and its tests run on the Windows CI job, where they read the access list back with the module's own reader and, separately, with `icacls`, a program that shares no code with it.
+- **`cineris-base` is no longer free of `unsafe`.** The module was reviewed independently before it was merged, and its tests run on the Windows CI job, where they read the access list back with the module's own reader and, separately, with `icacls`, a program that shares no code with it.
 - **A file's owner can open it and nobody else can, which includes tools the user runs as another account.** A service that indexes or backs up files as its own user will be refused, as it would be by `0600` on Linux.
 - **A file system with no access lists cannot keep the promise.** On FAT or exFAT, and on some network and virtual shares, Windows creates the file and drops the list without saying so. The module does not refuse to write there: a session on a USB stick still has to be saved. `is_private` then answers no, or fails, and the caller reports it. The same is true of a mode on Linux on such a file system.
 - **A process that runs under a restricted token may be refused its own user's private files.** Windows checks a restricted token's restricting identifiers as well as the user, and the list names the user alone. Nothing runs that way today. The Windows sandbox step (49), which starts commands under such a token, has to decide what those commands may read, and private files of the harness are not among it.
@@ -59,7 +59,7 @@ The module was reviewed independently before its first push, block by block agai
 
 ## Amended after the review of step 16: and a file's identity
 
-`private::windows` gained `file_identity`: the volume's serial number and the file's 128-bit id on it, from one call (`GetFileInformationByHandleEx` with the class `FileIdInfo`, which ReFS keeps unique where the older 64-bit index is not) that fills a structure of a number and sixteen bytes the function owns, with a `// SAFETY:` comment. It is what `cortex_base::FileIdentity` is on Windows, as a device and an inode number are on Linux; the standard library's `file_index` is not stable. The statistics' writer needs it to notice that the month's file it holds open is no longer the one at the name (`cortex stats reset` deleted it), where a creation time is no help: NTFS gives a file made again under a name within seconds the old file's creation time. The rule about where `unsafe` may be written does not change.
+`private::windows` gained `file_identity`: the volume's serial number and the file's 128-bit id on it, from one call (`GetFileInformationByHandleEx` with the class `FileIdInfo`, which ReFS keeps unique where the older 64-bit index is not) that fills a structure of a number and sixteen bytes the function owns, with a `// SAFETY:` comment. It is what `cineris_base::FileIdentity` is on Windows, as a device and an inode number are on Linux; the standard library's `file_index` is not stable. The statistics' writer needs it to notice that the month's file it holds open is no longer the one at the name (`cineris stats reset` deleted it), where a creation time is no help: NTFS gives a file made again under a name within seconds the old file's creation time. The rule about where `unsafe` may be written does not change.
 
 ## Amended in step 10: the module also reads a reparse tag
 
@@ -67,13 +67,13 @@ Accepted by the owner on 2026-11-13.
 
 `private::windows` gained one more function, `reparse_tag`, which is not about access lists: it returns the reparse tag of an open file. It is the only `unsafe` added, one call (`GetFileInformationByHandleEx` with the class `FileAttributeTagInfo`) that fills a structure of two numbers which the function owns, with a `// SAFETY:` comment. Its API is safe, and it is private to the crate.
 
-**Why it is needed.** `cortex_base::open_regular` opens a file without following a link ([architecture/05-tools.md](../architecture/05-tools.md), "What resolution does not promise"). On Windows it opens the reparse point itself and must then tell two things apart: a link, which it refuses, and a placeholder of a cloud-synced or projected folder, which is an ordinary file to its user and which only an ordinary open can read. What tells them apart is the tag, and the standard library reports only whether a reparse point is a "name surrogate". That is not enough: an app execution alias and the NFS and DFS tags lead elsewhere and are not name surrogates.
+**Why it is needed.** `cineris_base::open_regular` opens a file without following a link ([architecture/05-tools.md](../architecture/05-tools.md), "What resolution does not promise"). On Windows it opens the reparse point itself and must then tell two things apart: a link, which it refuses, and a placeholder of a cloud-synced or projected folder, which is an ordinary file to its user and which only an ordinary open can read. What tells them apart is the tag, and the standard library reports only whether a reparse point is a "name surrogate". That is not enough: an app execution alias and the NFS and DFS tags lead elsewhere and are not name surrogates.
 
 **The rule built on it** fails closed. A reparse point is refused unless its tag is on a short list of tags whose content a filter supplies (the cloud family, OneDrive, the projected file system, deduplication, system compression, HSM, SIS, WIM, storage sync, file placeholder). A tag this build does not know is refused as a link.
 
-**Why here.** The rule about where `unsafe` may be written does not change: it is still this one module of `cortex-base`. The alternative with no `unsafe` was to refuse every reparse point that is not a plain file, which would make every file in a OneDrive or projected folder impossible to edit.
+**Why here.** The rule about where `unsafe` may be written does not change: it is still this one module of `cineris-base`. The alternative with no `unsafe` was to refuse every reparse point that is not a plain file, which would make every file in a OneDrive or projected folder impossible to edit.
 
-**How it is tested.** On the Windows CI job, against a real symbolic link to a file, one to a directory, and a real junction, each of which must be refused (`crates/cortex-base/tests/it/nofollow.rs`). The list of tags is a pure function, tested on both OSes. The placeholder case is not tested: a hosted runner has no cloud-synced folder.
+**How it is tested.** On the Windows CI job, against a real symbolic link to a file, one to a directory, and a real junction, each of which must be refused (`crates/cineris-base/tests/it/nofollow.rs`). The list of tags is a pure function, tested on both OSes. The placeholder case is not tested: a hosted runner has no cloud-synced folder.
 
 ## Revisit when
 

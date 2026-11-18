@@ -23,8 +23,8 @@ The PR's run is 43790434698, at `87ee5ef`.
 
 <!-- end of what cargo xtask ci-times wrote -->
 
-- **The first CI run of the pull request** (43788764531, at `252a4ce`) read Linux's integration tier at 44.9 s, over its budget, nearly all of it tests that write files in crates the step did not touch (`cortex-session`'s durability tests 0.4 → 5.4 s): the same three crates against `main` on one Linux runner read 4.1 s on both sides (`try` 43789085254), and this run, on another runner, 21.1 s. Windows read 17.6 s there, on a 5 ms runner.
-- **Windows' system tier** reads 77.5 s here against `main`'s 67.6 s, on runners of 9 and 10 ms; on one runner (below) it moved by +0.8 s. Step 23's first part, on `main` since `9baacb6`, added the pseudo-terminal tests of `cortex-cli` to both sides.
+- **The first CI run of the pull request** (43788764531, at `252a4ce`) read Linux's integration tier at 44.9 s, over its budget, nearly all of it tests that write files in crates the step did not touch (`cineris-session`'s durability tests 0.4 → 5.4 s): the same three crates against `main` on one Linux runner read 4.1 s on both sides (`try` 43789085254), and this run, on another runner, 21.1 s. Windows read 17.6 s there, on a 5 ms runner.
+- **Windows' system tier** reads 77.5 s here against `main`'s 67.6 s, on runners of 9 and 10 ms; on one runner (below) it moved by +0.8 s. Step 23's first part, on `main` since `9baacb6`, added the pseudo-terminal tests of `cineris-cli` to both sides.
 - **The Windows test job** took 212 s against `main`'s 226 s: three at a time adds about 1.5 s to the run of tiers 1 and 2, and the tiers' tests are quicker.
 
 ## Windows, both trees on one runner

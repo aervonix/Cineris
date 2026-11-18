@@ -55,10 +55,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
-name = "cortex-base"
+name = "cineris-base"
 version = "0.0.0"
 dependencies = [
- "cortex-protocol",
+ "cineris-protocol",
  "libc",
  "serde",
  "serde_json",
@@ -72,33 +72,33 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-fuzz"
+name = "cineris-fuzz"
 version = "0.0.0"
 dependencies = [
- "cortex-base",
- "cortex-index",
- "cortex-llm",
- "cortex-protocol",
+ "cineris-base",
+ "cineris-index",
+ "cineris-llm",
+ "cineris-protocol",
  "libfuzzer-sys",
  "serde",
  "serde_json",
 ]
 
 [[package]]
-name = "cortex-index"
+name = "cineris-index"
 version = "0.0.0"
 dependencies = [
- "cortex-base",
+ "cineris-base",
  "ignore",
  "thiserror",
 ]
 
 [[package]]
-name = "cortex-llm"
+name = "cineris-llm"
 version = "0.0.0"
 dependencies = [
- "cortex-base",
- "cortex-protocol",
+ "cineris-base",
+ "cineris-protocol",
  "futures-core",
  "serde",
  "serde_json",
@@ -107,7 +107,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "cortex-protocol"
+name = "cineris-protocol"
 version = "0.0.0"
 dependencies = [
  "serde",

@@ -1,5 +1,5 @@
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                              │
 │                                                              │
 │   opus-5.5 high  ·  ~/src/parser on main                     │
 │   Knows 4 commands and 3 conventions here. /project shows t… │

@@ -1,6 +1,6 @@
 The decoder reads byte 0x08 as `Ctrl+Backspace`, so a terminal whose Backspace sends `^H` deletes a word.
 
-- Area: cortex-term
+- Area: cineris-term
 - Owner: step 25
 
 | Item | Who | When |

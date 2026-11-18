@@ -44,7 +44,7 @@ fn the_terms_are_found_where_the_variable_says_or_under_the_home_folder() {
     let default = TermsFile::find(env(&[("HOME", "/h")]));
     assert_eq!(
         default,
-        TermsFile::Default(PathBuf::from("/h/.config/cortex-harness/owner-terms"))
+        TermsFile::Default(PathBuf::from("/h/.config/cineris-dev/owner-terms"))
     );
     // Windows has USERPROFILE where Unix has HOME; an empty value is none.
     let windows = TermsFile::find(env(&[
@@ -54,7 +54,7 @@ fn the_terms_are_found_where_the_variable_says_or_under_the_home_folder() {
     ]));
     assert_eq!(
         windows,
-        TermsFile::Default(PathBuf::from("/u/.config/cortex-harness/owner-terms"))
+        TermsFile::Default(PathBuf::from("/u/.config/cineris-dev/owner-terms"))
     );
     assert_eq!(TermsFile::find(env(&[])), TermsFile::Nowhere);
 }
@@ -67,10 +67,7 @@ fn without_the_default_file_the_push_goes_on_and_a_named_file_must_be_there() {
     let Loaded::Missing(why) = load(&default, none).unwrap() else {
         panic!("a missing default file is a warning");
     };
-    assert!(
-        why.contains("~/.config/cortex-harness/owner-terms"),
-        "{why}"
-    );
+    assert!(why.contains("~/.config/cineris-dev/owner-terms"), "{why}");
     assert!(matches!(
         load(&TermsFile::Nowhere, none),
         Ok(Loaded::Missing(_))
@@ -539,12 +536,15 @@ fn sys_a_repository_that_requires_the_file_refuses_a_push_without_it() {
     let repo = Repo::new("required");
     assert!(!required(&repo.dir));
     assert_eq!(missing("there is no file", false), Ok(()));
-    repo.git("Someone", &["config", "cortex.ownerTermsRequired", "true"]);
+    repo.git("Someone", &["config", "cineris.ownerTermsRequired", "true"]);
     assert!(required(&repo.dir));
     // A value git cannot read as a boolean requires it too.
-    repo.git("Someone", &["config", "cortex.ownerTermsRequired", "ture"]);
+    repo.git("Someone", &["config", "cineris.ownerTermsRequired", "ture"]);
     assert!(required(&repo.dir));
-    repo.git("Someone", &["config", "cortex.ownerTermsRequired", "false"]);
+    repo.git(
+        "Someone",
+        &["config", "cineris.ownerTermsRequired", "false"],
+    );
     assert!(!required(&repo.dir));
     let refused = missing("there is no file", true).unwrap_err();
     assert!(refused.contains("The push is refused"), "{refused}");

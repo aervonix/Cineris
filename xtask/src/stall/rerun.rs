@@ -492,7 +492,7 @@ mod tests {
     fn cluster() -> Vec<Failure> {
         vec![
             timeout("cx::it", "a", "2026-11-15T10:00:00.000+00:00", 14.0),
-            timeout("cx", "b::c", "2026-11-15T10:00:02.000+00:00", 12.1),
+            timeout("cin", "b::c", "2026-11-15T10:00:02.000+00:00", 12.1),
             timeout("cx::it", "d", "2026-11-15T10:00:03.900+00:00", 10.3),
         ]
     }
@@ -508,7 +508,7 @@ mod tests {
     fn a_cluster_with_a_stall_is_run_again() {
         // 30 s of 100: 30%.
         let decision = decide(&cluster(), &observed(30.0, 100));
-        assert_eq!(tests_of(&decision), ["cx::it a", "cx b::c", "cx::it d"]);
+        assert_eq!(tests_of(&decision), ["cx::it a", "cin b::c", "cx::it d"]);
     }
 
     #[test]
@@ -591,7 +591,7 @@ mod tests {
             12.0,
         ));
         let decision = decide(&failures, &observed(30.0, 100));
-        assert_eq!(tests_of(&decision), ["cx::it a", "cx b::c", "cx::it d"]);
+        assert_eq!(tests_of(&decision), ["cx::it a", "cin b::c", "cx::it d"]);
     }
 
     #[test]
@@ -602,7 +602,7 @@ mod tests {
         let Decision::Declined { why, .. } = decision else {
             panic!("a test with a `)` in its name was run again");
         };
-        assert_eq!(why, Declined::Unnamable("cx odd)name".to_owned()));
+        assert_eq!(why, Declined::Unnamable("cin odd)name".to_owned()));
     }
 
     #[test]
@@ -681,7 +681,7 @@ mod tests {
     }
 
     /// What the first run wrote: the cluster of three timeouts (of `cx::it`
-    /// and `cx`), a test that passed, and `extra` suites.
+    /// and `cin`), a test that passed, and `extra` suites.
     fn first_report(extra: &[(&str, String, usize)]) -> String {
         let mut cases = vec![
             (
@@ -696,9 +696,9 @@ mod tests {
                 1,
             ),
             (
-                "cx",
+                "cin",
                 case(
-                    "cx",
+                    "cin",
                     "b::c",
                     "2026-11-15T10:00:02.000+00:00",
                     12.1,
@@ -730,7 +730,7 @@ mod tests {
     /// What the re-run writes for the three tests: each took a moment, and
     /// `failing` (a name and the kind of failure) did not pass.
     fn rerun_report(failing: &[(&str, &str)], leave_out: &[&str]) -> String {
-        let all = [("cx::it", "a"), ("cx", "b::c"), ("cx::it2", "d")];
+        let all = [("cx::it", "a"), ("cin", "b::c"), ("cx::it2", "d")];
         let cases: Vec<(&str, String, usize)> = all
             .iter()
             .filter(|(_, name)| !leave_out.contains(name))
@@ -840,7 +840,7 @@ mod tests {
         assert_eq!(
             ran.commands[1],
             "nextest run --no-tests=pass -E (binary_id(=cx::it) and test(=a)) or \
-             (binary_id(=cx) and test(=b::c)) or (binary_id(=cx::it2) and test(=d))"
+             (binary_id(=cin) and test(=b::c)) or (binary_id(=cx::it2) and test(=d))"
         );
         // The report the tier check reads has no failure left, the tests'
         // times are the re-run's, and the other test's case is as it was.
@@ -884,7 +884,11 @@ mod tests {
             error.contains("1 of the 3 tests did not pass on the re-run"),
             "{error}"
         );
-        assert!(ran.said.contains("cx b::c TIMED OUT AGAIN"), "{}", ran.said);
+        assert!(
+            ran.said.contains("cin b::c TIMED OUT AGAIN"),
+            "{}",
+            ran.said
+        );
         // The report keeps that failure, and only that one.
         let failed: Vec<String> = junit::failed(&ran.left)
             .into_iter()
@@ -1097,7 +1101,7 @@ mod tests {
                 name: "a".to_owned(),
             },
             Test {
-                binary: "cx".to_owned(),
+                binary: "cin".to_owned(),
                 name: "b::c".to_owned(),
             },
             Test {
@@ -1105,7 +1109,7 @@ mod tests {
                 name: "d".to_owned(),
             },
             Test {
-                binary: "cx".to_owned(),
+                binary: "cin".to_owned(),
                 name: "gone".to_owned(),
             },
         ];

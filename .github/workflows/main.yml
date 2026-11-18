@@ -91,7 +91,7 @@ jobs:
         shell: bash
         run: >-
           cargo run --locked --quiet --package xtask --
-          startup "target/${{ matrix.target }}/dist/cortex${{ runner.os == 'Windows' && '.exe' || '' }}"
+          startup "target/${{ matrix.target }}/dist/cineris${{ runner.os == 'Windows' && '.exe' || '' }}"
           --budget ${{ matrix.name }}
       - name: Keep the record
         if: ${{ !cancelled() }}

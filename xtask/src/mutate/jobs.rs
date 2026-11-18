@@ -158,7 +158,7 @@ mod tests {
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    use cortex_testkit::Gate;
+    use cineris_testkit::Gate;
 
     use super::for_each;
     use crate::Result;

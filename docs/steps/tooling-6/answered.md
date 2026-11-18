@@ -6,7 +6,7 @@ This step is not a numbered step of the build plan: it built the sixth round of 
 
 Measured on scratch branches whose only difference from the step branch, or from `main`, is the measurement named; every scratch branch was deleted at the end.
 
-**The profile** (`try` run 43710070420, the system tests alone with `-f testkit=profile`, a phase for each command the shell tool ran): tier 3 was 91.3 s, `cortex-tools` 38.0 s of it, `cortex-core` 14.7, `xtask` 14.0, `cortex-cli` 11.8. A PowerShell command through the tool took 0.5 to 0.65 s for `pwsh` and 0.3 to 0.4 s for Windows PowerShell, against 30 to 50 ms for `cmd.exe`; a 6,000-line output made with `ForEach-Object` 2.5 s for `pwsh`, and the broken store's 20,000 lines 4.3 s.
+**The profile** (`try` run 43710070420, the system tests alone with `-f testkit=profile`, a phase for each command the shell tool ran): tier 3 was 91.3 s, `cineris-tools` 38.0 s of it, `cineris-core` 14.7, `xtask` 14.0, `cineris-cli` 11.8. A PowerShell command through the tool took 0.5 to 0.65 s for `pwsh` and 0.3 to 0.4 s for Windows PowerShell, against 30 to 50 ms for `cmd.exe`; a 6,000-line output made with `ForEach-Object` 2.5 s for `pwsh`, and the broken store's 20,000 lines 4.3 s.
 
 **The probes** (one throwaway test, `try` runs 43710659246 and 43713246255, each start timed alone and three at once):
 
@@ -36,7 +36,7 @@ So the cost is PowerShell's own start, paid by every shell call of a system test
 | `sys_the_model_is_told_the_shell` | The version the shell reports | 1 | 1 | Nothing. |
 | `process::sys_a_store_that_panics_loses_the_output_and_not_the_command` (the default shell) | What the tool does with a broken store | 1 | 1 | The 20,000 lines are made as above. |
 
-No test was moved out of the blocking checks, no shell's cases run on fewer shells, and no assertion was weakened. A shared host was weighed and not used: every PowerShell start in tier 3 is the shell tool's own (the product starts a process for each call), or a test of what one process receives (`cortex-policy`'s differential tests, which already put all their lines in one script per shell), so a host would test something the product does not do.
+No test was moved out of the blocking checks, no shell's cases run on fewer shells, and no assertion was weakened. A shared host was weighed and not used: every PowerShell start in tier 3 is the shell tool's own (the product starts a process for each call), or a test of what one process receives (`cineris-policy`'s differential tests, which already put all their lines in one script per shell), so a host would test something the product does not do.
 
 The owner guard's tests (`xtask`, 6.7 s of tier 3 on a 6 ms runner) start git about sixty times each; the commit helper now reads the new commit's hash from the repository's files instead of asking git each time, a third of its starts.
 
@@ -56,7 +56,7 @@ The 65 s asked for at 10 ms is about what the two A/Bs together give (80.4 s × 
 
 **The runner estimate** (`ci --tiers --like-runner`) was measured again, since its table was of three system tests at a time on Windows and read that tree's tier 3 at 84 s: from the desk's run of the branch at `5e2866b` against the branch's side of `try` 43718003767. The desk's disk stalled 54% of that run, so the file-heavy crates' factors are low; a quieter desk would make them better. Whole tiers now: Linux 1.4, 1.0 and 1.4; Windows 2.6, 1.8 and 6.4.
 
-**The stall check, on a real stall.** `cargo xtask stress -p cortex-tools -p cortex-base -p cortex-testkit -p cortex-stats -p xtask --count 50` on the desk's side slot: 1,230 tests, 50 times each, and in repeat 1 fourteen file-heavy tests of `cortex-base` timed out together. The command said: "STALL: 13 tests timed out within 4 ms of each other: likely the machine, not the tests", with "During this run's 162 s, some task waited on I/O for 64.4 s, and every task at once for 60.8 s". The report shows them started within 33 ms and stopped 0.83 to 0.86 s past their 10 s limit. Every other repeat of every test passed. `cargo xtask stress -p cortex-agent --count 300`: 303 tests, every one every time. On Windows (`try` 43718006646): `cortex-tools`' shell and process tests, 92 of them, 20 times each, every one every time.
+**The stall check, on a real stall.** `cargo xtask stress -p cineris-tools -p cineris-base -p cineris-testkit -p cineris-stats -p xtask --count 50` on the desk's side slot: 1,230 tests, 50 times each, and in repeat 1 fourteen file-heavy tests of `cineris-base` timed out together. The command said: "STALL: 13 tests timed out within 4 ms of each other: likely the machine, not the tests", with "During this run's 162 s, some task waited on I/O for 64.4 s, and every task at once for 60.8 s". The report shows them started within 33 ms and stopped 0.83 to 0.86 s past their 10 s limit. Every other repeat of every test passed. `cargo xtask stress -p cineris-agent --count 300`: 303 tests, every one every time. On Windows (`try` 43718006646): `cineris-tools`' shell and process tests, 92 of them, 20 times each, every one every time.
 
 ## The A/B runs
 
@@ -66,7 +66,7 @@ The 65 s asked for at 10 ms is about what the two A/Bs together give (80.4 s × 
 | `try` 43715195861 | The branch at `51f9df9` (the test changes) against `main` | 10 to 11 ms | 93.2 → 80.4 s, −12.8 s (−14%); tier 2 41.2 → 38.3 s, tier 1 17.6 → 17.4 s |
 | `try` 43715198613 | The system tests two at a time against three, both the branch | 7 to 8 ms | 57.6 → 46.6 s, −11.0 s (−19%); the system run's wall time 20.1 → 24.2 s |
 
-The slowest tests of tier 3 on the head side, on a 6 ms runner (`try` 43712114548): `trust::sys_a_project_trusted_in_the_store_…` (`cortex-core`) 3.1 s, three turns each with two `pwsh` commands; the owner guard's `sys_what_the_machine_or_another_remote_could_hide_is_still_read` 1.8 s, `sys_a_push_is_searched_in_every_place_it_can_carry_a_term` 1.5 s and `sys_a_clean_push_…` 1.3 s, git started dozens of times; `shell::pwsh::sys_the_exit_status_is_the_commands` 1.8 s and `sys_the_command_reaches_the_shell_as_written` 1.5 s, five and four `pwsh` starts; `differential::sys_a_program_receives_the_words_the_analysis_gives_from_every_powershell` 1.4 s, 120 starts of the echoing child from three scripts; `rules::tests::sys_the_repository_follows_its_own_rules` 1.3 s. By crate: `cortex-tools` 16.1 s, `cortex-core` 8.9, `xtask` 8.1, `cortex-cli` 7.0.
+The slowest tests of tier 3 on the head side, on a 6 ms runner (`try` 43712114548): `trust::sys_a_project_trusted_in_the_store_…` (`cineris-core`) 3.1 s, three turns each with two `pwsh` commands; the owner guard's `sys_what_the_machine_or_another_remote_could_hide_is_still_read` 1.8 s, `sys_a_push_is_searched_in_every_place_it_can_carry_a_term` 1.5 s and `sys_a_clean_push_…` 1.3 s, git started dozens of times; `shell::pwsh::sys_the_exit_status_is_the_commands` 1.8 s and `sys_the_command_reaches_the_shell_as_written` 1.5 s, five and four `pwsh` starts; `differential::sys_a_program_receives_the_words_the_analysis_gives_from_every_powershell` 1.4 s, 120 starts of the echoing child from three scripts; `rules::tests::sys_the_repository_follows_its_own_rules` 1.3 s. By crate: `cineris-tools` 16.1 s, `cineris-core` 8.9, `xtask` 8.1, `cineris-cli` 7.0.
 
 ## The breaks, still caught
 
@@ -74,7 +74,7 @@ The slowest tests of tier 3 on the head side, on a 6 ms runner (`try` 4371211454
 
 ## The toolbox fixtures, recorded again
 
-Step 18 added the `outline` tool, so the tools the binary sends no longer matched `crates/cortex-llm/fixtures/toolbox/`. `cargo xtask record --toolbox --provider P` at the desk, one provider a call, after a dry run of each (`record --provider P --dry-run toolbox`, nothing sent). Every provider accepted the new toolbox:
+Step 18 added the `outline` tool, so the tools the binary sends no longer matched `crates/cineris-llm/fixtures/toolbox/`. `cargo xtask record --toolbox --provider P` at the desk, one provider a call, after a dry run of each (`record --provider P --dry-run toolbox`, nothing sent). Every provider accepted the new toolbox:
 
 | Provider | Model | Tokens in, out | Cost |
 |---|---|---|---|
@@ -111,7 +111,7 @@ The full review of the whole diff, then a second of the fixes:
 
 ## Gaps
 
-- **Item 1's target:** about 65 s at 10 ms by the two A/Bs together, 71.3 s on the pull request's 11 ms runner ("What it came to", above). Without the thread change, about 80 s at 10 ms is the best this step reaches without testing less: nearly every PowerShell start left in tier 3 is the shell tool's own (one process a call, which is what those tests test) or the product's shell in a `cortex-core` or `cortex-cli` turn. Running the process-tree tests on `cmd.exe` instead of the default `pwsh` would save about 5 s more; it changes which shell they test, and was not done or proposed.
+- **Item 1's target:** about 65 s at 10 ms by the two A/Bs together, 71.3 s on the pull request's 11 ms runner ("What it came to", above). Without the thread change, about 80 s at 10 ms is the best this step reaches without testing less: nearly every PowerShell start left in tier 3 is the shell tool's own (one process a call, which is what those tests test) or the product's shell in a `cineris-core` or `cineris-cli` turn. Running the process-tree tests on `cmd.exe` instead of the default `pwsh` would save about 5 s more; it changes which shell they test, and was not done or proposed.
 - **Glue no test holds:** the calls of the stall check in `stress`'s and `ci`'s runs (the check itself, and `mutate`'s use of it, are tested); `./x`'s fallback to the last good copy (a shell script); the move-aside path of the copy on Windows.
 - **`caught-by` names in CI:** checked only where a list of tests is kept; CI keeps none (`caught-by-names-checked-only-at-the-desk`, which the tenth tooling step settled ([tooling-10/parts/smaller-items.md](../tooling-10/parts/smaller-items.md))).
 - **`mutate`'s lock under plain `cargo test`** can be held a moment by another test's child (the outstanding item `the-mutate-lock-and-a-forked-child`, since settled by a retry of the lock).

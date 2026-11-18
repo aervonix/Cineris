@@ -113,7 +113,7 @@ jobs:
       # test gives its child the variables nextest would.
       - name: The timeout report and the race pause (Windows)
         if: runner.os == 'Windows'
-        run: cargo test --locked -p cortex-testkit --lib -- --ignored watch::tests::sys_
+        run: cargo test --locked -p cineris-testkit --lib -- --ignored watch::tests::sys_
       # combine on Windows, where git makes its object files read-only and
       # the clone has to be made writable to be removed.
       - name: combine, against real git (Windows)
@@ -140,7 +140,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      CORTEX_PROPERTY_SCALE: "50"
+      CINERIS_PROPERTY_SCALE: "50"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install the toolchain from rust-toolchain.toml
@@ -163,7 +163,7 @@ jobs:
       # time"). Ignored in the blocking checks, because they wait on
       # purpose; the Windows release job runs them too.
       - name: The timeout report and the race pause
-        run: cargo run --locked --quiet --package xtask -- test --locked -p cortex-testkit --run-ignored only watch::tests::sys_
+        run: cargo run --locked --quiet --package xtask -- test --locked -p cineris-testkit --run-ignored only watch::tests::sys_
 
   # The tests a break's `caught-by` names, checked against the tests that
   # exist (docs/testing-and-ci.md, "The tests a `caught-by` names"). The
@@ -250,7 +250,7 @@ jobs:
   # The TypeScript client of the RPC protocol, as the `ts-client` job of
   # ci.yml runs it on a pull request that reaches the protocol: its types
   # checked against the generated declarations, and then a turn run with it
-  # against `cortex serve --stdio` (docs/testing-and-ci.md, "The TypeScript
+  # against `cineris serve --stdio` (docs/testing-and-ci.md, "The TypeScript
   # client"). Here every night, whatever changed. No cache.
   ts-client:
     if: ${{ !inputs.force_failure }}
@@ -270,12 +270,12 @@ jobs:
       - name: Check the client's types against the declarations
         run: |
           npm install --prefix "$RUNNER_TEMP/tsc" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund typescript@6.0.3 @types/node@22.18.13
-          "$RUNNER_TEMP/tsc/node_modules/.bin/tsc" -p crates/cortex-cli/tests/system/ts_client --typeRoots "$RUNNER_TEMP/tsc/node_modules/@types"
+          "$RUNNER_TEMP/tsc/node_modules/.bin/tsc" -p crates/cineris-cli/tests/system/ts_client --typeRoots "$RUNNER_TEMP/tsc/node_modules/@types"
       - name: Run a turn with the client
         if: ${{ !cancelled() }}
         env:
-          CORTEX_TS_CLIENT: "1"
-        run: cargo run --locked --quiet --package xtask -- test --locked -p cortex-cli --cargo-profile ci --test system -E 'test(=ts_client::sys_a_typescript_client_runs_a_turn)'
+          CINERIS_TS_CLIENT: "1"
+        run: cargo run --locked --quiet --package xtask -- test --locked -p cineris-cli --cargo-profile ci --test system -E 'test(=ts_client::sys_a_typescript_client_runs_a_turn)'
 
   # The only job with a token that can write, and all it can write is issues.
   #

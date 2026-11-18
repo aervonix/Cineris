@@ -18,7 +18,7 @@ The owner accepted 09-tui's drafted look on 2026-11-12, then reopened it so that
 
 The rules were fixed. Every proposal had to be our own work (rule 1), and drawable by the inline presenter as step 20 built it: rows of styled text only, the last column empty, committed lines final, a short live region of steady height. It had to work in Windows Terminal and over SSH, with a fallback for 16 colours, for `NO_COLOR` and for ASCII on the old console host. It had to use keys that work everywhere, and its accent's contrast had to be measured on dark and light backgrounds.
 
-**How the proposals were made.** One script held every screen as rows of styled spans. It drew the same scenario (a lexer fix, with a failing test and a streaming answer) in every proposal, at 100 and 60 columns, on Windows Terminal's dark Campbell scheme and on One Half Light. It wrote a comparison page and an ANSI file for each screen. A small program drew every screen with `cortex_term::Inline` into the test kit's virtual terminal, compared each cell with the design, and measured each streaming frame. Every screen of every round drew without a difference.
+**How the proposals were made.** One script held every screen as rows of styled spans. It drew the same scenario (a lexer fix, with a failing test and a streaming answer) in every proposal, at 100 and 60 columns, on Windows Terminal's dark Campbell scheme and on One Half Light. It wrote a comparison page and an ANSI file for each screen. A small program drew every screen with `cineris_term::Inline` into the test kit's virtual terminal, compared each cell with the design, and measured each streaming frame. Every screen of every round drew without a difference.
 
 ## The rounds
 
@@ -60,7 +60,7 @@ A terminal reports the mouse for the whole window or not at all.
 - tmux passes clicks only in its own mouse mode.
 - The inline presenter does not know which screen row its live region starts on, and finding out would take the cursor-position query that [decision 0002](0002-tui-rendering.md) avoids.
 
-So the keys do the work inline. Clicks come with the screens that own the whole window, the viewer and the full-screen presenter. That costs an SGR mouse decoder in `cortex-term` (modes 1000 and 1006, about 150 lines with tests), and the Windows console's mouse input turned on while the alternate screen is shown. Step 25 builds both.
+So the keys do the work inline. Clicks come with the screens that own the whole window, the viewer and the full-screen presenter. That costs an SGR mouse decoder in `cineris-term` (modes 1000 and 1006, about 150 lines with tests), and the Windows console's mouse input turned on while the alternate screen is shown. Step 25 builds both.
 
 ## Found on the way
 

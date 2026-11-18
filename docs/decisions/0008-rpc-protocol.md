@@ -28,9 +28,9 @@ Four front ends drive the core: the TUI, headless mode, an RPC server, and exten
 
 ## Decision
 
-- `cortex-protocol` defines `Op`, `Event` and the item types once, in Rust.
+- `cineris-protocol` defines `Op`, `Event` and the item types once, in Rust.
 - In-process front ends exchange them over typed channels.
-- `cortex-rpc` carries the same types as JSON-RPC 2.0 over newline-delimited JSON, on standard I/O first and local sockets second.
+- `cineris-rpc` carries the same types as JSON-RPC 2.0 over newline-delimited JSON, on standard I/O first and local sockets second.
 - An integer protocol version for breaking changes, capabilities for everything else.
 - Amended on 2026-11-12: receivers tolerate what they do not know, **except in the values the harness enforces**, which fail closed ([0028](0028-enforced-values-fail-closed.md)).
 - JSON Schema and TypeScript declarations are generated from the Rust types and checked in.

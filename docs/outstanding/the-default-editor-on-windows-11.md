@@ -1,6 +1,6 @@
 Windows 11's tabbed Notepad may exit at once, so `Ctrl+G` removes the prompt's folder while it is open; a folder left behind is not tried again.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: the owner, by hand; the folder half, step 32
 
 | Item | Who | When |

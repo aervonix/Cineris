@@ -401,7 +401,7 @@ enum Placed {
 
 /// The word to look for of a `caught-by` entry: the last segment of the
 /// test's name, after the binary if the entry names one
-/// (`cortex-llm::it openai::endpoints::*`).
+/// (`cineris-llm::it openai::endpoints::*`).
 fn placed(entry: &str) -> Placed {
     let name = entry
         .split_once(char::is_whitespace)
@@ -816,19 +816,19 @@ mod tests {
     fn a_name_that_ends_in_a_star_is_placed_nowhere_and_chosen_by_any_file_of_its_crates() {
         assert_eq!(placed("mutate::tests::sys_*"), Placed::Nowhere);
         // A pattern that ends inside a module's name.
-        assert_eq!(placed("cortex-llm::it openai*"), Placed::Nowhere);
+        assert_eq!(placed("cineris-llm::it openai*"), Placed::Nowhere);
         assert_eq!(placed("tests::*"), Placed::Nowhere);
         assert_eq!(placed("*"), Placed::Nowhere);
         // The binary of an entry is not part of the name.
         assert_eq!(
-            placed("cortex-core::it sys_x"),
+            placed("cineris-core::it sys_x"),
             Placed::Word("sys_x".to_owned())
         );
         assert_eq!(
-            placed("cortex-llm::it openai_chat::endpoints::an_url"),
+            placed("cineris-llm::it openai_chat::endpoints::an_url"),
             Placed::Word("an_url".to_owned())
         );
-        assert_eq!(placed("cortex-config dirs::tests::*"), Placed::Nowhere);
+        assert_eq!(placed("cineris-config dirs::tests::*"), Placed::Nowhere);
         let list = A.replace("tests::first_test", "tests::first_*");
         let files = tree().same("crates/demo/src/extra.rs", "fn first_other() {}");
         assert_eq!(

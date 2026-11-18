@@ -1,5 +1,5 @@
 //! `cargo xtask schema`: the protocol's JSON Schema and TypeScript
-//! declarations, generated from the Rust types in `cortex-protocol` and
+//! declarations, generated from the Rust types in `cineris-protocol` and
 //! checked in under `docs/protocol/` (`docs/architecture/11-rpc-protocol.md`,
 //! "Schema and generated types").
 //!
@@ -12,16 +12,16 @@
 use std::fmt::Write as _;
 use std::fs;
 
-use cortex_protocol::schema::{METHODS_KEY, OPEN_KEY, bundle};
+use cineris_protocol::schema::{METHODS_KEY, OPEN_KEY, bundle};
 use serde_json::{Map, Value};
 
 use crate::Result;
 use crate::workspace;
 
 /// The generated schema, relative to the repository root.
-pub(crate) const SCHEMA_FILE: &str = "docs/protocol/schema/cortex-protocol.schema.json";
+pub(crate) const SCHEMA_FILE: &str = "docs/protocol/schema/cineris-protocol.schema.json";
 /// The generated declarations, relative to the repository root.
-pub(crate) const TYPESCRIPT_FILE: &str = "docs/protocol/ts/cortex-protocol.d.ts";
+pub(crate) const TYPESCRIPT_FILE: &str = "docs/protocol/ts/cineris-protocol.d.ts";
 
 /// The two files, as they should be.
 pub(crate) struct Generated {
@@ -94,7 +94,7 @@ pub(crate) fn check() -> Result<()> {
         Ok(())
     } else {
         Err(format!(
-            "stale: {}. The types in crates/cortex-protocol changed and the generated files \
+            "stale: {}. The types in crates/cineris-protocol changed and the generated files \
              did not.\n    Run `cargo xtask schema` and commit the result. The diff is the \
              protocol change, and belongs in the review.",
             stale.join(", ")
@@ -127,15 +127,15 @@ fn typescript(document: &Value) -> Result<String> {
         .and_then(Value::as_object)
         .ok_or("the schema has no $defs")?;
     let version = document
-        .get("x-cortex-protocol-version")
+        .get("x-cineris-protocol-version")
         .and_then(Value::as_u64)
         .ok_or("the schema has no protocol version")?;
 
     let mut out = String::new();
     out.push_str(
-        "// The Cortex-Harness protocol, as TypeScript declarations.\n\
+        "// The Cineris protocol, as TypeScript declarations.\n\
          //\n\
-         // Generated from the Rust types in crates/cortex-protocol by `cargo xtask schema`.\n\
+         // Generated from the Rust types in crates/cineris-protocol by `cargo xtask schema`.\n\
          // Do not edit: change the types and run the command again.\n\
          //\n\
          // Every enumeration and every tagged union is open. A string enumeration\n\
@@ -465,14 +465,14 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
 
-    use cortex_protocol::schema::{METHODS_KEY, bundle};
+    use cineris_protocol::schema::{METHODS_KEY, bundle};
     use serde_json::{Value, json};
 
     use super::{SCHEMA_FILE, TYPESCRIPT_FILE, generate, type_of, typescript};
     use crate::workspace;
 
-    const TRANSCRIPT: &str = "crates/cortex-protocol/tests/golden/v1-session.jsonl";
-    const VALUES: &str = "crates/cortex-protocol/tests/golden/v1-values.jsonl";
+    const TRANSCRIPT: &str = "crates/cineris-protocol/tests/golden/v1-session.jsonl";
+    const VALUES: &str = "crates/cineris-protocol/tests/golden/v1-values.jsonl";
 
     thread_local! {
         /// The definitions some value has been valid against, on this thread.
@@ -494,7 +494,7 @@ mod tests {
                 .replace("\r\n", "\n");
             assert!(
                 current == *content,
-                "{file} is stale: the types in crates/cortex-protocol changed and the generated \
+                "{file} is stale: the types in crates/cineris-protocol changed and the generated \
                  file did not. Run `cargo xtask schema` and commit the result."
             );
         }
@@ -546,7 +546,7 @@ mod tests {
             (
                 json!({"anyOf": [
                     {"const": "end"}, {"const": "error"},
-                    {"type": "string", "x-cortex-open": true},
+                    {"type": "string", "x-cineris-open": true},
                 ]}),
                 "\"end\" | \"error\" | (string & {})",
             ),
@@ -565,7 +565,7 @@ mod tests {
         // The open branch of a tagged union is not a TypeScript variant.
         let union = json!({"anyOf": [
             {"allOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}]},
-            {"type": "object", "properties": {"kind": {"type": "string"}}, "x-cortex-open": true},
+            {"type": "object", "properties": {"kind": {"type": "string"}}, "x-cineris-open": true},
         ]});
         assert_eq!(type_of(&union, "test").unwrap(), "(A & B)");
 
@@ -576,14 +576,14 @@ mod tests {
         assert!(error.contains("`pattern`"), "{error}");
     }
 
-    // ---- The validator is the test kit's (`cortex_testkit::schema`), so
+    // ---- The validator is the test kit's (`cineris_testkit::schema`), so
     // that the binary's system tests check what it writes against the same
     // schema. It is the proof that the schema describes the wire form the
     // Rust types really have, including the parts of the schema that are
     // written by hand (the open enumerations and unions).
 
     fn valid(schema: &Value, instance: &Value, root: &Value, at: &str) -> Result<(), String> {
-        cortex_testkit::schema::valid_seen(schema, instance, root, at, &mut |name| {
+        cineris_testkit::schema::valid_seen(schema, instance, root, at, &mut |name| {
             SEEN.with(|seen| seen.borrow_mut().insert(name.to_owned()));
         })
     }
@@ -689,7 +689,7 @@ mod tests {
         assert!(
             missing.is_empty(),
             "no golden file has a value of: {missing:?}. Add one to a file in \
-             crates/cortex-protocol/tests/golden/ (a new file for an addition to a released \
+             crates/cineris-protocol/tests/golden/ (a new file for an addition to a released \
              version), so that its wire form is pinned."
         );
     }

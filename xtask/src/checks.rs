@@ -111,7 +111,7 @@ pub(crate) fn fmt() -> Result<()> {
 /// `cargo xtask test [ARGS...]`
 ///
 /// The whole workspace, unless the arguments name packages: `test -p
-/// cortex-agent` builds and runs that crate's tests and no other's.
+/// cineris-agent` builds and runs that crate's tests and no other's.
 ///
 /// `--dependents` beside `-p` adds every workspace crate whose tests can see
 /// a change to the crates named ([`crate::dependents`]).
@@ -151,7 +151,7 @@ pub(crate) fn selects_packages(arguments: &[String]) -> bool {
                 argument.as_str(),
                 "-p" | "--package" | "--workspace" | "--all"
             ) || argument.starts_with("--package=")
-                // `-pcortex-agent`. No other option of nextest starts `-p`.
+                // `-pcineris-agent`. No other option of nextest starts `-p`.
                 || (argument.starts_with("-p") && !argument.starts_with("--"))
         })
 }
@@ -984,12 +984,12 @@ mod tests {
     #[test]
     fn naming_a_package_keeps_the_rest_of_the_workspace_out() {
         for chosen in [
-            &["-p", "cortex-agent"][..],
-            &["--package", "cortex-agent"],
-            &["--package=cortex-agent"],
-            &["-pcortex-agent"],
-            &["--profile", "fast", "-p", "cortex-agent", "denials"],
-            &["--workspace", "--exclude", "cortex-cli"],
+            &["-p", "cineris-agent"][..],
+            &["--package", "cineris-agent"],
+            &["--package=cineris-agent"],
+            &["-pcineris-agent"],
+            &["--profile", "fast", "-p", "cineris-agent", "denials"],
+            &["--workspace", "--exclude", "cineris-cli"],
         ] {
             assert!(selects_packages(&strings(chosen)), "{chosen:?}");
         }
@@ -998,8 +998,8 @@ mod tests {
     #[test]
     fn a_run_of_one_crate_is_not_a_run_of_the_workspace() {
         assert_eq!(
-            super::test_command(&strings(&["-p", "cortex-agent", "denials::"])).join(" "),
-            "nextest run -p cortex-agent denials::"
+            super::test_command(&strings(&["-p", "cineris-agent", "denials::"])).join(" "),
+            "nextest run -p cineris-agent denials::"
         );
         assert_eq!(
             super::test_command(&strings(&["--profile", "fast"])).join(" "),
@@ -1017,7 +1017,7 @@ mod tests {
             &[][..],
             &["--profile", "fast"],
             &["denials::"],
-            &["--exclude", "cortex-cli"],
+            &["--exclude", "cineris-cli"],
             &["--no-fail-fast", "-E", "test(/sys_/)"],
             // Arguments for the test binaries are not nextest's.
             &["--", "-p"],
@@ -1027,29 +1027,29 @@ mod tests {
         }
     }
 
-    /// The `backends` trap: a build of cortex-sandbox alone that tests
+    /// The `backends` trap: a build of cineris-sandbox alone that tests
     /// nothing it confines.
     #[test]
     fn the_sandbox_alone_is_built_with_its_backends_on_linux() {
-        let test = test_command(&strings(&["-p", "cortex-sandbox", "confined::"])).join(" ");
-        let ci = ci_run(&strings(&["cortex-sandbox"])).join(" ");
-        let other = test_command(&strings(&["-p", "cortex-agent"])).join(" ");
-        let spelled = test_command(&strings(&["--package=cortex-sandbox"])).join(" ");
+        let test = test_command(&strings(&["-p", "cineris-sandbox", "confined::"])).join(" ");
+        let ci = ci_run(&strings(&["cineris-sandbox"])).join(" ");
+        let other = test_command(&strings(&["-p", "cineris-agent"])).join(" ");
+        let spelled = test_command(&strings(&["--package=cineris-sandbox"])).join(" ");
         if cfg!(target_os = "linux") {
             assert_eq!(
                 test,
-                "nextest run --features cortex-sandbox/backends -p cortex-sandbox confined::"
+                "nextest run --features cineris-sandbox/backends -p cineris-sandbox confined::"
             );
-            assert!(ci.contains("--features cortex-sandbox/backends"), "{ci}");
+            assert!(ci.contains("--features cineris-sandbox/backends"), "{ci}");
             assert!(
-                spelled.contains("--features cortex-sandbox/backends"),
+                spelled.contains("--features cineris-sandbox/backends"),
                 "{spelled}"
             );
         } else {
             assert!(!test.contains("--features"), "{test}");
         }
         assert!(!other.contains("--features"), "{other}");
-        // The whole workspace turns it on through cortex-core.
+        // The whole workspace turns it on through cineris-core.
         assert!(!test_command(&[]).join(" ").contains("--features"));
     }
 
@@ -1067,7 +1067,7 @@ mod tests {
         // A tree from before the split: one run, as its own job had it.
         assert_eq!(
             super::ci_runs(
-                &strings(&["cortex-llm"]),
+                &strings(&["cineris-llm"]),
                 &strings(&["--test-threads", "4"]),
                 false
             ),
@@ -1075,7 +1075,7 @@ mod tests {
                 "nextest",
                 "run",
                 "-p",
-                "cortex-llm",
+                "cineris-llm",
                 "--locked",
                 "--cargo-profile",
                 "ci",
@@ -1094,7 +1094,7 @@ mod tests {
         // other tier too.
         let rest = strings(&[
             "-E",
-            "package(cortex-tui)",
+            "package(cineris-tui)",
             "--filterset=test(a)",
             "--test-threads",
             "4",
@@ -1109,7 +1109,7 @@ mod tests {
             strings(&[
                 "--no-tests=pass",
                 "-E",
-                "((package(cortex-tui)) or (test(a))) and (not test(/(^|::)sys_/))",
+                "((package(cineris-tui)) or (test(a))) and (not test(/(^|::)sys_/))",
                 "--test-threads",
                 "4",
                 "--",
@@ -1119,7 +1119,7 @@ mod tests {
         );
         assert_eq!(
             tail(&runs[1])[2],
-            "((package(cortex-tui)) or (test(a))) and (test(/(^|::)sys_/))"
+            "((package(cineris-tui)) or (test(a))) and (test(/(^|::)sys_/))"
         );
         assert_eq!(
             super::filtersets(&strings(&["--filter-expr", "a"]))
@@ -1219,8 +1219,8 @@ mod tests {
             "nextest run --workspace --locked --cargo-profile ci --profile ci"
         );
         assert_eq!(
-            ci_run(&strings(&["cortex-agent", "cortex-tools"])).join(" "),
-            "nextest run -p cortex-agent -p cortex-tools --locked --cargo-profile ci --profile ci"
+            ci_run(&strings(&["cineris-agent", "cineris-tools"])).join(" "),
+            "nextest run -p cineris-agent -p cineris-tools --locked --cargo-profile ci --profile ci"
         );
     }
 
@@ -1246,7 +1246,7 @@ mod tests {
         assert_eq!(
             TiersRequest::parse(&strings(&[
                 "-p",
-                "cortex-llm",
+                "cineris-llm",
                 "--top",
                 "3",
                 "--",
@@ -1255,7 +1255,7 @@ mod tests {
             ]))
             .unwrap(),
             TiersRequest {
-                packages: strings(&["cortex-llm"]),
+                packages: strings(&["cineris-llm"]),
                 top: 3,
                 from: None,
                 os: Os::here(),
@@ -1287,7 +1287,7 @@ mod tests {
                 base: None,
             }
         );
-        let like = TiersRequest::parse(&strings(&["--like-runner", "-p", "cortex-llm"])).unwrap();
+        let like = TiersRequest::parse(&strings(&["--like-runner", "-p", "cineris-llm"])).unwrap();
         assert!(like.like_runner);
         // A base goes with the estimate, and the starts with what reads them.
         let based = TiersRequest::parse(&strings(&["--like-runner", "--base", "../b"])).unwrap();
@@ -1304,7 +1304,7 @@ mod tests {
             let error = TiersRequest::parse(&strings(words)).unwrap_err();
             assert!(error.contains(said), "{words:?}: {error}");
         }
-        assert_eq!(like.packages, strings(&["cortex-llm"]));
+        assert_eq!(like.packages, strings(&["cineris-llm"]));
         let measure = TiersRequest::parse(&strings(&[
             "--from",
             "desk.xml",
@@ -1404,9 +1404,9 @@ mod tests {
             (&["--top", "many"], "is not a number"),
             (&["--os", "macos", "--from", "x"], "`linux` or `windows`"),
             (&["--os", "windows"], "`--os` says where a report"),
-            (&["--from", "x", "-p", "cortex-llm"], "run nothing"),
+            (&["--from", "x", "-p", "cineris-llm"], "run nothing"),
             (&["--from", "x", "--", "replay::"], "run nothing"),
-            (&["--compare", "x", "-p", "cortex-llm"], "run nothing"),
+            (&["--compare", "x", "-p", "cineris-llm"], "run nothing"),
             (
                 &["--against", "main"],
                 "says what `--compare` is compared with",

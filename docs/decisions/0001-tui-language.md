@@ -55,7 +55,7 @@ Two findings worth stating plainly:
 
 ## Decision
 
-Rust, in the main binary, in the `cortex-term` and `cortex-tui` crates.
+Rust, in the main binary, in the `cineris-term` and `cineris-tui` crates.
 
 The RPC protocol is nonetheless complete enough for a TypeScript client to be built later with no change to the core: it is the same contract the built-in TUI uses.
 

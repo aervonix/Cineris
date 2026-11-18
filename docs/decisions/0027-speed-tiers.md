@@ -5,7 +5,7 @@
 
 ## Context
 
-The owner wants provider fast modes available in Cortex-Harness, starting with Anthropic's: Opus 5.5 and Fable 5.2 produce output about 2.5 times faster for twice the price per token. The docs written in step 1 had no concept of speed. Step 3 builds the protocol that every later step depends on, so the protocol side is designed now: a setting for the session and per role, the speed each request ran at in its usage record, events for a fallback and a cooldown, and which speeds a model offers.
+The owner wants provider fast modes available in Cineris, starting with Anthropic's: Opus 5.5 and Fable 5.2 produce output about 2.5 times faster for twice the price per token. The docs written in step 1 had no concept of speed. Step 3 builds the protocol that every later step depends on, so the protocol side is designed now: a setting for the session and per role, the speed each request ran at in its usage record, events for a fallback and a cooldown, and which speeds a model offers.
 
 The providers' own documentation was read on 2026-11-12. It goes stale; each provider step re-reads it.
 
@@ -100,7 +100,7 @@ Two more facts shape the design:
 - **Why 20 seconds.** It is about as long as a person will watch a request wait before they would rather it carried on at standard speed. Anthropic describes its `retry-after` for fast mode as "typically short", because the limit refills continuously, so most refusals should be waited out and cost nothing: no change of speed, no cache rewrite.
 - **Why the provider's time.** It is the cheapest moment to ask again. Earlier, the tier is refused. Much later, the prefix that was cached at the tier's speed has expired, and coming back costs a full rewrite.
 - **Why a budget and not a limit per attempt.** A provider that answers "8 seconds" three times in a row would otherwise hold a request for as long as it has attempts.
-- **All three are settings.** Step 5 defines them in the retry policy of `cortex-llm`; step 9 names the configuration keys. The cooldown is kept per provider, model and tier, in memory, for the life of the process.
+- **All three are settings.** Step 5 defines them in the retry policy of `cineris-llm`; step 9 names the configuration keys. The cooldown is kept per provider, model and tier, in memory, for the life of the process.
 - **The length of a cooldown is decided in one function** (`RetryPolicy::cooldown`), so that the open item below can be settled without touching anything else.
 
 **Settled in step 9, on 2026-11-12: the configuration keys.**
@@ -133,7 +133,7 @@ What it was decided from:
 - **Why one minute.** It is one whole window of the limit. After it, the bucket is full again, so the first request back cannot be refused for what the earlier one was refused for, unless the session really does use more than the limit allows, and then it cools down again, a minute at a time and not every 25 seconds. It is also short enough to come back to a warm cache: the prefix written at fast speed lives five minutes from its last use, so a return after one or two minutes reads it, where a return after a floor of five minutes or more would rewrite the whole conversation at the fast tier's write price.
 - **What was not seen.** No refusal of the fast tier was provoked: the brief for the step rules that out, and one small request does not come near the tier's limit. So no real `retry-after` for fast mode was observed. The value rests on the documentation and on the limits and reset times a real fast response carries. It is a setting (`SpeedPolicy::min_cooldown` in the retry policy), and the first real refusal should be looked at against it.
 - **Where it is decided.** In `RetryPolicy::cooldown`, and nowhere else, as step 5 arranged.
-- **Its configuration key** is not added yet, because `cortex-config` is outside step 14. Step 13 adds `model.speed_cooldown_min`, default `"1m"`, a preference, beside the other three.
+- **Its configuration key** is not added yet, because `cineris-config` is outside step 14. Step 13 adds `model.speed_cooldown_min`, default `"1m"`, a preference, beside the other three.
 
 **Also learned in step 14, from the real API:**
 

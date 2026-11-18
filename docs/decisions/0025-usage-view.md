@@ -26,7 +26,7 @@ Three design questions follow.
 | Read them live when the view opens | Slow on a large history. The owner asked for an instant view. |
 | A derived cache per source, filled in the background by one adapter per tool | Our store stays ours. The cache can be deleted and rebuilt. Each source can be turned off cleanly. The view opens from the cache. |
 
-**Chosen:** one adapter per tool behind a small trait, in a crate of its own (`cortex-usage`), writing a derived cache per source. Adapters are opt-in, read-only, keep only numbers, tolerate unknown fields, and report an unreadable version instead of failing. Every number carries its source.
+**Chosen:** one adapter per tool behind a small trait, in a crate of its own (`cineris-usage`), writing a derived cache per source. Adapters are opt-in, read-only, keep only numbers, tolerate unknown fields, and report an unreadable version instead of failing. Every number carries its source.
 
 Other tools' on-disk formats are not documented promises. That is why each adapter names the versions it was written against, and why the default on anything unrecognised is "not available".
 
@@ -44,13 +44,13 @@ Other tools' on-disk formats are not documented promises. That is why each adapt
 
 As specified in [architecture/18-usage.md](../architecture/18-usage.md):
 
-- Our own figures come from `cortex-stats`. No second store.
+- Our own figures come from `cineris-stats`. No second store.
 - Other tools: per-tool adapters, opt-in, read-only, numbers only, version-aware, cached in the background, shown separately or merged, always with their source.
 - Cost has a stated basis: metered, API-equivalent estimate, recorded by the tool, or unknown price. Estimates are never silently added to metered totals.
 - Limits come only from official figures: those the harness already receives, and, where the user has turned it on for a provider, that provider's documented usage endpoint.
 - By default no network request is made by the view or by indexing. The opt-in refresh is the one exception. It is off by default, per provider, user-only, made only when the user asks, sent only to the provider the key belongs to, and never telemetry.
 - Tests use small made-up files. Real session data is never used or committed.
-- **First release:** our own figures in every range and grouping, limits from headers, the panel, `cortex usage` and `usage/report`. **After it:** the adapters, in one step, Claude Code and Codex first. The opt-in refresh is in the first release too: the setting and the command with the statistics step, the key with the panels step, and each provider's endpoint in that provider's step.
+- **First release:** our own figures in every range and grouping, limits from headers, the panel, `cineris usage` and `usage/report`. **After it:** the adapters, in one step, Claude Code and Codex first. The opt-in refresh is in the first release too: the setting and the command with the statistics step, the key with the panels step, and each provider's endpoint in that provider's step.
 
 ## Why
 

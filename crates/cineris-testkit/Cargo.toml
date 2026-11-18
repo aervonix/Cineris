@@ -1,0 +1,25 @@
+[package]
+name = "cineris-testkit"
+description = "Test support: the scripted provider, the scripted SSE server, the virtual terminal, the pseudo-terminal driver, temporary workspaces and the fake clock. A dev-dependency only."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+cineris-protocol.workspace = true
+# With `test-hooks`: the points library code marks for a test to hold
+# (`cineris_base::hook`, `hold`). Only a build that has the test kit has them.
+cineris-base = { workspace = true, features = ["test-hooks"] }
+# The types and traits only. A test of the real HTTP transport turns the
+# `http` feature on in the crate that owns it.
+cineris-llm.workspace = true
+# With `pty`: the pseudo-terminal under the driver in `pty`.
+cineris-term = { workspace = true, features = ["pty"] }
+serde_json.workspace = true
+
+[lints]
+workspace = true

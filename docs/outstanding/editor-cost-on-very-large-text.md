@@ -1,6 +1,6 @@
 The prompt editor lays out all its text on every key; a shortened `@` query refilters all paths.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 33
 
 | Item | Who | When |

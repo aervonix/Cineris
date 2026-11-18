@@ -1,6 +1,6 @@
 The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: a later step that touches the budget, or step 33
 
 | Item | Who | When |

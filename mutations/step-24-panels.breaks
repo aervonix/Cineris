@@ -10,7 +10,7 @@
 
 [break] a-panel-key-ignores-the-readiness
 rule: A panel's key that changes something is taken only when the panel is ready; until then one that types goes to the editor.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_key
 find: let ready = action == Action::FocusClose || self.panels.ready(id, at);
 replace: let ready = true;
@@ -20,7 +20,7 @@ caught-by:
 
 [break] close-waits-for-the-readiness
 rule: `focus.close` changes nothing the person cannot see again, and acts at once, like moving.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_key
 find: let ready = action == Action::FocusClose || self.panels.ready(id, at);
 replace: let ready = self.panels.ready(id, at);
@@ -29,7 +29,7 @@ caught-by:
 
 [break] a-held-panel-key-acts-again
 rule: A key held down never acts on a panel: the same key again within the repeat window of one the panel took goes where its press went, nowhere.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_holds
 find: repeat || at.saturating_duration_since(last) < REPEAT
 replace: repeat
@@ -39,7 +39,7 @@ caught-by:
 
 [break] a-marked-repeat-acts-on-a-panel
 rule: A repeat the terminal marks never acts on a panel, whatever key came before it.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_key
 find: if repeat || !ready {
 replace: if !ready {
@@ -48,7 +48,7 @@ caught-by:
 
 [break] keys-read-together-do-not-hold-a-panel
 rule: Keys read together were typed together: they hold a focused panel a quiet second, and none of them acts.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::not_taken
 find: self.panels.typed(at);
 replace:
@@ -57,7 +57,7 @@ caught-by:
 
 [break] slash-plans-enter-is-not-typing
 rule: A key that went to the editor, `/plan`'s own `Enter` among them, holds the panel that takes the focus a quiet second, so that typing that runs on past it never acts.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find:
     != Some(crate::keys::Action::FocusNext)
@@ -72,7 +72,7 @@ caught-by:
 
 [break] ctrl-p-is-taken-for-typing
 rule: Moving the focus to a panel with `Ctrl+P` is not typing at it: the panel is ready after its grace alone.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find: != Some(crate::keys::Action::FocusNext)
 replace: != Some(crate::keys::Action::Interrupt)
@@ -81,7 +81,7 @@ caught-by:
 
 [break] a-panels-first-frame-forgets-the-typing-before-it
 rule: The panel's first frame holds it a quiet second after the input no panel took just before it, as a dialog's does.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_drawn_at
 find: self.panels.typed(untaken);
 replace:
@@ -90,7 +90,7 @@ caught-by:
 
 [break] resume-keeps-the-panels-readiness
 rule: After the program is continued (`fg`) a panel's grace starts again.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find:
     self.panels.restart();
@@ -101,7 +101,7 @@ caught-by:
 
 [break] the-external-editor-keeps-the-panels-readiness
 rule: After the external editor gives the terminal back a panel's grace starts again.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::edited
 find: self.panels.restart();
 replace:
@@ -110,7 +110,7 @@ caught-by:
 
 [break] the-viewer-keeps-the-panels-readiness
 rule: After the viewer a panel's grace starts again. Every key that closes the viewer is input no panel took, which holds the panel a quiet second, longer than its grace: so this restart is not what a test sees, and the break survives.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find:
     if self.viewer.is_none() {
@@ -121,7 +121,7 @@ expect: survives
 
 [break] a-dialog-leaves-the-focus-on-a-panel
 rule: While a dialog is up no panel is drawn and none keeps the focus: a key meant for the dialog never acts on a panel.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::request
 find:
     if matches!(self.input.focus().focused(), Target::Panel(_)) {
@@ -133,7 +133,7 @@ caught-by:
 
 [break] a-new-key-map-keeps-the-panels-readiness
 rule: A new key map starts a panel's grace again: what the person saw offered was the old map's.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::set_keymap
 find: self.panels.restart();
 replace:
@@ -142,7 +142,7 @@ caught-by:
 
 [break] a-changed-focused-row-keeps-the-readiness
 rule: When the focused row changes from outside, the panel's grace starts again as the change is seen, not at the next frame: a key meant for what was there, read before that frame, never acts on what is there now (the independent review, finding 1).
-file: crates/cortex-tui/src/app/panels.rs
+file: crates/cineris-tui/src/app/panels.rs
 in: Panels::follow
 find:
     if now != slot.seen {
@@ -158,7 +158,7 @@ caught-by:
 
 [break] panels-are-drawn-under-a-menu
 rule: With a menu or the history search open there is no room for a panel: none is drawn.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_block
 find: if !menu && self.rows > LEAST_ROWS {
 replace: if self.rows > LEAST_ROWS {
@@ -167,7 +167,7 @@ caught-by:
 
 [break] panels-take-every-live-row
 rule: Panels never take the transcript's last four live rows: what streams never vanishes under them.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_rows
 find: live.min(LIVE_KEPT)
 replace: live.min(0)
@@ -176,7 +176,7 @@ caught-by:
 
 [break] no-blank-row-after-the-block
 rule: The panels' block is followed by a blank row, which sets it apart from the input box (screen 4).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_block
 find:
     block.extend(laid.lines);
@@ -188,7 +188,7 @@ caught-by:
 
 [break] a-focused-panel-that-does-not-fit-keeps-the-focus
 rule: A panel that would not be drawn focused in the room there is cannot have the focus: the panels are laid out as if none had it, and the ring is not given it.
-file: crates/cortex-tui/src/app/panels.rs
+file: crates/cineris-tui/src/app/panels.rs
 in: Panels::layout
 find: let focused = focused.filter(|id| laid.reachable.contains(id));
 replace: let focused = focused;
@@ -197,7 +197,7 @@ caught-by:
 
 [break] every-open-panel-is-reachable
 rule: The focus ring is given only the panels that would be drawn focused in the room there is.
-file: crates/cortex-tui/src/app/panels.rs
+file: crates/cineris-tui/src/app/panels.rs
 in: Panels::layout
 find: .filter(|(_, rows)| *rows <= room)
 replace:
@@ -207,7 +207,7 @@ caught-by:
 
 [break] the-folded-panels-say-nothing
 rule: The oldest collapsed panels that do not fit fold into one dim row that says how many and the key that reaches them.
-file: crates/cortex-tui/src/app/panels.rs
+file: crates/cineris-tui/src/app/panels.rs
 in: Panels::layout
 find: if shown_others && folded > 0 {
 replace: if false {
@@ -216,7 +216,7 @@ caught-by:
 
 [break] the-cut-rows-are-said-with-no-room-for-them
 rule: The focused panel's `… N more` rows are drawn only where the room kept one for them, so the block never passes the live region's limit.
-file: crates/cortex-tui/src/app/panels.rs
+file: crates/cineris-tui/src/app/panels.rs
 in: Panels::scrolled
 find: if marked && start > 0 {
 replace: if start > 0 {
@@ -225,7 +225,7 @@ caught-by:
 
 [break] the-scrolled-list-says-nothing-of-what-it-cut
 rule: A focused panel's list cut at an end says how many rows it hides there.
-file: crates/cortex-tui/src/app/panels.rs
+file: crates/cineris-tui/src/app/panels.rs
 in: Panels::scrolled
 find:
     if marked && end < body.len() {
@@ -237,7 +237,7 @@ caught-by:
 
 [break] the-focus-is-not-kept-on-its-item
 rule: When the list changes under the focus, the focus stays on its item, by its id.
-file: crates/cortex-tui/src/app/panels.rs
+file: crates/cineris-tui/src/app/panels.rs
 in: Panels::follow
 find: slot.focus = found;
 replace: let _ = found;
@@ -248,7 +248,7 @@ caught-by:
 
 [break] an-item-edit-sends-a-prompt
 rule: `Enter` in an item edit saves the item: it is never a prompt, and nothing is pushed to the history.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::act
 find: Action::Submit if self.item_edit.is_some() => {
 replace: Action::Submit if false => {
@@ -258,7 +258,7 @@ caught-by:
 
 [break] an-item-edit-loses-the-draft
 rule: Either way an item edit ends, the draft set aside comes back whole.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::cancel_item_edit
 find: self.editor = edit.draft;
 replace: self.editor = Editor::new();
@@ -267,7 +267,7 @@ caught-by:
 
 [break] an-item-edit-opens-the-command-menu
 rule: An item being edited is text: `/` and `@` open no menu, so that `Enter` saves it.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::refresh_menu
 find:
     if self.item_edit.is_some() {
@@ -280,7 +280,7 @@ caught-by:
 
 [break] a-letter-with-a-box-focused-is-dropped
 rule: A key that types and is not taken while a box or a panel has the focus goes to the editor, and the focus with it.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::key
 find:
     if !self.focus.on_input() {
@@ -296,28 +296,28 @@ caught-by:
 
 [break] a-panels-letter-with-a-box-focused-is-dropped
 rule: A panel's own key that types, with a box focused, is a key the box does not take: it goes to the editor.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::key
 find: if matches!(outcome, Outcome::Ignored(ignored) if ignored.is_panel_key())
 replace: if false
 caught-by:
     input::tests::typing_with_a_box_or_a_panel_focused_reaches_the_editor_in_order
-    cortex-tui::it bindings::every_default_binding_does_its_action
+    cineris-tui::it bindings::every_default_binding_does_its_action
 
 [break] a-panel-is-not-given-its-keys
 rule: A panel's own keys come to the application as `Outcome::Panel` while a panel has the focus.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::act
 find: target @ Target::Panel(_) => Outcome::Panel(target, action)
 replace: Target::Panel(_) => Outcome::Ignored(action)
 caught-by:
-    cortex-tui::it bindings::every_default_binding_does_its_action
+    cineris-tui::it bindings::every_default_binding_does_its_action
 
 # ------------------------------------------------------- the plan panel
 
 [break] a-plan-all-done-closes-while-the-turn-runs
 rule: A plan with nothing left to do stays open while the turn runs, and goes when it ends.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::show
 find: (self.finished() && !self.running)
 replace: self.finished()
@@ -326,7 +326,7 @@ caught-by:
 
 [break] a-skipped-item-is-left-to-do
 rule: An item skipped is not left to do: a plan of done and skipped items is finished.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::finished
 find: PlanStatus::Done | PlanStatus::Skipped
 replace: PlanStatus::Done
@@ -335,7 +335,7 @@ caught-by:
 
 [break] an-older-plan-replaces-a-newer
 rule: A plan older than the one shown (by its revision) is not taken: a `plan/get` that answers late never undoes an edit.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::take
 find: if plan.revision < self.plan.revision {
 replace: if false {
@@ -344,7 +344,7 @@ caught-by:
 
 [break] a-stored-session-is-not-asked-for-its-plan
 rule: A session opened from the store is asked for its plan (`plan/get`); a new one has none to ask for.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::when_opened
 find: stored.then(
 replace: (!stored).then(
@@ -353,7 +353,7 @@ caught-by:
 
 [break] space-removes-the-item
 rule: `space` skips the focused item: it is kept, marked skipped.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::act
 find: _ => Self::update(session, PlanEdit::Skip(PlanItemRef { id }))
 replace: _ => Self::update(session, PlanEdit::Remove(PlanItemRef { id }))
@@ -362,7 +362,7 @@ caught-by:
 
 [break] space-skips-a-done-item
 rule: `space` on a done item does nothing, and is not typed either.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::act
 find: PlanStatus::Done => Act::Taken
 replace: PlanStatus::Done => Self::update(session, PlanEdit::Skip(PlanItemRef { id }))
@@ -371,7 +371,7 @@ caught-by:
 
 [break] the-hint-offers-space-on-a-done-item
 rule: The hint row offers only what the keys do on the focused item: no `space skips` on a done one.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::hint
 find: Some(PlanStatus::Done) | None => {}
 replace: None => {}
@@ -380,7 +380,7 @@ caught-by:
 
 [break] move-up-moves-down
 rule: `alt+up` moves the focused item up one.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::act
 find: self.reorder(focused, focused - 1, session)
 replace: self.reorder(focused, focused + 1, session)
@@ -389,7 +389,7 @@ caught-by:
 
 [break] an-item-is-added-at-the-end
 rule: `a` adds the new item after the focused one.
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::edited
 find: after: Some(item.id.clone())
 replace: after: None
@@ -398,7 +398,7 @@ caught-by:
 
 [break] slash-plan-is-not-a-command
 rule: `/plan` focuses the plan panel, or says there is none; it is never sent to the model.
-file: crates/cortex-tui/src/app/state/commands.rs
+file: crates/cineris-tui/src/app/state/commands.rs
 in: App::command
 find: "plan" => self.summon_panel("plan")
 replace: "plan" => {}
@@ -407,18 +407,18 @@ caught-by:
 
 [break] the-focused-plan-item-is-not-the-selection
 rule: The focused item is drawn as the selection: in the accent's tint, in bold (screen 4).
-file: crates/cortex-tui/src/view/plan.rs
+file: crates/cineris-tui/src/view/plan.rs
 in: plan_item
 find: let text_token = if focused { Token::Selected } else { text_token };
 replace: let text_token = if focused { Token::Text } else { text_token };
 caught-by:
     view::plan::tests::each_status_and_the_focus_take_screen_fours_tokens
     view::plan::tests::the_plan_in_every_variant
-    cortex-tui::it screens::the_views_draw_the_reference_screens
+    cineris-tui::it screens::the_views_draw_the_reference_screens
 
 [break] a-plan-item-is-drawn-unsanitised
 rule: A plan item's text comes from the model: it is made visible and one line before it is laid out.
-file: crates/cortex-tui/src/view/plan.rs
+file: crates/cineris-tui/src/view/plan.rs
 in: plan_item
 find: one_line(&item.text)
 replace: item.text.clone()
@@ -430,7 +430,7 @@ caught-by:
 
 [break] the-review-stays-past-the-next-prompt
 rule: The review closes when the next prompt is sent, in the key's own frame.
-file: crates/cortex-tui/src/app/panels/review.rs
+file: crates/cineris-tui/src/app/panels/review.rs
 in: ReviewPanel::seen
 find: Seen::Prompt => Show::Close
 replace: Seen::Prompt => Show::Same
@@ -439,7 +439,7 @@ caught-by:
 
 [break] a-turn-that-changed-nothing-opens-the-review
 rule: The review opens when a turn ended having changed files, or its checks ran: not after every turn.
-file: crates/cortex-tui/src/app/panels/review.rs
+file: crates/cineris-tui/src/app/panels/review.rs
 in: ReviewPanel::seen
 find:
     if self.has_any() {
@@ -453,7 +453,7 @@ caught-by:
 
 [break] a-failed-edit-is-a-changed-file
 rule: Only an edit or a write that succeeded changed a file.
-file: crates/cortex-tui/src/app/panels/review.rs
+file: crates/cineris-tui/src/app/panels/review.rs
 in: ReviewPanel::tool_result
 find:
     if result.outcome != ToolOutcome::Success {
@@ -465,7 +465,7 @@ caught-by:
 
 [break] enter-opens-the-first-call-of-a-file
 rule: `Enter` on a file opens the viewer at the box of its last call.
-file: crates/cortex-tui/src/app/panels/review.rs
+file: crates/cineris-tui/src/app/panels/review.rs
 in: ReviewPanel::tool_result
 find: self.rounds[at] = round;
 replace: let _ = round;
@@ -474,7 +474,7 @@ caught-by:
 
 [break] the-summary-says-no-verdict
 rule: The turn summary line says the turn's verdict when its checks ran.
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: with_verdict
 find: Verification::Passed => "checks passed"
 replace: Verification::Passed => return cost
@@ -483,7 +483,7 @@ caught-by:
 
 [break] a-long-path-loses-its-counts
 rule: A path too long for its row is shortened from its start, so that the file's name and its counts stay.
-file: crates/cortex-tui/src/view/review.rs
+file: crates/cineris-tui/src/view/review.rs
 in: file_row
 find: let path = shortened(&path, room, look.glyphs.ellipsis);
 replace: let path = path.clone();
@@ -493,7 +493,7 @@ caught-by:
 
 [break] the-first-row-has-no-totals
 rule: The review's first row sums the files' counts.
-file: crates/cortex-tui/src/view/review.rs
+file: crates/cineris-tui/src/view/review.rs
 in: review_header
 find: rest.extend(counts(added, removed, look));
 replace:
@@ -503,7 +503,7 @@ caught-by:
 
 [break] a-check-command-is-drawn-unsanitised
 rule: A check's command comes from a file a project may write: it is made visible and one line before it is laid out.
-file: crates/cortex-tui/src/view/review.rs
+file: crates/cineris-tui/src/view/review.rs
 in: check_row
 find: one_line(&check.command)
 replace: check.command.clone()
@@ -512,7 +512,7 @@ caught-by:
 
 [break] a-changed-path-is-drawn-unsanitised
 rule: A changed file's path comes from the model: it is made visible and one line before it is laid out.
-file: crates/cortex-tui/src/view/review.rs
+file: crates/cineris-tui/src/view/review.rs
 in: file_row
 find: let path = one_line(&file.path);
 replace: let path = file.path.clone();
@@ -524,7 +524,7 @@ caught-by:
 
 [break] a-held-key-types-once-its-panel-lost-the-focus
 rule: A key held down after a panel took it goes nowhere, though the panel it acted on closed or gave the input the focus: a held `x` that closed the review types nothing into the prompt (finding 5).
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find:
     if self.panel_holds(*key, at, repeat) {
@@ -536,7 +536,7 @@ caught-by:
 
 [break] an-item-edit-sends-its-line-breaks
 rule: An item is one line: the line breaks and tabs a paste or the external editor brought into an item edit are sent as spaces, which the core takes, and the text typed is not lost to its refusal (finding 2).
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::edited
 find: .map(|c| if c.is_control() { ' ' } else { c })
 replace: .map(|c| c)
@@ -545,7 +545,7 @@ caught-by:
 
 [break] the-folded-row-offers-a-key-that-reaches-nothing
 rule: The folded row names the key that moves the focus only when it reaches a panel folded there (finding 3).
-file: crates/cortex-tui/src/app/panels.rs
+file: crates/cineris-tui/src/app/panels.rs
 in: Panels::layout
 find: .filter(|_| reached)
 replace: .filter(|_| reached || true)
@@ -555,7 +555,7 @@ caught-by:
 
 [break] slash-plan-with-no-room-says-nothing
 rule: A panel a command asked for that the window cannot draw focused says so, in the command's own frame, rather than take the focus for nothing (finding 3; the second review, finding 1).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::summon_panel
 find: if self.panels.rows_to_focus(id, &draw) > self.panel_room {
 replace: if false {
@@ -564,7 +564,7 @@ caught-by:
 
 [break] a-notice-of-a-session-not-open-reaches-the-panels
 rule: Only the events of the session open here reach the panels: the notices of one that failed to open are said, and open no review (finding 4).
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::event
 find:
     if self.is_open(&event.session_id) {
@@ -576,7 +576,7 @@ caught-by:
 
 [break] an-edit-on-its-way-lets-the-next-be-computed-from-an-old-plan
 rule: While a change of a panel's is on its way, a key's change computed from what the panel shows, which the first will change, is not sent (finding 6).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_key
 find: if matches!(act, Act::Send(_) | Act::SendAndSay(..)) && self.panel_waiting(id) {
 replace: if false {
@@ -586,7 +586,7 @@ caught-by:
 
 [break] a-session-lefts-edit-holds-the-next-sessions-keys
 rule: What a panel waits for is what the session open waits for: an edit left on its way in a session left holds nothing in the next (the second review, finding 4).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_waiting
 find: if *panel == id && self.is_open(session)
 replace: if *panel == id
@@ -595,7 +595,7 @@ caught-by:
 
 [break] the-panels-block-is-not-drawn
 rule: The panels are drawn in the frame, their rows with what came from outside made visible: the frame's hostile-text test finds the rows, not only nothing wrong (finding 7).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_block
 find: block.extend(laid.lines);
 replace:
@@ -605,7 +605,7 @@ caught-by:
 
 [break] the-plan-collapses-while-its-item-is-edited
 rule: While an item is edited in the input box, its panel stays drawn whole, the item shown (finding 9).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_block
 find: Target::Input | Target::ToolBox(_) => self.item_edit.as_ref().map(|(id, _)| *id)
 replace: Target::Input | Target::ToolBox(_) => None
@@ -616,7 +616,7 @@ caught-by:
 
 [break] an-item-edits-first-letter-is-taken-for-the-key-held
 rule: After a key that began an item edit, what is typed is the item's: only a repeat the terminal marks is taken for that key held, and the same letter typed into the box is kept (the second review, finding 2).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_key
 find: let marked_only = matches!(act, Act::Edit { .. });
 replace: let marked_only = false;
@@ -625,7 +625,7 @@ caught-by:
 
 [break] a-held-back-key-is-taken-for-a-key-held
 rule: A key whose change was not sent while an earlier one was on its way is no key held: pressed again once the answer has come, it acts (the second review, finding 3).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_key
 find:
     self.panel_dropped = Some(id);
@@ -639,7 +639,7 @@ caught-by:
 
 [break] a-held-back-key-is-not-said
 rule: A key whose change was not sent while an earlier one was on its way is said, in the hint row, while that change is still being made (the second review, finding 3).
-file: crates/cortex-tui/src/app/state/panel.rs
+file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_hint
 find: keys.insert(0, "the last change is still being made".to_owned());
 replace:
@@ -648,7 +648,7 @@ caught-by:
 
 [break] an-item-longer-than-the-plan-holds-is-sent-whole
 rule: An item's text longer than the plan holds is cut to what it holds, so that the core does not refuse it and the text typed is not lost (the second review, finding 5).
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::edited
 find: let text: String = text.chars().take(ITEM_TEXT).collect();
 replace: let text: String = text.chars().collect();
@@ -657,7 +657,7 @@ caught-by:
 
 [break] an-items-cut-is-not-said
 rule: An item's text cut to what the plan holds is said (the second review, finding 5).
-file: crates/cortex-tui/src/app/panels/plan.rs
+file: crates/cineris-tui/src/app/panels/plan.rs
 in: PlanPanel::edited
 find: Act::Send(op) if cut => Act::SendAndSay(
 replace: Act::Send(op) if false => Act::SendAndSay(

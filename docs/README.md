@@ -1,6 +1,6 @@
-# Cortex-Harness design docs
+# Cineris design docs
 
-Cortex-Harness is a terminal agent harness written from scratch in Rust: an LLM agent loop that reads and edits code, runs commands, and talks to several model providers.
+Cineris is a terminal agent harness written from scratch in Rust: an LLM agent loop that reads and edits code, runs commands, and talks to several model providers.
 
 These docs are the specification that every build step works from. They were written before any harness code. A step's session has only these docs and its own prompt, so they are meant to be complete enough to build from.
 
@@ -62,14 +62,14 @@ These docs are the specification that every build step works from. They were wri
 
 | Page | Content |
 |---|---|
-| [protocol/](protocol/README.md) | The protocol's JSON Schema and TypeScript declarations, generated from the Rust types in `cortex-protocol` by `cargo xtask schema`. Not edited by hand, and checked against the types in CI. |
-| [configuration/reference.md](configuration/reference.md) | Every configuration key: its type, its default, what a project's file may do with it, and when a change takes effect. Generated from the settings in `cortex-config` by `cargo xtask gen`, with a JSON Schema of the same keys beside it ([configuration/schema.json](configuration/schema.json)). Not edited by hand, and checked against the settings in CI. |
+| [protocol/](protocol/README.md) | The protocol's JSON Schema and TypeScript declarations, generated from the Rust types in `cineris-protocol` by `cargo xtask schema`. Not edited by hand, and checked against the types in CI. |
+| [configuration/reference.md](configuration/reference.md) | Every configuration key: its type, its default, what a project's file may do with it, and when a change takes effect. Generated from the settings in `cineris-config` by `cargo xtask gen`, with a JSON Schema of the same keys beside it ([configuration/schema.json](configuration/schema.json)). Not edited by hand, and checked against the settings in CI. |
 
 ### Background
 
 | Page | Content |
 |---|---|
-| [reference-notes.md](reference-notes.md) | How Pi and Opencode approach the same problems, what is worth matching, and where Cortex-Harness differs. |
+| [reference-notes.md](reference-notes.md) | How Pi and Opencode approach the same problems, what is worth matching, and where Cineris differs. |
 | [decisions/](decisions/README.md) | One record per significant choice: options, the choice, why, and what would reopen it. |
 | [measurements/](measurements/README.md) | The spikes: what was built, how it was measured, the numbers. |
 
@@ -95,4 +95,4 @@ These docs are the specification that every build step works from. They were wri
 2. **Speed and efficiency come first,** in the product and in the tooling. The blocking pull-request checks finish in under 5 minutes per OS.
 3. **No personal details** in commits, docs, code, configuration or fixtures, and no absolute home-directory paths.
 4. **Everything fresh.** Nothing is carried over from earlier attempts.
-5. **The brand is Cortex-Harness.** Crates use the `cortex-` prefix. The licence is MIT.
+5. **The brand is Cineris.** Crates use the `cineris-` prefix. The licence is MIT.

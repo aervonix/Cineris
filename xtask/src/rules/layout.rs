@@ -314,8 +314,8 @@ mod tests {
 
     fn names() -> BTreeSet<String> {
         [
-            "crates/cortex-tui/Cargo.toml",
-            "crates/cortex-cli/Cargo.toml",
+            "crates/cineris-tui/Cargo.toml",
+            "crates/cineris-cli/Cargo.toml",
         ]
         .map(str::to_owned)
         .into_iter()
@@ -361,7 +361,7 @@ mod tests {
 
     #[test]
     fn an_index_that_is_not_what_the_items_give_is_found() {
-        let flag = item("A flag.", "cortex-tui");
+        let flag = item("A flag.", "cineris-tui");
         let quick = item("The engine.", "other");
         let items = [
             ("docs/outstanding/a-flag.md", flag.as_str()),
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn the_index_waits_for_items_that_cannot_be_read() {
-        let flag = item("A flag.", "cortex-tui");
+        let flag = item("A flag.", "cineris-tui");
         let right = index_of(&[("docs/outstanding/a-flag.md", flag.as_str())]);
         let found = found(&[
             ("docs/outstanding/a-flag.md", flag.as_str()),
@@ -428,7 +428,7 @@ mod tests {
 
     #[test]
     fn records_and_items_in_their_places_pass() {
-        let flag = item("A flag.", "cortex-cli");
+        let flag = item("A flag.", "cineris-cli");
         let engine = item("The engine.", "other");
         let index = index_of(&[
             (
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn items_with_no_index_are_found() {
-        let flag = item("A flag.", "cortex-tui");
+        let flag = item("A flag.", "cineris-tui");
         assert_one(
             &found(&[("docs/outstanding/a-flag.md", &flag)]),
             &[
@@ -658,7 +658,7 @@ mod tests {
 
     #[test]
     fn an_open_item_is_named_in_hyphenated_words() {
-        let flag = item("A flag.", "cortex-tui");
+        let flag = item("A flag.", "cineris-tui");
         for file in [
             "docs/outstanding/Speed-flag.md",
             "docs/outstanding/speed_flag.md",
@@ -677,7 +677,7 @@ mod tests {
     #[test]
     fn an_open_item_out_of_form_is_found_at_its_line() {
         let row = "| **A flag.** | Step 13 | In that step |";
-        let fields = "- Area: cortex-tui\n- Owner: step 13\n";
+        let fields = "- Area: cineris-tui\n- Owner: step 13\n";
         for (text, line) in [
             // Two items in one file.
             (

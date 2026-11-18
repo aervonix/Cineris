@@ -14,7 +14,7 @@
 //! same bytes on a desk and on a hosted runner.
 //!
 //! The count, the hash and the places it is kept are
-//! `cortex_testkit::corpus::shared`'s: this file includes it, so that the
+//! `cineris_testkit::corpus::shared`'s: this file includes it, so that the
 //! command and the test that reads the corpus check it with the same code.
 
 use std::fs;
@@ -25,7 +25,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::{Result, workspace};
 
-#[path = "../../crates/cortex-testkit/src/corpus/shared.rs"]
+#[path = "../../crates/cineris-testkit/src/corpus/shared.rs"]
 mod shared;
 
 use shared::{Measured, Pin};
@@ -38,14 +38,14 @@ usage: cargo xtask corpus fetch|check|path|pin [--update]
   check          check the corpus in its place against the pin; fail if it is
                  not there or not whole
   path           print the corpus's folder, after the same check, and nothing
-                 else (CORTEX_PERF_SOURCE=$(cargo xtask corpus path))
+                 else (CINERIS_PERF_SOURCE=$(cargo xtask corpus path))
   pin [--update] make the corpus again from corpus/dependencies.toml and write
                  corpus/Cargo.lock and corpus/PIN: the way to change it.
                  --update takes the newest versions the list allows.
 
-It is kept under $XDG_CACHE_HOME/cortex-harness/corpus (~/.cache/... when that
-is not set) or %LOCALAPPDATA%\\cortex-harness\\corpus, in a folder named for its
-hash; CORTEX_CORPUS_DIR names another place.";
+It is kept under $XDG_CACHE_HOME/cineris-dev/corpus (~/.cache/... when that
+is not set) or %LOCALAPPDATA%\\cineris-dev\\corpus, in a folder named for its
+hash; CINERIS_CORPUS_DIR names another place.";
 
 /// The date given to every file of the corpus: the first of January 2021.
 /// A file made by the fetch is not "modified a moment ago" to the index that
@@ -337,7 +337,7 @@ fn make_with(work: &Path, locked: bool, with_lock: bool) -> Result<(PathBuf, Mea
 /// workspace, whose dependencies are the list.
 fn manifest(dependencies: &str) -> String {
     format!(
-        "[package]\nname = \"cortex-corpus\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
+        "[package]\nname = \"cineris-corpus\"\nversion = \"0.0.0\"\nedition = \"2021\"\n\
          publish = false\n\n[lib]\npath = \"lib.rs\"\n\n[workspace]\n\n[dependencies]\n{dependencies}"
     )
 }
@@ -457,7 +457,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::time::{Duration, SystemTime};
 
-    use cortex_testkit::Scratch;
+    use cineris_testkit::Scratch;
 
     use super::shared::{Measured, Pin};
     use super::{
@@ -519,7 +519,7 @@ mod tests {
 version = 4
 
 [[package]]
-name = \"cortex-corpus\"
+name = \"cineris-corpus\"
 version = \"0.0.0\"
 dependencies = [
  \"serde\",
@@ -561,7 +561,7 @@ checksum = \"def\"
 
     #[test]
     fn only_rust_files_are_copied_byte_for_byte_and_dated() {
-        let scratch = cortex_testkit::Scratch::outside("xtask-corpus", "copy");
+        let scratch = cineris_testkit::Scratch::outside("xtask-corpus", "copy");
         let crlf = b"fn a() {}\r\nfn b() {}\r\n";
         scratch.file("from/c-1.0.0/src/lib.rs", crlf);
         scratch.file("from/c-1.0.0/src/deep/x.rs", [0u8, 255, 10, 13]);

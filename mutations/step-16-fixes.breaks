@@ -12,430 +12,430 @@
 
 [break] other-processes-spend-is-not-read
 rule: Before each request a day-limited session makes, the day's purse reads what other processes spent.
-file: crates/cortex-agent/src/ledger.rs
+file: crates/cineris-agent/src/ledger.rs
 in: Ledger::catch_up
 find: catch_up.catch_up().await;
 replace:
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core::it day::two_processes_together_hold_the_day_to_its_limit
-    cortex-core::it day::a_line_an_older_build_wrote_counts_as_another_processs
+    cineris-core::it day::two_processes_together_hold_the_day_to_its_limit
+    cineris-core::it day::a_line_an_older_build_wrote_counts_as_another_processs
 
 [break] own-lines-are-counted-twice
 rule: A purse's own requests' lines are not read back: they were charged as they were made.
-file: crates/cortex-stats/src/day.rs
+file: crates/cineris-stats/src/day.rs
 in: DayReader::read_month
 find: let counted = line.charged_to.is_some() && line.charged_to == *purse;
 replace: let counted = false;
-packages: cortex-stats, cortex-core
+packages: cineris-stats, cineris-core
 caught-by:
-    cortex-stats::it day::a_days_reader_counts_every_request_but_its_own_purses
-    cortex-core::it day::a_processs_own_spending_is_not_counted_twice
+    cineris-stats::it day::a_days_reader_counts_every_request_but_its_own_purses
+    cineris-core::it day::a_processs_own_spending_is_not_counted_twice
 
 [break] a-request-says-no-purse
 rule: A request's statistics event says which day's purse it was charged to.
-file: crates/cortex-agent/src/turn.rs
+file: crates/cineris-agent/src/turn.rs
 in: record_request
 find: charged_to: self.ledger.charged_to()
 replace: charged_to: None
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core::it day::a_processs_own_spending_is_not_counted_twice
+    cineris-core::it day::a_processs_own_spending_is_not_counted_twice
 
 [break] two-processes-share-a-purse-id
 rule: A day's purse has an id no other process's purse has: its recorder's, and the day.
-file: crates/cortex-core/src/day.rs
+file: crates/cineris-core/src/day.rs
 in: day_account
 find: let id = format!("{}/{today}", recorder.writer());
 replace: let id = format!("w/{today}");
 caught-by:
-    cortex-core::it day::two_processes_together_hold_the_day_to_its_limit
+    cineris-core::it day::two_processes_together_hold_the_day_to_its_limit
 
 [break] an-older-builds-line-is-skipped
 rule: A request line that says no purse, from a build before it was written, counts as another process's.
-file: crates/cortex-stats/src/day.rs
+file: crates/cineris-stats/src/day.rs
 in: DayReader::read_month
 find: if line.kind != "request" || line.day != *day {
 replace: if line.charged_to.is_none() || line.kind != "request" || line.day != *day {
-packages: cortex-stats, cortex-core
+packages: cineris-stats, cineris-core
 caught-by:
-    cortex-stats::it day::a_days_reader_counts_every_request_but_its_own_purses
-    cortex-core::it day::a_line_an_older_build_wrote_counts_as_another_processs
+    cineris-stats::it day::a_days_reader_counts_every_request_but_its_own_purses
+    cineris-core::it day::a_line_an_older_build_wrote_counts_as_another_processs
 
 [break] an-interrupted-request-is-not-recorded
 rule: A request interrupted part-way has a statistics event, with what it used.
-file: crates/cortex-agent/src/turn.rs
+file: crates/cineris-agent/src/turn.rs
 in: interrupted
 find: self.record_request(turn, &model, usage.clone(), StopReason::Interrupted, None, &live);
 replace:
 caught-by:
-    cortex-agent::it interrupt::an_interrupted_request_is_recorded_with_what_it_used
+    cineris-agent::it interrupt::an_interrupted_request_is_recorded_with_what_it_used
 
 [break] a-voided-attempts-usage-is-not-recorded
 rule: A request's statistics event carries what its attempts given up used.
-file: crates/cortex-agent/src/turn.rs
+file: crates/cineris-agent/src/turn.rs
 in: record_request
 find: (Some(last), Some(voided)) => Some(crate::usage::together(voided, &last)),
 replace: (Some(last), Some(_)) => Some(last),
 caught-by:
-    cortex-agent::it retries::what_a_discarded_attempt_used_is_still_counted
+    cineris-agent::it retries::what_a_discarded_attempt_used_is_still_counted
 
 [break] a-request-waits-for-a-stalled-disk
 rule: A request waits for what other processes spent at most a second.
-file: crates/cortex-core/src/day.rs
+file: crates/cineris-core/src/day.rs
 in: Catching::catch_up
 find: if sleep.as_mut().poll(context).is_ready() {
 replace: if false {
 caught-by:
-    cortex-core::it day::a_stalled_disk_holds_a_days_request_at_most_a_second
+    cineris-core::it day::a_stalled_disk_holds_a_days_request_at_most_a_second
 
 [break] two-recorders-share-an-id
 rule: Each recorder has an id of its own, which no other process's has.
-file: crates/cortex-stats/src/recorder.rs
+file: crates/cineris-stats/src/recorder.rs
 in: Recorder::new
 find: .unique("w_")
 replace: .unique("w_").get(..2).unwrap_or_default().to_owned()
 caught-by:
-    cortex-stats::it day::sys_two_processes_have_recorders_of_their_own
+    cineris-stats::it day::sys_two_processes_have_recorders_of_their_own
 
 [break] statistics-off-records-and-holds-the-day-per-process
 rule: With statistics off nothing is recorded, and a session with a day's limit is refused at open.
-file: crates/cortex-core/src/usage.rs
+file: crates/cineris-core/src/usage.rs
 in: recorder
 find: if !user.settings.stats.enabled { return None; }
 replace:
 caught-by:
-    cortex-core::it day::a_days_limit_with_statistics_off_is_refused_at_open
+    cineris-core::it day::a_days_limit_with_statistics_off_is_refused_at_open
 
 # ------------------------------------- finding 2: the aggregates' only copy
 
 [break] a-newer-builds-file-is-saved-over
 rule: Aggregates that did not read the file that is there are not saved over it.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: Found::may_save
 find: matches!(self, Self::Missing | Self::Read | Self::MovedAside { .. })
 replace: !matches!(self, Self::NotLoaded)
-packages: cortex-stats, cortex-core
+packages: cineris-stats, cineris-core
 caught-by:
-    cortex-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
-    cortex-stats::it store::aggregates_that_could_not_read_the_file_are_never_saved_over_it
+    cineris-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
+    cineris-stats::it store::aggregates_that_could_not_read_the_file_are_never_saved_over_it
 
 [break] a-newer-version-is-taken-for-a-damaged-file
 rule: A newer build's aggregates file is left for it, not moved aside.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: read_aggregates
 find: Ok(Version { version }) if version > AGGREGATES_VERSION => Reading::Newer(version),
 replace:
-packages: cortex-stats, cortex-core
+packages: cineris-stats, cineris-core
 caught-by:
-    cortex-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
-    cortex-core::it usage::the_report_and_cortex_stats_say_what_the_aggregates_file_was
+    cineris-stats::it store::a_newer_builds_aggregates_file_is_left_for_it
+    cineris-core::it usage::the_report_and_cineris_stats_say_what_the_aggregates_file_was
 
 [break] a-damaged-file-is-not-moved-aside
 rule: An aggregates file that does not parse is moved aside before anything is saved.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: Aggregates::load_for_saving
 find: match move_aside(dir, identity, clock) {
 replace: match Ok::<Option<PathBuf>, io::Error>(None) {
-packages: cortex-stats, cortex-core
+packages: cineris-stats, cineris-core
 caught-by:
-    cortex-stats::it store::an_aggregates_file_that_does_not_parse_is_moved_aside_before_anything_is_saved
-    cortex-core::it usage::the_report_and_cortex_stats_say_what_the_aggregates_file_was
+    cineris-stats::it store::an_aggregates_file_that_does_not_parse_is_moved_aside_before_anything_is_saved
+    cineris-core::it usage::the_report_and_cineris_stats_say_what_the_aggregates_file_was
 
 [break] the-file-moved-aside-is-not-private
 rule: The aggregates file moved aside is owner-only.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: move_aside
 find: owner_only: true
 replace: owner_only: false
 caught-by:
-    cortex-stats::it store::an_aggregates_file_that_does_not_parse_is_moved_aside_before_anything_is_saved
+    cineris-stats::it store::an_aggregates_file_that_does_not_parse_is_moved_aside_before_anything_is_saved
 
 [break] aggregates-that-started-from-nothing-prune
 rule: Only aggregates read from the file prune: ones that started from nothing are saved first.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: Found::may_prune
 find: matches!(self, Self::Read)
 replace: self.may_save()
 caught-by:
-    cortex-stats::it store::aggregates_that_start_from_nothing_prune_only_once_saved
+    cineris-stats::it store::aggregates_that_start_from_nothing_prune_only_once_saved
 
 [break] a-blank-line-is-unreadable
 rule: A line break with nothing before it is not a line.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: read_lines
 find: if line.iter().all(u8::is_ascii_whitespace) { continue; }
 replace:
 caught-by:
-    cortex-stats::it store::a_blank_line_is_not_counted_as_unreadable
+    cineris-stats::it store::a_blank_line_is_not_counted_as_unreadable
 
 [break] aggregates-that-may-not-be-saved-prune
 rule: Aggregates that may not be saved prune nothing: a pruned file's part lives on only in what is saved.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: Aggregates::sync
 find: let retention = retention.filter(|_| self.found.may_prune());
 replace:
 caught-by:
-    cortex-stats::it store::aggregates_that_could_not_read_the_file_are_never_saved_over_it
+    cineris-stats::it store::aggregates_that_could_not_read_the_file_are_never_saved_over_it
 
 # ----------------------------------------------- finding 4: the zone's counts
 
 [break] the-zone-reader-allocates-before-it-checks
 rule: The TZif reader allocates nothing for counts the file does not hold.
-file: crates/cortex-base/src/zone/tzif.rs
+file: crates/cineris-base/src/zone/tzif.rs
 in: Transitions::parse
 find: let data_end = header.data_end(start, time_len, bytes.len())?;
 replace: let data_end = start + header.data_len(time_len).unwrap_or(0);
 caught-by:
-    cortex-base::it zone::a_zone_file_that_lies_about_its_counts_is_refused_without_a_large_allocation
+    cineris-base::it zone::a_zone_file_that_lies_about_its_counts_is_refused_without_a_large_allocation
 
 # ----------------------------------------------- finding 5: the end's flush
 
 [break] the-end-waits-for-a-stuck-writer
 rule: The end of a process waits for the statistics writer at most two seconds.
-file: crates/cortex-core/src/stats.rs
+file: crates/cineris-core/src/stats.rs
 in: flush
 find: if sleep.as_mut().poll(context).is_ready() {
 replace: if false {
 caught-by:
-    cortex-core::it usage::a_stuck_statistics_writer_holds_the_end_at_most_two_seconds
+    cineris-core::it usage::a_stuck_statistics_writer_holds_the_end_at_most_two_seconds
 
 [break] the-end-does-not-give-up-on-the-writer
 rule: The end of a process gives up on a writer that is stuck, and the stuck-writer test's writer is stuck.
-file: crates/cortex-core/src/stats.rs
+file: crates/cineris-core/src/stats.rs
 in: flush
 find: give_up.now(); finished.await
 replace: finished.await
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core::it usage::a_stuck_statistics_writer_holds_the_end_at_most_two_seconds
+    cineris-core::it usage::a_stuck_statistics_writer_holds_the_end_at_most_two_seconds
 
 [break] a-key-shaped-code-reaches-the-refresh-error
 rule: A refresh's error keeps a provider's code only when the secret filter finds no credential in it.
-file: crates/cortex-core/src/usage.rs
+file: crates/cineris-core/src/usage.rs
 in: refresh_one
-find: if known || !cortex_base::redact::is_plain_code(&data.code) {
-replace: if !cortex_protocol::error::code::is_plain(&data.code) {
+find: if known || !cineris_base::redact::is_plain_code(&data.code) {
+replace: if !cineris_protocol::error::code::is_plain(&data.code) {
 caught-by:
-    cortex-core::it usage::a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer
+    cineris-core::it usage::a_failed_refresh_changes_nothing_kept_and_says_why_without_the_answer
 
 [break] a-flush-cannot-be-given-up
 rule: A flush that is given up returns at once.
-file: crates/cortex-stats/src/recorder.rs
+file: crates/cineris-stats/src/recorder.rs
 in: GiveUp::now
 find: self.state.end(Ended::GaveUp);
 replace:
 caught-by:
-    cortex-stats recorder::tests::a_flush_given_up_returns_at_once_with_what_was_left
+    cineris-stats recorder::tests::a_flush_given_up_returns_at_once_with_what_was_left
 
 # --------------------------------------------- finding 6: a provider's code
 
 [break] a-providers-text-reaches-the-statistics
 rule: A provider's error code reaches the statistics only when it is a plain one.
-file: crates/cortex-stats/src/recorder.rs
+file: crates/cineris-stats/src/recorder.rs
 in: keep_plain
 find: let plain = is_plain_code(error);
 replace: let plain = true;
-packages: cortex-stats, cortex-core
+packages: cineris-stats, cineris-core
 caught-by:
-    cortex-stats::it store::a_providers_own_words_are_kept_only_when_plain
-    cortex-core::it usage::a_providers_error_code_reaches_the_statistics_only_when_it_is_plain
+    cineris-stats::it store::a_providers_own_words_are_kept_only_when_plain
+    cineris-core::it usage::a_providers_error_code_reaches_the_statistics_only_when_it_is_plain
 
 [break] a-providers-stop-reason-reaches-the-statistics
 rule: A stop reason the client did not know reaches the statistics only when it is plain.
-file: crates/cortex-stats/src/recorder.rs
+file: crates/cineris-stats/src/recorder.rs
 in: keep_plain
 find: plain_or_other(&mut request.stop, plain);
 replace:
 caught-by:
-    cortex-stats::it store::a_providers_own_words_are_kept_only_when_plain
+    cineris-stats::it store::a_providers_own_words_are_kept_only_when_plain
 
 [break] a-made-up-tool-name-reaches-the-statistics
 rule: The name of a tool that does not exist reaches the statistics only when it is plain.
-file: crates/cortex-stats/src/recorder.rs
+file: crates/cineris-stats/src/recorder.rs
 in: keep_plain
 find: Record::Tool(tool) if tool.outcome == crate::ToolOutcome::UnknownTool => {
 replace: Record::Tool(tool) if false => {
 caught-by:
-    cortex-stats::it store::a_providers_own_words_are_kept_only_when_plain
+    cineris-stats::it store::a_providers_own_words_are_kept_only_when_plain
 
 [break] any-text-is-a-plain-code
 rule: A plain code is lower-case letters, digits, `_`, `.` and `-`, at most 64 of them.
-file: crates/cortex-protocol/src/error.rs
+file: crates/cineris-protocol/src/error.rs
 in: code::is_plain
 find: byte.is_ascii_lowercase() || byte.is_ascii_digit() || b"_.-".contains(&byte)
 replace: !byte.is_ascii_control()
-packages: cortex-protocol, cortex-core
+packages: cineris-protocol, cineris-core
 caught-by:
-    cortex-protocol error::tests::only_a_plain_code_is_plain
-    cortex-core::it usage::a_providers_error_code_reaches_the_statistics_only_when_it_is_plain
+    cineris-protocol error::tests::only_a_plain_code_is_plain
+    cineris-core::it usage::a_providers_error_code_reaches_the_statistics_only_when_it_is_plain
 
 # ---------------------------------------- finding 7: a half-written line
 
 [break] a-cut-line-takes-the-next-one
 rule: The next writer ends a last line that was cut short before it appends.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: open_to_append
 find: if last != *b"\n" {
 replace: if false {
 caught-by:
-    cortex-stats::it store::a_half_written_last_line_does_not_take_the_next_writers_first_line
+    cineris-stats::it store::a_half_written_last_line_does_not_take_the_next_writers_first_line
 
 # ---------------------------------------------- finding 8: the limits' lock
 
 [break] the-limits-file-is-updated-unlocked
 rule: An update of the limits file holds its lock from the read to the write.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: LimitsFile::update
 find: let _held = private::hold_lock(&path)?;
 replace:
 caught-by:
-    cortex-stats::it limits::an_update_takes_the_files_lock
+    cineris-stats::it limits::an_update_takes_the_files_lock
 
 # ----------------------------------------- finding 9: the session's report
 
 [break] the-session-range-answers-anyone
 rule: The session range of `usage/report` answers only a client that has the session open.
-file: crates/cortex-core/src/usage.rs
+file: crates/cineris-core/src/usage.rs
 in: session_report
 find: let usage = core.open_for(client, session)?.handle.usage();
 replace: let usage = core.session_usage(session).ok_or_else(|| error(ErrorKind::Usage, "session_not_open", "not open"))?;
 caught-by:
-    cortex-core::it usage::a_client_that_has_not_opened_a_session_gets_no_report_of_it
+    cineris-core::it usage::a_client_that_has_not_opened_a_session_gets_no_report_of_it
 
 # --------------------------------------- the reset while a writer runs
 
 [break] the-writer-keeps-a-deleted-file
 rule: The writer appends to the file the month's name gives now, not to one a reset deleted.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: Appender::append
 find: || FileIdentity::at(&path).map_or(true, |now| now != open.identity)
 replace:
 caught-by:
-    cortex-stats::it store::a_reset_while_a_writer_runs_keeps_the_writers_later_lines
+    cineris-stats::it store::a_reset_while_a_writer_runs_keeps_the_writers_later_lines
 
 [break] the-days-reader-reads-a-new-file-from-where-the-old-one-ended
 rule: A day's reader reads a file made again under the month's name from its start.
-file: crates/cortex-stats/src/day.rs
+file: crates/cineris-stats/src/day.rs
 in: DayReader::read_month
 find: Ok(now) if tail.file.as_ref().is_some_and(|(_, held)| *held == now) => {}
 replace: Ok(_) if tail.file.is_some() => {}
 caught-by:
-    cortex-stats::it day::a_days_reader_reads_a_new_file_from_its_start
+    cineris-stats::it day::a_days_reader_reads_a_new_file_from_its_start
 
 [break] a-file-cut-back-is-read-again
 rule: A file cut back in place is not read again from where it was cut.
-file: crates/cortex-stats/src/day.rs
+file: crates/cineris-stats/src/day.rs
 in: DayReader::read_month
 find: tail.offset = length; return Ok(());
 replace: tail.offset = 0;
 caught-by:
-    cortex-stats::it day::a_days_reader_counts_nothing_twice_when_a_file_is_cut_back
+    cineris-stats::it day::a_days_reader_counts_nothing_twice_when_a_file_is_cut_back
 
 # ------------------- the four rules the review found no test held (moved
 # here from its throwaway list)
 
 [break] a-month-too-few-is-kept
 rule: A monthly file stays for `stats.retention` whole months after its own.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: Aggregates::sync
 find: if number + i64::from(retention) < now {
 replace: if number + i64::from(retention) <= now {
 caught-by:
-    cortex-stats::it store::a_monthly_file_stays_for_its_retention_and_goes_the_month_after
+    cineris-stats::it store::a_monthly_file_stays_for_its_retention_and_goes_the_month_after
 
 [break] a-line-being-written-is-read
 rule: A line another process is still writing is not read until it is whole.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: read_lines
 find: if read == 0 || line.last() != Some(&b'\n') {
 replace: if read == 0 {
 caught-by:
-    cortex-stats::it store::a_line_still_being_written_is_read_once_it_is_whole
+    cineris-stats::it store::a_line_still_being_written_is_read_once_it_is_whole
 
 [break] days-fold-after-forty-days
 rule: Day buckets fold into months only once they are more than 400 days old.
-file: crates/cortex-stats/src/aggregate.rs
+file: crates/cineris-stats/src/aggregate.rs
 in: DAYS_KEPT
 find: 400
 replace: 40
 caught-by:
-    cortex-stats::it store::days_fold_into_months_after_four_hundred_days
+    cineris-stats::it store::days_fold_into_months_after_four_hundred_days
 
 [break] a-limits-file-that-cannot-be-read-is-replaced
 rule: A limits file that cannot be read for any reason but its absence is not written over.
-file: crates/cortex-stats/src/store.rs
+file: crates/cineris-stats/src/store.rs
 in: LimitsFile::update
 find: Err(error) => return Err(error)
 replace: Err(_) => Self::default()
 caught-by:
-    cortex-stats::it limits::a_limits_file_that_cannot_be_read_is_left_as_it_is
+    cineris-stats::it limits::a_limits_file_that_cannot_be_read_is_left_as_it_is
 
 # ----------------------------------------------------- the notes, fixed
 
 [break] a-sum-overflows
 rule: Sums saturate: a provider's huge count stops at the most a figure holds and the writer goes on.
-file: crates/cortex-stats/src/aggregate.rs
+file: crates/cineris-stats/src/aggregate.rs
 in: UsageSum::add
 find: self.input = self.input.saturating_add(other.input);
 replace: self.input += other.input;
 caught-by:
-    cortex-stats::it store::sums_that_would_overflow_stop_at_the_most_a_figure_holds
+    cineris-stats::it store::sums_that_would_overflow_stop_at_the_most_a_figure_holds
 
 [break] a-stopped-writer-is-invisible
 rule: An event sent to a writer that has stopped is dropped and counted.
-file: crates/cortex-stats/src/recorder.rs
+file: crates/cineris-stats/src/recorder.rs
 in: Recorder::send
 find: Err(TrySendError::Disconnected(_)) => { self.queued.fetch_sub(1, Ordering::Relaxed); self.dropped.fetch_add(1, Ordering::Relaxed); self.tell_stopped(); }
 replace: Err(TrySendError::Disconnected(_)) => { self.queued.fetch_sub(1, Ordering::Relaxed); }
 caught-by:
-    cortex-stats recorder::tests::a_writer_that_stopped_is_counted_not_hidden
+    cineris-stats recorder::tests::a_writer_that_stopped_is_counted_not_hidden
 
 [break] an-unknown-range-is-all-time
 rule: A range this build does not know is refused, not answered as all time.
-file: crates/cortex-core/src/usage.rs
+file: crates/cineris-core/src/usage.rs
 in: report
 find: if let UsageRange::Unknown(other) = &params.range {
 replace: if let UsageRange::Unknown(other) = &params.range && false {
 caught-by:
-    cortex-core::it usage::a_range_this_build_does_not_know_is_refused
+    cineris-core::it usage::a_range_this_build_does_not_know_is_refused
 
 # ------------------------------------------- the full review of the fixes
 
 [break] a-reports-sums-overflow
 rule: A report adds its range's buckets with sums that saturate.
-file: crates/cortex-stats/src/query.rs
+file: crates/cineris-stats/src/query.rs
 in: add_sum
 find: into.add(other);
 replace: into.input += other.input;
 caught-by:
-    cortex-stats::it ranges::a_reports_sums_stop_at_the_most_a_figure_holds
+    cineris-stats::it ranges::a_reports_sums_stop_at_the_most_a_figure_holds
 
 [break] the-writer-reads-everything-beside-a-newer-file
 rule: Aggregates that may not be saved are not brought up to date by the writer.
-file: crates/cortex-stats/src/recorder.rs
+file: crates/cineris-stats/src/recorder.rs
 in: settle
 find: if aggregates.found().may_save() && let Ok(true) = aggregates.sync(
 replace: if let Ok(true) = aggregates.sync(
 caught-by:
-    cortex-stats::it store::beside_a_newer_file_the_writer_reads_no_monthly_file
+    cineris-stats::it store::beside_a_newer_file_the_writer_reads_no_monthly_file
 
 [break] a-key-shaped-code-is-kept
 rule: A provider's code in which the secret filter finds a credential is not kept.
-file: crates/cortex-base/src/redact.rs
+file: crates/cineris-base/src/redact.rs
 in: is_plain_code
 find: .any(|part| filter.finds(part))
 replace: .any(|_part| false)
-packages: cortex-base, cortex-stats
+packages: cineris-base, cineris-stats
 caught-by:
-    cortex-base redact::plain_code_tests::a_code_in_the_shape_of_a_key_is_not_plain
-    cortex-stats::it store::a_providers_own_words_are_kept_only_when_plain
+    cineris-base redact::plain_code_tests::a_code_in_the_shape_of_a_key_is_not_plain
+    cineris-stats::it store::a_providers_own_words_are_kept_only_when_plain
 
 [break] mixed-bases-lose-a-cost
 rule: A retried request's line carries every attempt's cost, whatever its basis.
-file: crates/cortex-agent/src/usage.rs
+file: crates/cineris-agent/src/usage.rs
 in: together
 find: (Some(earlier), Some(later)) => Some(Cost {
 replace: (Some(earlier), Some(later)) if earlier.basis == later.basis => Some(Cost {
 caught-by:
-    cortex-agent usage::together_tests::two_attempts_together_keep_everything_the_ledger_was_charged
+    cineris-agent usage::together_tests::two_attempts_together_keep_everything_the_ledger_was_charged

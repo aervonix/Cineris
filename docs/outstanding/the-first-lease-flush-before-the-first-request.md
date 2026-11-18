@@ -1,6 +1,6 @@
 A session's first lease record is flushed to disk before its first request, whatever the durability.
 
-- Area: cortex-session
+- Area: cineris-session
 - Owner: the next step that changes leases, or step 32
 
 | Item | Who | When |

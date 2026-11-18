@@ -47,8 +47,8 @@ matched as a whole word, and a term with `@` or `/` in it anywhere in the
 text; case is ignored. A term is never printed.
 
 --pre-push and --unpushed are the same check before a push, with the
-terms from ~/.config/cortex-harness/owner-terms or the file that
-CORTEX_OWNER_TERMS_FILE names: each commit the push sends that the
+terms from ~/.config/cineris-dev/owner-terms or the file that
+CINERIS_OWNER_TERMS_FILE names: each commit the push sends that the
 remote does not have. Without the file they pass with a warning.";
 
 /// The terms, ready to match: lowered, and each with its kind.
@@ -705,10 +705,10 @@ diff --git a/a.md b/a.md
         let log = log(&[
             [
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "Cortex-Harness",
-                "dev@cortex-harness.invalid",
-                "Cortex-Harness",
-                "dev@cortex-harness.invalid",
+                "Cineris",
+                "dev@cineris.invalid",
+                "Cineris",
+                "dev@cineris.invalid",
                 "Do a thing\n\nAnd say why.\n",
             ],
             [
@@ -721,10 +721,10 @@ diff --git a/a.md b/a.md
             ],
             [
                 "cccccccccccccccccccccccccccccccccccccccc",
-                "Cortex-Harness",
-                "dev@cortex-harness.invalid",
-                "Cortex-Harness",
-                "dev@cortex-harness.invalid",
+                "Cineris",
+                "dev@cineris.invalid",
+                "Cineris",
+                "dev@cineris.invalid",
                 "As Quentin asked\n",
             ],
         ]);
@@ -751,8 +751,8 @@ diff --git a/a.md b/a.md
     fn a_committer_is_read_too() {
         let log = log(&[[
             "dddddddddddddddddddddddddddddddddddddddd",
-            "Cortex-Harness",
-            "dev@cortex-harness.invalid",
+            "Cineris",
+            "dev@cineris.invalid",
             "Quentin",
             "someone@example.invalid",
             "Message\n",

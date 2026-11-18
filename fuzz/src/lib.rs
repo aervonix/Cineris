@@ -23,34 +23,34 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use cortex_base::framing::{self, FrameDecoder};
-use cortex_index::outline::{DOC_CHARS, HEAD_CHARS, MAX_ENTRIES, NAME_CHARS};
-use cortex_index::{Language, extract};
-use cortex_llm::anthropic::{self, AnthropicMessages};
-use cortex_llm::openai_chat::{self, OpenAiChat};
-use cortex_llm::{
+use cineris_base::framing::{self, FrameDecoder};
+use cineris_index::outline::{DOC_CHARS, HEAD_CHARS, MAX_ENTRIES, NAME_CHARS};
+use cineris_index::{Language, extract};
+use cineris_llm::anthropic::{self, AnthropicMessages};
+use cineris_llm::openai_chat::{self, OpenAiChat};
+use cineris_llm::{
     Catalog, EventSink, FlagValue, ModelEntry, ModelEvent, ModelRequest, Protocol, ProviderInfo,
     SseParser,
 };
-use cortex_protocol::jsonrpc::{ErrorObject, Message, Request, RequestId, Response, code};
-use cortex_protocol::methods::{Op, ServerRequest, ServerResponse};
-use cortex_protocol::model::ModelRole;
-use cortex_protocol::{ModelId, ProviderId, Speed};
+use cineris_protocol::jsonrpc::{ErrorObject, Message, Request, RequestId, Response, code};
+use cineris_protocol::methods::{Op, ServerRequest, ServerResponse};
+use cineris_protocol::model::ModelRole;
+use cineris_protocol::{ModelId, ProviderId, Speed};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The RPC server's reading of a client's line (`cortex-rpc`'s `wire`
+/// The RPC server's reading of a client's line (`cineris-rpc`'s `wire`
 /// module), compiled here from the server's own file. This package does
-/// not depend on `cortex-rpc`: that would build the whole core into the
+/// not depend on `cineris-rpc`: that would build the whole core into the
 /// fuzzer (the HTTP and TLS stack, the tools, the sandbox), where the file
-/// itself needs only `cortex-base`, `cortex-protocol`, `serde` and
-/// `serde_json`, which this package depends on too. `cortex-rpc` keeps the
+/// itself needs only `cineris-base`, `cineris-protocol`, `serde` and
+/// `serde_json`, which this package depends on too. `cineris-rpc` keeps the
 /// file that way, and says so at its head.
 #[allow(
     dead_code,
     reason = "the server's writing of events, requests and results is not what is fuzzed"
 )]
-#[path = "../../crates/cortex-rpc/src/wire.rs"]
+#[path = "../../crates/cineris-rpc/src/wire.rs"]
 mod wire;
 
 use wire::Incoming;
@@ -282,7 +282,7 @@ pub fn openai_chat_decoder(data: &[u8]) {
 }
 
 /// The outline extractors, on the input as a file: decoded as a pass
-/// decodes one (`cortex_index::text::decode`), and outlined in every
+/// decodes one (`cineris_index::text::decode`), and outlined in every
 /// language, by the fallback, and as a C and a C++ header and source file
 /// (a prototype is outlined in a header only).
 ///
@@ -292,7 +292,7 @@ pub fn openai_chat_decoder(data: &[u8]) {
 /// [`MAX_ENTRIES`], an empty name, or a name, a head or a doc longer than
 /// [`NAME_CHARS`], [`HEAD_CHARS`] or [`DOC_CHARS`] characters.
 pub fn extractors(data: &[u8]) {
-    let text = cortex_index::text::decode(data);
+    let text = cineris_index::text::decode(data);
     let mut runs: Vec<(Option<Language>, &str)> = Language::ALL
         .into_iter()
         .map(|language| (Some(language), "a"))
@@ -369,7 +369,7 @@ fn serve(stream: &[u8], cuts: &[usize]) -> Vec<Read> {
     read
 }
 
-/// The RPC server's decoder: what `cortex-rpc` does with the bytes a client
+/// The RPC server's decoder: what `cineris-rpc` does with the bytes a client
 /// sends, before the core is asked anything.
 ///
 /// The input is the stream as it is, read whole and read cut where a hash
@@ -641,16 +641,16 @@ mod tests {
     }
 
     /// The seeds `cargo xtask fuzz` starts the RPC target from
-    /// (`crates/cortex-rpc/fixtures/lines`).
+    /// (`crates/cineris-rpc/fixtures/lines`).
     const RPC_SEEDS: [&[u8]; 8] = [
-        include_bytes!("../../crates/cortex-rpc/fixtures/lines/requests.jsonl"),
-        include_bytes!("../../crates/cortex-rpc/fixtures/lines/initialize.jsonl"),
-        include_bytes!("../../crates/cortex-rpc/fixtures/lines/turn-start.jsonl"),
-        include_bytes!("../../crates/cortex-rpc/fixtures/lines/answers.jsonl"),
-        include_bytes!("../../crates/cortex-rpc/fixtures/lines/notification.jsonl"),
-        include_bytes!("../../crates/cortex-rpc/fixtures/lines/batch.jsonl"),
-        include_bytes!("../../crates/cortex-rpc/fixtures/lines/invalid.jsonl"),
-        include_bytes!("../../crates/cortex-rpc/fixtures/lines/too-long.jsonl"),
+        include_bytes!("../../crates/cineris-rpc/fixtures/lines/requests.jsonl"),
+        include_bytes!("../../crates/cineris-rpc/fixtures/lines/initialize.jsonl"),
+        include_bytes!("../../crates/cineris-rpc/fixtures/lines/turn-start.jsonl"),
+        include_bytes!("../../crates/cineris-rpc/fixtures/lines/answers.jsonl"),
+        include_bytes!("../../crates/cineris-rpc/fixtures/lines/notification.jsonl"),
+        include_bytes!("../../crates/cineris-rpc/fixtures/lines/batch.jsonl"),
+        include_bytes!("../../crates/cineris-rpc/fixtures/lines/invalid.jsonl"),
+        include_bytes!("../../crates/cineris-rpc/fixtures/lines/too-long.jsonl"),
     ];
 
     #[test]

@@ -5,7 +5,7 @@
 
 [break] a-minute-read-as-six-seconds
 rule: A range's bound in minutes is read as sixty thousand milliseconds, as a length of time in a configuration file is.
-file: crates/cortex-config/src/duration.rs
+file: crates/cineris-config/src/duration.rs
 in: unit_scale
 find: return Some(scale);
 replace: return Some(scale / 10);
@@ -15,7 +15,7 @@ caught-by:
 
 [break] a-range-bound-of-several-units-keeps-only-the-last
 rule: A bound of several units (`1h30m`) is the sum of its parts.
-file: crates/cortex-config/src/duration.rs
+file: crates/cineris-config/src/duration.rs
 in: range_bound
 find: let Some(sum) = total.checked_add(part)
 replace: let Some(sum) = 0u64.checked_add(part)
@@ -24,7 +24,7 @@ caught-by:
 
 [break] a-number-with-a-unit-is-taken
 rule: A setting that is not a length of time has its range written with no unit.
-file: crates/cortex-config/src/duration.rs
+file: crates/cineris-config/src/duration.rs
 in: range_bound
 find: unit == at && at == bytes.len()
 replace: true
@@ -33,7 +33,7 @@ caught-by:
 
 [break] a-length-of-time-written-bare-is-taken
 rule: A length of time's range is written with its units; a bare number is refused.
-file: crates/cortex-config/src/duration.rs
+file: crates/cineris-config/src/duration.rs
 in: range_bound
 find: None if unit == at =>
 replace: None if unit == at => 1, None if false =>
@@ -487,183 +487,183 @@ caught-by:
 
 # From mutations/tooling-7-corpus.breaks (part `corpus`).
 # The seventh tooling step, the corpus of real code: `cargo xtask corpus`,
-# `cortex_testkit::corpus` and the fetch that `try`'s `perf -p CRATE` makes.
+# `cineris_testkit::corpus` and the fetch that `try`'s `perf -p CRATE` makes.
 # Written with the code, and run with `cargo xtask mutate tooling-7`.
 
 # ----------------------------------------------------------------- the hash
 
 [break] corpus-hash-ignores-the-content
 rule: The hash is of every file's content: a changed byte changes it.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: measure
 find: hash.write(&content);
 replace: let _ = &content;
 caught-by:
-    cortex-testkit corpus::tests::a_changed_byte_is_refused
-    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+    cineris-testkit corpus::tests::a_changed_byte_is_refused
+    cineris-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
 
 [break] corpus-hash-ignores-the-path
 rule: The hash is of every file's path: the same bytes under another name are another corpus.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: measure
 find: hash.write(relative.as_bytes());
 replace: let _ = relative;
 caught-by:
-    cortex-testkit corpus::tests::a_file_under_another_name_is_refused
-    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+    cineris-testkit corpus::tests::a_file_under_another_name_is_refused
+    cineris-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
 
 [break] corpus-listing-is-not-sorted
 rule: The files are hashed in the byte order of their paths, the same on every system.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: list
 find: files.sort_unstable();
 replace: files.reverse();
 caught-by:
-    cortex-testkit corpus::tests::the_listing_is_in_the_byte_order_of_the_paths_whatever_the_folder_says
-    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+    cineris-testkit corpus::tests::the_listing_is_in_the_byte_order_of_the_paths_whatever_the_folder_says
+    cineris-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
 
 [break] corpus-path-separator-is-the-systems
 rule: A file's path in the hash is written with `/` on every system, or the same corpus would hash differently on Windows.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: list
 find: format!("{prefix}/{name}")
 replace: format!("{prefix}{name}")
 caught-by:
-    cortex-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
+    cineris-testkit corpus::tests::the_hash_is_fnv_1a_of_the_paths_lengths_and_contents_in_path_order
 
 [break] corpus-link-is-followed-as-a-file
 rule: A link is not a file of the corpus: it is refused, not followed.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: list
 find: } else if kind.is_file() {
 replace: } else if !kind.is_dir() {
 caught-by:
-    cortex-testkit corpus::tests::a_link_is_not_followed
+    cineris-testkit corpus::tests::a_link_is_not_followed
 
 # ------------------------------------------------------------- verification
 
 [break] corpus-verify-accepts-any-hash
 rule: A corpus whose hash is not the pin's is refused: a changed byte of the same length, or a file renamed.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: verify
 find: if found.hash != pin.hash {
 replace: if false {
 caught-by:
-    cortex-testkit corpus::tests::a_changed_byte_is_refused
-    cortex-testkit corpus::tests::a_file_under_another_name_is_refused
+    cineris-testkit corpus::tests::a_changed_byte_is_refused
+    cineris-testkit corpus::tests::a_file_under_another_name_is_refused
 
 [break] corpus-verify-accepts-any-size
 rule: A corpus whose size is not the pin's is refused: a line ending that changed is a different size.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: verify
 find: if found.bytes != pin.bytes {
 replace: if false {
 caught-by:
-    cortex-testkit corpus::tests::a_line_ending_that_changed_is_refused
+    cineris-testkit corpus::tests::a_line_ending_that_changed_is_refused
 
 [break] corpus-verify-accepts-any-count
 rule: A corpus with a file missing, or one that is not meant to be there, is refused by its count.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: verify
 find: if found.files != pin.files {
 replace: if false {
 caught-by:
-    cortex-testkit corpus::tests::a_missing_file_is_refused
-    cortex-testkit corpus::tests::an_extra_file_is_refused_even_when_empty
+    cineris-testkit corpus::tests::a_missing_file_is_refused
+    cineris-testkit corpus::tests::an_extra_file_is_refused_even_when_empty
 
 [break] corpus-verify-accepts-a-folder-that-is-not-there
 rule: A corpus that is not there is refused, not measured as empty.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: verify
 find: if !dir.is_dir() {
 replace: if false {
 caught-by:
-    cortex-testkit corpus::tests::a_folder_that_is_not_there_is_refused
+    cineris-testkit corpus::tests::a_folder_that_is_not_there_is_refused
 
 [break] corpus-real-code-checks-the-repositorys-pin-whatever-it-is-asked
 rule: A corpus is checked against the pin it is asked for.
-file: crates/cortex-testkit/src/corpus.rs
+file: crates/cineris-testkit/src/corpus.rs
 in: try_real_code_in
 find: shared::verify(&folder, pin)
 replace: shared::verify(&folder, &Pin::pinned())
 caught-by:
-    cortex-testkit corpus::tests::a_corpus_that_is_not_fetched_or_not_whole_fails_with_the_command_that_fetches_it
+    cineris-testkit corpus::tests::a_corpus_that_is_not_fetched_or_not_whole_fails_with_the_command_that_fetches_it
 
 # ----------------------------------------------------------- the pin's text
 
 [break] corpus-pin-takes-a-key-twice
 rule: A pin that gives a key twice is refused.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: Pin::parse
 find: if taken.is_some() {
 replace: if false {
 caught-by:
-    cortex-testkit corpus::tests::a_pin_is_read_from_its_text_and_a_bad_one_is_refused
+    cineris-testkit corpus::tests::a_pin_is_read_from_its_text_and_a_bad_one_is_refused
 
 [break] corpus-pin-takes-a-short-hash
 rule: A pin's hash is sixteen digits, so that a cut-off line is not taken for a hash.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: parse_hash
 find: if value.len() != 16 {
 replace: if false {
 caught-by:
-    cortex-testkit corpus::tests::a_pin_is_read_from_its_text_and_a_bad_one_is_refused
+    cineris-testkit corpus::tests::a_pin_is_read_from_its_text_and_a_bad_one_is_refused
 
 [break] corpus-folder-name-is-not-sixteen-digits
 rule: The corpus's folder is named by its hash in sixteen hexadecimal digits.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: Pin::name
 find: format!("{:016x}", self.hash)
 replace: format!("{:x}", self.hash)
 caught-by:
-    cortex-testkit corpus::tests::the_folder_of_a_corpus_is_named_by_its_hash
+    cineris-testkit corpus::tests::the_folder_of_a_corpus_is_named_by_its_hash
 
 # ----------------------------------------------------- where it is kept
 
 [break] corpus-variable-does-not-win
-rule: CORTEX_CORPUS_DIR names the place to keep corpora, before the system's own.
-file: crates/cortex-testkit/src/corpus/shared.rs
+rule: CINERIS_CORPUS_DIR names the place to keep corpora, before the system's own.
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: cache_root
 find: if let Some(root) = given(ROOT_VARIABLE) {
 replace: if let Some(root) = given(ROOT_VARIABLE).filter(|_| false) {
 caught-by:
-    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+    cineris-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
 
 [break] corpus-empty-variable-is-a-place
 rule: A variable that is set and empty is not set.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: cache_root
 find: variable(name).filter(|value| !value.is_empty())
 replace: variable(name)
 caught-by:
-    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+    cineris-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
 
 [break] corpus-relative-variable-is-a-place
 rule: A relative place is refused: it would be another place in every folder the command runs in.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: cache_root
 find: if !root.is_absolute() {
 replace: if false {
 caught-by:
-    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+    cineris-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
 
 [break] corpus-windows-keeps-it-in-the-home
 rule: On Windows the corpus is kept in the local application data folder, not under `.cache` in the home folder.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: cache_root
 find: let base = if windows {
 replace: let base = if false {
 caught-by:
-    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+    cineris-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
 
 [break] corpus-relative-cache-folder-is-used
 rule: A cache folder (XDG_CACHE_HOME) that is not absolute is not used.
-file: crates/cortex-testkit/src/corpus/shared.rs
+file: crates/cineris-testkit/src/corpus/shared.rs
 in: cache_root
 find: .filter(|path| path.is_absolute())
 replace: .filter(|_| true)
 caught-by:
-    cortex-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
+    cineris-testkit corpus::tests::the_corpus_is_kept_where_the_system_keeps_caches
 
 # ------------------------------------------------------------------ fetching
 
@@ -772,7 +772,7 @@ caught-by:
 
 # From mutations/tooling-7-gates.breaks (part `gates`).
 # The seventh tooling step, gates: the points library code marks for a test
-# to hold (`cortex_base::hook`, `cortex_testkit::hold`), their rule in
+# to hold (`cineris_base::hook`, `cineris_testkit::hold`), their rule in
 # `cargo xtask rules`, the race test of `write_atomic` that uses one, and
 # the stalled file of the reviewer's kit. Written with the code, and run
 # with `cargo xtask mutate tooling-7`.
@@ -781,63 +781,63 @@ caught-by:
 
 [break] a-point-never-stops
 rule: A thread that reaches a point a test holds stops there.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 find: arrive(name);
 replace:
-packages: cortex-base, cortex-testkit
+packages: cineris-base, cineris-testkit
 caught-by:
     hook::enabled::tests::a_thread_stops_at_a_held_point_until_the_hold_releases_it
     hold::tests::a_hold_stops_a_thread_of_the_library_until_the_test_lets_it_go
-    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+    cineris-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
 
 [break] a-release-does-not-release
 rule: Releasing a hold lets every thread stopped at its point go on.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 in: Hold::release
 find: lock(&self.shared.state).released = true;
 replace: lock(&self.shared.state).released = false;
-packages: cortex-base
+packages: cineris-base
 caught-by:
     hook::enabled::tests::a_thread_stops_at_a_held_point_until_the_hold_releases_it
     hook::enabled::tests::the_nth_arrival_is_the_one_that_stops
 
 [break] a-dropped-hold-does-not-release
 rule: A hold that is dropped lets go what it stopped, so that a failing test never leaves a thread stopped.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 in: Hold::drop
 find: self.release();
 replace:
-packages: cortex-base
+packages: cineris-base
 caught-by:
     hook::enabled::tests::a_dropped_hold_releases_what_it_stopped
 
 [break] one-let-go-lets-every-thread-go
 rule: `let_one_go` lets one stopped thread go and keeps the others.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 in: Shared::may_go
 find: state.permits -= 1;
 replace:
-packages: cortex-base
+packages: cineris-base
 caught-by:
     hook::enabled::tests::one_thread_is_let_go_and_the_others_stay
 
 [break] the-first-arrival-stops-in-place-of-the-nth
 rule: With `skipping(n)` the first n arrivals pass and the next one stops.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 in: Shared::stop
 find: state.arrivals <= state.skip
 replace: state.arrivals < state.skip
-packages: cortex-base
+packages: cineris-base
 caught-by:
     hook::enabled::tests::the_nth_arrival_is_the_one_that_stops
 
 [break] two-holds-of-one-point-live-together
 rule: A second hold of a point waits for the first to end, and fails within its bound when it does not.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 in: Hold::with_limit
 find: while registry.holds.iter().any(|hold| hold.point == point)
 replace: while false
-packages: cortex-base
+packages: cineris-base
 caught-by:
     hook::enabled::tests::a_second_hold_that_waits_too_long_fails_and_does_not_hang
 
@@ -845,31 +845,31 @@ caught-by:
 
 [break] a-stopped-thread-has-no-bound
 rule: A thread stopped at a point goes on by itself when the hold's bound has passed, and the hold says so.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 in: Shared::arrive
 find: .wait_timeout_while(state, self.limit, |state| {
 replace: .wait_timeout_while(state, Duration::MAX, |state| {
-packages: cortex-base
+packages: cineris-base
 caught-by:
     hook::enabled::tests::the_bound_lets_a_thread_go_on_and_says_so
 
 [break] the-wait-for-the-library-has-no-bound
 rule: The test's wait for the library to reach a point ends at its limit and says whether it did.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 in: Hold::wait_reached_times
 find: .wait_timeout_while(state, limit, |state| state.stops < stops)
 replace: .wait_timeout_while(state, Duration::MAX, |state| state.stops < stops)
-packages: cortex-base
+packages: cineris-base
 caught-by:
     hook::enabled::tests::a_wait_for_a_point_nothing_reaches_ends_at_its_bound
 
 [break] the-wait-for-a-thread-to-go-on-has-no-bound
 rule: The test's wait for a thread to go on ends at its limit too.
-file: crates/cortex-base/src/hook.rs
+file: crates/cineris-base/src/hook.rs
 in: Hold::wait_stopped
 find: .wait_timeout_while(state, limit, |state| state.waiting.len() != stopped)
 replace: .wait_timeout_while(state, Duration::MAX, |state| state.waiting.len() != stopped)
-packages: cortex-base
+packages: cineris-base
 caught-by:
     hook::enabled::tests::a_wait_for_a_point_nothing_reaches_ends_at_its_bound
 
@@ -877,28 +877,28 @@ caught-by:
 
 [break] the-timeout-report-leaves-out-a-stopped-thread
 rule: The timeout report names the threads that a hold has stopped at a library point.
-file: crates/cortex-testkit/src/watch.rs
+file: crates/cineris-testkit/src/watch.rs
 in: waits
-find: cortex_base::hook::stopped().into_iter()
-replace: Vec::<cortex_base::hook::Stopped>::new().into_iter()
-packages: cortex-testkit
+find: cineris_base::hook::stopped().into_iter()
+replace: Vec::<cineris_base::hook::Stopped>::new().into_iter()
+packages: cineris-testkit
 caught-by:
     hold::tests::the_report_of_a_test_that_runs_out_of_time_names_a_thread_stopped_at_a_point
 
 [break] a-point-that-never-came-says-nothing-of-the-points-that-did
 rule: A test whose point never comes fails with the points the library did reach, so that a misspelled name is found.
-file: crates/cortex-testkit/src/hold.rs
+file: crates/cineris-testkit/src/hold.rs
 in: Hold::not_reached
 find: seen()
 replace: Vec::<&'static str>::new()
-packages: cortex-testkit
+packages: cineris-testkit
 caught-by:
     hold::tests::a_point_nobody_reaches_fails_with_the_points_that_were_reached
 
 # ------------------------------------------------------------ the rule in `rules`
 
 [break] a-normal-dependency-turns-test-hooks-on
-rule: Only a dev-dependency, or the test kit, turns a `test-hooks` feature on; `cortex-base`'s included.
+rule: Only a dev-dependency, or the test kit, turns a `test-hooks` feature on; `cineris-base`'s included.
 file: xtask/src/rules/crate_graph.rs
 in: check_test_hooks
 find: dependency.kind != DepKind::Dev
@@ -922,54 +922,54 @@ caught-by:
 
 [break] a-write-truncates-the-target-before-the-rename
 rule: A reader sees the old content or the new, never a mixture: the target is not touched until the rename.
-file: crates/cortex-base/src/atomic.rs
+file: crates/cineris-base/src/atomic.rs
 in: write_atomic
 find: let prepared = (|| {
 replace: let _ = fs::write(&target, b""); let prepared = (|| {
-packages: cortex-base
+packages: cineris-base
 caught-by:
-    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
-    cortex-base::it atomic::a_reader_racing_the_replaces_never_sees_a_mixture
+    cineris-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+    cineris-base::it atomic::a_reader_racing_the_replaces_never_sees_a_mixture
 
 [break] a-new-file-appears-empty-before-its-content
 rule: A file that is created is not there until its content is complete: the name appears at the rename.
-file: crates/cortex-base/src/atomic.rs
+file: crates/cineris-base/src/atomic.rs
 in: write_atomic
 find: let (temporary, mut file) =
 replace: if existing.is_none() { let _ = fs::write(&target, b""); } let (temporary, mut file) =
-packages: cortex-base
+packages: cineris-base
 caught-by:
-    cortex-base::it atomic::a_file_that_is_created_is_not_there_until_its_content_is_complete
+    cineris-base::it atomic::a_file_that_is_created_is_not_there_until_its_content_is_complete
 
 [break] the-rename-comes-before-its-point
 rule: The point is where the content is complete and the rename has not happened: a reader at it sees the old content.
-file: crates/cortex-base/src/atomic.rs
+file: crates/cineris-base/src/atomic.rs
 in: write_atomic
 find: crate::hook::point(BEFORE_THE_RENAME);
 replace: crate::hook::point(BEFORE_THE_RENAME); let _ = fs::rename(&temporary, &target);
-packages: cortex-base
+packages: cineris-base
 caught-by:
-    cortex-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
+    cineris-base::it atomic::a_reader_sees_the_old_content_or_the_new_and_never_a_mixture
 
 # ------------------------------------------------------------ the stalled file
 
 [break] a-stalled-file-is-an-ordinary-file
 rule: A stalled file is a FIFO, so that opening it waits.
-file: crates/cortex-testkit/src/stalled.rs
+file: crates/cineris-testkit/src/stalled.rs
 in: stalled_file
 find: .arg(path)
 replace: .arg("--version")
-packages: cortex-testkit
+packages: cineris-testkit
 caught-by:
     stalled::tests::sys_a_stalled_file_is_a_fifo_and_holds_an_opener_until_it_is_released
 
 [break] a-stalled-file-is-never-released
 rule: Releasing a stalled file lets the opener that waits go on.
-file: crates/cortex-testkit/src/stalled.rs
+file: crates/cineris-testkit/src/stalled.rs
 in: Stalled::release
 find: if let Ok(mut other_end) = File::open(path) {
 replace: if let Ok(mut other_end) = File::open("/dev/null") {
-packages: cortex-testkit
+packages: cineris-testkit
 caught-by:
     stalled::tests::sys_a_stalled_file_is_a_fifo_and_holds_an_opener_until_it_is_released
 
@@ -1244,16 +1244,16 @@ caught-by:
 # command="mutate tooling-7/nofollow-windows-follows-a-reparse-point"`.
 [break] nofollow-windows-follows-a-reparse-point
 rule: On Windows a reparse point that is not a placeholder (a symbolic link, a junction) is never followed: the open is refused as a link.
-file: crates/cortex-base/src/nofollow.rs
+file: crates/cineris-base/src/nofollow.rs
 in: open_unfollowed
 find: if !is_placeholder_tag(tag) { return Err(OpenError::Link); }
 replace: if !is_placeholder_tag(tag) && false { return Err(OpenError::Link); }
 os: windows
-packages: cortex-base
+packages: cineris-base
 caught-by:
-    cortex-base::it nofollow::windows::sys_a_junction_is_never_followed
-    cortex-base::it nofollow::windows::a_symbolic_link_is_never_followed
-    cortex-base::it nofollow::windows::a_file_swapped_for_a_link_after_the_look_is_not_followed
+    cineris-base::it nofollow::windows::sys_a_junction_is_never_followed
+    cineris-base::it nofollow::windows::a_symbolic_link_is_never_followed
+    cineris-base::it nofollow::windows::a_file_swapped_for_a_link_after_the_look_is_not_followed
 
 # ----------------------------------------------------------- the copy's lock
 
@@ -1286,196 +1286,196 @@ caught-by:
 
 # From mutations/tooling-7-names.breaks (part `names`).
 # The seventh tooling step, the part on hostile names: the one set in the test
-# kit (`cortex_testkit::hostile`) and the tests moved onto it. Written with the
+# kit (`cineris_testkit::hostile`) and the tests moved onto it. Written with the
 # code, and run with `cargo xtask mutate tooling-7`.
 
 # ------------------------------------------------------------------ the set
 
 [break] names-a-line-feed-that-differs-by-system
 rule: The set has no cfg: an entry is the same on every system, so what a test checks does not depend on where it runs.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: line_breaks
 find: one(Kind::LineBreak, "LF line feed", '\n')
 replace: one(Kind::LineBreak, "LF line feed", if cfg!(windows) { '\u{2028}' } else { '\n' })
 caught-by:
-    cortex-testkit hostile::tests::the_set_has_no_cfg_that_changes_it
+    cineris-testkit hostile::tests::the_set_has_no_cfg_that_changes_it
 
 [break] names-a-kind-with-no-entries
 rule: Every kind of hostile name has entries.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: of
 find: Kind::Replacement => replacement()
 replace: Kind::Replacement => Vec::new()
 caught-by:
-    cortex-testkit hostile::tests::every_kind_has_entries_and_all_is_all_of_them
+    cineris-testkit hostile::tests::every_kind_has_entries_and_all_is_all_of_them
 
 [break] names-the-line-breaks-lose-crlf
 rule: The line breaks are LF, CR, CRLF, NEL, U+2028 and U+2029, all six.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: line_breaks
 find: Name::new(Kind::LineBreak, "CRLF", "\r\n").shown("\\r\\n")
 replace: one(Kind::LineBreak, "CR again", '\r')
 caught-by:
-    cortex-testkit hostile::tests::the_line_breaks_are_the_six_and_only_the_six
+    cineris-testkit hostile::tests::the_line_breaks_are_the_six_and_only_the_six
 
 [break] names-a-bidi-entry-that-is-not-a-control
 rule: An entry of the bidi kind holds a bidirectional control, and every control of the family is there alone.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: bidi
 find: ('\u{061C}', "ALM arabic letter mark")
 replace: ('\u{0041}', "ALM arabic letter mark")
 caught-by:
-    cortex-testkit hostile::tests::a_bidi_entry_holds_a_bidirectional_control
+    cineris-testkit hostile::tests::a_bidi_entry_holds_a_bidirectional_control
 
 [break] names-a-format-entry-that-is-not-format
 rule: An entry of the format kind holds a character of Unicode's category Cf.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: format_characters
 find: ('\u{FEFF}', "byte-order mark")
 replace: ('\u{0041}', "byte-order mark")
 caught-by:
-    cortex-testkit hostile::tests::a_format_entry_holds_a_format_character_and_the_tags_are_among_them
+    cineris-testkit hostile::tests::a_format_entry_holds_a_format_character_and_the_tags_are_among_them
 
 [break] names-a-control-set-without-del
 rule: The control entries are all of C0 but the line breaks, DEL, and all of C1 but NEL, each alone.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: control
 find: (0x00..=0x1Fu32).chain([0x7F]).chain(0x80..=0x9F)
 replace: (0x00..=0x1Fu32).chain(0x80..=0x9F)
 caught-by:
-    cortex-testkit hostile::tests::a_control_entry_is_a_control_character_that_is_not_a_line_break
+    cineris-testkit hostile::tests::a_control_entry_is_a_control_character_that_is_not_a_line_break
 
 [break] names-a-long-name-of-the-wrong-length
 rule: A long name has the length its label claims.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: long
 find: repeated("255 bytes of ASCII, the most a name holds on Linux", "a", 255)
 replace: repeated("255 bytes of ASCII, the most a name holds on Linux", "a", 254)
 caught-by:
-    cortex-testkit hostile::tests::a_long_name_has_the_length_it_claims
+    cineris-testkit hostile::tests::a_long_name_has_the_length_it_claims
 
 [break] names-a-device-that-is-not-one
 rule: An entry of the reserved kind is a name Windows keeps for a device, in a form it still takes for it.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: reserved
 find: add("CONIN$".into(), "CONIN$".into());
 replace: add("CONIN$".into(), "CONINX".into());
 caught-by:
-    cortex-testkit hostile::tests::a_reserved_entry_is_a_windows_device_in_a_form_windows_still_takes_for_it
+    cineris-testkit hostile::tests::a_reserved_entry_is_a_windows_device_in_a_form_windows_still_takes_for_it
 
 [break] names-an-entry-shown-as-it-is
 rule: What an entry says it is shown as is how the harness shows it, so the function is checked against something that is not itself.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: one
 find: Name::new(kind, label, character.to_string()).shown(escape(character))
 replace: Name::new(kind, label, character.to_string())
 caught-by:
-    cortex-testkit hostile::tests::every_entry_is_shown_as_it_says
+    cineris-testkit hostile::tests::every_entry_is_shown_as_it_says
 
 [break] names-a-slash-in-an-escape-entry
 rule: A name holds no slash, but the punctuation that is about paths on purpose.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: escapes
 find: "\u{1b}]8;;link.invalid\u{1b}\\link\u{1b}]8;;\u{1b}\\"
 replace: "\u{1b}]8;;https://link.invalid/\u{1b}\\link\u{1b}]8;;\u{1b}\\"
 caught-by:
-    cortex-testkit hostile::tests::only_a_punctuation_entry_holds_a_slash
+    cineris-testkit hostile::tests::only_a_punctuation_entry_holds_a_slash
 
 [break] names-a-probe-that-takes-every-name
 rule: Whether a file system takes a name is known by making the file and reading back what the directory holds.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: takes_file_name
 find: let exact = made && held.len() == 1 && held[0].as_os_str() == std::ffi::OsStr::new(name);
 replace: let exact = true;
 caught-by:
-    cortex-testkit hostile::tests::a_file_system_that_takes_a_name_is_known_by_making_the_file
+    cineris-testkit hostile::tests::a_file_system_that_takes_a_name_is_known_by_making_the_file
 
 [break] names-a-probe-that-leaves-its-directory
 rule: The probe's directory is removed again.
-file: crates/cortex-testkit/src/hostile.rs
+file: crates/cineris-testkit/src/hostile.rs
 in: takes_file_name
 find: let _ = std::fs::remove_dir_all(&probe);
 replace:
 caught-by:
-    cortex-testkit hostile::tests::a_file_system_that_takes_a_name_is_known_by_making_the_file
+    cineris-testkit hostile::tests::a_file_system_that_takes_a_name_is_known_by_making_the_file
 
 [break] names-a-test-that-checks-no-name
 rule: A test that makes files fails when the file system takes none of the line breaks, so that it cannot check nothing and pass.
-file: crates/cortex-tools/tests/it/main.rs
+file: crates/cineris-tools/tests/it/main.rs
 in: breaks_in_names
 find: .filter(|name| hostile::takes_file_name(&ws.dir, &format!("x{}y", name.text)))
 replace: .filter(|_| false)
 caught-by:
-    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
-    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
-    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
-    cortex-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
+    cineris-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+    cineris-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+    cineris-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
+    cineris-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
 
 # ------------------------------------------------- the tests moved onto it
 
 [break] names-read-shows-its-path-as-it-is
 rule: A path `read` shows is written with every character that acts unseen as an escape, for every line break of the set and not for one.
-file: crates/cortex-tools/src/read.rs
+file: crates/cineris-tools/src/read.rs
 in: read_file
 find: let shown = path.shown();
 replace: let shown = path.data();
 caught-by:
-    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+    cineris-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
 
 [break] names-a-skipped-entrys-error-is-not-escaped
 rule: What the walk says of an entry it could not read names it as an escape, and a line break in it does not cut the reason short.
-file: crates/cortex-tools/src/walk.rs
+file: crates/cineris-tools/src/walk.rs
 in: Skipped::unreadable
-find: let escaped = cortex_base::visible(reason);
+find: let escaped = cineris_base::visible(reason);
 replace: let escaped = std::borrow::Cow::Borrowed(reason);
 caught-by:
-    cortex-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
+    cineris-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
 
 [break] names-a-skipped-entrys-refusal-is-not-escaped
 rule: What the walk says of an entry whose name was refused names it as an escape.
-file: crates/cortex-tools/src/walk.rs
+file: crates/cineris-tools/src/walk.rs
 in: Skipped::refuse
-find: cortex_base::visible(&reason).into_owned()
+find: cineris_base::visible(&reason).into_owned()
 replace: reason
 caught-by:
-    cortex-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
+    cineris-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
 
 [break] names-the-engines-reasons-are-not-escaped
 rule: A reason names a path from the workspace as an escape, so that it cannot start lines of its own.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: escaped
-find: match cortex_base::visible(&reason) {
+find: match cineris_base::visible(&reason) {
 replace: match std::borrow::Cow::Borrowed(reason.as_str()) {
 caught-by:
-    cortex-policy::it files::a_reason_writes_the_path_it_names_as_an_escape
+    cineris-policy::it files::a_reason_writes_the_path_it_names_as_an_escape
 
 [break] names-an-outlines-head-is-not-escaped
-rule: A head is shown through `cortex_base::visible`.
-file: crates/cortex-index/src/outline.rs
+rule: A head is shown through `cineris_base::visible`.
+file: crates/cineris-index/src/outline.rs
 in: Outline::render
 find: visible(&entry.head)
 replace: &entry.head
 caught-by:
-    cortex-index outline::tests::an_outline_shows_what_would_act_unseen_as_escapes
+    cineris-index outline::tests::an_outline_shows_what_would_act_unseen_as_escapes
 
 [break] names-an-outlines-doc-is-not-escaped
-rule: A doc is shown through `cortex_base::visible`.
-file: crates/cortex-index/src/outline.rs
+rule: A doc is shown through `cineris_base::visible`.
+file: crates/cineris-index/src/outline.rs
 in: Outline::render
 find: let _ = write!(text, "  — {}", visible(doc));
 replace: let _ = write!(text, "  — {}", doc);
 caught-by:
-    cortex-index outline::tests::an_outline_shows_what_would_act_unseen_as_escapes
+    cineris-index outline::tests::an_outline_shows_what_would_act_unseen_as_escapes
 
 [break] names-unix-refuses-a-windows-device-name
 rule: A Unix path takes every name of the hostile set that Windows keeps for a device, as it takes any other.
-file: crates/cortex-base/src/path/lexical.rs
+file: crates/cineris-base/src/path/lexical.rs
 in: check_name
 find: if style == PathStyle::Posix {
 replace: if false {
-packages: cortex-base, cortex-tools
+packages: cineris-base, cineris-tools
 caught-by:
-    cortex-tools::it paths_unix::names_that_only_windows_refuses_are_ordinary_here
+    cineris-tools::it paths_unix::names_that_only_windows_refuses_are_ordinary_here
 
 # From mutations/tooling-7-runs.breaks (part `runs`).
 # The seventh tooling step, the runs part: `ci --tiers --compare --os both` and
@@ -2504,7 +2504,7 @@ caught-by:
 
 [break] resolve-dir-takes-no-folder-for-one
 rule: A path that does not exist yet resolves at its deepest existing folder, as it did when a resolver was tried at each level.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: resolve_dir
 find: metadata.is_dir()
 replace: metadata.is_file()

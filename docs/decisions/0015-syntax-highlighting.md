@@ -28,7 +28,7 @@ Desktop pinned to 4 cores, syntect with default features off, the pure-Rust rege
 
 ## Decision
 
-- syntect, default features off, pure-Rust regex engine, behind the `highlight` feature of `cortex-tui` (on by default).
+- syntect, default features off, pure-Rust regex engine, behind the `highlight` feature of `cineris-tui` (on by default).
 - A trimmed grammar and theme set packed at build time by `xtask`, covering the languages the outline extractors cover plus common configuration and markup formats.
 - Loaded on first use, on the blocking pool, never on the UI thread. Until it is ready, code is shown plain. Highlighting applies to lines committed after that; lines already in the scrollback are not rewritten.
 - A per-line time limit. A line that exceeds it is shown plain.
@@ -36,9 +36,9 @@ Desktop pinned to 4 cores, syntect with default features off, the pure-Rust rege
 
 ## Amended in step 22
 
-Built in `cortex_tui::highlight`, with these differences from the decision above, each for the reason given:
+Built in `cineris_tui::highlight`, with these differences from the decision above, each for the reason given:
 
-- **A worker thread of its own, not the blocking pool.** `cortex-tui` has no async runtime: the interface runs on its own thread, and a dedicated worker, started when the first code block asks for it, keeps each block's parse state between lines, which a pool's tasks would have to hand back and forth. The interface hands it lines and takes what it has finished; it never waits for it.
+- **A worker thread of its own, not the blocking pool.** `cineris-tui` has no async runtime: the interface runs on its own thread, and a dedicated worker, started when the first code block asks for it, keeps each block's parse state between lines, which a pool's tasks would have to hand back and forth. The interface hands it lines and takes what it has finished; it never waits for it.
 - **The per-line limit is a wait on the interface's side.** syntect cannot be stopped in the middle of a line, so the limit is put where it matters: a completed line waits for its colours for at most 50 ms on the caller's clock, and is committed plain after that. A line over 1,000 bytes is never given to the worker, and the regular-expression engine bounds each pattern's backtracking. A worker stuck on a line costs that line and the ones queued behind it their colours, never a frame.
 - **Lines wait while the grammars load,** under the same limit. "Until it is ready, code is shown plain" holds for the live region, where a waiting line is drawn plain; a line commits in colour if the grammars are ready within its wait, so a session's first code block is coloured too. Lines already committed are never rewritten.
 - **The default packed grammar set, not a trimmed one.** syntect's own packed set (its `default-syntaxes` feature) covers the outline extractors' languages and more, and costs 628 KB of the stripped `dist` binary: 13.2 MB with the feature and 12.6 MB without, against the 16 MB budget. Trimming and packing a set with `xtask` would need the grammar sources in the repository and saves a fraction of that, so it waits for the size budget to ask for it (as "Revisit when" says). The code line still streaming is drawn plain until it ends (kept so by the owner on 2026-11-15: [steps/23/answered.md](../steps/23/answered.md)).

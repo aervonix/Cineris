@@ -1,6 +1,6 @@
 The pattern and word checks ask or refuse needlessly for several link, quoting, set and heredoc forms.
 
-- Area: cortex-policy
+- Area: cineris-policy
 - Owner: step 32
 
 | Item | Who | When |

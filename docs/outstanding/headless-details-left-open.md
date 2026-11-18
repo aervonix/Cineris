@@ -1,6 +1,6 @@
 Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals.
 
-- Area: cortex-cli
+- Area: cineris-cli
 - Owner: step 27 or step 32
 
 | Item | Who | When |

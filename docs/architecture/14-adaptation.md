@@ -11,7 +11,7 @@ Four rules hold for all of them.
 
 ## Local statistics
 
-`cortex-stats` records measurable outcomes. Every adaptive feature reads from it.
+`cineris-stats` records measurable outcomes. Every adaptive feature reads from it.
 
 **What is recorded.** Small events, each a few fields, with no prompt or file content.
 
@@ -33,25 +33,25 @@ Four rules hold for all of them.
 - Nothing is read at start-up. The aggregates file (kilobytes) is loaded the first time an adaptive decision needs it.
 - Old monthly files are folded into the aggregates and deleted after a retention period (default 3 months since step 16, the coordinator's decision, which the owner may revisit; 12 before: a year of a heavy user's raw events is about 1.1 GB, and every all-time figure is in the aggregates).
 
-**Control.** `cortex stats` shows what is stored, in plain numbers. `cortex stats reset` deletes it. `stats.enabled = false` turns recording off, and every adaptive feature then falls back to its catalog default.
+**Control.** `cineris stats` shows what is stored, in plain numbers. `cineris stats reset` deletes it. `stats.enabled = false` turns recording off, and every adaptive feature then falls back to its catalog default.
 
-**As built in step 16** (`cortex-stats`; the core's `stats` and `usage`).
+**As built in step 16** (`cineris-stats`; the core's `stats` and `usage`).
 
 | Part | As built |
 |---|---|
 | **Events** | `request` (both the turn's and the summaries', with `purpose`, `role`, the variants, tokens, the cost and catalog version fixed then, the billing kind, time to first token, tokens a second, where the request's own time went, the stop and an error's code), `tool` (outcome, running, queued and approval times), `turn` (outcome, verification, the parts of its wall time, each tool's share), `context` (the per-request record) and `dropped`. Each is one JSON line with the local day it fell on (`day`), fixed when it is written. No text of a prompt, a file or an answer. |
-| **Recording** | `Recorder`: a bounded queue (4,096 events, boxed, so its slots are small) and a thread of its own. `record` never waits: a full queue drops and counts, and the count is an event (`dropped` counts events and limits updates alike). The thread starts when the first session opens, from the blocking pool, and is flushed at `Core::shutdown`, which waits for it at most two seconds and logs what was left unwritten (since the fixes after the independent review of step 16). A writer whose thread has ended is counted the same way, and the log says once that it stopped. Each request line says which day's purse it was charged to (`charged_to`), for a day's limits, and carries what its attempts given up used and what an interrupted request used: the statistics hold what the ledger was charged. A provider's error code, a stop reason the client did not know and the name of a tool that does not exist are kept only when plain (`cortex_base::redact::is_plain_code`: a plain code in which the secret filter finds no credential, the refresh's rule too), and are `other` otherwise. |
-| **Files** | `stats/events-YYYY-MM.jsonl` by the UTC month of the event; `aggregates.json`; `limits.json`. Every one owner-only (`cortex_base::private`), and the two last written atomically. The writer appends to the file the month's name gives now: one that `cortex stats reset` deleted is let go and made again. (On a volume without POSIX deletes, FAT or some network shares, a file deleted while another process holds it stays until that process lets it go: a writer at its next line, a day's reader at its next request. Until then no process can make the file again, and lines are lost there.) A blank line is not a line, and is passed over. A last line cut short is ended with a line break before the next line is appended. `limits.json` is updated under its lock (`limits.json.lock`). |
-| **Aggregates** | Usage by day, provider, model, speed, project and billing; time by day, project and model; tools by day, project and tool; outcomes by model, variant set and tool (or the turn). Each monthly file has its part and the byte it was read to; the writer brings them up to date every five seconds while it writes, and a report does when it reads. Any process may: two that save out of order leave a file the next one carries on from. A file past `stats.retention` months moves its part to `kept` and is deleted. Days more than 400 back fold into months. A rebuild from the files gives the same values (tested). Sums saturate. **`kept` is the one copy of every pruned month,** so the file is flushed to the disk before it takes its name, and one this build cannot read is never written over (`cortex_stats::Found`): a newer build's is left alone, and nothing is pruned or saved beside it; one that does not parse is moved aside (`aggregates.json.unreadable-<when>`, owner-only, by a rename that deletes nothing) before anything is saved, by a writer or a report with statistics on, and `cortex stats` lists it. Saving and pruning check this themselves, and only aggregates read from the file prune: ones that started from nothing are saved first. |
-| **Nothing at start-up** | Making a recorder reads nothing; the files are read by a report, `cortex stats`, a day's limit and the writer's own bringing up to date, never by starting or opening a session (a count of reads by directory, `cortex_stats::reads`). |
-| **Test helper** | `cortex_stats::synthetic` (the `test-hooks` feature, dev-dependencies only): `write` fills a directory with a made-up month of events by a seed and a scale (light, typical, heavy), through the real recorder, and returns a summary to assert against. Deterministic, and never in a shipped build ([testing-and-ci.md](../testing-and-ci.md), "A month of statistics, made up"). |
+| **Recording** | `Recorder`: a bounded queue (4,096 events, boxed, so its slots are small) and a thread of its own. `record` never waits: a full queue drops and counts, and the count is an event (`dropped` counts events and limits updates alike). The thread starts when the first session opens, from the blocking pool, and is flushed at `Core::shutdown`, which waits for it at most two seconds and logs what was left unwritten (since the fixes after the independent review of step 16). A writer whose thread has ended is counted the same way, and the log says once that it stopped. Each request line says which day's purse it was charged to (`charged_to`), for a day's limits, and carries what its attempts given up used and what an interrupted request used: the statistics hold what the ledger was charged. A provider's error code, a stop reason the client did not know and the name of a tool that does not exist are kept only when plain (`cineris_base::redact::is_plain_code`: a plain code in which the secret filter finds no credential, the refresh's rule too), and are `other` otherwise. |
+| **Files** | `stats/events-YYYY-MM.jsonl` by the UTC month of the event; `aggregates.json`; `limits.json`. Every one owner-only (`cineris_base::private`), and the two last written atomically. The writer appends to the file the month's name gives now: one that `cineris stats reset` deleted is let go and made again. (On a volume without POSIX deletes, FAT or some network shares, a file deleted while another process holds it stays until that process lets it go: a writer at its next line, a day's reader at its next request. Until then no process can make the file again, and lines are lost there.) A blank line is not a line, and is passed over. A last line cut short is ended with a line break before the next line is appended. `limits.json` is updated under its lock (`limits.json.lock`). |
+| **Aggregates** | Usage by day, provider, model, speed, project and billing; time by day, project and model; tools by day, project and tool; outcomes by model, variant set and tool (or the turn). Each monthly file has its part and the byte it was read to; the writer brings them up to date every five seconds while it writes, and a report does when it reads. Any process may: two that save out of order leave a file the next one carries on from. A file past `stats.retention` months moves its part to `kept` and is deleted. Days more than 400 back fold into months. A rebuild from the files gives the same values (tested). Sums saturate. **`kept` is the one copy of every pruned month,** so the file is flushed to the disk before it takes its name, and one this build cannot read is never written over (`cineris_stats::Found`): a newer build's is left alone, and nothing is pruned or saved beside it; one that does not parse is moved aside (`aggregates.json.unreadable-<when>`, owner-only, by a rename that deletes nothing) before anything is saved, by a writer or a report with statistics on, and `cineris stats` lists it. Saving and pruning check this themselves, and only aggregates read from the file prune: ones that started from nothing are saved first. |
+| **Nothing at start-up** | Making a recorder reads nothing; the files are read by a report, `cineris stats`, a day's limit and the writer's own bringing up to date, never by starting or opening a session (a count of reads by directory, `cineris_stats::reads`). |
+| **Test helper** | `cineris_stats::synthetic` (the `test-hooks` feature, dev-dependencies only): `write` fills a directory with a made-up month of events by a seed and a scale (light, typical, heavy), through the real recorder, and returns a summary to assert against. Deterministic, and never in a shipped build ([testing-and-ci.md](../testing-and-ci.md), "A month of statistics, made up"). |
 | **Disabled** | No recorder is made; no file is written, a refresh's included, and nothing is moved aside or pruned. `usage/report` says `recording: false`. A session with a day's limit is refused at open (`day_limit_needs_stats`): there is nothing to count other processes' spending from ([18-usage.md](18-usage.md), "Limits on one day"). |
 
 The size a year of raw files reaches for a heavy user, measured: [steps/16/answered.md](../steps/16/answered.md), point 5.
 
 ## Project knowledge: profile and memory
 
-`cortex-knowledge` holds what the harness knows about one repository. The vision asks for two things: a project profile (commands, conventions, flaky tests) and project memory (facts with a source and an expiry). They are one store with typed entries, because they share everything that matters: provenance, review, expiry and how they reach the prompt.
+`cineris-knowledge` holds what the harness knows about one repository. The vision asks for two things: a project profile (commands, conventions, flaky tests) and project memory (facts with a source and an expiry). They are one store with typed entries, because they share everything that matters: provenance, review, expiry and how they reach the prompt.
 
 ### Entries
 
@@ -78,7 +78,7 @@ Every entry carries:
 
 | File | Scope | Who writes it |
 |---|---|---|
-| `<workspace>/.cortex/profile.toml` | Shared with the team through the repository. | The user. The harness writes here only when the user promotes an entry. |
+| `<workspace>/.cineris/profile.toml` | Shared with the team through the repository. | The user. The harness writes here only when the user promotes an entry. |
 | `<state dir>/projects/<project key>/knowledge.toml` | Private to this user and machine. | The harness, as it learns. The user, through the review panel or an editor. |
 
 Both are plain TOML that a person can read and edit.
@@ -132,11 +132,11 @@ An entry with no check behaves exactly as before.
 - **In the prompt.** At the start of each context epoch, active entries are rendered into a "project profile" section of the system prompt, inside a token budget (default 1,500), commands first. Proposed, expired and disabled entries are left out, and so is a shared entry this user has not accepted.
 - **For verification.** `command` entries of class test and check are what automatic verification runs ([15-efficiency.md](15-efficiency.md)).
 - **For permissions.** Accepted `command` entries are the "learned safe list": they run without asking ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md)).
-- **For the user.** `/project` opens the review panel: entries by kind, with source, age and expiry, and actions to accept, edit, disable, delete, or promote to the shared file. `cortex project` does the same from the command line. (A settings profile, chosen with `/profile`, is a different thing: see [08-configuration.md](08-configuration.md).)
+- **For the user.** `/project` opens the review panel: entries by kind, with source, age and expiry, and actions to accept, edit, disable, delete, or promote to the shared file. `cineris project` does the same from the command line. (A settings profile, chosen with `/profile`, is a different thing: see [08-configuration.md](08-configuration.md).)
 
 ### As built in step 17
 
-`cortex-knowledge`, with the design as it was reviewed and the owner's answers in [steps/17/answered.md](../steps/17/answered.md).
+`cineris-knowledge`, with the design as it was reviewed and the owner's answers in [steps/17/answered.md](../steps/17/answered.md).
 
 Each part is a list item, with one sentence a line, so that two changes to one part touch different lines ([CONTRIBUTING.md](../../CONTRIBUTING.md), "Writing the docs").
 
@@ -159,8 +159,8 @@ Each part is a list item, with one sentence a line, so that two changes to one p
   It is the same on every machine, and another when the entry changes.
   The evidence is outside the hash: it is shown in a listing, and never sent to the model or run.
 - **The shared file**:
-  `<workspace>/.cortex/profile.toml`, `version = 1`: `[[entry]]` tables of a kind, a text, and optionally evidence, a command and a check, and nothing else.
-  It is read as a regular file in a `.cortex` that is a directory of the workspace itself: a link at either name is not followed, and the file is then reported and not used.
+  `<workspace>/.cineris/profile.toml`, `version = 1`: `[[entry]]` tables of a kind, a text, and optionally evidence, a command and a check, and nothing else.
+  It is read as a regular file in a `.cineris` that is a directory of the workspace itself: a link at either name is not followed, and the file is then reported and not used.
   Text that is not TOML, a key outside the entries, a newer version or more than 200 entries refuses the file; **an entry with a key or a value this build does not know is left out alone**, and said, so a team on two builds keeps the entries both understand.
   An entry that claims a status, a date or an acceptance is left out that way: a repository cannot say that its entry is in use.
   It is written only by `promote`, which adds one entry to its end and keeps every byte a person wrote, never through a link at either name (checked again at the write, whatever the read found), and never past 256 KiB (`shared_profile_full`).
@@ -190,13 +190,13 @@ Each part is a list item, with one sentence a line, so that two changes to one p
   An entry a person wrote does not expire.
 - **Section 5** (`render`):
   A fixed first line, then `Commands:` (by purpose: build, test, check, format, run), `Conventions:`, `Flaky tests:` and `Facts:`, each entry one list line, in the order the files hold them, the private store's first.
-  Every piece of an entry goes through `cortex_base::visible`.
+  Every piece of an entry goes through `cineris_base::visible`.
   Nothing in it depends on a clock, a count or a duration.
   The budget is `tokens` at a fixed three bytes a token; entries are taken in order while they fit, and a last line says how many were left out.
   No entry in use, or a budget that holds none, gives no section.
 - **The project key**:
   `AbsPath::project_key` of the resolved workspace root, as for sessions, trust and approvals.
-  A moved workspace has another key, and its store stays under the old one; two worktrees of one repository are two stores; a workspace below a repository's top looks for its own `.cortex/profile.toml`.
+  A moved workspace has another key, and its store stays under the old one; two worktrees of one repository are two stores; a workspace below a repository's top looks for its own `.cineris/profile.toml`.
   Nothing is shared across keys.
 - **The command observer** (`observe`):
   The core hands every finished `shell` call to the session's `Watch`.
@@ -223,16 +223,16 @@ Each part is a list item, with one sentence a line, so that two changes to one p
   Known already as an entry someone wrote: nothing.
   A command entry's `check` is `exists` of its program where that is a relative path in the workspace; a program found on the search path, a rooted one or one on a drive has none.
   `Snapshot::wants` answers from memory whether an observation could change anything, so the common case (a command known and confirmed today) takes no lock and reads no file.
-- **In a session** (`cortex-core`'s `knowledge`):
+- **In a session** (`cineris-core`'s `knowledge`):
   One `Knowledge` for a session, made for the session's own workspace root and project key; the sessions of one project in a process share the last snapshot read.
   It fills four seams: the loop's `ProfileSource` (section 5), `remember`'s `Proposals`, `shell`'s `CommandProfile` (a command in use as a build, a test run or a check has the lines that report a problem kept first), and the engine's learned rules.
-  **Nothing is read until the session's first turn, or a client's `project/list` before it:** making it touches no file (`the_knowledge_is_not_touched_until_the_session_is_open`, with the test kit's `Untouched`); the first read is where the loop asks for section 5, or the list the interface asks for as the session opens (since step 24, so that its project panel shows what waits for review), on the blocking pool. The list reads as `cortex project` does: it may mark an entry that expired, waiting for the store's lock there, beside the lane.
+  **Nothing is read until the session's first turn, or a client's `project/list` before it:** making it touches no file (`the_knowledge_is_not_touched_until_the_session_is_open`, with the test kit's `Untouched`); the first read is where the loop asks for section 5, or the list the interface asks for as the session opens (since step 24, so that its project panel shows what waits for review), on the blocking pool. The list reads as `cineris project` does: it may mark an entry that expired, waiting for the store's lock there, beside the lane.
   A read looks at the two files' stamps and reads them again only when one changed, tells the user of a file that cannot be read (once), and gives the engine its rules.
   **A turn's start and a command's result wait for no lock:** a read waits for nothing (it takes no lock for the store, and only tries the lock, without waiting, when it has the good copy to bring up to date), and what writes the store for the session itself (what the observer saw, the mark on an entry that expired, which is out of use by the clock already) is done beside the turn on the blocking pool, so a process that holds the lock and has stopped holds up neither.
   A `remember` call writes the store itself, and waits for the lock as any change does.
   `project/list` waits for that work: a listing after a turn holds what the turn's commands showed.
   The policy and the checkpoints hold the session's knowledge weakly, so a closed session is let go.
-  `cortex-knowledge` does not implement the tools' traits itself: it would have to depend on `cortex-tools`, which the workspace's edges do not give it, so the core does (a departure from the build plan's wording, accepted by the coordinator).
+  `cineris-knowledge` does not implement the tools' traits itself: it would have to depend on `cineris-tools`, which the workspace's edges do not give it, so the core does (a departure from the build plan's wording, accepted by the coordinator).
 - **The safe list**:
   The engine is given one exact allow rule (`exact_command_rule`, [06-permissions-and-sandbox.md](06-permissions-and-sandbox.md)) for each command that `runs_unasked`: in use **and accepted**.
   They go in with `Engine::set_learned` and never in the rules a session starts with, so they can be taken back.
@@ -241,7 +241,7 @@ Each part is a list item, with one sentence a line, so that two changes to one p
   The rules wait for the project's trust like the project's own allows, and the user is told once that they wait.
   `Knowledge` is the one place that holds a session's learned rules: a change of level makes a new engine, which is given them from there as it is put in force (`put_in_force`: read under this module's lock, and handed over with the swap under the policy's, since the re-decide step of step 12).
   **Before every command is decided** (`EnginePolicy::on_command`) the session looks at the two files' stamps, and when either changed since **its own rules were made from them**, or the first of the entries behind the rules has expired, it reads the files again there and then (a read that waits for nothing: the cost of a load, and only when a file changed) and gives the engine the rules that follow.
-  (The comparison is with the snapshot the session's rules came from, not the one the project's sessions share: another session may have read the files again since, and only its own engine was given what it read.) So a `cortex project disable` in another process takes a command off the safe list before its next decision in this one, and another session's or process's write of something else (a command it saw for the first time) leaves this session's accepted commands running unasked.
+  (The comparison is with the snapshot the session's rules came from, not the one the project's sessions share: another session may have read the files again since, and only its own engine was given what it read.) So a `cineris project disable` in another process takes a command off the safe list before its next decision in this one, and another session's or process's write of something else (a command it saw for the first time) leaves this session's accepted commands running unasked.
   A session with no learned rule in force does not look: what was accepted elsewhere since comes at its next turn's start.
   A `project/update` reaches every session of the project in the process at once, a turn that is running included.
   The rules are changed, and handed to an engine, only under their own lock, so a change of level and a `disable` at the same moment leave the new engine with the later list.
@@ -249,7 +249,7 @@ Each part is a list item, with one sentence a line, so that two changes to one p
   While the repository's file cannot be read, what an earlier reading held of it stands in for the prompt and puts none of its commands on the safe list, as an unreadable private store puts none at all: the file as it is may be the one a command was taken out of.
   **A call decided before its command was turned off** is decided again when its turn comes: turning a command off moves the policy's count of narrowings, and the loop decides again every call of the turn that has not started (since the re-decide step of step 12: [03-agent-loop.md](03-agent-loop.md), "A call is decided again").
   Of two calls in one response, the second is then asked about though it was allowed when it was planned.
-- **The profile in an epoch** (`cortex-agent`'s `context::profile`):
+- **The profile in an epoch** (`cineris-agent`'s `context::profile`):
   The loop asks the source for the section when it builds a prompt, and the epoch's record holds the prompt from then on: nothing that happens to the profile changes a byte of a request's prefix.
   At each turn's start the section the source gives is compared with the one the model has (the epoch's `profile` hash, then the last `profile` notice of the epoch's history); when it differs, one notice carries the whole section as it stands, or says that the profile is empty now.
   After a summary the old epoch's profile notices are not replayed, live or when the log is read again: the new prompt holds the profile as it is then.
@@ -259,7 +259,7 @@ Each part is a list item, with one sentence a line, so that two changes to one p
   A command that became active: what it is, that it is in the profile and still asks, and the two commands that accept it and take it out.
   A flaky test that became active, an entry that expired, an entry that came back, a file that cannot be read, a profile larger than its budget (how many entries are left out), accepted commands that wait for trust.
   Front ends get `project.updated` with the entries that changed.
-  Each line and text in a notice goes through `cortex_base::visible`.
+  Each line and text in a notice goes through `cineris_base::visible`.
 - **Credentials**:
   A command line the secret filter finds a credential in is not observed.
   A proposal, an added or edited entry and a promoted one are refused with the reason when their text, evidence, command line, directory or check holds one: a promote writes all of an entry into the repository's file.
@@ -269,7 +269,7 @@ Each part is a list item, with one sentence a line, so that two changes to one p
   A change is refused whole, with nothing written: `unknown_entry`, `unknown_action`, `invalid_entry` (an entry that does not validate, or that holds what looks like a credential), `shared_entry_read_only` (an `edit` or a `delete` of the repository's entry), `not_promotable`, `project_store_full`, `project_store_invalid` and `project_store_unwritable` for the private store, `shared_profile_invalid` and `shared_profile_full` for the repository's file. Since step 24 a `promote` is refused with `turn_running` while a session of the project in the same core runs a turn: the repository's file is a protected path, and a confined command's looks before and after it would take the write for a change made from outside. Another process's promote during a command is still possible ([outstanding](../outstanding/a-promote-while-a-confined-command-runs.md)).
   `project/update` is a `user` client's alone (`role_not_allowed`): an entry reaches the prompt, and a command the safe list, only by an act of the user's.
   The listing carries every entry, the shared file's as this user stands to them, and `problems`, the files that could not be read.
-- **`cortex project`**:
+- **`cineris project`**:
   The command line's way to what `/project` will show (step 24), for the project of the working directory, outside a session: `list` (the default; proposals first, then what is in use; `--all` adds what is turned off, `--kind` keeps one kind, `--json` prints the same choice of entries as one line of JSON, in `project/list`'s form, with every character that acts unseen written as a `\u` escape), `accept ID…`, `accept --shared` (every entry of the repository's file that waits for this user, with one command), `disable`, `delete`, `promote`, `edit ID TEXT`, `add KIND TEXT` (a command with `--purpose` and `--command`, and `--cwd`, `--read-only`), and `path` (where the two files are).
   An id is given as the listing shows it; one of the repository's file, which is 34 characters, may be cut short to a start that only one of them has (an id of the user's own store may not: those are numbered in turn, and the start of one that is gone names a later entry).
   The listing prints a command's line and directory whole, and says of each entry whether it asks (`active, asks`: it became active by itself) or was accepted, where it came from, its evidence and its check, and until when it stands.

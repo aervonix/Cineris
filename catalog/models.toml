@@ -1,7 +1,7 @@
-# The model catalog: what Cortex-Harness knows about each model that no
+# The model catalog: what Cineris knows about each model that no
 # provider's API serves. This file is the source of truth
 # (docs/decisions/0017-model-catalog.md). The build embeds it in the binary;
-# `cortex-llm` reads it on first use, and its tests fail when an entry is
+# `cineris-llm` reads it on first use, and its tests fail when an entry is
 # not valid.
 #
 # The facts here are read from the providers' own documentation, by hand.

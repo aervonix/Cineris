@@ -1,6 +1,6 @@
 A changed file is hashed whole at round end and on rewind, uncapped, at 0.4 s a gibibyte.
 
-- Area: cortex-session
+- Area: cineris-session
 - Owner: step 33
 
 | Item | Who | When |

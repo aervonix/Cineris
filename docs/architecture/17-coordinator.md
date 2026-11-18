@@ -92,7 +92,7 @@ Three levels, the same ones a single session's lease can have. For a single sess
 
 **What the harness can enforce, and what it cannot.** The rows about approvals, merges, pull requests, spending and sensitive paths are mechanical: the harness sees the request and applies the table, whatever the Manager says. The rows about design, security and scope depend on the Manager recognising that it is making such a choice. The harness cannot detect that. So for those rows the Manager is instructed to escalate, every decision it takes alone is written to the decision log, and the user can review the log at any time. This limit is stated to the user when they choose a level.
 
-**Sensitive paths** always escalate unless the grant names them: CI configuration, git hooks and git configuration, the project's `.cortex` directory, dependency manifests' registry and script settings, and files matching the secret patterns in [../security.md](../security.md). The list is configurable upward.
+**Sensitive paths** always escalate unless the grant names them: CI configuration, git hooks and git configuration, the project's `.cineris` directory, dependency manifests' registry and script settings, and files matching the secret patterns in [../security.md](../security.md). The list is configurable upward.
 
 **Levels above `supervised` need an enforcing sandbox,** as they do for a single session. Where the OS sandbox is not enforcing (Windows until its sandbox step), only `supervised` is offered, because the hard limits below could not be guaranteed. The owner confirmed this on 2026-11-12.
 
@@ -146,7 +146,7 @@ Both are entries in the Manager's session log ([07-sessions-and-context.md](07-s
 | `options` | The choices on offer. |
 | `status`, `answer`, `answered_by`, `at` | Filled in when it is resolved. |
 
-The user works through the queue in the escalations panel or with `cortex team queue`. Work that does not depend on an open escalation carries on.
+The user works through the queue in the escalations panel or with `cineris team queue`. Work that does not depend on an open escalation carries on.
 
 **The decision log.** What the Manager decided without asking.
 
@@ -186,7 +186,7 @@ How many Employees fit, and how trouble is caught. The mechanisms are the orches
 
 ## Other machines
 
-Not in scope, and not ruled out. A supervised session is reached through a handle that hides where it runs. An Employee on another machine would be a `cortex serve --stdio` process started over SSH, with its worktree and sandbox there. What that needs beyond this design: getting the code to the other machine and back (git handles it), credentials on that machine, and an estimate that counts its resources.
+Not in scope, and not ruled out. A supervised session is reached through a handle that hides where it runs. An Employee on another machine would be a `cineris serve --stdio` process started over SSH, with its worktree and sandbox there. What that needs beyond this design: getting the code to the other machine and back (git handles it), credentials on that machine, and an estimate that counts its resources.
 
 ## Security
 
@@ -202,7 +202,7 @@ The threats and mitigations are in [../security.md](../security.md), section 8. 
 
 ## Where it lives
 
-A crate `cortex-coordinator` on top of `cortex-runs`: sub-leases for Employees, the team rows of the level table, approval routing, the escalation queue and decision log, the Manager's tools, and the integration operations. The TUI gains the Employees and escalations panels. The protocol gains methods under `team/*`.
+A crate `cineris-coordinator` on top of `cineris-runs`: sub-leases for Employees, the team rows of the level table, approval routing, the escalation queue and decision log, the Manager's tools, and the integration operations. The TUI gains the Employees and escalations panels. The protocol gains methods under `team/*`.
 
 ## What the first release carries for it
 

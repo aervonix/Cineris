@@ -40,7 +40,7 @@ The framework's build and size cost is in [measurements/dependency-costs.md](../
 - **Inline by default.** The transcript goes into the terminal's own scrollback. The harness owns a small live region at the bottom.
 - **Commit as soon as stable.** Content leaves the live region the moment it can no longer change, so the live region stays a few lines tall however long the answer is.
 - **Panels live in the live region**, bounded, opening and closing as needed.
-- **Our own line-based renderer** in `cortex-term`, with no terminal library under it: raw mode, console modes and input are ours too ("Amended in step 20" below; the decision first said crossterm for those). Components produce styled lines. A frame is one write inside a synchronized update: committed lines, then the changed lines of the live region. No clear-and-redraw, no scroll regions, no cursor queries.
+- **Our own line-based renderer** in `cineris-term`, with no terminal library under it: raw mode, console modes and input are ours too ("Amended in step 20" below; the decision first said crossterm for those). Components produce styled lines. A frame is one write inside a synchronized update: committed lines, then the changed lines of the live region. No clear-and-redraw, no scroll regions, no cursor queries.
 - **A full-screen presenter** over the same lines, selectable by flag or setting, for terminals where inline misbehaves and for people who prefer it. It is where side-by-side panes can exist.
 - **A viewer** (a temporary full-screen view) for long output, diffs and summaries, which is how inline mode offers "expand".
 - No cell-grid framework dependency.

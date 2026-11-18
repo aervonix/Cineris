@@ -9,9 +9,9 @@ Item 2: a list of known flaky tests that the tools read. One sentence a line.
   An item that cannot be read names no flake, and a warning says which: a list that is short runs fewer tests again, never more.
   `flaky::tests::every_known_flake_names_a_test_its_crate_has` holds each mark to a function of its crate, so a renamed test is found on the pull request that renames it.
 - **Marked:**
-  - `cortex-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw` ([a-base-capture-beside-the-turns-git](../../../outstanding/a-base-capture-beside-the-turns-git.md));
-  - `cortex-tools::it changes::sys_every_git_the_look_starts_goes_through_its_confinement`, GitTooSlow ([a-git-look-too-slow-on-a-loaded-windows-runner](../../../outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md));
-  - `cortex-index::it outlines::outlining_a_name_of_a_megabyte_takes_little_memory` ([a-memory-peak-test-near-its-limit](../../../outstanding/a-memory-peak-test-near-its-limit.md)).
+  - `cineris-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw` ([a-base-capture-beside-the-turns-git](../../../outstanding/a-base-capture-beside-the-turns-git.md));
+  - `cineris-tools::it changes::sys_every_git_the_look_starts_goes_through_its_confinement`, GitTooSlow ([a-git-look-too-slow-on-a-loaded-windows-runner](../../../outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md));
+  - `cineris-index::it outlines::outlining_a_name_of_a_megabyte_takes_little_memory` ([a-memory-peak-test-near-its-limit](../../../outstanding/a-memory-peak-test-near-its-limit.md)).
   The leader-close test is not marked: step 23's third pull request fixed its cause and settled its item.
 - **`stress`, `ci` away from CI and `mutate`'s baseline** name a listed test that failed, with its item, run it again once by its binary and its name exactly, and go on when that run passes.
   A listed test that fails its second run, a second run whose command failed or whose report lacks it, and every test that is not listed still fail.
@@ -32,12 +32,12 @@ Item 2: a list of known flaky tests that the tools read. One sentence a line.
 
 At the desk, with a throwaway test that fails the first time it runs under a tag and passes after: one listed as a known flake by a throwaway item, one not. Neither was committed.
 
-- **`stress -p cortex-base --count 3`, both tests:** the listed flake was named, run once more under seed 0, and passed; the unlisted one failed the run: `xtask: 1 test(s) failed on some repeat, besides 1 known flake(s) that passed when run once more`, exit 1.
+- **`stress -p cineris-base --count 3`, both tests:** the listed flake was named, run once more under seed 0, and passed; the unlisted one failed the run: `xtask: 1 test(s) failed on some repeat, besides 1 known flake(s) that passed when run once more`, exit 1.
 - **`stress`, the listed one alone:** `1 of 1 known flake(s) passed when run once more, and are not counted as failures of this run`, exit 0. With `--strict`: `--strict: not run again, so each counts as a failure of this run`, exit 1.
 - **`ci test`, both tests:** the listed flake ran again and passed, `The step fails: 1 other test(s) failed, which are not run again`, exit 1.
 - **`ci test`, the listed one alone:** `The 1 known flake(s) passed when run again, and nothing else failed: the step passes`, exit 0.
 - **`ci test` with `GITHUB_ACTIONS=true`:** `Not run again: CI's blocking jobs run nothing again. 1 known flake(s) failed.`, and the step failed, exit 1.
-- **`mutate` of one break of `cortex-base`:** `Running the 1 known flake(s) again, once.`, `passed when run again`, `732 tests pass, 1 of them a known flake on its second run`, and the break was then judged (caught by 2 tests).
+- **`mutate` of one break of `cineris-base`:** `Running the 1 known flake(s) again, once.`, `passed when run again`, `732 tests pass, 1 of them a known flake on its second run`, and the break was then judged (caught by 2 tests).
 
 ## Tests and breaks
 

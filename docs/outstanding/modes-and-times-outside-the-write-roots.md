@@ -1,6 +1,6 @@
 A confined command can change modes and times of user-owned files anywhere, since Landlock ignores `chmod` and `utimensat`.
 
-- Area: cortex-sandbox
+- Area: cineris-sandbox
 - Owner: step 32
 
 | Item | Who | When |

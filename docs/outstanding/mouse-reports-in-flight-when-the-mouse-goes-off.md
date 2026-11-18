@@ -1,6 +1,6 @@
 A mouse report the terminal sent just before the mouse was turned off can arrive afterwards and be read as text.
 
-- Area: cortex-term
+- Area: cineris-term
 - Owner: step 33
 
 | Item | Who | When |

@@ -1,6 +1,6 @@
 # Step 24, its second pull request: the panels
 
-The second of step 24's three pull requests: the panel mechanism, and the plan and review panels, in `cortex-tui` alone. It was built by a session of its own beside the first pull request (`config/reload` and the protocol's additions), and the third (the usage and project panels, the commands, the reloads) builds on it. What it built is described in [09-tui.md](../../../architecture/09-tui.md), "The panels as built".
+The second of step 24's three pull requests: the panel mechanism, and the plan and review panels, in `cineris-tui` alone. It was built by a session of its own beside the first pull request (`config/reload` and the protocol's additions), and the third (the usage and project panels, the commands, the reloads) builds on it. What it built is described in [09-tui.md](../../../architecture/09-tui.md), "The panels as built".
 
 ## What was built
 
@@ -40,7 +40,7 @@ The second of step 24's three pull requests: the panel mechanism, and the plan a
 11. **`Enter` acts at once,** as moving does: on a review's file it opens the viewer, which changes nothing.
 12. **While a change of a panel's is on its way, a key's change is not sent** (since the review): it is not computed from what the answer will change. What is on its way is what the application waits for in the session open. The hint row says the last change is still being made, and the key, pressed again once the answer has come, acts. With the core in process the answer comes before the next key.
 13. **`/plan` measures the panel against the rows the last frame gave the panels,** as if no menu were open (the command is typed with its menu open): a window that grew or shrank since that frame is measured as it was. A panel it cannot draw focused is said in the command's own frame. Under a dialog it opens the panel without the focus.
-14. **An item is cut to the 400 characters the plan holds** (the core's `MAX_PLAN_TEXT`, which `cortex-tui` may not name), and the cut is said.
+14. **An item is cut to the 400 characters the plan holds** (the core's `MAX_PLAN_TEXT`, which `cineris-tui` may not name), and the cut is said.
 
 ## The independent review, and what each finding changed
 
@@ -72,7 +72,7 @@ A review of the first review's fixes (545aaee8) found these. It found sound the 
 
 ## Tests
 
-All tier-1 unit tests of `cortex-tui`, with no real waiting (the application's tests give every event its time):
+All tier-1 unit tests of `cineris-tui`, with no real waiting (the application's tests give every event its time):
 
 - `app/tests/panels.rs`: each panel opens and closes on its conditions, edges included; every plan key's `plan/update`, a result replacing the plan, an error said, a result for a session left dropped, `plan/get` for a stored session; the readiness (typing past `/plan`'s `Enter`, held keys marked and unmarked, keys read together, a paste, moving and `Esc` at once, the grace again after the viewer, `fg`, the external editor, a dialog, a changed row and a new key map, a key between a dialog and its frame); the typing rule with a box and a panel; the review's checks as they come, `x` and `Enter`; the verdict in the summary; hostile text in the frame; and the review's findings above.
 - `app/panels/tests.rs`: the sweep of the live region (every height from 4 to 60 rows, every set of the plan, the review and two stand-in panels of other shapes, each focused or none, with a round running or not, and with a menu open: the region within `max(rows / 2, bottom)`, a focused panel drawn with its focused rows or the input focused, no row wider than the width), in two tests; scrolling, folding, what can be reached, the window, `least_rows` against the rows drawn, the blank rows and the four live rows kept.
@@ -90,21 +90,21 @@ All tier-1 unit tests of `cortex-tui`, with no real waiting (the application's t
 
 ## Stress
 
-- `cargo xtask stress -p cortex-tui --count 50`: 470 tests, 50 times each, seeds 0 to 49: every test passed every time.
-- `cargo xtask stress -p cortex-tui --count 50 --cores 2 --load 6`: the same, every test passed every time.
+- `cargo xtask stress -p cineris-tui --count 50`: 470 tests, 50 times each, seeds 0 to 49: every test passed every time.
+- `cargo xtask stress -p cineris-tui --count 50 --cores 2 --load 6`: the same, every test passed every time.
 
 ## Tiers
 
 - **The sweep of the live region** first took 1.3 s at the desk in the `dev` profile: the application's own frame (the transcript's live round and the hint row, step 22's views) is most of a frame's cost, and the sweep draws about 5,500 frames. It is drawn at 40 columns (where the hint row is short) with one call live, the edits' round and the checks' notice committed, and is two tests, one with a round running and one without: **0.25 s and 0.40 s in CI's profile at the desk** (0.24 s and 0.38 s before the review's fixes).
-- **What this part's tests add:** 1.64 s of `cortex-tui`'s 7.08 s of tier-1 test time (23%), summed over the tests in CI's profile at the desk; nothing measurable to tier 2 (the bindings' and the decoder's loops take the new keys).
-- **The estimate for a hosted runner** (`cargo xtask ci --tiers --like-runner -p cortex-tui`), the whole crate: tier 1 4.7 s on Linux (6.8 s on a slow runner) and 6.1 s on Windows (7.4 s), tier 2 0.8 s on Linux, of budgets of 20 s and 40 s for the whole workspace. So this part adds about 1.1 s to tier 1 on Linux and 1.4 s on Windows.
-- **Measured on a hosted Windows runner** (`try` run 43967628821, `test -p cortex-tui` against `main`, the median of 5 runs each on one runner at 8 ms a process start): `cortex-tui`'s tier 1 went from 4.2 s to 6.0 s, **+1.7 s**, of which the sweep's two tests are 1.4 s (0.87 s and 0.55 s); tiers 2 and 3 did not move.
+- **What this part's tests add:** 1.64 s of `cineris-tui`'s 7.08 s of tier-1 test time (23%), summed over the tests in CI's profile at the desk; nothing measurable to tier 2 (the bindings' and the decoder's loops take the new keys).
+- **The estimate for a hosted runner** (`cargo xtask ci --tiers --like-runner -p cineris-tui`), the whole crate: tier 1 4.7 s on Linux (6.8 s on a slow runner) and 6.1 s on Windows (7.4 s), tier 2 0.8 s on Linux, of budgets of 20 s and 40 s for the whole workspace. So this part adds about 1.1 s to tier 1 on Linux and 1.4 s on Windows.
+- **Measured on a hosted Windows runner** (`try` run 43967628821, `test -p cineris-tui` against `main`, the median of 5 runs each on one runner at 8 ms a process start): `cineris-tui`'s tier 1 went from 4.2 s to 6.0 s, **+1.7 s**, of which the sweep's two tests are 1.4 s (0.87 s and 0.55 s); tiers 2 and 3 did not move.
 
 ## Checks
 
-- `cargo xtask ci` on a2fb9d21 (the first pull request merged) with this part on top, after the second review's fixes: formatting, the rules, the breaks, the generated files, clippy, licences, tiers 1 and 2 (4076 tests), the system tests (270) and the tier budgets pass. Tier 1 used 68% of its budget, `cortex-tui` 4.6 s of it above the start of the tests' processes, at a desk whose disk stalled for most of the run.
-- `cargo xwin clippy --target x86_64-pc-windows-msvc -p cortex-tui --all-targets --locked -- -D warnings`: clean.
-- `cargo xtask api-diff --against origin/main --features cortex-tui/test-kit -p cortex-tui`: 57 public items added, none removed or changed; the test kit is unchanged. `App` stays `Send` (a panel is `Send`). The second review's changes add no public item and no code for one system alone.
+- `cargo xtask ci` on a2fb9d21 (the first pull request merged) with this part on top, after the second review's fixes: formatting, the rules, the breaks, the generated files, clippy, licences, tiers 1 and 2 (4076 tests), the system tests (270) and the tier budgets pass. Tier 1 used 68% of its budget, `cineris-tui` 4.6 s of it above the start of the tests' processes, at a desk whose disk stalled for most of the run.
+- `cargo xwin clippy --target x86_64-pc-windows-msvc -p cineris-tui --all-targets --locked -- -D warnings`: clean.
+- `cargo xtask api-diff --against origin/main --features cineris-tui/test-kit -p cineris-tui`: 57 public items added, none removed or changed; the test kit is unchanged. `App` stays `Send` (a panel is `Send`). The second review's changes add no public item and no code for one system alone.
 
 ## CI times
 

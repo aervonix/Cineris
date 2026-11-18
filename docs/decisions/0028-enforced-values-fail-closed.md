@@ -13,7 +13,7 @@ For most of the protocol that is right: a field that only informs can be skipped
 
 | Option | Assessment |
 |---|---|
-| Tolerant everywhere, and leave it to `cortex-policy` to notice | The policy engine cannot notice a field the decoder already threw away. |
+| Tolerant everywhere, and leave it to `cineris-policy` to notice | The policy engine cannot notice a field the decoder already threw away. |
 | Tolerant decoding that keeps unknown parts, with a check afterwards | Works only if every later reader remembers the check. One forgotten call site is the hole again. |
 | **Strict types for enforced values: the decoder itself refuses** | There is no lenient way to read a lease, so nothing can forget to check. The cost is that enforced types cannot grow by plain addition. |
 
@@ -42,11 +42,11 @@ Two enumerations sit on both sides. A **level** and an **effect** appear in enfo
 
 ## Where it is built
 
-`crates/cortex-protocol/src/lease.rs`. The enforced structs forbid unknown fields; their own enumerations and the stop-condition union have no catch-all variant; `Lease::from_wire`, `Grant::from_wire` and `Rule::from_wire` return the refusal as an error object. Tests: `a_lease_with_an_unknown_restriction_field_is_refused`, `a_lease_with_an_unknown_restriction_value_is_refused`, `a_grant_with_an_unknown_scope_is_refused`, `a_rule_in_a_message_is_enforced_too`, and, for the schema, `the_schema_refuses_what_the_types_refuse`.
+`crates/cineris-protocol/src/lease.rs`. The enforced structs forbid unknown fields; their own enumerations and the stop-condition union have no catch-all variant; `Lease::from_wire`, `Grant::from_wire` and `Rule::from_wire` return the refusal as an error object. Tests: `a_lease_with_an_unknown_restriction_field_is_refused`, `a_lease_with_an_unknown_restriction_value_is_refused`, `a_grant_with_an_unknown_scope_is_refused`, `a_rule_in_a_message_is_enforced_too`, and, for the schema, `the_schema_refuses_what_the_types_refuse`.
 
 Step 12 builds the policy engine on these types, and step 8 writes leases to the session log. Both read them through the same decoder.
 
-**In configuration** (step 9, `crates/cortex-config`). The tables `[permissions]`, `[sandbox]` and `[limits]` are enforced. An unknown key in one is an error, where anywhere else it is a warning, and the whole file is refused, so the configuration that was in force stays in force. A permission rule is read through `Rule`'s own strict reader, a mode must be a level this build lists, and the sandbox's network setting is the closed enumeration. A file with a newer `config_version` is refused before any of its keys is judged, which is what gates a new enforced section: an older build warns about a top-level table it does not know, so a section that restricts is added only with a version bump. Tests: `an_unknown_key_in_an_enforced_table_refuses_the_file` and `a_rule_is_read_strictly_and_written_back`.
+**In configuration** (step 9, `crates/cineris-config`). The tables `[permissions]`, `[sandbox]` and `[limits]` are enforced. An unknown key in one is an error, where anywhere else it is a warning, and the whole file is refused, so the configuration that was in force stays in force. A permission rule is read through `Rule`'s own strict reader, a mode must be a level this build lists, and the sandbox's network setting is the closed enumeration. A file with a newer `config_version` is refused before any of its keys is judged, which is what gates a new enforced section: an older build warns about a top-level table it does not know, so a section that restricts is added only with a version bump. Tests: `an_unknown_key_in_an_enforced_table_refuses_the_file` and `a_rule_is_read_strictly_and_written_back`.
 
 ## Revisit when
 

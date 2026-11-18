@@ -1,6 +1,6 @@
 Parts of the external editor (umask, ConPTY modes, failed hand-over, `.cmd` editors, interrupt guard) are untested.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 32
 
 | Item | Who | When |

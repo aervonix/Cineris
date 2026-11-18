@@ -1,6 +1,6 @@
 # After the sixth tooling step: Windows' system tier, stalls, stale break lists, dependents, the test kit, runs and logs, live tests by name
 
-This step added tools and test support: the stall check, `test --dependents`, `mutate --check` of `caught-by` names and `--fix-in`, `ab --keep-going`, `ci-log`, the `perf` preset of `try`, `live --test`, the last good copy of `xtask` and `regen`, `ScriptedProvider`'s output limit, `Rig::fill_next` and `fill_after`, `Phases`, and a made-up month of statistics. It changed system tests of `cortex-tools` and `xtask` to start PowerShell and git less, and, by the owner's decision, runs Windows' system tests two at a time. No dependency was added. The tables were made with `cargo xtask ci-times`.
+This step added tools and test support: the stall check, `test --dependents`, `mutate --check` of `caught-by` names and `--fix-in`, `ab --keep-going`, `ci-log`, the `perf` preset of `try`, `live --test`, the last good copy of `xtask` and `regen`, `ScriptedProvider`'s output limit, `Rig::fill_next` and `fill_after`, `Phases`, and a made-up month of statistics. It changed system tests of `cineris-tools` and `xtask` to start PowerShell and git less, and, by the owner's decision, runs Windows' system tests two at a time. No dependency was added. The tables were made with `cargo xtask ci-times`.
 
 ## On the pull request
 

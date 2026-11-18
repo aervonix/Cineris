@@ -409,7 +409,7 @@ mod tests {
             },
             Listed {
                 test: Test {
-                    binary: "cx".to_owned(),
+                    binary: "cin".to_owned(),
                     name: "memory::peak".to_owned(),
                 },
                 item: "a-memory-peak".to_owned(),
@@ -563,12 +563,12 @@ mod tests {
             .map(str::to_owned)
             .to_vec();
         let test = Test {
-            binary: "cx".to_owned(),
+            binary: "cin".to_owned(),
             name: "a".to_owned(),
         };
         assert_eq!(
             super::once(&args, &[test]).join(" "),
-            "nextest run -E (binary_id(=cx) and test(=a)) --retries 0 -- --nocapture"
+            "nextest run -E (binary_id(=cin) and test(=a)) --retries 0 -- --nocapture"
         );
     }
 
@@ -579,7 +579,7 @@ mod tests {
             failure("cx::it", "trust::sys_flaky"),
             // The same name in another binary, a name that ends the same,
             // and one that begins the same are other tests.
-            failure("cx", "trust::sys_flaky"),
+            failure("cin", "trust::sys_flaky"),
             failure("cx::it", "other::trust::sys_flaky"),
             failure("cx::it", "trust::sys_flaky_too"),
             // Twice, as a stress run's report has it: one flake.
@@ -695,7 +695,7 @@ mod tests {
 
     const FLAKE: (&str, &str, bool) = ("cx::it", "trust::sys_flaky", true);
     const FLAKE_PASSES: (&str, &str, bool) = ("cx::it", "trust::sys_flaky", false);
-    const FINE: (&str, &str, bool) = ("cx", "fine", false);
+    const FINE: (&str, &str, bool) = ("cin", "fine", false);
 
     #[test]
     fn a_known_flake_that_passes_its_second_run_lets_the_run_pass() {
@@ -765,7 +765,7 @@ mod tests {
         // Alone: nothing is run, nothing is said.
         let ran_alone = ran(
             "alone",
-            &report(&[("cx", "other", true), FINE]),
+            &report(&[("cin", "other", true), FINE]),
             Some(&report(&[])),
             Ok(()),
             None,
@@ -779,7 +779,7 @@ mod tests {
         // failure still fails the run, though the flake passed.
         let ran = ran(
             "beside",
-            &report(&[FLAKE, ("cx", "other", true)]),
+            &report(&[FLAKE, ("cin", "other", true)]),
             Some(&report(&[FLAKE_PASSES])),
             Ok(()),
             None,

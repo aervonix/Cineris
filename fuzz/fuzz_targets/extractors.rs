@@ -6,4 +6,4 @@
     reason = "the fuzzer's own macro reads a crash file; nothing here is the product"
 )]
 
-libfuzzer_sys::fuzz_target!(|data: &[u8]| cortex_fuzz::extractors(data));
+libfuzzer_sys::fuzz_target!(|data: &[u8]| cineris_fuzz::extractors(data));

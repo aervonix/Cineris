@@ -1,6 +1,6 @@
 # MCP
 
-The Model Context Protocol (MCP) is how most third-party tools reach coding agents today. This page says what Cortex-Harness supports, when, and how MCP sits beside the extension system.
+The Model Context Protocol (MCP) is how most third-party tools reach coding agents today. This page says what Cineris supports, when, and how MCP sits beside the extension system.
 
 The protocol facts here were read from the MCP specification and SDK documentation in November 2026 and are summarised in the research notes. The specification changed fundamentally in July 2026. The MCP build step starts by re-reading it.
 
@@ -10,7 +10,7 @@ The protocol facts here were read from the MCP specification and SDK documentati
 
 | | First usable release | Later |
 |---|---|---|
-| Role | Client only. | The same. Cortex-Harness is not an MCP server. |
+| Role | Client only. | The same. Cineris is not an MCP server. |
 | Features | Tools: list and call. Tool-list change handling. Cancellation. | Prompts as slash commands. Resources. Questions from servers to the user. |
 | Transports | Standard I/O (local servers). Streamable HTTP with static credentials (a bearer token or headers from the environment). | OAuth for remote servers. |
 | Protocol eras | Both: the current stateless revision and the older handshake-based revisions that most existing servers still speak. | Tracking new revisions. |
@@ -26,7 +26,7 @@ MCP and extensions overlap on one thing, tools, and differ on everything else.
 | Can provide | Tools (later prompts and resources). | Tools, slash commands, hooks on the agent's lifecycle. |
 | Runs as | A separate process, in any language. | JavaScript inside the harness's script runtime. |
 | Protocol owner | The MCP project. | Us. |
-| Written for | Any MCP client. | Cortex-Harness. The agent can write one on request. |
+| Written for | Any MCP client. | Cineris. The agent can write one on request. |
 
 Rule of thumb for authors: if it needs a client library, a database driver or a long-running process, or should work in other agents too, write an MCP server. If it needs to gate, observe or change the agent, or is a small tool built from commands and files, write an extension.
 
@@ -36,7 +36,7 @@ Inside the harness they share machinery: the dynamic-tool registry behind `tool_
 
 The common approach, declaring every MCP tool to the model, has two costs. Tool definitions fill the context (tens of thousands of tokens for a handful of servers), and any change to the tool list changes the request prefix, which breaks prompt caches and, on some providers, invalidates reasoning ([07-sessions-and-context.md](07-sessions-and-context.md)).
 
-Cortex-Harness keeps the declared tool list fixed and reaches MCP tools through the same fixed pair of tools that serves extension tools, `tool_search` and `tool_call` ([05-tools.md](05-tools.md)).
+Cineris keeps the declared tool list fixed and reaches MCP tools through the same fixed pair of tools that serves extension tools, `tool_search` and `tool_call` ([05-tools.md](05-tools.md)).
 
 - The system prompt lists each connected server with its one-line description and tool count. It does not list the tools.
 - The model searches when it needs something, reads the schema in the result, and calls. Search results are ordinary tool results, so they are append-only content.
@@ -69,8 +69,8 @@ tools = ["create_issue", "find_issue"]
 timeout_ms = 30000
 ```
 
-- A server is local (`command`) or remote (`url`). The schema is ours. `cortex mcp add` writes entries.
-- **Existing configurations are read.** The harness looks for the project's `.mcp.json` and for the per-user files of common MCP clients. What it finds is listed at onboarding and by `cortex mcp import`, and can be brought in with one confirmation per server. A project's `.mcp.json` is also read live: its servers show up as proposed, and each needs the same trust and approval as a server written in our own format. The files are never modified.
+- A server is local (`command`) or remote (`url`). The schema is ours. `cineris mcp add` writes entries.
+- **Existing configurations are read.** The harness looks for the project's `.mcp.json` and for the per-user files of common MCP clients. What it finds is listed at onboarding and by `cineris mcp import`, and can be brought in with one confirmation per server. A project's `.mcp.json` is also read live: its servers show up as proposed, and each needs the same trust and approval as a server written in our own format. The files are never modified.
 - Per server: `enabled`, `expose`, an allow or deny list of tools, start-up and call timeouts, the sandbox additions it needs.
 - Secrets are references to environment variables. They are never literals in the file.
 - Servers defined in a project's configuration need project trust and are pinned by hash ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md)).
@@ -91,7 +91,7 @@ MCP servers are third-party code and third-party text. Both are treated as untru
 | Risk | Handling |
 |---|---|
 | A server process does damage | Local servers run in the sandbox with a narrow default policy: read the workspace, no writes, no network unless the entry declares it and the user approved it. |
-| Tool descriptions carry hidden instructions | Descriptions reach the model only as search results, which are marked as third-party content. They are size-capped (2 KiB each). `cortex mcp inspect` shows them in full to the user. |
+| Tool descriptions carry hidden instructions | Descriptions reach the model only as search results, which are marked as third-party content. They are size-capped (2 KiB each). `cineris mcp inspect` shows them in full to the user. |
 | A server changes a tool after approval | Each tool definition is hashed when first approved. A changed definition needs approval again before it can be called. |
 | One server's text steers another server's tools | Calls are checked per `server/tool` by the permission engine. A description cannot grant permission. |
 | A tool returns a huge result | The standard output policy applies ([05-tools.md](05-tools.md)): truncation, with the full result as an artifact. |
@@ -102,7 +102,7 @@ More in [../security.md](../security.md).
 
 ## Implementation
 
-- `cortex-mcp` is the only crate that knows MCP. It registers its servers' tools with the dynamic-tool registry behind `tool_search` and `tool_call`, and exposes directly exposed tools through the ordinary `Tool` trait.
+- `cineris-mcp` is the only crate that knows MCP. It registers its servers' tools with the dynamic-tool registry behind `tool_search` and `tool_call`, and exposes directly exposed tools through the ordinary `Tool` trait.
 - It uses the official Rust SDK (`rmcp`) behind a small transport trait of our own, with only the client features enabled. The SDK already handles both protocol eras, which is the expensive part to track by hand. Its measured build and size cost is in [../measurements/dependency-costs.md](../measurements/dependency-costs.md).
 - Because the SDK is confined to one crate behind our trait, replacing it with a hand-written client for the standard I/O transport is possible later without touching anything else. The condition for doing that is in the decision record.
 - The `mcp` cargo feature builds the harness without it.

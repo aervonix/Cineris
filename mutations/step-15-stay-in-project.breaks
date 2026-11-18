@@ -8,10 +8,10 @@
 
 [break] the-prompt-without-the-stay-in-project-line
 rule: Section 1 of the system prompt tells the agent to stay inside its project and ask the user, not to look in other projects' files.
-file: crates/cortex-agent/src/context/prompt.rs
+file: crates/cineris-agent/src/context/prompt.rs
 in: build
 find: vec![CORE_INSTRUCTIONS.to_owned()]
 replace: vec![CORE_INSTRUCTIONS.lines().filter(|line| !line.starts_with("- Stay inside")).collect::<Vec<_>>().join("\n")]
 caught-by:
-    cortex-agent context::prompt::tests::the_core_instructions_keep_the_agent_inside_its_project
-    cortex-agent context::prompt::tests::the_guided_style_adds_its_notes_after_the_environment
+    cineris-agent context::prompt::tests::the_core_instructions_keep_the_agent_inside_its_project
+    cineris-agent context::prompt::tests::the_guided_style_adds_its_notes_after_the_environment

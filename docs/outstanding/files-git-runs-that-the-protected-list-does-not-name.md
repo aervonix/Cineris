@@ -1,6 +1,6 @@
 Files git's configuration points to (hooks path, fsmonitor, filters, includes) and `sandbox.write` roots are not protected or watched.
 
-- Area: cortex-sandbox
+- Area: cineris-sandbox
 - Owner: step 32
 
 | Item | Who | When |

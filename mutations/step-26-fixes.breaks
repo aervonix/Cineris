@@ -6,180 +6,180 @@
 
 [break] harness-git-not-confined
 rule: While commands are confined, the harness's own git runs inside the sandbox, so a program a confined command named in the repository's configuration cannot run unconfined.
-file: crates/cortex-core/src/sandbox.rs
+file: crates/cineris-core/src/sandbox.rs
 in: SessionSandbox::start_git
 find: self.reader.as_ref().filter(|_| self.confines())
 replace: self.reader.as_ref().filter(|_| false)
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core::it harness_git::sys_a_filter_a_confined_command_plants_runs_inside_the_sandbox
+    cineris-core::it harness_git::sys_a_filter_a_confined_command_plants_runs_inside_the_sandbox
 
 [break] harness-git-read-policy-widened
 rule: The harness's own git runs under a reading policy with no write root, so a planted filter can change nothing.
-file: crates/cortex-core/src/sandbox.rs
+file: crates/cineris-core/src/sandbox.rs
 in: SessionSandbox::new
 find: write: Vec::new()
 replace: write: policy.write.clone()
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core sandbox::tests::the_harness_git_runs_inside_the_sandbox_reading_only
+    cineris-core sandbox::tests::the_harness_git_runs_inside_the_sandbox_reading_only
 
 [break] change-list-not-marked-incomplete
 rule: A git that fails or is refused inside the sandbox leaves the change list incomplete, never complete.
-file: crates/cortex-tools/src/shell/changes.rs
+file: crates/cineris-tools/src/shell/changes.rs
 in: Changes::stop_short
 find: self.complete = false;
 replace: self.complete = true;
-packages: cortex-tools
+packages: cineris-tools
 caught-by:
-    cortex-tools shell::changes::tests::changes_are_a_payload_for_front_ends
+    cineris-tools shell::changes::tests::changes_are_a_payload_for_front_ends
 
 [break] after-look-runs-an-unconfined-git
 rule: A look whose command ran confined does not run git again once the session has stopped confining.
-file: crates/cortex-tools/src/shell/changes.rs
+file: crates/cineris-tools/src/shell/changes.rs
 in: ChangeDetector::after
 find: before.confined && !self.confinement.confines()
 replace: false
-packages: cortex-tools
+packages: cineris-tools
 caught-by:
-    cortex-tools::it changes::sys_a_look_is_left_incomplete_when_the_session_un_confines
+    cineris-tools::it changes::sys_a_look_is_left_incomplete_when_the_session_un_confines
 
 [break] a-commondir-is-not-followed
 rule: A git directory's commondir is recorded and followed to the common directory's configuration and hooks.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Look::record_git
 find: self.follow_commondir(git);
 replace: let _ = git;
-packages: cortex-sandbox
+packages: cineris-sandbox
 caught-by:
-    cortex-sandbox protect::tests::a_commondir_in_the_main_repository_is_found
+    cineris-sandbox protect::tests::a_commondir_in_the_main_repository_is_found
 
 [break] a-cargo-link-is-not-recorded
 rule: A .cargo made as a link is recorded, like one made as a directory.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Look::walk
 find: ".cargo" =>
 replace: ".cargo" if is_dir =>
-packages: cortex-sandbox
+packages: cineris-sandbox
 caught-by:
-    cortex-sandbox protect::tests::a_cargo_made_as_a_link_is_found
+    cineris-sandbox protect::tests::a_cargo_made_as_a_link_is_found
 
 [break] the-extended-attribute-setters-are-allowed
 rule: The sandbox refuses the extended-attribute setters, so a confined command cannot change a file's access-control list outside the write roots.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: libc::SYS_setxattr
 replace: libc::SYS_fsetxattr
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_the_owner_and_extended_attributes_cannot_be_changed
+    cineris-sandbox::it confined::sys_the_owner_and_extended_attributes_cannot_be_changed
 
 [break] the-owner-can-be-changed
 rule: The sandbox refuses the owner-change calls.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: seccomp
 find: libc::SYS_chown
 replace: libc::SYS_fchown
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_the_owner_and_extended_attributes_cannot_be_changed
+    cineris-sandbox::it confined::sys_the_owner_and_extended_attributes_cannot_be_changed
 
 [break] a-swapped-root-is-followed
 rule: The launcher opens each write root with no symbolic link followed, so a root a confined command replaced with a link is refused.
-file: crates/cortex-sandbox/src/confine.rs
+file: crates/cineris-sandbox/src/confine.rs
 in: open_no_symlinks
 find: libc::RESOLVE_NO_SYMLINKS
 replace: 0u64
-packages: cortex-sandbox, cortex-core
+packages: cineris-sandbox, cineris-core
 caught-by:
-    cortex-sandbox::it confined::sys_a_write_root_swapped_for_a_link_refuses_the_next_command
+    cineris-sandbox::it confined::sys_a_write_root_swapped_for_a_link_refuses_the_next_command
 
 [break] a-shell-in-a-write-root-is-used
 rule: A shell whose real path is inside a write root is passed over when the session would confine.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: shell_outside_roots
 find: under_a_write_root(candidate.program(), roots).is_none()
 replace: true
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core assemble::tests::a_shell_inside_a_write_root_is_passed_over
+    cineris-core assemble::tests::a_shell_inside_a_write_root_is_passed_over
 
 [break] a-program-in-a-write-root-is-found
 rule: A program found for the harness is passed over when its real path is inside a write root to avoid.
-file: crates/cortex-base/src/program.rs
+file: crates/cineris-base/src/program.rs
 in: find_outside
 find: !avoid.iter().any(|root| crate::path::location_within(&real, root))
 replace: true
-packages: cortex-base
+packages: cineris-base
 caught-by:
-    cortex-base program::tests::find_outside_passes_over_a_program_inside_a_root
+    cineris-base program::tests::find_outside_passes_over_a_program_inside_a_root
 
 [break] a-change-between-commands-is-not-found
 rule: The look before a command is compared with the look after the last confined command, so a protected path changed in between — by a process left running, or by hand — is found.
-file: crates/cortex-core/src/sandbox.rs
+file: crates/cineris-core/src/sandbox.rs
 in: SessionSandbox::remember_after
 find: Some(after)
 replace: None::<Snapshot>
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core sandbox::tests::a_change_after_an_escaped_command_is_found_on_re_check
+    cineris-core sandbox::tests::a_change_after_an_escaped_command_is_found_on_re_check
 
 [break] an-escape-is-not-warned-about
 rule: A command that outran its kill is said in the result, with where to look for a change that runs later.
-file: crates/cortex-tools/src/shell/mod.rs
+file: crates/cineris-tools/src/shell/mod.rs
 in: write_result
 find: if finished.escaped {
 replace: if false && finished.escaped {
-packages: cortex-tools
+packages: cineris-tools
 caught-by:
-    cortex-tools shell::tests::a_command_that_outran_its_kill_is_said_with_where_to_look
+    cineris-tools shell::tests::a_command_that_outran_its_kill_is_said_with_where_to_look
 
 [break] a-commondir-outside-the-workspace-is-followed
 rule: A commondir that points outside the workspace is recorded as a pointer but not followed, so the look never reads or names a file outside the workspace.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Look::follow_commondir
 find: if !common.starts_with(&self.root) || self.through_a_link(&common) {
 replace: if self.through_a_link(&common) {
-packages: cortex-sandbox
+packages: cineris-sandbox
 caught-by:
-    cortex-sandbox protect::tests::a_commondir_pointing_outside_the_workspace_is_not_followed
+    cineris-sandbox protect::tests::a_commondir_pointing_outside_the_workspace_is_not_followed
 
 [break] a-cargo-link-outside-the-workspace-is-followed
 rule: A .cargo link that leads outside the workspace is recorded as the link but not looked through.
-file: crates/cortex-sandbox/src/protect.rs
+file: crates/cineris-sandbox/src/protect.rs
 in: Look::leads_inside
-find: cortex_base::location_within(&lexically_resolved(&joined), &self.root)
-replace: cortex_base::location_within(&lexically_resolved(&joined), &self.root) || true
-packages: cortex-sandbox
+find: cineris_base::location_within(&lexically_resolved(&joined), &self.root)
+replace: cineris_base::location_within(&lexically_resolved(&joined), &self.root) || true
+packages: cineris-sandbox
 caught-by:
-    cortex-sandbox protect::tests::a_cargo_link_leading_outside_is_not_followed
+    cineris-sandbox protect::tests::a_cargo_link_leading_outside_is_not_followed
 
 [break] an-unconfined-command-keeps-the-baseline
 rule: After a command that left the sandbox, the continuity baseline is dropped, so the next confined command does not report the approved change as one from outside.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
 find: self.sandbox.forget_after();
 replace: let _ = &self.sandbox;
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core::it sandbox::sys_an_unconfined_command_does_not_trip_the_next_command
+    cineris-core::it sandbox::sys_an_unconfined_command_does_not_trip_the_next_command
 
 [break] a-cached-shell-is-not-revalidated
 rule: A shell an earlier session cached inside a write root is not reused by a session that confines to that root.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: cached_shell_is_usable
 find: under_a_write_root(shell.program(), roots).is_none()
 replace: true
-packages: cortex-core
+packages: cineris-core
 caught-by:
-    cortex-core assemble::tests::a_shell_inside_a_write_root_is_passed_over
+    cineris-core assemble::tests::a_shell_inside_a_write_root_is_passed_over
 
 [break] the-kill-sweep-ignores-the-interrupt
 rule: The kill's sweep stops when the turn's interrupt is raised, and reports the tree as escaped.
-file: crates/cortex-sandbox/src/tree/unix.rs
+file: crates/cineris-sandbox/src/tree/unix.rs
 in: kill_session
 find: if cancel.is_cancelled() {
 replace: if false {
-packages: cortex-sandbox
+packages: cineris-sandbox
 caught-by:
-    cortex-sandbox::it tree::sys_a_raised_interrupt_stops_the_kill_sweep
+    cineris-sandbox::it tree::sys_a_raised_interrupt_stops_the_kill_sweep

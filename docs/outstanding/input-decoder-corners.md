@@ -1,6 +1,6 @@
 `sys::unix::wait` and `sys::windows::wait` restart their timeout after an interrupted call, stale wake or key release.
 
-- Area: cortex-term
+- Area: cineris-term
 - Owner: step 32
 
 | Item | Who | When |

@@ -1,19 +1,19 @@
-# Step 27: the RPC server. The rules of `cortex-rpc` and of `cortex serve`,
+# Step 27: the RPC server. The rules of `cineris-rpc` and of `cineris serve`,
 # broken one at a time, with the tests that must fail. Written with the
 # code (docs/steps/27/answered.md).
 
 [break] a-request-before-initialize-is-run
 rule: Nothing but `initialize` is taken before it: any other request is refused `not_initialized`.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: request
 find: if self.dispatcher.is_none() {
 replace: if self.dispatcher.is_none() && method == "initialize" {
 caught-by:
-    cortex-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
+    cineris-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
 
 [break] initialize-is-taken-twice
 rule: A second `initialize` on a connection is refused `already_initialized`.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: request
 find:
             Op::Initialize(_) => self.refused(self.shared.refuse_with(
@@ -25,11 +25,11 @@ find:
 replace:
             Op::Initialize(params) => self.initialize(id, Some(serde_json::to_value(params).unwrap_or_default())).await,
 caught-by:
-    cortex-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
+    cineris-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
 
 [break] a-refused-initialize-leaves-its-client-connected
 rule: A refused `initialize` disconnects the client it made, and the connection may say `initialize` again.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: initialize
 find:
             Err(error) => {
@@ -39,69 +39,69 @@ replace:
                 *lock(&self.shared.client) = Some(client.clone());
                 self.dispatcher = Some(Dispatcher::start(Arc::new(|_| Box::pin(async { Err(Box::new(ErrorData::new(ErrorKind::Usage, "x", "x"))) })), Arc::new(|_, _| {})));
 caught-by:
-    cortex-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
+    cineris-rpc::it wire::nothing_is_taken_before_initialize_and_initialize_is_taken_once
 
 [break] an-answer-to-a-request-is-not-recorded
 rule: A request put to the client is remembered with its method, so the client's answer is read against it and reaches the core.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: write
 find: lock(&shared.asked).insert(id.clone(), request.method());
 replace: let _ = request.method();
 caught-by:
-    cortex-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
+    cineris-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
 
 [break] an-event-is-written-as-another-method
 rule: An event is a `session/event` notification.
-file: crates/cortex-rpc/src/wire.rs
+file: crates/cineris-rpc/src/wire.rs
 in: event
 find: method: SESSION_EVENT
 replace: method: "session/events"
 caught-by:
-    cortex-rpc wire::tests::an_event_is_one_line_that_reads_back_as_the_same_notification
-    cortex-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
+    cineris-rpc wire::tests::an_event_is_one_line_that_reads_back_as_the_same_notification
+    cineris-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
 
 [break] a-bad-line-is-answered-with-no-id
 rule: JSON that is not a message is answered under its own id when it has one.
-file: crates/cortex-rpc/src/wire.rs
+file: crates/cineris-rpc/src/wire.rs
 in: read
 find: .and_then(|id| serde_json::from_value::<RequestId>(id).ok());
 replace: .and_then(|_| None::<RequestId>);
 caught-by:
-    cortex-rpc wire::tests::json_that_is_not_a_message_is_answered_under_its_id
-    cortex-rpc::it wire::each_bad_line_is_answered_and_reading_goes_on
+    cineris-rpc wire::tests::json_that_is_not_a_message_is_answered_under_its_id
+    cineris-rpc::it wire::each_bad_line_is_answered_and_reading_goes_on
 
 [break] a-request-past-the-budget-is-run
 rule: A request past the connection's budget is refused `overloaded` and not run, so what a client may hold is bounded.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Budget::take_request
 find: let fits = self.requests < most && self.bytes.saturating_add(bytes) <= most_bytes;
 replace: let fits = self.bytes.saturating_add(bytes) <= most_bytes;
 caught-by:
-    cortex-rpc connection::tests::the_budget_counts_requests_and_their_results_by_size
-    cortex-rpc::it wire::a_client_that_floods_and_reads_nothing_is_closed
+    cineris-rpc connection::tests::the_budget_counts_requests_and_their_results_by_size
+    cineris-rpc::it wire::a_client_that_floods_and_reads_nothing_is_closed
 
 [break] refusals-are-held-without-end
 rule: A client with more refusals unread than requests may run is closed: it sends and does not read.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Budget::take_refusal
 find: if self.refusals >= most.max(1) {
 replace: if self.refusals >= usize::MAX {
 caught-by:
-    cortex-rpc connection::tests::refusals_are_counted_up_to_their_bound
-    cortex-rpc::it wire::a_client_that_floods_and_reads_nothing_is_closed
+    cineris-rpc connection::tests::refusals_are_counted_up_to_their_bound
+    cineris-rpc::it wire::a_client_that_floods_and_reads_nothing_is_closed
 
 [break] a-client-that-takes-nothing-is-never-closed
 rule: A client that takes no line while whole events wait past its queue's capacity is closed after `stalled_client`.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: send
 find: || (past && waited >= options.stalled_client)
 replace: || (past && waited >= Duration::MAX)
 caught-by:
-    cortex-rpc::it wire::a_client_that_takes_nothing_is_closed_and_the_session_goes_on
+    cineris-rpc::it wire::a_client_that_takes_nothing_is_closed_and_the_session_goes_on
 
 [break] the-lane-is-waited-for-before-the-client-is-disconnected
 rule: A connection's end disconnects its client first, which withdraws what it was asked, and only then waits for the lane: an open waiting on a question it never answered does not hold the end.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: run
 find:
         if let Some(client) = self.client() {
@@ -126,11 +126,11 @@ replace:
             self.shared.core.disconnect(client.id).await;
         }
 caught-by:
-    cortex-rpc::it wire::a_client_that_leaves_while_its_open_waits_on_a_question_ends_at_once
+    cineris-rpc::it wire::a_client_that_leaves_while_its_open_waits_on_a_question_ends_at_once
 
 [break] shutdown-answers-before-the-requests-under-way
 rule: `shutdown` is answered once the requests under way have ended, so an open being put together ends itself before the server does.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: finish
 find:
         if within(&shared.options.timer, shared.options.requests_end, running)
@@ -155,38 +155,38 @@ replace:
             tracing::warn!("requests were still running at the server's end");
         }
 caught-by:
-    cortex-rpc::it wire::a_shutdown_waits_for_an_operation_still_running_past_the_lanes_bound
+    cineris-rpc::it wire::a_shutdown_waits_for_an_operation_still_running_past_the_lanes_bound
 
 [break] the-end-of-input-leaves-the-core-running
 rule: `serve --stdio` shuts the core down when its one client's input ends: its sessions end.
-file: crates/cortex-rpc/src/server.rs
+file: crates/cineris-rpc/src/server.rs
 in: serve_one
 find: if ended != Ended::Shutdown {
 replace: if ended == Ended::Stopped {
 caught-by:
-    cortex-rpc::it wire::the_end_of_the_input_ends_the_clients_sessions_and_the_server
+    cineris-rpc::it wire::the_end_of_the_input_ends_the_clients_sessions_and_the_server
 
 [break] serve-takes-a-runs-own-flags
 rule: `serve` refuses a run's own flags by name: a server has no prompt, no one session and no one turn.
-file: crates/cortex-cli/src/args.rs
+file: crates/cineris-cli/src/args.rs
 in: run_only
 find: } else if run.fail_on_denial {
 replace: } else if run.fail_on_denial && false {
 caught-by:
-    cortex-cli::bin/cortex args::tests::serve_takes_the_cores_flags_and_refuses_a_runs_own
+    cineris-cli::bin/cineris args::tests::serve_takes_the_cores_flags_and_refuses_a_runs_own
 
 [break] a-signal-does-not-stop-the-server
 rule: The first signal stops the server, which ends as that signal.
-file: crates/cortex-cli/src/serve.rs
+file: crates/cineris-cli/src/serve.rs
 in: watch
 find: stop.cancel();
 replace: let _ = stop;
 caught-by:
-    cortex-cli::system serve::sys_a_signal_ends_the_server_with_its_code
+    cineris-cli::system serve::sys_a_signal_ends_the_server_with_its_code
 
 [break] the-ends-bound-begins-after-the-lane
 rule: The end's bound begins when serving stops, before the client's disconnect and the wait for its lane, which nothing else bounds.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Connection::run
 find:
         let ended = self.serve(stop, ending).await;
@@ -194,29 +194,29 @@ find:
 replace:
         let ended = self.serve(stop, ending).await;
 caught-by:
-    cortex-rpc::it wire::the_ends_bound_begins_before_the_lane_is_waited_for
+    cineris-rpc::it wire::the_ends_bound_begins_before_the_lane_is_waited_for
 
 [break] the-ends-bound-begins-after-the-cores-end
 rule: A `shutdown` begins the end's bound before it ends the core, which waits for each session's close.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Connection::shutdown
 find: self.server_ending.as_ref().unwrap_or(ending).cancel();
 replace: let _ = (&self.server_ending, ending);
 caught-by:
-    cortex-rpc::it wire::the_ends_bound_begins_before_a_shutdown_ends_the_core
+    cineris-rpc::it wire::the_ends_bound_begins_before_a_shutdown_ends_the_core
 
 [break] a-refused-shutdown-begins-the-end
 rule: Only a `shutdown` the core takes begins the end: a refused one leaves the server serving, with no bound running on it.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Connection::shutdown
 find: if matches!(self.role, Some(ClientRole::User | ClientRole::Supervisor)) {
 replace: if true {
 caught-by:
-    cortex-rpc::it wire::a_refused_shutdown_does_not_begin_the_end
+    cineris-rpc::it wire::a_refused_shutdown_does_not_begin_the_end
 
 [break] a-refused-initialize-is-not-counted
 rule: An answer to `initialize` counts until it is written, so a client that repeats it and reads nothing is closed.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Connection::initialize
 find:
         if !self.shared.take_refusal() {
@@ -226,95 +226,95 @@ find:
 replace:
         let core = self.shared.core.clone();
 caught-by:
-    cortex-rpc::it wire::a_client_that_repeats_a_refused_initialize_and_reads_nothing_is_closed
+    cineris-rpc::it wire::a_client_that_repeats_a_refused_initialize_and_reads_nothing_is_closed
 
 [break] the-writer-gives-results-first
 rule: Over the wire, a result is written after the events queued when it was ready, so a read's result comes after every event at or below its `seq`.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: next_to_write
 find: Some(queue) => order.next(queue, results),
 replace: Some(queue) => lock(results).pop_front().map(Next::Result).or_else(|| queue.try_next().map(Next::Core)),
 caught-by:
-    cortex-rpc connection::tests::the_writer_sends_a_result_after_the_events_queued_before_it
+    cineris-rpc connection::tests::the_writer_sends_a_result_after_the_events_queued_before_it
 
 [break] a-result-counts-only-its-request
 rule: A result counts against the budget by its own size once it is larger than its request's line.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Budget::result
 find: let more = length.saturating_sub(bytes);
 replace: let more = 0;
 caught-by:
-    cortex-rpc connection::tests::the_budget_counts_requests_and_their_results_by_size
+    cineris-rpc connection::tests::the_budget_counts_requests_and_their_results_by_size
 
 [break] the-requests-after-a-shutdown-go-unanswered
 rule: The requests read with a `shutdown`, after it, are answered `shutting_down`.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Connection::lines
 find: self.after_shutdown();
 replace: let _ = 0;
 caught-by:
-    cortex-rpc::it wire::the_requests_after_a_shutdown_are_answered
+    cineris-rpc::it wire::the_requests_after_a_shutdown_are_answered
 
 [break] no-approval-time-limit-is-a-limit-of-nothing
 rule: `rpc.approval_timeout = "0s"` is no limit, never a limit of nothing that denies every approval at once.
-file: crates/cortex-cli/src/serve.rs
+file: crates/cineris-cli/src/serve.rs
 in: approval_timeout
 find: (!rpc.approval_timeout.is_zero()).then_some(rpc.approval_timeout)
 replace: Some(rpc.approval_timeout)
 caught-by:
-    cortex-cli::bin/cortex serve::tests::the_approval_time_limit_is_the_settings_and_nothing_is_none
+    cineris-cli::bin/cineris serve::tests::the_approval_time_limit_is_the_settings_and_nothing_is_none
 
 [break] unrestricted-reaches-the-core-from-any-client
 rule: A client may have a session at `unrestricted` only when the server's own command line or configuration allows it: the core refuses one that would start there.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: Inner::may_hold
 find: if *level == Level::Unrestricted && !self.options.allow_unrestricted {
 replace: if *level == Level::Unrestricted && self.options.allow_unrestricted {
-packages: cortex-core, cortex-rpc
+packages: cineris-core, cineris-rpc
 caught-by:
-    cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
+    cineris-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
 
 [break] an-override-of-the-mode-passes-the-gate
 rule: A configuration override of `permissions.mode` to `unrestricted`, however it is spelled, is refused as the level is: the core judges what the configuration comes to.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: inner.may_hold(&loaded.settings.permissions.mode)?;
-replace: inner.may_hold(wanted.settings.level.as_ref().unwrap_or(&cortex_protocol::lease::Level::Supervised))?;
-packages: cortex-core, cortex-rpc
+replace: inner.may_hold(wanted.settings.level.as_ref().unwrap_or(&cineris_protocol::lease::Level::Supervised))?;
+packages: cineris-core, cineris-rpc
 caught-by:
-    cortex-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
+    cineris-rpc::it wire::unrestricted_is_the_servers_command_lines_to_allow
 
 [break] the-servers-own-command-is-served
 rule: A peer whose line of parents reaches the server's process is one of its own commands, and is closed unanswered.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: line_of
 find: Parent::Of(parent) if parent == server => return Line::Server,
 replace: Parent::Of(parent) if parent == server => return Line::Elsewhere,
 caught-by:
-    cortex-rpc::it socket::sys_one_of_the_servers_own_commands_is_refused
+    cineris-rpc::it socket::sys_one_of_the_servers_own_commands_is_refused
 
 [break] another-users-peer-is-served
 rule: Every peer's credentials must name the server's own effective uid.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: Listener::accept
 find: if peer.uid() != self.uid {
 replace: if peer.uid() == u32::MAX {
-packages: cortex-cli
+packages: cineris-cli
 caught-by:
-    cortex-cli::system serve::sys_another_user_is_refused_at_the_socket
+    cineris-cli::system serve::sys_another_user_is_refused_at_the_socket
 
 [break] the-socket-keeps-the-umasks-mode
 rule: The socket is made 0600 right after it is bound.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: Listener::bind
 find: std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
 replace: let _ = 0;
 caught-by:
-    cortex-rpc::it socket::the_socket_is_the_users_alone_and_is_removed_at_the_end
+    cineris-rpc::it socket::the_socket_is_the_users_alone_and_is_removed_at_the_end
 
 [break] a-live-socket-is-removed
 rule: A socket at the path is removed only when a connect to it is refused: a live server's is kept.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: clear
 find:
         Ok(_) => Err(io::Error::new(
@@ -324,29 +324,29 @@ find:
 replace:
         Ok(_) => std::fs::remove_file(socket),
 caught-by:
-    cortex-rpc::it socket::a_place_in_use_is_refused_and_a_stale_socket_cleared
+    cineris-rpc::it socket::a_place_in_use_is_refused_and_a_stale_socket_cleared
 
 [break] a-folder-others-write-in-is-taken
 rule: A folder the user names must be theirs with no write for group or others, or root's with the sticky bit.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: check_named_folder
 find: let theirs = found.uid() == uid && mode & 0o022 == 0;
 replace: let theirs = found.uid() == uid;
 caught-by:
-    cortex-rpc::it socket::the_folder_is_secured_before_the_socket_exists
+    cineris-rpc::it socket::the_folder_is_secured_before_the_socket_exists
 
 [break] the-own-folder-is-not-checked
 rule: The server's own folder must be its user's alone: an existing one open to others refuses the start.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: check_own_folder
 find: if found.mode() & 0o077 != 0 {
 replace: if found.mode() & 0o077 == 0o077 {
 caught-by:
-    cortex-rpc::it socket::the_folder_is_secured_before_the_socket_exists
+    cineris-rpc::it socket::the_folder_is_secured_before_the_socket_exists
 
 [break] a-silent-connection-is-kept
 rule: A socket's connection that does not say `initialize` within its bound is closed.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Connection::serve
 find:
             let Some(step) = step else {
@@ -357,11 +357,11 @@ replace:
                 continue;
             };
 caught-by:
-    cortex-rpc::it socket::silent_connections_and_too_many_are_closed
+    cineris-rpc::it socket::silent_connections_and_too_many_are_closed
 
 [break] one-clients-shutdown-ends-only-its-own
 rule: A client's `shutdown` ends the server: every other connection with it.
-file: crates/cortex-rpc/src/server.rs
+file: crates/cineris-rpc/src/server.rs
 in: serve_socket
 find:
                         shut.store(true, Ordering::SeqCst);
@@ -370,186 +370,186 @@ find:
 replace:
                         shut.store(true, Ordering::SeqCst);
 caught-by:
-    cortex-rpc::it socket::a_clients_shutdown_ends_the_server
+    cineris-rpc::it socket::a_clients_shutdown_ends_the_server
 
 
 [break] the-clients-queue-is-unbounded
 rule: A client's events wait in the core's queue at the server's bound, where its deltas merge and give way to an `item.resync`, so what a slow client holds stays bounded.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Connection::initialize
 find: queue: self.shared.options.queue
 replace: queue: usize::MAX
 caught-by:
-    cortex-rpc::it wire::a_slow_client_is_sent_merged_deltas_and_a_resync
+    cineris-rpc::it wire::a_slow_client_is_sent_merged_deltas_and_a_resync
 
 [break] a-supervisor-is-given-no-grant
 rule: Every supervisor connection is given the server's grant, so that it is put the approvals of the sessions it opens.
-file: crates/cortex-rpc/src/connection.rs
+file: crates/cineris-rpc/src/connection.rs
 in: Connection::initialize
 find: core.connect_with_grant(info, self.shared.options.supervisor_grant.clone())
 replace: core.connect_with_grant(info, None)
 caught-by:
-    cortex-rpc::it wire::a_supervisor_cannot_answer_beyond_the_servers_grant_and_the_user_does
+    cineris-rpc::it wire::a_supervisor_cannot_answer_beyond_the_servers_grant_and_the_user_does
 
 [break] a-socket-ends-its-clients-sessions
 rule: A socket's sessions outlive their clients, for another to open.
-file: crates/cortex-cli/src/serve.rs
+file: crates/cineris-cli/src/serve.rs
 in: run
 find: options.keep_sessions = serve.socket.is_some();
 replace: options.keep_sessions = false;
 caught-by:
-    cortex-cli::system serve::sys_serve_socket_serves_at_the_default_place_and_removes_it
+    cineris-cli::system serve::sys_serve_socket_serves_at_the_default_place_and_removes_it
 
 [break] a-connection-keeps-its-place-for-good
 rule: A socket's connection gives its place back when it stops serving, so that a client that has gone is not counted against the next.
-file: crates/cortex-rpc/src/server.rs
+file: crates/cineris-rpc/src/server.rs
 in: serve_socket
 find: drop(place);
 replace: std::mem::forget(place);
 caught-by:
-    cortex-rpc::it socket::the_place_of_a_client_that_went_is_the_next_ones
+    cineris-rpc::it socket::the_place_of_a_client_that_went_is_the_next_ones
 
 [break] an-accept-that-fails-for-a-moment-ends-the-server
 rule: An accept that fails for want of a resource is tried again after a wait; only another failure ends the server.
-file: crates/cortex-rpc/src/server.rs
+file: crates/cineris-rpc/src/server.rs
 in: serve_socket
 find: Err(error) if passes(&error) =>
 replace: Err(error) if false && passes(&error) =>
 caught-by:
-    cortex-rpc::it socket::an_accept_that_fails_for_want_of_a_resource_is_tried_again
+    cineris-rpc::it socket::an_accept_that_fails_for_want_of_a_resource_is_tried_again
 
 [break] out-of-descriptors-is-the-listeners-end
 rule: Out of descriptors, memory or buffers, by the system's own code, is a failure that passes.
-file: crates/cortex-rpc/src/server.rs
+file: crates/cineris-rpc/src/server.rs
 in: passes
 find: || error.raw_os_error().is_some_and(|code| OUT_OF.contains(&code))
 replace: || false
 caught-by:
-    cortex-rpc server::tests::an_accept_out_of_a_resource_passes_and_any_other_failure_ends_the_listener
-    cortex-rpc::it socket::an_accept_that_fails_for_want_of_a_resource_is_tried_again
+    cineris-rpc server::tests::an_accept_out_of_a_resource_passes_and_any_other_failure_ends_the_listener
+    cineris-rpc::it socket::an_accept_that_fails_for_want_of_a_resource_is_tried_again
 
 [break] a-peer-whose-parents-cannot-be-read-is-served
 rule: A peer whose own process cannot be read (it is gone) is refused.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: line_of
 find: Parent::Unseen if at == pid => return Line::Unknown
 replace: Parent::Unseen if at == pid => return Line::Elsewhere
 caught-by:
-    cortex-rpc::it socket::sys_a_peer_whose_process_is_gone_is_refused
+    cineris-rpc::it socket::sys_a_peer_whose_process_is_gone_is_refused
 
 [break] a-hidden-parent-refuses-the-peer
 rule: Only the peer's own process must be readable: a parent that cannot be read (another user's, hidden by `/proc`) ends the line elsewhere, and the peer is served.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: line_of
 find: Parent::Unseen => return Line::Elsewhere
 replace: Parent::Unseen => return Line::Unknown
 caught-by:
-    cortex-rpc socket::sys::tests::a_line_of_parents_is_the_servers_elsewhere_or_unknown
+    cineris-rpc socket::sys::tests::a_line_of_parents_is_the_servers_elsewhere_or_unknown
 
 [break] a-failed-read-of-a-parent-serves-the-peer
 rule: A read of a peer's line of parents that fails for any reason but the process not being shown refuses the peer.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: line_of
 find: Parent::Failed => return Line::Unknown
 replace: Parent::Failed => return Line::Elsewhere
 caught-by:
-    cortex-rpc socket::sys::tests::a_line_of_parents_is_the_servers_elsewhere_or_unknown
+    cineris-rpc socket::sys::tests::a_line_of_parents_is_the_servers_elsewhere_or_unknown
 
 [break] a-client-reaches-a-socket-others-write-to
 rule: A client reaches only a socket that is the user's, with no write for group or others.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: connect
 find: if found.uid() != uid || found.mode() & 0o022 != 0 {
 replace: if found.uid() != uid {
 caught-by:
-    cortex-rpc::it socket::a_client_reaches_only_a_server_of_the_users_own
+    cineris-rpc::it socket::a_client_reaches_only_a_server_of_the_users_own
 
 [break] a-client-reaches-a-socket-where-others-write
 rule: A client reaches only a socket in a folder that is the user's with no write for others, or root's with the sticky bit.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: connect
 find: check_named_folder(folder, uid).map_err
 replace: Ok::<(), io::Error>(()).map_err
 caught-by:
-    cortex-rpc::it socket::a_client_reaches_only_a_server_of_the_users_own
+    cineris-rpc::it socket::a_client_reaches_only_a_server_of_the_users_own
 
 
 
 [break] attach-merges-a-delta-across-a-read
 rule: A history read's result fences attach's queue at its seq, so no delta after the read is merged into one before it.
-file: crates/cortex-cli/src/attach.rs
+file: crates/cineris-cli/src/attach.rs
 in: take_in
 find: shared.queue.fence(session, read.seq);
 replace: let _ = (session, read.seq);
 caught-by:
-    cortex-cli::bin/cortex attach::tests::a_reads_result_fences_the_queue_at_its_seq
+    cineris-cli::bin/cineris attach::tests::a_reads_result_fences_the_queue_at_its_seq
 
 [break] attach-leaves-what-was-asked-unanswered
 rule: At the connection's end every operation attach still asked is answered, so the application never waits on one.
-file: crates/cortex-cli/src/attach.rs
+file: crates/cineris-cli/src/attach.rs
 in: ended
 find: interactive::push(&shared.done, Inbound::Done(ticket, Err(gone())));
 replace: let _ = ticket;
 caught-by:
-    cortex-cli::bin/cortex attach::tests::the_end_answers_what_was_asked_and_tells_the_interface_once
+    cineris-cli::bin/cineris attach::tests::the_end_answers_what_was_asked_and_tells_the_interface_once
 
 [break] attach-leaves-an-unreadable-request-unanswered
 rule: A request attach cannot read is declined, so it stays open for the server's other clients rather than waiting on this one.
-file: crates/cortex-cli/src/attach.rs
+file: crates/cineris-cli/src/attach.rs
 in: take_in
 find: let _ = write(output, &declined).await;
 replace: let _ = declined;
 caught-by:
-    cortex-cli::bin/cortex attach::tests::a_request_that_cannot_be_read_is_declined
+    cineris-cli::bin/cineris attach::tests::a_request_that_cannot_be_read_is_declined
 
 [break] a-batch-is-served-as-a-message
 rule: A line holds one JSON object: an array is refused as a request that cannot be read, never served as the message serde reads out of it.
-file: crates/cortex-rpc/src/wire.rs
+file: crates/cineris-rpc/src/wire.rs
 in: read
 find: == Some(&b'[')
 replace: == Some(&b'!')
 caught-by:
-    cortex-rpc wire::tests::an_array_is_not_served_as_a_message
+    cineris-rpc wire::tests::an_array_is_not_served_as_a_message
 
 [break] not-json-is-told-by-serdes-first-error
 rule: A line that fails is JSON of the wrong shape only when it reads as JSON at all; anything else is not JSON (-32700).
-file: crates/cortex-base/src/framing.rs
+file: crates/cineris-base/src/framing.rs
 in: decode
 find: && serde_json::from_slice::<serde::de::IgnoredAny>(line).is_ok()
 replace: && error.classify() == serde_json::error::Category::Data
 caught-by:
-    cortex-base framing::tests::a_line_is_told_apart_as_not_json_or_not_a_message
+    cineris-base framing::tests::a_line_is_told_apart_as_not_json_or_not_a_message
 
 [break] a-line-that-is-not-text-reads-as-json
 rule: A line that is not UTF-8 is not JSON, though serde's reading that skips values passes over a string's bytes unchecked.
-file: crates/cortex-base/src/framing.rs
+file: crates/cineris-base/src/framing.rs
 in: decode
 find: if std::str::from_utf8(line).is_ok()
 replace: if true
 caught-by:
-    cortex-base framing::tests::a_line_is_told_apart_as_not_json_or_not_a_message
+    cineris-base framing::tests::a_line_is_told_apart_as_not_json_or_not_a_message
 
 [break] attach-merges-before-a-reads-answer
 rule: From a history read's asking to its answer attach merges no delta of the session, since the server may send a delta after the read's seq before the answer.
-file: crates/cortex-cli/src/attach.rs
+file: crates/cineris-cli/src/attach.rs
 in: writes
 find: hold_merging(&shared.queue, session);
 replace: let _ = session;
 caught-by:
-    cortex-cli::bin/cortex attach::tests::a_delta_after_a_read_is_never_merged_into_one_it_drew
+    cineris-cli::bin/cineris attach::tests::a_delta_after_a_read_is_never_merged_into_one_it_drew
 
 [break] attach-is-not-told-the-server-went
 rule: When the server's connection ends, however attach's reader stops, every operation asked is answered and the application is told, so that attach ends.
-file: crates/cortex-cli/src/attach.rs
+file: crates/cineris-cli/src/attach.rs
 in: Ending::drop
 find: ended(&self.asked, &self.shared);
 replace: let _ = (&self.asked, &self.shared);
 caught-by:
-    cortex-cli::system tui::sys_attach_ends_when_the_server_goes
+    cineris-cli::system tui::sys_attach_ends_when_the_server_goes
 
 [break] attach-reaches-a-server-of-another-user
 rule: attach reaches a socket's server only when the process at the other end is the user's (SO_PEERCRED). No test sees this break alone: the socket must be the user's, in a folder of the user's or a sticky one, which only a process of the user's can bind, so another user's server there needs root to set up.
-file: crates/cortex-rpc/src/socket/unix.rs
+file: crates/cineris-rpc/src/socket/unix.rs
 in: connect
 find: if server.uid() != uid {
 replace: if server.uid() == u32::MAX {

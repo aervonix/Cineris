@@ -137,7 +137,7 @@ jobs:
           # Temporary files too. Tests that need a directory with no
           # repository above it make it in the system's temporary
           # directory, which is on the system disk by default: with it on
-          # the workspace's disk the tests of `cortex-core` took half the
+          # the workspace's disk the tests of `cineris-core` took half the
           # time (docs/steps/11/ci.md, "Windows CI health").
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\tmp" | Out-Null
           "TEMP=$env:RUNNER_TEMP\tmp" >> $env:GITHUB_ENV
@@ -239,10 +239,10 @@ jobs:
 
   # Not a required check, and not one of the blocking jobs: a client written
   # in TypeScript, which knows the protocol only from the generated
-  # declarations, runs a turn against `cortex serve --stdio`
+  # declarations, runs a turn against `cineris serve --stdio`
   # (docs/testing-and-ci.md, "The TypeScript client"). It needs Node, which
   # the blocking jobs do not have to have: there the test says it was not
-  # run, and here `CORTEX_TS_CLIENT` makes it run or fail.
+  # run, and here `CINERIS_TS_CLIENT` makes it run or fail.
   #
   # On a pull request that changes the protocol, the server, the client or
   # this workflow, and when the workflow is started by hand. Like `pr-size`,
@@ -272,8 +272,8 @@ jobs:
             reaches=false
             while IFS= read -r file; do
               case "$file" in
-                crates/cortex-protocol/* | crates/cortex-rpc/* | docs/protocol/* | \
-                crates/cortex-cli/tests/system/ts_client* | .github/workflows/ci.yml) reaches=true ;;
+                crates/cineris-protocol/* | crates/cineris-rpc/* | docs/protocol/* | \
+                crates/cineris-cli/tests/system/ts_client* | .github/workflows/ci.yml) reaches=true ;;
               esac
             done <<< "$files"
           fi
@@ -311,9 +311,9 @@ jobs:
         if: steps.reaches.outputs.reaches == 'true'
         run: |
           npm install --prefix "$RUNNER_TEMP/tsc" --no-save --no-package-lock --ignore-scripts --no-audit --no-fund typescript@6.0.3 @types/node@22.18.13
-          "$RUNNER_TEMP/tsc/node_modules/.bin/tsc" -p crates/cortex-cli/tests/system/ts_client --typeRoots "$RUNNER_TEMP/tsc/node_modules/@types"
+          "$RUNNER_TEMP/tsc/node_modules/.bin/tsc" -p crates/cineris-cli/tests/system/ts_client --typeRoots "$RUNNER_TEMP/tsc/node_modules/@types"
       - name: Run a turn with the client
         if: ${{ !cancelled() && steps.reaches.outputs.reaches == 'true' }}
         env:
-          CORTEX_TS_CLIENT: "1"
-        run: cargo run --locked --quiet --package xtask -- test --locked -p cortex-cli --cargo-profile ci --test system -E 'test(=ts_client::sys_a_typescript_client_runs_a_turn)'
+          CINERIS_TS_CLIENT: "1"
+        run: cargo run --locked --quiet --package xtask -- test --locked -p cineris-cli --cargo-profile ci --test system -E 'test(=ts_client::sys_a_typescript_client_runs_a_turn)'

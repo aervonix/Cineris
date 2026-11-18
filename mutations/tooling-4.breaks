@@ -83,39 +83,39 @@ caught-by:
 
 [break] two-different-paths-are-one-place
 rule: Two Windows paths whose names differ are two places.
-file: crates/cortex-base/src/path/location.rs
+file: crates/cineris-base/src/path/location.rs
 in: PathStyle::same_location
 find: .all(|(one, other)| self.same_name(one, other))
 replace: .all(|_| true)
 caught-by:
-    cortex-base path::location::tests::a_path_that_differs_by_one_character_is_another_place
+    cineris-base path::location::tests::a_path_that_differs_by_one_character_is_another_place
 
 [break] the-unc-form-is-not-read
 rule: The extended-length form of a share, \\?\UNC\server\share, is read as \\server\share.
-file: crates/cortex-base/src/path/location.rs
+file: crates/cineris-base/src/path/location.rs
 in: Place::read
 find: let (root, rest) = if let Some(rest) = strip_verbatim(text, "UNC\\") {
 replace: let (root, rest) = if let Some(rest) = strip_verbatim(text, "UNC\\").filter(|_| false) {
 caught-by:
-    cortex-base path::location::tests::windows_reads_the_extended_length_forms_as_the_plain_ones
+    cineris-base path::location::tests::windows_reads_the_extended_length_forms_as_the_plain_ones
 
 [break] case-is-not-folded
 rule: On Windows names are compared with case folded.
-file: crates/cortex-base/src/path/location.rs
+file: crates/cineris-base/src/path/location.rs
 in: PathStyle::location_within
 find: .all(|(one, other)| self.same_name(one, other))
 replace: .all(|(one, other)| one == other)
 caught-by:
-    cortex-base path::location::tests::within_is_by_whole_names_and_by_place
+    cineris-base path::location::tests::within_is_by_whole_names_and_by_place
 
 [break] the-home-folder-is-stripped-by-text
 rule: A resolved path under the home folder is shown with ~ on Windows, whatever its form and case.
-file: crates/cortex-config/src/env.rs
+file: crates/cineris-config/src/env.rs
 in: Env::display_path
 find: && let Some(inside) = style.strip_location_prefix(path, &home)
 replace: && let Some(inside) = path.strip_prefix(&home).ok().map(Path::to_path_buf).filter(|_| style == style)
 caught-by:
-    cortex-config env::tests::a_path_under_the_home_directory_is_shown_with_a_tilde
+    cineris-config env::tests::a_path_under_the_home_directory_is_shown_with_a_tilde
 
 # ------------------------------------------------------------------ try
 
@@ -131,50 +131,50 @@ caught-by:
 # --------------------------------------------------------- the profile
 
 [break] the-profile-reads-the-clock-when-off
-rule: With CORTEX_TESTKIT_PROFILE unset, a mark describes nothing and reads no clock.
-file: crates/cortex-testkit/src/profile.rs
+rule: With CINERIS_TESTKIT_PROFILE unset, a mark describes nothing and reads no clock.
+file: crates/cineris-testkit/src/profile.rs
 in: Mark::start
 find: open: recorder().map(|_| (kind, what(), Instant::now()))
 replace: open: Some((kind, what(), Instant::now()))
 caught-by:
-    cortex-testkit profile::tests::off_it_reads_no_clock_and_keeps_nothing
+    cineris-testkit profile::tests::off_it_reads_no_clock_and_keeps_nothing
 
 [break] a-phase-is-counted-twice
 rule: The time in phases counts each stretch once, however phases nest.
-file: crates/cortex-testkit/src/profile.rs
+file: crates/cineris-testkit/src/profile.rs
 in: union
 find: let (start, end) = (start.max(reached), end.min(to));
 replace: let (start, end) = (start, end.min(to));
 caught-by:
-    cortex-testkit profile::tests::a_report_lists_the_phases_and_waits_in_order_with_the_start
+    cineris-testkit profile::tests::a_report_lists_the_phases_and_waits_in_order_with_the_start
 
 # ------------------------------------------------------ the pressure helper
 
 [break] preparing-is-sized-past-the-trigger
 rule: Fill::Preparing puts the estimate between the background threshold and the trigger.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::size
 find: Fill::Preparing => (prepare, compact),
 replace: Fill::Preparing => (compact, limit as f64),
 caught-by:
-    cortex-agent::it pressure::preparing_starts_a_summary_in_the_background
+    cineris-agent::it pressure::preparing_starts_a_summary_in_the_background
 
 [break] the-twin-ignores-the-instructions
 rule: The twin reads the session's instruction files, so they are counted in the request's size.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::measure
 find: setup.instructions = Arc::clone(&self.twin.instructions);
 replace:
 caught-by:
-    cortex-agent::it pressure::the_twin_counts_the_tools_and_the_instructions
+    cineris-agent::it pressure::the_twin_counts_the_tools_and_the_instructions
 
 # ------------------------------------------------------ a crate alone
 
 [break] the-sandbox-alone-without-its-backends
-rule: A build of cortex-sandbox alone on Linux turns its backends on.
+rule: A build of cineris-sandbox alone on Linux turns its backends on.
 file: xtask/src/workspace.rs
 in: implied_features
-find: if cfg!(target_os = "linux") && packages.iter().any(|package| package == "cortex-sandbox") {
+find: if cfg!(target_os = "linux") && packages.iter().any(|package| package == "cineris-sandbox") {
 replace: if false {
 caught-by:
     checks::tests::the_sandbox_alone_is_built_with_its_backends_on_linux
@@ -270,24 +270,24 @@ caught-by:
 
 [break] a-protocols-refusal-is-served-from-the-script
 rule: A request the protocol cannot build fails, and takes nothing from the script.
-file: crates/cortex-testkit/src/built.rs
+file: crates/cineris-testkit/src/built.rs
 in: Built::stream
 find: Ok(_) => self.inner.stream(request, cancel)
 replace: Ok(_) | Err(_) => self.inner.stream(request, cancel)
 caught-by:
-    cortex-testkit built::tests::a_request_the_protocol_cannot_build_fails_and_takes_nothing_from_the_script
+    cineris-testkit built::tests::a_request_the_protocol_cannot_build_fails_and_takes_nothing_from_the_script
 
 [break] a-verbatim-dot-dot-is-read-as-a-plain-one
 rule: In an extended-length path `.` and `..` are names, as Windows reads them, not steps.
-file: crates/cortex-base/src/path/location.rs
+file: crates/cineris-base/src/path/location.rs
 in: Place::read
 find: "." | ".." if verbatim => return None,
 replace: "." | ".." if verbatim && false => return None,
 caught-by:
-    cortex-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly
+    cineris-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly
 
 [break] a-mistyped-requirement-is-not-required
-rule: A value of cortex.ownerTermsRequired that is not a plain false requires the terms file.
+rule: A value of cineris.ownerTermsRequired that is not a plain false requires the terms file.
 file: xtask/src/owner_guard/local.rs
 in: required
 find: !matches!(value.as_str(), "false" | "no" | "off" | "0")
@@ -297,18 +297,18 @@ caught-by:
 
 [break] a-verbatim-slash-is-read-as-a-separator
 rule: A `/` in an extended-length path is part of a name to Windows, and is compared exactly.
-file: crates/cortex-base/src/path/location.rs
+file: crates/cineris-base/src/path/location.rs
 in: Place::read
 find: if verbatim && text[4..].contains('/') {
 replace: if false {
 caught-by:
-    cortex-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly
+    cineris-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly
 
 [break] a-relative-path-climbs-out-unseen
 rule: A relative path whose `..` climbs above where it starts is compared exactly.
-file: crates/cortex-base/src/path/location.rs
+file: crates/cineris-base/src/path/location.rs
 in: Place::read
 find: if names.pop().is_none() && !rooted {
 replace: if names.pop().is_none() && false {
 caught-by:
-    cortex-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly
+    cineris-base path::location::tests::what_cannot_be_read_as_a_place_is_compared_exactly

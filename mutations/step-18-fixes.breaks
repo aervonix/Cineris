@@ -9,314 +9,314 @@
 
 [break] the-cache-keeps-every-top-level-definition
 rule: The cache keeps a file's first top-level definitions only, the ones the map names, and counts the rest.
-file: crates/cortex-index/src/cache.rs
+file: crates/cineris-index/src/cache.rs
 in: record
 find: if seen_top <= TOP_ENTRIES {
 replace: if true {
 caught-by:
-    cortex-index cache::tests::a_record_keeps_what_the_map_shows_and_counts_the_rest
+    cineris-index cache::tests::a_record_keeps_what_the_map_shows_and_counts_the_rest
 
 [break] a-pass-checks-every-definition-line
 rule: A definition's line is read when its file is shown, not by every pass: a pass reads the stamps.
-file: crates/cortex-index/src/cache.rs
+file: crates/cineris-index/src/cache.rs
 in: CacheFile::parse
 find: let record = open.as_mut()?;
 replace: parse_shown(line.strip_prefix("O\t")?)?; let record = open.as_mut()?;
 caught-by:
-    cortex-index::it index::a_bad_definition_line_leaves_its_file_out_of_the_map
-    cortex-index cache::tests::a_bad_definition_line_is_found_when_its_file_is_shown
+    cineris-index::it index::a_bad_definition_line_leaves_its_file_out_of_the_map
+    cineris-index cache::tests::a_bad_definition_line_is_found_when_its_file_is_shown
 
 [break] a-warm-pass-makes-a-new-cache-when-nothing-changed
 rule: A pass that finds nothing to read and nothing gone makes no new cache and writes none.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::pass_and_keep
 find: if unchanged {
 replace: if false {
 caught-by:
-    cortex-index::it index::a_warm_pass_reads_only_what_changed
+    cineris-index::it index::a_warm_pass_reads_only_what_changed
 
 [break] the-map-after-a-pass-reads-the-cache-again
 rule: The map asked for with a pass is made from the cache that pass kept, without reading it again.
-file: crates/cortex-index/src/lookup.rs
+file: crates/cineris-index/src/lookup.rs
 in: Index::map_from
 find: self.map_of(snapshot.cache.as_ref()?, request)
 replace: { let _ = snapshot; self.map(request) }
 caught-by:
-    cortex-index::it index::the_map_after_a_pass_is_made_from_what_the_pass_kept
+    cineris-index::it index::the_map_after_a_pass_is_made_from_what_the_pass_kept
 
 [break] the-session-reads-the-cache-again-for-its-map
 rule: The session's index makes the maps asked for from the cache its pass kept.
-file: crates/cortex-core/src/repo_map.rs
+file: crates/cineris-core/src/repo_map.rs
 in: Shared::work
 find: self.index.map_from(&snapshot, &request)
 replace: self.index.map(&request)
 caught-by:
-    cortex-core repo_map::tests::a_map_asked_for_with_a_pass_is_made_from_what_the_pass_kept
+    cineris-core repo_map::tests::a_map_asked_for_with_a_pass_is_made_from_what_the_pass_kept
 
 # ---------------------------------------------------------------- finding 5
 
 [break] the-map-shows-lockfiles-and-licences
 rule: A lockfile, a licence, a changelog or a merge's leftover that Markdown or the fallback outlines is never shown.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: noise
 find: lockfile || leftover || named
 replace: false
 caught-by:
-    cortex-index::it map::noise_is_never_shown_and_code_comes_before_documents
+    cineris-index::it map::noise_is_never_shown_and_code_comes_before_documents
 
 [break] a-code-file-named-like-noise-is-left-out
 rule: A file a language's extractor outlines is code, whatever its name.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: noise
 find: if class(record) == 0 {
 replace: if false {
 caught-by:
-    cortex-index::it map::noise_is_never_shown_and_code_comes_before_documents
+    cineris-index::it map::noise_is_never_shown_and_code_comes_before_documents
 
 [break] the-map-ranks-documents-with-code
 rule: In each tier, code comes before Markdown, and Markdown before the fallback's files.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: rank
 find: class(record), changed_rank[at]
 replace: 0, changed_rank[at]
 caught-by:
-    cortex-index::it map::noise_is_never_shown_and_code_comes_before_documents
-    cortex-index::it map::a_small_projects_map
-    cortex-index::it map::a_fresh_clone_has_no_recent_changes_to_rank_by
+    cineris-index::it map::noise_is_never_shown_and_code_comes_before_documents
+    cineris-index::it map::a_small_projects_map
+    cineris-index::it map::a_fresh_clone_has_no_recent_changes_to_rank_by
 
 [break] the-map-goes-deep-before-wide
 rule: The last tier is spread over the tree: each directory's first file before any directory's second.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: rank
 find: round[at] = place;
 replace: round[at] = 0;
 caught-by:
-    cortex-index::it map::the_map_shows_the_trees_breadth_before_one_directorys_depth
+    cineris-index::it map::the_map_shows_the_trees_breadth_before_one_directorys_depth
 
 [break] a-directorys-first-file-is-its-first-by-name
 rule: A directory's first file in the map is the one with the most top-level definitions.
-file: crates/cortex-index/src/map.rs
+file: crates/cineris-index/src/map.rs
 in: rank
 find: .cmp(&cache.records[one].top)
 replace: .cmp(&cache.records[other].top)
 caught-by:
-    cortex-index::it map::the_map_shows_the_trees_breadth_before_one_directorys_depth
+    cineris-index::it map::the_map_shows_the_trees_breadth_before_one_directorys_depth
 
 # --------------------------------------------------------- findings 3 and 4
 
 [break] a-format-character-acts-seen
 rule: Every format character (Unicode's Cf) is written as an escape, the ones that do not render as nothing (U+FFF9, U+0600) too.
-file: crates/cortex-base/src/visible.rs
+file: crates/cineris-base/src/visible.rs
 in: is_format
 find: listed(&FORMAT, u32::from(character))
 replace: false
 caught-by:
-    cortex-base visible::tests::a_character_is_a_format_character_exactly_when_unicode_says
-    cortex-base visible::tests::what_would_act_unseen_is_written_as_an_escape
+    cineris-base visible::tests::a_character_is_a_format_character_exactly_when_unicode_says
+    cineris-base visible::tests::what_would_act_unseen_is_written_as_an_escape
 
 [break] the-tag-block-is-left-out-of-the-table
 rule: The table of format characters is Unicode's, the tag characters included.
-file: crates/cortex-base/src/visible.rs
+file: crates/cineris-base/src/visible.rs
 find: (0xE0020, 0xE007F)
 occurrence: 1
 replace: (0xE0020, 0xE0020)
 caught-by:
-    cortex-base visible::tests::the_table_of_format_characters_is_unicodes_for_its_version
+    cineris-base visible::tests::the_table_of_format_characters_is_unicodes_for_its_version
 
 [break] the-outline-tools-directory-name-is-raw
 rule: The outline tool writes a directory's name as an escape in its headers and its messages.
-file: crates/cortex-tools/src/outline.rs
+file: crates/cineris-tools/src/outline.rs
 in: outline_directory
 find: let shown = call.target.shown();
 replace: let shown = call.target.data();
 caught-by:
-    cortex-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
+    cineris-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
 
 [break] a-plan-summary-names-the-path-raw
 rule: A plan's summary, which an approval prompt and a client show, names its path as an escape.
-file: crates/cortex-tools/src/outline.rs
+file: crates/cineris-tools/src/outline.rs
 in: OutlineTool::plan
 find: let shown = target.shown();
 replace: let shown = target.data();
 caught-by:
-    cortex-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
+    cineris-tools::it outline::a_directory_named_to_start_lines_of_its_own_is_an_escape_in_every_message
 
 [break] an-outliners-lines-are-shown-as-they-are
 rule: The outline tool writes each line an outliner gives as an escape, whatever the outliner did.
-file: crates/cortex-tools/src/outline.rs
+file: crates/cineris-tools/src/outline.rs
 in: outline_directory
 find: let line = format!("  {}", limits.clip(&visible(line)));
 replace: let line = format!("  {}", limits.clip(line));
 caught-by:
-    cortex-tools::it outline::tag_characters_are_escapes_in_names_and_outline_lines
+    cineris-tools::it outline::tag_characters_are_escapes_in_names_and_outline_lines
 
 [break] a-listed-path-is-raw
 rule: list, search and outline show a listed path with every character that would act unseen as an escape.
-file: crates/cortex-tools/src/walk.rs
+file: crates/cineris-tools/src/walk.rs
 in: shown_path
-find: match cortex_base::visible(&joined) {
+find: match cineris_base::visible(&joined) {
 replace: match std::borrow::Cow::<str>::Borrowed(&joined) {
 caught-by:
-    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
-    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
+    cineris-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+    cineris-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
 
 [break] a-link-is-resolved-by-its-shown-name
 rule: list resolves a link by its path as it is, not as it is shown.
-file: crates/cortex-tools/src/list.rs
+file: crates/cineris-tools/src/list.rs
 find: let path = walk::joined_path(data, entry.relative);
 replace: let path = line.clone();
 caught-by:
-    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+    cineris-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
 
 [break] a-matching-line-is-shown-as-it-is
 rule: search shows a matching line with every character that would act unseen as an escape, its tabs kept.
-file: crates/cortex-tools/src/search.rs
+file: crates/cineris-tools/src/search.rs
 in: FileSink::line
 find: let text = String::from_utf8_lossy(bytes); let text = visible_keeping(&text, &['\t']);
 replace: let text = String::from_utf8_lossy(bytes);
 caught-by:
-    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
+    cineris-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
 
 [break] a-matching-lines-tabs-are-escaped
 rule: A matching line's tabs are its indentation, and are kept.
-file: crates/cortex-tools/src/search.rs
+file: crates/cineris-tools/src/search.rs
 in: FileSink::line
 find: let text = String::from_utf8_lossy(bytes); let text = visible_keeping(&text, &['\t']);
 replace: let text = String::from_utf8_lossy(bytes); let text = visible_keeping(&text, &[]);
 caught-by:
-    cortex-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
+    cineris-tools::it search::a_name_and_a_matching_line_that_act_unseen_are_escapes_and_tabs_are_kept
 
 [break] a-payload-path-is-escaped
 rule: A payload's path is data, which programs read back (the files a summary carries): it is as it is.
-file: crates/cortex-tools/src/read.rs
+file: crates/cineris-tools/src/read.rs
 find: "path": data
 occurrence: 3
 replace: "path": shown
 caught-by:
-    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+    cineris-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
 
 [break] read-names-close-matches-raw
 rule: The names read gives as close matches to a missing file are escapes, and are compared with the name asked for in that form.
-file: crates/cortex-tools/src/read.rs
+file: crates/cineris-tools/src/read.rs
 in: close_matches
-find: .map(|name| cortex_base::visible(&name).into_owned())
+find: .map(|name| cineris_base::visible(&name).into_owned())
 replace: .map(|name| name)
 caught-by:
-    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+    cineris-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
 
 [break] a-path-refusal-names-the-path-raw
 rule: A path the resolver refuses is named in its message as an escape.
-file: crates/cortex-base/src/path/mod.rs
+file: crates/cineris-base/src/path/mod.rs
 find: #[error("`{shown_path}` leads out of the directory it is relative to", shown_path = crate::visible(.path))]
 replace: #[error("`{path}` leads out of the directory it is relative to")]
 caught-by:
-    cortex-base::it paths::a_refusal_writes_the_path_it_names_as_an_escape
+    cineris-base::it paths::a_refusal_writes_the_path_it_names_as_an_escape
 
 # ---------------------------------------------------------------- finding 8
 
 [break] the-index-starts-while-the-session-is-assembled
 rule: The index's first pass starts once the session's loop runs, never while the session is put together (the independent review of step 18's break).
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: let main = models.main().clone();
 replace: if let Some(repo) = &repo { repo.warm(); } let main = models.main().clone();
 caught-by:
-    cortex-core::it index::the_index_is_not_touched_until_the_session_is_open
+    cineris-core::it index::the_index_is_not_touched_until_the_session_is_open
 
 # ---------------------------------------------------------------- finding 9
 
 [break] a-project-may-set-the-maps-wait
 rule: The map's wait is the user's alone: a repository's file must not make the sessions in it wait.
-file: crates/cortex-config/src/schema/sections.rs
+file: crates/cineris-config/src/schema/sections.rs
 find: [UserOnly, NextSession, 0s..=1s]
 replace: [Preference, NextSession, 0s..=1s]
 caught-by:
-    cortex-config::it trust::the_documented_classes_hold
-    cortex-config::it trust::every_key_has_a_trust_class
+    cineris-config::it trust::the_documented_classes_hold
+    cineris-config::it trust::every_key_has_a_trust_class
 
 [break] the-maps-wait-has-no-bound
 rule: The map's wait is at most one second.
-file: crates/cortex-config/src/schema/sections.rs
+file: crates/cineris-config/src/schema/sections.rs
 find: [UserOnly, NextSession, 0s..=1s]
 replace: [UserOnly, NextSession]
 caught-by:
-    cortex-config validate::tests::a_length_of_time_out_of_range_is_an_error_in_milliseconds
+    cineris-config validate::tests::a_length_of_time_out_of_range_is_an_error_in_milliseconds
 
 [break] a-length-of-time-is-not-ranged
 rule: A length of time with a range is checked against it, in milliseconds.
-file: crates/cortex-config/src/validate.rs
+file: crates/cineris-config/src/validate.rs
 in: check_leaf
 find: let number = crate::schema::magnitude(value);
 replace: let number = match value { Value::Integer(number) => Some(*number as f64), Value::Float(number) => Some(*number), _ => None };
 caught-by:
-    cortex-config validate::tests::a_length_of_time_out_of_range_is_an_error_in_milliseconds
+    cineris-config validate::tests::a_length_of_time_out_of_range_is_an_error_in_milliseconds
 
 # --------------------------------------------------------------- finding 10
 
 [break] a-change-of-history-keeps-the-maps-state
 rule: A change of history forgets what the loop knew of the map: the epoch's number may come again for another history.
-file: crates/cortex-agent/src/turn.rs
+file: crates/cineris-agent/src/turn.rs
 in: Session::reload
 find: self.forget_map();
 replace:
 caught-by:
-    cortex-agent::it map::a_rewind_past_a_compaction_forgets_what_the_epoch_of_its_number_knew
+    cineris-agent::it map::a_rewind_past_a_compaction_forgets_what_the_epoch_of_its_number_knew
 
 [break] a-dropped-answer-is-taken-for-no-map
 rule: A source that drops its answer (a pass that failed) has not said there is no map, and is asked again.
-file: crates/cortex-agent/src/context/map.rs
+file: crates/cineris-agent/src/context/map.rs
 in: MapPending::try_take
 find: Err(oneshot::error::TryRecvError::Closed) => Some(Answered::Dropped)
 replace: Err(oneshot::error::TryRecvError::Closed) => Some(Answered::NoMap)
 caught-by:
-    cortex-agent::it map::a_dropped_answer_is_asked_again_at_a_later_boundary
+    cineris-agent::it map::a_dropped_answer_is_asked_again_at_a_later_boundary
 
 [break] a-dropped-answer-is-asked-for-ever
 rule: A source that drops every answer is asked a few times in an epoch, not at every boundary.
-file: crates/cortex-agent/src/turn/map.rs
+file: crates/cineris-agent/src/turn/map.rs
 in: Session::give_map
 find: if dropped >= DROPPED {
 replace: if false {
 caught-by:
-    cortex-agent::it map::a_source_that_drops_every_answer_is_asked_a_bounded_number_of_times
+    cineris-agent::it map::a_source_that_drops_every_answer_is_asked_a_bounded_number_of_times
 
 # -------------------------------------------- the twins of findings 3 and 4
 
 [break] a-permission-reason-names-a-path-raw
 rule: A permission reason, which the model reads in a denial or a refusal, names its path as an escape.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: escaped
-find: match cortex_base::visible(&reason) {
+find: match cineris_base::visible(&reason) {
 replace: match std::borrow::Cow::<str>::Borrowed(&reason) {
 caught-by:
-    cortex-policy::it files::a_reason_writes_the_path_it_names_as_an_escape
+    cineris-policy::it files::a_reason_writes_the_path_it_names_as_an_escape
 
 [break] the-protected-path-note-names-a-path-raw
 rule: The note on changed protected paths, which the model reads, names them as escapes.
-file: crates/cortex-core/src/sandbox.rs
+file: crates/cineris-core/src/sandbox.rs
 in: protected_note
-find: cortex_base::visible(&path.to_string_lossy())
+find: cineris_base::visible(&path.to_string_lossy())
 replace: path.to_string_lossy()
 caught-by:
-    cortex-core sandbox::tests::the_note_on_protected_paths_names_them_as_escapes
+    cineris-core sandbox::tests::the_note_on_protected_paths_names_them_as_escapes
 
 [break] an-instruction-files-name-is-raw
 rule: An instruction file's name, in the system prompt, in notices and as the key of what the model was given, is an escape.
-file: crates/cortex-agent/src/context/instructions.rs
+file: crates/cineris-agent/src/context/instructions.rs
 in: shown
-find: cortex_base::visible(&relative(root, path)).into_owned()
+find: cineris_base::visible(&relative(root, path)).into_owned()
 replace: relative(root, path)
 caught-by:
-    cortex-agent context::instructions::tests::a_name_that_acts_unseen_is_shown_as_an_escape
+    cineris-agent context::instructions::tests::a_name_that_acts_unseen_is_shown_as_an_escape
 
 [break] the-clis-escape-passes-format-characters
 rule: The command line writes every character that would act unseen but a line break and a tab as an escape.
-file: crates/cortex-cli/src/main.rs
+file: crates/cineris-cli/src/main.rs
 in: visible
-find: cortex_base::visible_keeping(text, &['\n', '\t'])
-replace: cortex_base::visible_keeping(text, &['\n', '\t', '\u{202E}', '\u{E0041}'])
+find: cineris_base::visible_keeping(text, &['\n', '\t'])
+replace: cineris_base::visible_keeping(text, &['\n', '\t', '\u{202E}', '\u{E0041}'])
 caught-by:
-    cortex-cli::bin/cortex tests::control_characters_are_shown_as_escapes
+    cineris-cli::bin/cineris tests::control_characters_are_shown_as_escapes
 
 # ---------------------------------------------------------------- the notes
 
@@ -331,88 +331,88 @@ caught-by:
 
 [break] the-index-keeps-the-engine-of-the-assembly
 rule: The index asks the permission engine in force, not the one the session was put together with.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::index_gate
 find: now: Box::new(move || policy.upgrade().map(|policy| policy.engine()))
 replace: now: { let engine = self.engine(); Box::new(move || { let _ = &policy; Some(Arc::clone(&engine)) }) }
 caught-by:
-    cortex-core::it index::the_index_follows_the_engine_in_force_after_a_change_of_level
+    cineris-core::it index::the_index_follows_the_engine_in_force_after_a_change_of_level
 
 # --------------------------------------- the early review of the escaping
 
 [break] a-name-shown-escaped-leads-nowhere
 rule: A name the model was shown escaped leads back to its file: the path resolver reads the escapes back when the path as written leads to nothing.
-file: crates/cortex-base/src/path/resolve.rs
+file: crates/cineris-base/src/path/resolve.rs
 in: PathResolver::resolve
 find: && (found.exists() || literal_reach.is_none_or(|literal| reach > literal))
 replace: && false
-packages: cortex-base, cortex-tools
+packages: cineris-base, cineris-tools
 caught-by:
-    cortex-base::it paths::a_name_shown_escaped_resolves_to_its_file
-    cortex-tools::it read::a_file_is_read_by_the_escaped_name_it_is_shown_by
+    cineris-base::it paths::a_name_shown_escaped_resolves_to_its_file
+    cineris-tools::it read::a_file_is_read_by_the_escaped_name_it_is_shown_by
 
 [break] what-renders-as-nothing-is-shown
 rule: A character that renders as nothing (Default_Ignorable_Code_Point), the Hangul fillers and the unassigned tag plane among them, is written as an escape.
-file: crates/cortex-base/src/visible.rs
+file: crates/cineris-base/src/visible.rs
 in: acts_unseen
 find: || (is_ignorable(character) && !is_selector(character))
 replace: || false
 caught-by:
-    cortex-base visible::tests::what_renders_as_nothing_is_written_as_an_escape
+    cineris-base visible::tests::what_renders_as_nothing_is_written_as_an_escape
 
 [break] a-run-of-variation-selectors-is-kept
 rule: A variation selector is kept only right after a character shown as it is; a run of them carries bytes unseen and is an escape.
-file: crates/cortex-base/src/visible.rs
+file: crates/cineris-base/src/visible.rs
 in: visible_keeping_after
 find: let escape = if is_selector(character) { !base } else {
 replace: let escape = if is_selector(character) { false } else {
 caught-by:
-    cortex-base visible::tests::a_variation_selector_is_kept_after_a_character_and_a_run_is_escaped
+    cineris-base visible::tests::a_variation_selector_is_kept_after_a_character_and_a_run_is_escaped
 
 [break] the-sandboxs-line-names-paths-raw
 rule: The sandbox's line after a command's output, which the model reads, writes its paths as escapes.
-file: crates/cortex-sandbox/src/explain.rs
+file: crates/cineris-sandbox/src/explain.rs
 in: explain
-find: line(policy, code, output).map(|line| cortex_base::visible(&line).into_owned())
+find: line(policy, code, output).map(|line| cineris_base::visible(&line).into_owned())
 replace: line(policy, code, output)
 caught-by:
-    cortex-sandbox explain::tests::a_path_the_line_names_is_written_as_an_escape
+    cineris-sandbox explain::tests::a_path_the_line_names_is_written_as_an_escape
 
 [break] an-instruction-files-key-is-joined-as-shown
 rule: The key of an instruction file the model was given is its name as shown, escaped, and leads to the file read back.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: instruction_changes
-find: let unescaped = cortex_base::unescape(shown);
+find: let unescaped = cineris_base::unescape(shown);
 replace: let unescaped = std::borrow::Cow::Borrowed(shown.as_str());
 caught-by:
-    cortex-agent::it context::a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed
+    cineris-agent::it context::a_nested_instruction_file_under_a_name_shown_escaped_is_not_told_removed
 
 [break] the-workspace-in-the-system-prompt-is-raw
 rule: The workspace's path in the system prompt is written as an escape.
-file: crates/cortex-agent/src/context/prompt.rs
-find: cortex_base::visible(&self.workspace)
+file: crates/cineris-agent/src/context/prompt.rs
+find: cineris_base::visible(&self.workspace)
 replace: &self.workspace
 caught-by:
-    cortex-agent context::prompt::tests::the_workspace_is_named_as_an_escape
+    cineris-agent context::prompt::tests::the_workspace_is_named_as_an_escape
 
 [break] the-continuity-note-names-a-path-raw
 rule: The note on a protected path changed between two commands names it as an escape.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: continuity_note
-find: cortex_base::visible(&path.to_string_lossy())
+find: cineris_base::visible(&path.to_string_lossy())
 replace: path.to_string_lossy()
 caught-by:
-    cortex-core checkpoints::tests::the_continuity_note_names_its_paths_as_escapes
+    cineris-core checkpoints::tests::the_continuity_note_names_its_paths_as_escapes
 
 [break] a-skipped-entrys-reason-is-raw
 rule: What the walk says of an entry it stepped past names it as an escape, and a line break in it does not cut it short.
-file: crates/cortex-tools/src/walk.rs
+file: crates/cineris-tools/src/walk.rs
 in: Skipped::unreadable
-find: let escaped = cortex_base::visible(reason);
+find: let escaped = cineris_base::visible(reason);
 replace: let escaped = reason.lines().next().unwrap_or("");
 caught-by:
-    cortex-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
-    cortex-tools walk::tests::what_was_skipped_is_said_once_per_kind
+    cineris-tools walk::tests::a_skipped_entrys_reason_names_it_as_an_escape
+    cineris-tools walk::tests::what_was_skipped_is_said_once_per_kind
 
 # -------------------------------------- findings 2, 6 and 7: the extractors
 #
@@ -424,7 +424,7 @@ caught-by:
 
 [break] a-template-chain-recurses
 rule: A chain of `template<…>` prefixes is stripped in a loop: no input recurses, so no line overflows a pass thread's stack, which would abort the process.
-file: crates/cortex-index/src/extract/langs.rs
+file: crates/cineris-index/src/extract/langs.rs
 in: Cish::recognise
 find:
     return Found::Attribute;
@@ -436,11 +436,11 @@ replace:
     }
     return self.recognise(rest, scope);
 caught-by:
-    cortex-index extract::tests::a_chain_of_template_and_extern_prefixes_needs_no_more_stack_than_one
+    cineris-index extract::tests::a_chain_of_template_and_extern_prefixes_needs_no_more_stack_than_one
 
 [break] an-extern-chain-recurses
 rule: A chain of `extern "…"` prefixes is stripped in a loop: no input recurses, so no line overflows a pass thread's stack, which would abort the process.
-file: crates/cortex-index/src/extract/langs.rs
+file: crates/cineris-index/src/extract/langs.rs
 in: Cish::recognise
 find:
     return Found::Transparent;
@@ -452,112 +452,112 @@ replace:
     }
     return self.recognise(rest, scope);
 caught-by:
-    cortex-index extract::tests::a_chain_of_template_and_extern_prefixes_needs_no_more_stack_than_one
-    cortex-index extract::tests::a_chain_of_extern_prefixes_costs_linear_time
+    cineris-index extract::tests::a_chain_of_template_and_extern_prefixes_needs_no_more_stack_than_one
+    cineris-index extract::tests::a_chain_of_extern_prefixes_costs_linear_time
 
 [break] what-follows-each-extern-prefix-is-scanned-again
 rule: What follows a prefix is looked at once, not once per prefix: a chain of `extern "…"` costs linear time.
-file: crates/cortex-index/src/extract/langs.rs
+file: crates/cineris-index/src/extract/langs.rs
 in: Cish::recognise
 find: let rest = rest.trim_start();
 replace: let rest = rest.trim_start(); if rest.contains('\u{0}') { return Found::Nothing; }
 caught-by:
-    cortex-index extract::tests::a_chain_of_extern_prefixes_costs_linear_time
+    cineris-index extract::tests::a_chain_of_extern_prefixes_costs_linear_time
 
 [break] an-extern-c-function-is-taken-for-a-block
 rule: Only a `{` right after `extern "…"` opens an `extern "C" {` block; a function with C linkage and its body is a function, and what is in its body is not outlined.
-file: crates/cortex-index/src/extract/langs.rs
+file: crates/cineris-index/src/extract/langs.rs
 in: Cish::recognise
 find: if rest.is_empty() || rest.starts_with('{') {
 replace: if rest.is_empty() || rest.ends_with('{') {
 caught-by:
-    cortex-index extract::tests::an_extern_c_function_with_a_body_is_a_function_and_not_a_block
-    cortex-index::it outlines::cpp
+    cineris-index extract::tests::an_extern_c_function_with_a_body_is_a_function_and_not_a_block
+    cineris-index::it outlines::cpp
 
 [break] an-extern-c-block-whose-brace-is-on-the-next-line-hides-its-contents
 rule: `extern "C"` alone on its line opens a block whose brace comes on the next line, and what is in it is outlined at the level outside it.
-file: crates/cortex-index/src/extract/langs.rs
+file: crates/cineris-index/src/extract/langs.rs
 in: Cish::recognise
 find: if rest.is_empty() || rest.starts_with('{') {
 replace: if rest.starts_with('{') {
 caught-by:
-    cortex-index extract::tests::an_extern_c_function_with_a_body_is_a_function_and_not_a_block
-    cortex-index::it outlines::cpp
+    cineris-index extract::tests::an_extern_c_function_with_a_body_is_a_function_and_not_a_block
+    cineris-index::it outlines::cpp
 
 [break] a-module-named-by-a-string-is-named-from-the-blanked-code
 rule: TypeScript's `declare module "name"` is named by its string as the line writes it, not from the code, where a string's content is blanked.
-file: crates/cortex-index/src/extract/langs.rs
+file: crates/cineris-index/src/extract/langs.rs
 in: quoted_name
 find: let raw = as_written(scope, code)?;
 replace: let raw = code;
 caught-by:
-    cortex-index extract::tests::a_typescript_module_declared_by_a_string_is_named_by_the_string
-    cortex-index::it outlines::typescript
+    cineris-index extract::tests::a_typescript_module_declared_by_a_string_is_named_by_the_string
+    cineris-index::it outlines::typescript
 
 [break] a-regular-expression-is-read-as-code
 rule: In JavaScript and TypeScript a `/` where an expression begins opens a regular expression, whose content is blanked as a string's: a `//` or a `/*` in it is not a comment.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 find: regex: true
 replace: regex: false
 caught-by:
-    cortex-index extract::tests::a_regular_expression_with_two_slashes_is_not_a_comment
-    cortex-index extract::tests::a_regular_expression_with_slash_star_does_not_open_a_comment
-    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
-    cortex-index::it outlines::typescript
-    cortex-index::it outlines::javascript
+    cineris-index extract::tests::a_regular_expression_with_two_slashes_is_not_a_comment
+    cineris-index extract::tests::a_regular_expression_with_slash_star_does_not_open_a_comment
+    cineris-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+    cineris-index::it outlines::typescript
+    cineris-index::it outlines::javascript
 
 [break] every-slash-of-a-line-is-scanned-for-a-regular-expression
 rule: After a `/` that looked like a regular expression's start does not close on its line, no later `/` of the line is tried, so a line of them costs linear time.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: Lexer::code_at
 find: self.no_regex = true;
 replace:
 caught-by:
-    cortex-index extract::tests::a_line_of_regular_expressions_that_never_close_costs_linear_time
+    cineris-index extract::tests::a_line_of_regular_expressions_that_never_close_costs_linear_time
 
 [break] a-here-string-is-read-as-a-heredoc
 rule: A shell's here-string, `<<<word`, is code: its second `<` does not begin a heredoc that blanks the file down to a line `word`.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: Lexer::code_at
 find: if syntax.heredocs == Heredocs::Shell && rest.starts_with(b"<<<") {
 replace: if syntax.heredocs == Heredocs::Shell && rest.starts_with(b"<<<") && false {
 caught-by:
-    cortex-index extract::tests::a_shell_here_string_is_not_a_heredoc
-    cortex-index lex::tests::heredocs_are_skipped_to_their_tag
-    cortex-index::it outlines::shell
+    cineris-index extract::tests::a_shell_here_string_is_not_a_heredoc
+    cineris-index lex::tests::heredocs_are_skipped_to_their_tag
+    cineris-index::it outlines::shell
 
 [break] an-unclosed-python-bracket-hides-the-rest-of-the-file
 rule: In Python a `def` or a `class` no further in than the line that opened a bracket still open ends that bracket, so one bracket left open (a file in mid-edit) does not hide the rest of the file.
-file: crates/cortex-index/src/extract/indent.rs
+file: crates/cineris-index/src/extract/indent.rs
 in: python
 find: if continuing && indent_of(raw) <= opener && defines(code) {
 replace: if continuing && indent_of(raw) < opener && defines(code) {
 caught-by:
-    cortex-index extract::tests::one_unclosed_bracket_in_python_does_not_hide_the_rest_of_the_file
-    cortex-index extract::tests::a_python_f_string_with_its_own_quotes_inside_does_not_hide_what_follows
-    cortex-index::it outlines::python
+    cineris-index extract::tests::one_unclosed_bracket_in_python_does_not_hide_the_rest_of_the_file
+    cineris-index extract::tests::a_python_f_string_with_its_own_quotes_inside_does_not_hide_what_follows
+    cineris-index::it outlines::python
 
 [break] a-name-is-kept-whole
 rule: Every name an outline keeps is clipped to NAME_CHARS characters, whichever extractor found it.
-file: crates/cortex-index/src/extract/mod.rs
+file: crates/cineris-index/src/extract/mod.rs
 in: Builder::push
 find: if entry.name.char_indices().nth(NAME_CHARS).is_some() {
 replace: if entry.name.char_indices().nth(NAME_CHARS).is_some() && false {
 caught-by:
-    cortex-index extract::tests::every_name_is_clipped_like_the_head
+    cineris-index extract::tests::every_name_is_clipped_like_the_head
 
 [break] a-typedef-name-taken-at-its-close-is-kept-whole
 rule: The name a C `typedef struct { … } Name;` takes at its close is clipped like every other.
-file: crates/cortex-index/src/extract/brace.rs
+file: crates/cineris-index/src/extract/brace.rs
 in: run
 find: entry.name = clip(&name, NAME_CHARS);
 replace: entry.name = name;
 caught-by:
-    cortex-index extract::tests::every_name_is_clipped_like_the_head
+    cineris-index extract::tests::every_name_is_clipped_like_the_head
 
 [break] a-brace-that-opens-nothing-is-kept-as-a-frame
 rule: A brace that opens no definition is counted, not kept as a frame: a line of a million `{` costs a number, not megabytes.
-file: crates/cortex-index/src/extract/brace.rs
+file: crates/cineris-index/src/extract/brace.rs
 in: Reader::push
 find:
     Frame::Opaque { entry: None } => {
@@ -568,252 +568,252 @@ find:
 replace:
     Frame::Opaque { entry: None } => self.opaque += 1,
 caught-by:
-    cortex-index::it outlines::outlining_a_line_of_a_million_open_braces_takes_little_memory
+    cineris-index::it outlines::outlining_a_line_of_a_million_open_braces_takes_little_memory
 
 [break] braces-below-a-body-are-forgotten-when-it-closes
 rule: The braces that opened nothing and are open below a definition's body are open again when that body closes: the nesting is what it was when each brace was a frame.
-file: crates/cortex-index/src/extract/brace.rs
+file: crates/cineris-index/src/extract/brace.rs
 in: Reader::pop
 find: self.anonymous = count;
 replace: self.anonymous = 0;
 caught-by:
-    cortex-index extract::tests::blocks_that_open_no_definition_nest_as_the_definitions_around_them
+    cineris-index extract::tests::blocks_that_open_no_definition_nest_as_the_definitions_around_them
 
 [break] a-head-is-made-from-the-whole-line
 rule: A head is made from at most LINE_BYTES of each line, so a line of megabytes is not copied whole, several times over, to keep 160 characters of it.
-file: crates/cortex-index/src/extract/brace.rs
+file: crates/cineris-index/src/extract/brace.rs
 in: run
 find: let head_part = prefix(part, LINE_BYTES);
 replace: let head_part = part;
 caught-by:
-    cortex-index::it outlines::outlining_a_name_of_a_megabyte_takes_little_memory
+    cineris-index::it outlines::outlining_a_name_of_a_megabyte_takes_little_memory
 
 [break] markdown-keeps-every-heading
 rule: Markdown keeps only its first MAX_ENTRIES headings, so a file of a million headings costs no more memory than one of a thousand.
-file: crates/cortex-index/src/extract/markdown.rs
+file: crates/cineris-index/src/extract/markdown.rs
 in: Headings::add
 find: if self.kept.len() < MAX_ENTRIES {
 replace: if self.kept.len() < usize::MAX {
 caught-by:
-    cortex-index::it outlines::outlining_a_megabyte_of_headings_takes_little_memory
+    cineris-index::it outlines::outlining_a_megabyte_of_headings_takes_little_memory
 
 [break] markdown-counts-depth-from-the-kept-headings-only
 rule: Depth 0 is the shallowest level in the whole file, headings past the cap included.
-file: crates/cortex-index/src/extract/markdown.rs
+file: crates/cineris-index/src/extract/markdown.rs
 in: Headings::add
 find: self.shallowest = Some(self.shallowest.map_or(level, |least| least.min(level)));
 replace: if self.kept.len() < MAX_ENTRIES { self.shallowest = Some(self.shallowest.map_or(level, |least| least.min(level))); }
 caught-by:
-    cortex-index extract::tests::markdown_keeps_its_first_headings_and_the_files_shallowest_level
+    cineris-index extract::tests::markdown_keeps_its_first_headings_and_the_files_shallowest_level
 
 [break] markdown-past-its-cap-does-not-say-so
 rule: An outline of the first MAX_ENTRIES headings of more says it is truncated.
-file: crates/cortex-index/src/extract/markdown.rs
+file: crates/cineris-index/src/extract/markdown.rs
 in: Headings::add
 find: self.more = true;
 replace:
 caught-by:
-    cortex-index extract::tests::markdown_keeps_its_first_headings_and_the_files_shallowest_level
+    cineris-index extract::tests::markdown_keeps_its_first_headings_and_the_files_shallowest_level
 
 [break] the-fallback-keeps-every-line
 rule: The fallback looks at each non-blank line beside the next and keeps none, so a file of a million short lines costs no more memory than one of ten.
-file: crates/cortex-index/src/extract/indent.rs
+file: crates/cineris-index/src/extract/indent.rs
 in: fallback
 find: .peekable();
 replace: .collect::<Vec<_>>().into_iter().peekable();
 caught-by:
-    cortex-index::it outlines::outlining_a_megabyte_of_short_lines_takes_little_memory
+    cineris-index::it outlines::outlining_a_megabyte_of_short_lines_takes_little_memory
 
 [break] the-builder-holds-no-more-than-the-cap
 rule: The builder holds one entry more than the cap, so that `truncated` is said only when more definitions than the cap survive: past the cap, a C prototype that gets no body, or a typedef that gets no name, is no cut.
-file: crates/cortex-index/src/extract/mod.rs
+file: crates/cineris-index/src/extract/mod.rs
 in: Builder::push
 find: if self.entries.len() > MAX_ENTRIES {
 replace: if self.entries.len() >= MAX_ENTRIES {
 caught-by:
-    cortex-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
+    cineris-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
 
 [break] a-typedef-that-gets-no-name-keeps-its-place
 rule: A `typedef struct { … }` that gets no name at its close is taken out there, so the definition after it can have its place under the cap.
-file: crates/cortex-index/src/extract/brace.rs
+file: crates/cineris-index/src/extract/brace.rs
 in: run
 find: reader.out.drop_last(index);
 replace:
 caught-by:
-    cortex-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
+    cineris-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
 
 [break] a-typedef-whose-body-never-comes-keeps-its-place
 rule: A definition whose name was to come at its body's close, and whose body never comes, is taken out when the next definition begins.
-file: crates/cortex-index/src/extract/brace.rs
+file: crates/cineris-index/src/extract/brace.rs
 in: Reader::without_body
 find: if done.needs_body || nameless {
 replace: if done.needs_body {
 caught-by:
-    cortex-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
+    cineris-index extract::tests::an_outline_is_truncated_only_when_more_definitions_than_the_cap_survive
 
 [break] a-quote-in-a-kotlin-name-in-backticks-opens-a-literal
 rule: Kotlin's lexer blanks a name in backticks as a string, so an apostrophe in it (``fun `doesn't crash`()``) does not open a character literal that blanks the rest of the line and its `{`.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 find: quote(b'`', false, false)
 replace: quote(b'"', true, false)
 caught-by:
-    cortex-index extract::tests::a_kotlin_function_named_in_backticks_is_outlined
-    cortex-index::it outlines::kotlin
+    cineris-index extract::tests::a_kotlin_function_named_in_backticks_is_outlined
+    cineris-index::it outlines::kotlin
 
 [break] a-kotlin-name-in-backticks-is-not-read
 rule: A Kotlin function named in backticks is outlined, its name being what is between them.
-file: crates/cortex-index/src/extract/langs.rs
+file: crates/cineris-index/src/extract/langs.rs
 in: Kotlin::recognise
 find: if let Some(tick) = after.find('`')
 replace: if let Some(tick) = after.find('`').filter(|_| false)
 caught-by:
-    cortex-index extract::tests::a_kotlin_function_named_in_backticks_is_outlined
-    cortex-index::it outlines::kotlin
+    cineris-index extract::tests::a_kotlin_function_named_in_backticks_is_outlined
+    cineris-index::it outlines::kotlin
 
 # ------------------------------------------- the full review of the fixes
 
 [break] a-new-file-in-an-escaped-directory-goes-elsewhere
 rule: A path whose escapes read back reach further into directories that exist is taken that way: a new file goes into the directory the model was shown escaped, not a new one named by the escape.
-file: crates/cortex-base/src/path/resolve.rs
+file: crates/cineris-base/src/path/resolve.rs
 in: PathResolver::resolve
 find: && (found.exists() || literal_reach.is_none_or(|literal| reach > literal))
 replace: && found.exists()
 caught-by:
-    cortex-base::it paths::a_name_shown_escaped_resolves_to_its_file
+    cineris-base::it paths::a_name_shown_escaped_resolves_to_its_file
 
 [break] jsx-text-after-a-tag-starts-a-regex
 rule: A `/` after `>` is JSX text, not a regular expression, unless the `>` ends an arrow.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: regex_may_start
 find: b'>' => return previous == Some(b'='),
 replace: b'>' => return true,
 caught-by:
-    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+    cineris-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
 
 [break] a-postfix-increment-starts-a-regex
 rule: A `/` after `++` or `--` is a division: they end an operand.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: regex_may_start
 find: b'+' | b'-' => return previous != Some(before[last]),
 replace: b'+' | b'-' => return true,
 caught-by:
-    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+    cineris-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
 
 [break] a-non-null-assertion-starts-a-regex
 rule: A `/` after a `!` that follows a name or a closing bracket (TypeScript's non-null assertion) is a division.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: regex_may_start
 find: b'!' => {
 replace: b'!' => return true, b'\0' => {
 caught-by:
-    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+    cineris-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
 
 [break] a-property-named-as-a-keyword-starts-a-regex
 rule: A `/` after a keyword that follows a `.` is a division: the word is a property.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: regex_may_start
 find: || before[start - 1] == b'.')
 replace: || false)
 caught-by:
-    cortex-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
+    cineris-index lex::tests::a_regular_expression_is_blanked_as_a_string_and_a_division_is_code
 
 [break] a-shift-in-shell-arithmetic-is-a-heredoc
 rule: `<<` inside a shell's `(( ))` is a shift, not a heredoc, whatever follows it.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: Lexer::code_at
 find: && !(syntax.heredocs == Heredocs::Shell && self.arithmetic.open_at(code, at))
 replace: && true
 caught-by:
-    cortex-index lex::tests::heredocs_are_skipped_to_their_tag
+    cineris-index lex::tests::heredocs_are_skipped_to_their_tag
 
 [break] a-heredoc-tag-is-unbounded
 rule: A heredoc's tag longer than a name is not one: the lexer would hold it for every line after.
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: heredoc_at
 find: if tag.len() > NAME_CHARS {
 replace: if tag.len() > NAME_CHARS * 2 {
 caught-by:
-    cortex-index lex::tests::heredocs_are_skipped_to_their_tag
+    cineris-index lex::tests::heredocs_are_skipped_to_their_tag
 
 [break] a-pass-asks-the-gate-for-each-path
 rule: A pass takes its gate once at its start (`Gate::for_pass`), so that finding the engine in force is not paid for every path.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::pass_and_keep
 find: &walk::for_pass(&self.gate)
 replace: &self.gate
 caught-by:
-    cortex-index::it index::a_pass_and_a_map_each_take_the_gate_once
+    cineris-index::it index::a_pass_and_a_map_each_take_the_gate_once
 
 [break] a-map-asks-the-gate-for-each-path
 rule: A map takes its gate once at its start, as a pass does.
-file: crates/cortex-index/src/pass.rs
+file: crates/cineris-index/src/pass.rs
 in: Index::gate_for_pass
 find: walk::for_pass(&self.gate)
 replace: Arc::clone(&self.gate)
 caught-by:
-    cortex-index::it index::a_pass_and_a_map_each_take_the_gate_once
+    cineris-index::it index::a_pass_and_a_map_each_take_the_gate_once
 
 [break] an-instruction-name-with-a-backslash-is-told-removed
 rule: A nested instruction file's name is tried as it is before it is read back, so a name that holds `\n` as two characters is not told removed.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: instruction_changes
 find: std::borrow::Cow::Owned(_) => root.join(shown).ok(),
 replace: std::borrow::Cow::Owned(_) => None,
 caught-by:
-    cortex-agent::it context::a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed
+    cineris-agent::it context::a_nested_instruction_file_under_a_name_with_a_backslash_is_not_told_removed
 
 [break] a-glob-copied-from-an-escaped-name-matches-nothing
 rule: A glob that holds a name as the model was shown it, escaped, matches that name.
-file: crates/cortex-tools/src/walk.rs
+file: crates/cineris-tools/src/walk.rs
 in: GlobFilter::matches
 find: .is_some_and(|(matcher, name_only)| matches(matcher, *name_only))
 replace: .is_some_and(|_| false)
 caught-by:
-    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+    cineris-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
 
 # ---------------------------------------- the second review of the fixes
 
 [break] the-index-gate-is-asked-for-each-path
 rule: The core's index gate gives a pass and a map what is in force, taken once (`Gate::for_pass`).
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: InForce::for_pass
 find: let taken = (self.now)();
 replace: return None; let taken = (self.now)();
 caught-by:
-    cortex-core policy::tests::the_index_gate_takes_what_is_in_force_once_a_pass
+    cineris-core policy::tests::the_index_gate_takes_what_is_in_force_once_a_pass
 
 [break] an-escaped-name-glob-matches-whole-paths
 rule: A glob read back with its escapes matches a name when it has no `/` itself, whatever the glob as written has.
-file: crates/cortex-tools/src/walk.rs
+file: crates/cineris-tools/src/walk.rs
 in: GlobFilter::new
 find: .map(|glob| (glob.compile_matcher(), !unescaped.contains('/')))
 replace: .map(|glob| (glob.compile_matcher(), false))
 caught-by:
-    cortex-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
+    cineris-tools::it list::a_name_that_acts_unseen_is_listed_as_an_escape_and_a_link_of_such_a_name_resolves
 
 [break] close-matches-compare-a-raw-name-with-escaped-ones
 rule: `read`'s close matches compare the name asked for and the directory's names in the same form, escaped.
-file: crates/cortex-tools/src/read.rs
+file: crates/cineris-tools/src/read.rs
 in: close_matches
-find: let wanted = cortex_base::visible(wanted);
+find: let wanted = cineris_base::visible(wanted);
 replace: let wanted = std::borrow::Cow::Borrowed(wanted);
 caught-by:
-    cortex-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
+    cineris-tools::it read::a_name_that_acts_unseen_is_an_escape_in_the_text_and_as_it_is_in_the_payload
 
 [break] an-instruction-name-that-does-not-read-back-is-dropped
 rule: A nested instruction file whose name does not join read back is followed by its name as it is.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: instruction_changes
 find: (Err(_), Some(written)) => (written, None),
 replace: (Err(_), Some(_)) => continue,
 caught-by:
-    cortex-agent::it context::a_nested_instruction_file_whose_name_does_not_read_back_is_still_followed
+    cineris-agent::it context::a_nested_instruction_file_whose_name_does_not_read_back_is_still_followed
 
 [break] a-heredoc-tag-after-a-space-is-not-read
 rule: A shell heredoc's tag may follow spaces (`cat << EOF`).
-file: crates/cortex-index/src/lex.rs
+file: crates/cineris-index/src/lex.rs
 in: heredoc_at
 find: let tag = after.trim_start_matches([' ', '\t']);
 replace: let tag = after;
 caught-by:
-    cortex-index lex::tests::heredocs_are_skipped_to_their_tag
+    cineris-index lex::tests::heredocs_are_skipped_to_their_tag

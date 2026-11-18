@@ -1,0 +1,38 @@
+[package]
+name = "cineris-cli"
+description = "The cineris binary, also installed under the alias cin: argument parsing, mode selection and the headless printer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# One executable. `cin` is a link to it, never a second build target
+# (docs/decisions/0013-naming.md).
+[[bin]]
+name = "cineris"
+path = "src/main.rs"
+
+[dependencies]
+cineris-base.workspace = true
+cineris-config.workspace = true
+cineris-core.workspace = true
+cineris-protocol.workspace = true
+# The body of the hidden guard subcommand (`tree::run_guard`).
+cineris-sandbox.workspace = true
+cineris-rpc.workspace = true
+cineris-tui.workspace = true
+
+lexopt.workspace = true
+serde_json.workspace = true
+# The core thread's runtime (`rt`, with `time` for the provider layer's and
+# the process runner's timers), the channels between the binary's threads
+# (`sync`), and Ctrl-C, SIGTERM and the console's events (`signal`).
+tokio = { workspace = true, features = ["rt", "sync", "time", "signal"] }
+# Installs the log's subscriber as the process's own.
+tracing.workspace = true
+
+[dev-dependencies]
+cineris-testkit.workspace = true
+
+[lints]
+workspace = true

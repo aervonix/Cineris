@@ -18,7 +18,7 @@ The vision asks for lean context: a structural map of the repository instead of 
 
 ## Decision
 
-- Approximate per-language extractors in `cortex-index`, for about fifteen languages, with an indentation-based fallback.
+- Approximate per-language extractors in `cineris-index`, for about fifteen languages, with an indentation-based fallback.
 - Outlines cached on disk per project, keyed by path, size and modification time. *Amended by the fixes of the independent review of step 18 (2026-11-15): the cache holds what the map shows of each file's outline, its first top-level definitions and their members' names, and not the whole outline; a file's whole outline is made from the file when it is asked for. Whole outlines took 4.7 KiB a file on real code, and the warm map 2.7 times its budget.*
 - Indexing in the background after the first frame, under caps on files, bytes and time. Never on the start-up path. Not held in memory. *As built: the first pass starts once a session's loop runs, at the end of opening the session, which the interactive app does after its first frame.*
 - The map goes in the first user message of a context epoch inside a token budget, or follows as a notice if it is not ready. *Amended in step 18: the map is a notice of its own in every case ([decision 0034](0034-notices-in-the-users-role.md)); and by the fixes of its review: it ranks code before documents and leaves lockfiles, licences and changelogs out ([architecture/15-efficiency.md](../architecture/15-efficiency.md), "Repository map").*

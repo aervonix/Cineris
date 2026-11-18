@@ -1,10 +1,10 @@
-# Breaks for step 12 (the permission engine, `cortex-policy`), from pull request 25.
+# Breaks for step 12 (the permission engine, `cineris-policy`), from pull request 25.
 # Reconstructed from the pull request description and the crate's tests, not
 # from the lists the step kept: each rule is one the description names.
 
 [break] deny-beats-ask
 rule: Deny beats ask beats allow, whatever the order: an ask must never outrank a deny.
-file: crates/cortex-policy/src/rules.rs
+file: crates/cineris-policy/src/rules.rs
 in: strength
 find: RuleAction::Ask => 1
 replace: RuleAction::Ask => 3
@@ -13,7 +13,7 @@ caught-by:
 
 [break] learned-allow-needs-no-trust
 rule: A project's allow, and one learned for the project, waits for trust; a learned allow must wait too.
-file: crates/cortex-policy/src/rules.rs
+file: crates/cineris-policy/src/rules.rs
 in: RuleSource::allow_needs_trust
 find: matches!(self, Self::Project | Self::Learned)
 replace: matches!(self, Self::Project)
@@ -23,7 +23,7 @@ caught-by:
 
 [break] allow-anywhere-is-everywhere
 rule: An allow that starts with `**` means the workspace, not the whole machine.
-file: crates/cortex-policy/src/rules.rs
+file: crates/cineris-policy/src/rules.rs
 in: RuleSet::compile
 find: exact: exact.kept_within(context.workspace)
 replace: exact
@@ -32,7 +32,7 @@ caught-by:
 
 [break] autonomous-without-sandbox
 rule: The autonomous level is refused where the sandbox does not enforce.
-file: crates/cortex-policy/src/level.rs
+file: crates/cineris-policy/src/level.rs
 in: check_standing
 find:
     SandboxState::NotEnforcing(why) => Err(LevelError::SandboxRequired {
@@ -46,7 +46,7 @@ caught-by:
 
 [break] child-may-be-unrestricted
 rule: A child lease never gets the unrestricted level, which is not passed down.
-file: crates/cortex-policy/src/lease.rs
+file: crates/cineris-policy/src/lease.rs
 in: narrow_in
 find: &Level::Autonomous
 replace: &Level::Unrestricted
@@ -55,7 +55,7 @@ caught-by:
 
 [break] child-allow-without-parent
 rule: An allow rule of a proposal reaches the child only if the parent has the same rule.
-file: crates/cortex-policy/src/lease.rs
+file: crates/cineris-policy/src/lease.rs
 in: narrow_in
 find: rule.action == RuleAction::Allow && ours.rules.contains(rule)
 replace: rule.action == RuleAction::Allow
@@ -64,7 +64,7 @@ caught-by:
 
 [break] circleci-not-protected
 rule: CI configuration (here `.circleci`) is a protected path of the workspace: a write to it goes to the user.
-file: crates/cortex-policy/src/lease.rs
+file: crates/cineris-policy/src/lease.rs
 find: ".circleci"
 replace: ".circleci-unprotected"
 caught-by:
@@ -72,7 +72,7 @@ caught-by:
 
 [break] ssh-key-by-prefix-only
 rule: Only the usual names of an SSH private key look like secrets; other names that begin `id_` are ordinary files.
-file: crates/cortex-policy/src/secrets.rs
+file: crates/cineris-policy/src/secrets.rs
 in: looks_secret
 find: SSH_KEYS.contains(&name.as_str())
 replace: name.starts_with("id_")
@@ -81,7 +81,7 @@ caught-by:
 
 [break] nested-git-dir-is-source
 rule: Anything in a `.git` directory, at any depth, goes to the user to write.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: is_repository_data
 find: path.names().any(|name| name.eq_ignore_ascii_case(".git"))
 replace: false
@@ -91,7 +91,7 @@ caught-by:
 
 [break] git-config-after-option-value
 rule: `git config` is recognised after git's own options, including those that take a value in the next word.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: is_git_config
 find: words.next();
 replace: let _ = &words;
@@ -100,7 +100,7 @@ caught-by:
 
 [break] redirect-is-a-read
 rule: A redirection to a file is a write of that file, judged by the write rules.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_part
 find: (target, Effect::Write)
 replace: (target, Effect::Read)
@@ -109,7 +109,7 @@ caught-by:
 
 [break] session-approves-a-deny
 rule: An approval for the session can only allow; a deny is never kept as an approval.
-file: crates/cortex-policy/src/approvals.rs
+file: crates/cineris-policy/src/approvals.rs
 in: SessionApprovals::add
 find: rules.iter().filter(|rule| rule.action == RuleAction::Allow)
 replace: rules.iter()
@@ -118,7 +118,7 @@ caught-by:
 
 [break] trust-ignores-the-pin
 rule: A project's allow rules are trusted only while they are the ones the user saw: a changed set is disabled until approved again.
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: ProjectTrust::rules_approved
 find: Standing::Changed | Standing::Untrusted => false
 replace: Standing::Changed => true, Standing::Untrusted => false
@@ -128,7 +128,7 @@ caught-by:
 
 [break] unlisted-short-option-allowed
 rule: An option that is not listed takes a command off the table of read-only commands (`sort -o out`).
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: unix_allows
 find: _ => return false
 replace: _ => {}
@@ -138,7 +138,7 @@ caught-by:
 
 [break] git-on-the-table-untrusted
 rule: `git` is on the table of read-only commands only in a trusted project.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: read_only
 find: entry.needs_trust && !trusted
 replace: false
@@ -147,7 +147,7 @@ caught-by:
 
 [break] dollar-is-a-word
 rule: Command analysis fails closed: a `$` (variable or substitution) makes the line not modelled.
-file: crates/cortex-policy/src/command/posix.rs
+file: crates/cineris-policy/src/command/posix.rs
 find: '$' => refuse("`$`: a variable or another expansion")
 replace:
     '$' => {

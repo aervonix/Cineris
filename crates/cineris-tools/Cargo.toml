@@ -1,0 +1,41 @@
+[package]
+name = "cineris-tools"
+description = "The tool contract and the built-in tools, the output policy, file snapshots, the process runner and the dynamic-tool registry."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+# For tests only: a switch that makes `run_blocking` run its work on the
+# calling thread at a moment a seed decides, so that a single-threaded test
+# sees the same order of events every time (`src/blocking.rs`). Only a
+# dev-dependency may turn it on, which `cargo xtask rules` checks, and with
+# it on nothing changes until a test makes an `InlineBlocking`.
+test-hooks = []
+
+[dependencies]
+cineris-protocol.workspace = true
+cineris-base.workspace = true
+cineris-sandbox.workspace = true
+globset.workspace = true
+grep-matcher.workspace = true
+grep-regex.workspace = true
+grep-searcher.workspace = true
+ignore.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+
+[dev-dependencies]
+# For the property-test helper (`cineris_testkit::cases`), and for the child
+# processes of the process tests (`cineris_testkit::children`).
+cineris-testkit.workspace = true
+
+[lints]
+workspace = true

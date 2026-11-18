@@ -1,6 +1,6 @@
 # Architecture overview
 
-Cortex-Harness is a terminal agent harness written in Rust. It runs an LLM agent loop that reads and edits code, runs commands, and talks to several model providers. This page gives the shape of the whole system. The numbered pages after it specify each part.
+Cineris is a terminal agent harness written in Rust. It runs an LLM agent loop that reads and edits code, runs commands, and talks to several model providers. This page gives the shape of the whole system. The numbered pages after it specify each part.
 
 ## What it is for
 
@@ -26,7 +26,7 @@ Where a product feature pulls against goal 1, the conflict is stated in [../buil
 ## The shape
 
 ```
-                 ┌──────────────────────────── one process: `cortex` ───────────────────────────┐
+                 ┌──────────────────────────── one process: `cineris` ───────────────────────────┐
  terminal ◄────► │  TUI (main thread)        headless printer         RPC server (stdio/socket)  │ ◄──► editors, GUIs,
                  │        │                        │                          │                  │      other agents
                  │        └────────── Op ──────────┴────────── Op ────────────┘                  │
@@ -121,8 +121,8 @@ These are referred to from the other pages as "the invariants".
 
 | Name | Meaning |
 |---|---|
-| Cortex-Harness | The project. |
-| `cortex`, `cx` | The command, and its short alias. Both names run the same program ([decision 0013](../decisions/0013-naming.md)). |
+| Cineris | The project. |
+| `cineris`, `cin` | The command, and its short alias. Both names run the same program ([decision 0013](../decisions/0013-naming.md)). |
 | Session | One conversation with its log, artifacts and checkpoints. |
 | Turn | Everything from one user prompt until the session is idle again: one or more model requests, tool rounds, retries and compaction. |
 | Item | One unit inside a turn: a user message, an assistant message, a tool call with its result, or a notice. |

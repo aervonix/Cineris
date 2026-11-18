@@ -1,0 +1,476 @@
+//! Trust, worked out once and given to the four places that need it
+//! (`docs/architecture/06-permissions-and-sandbox.md`, "Project trust").
+//!
+//! Each test sets a project up so that trust shows in four ways at once,
+//! runs one turn, and reads all four:
+//!
+//! | Consumer | What a trusted project gets | Which answer |
+//! |---|---|---|
+//! | Configuration | Its own `model.main`, which raises cost and so waits for trust. | Trusted, and its rules are the ones the user saw. |
+//! | The permission engine | Its `allow` rule: a write under `.github/` is not asked about. | The same. |
+//! | The permission engine | `git status` is a command that only reads. | Trusted. |
+//! | The shell tool | Git is asked what a command changed (`changes.method` is `git`). | Trusted. |
+//! | The base state | A complete record, marked as taken from a trusted project. | Trusted. |
+//!
+//! A project whose rules changed since the user saw them keeps the last
+//! three and loses the first two until the change is approved.
+//!
+//! The tests start a shell and git, so they are named `sys_…`.
+
+use std::path::Path;
+use std::process::Command;
+use std::sync::Arc;
+
+use cineris_base::{PathOptions, PathResolver};
+use cineris_core::CoreOptions;
+use cineris_policy::{Definition, TrustStore};
+use cineris_protocol::Item;
+use cineris_protocol::event::TurnOutcome;
+use cineris_protocol::lease::{Effect, Rule, RuleAction};
+use cineris_protocol::methods::{ApprovalChoice, ApprovalDetail};
+use cineris_protocol::model::ModelRole;
+use serde_json::{Value, json};
+
+use crate::{Front, MODEL, OTHER_MODEL, World, calls, says};
+
+const PROTECTED: &str = ".github/workflows/ci.yml";
+
+fn git(dir: &Path, arguments: &[&str]) -> bool {
+    Command::new("git")
+        .args([
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "-c",
+            "init.defaultBranch=main",
+            "-c",
+            "commit.gpgsign=false",
+        ])
+        .args(arguments)
+        .current_dir(dir)
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+fn allow_rule() -> Rule {
+    Rule {
+        effect: Effect::Write,
+        pattern: ".github/**".to_owned(),
+        action: RuleAction::Allow,
+    }
+}
+
+/// A project that asks for a dearer model and allows itself a protected
+/// write, in a repository with one committed file. `None` where there is
+/// no git to make the repository with.
+fn project(test: &str) -> Option<World> {
+    let world = World::new(test, []);
+    world.project_config(&format!(
+        "[model]\nmain = \"{OTHER_MODEL}\"\n\n[[permissions.rules]]\neffect = \"write\"\nmatch = \
+         \".github/**\"\naction = \"allow\"\n"
+    ));
+    world.put("tracked.txt", "one\n");
+    let repository = git(&world.workspace, &["init", "-q"])
+        && git(&world.workspace, &["add", "."])
+        && git(&world.workspace, &["commit", "-q", "-m", "first"]);
+    repository.then_some(world)
+}
+
+/// What one turn showed of the project's trust.
+#[derive(Debug, PartialEq, Eq)]
+struct Seen {
+    /// The model the session runs on.
+    model: String,
+    /// Whether the write the project's rule allows was asked about.
+    write_asked: bool,
+    /// Whether `git status` was asked about. The engine takes git for a
+    /// command that only reads in a project the user trusts, and in no
+    /// other: the repository's own configuration of git can make any git
+    /// command run a program.
+    git_asked: bool,
+    /// How the shell tool looked for what the command changed.
+    method: String,
+    /// Whether the checkpoint has the earlier content of the file the
+    /// command changed, which only git can give.
+    restorable: bool,
+    /// Whether the base state was taken as a trusted project's.
+    base_trusted: bool,
+    base_complete: bool,
+}
+
+impl Seen {
+    fn trusted() -> Self {
+        Self {
+            model: OTHER_MODEL.to_owned(),
+            write_asked: false,
+            git_asked: false,
+            method: "git".to_owned(),
+            restorable: true,
+            base_trusted: true,
+            base_complete: true,
+        }
+    }
+
+    fn untrusted() -> Self {
+        Self {
+            model: MODEL.to_owned(),
+            write_asked: true,
+            git_asked: true,
+            method: "mtime".to_owned(),
+            restorable: false,
+            base_trusted: false,
+            base_complete: false,
+        }
+    }
+
+    /// A project the user trusts, whose rules are not the ones they saw:
+    /// nothing that loosens or costs, and everything that is only git
+    /// reading the repository's own configuration.
+    fn rules_set_aside() -> Self {
+        Self {
+            model: MODEL.to_owned(),
+            write_asked: true,
+            ..Self::trusted()
+        }
+    }
+}
+
+/// Puts the project's files back as they were committed, between two
+/// turns of one test.
+fn put_back(world: &World) {
+    let _ = std::fs::remove_dir_all(world.workspace.join(".github"));
+    assert!(git(&world.workspace, &["checkout", "--", "tracked.txt"]));
+}
+
+/// Runs one turn in the project and reads the four consumers. Returns the
+/// notices the session gave as well.
+fn observe(world: &World, change: impl FnOnce(&mut CoreOptions)) -> (Seen, Vec<String>) {
+    world.provider.push(calls(&[(
+        "c1",
+        "write",
+        json!({"path": PROTECTED, "content": "on: push\n"}),
+    )]));
+    world.provider.push(calls(&[(
+        "c2",
+        "shell",
+        json!({"command": "echo more >> tracked.txt"}),
+    )]));
+    world.provider.push(calls(&[(
+        "c3",
+        "shell",
+        json!({"command": "git status --short"}),
+    )]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| {
+        options.base_capture = true;
+        change(options);
+    });
+    world.run(async {
+        let front = Front::start(world, &core).await;
+        let model = front.state.roles[&ModelRole::Main]
+            .model
+            .as_str()
+            .to_owned();
+        // Everything asked about is allowed but `git status`: whether it is
+        // asked is what the test reads of it, and refused it starts no
+        // shell. Where it is not asked it runs, which is the point.
+        let asked = front
+            .turn_answering("go", |request| {
+                if matches!(
+                    &request.detail,
+                    ApprovalDetail::Command(command) if command.command.starts_with("git status")
+                ) {
+                    ApprovalChoice::Deny
+                } else {
+                    ApprovalChoice::AllowOnce
+                }
+            })
+            .await;
+        let method = front
+            .items()
+            .iter()
+            .find_map(|item| match item {
+                Item::ToolResult(result) if result.tool == "shell" => {
+                    let payload = result.payload.as_ref()?;
+                    assert_eq!(payload["exit_code"], 0, "{payload}");
+                    Some(payload["changes"]["method"].as_str()?.to_owned())
+                }
+                _ => None,
+            })
+            .expect("a shell result with what it changed");
+        // Which command was asked about is read from the question itself:
+        // what else a shell asks about differs from one shell to another.
+        let git_asked = front.approvals().iter().any(|request| {
+            matches!(
+                &request.detail,
+                ApprovalDetail::Command(command) if command.command.starts_with("git status")
+            )
+        });
+        let notices = front.notices();
+        front.close().await;
+
+        let lines: Vec<Value> = front.log(world);
+        let base = lines
+            .iter()
+            .find(|line| line["kind"] == "base")
+            .expect("the base state was recorded");
+        // The checkpoint of the command's round names the file, with its
+        // earlier content only when git was asked for it.
+        let restorable = lines.iter().any(|line| {
+            line["kind"] == "checkpoint"
+                && line["files"].as_array().is_some_and(|files| {
+                    files
+                        .iter()
+                        .any(|file| file["path"] == "tracked.txt" && file["before"].is_object())
+                })
+        });
+        let unknown = lines.iter().any(|line| {
+            line["kind"] == "checkpoint"
+                && line["files"].as_array().is_some_and(|files| {
+                    files
+                        .iter()
+                        .any(|file| file["path"] == "tracked.txt" && file["before"] == "unknown")
+                })
+        });
+        assert!(
+            restorable ^ unknown,
+            "the command's change is in a checkpoint: {lines:?}"
+        );
+        (
+            Seen {
+                model,
+                write_asked: asked.contains(&"write".to_owned()),
+                git_asked,
+                method,
+                restorable,
+                base_trusted: base["trusted"] == true,
+                base_complete: base["complete"] == true,
+            },
+            notices,
+        )
+    })
+}
+
+fn trust_store(world: &World) -> (TrustStore, cineris_protocol::ProjectKey) {
+    let state = world.dirs().state.unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    let store = TrustStore::new(state.join("trust.toml"), Arc::new(world.clock.clone()));
+    let key = PathResolver::new(&world.workspace, PathOptions::new())
+        .unwrap()
+        .root()
+        .project_key();
+    (store, key)
+}
+
+#[test]
+fn sys_an_untrusted_project_gets_nothing_that_needs_trust() {
+    let Some(world) = project("trust_none") else {
+        return;
+    };
+    let (seen, notices) = observe(&world, |_| {});
+    assert_eq!(seen, Seen::untrusted());
+    // What was held back is said, by name.
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("not trusted") && notice.contains("model.main")),
+        "{notices:?}"
+    );
+}
+
+#[test]
+fn sys_trust_for_the_run_reaches_all_four() {
+    let Some(world) = project("trust_flag") else {
+        return;
+    };
+    let (seen, _) = observe(&world, |options| options.trust_project = true);
+    assert_eq!(seen, Seen::trusted());
+}
+
+#[test]
+fn sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw() {
+    let Some(world) = project("trust_store") else {
+        return;
+    };
+    let (store, key) = trust_store(&world);
+    store
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_rule()])],
+            true,
+        )
+        .unwrap();
+    let (seen, notices) = observe(&world, |_| {});
+    assert_eq!(seen, Seen::trusted(), "{notices:?}");
+
+    // The project's rules change behind the user's back: it allows itself
+    // more. Nothing that a rule or a setting of its could loosen holds
+    // until the user has looked again. What git reads of the repository
+    // has not changed, and the user's trust in that stands.
+    let more = "[[permissions.rules]]\neffect = \"exec\"\nmatch = \"curl *\"\naction = \"allow\"\n";
+    // A project that only forbids itself something is treated the same:
+    // its rules are not the ones the user saw.
+    let less =
+        "[[permissions.rules]]\neffect = \"read\"\nmatch = \"secret/**\"\naction = \"deny\"\n";
+    for added in [more, less] {
+        world.project_config(&format!(
+            "[model]\nmain = \"{OTHER_MODEL}\"\n\n[[permissions.rules]]\neffect = \"write\"\nmatch \
+             = \".github/**\"\naction = \"allow\"\n\n{added}"
+        ));
+        put_back(&world);
+        let (seen, notices) = observe(&world, |_| {});
+        assert_eq!(seen, Seen::rules_set_aside(), "{added}");
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("rules have changed")),
+            "{notices:?}"
+        );
+    }
+}
+
+/// A repository trusted with git never shown (it became one after it was
+/// trusted, or was trusted under an older store), or kept trusted without
+/// git, has its rules and settings and nothing of git: git is not asked
+/// what a command changed, `git status` is asked about, and the base state
+/// is taken without git; the session says why (the follow-ups of step 23,
+/// and their early review, which found no test of it).
+#[test]
+fn sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git() {
+    let Some(world) = project("trust_git_unshown") else {
+        return;
+    };
+    let git_not_trusted = Seen {
+        model: OTHER_MODEL.to_owned(),
+        write_asked: false,
+        ..Seen::untrusted()
+    };
+    let (store, key) = trust_store(&world);
+    store
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_rule()])],
+            false,
+        )
+        .unwrap();
+    let (seen, notices) = observe(&world, |_| {});
+    assert_eq!(seen, git_not_trusted, "{notices:?}");
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("You were not shown git")),
+        "{notices:?}"
+    );
+    // Kept trusted without git: the same, and nothing said each session.
+    store.keep_without(&key, None, true).unwrap();
+    put_back(&world);
+    let (seen, notices) = observe(&world, |_| {});
+    assert_eq!(seen, git_not_trusted, "{notices:?}");
+    assert!(
+        !notices.iter().any(|notice| notice.contains("shown git")),
+        "{notices:?}"
+    );
+}
+
+#[test]
+fn sys_a_trust_store_that_cannot_be_read_trusts_nothing_and_says_so() {
+    let Some(world) = project("trust_unreadable") else {
+        return;
+    };
+    let state = world.dirs().state.unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("trust.toml"), "this is { not toml").unwrap();
+    let (seen, notices) = observe(&world, |_| {});
+    assert_eq!(seen, Seen::untrusted());
+    assert!(
+        notices
+            .iter()
+            .any(|notice| notice.contains("trust store could not be read")),
+        "{notices:?}"
+    );
+}
+
+/// Carried over from step 13a's review: a project the user trusts, whose
+/// rules have changed, is read twice, once as trusted to see its rules and
+/// once as not. Values that only a trusted read admits (a model the catalog
+/// does not have, a tier and a reasoning level nothing offers, writable
+/// paths nothing can place) must not stop it starting: they are set aside
+/// with everything else that waits for the change to be approved.
+#[test]
+fn a_trusted_project_whose_rules_changed_starts_with_what_only_trust_admits_set_aside() {
+    let world = World::new("trust_peek", [says("Done.")]);
+    let (store, key) = trust_store(&world);
+    store
+        .trust(
+            &key,
+            "~/work/app",
+            &[Definition::of_rules(&[allow_rule()])],
+            true,
+        )
+        .unwrap();
+    world.project_config(
+        "[model]\nmain = \"no-such-model\"\nspeed = \"no-such-tier\"\neffort = \
+         \"no-such-level\"\n\n[sandbox]\nwrite = [\"\", \"~nobody/x\", \"C:relative\"]\n\n\
+         [[permissions.rules]]\neffect = \"write\"\nmatch = \".github/**\"\naction = \"allow\"\n\n\
+         [[permissions.rules]]\neffect = \"exec\"\nmatch = \"curl *\"\naction = \"allow\"\n",
+    );
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(front.state.roles[&ModelRole::Main].model.as_str(), MODEL);
+        front.prompt("hello").await;
+        front.until(|seen| !crate::ends_in(seen).is_empty()).await;
+        assert_eq!(front.last_text(), "Done.");
+        let notices = front.notices();
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("rules have changed")),
+            "{notices:?}"
+        );
+        front.close().await;
+    });
+}
+
+/// A project's first limit where there was none waits for trust (the
+/// owner's decision of 2026-11-16): an untrusted repository's limit of one
+/// request would stop every turn at once. Untrusted, the turn runs without
+/// it and a notice names it; trusted, it is in force.
+#[test]
+fn a_projects_first_limit_waits_for_trust() {
+    for trusted in [false, true] {
+        let world = World::new(
+            if trusted {
+                "first_limit_trusted"
+            } else {
+                "first_limit_untrusted"
+            },
+            [
+                calls(&[("c1", "read", json!({"path": "a.txt"}))]),
+                says("Done."),
+            ],
+        );
+        world.project_config("[limits.turn]\nrequests = 1\n");
+        world.put("a.txt", "one\n");
+        let core = world.core_with(|options| options.trust_project = trusted);
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            let end = front.turn("go").await;
+            let notices = front.notices();
+            front.close().await;
+            if trusted {
+                assert_eq!(end.outcome, TurnOutcome::Limit, "{:?}", end.error);
+            } else {
+                assert_eq!(end.outcome, TurnOutcome::Completed, "{:?}", end.error);
+                assert!(
+                    notices.iter().any(|notice| notice.contains("not trusted")
+                        && notice.contains("limits.turn.requests")),
+                    "{notices:?}"
+                );
+            }
+        });
+    }
+}

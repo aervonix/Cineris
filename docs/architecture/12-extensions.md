@@ -101,7 +101,7 @@ Review the staged changes in this repository. Focus on {{focus | "correctness"}}
 Report problems as a list, most serious first.
 ```
 
-- **Where.** `<workspace>/.cortex/commands/*.md` and `<config dir>/commands/*.md`. The file name is the command name. Project commands override user commands of the same name.
+- **Where.** `<workspace>/.cineris/commands/*.md` and `<config dir>/commands/*.md`. The file name is the command name. Project commands override user commands of the same name.
 - **Front matter.** A description for the menu, named arguments with optional defaults, and optionally a settings profile for the turn.
 - **Body.** Sent as the user's prompt, with arguments substituted. `{{args}}` is everything typed after the command.
 - **No execution.** A command file cannot run anything or include files by itself. It is text for the model, so it needs no trust.
@@ -110,7 +110,7 @@ Report problems as a list, most serious first.
 
 A skill is a folder with a `SKILL.md` that starts with a name and a description. This is the open Agent Skills layout, read as it is so that people's existing skills work.
 
-- **Where.** `.cortex/skills/`, `.agents/skills/` and `.claude/skills/`, in the project and in the user's home.
+- **Where.** `.cineris/skills/`, `.agents/skills/` and `.claude/skills/`, in the project and in the user's home.
 - **In the prompt:** each skill's name, description and path, and nothing else. The model reads the file when a task calls for it.
 - **Scripts inside a skill** are just files. If the model runs one, it runs through the shell tool under the normal permissions.
 - Skills need no trust, for the same reason as instruction files.
@@ -186,20 +186,20 @@ net   = []                      # hosts it may contact through the host's fetch
 **The script** registers what it contributes.
 
 ```js
-cortex.tool({
+cineris.tool({
   name: "find_issue",
   description: "Search issues by text",
   input: { type: "object", properties: { query: { type: "string" } },
            required: ["query"], additionalProperties: false },
   readOnly: true,
   async run(args) {
-    const r = await cortex.exec("gh", ["issue", "list", "--search", args.query, "--json", "number,title"]);
+    const r = await cineris.exec("gh", ["issue", "list", "--search", args.query, "--json", "number,title"]);
     if (r.code !== 0) throw new Error(r.stderr);
     return { issues: JSON.parse(r.stdout) };
   },
 });
 
-cortex.on("tool.before", { tools: ["edit", "write"] }, (event) => {
+cineris.on("tool.before", { tools: ["edit", "write"] }, (event) => {
   if (event.arguments.path.startsWith("generated/")) {
     return { decision: "deny", reason: "generated files are rebuilt from schema/" };
   }
@@ -210,13 +210,13 @@ cortex.on("tool.before", { tools: ["edit", "write"] }, (event) => {
 
 | Function | Does | Checked against |
 |---|---|---|
-| `cortex.tool(def)`, `cortex.command(def)`, `cortex.on(event, filter, fn)` | Register contributions. | The manifest's name and API version. |
-| `cortex.exec(program, args, options)` | Asks the host to run a program. Returns exit code and bounded output. | `capabilities.exec`, then the permission engine as an `exec` effect, then the sandbox. |
-| `cortex.fs.read`, `cortex.fs.write`, `cortex.fs.list`, `cortex.fs.search` | Workspace file access through the same code as the built-in tools. | `capabilities.read` and `write`, then the permission engine. |
-| `cortex.http.fetch(url, options)` | An HTTP request made by the host. | `capabilities.net`, then the permission engine as a `network` effect. |
-| `cortex.ask(question, choices)`, `cortex.notify(text)`, `cortex.progress(text)` | Talk to the user through the front end. | Rate limits. |
-| `cortex.state.get`, `cortex.state.set` | A small key-value store per extension, kept in the session and the state directory. | A size cap. |
-| `cortex.log(...)` | Writes to the log. | |
+| `cineris.tool(def)`, `cineris.command(def)`, `cineris.on(event, filter, fn)` | Register contributions. | The manifest's name and API version. |
+| `cineris.exec(program, args, options)` | Asks the host to run a program. Returns exit code and bounded output. | `capabilities.exec`, then the permission engine as an `exec` effect, then the sandbox. |
+| `cineris.fs.read`, `cineris.fs.write`, `cineris.fs.list`, `cineris.fs.search` | Workspace file access through the same code as the built-in tools. | `capabilities.read` and `write`, then the permission engine. |
+| `cineris.http.fetch(url, options)` | An HTTP request made by the host. | `capabilities.net`, then the permission engine as a `network` effect. |
+| `cineris.ask(question, choices)`, `cineris.notify(text)`, `cineris.progress(text)` | Talk to the user through the front end. | Rate limits. |
+| `cineris.state.get`, `cineris.state.set` | A small key-value store per extension, kept in the session and the state directory. | A size cap. |
+| `cineris.log(...)` | Writes to the log. | |
 
 There is no function that returns credentials, reads the session, changes configuration or grants permission.
 
@@ -271,7 +271,7 @@ The threats are in [../security.md](../security.md), section 3.
 ## Windows
 
 - Extension scripts behave identically: the engine is in the binary and the host functions are the same code.
-- `cortex.exec` names a program and its arguments as a list. Nothing passes through a shell. Script shims (`.cmd`, `.bat`) are resolved by the host and run with arguments it escapes itself; arguments that cannot be escaped safely are refused.
+- `cineris.exec` names a program and its arguments as a list. Nothing passes through a shell. Script shims (`.cmd`, `.bat`) are resolved by the host and run with arguments it escapes itself; arguments that cannot be escaped safely are refused.
 - Hook commands follow the same rules.
 
 ## What is in the first usable release
@@ -284,7 +284,7 @@ The threats are in [../security.md](../security.md), section 3.
 | Script extensions | yes: tools, commands, hooks, the host functions above | UI contributions (status items, panels). |
 | Self-written extensions | yes: proposal, checks, review, immediate load | Sharing and installing extensions from a git URL at a pinned commit. |
 | Hot-reload | yes | |
-| Management | `cortex ext list`, `inspect`, `disable`, `remove`, `add <path>` | |
+| Management | `cineris ext list`, `inspect`, `disable`, `remove`, `add <path>` | |
 | Examples | Three small extensions under `examples/`, used as tests | |
 
 ## Relation to MCP

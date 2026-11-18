@@ -1,10 +1,10 @@
-# Breaks for step 14 (the `anthropic-messages` protocol, `cortex-llm`), from pull request 21.
+# Breaks for step 14 (the `anthropic-messages` protocol, `cineris-llm`), from pull request 21.
 # Reconstructed from the pull request description and the tests, not from the
 # lists the step kept: each rule is one the description names.
 
 [break] cache-marker-after-lookback
 rule: The one extra cache marker is written only when the round is longer than the provider's lookback; a round exactly as long as the lookback has none.
-file: crates/cortex-llm/src/anthropic/request.rs
+file: crates/cineris-llm/src/anthropic/request.rs
 in: Body::long_round
 find: positions > LOOKBACK
 replace: positions >= LOOKBACK
@@ -13,7 +13,7 @@ caught-by:
 
 [break] replay-only-readable-blocks
 rule: Anthropic's own API gets every reasoning block of its own earlier messages back, whatever the model (the flag `replay_reasoning` is `all`).
-file: crates/cortex-llm/src/anthropic/request.rs
+file: crates/cineris-llm/src/anthropic/request.rs
 in: replay
 find: readable || flags::replays_every_block(provider)
 replace: readable
@@ -22,7 +22,7 @@ caught-by:
 
 [break] stored-block-not-checked
 rule: A stored block is sent back as the text that was stored only when it is one JSON object; anything else falls back to the neutral fields.
-file: crates/cortex-llm/src/anthropic/request.rs
+file: crates/cineris-llm/src/anthropic/request.rs
 in: stored_block
 find: .filter(|text| json::is_object(text))
 replace:
@@ -31,7 +31,7 @@ caught-by:
 
 [break] tool-call-id-kept-as-is
 rule: A tool call id from another provider is written with only the characters this provider takes, so a call and its result still name each other.
-file: crates/cortex-llm/src/anthropic/request.rs
+file: crates/cineris-llm/src/anthropic/request.rs
 in: wire_id
 find: !id.is_empty() && id.bytes().all(fits)
 replace: true
@@ -40,7 +40,7 @@ caught-by:
 
 [break] speed-sent-to-every-model
 rule: A model that offers no speed tier is not told a speed: the real API refuses the field for it.
-file: crates/cortex-llm/src/anthropic/request.rs
+file: crates/cineris-llm/src/anthropic/request.rs
 in: sends_speed
 find: !request.model.info.speeds.is_empty()
 replace: true
@@ -49,7 +49,7 @@ caught-by:
 
 [break] speed-beta-without-a-tier
 rule: The beta name for a speed is sent only where the request names a speed; the flag on a model with no tier asks for nothing.
-file: crates/cortex-llm/src/anthropic/mod.rs
+file: crates/cineris-llm/src/anthropic/mod.rs
 in: build
 find: request::sends_speed(request) &&
 replace:
@@ -58,7 +58,7 @@ caught-by:
 
 [break] spend-cap-is-a-rate-limit
 rule: A spending cap arrives as a 429 like a rate limit, and its detail code wins: it is a hard stop, never retried.
-file: crates/cortex-llm/src/anthropic/classify.rs
+file: crates/cineris-llm/src/anthropic/classify.rs
 in: signal
 find:
     if detail == Some(SPEND_LIMIT) {
@@ -71,7 +71,7 @@ caught-by:
 
 [break] too-large-413-is-not-overflow
 rule: Any 413 is a context overflow, even when the body names no error type (a proxy's HTML page).
-file: crates/cortex-llm/src/anthropic/classify.rs
+file: crates/cineris-llm/src/anthropic/classify.rs
 in: error
 find: Signal::None if status == Some(413) => Signal::ContextLength
 replace: Signal::None if status == Some(413) => Signal::None
@@ -80,7 +80,7 @@ caught-by:
 
 [break] tier-claims-model-limit
 rule: A refusal at a speed tier belongs to the model, not the tier, when the standard headers say nothing is left and the tier's own say something is.
-file: crates/cortex-llm/src/anthropic/classify.rs
+file: crates/cineris-llm/src/anthropic/classify.rs
 in: refused_by_tier
 find: tier_used_up || !standard_used_up
 replace: true
@@ -89,7 +89,7 @@ caught-by:
 
 [break] shared-limit-tier-rate-limit
 rule: A rate limit can only be the speed tier's when the tier has a limit of its own.
-file: crates/cortex-llm/src/anthropic/classify.rs
+file: crates/cineris-llm/src/anthropic/classify.rs
 in: refused_by_tier
 find: Throttle::RateLimit if offer.separate_limit => {}
 replace: Throttle::RateLimit => {}
@@ -98,7 +98,7 @@ caught-by:
 
 [break] fast-limits-not-labelled
 rule: The fast tier's own limits from the headers are labelled with the tier.
-file: crates/cortex-llm/src/anthropic/classify.rs
+file: crates/cineris-llm/src/anthropic/classify.rs
 in: read_headers
 find: speed: fast.then_some(Speed::Fast)
 replace: speed: None
@@ -107,7 +107,7 @@ caught-by:
 
 [break] block-index-used-twice
 rule: An index names one block for the whole response: a block that starts under an index already used is an error.
-file: crates/cortex-llm/src/anthropic/decode.rs
+file: crates/cineris-llm/src/anthropic/decode.rs
 in: Decoder::block_start
 find: !self.seen.insert(index)
 replace: false
@@ -116,7 +116,7 @@ caught-by:
 
 [break] unknown-events-not-skipped
 rule: An event of a kind the decoder does not know is skipped.
-file: crates/cortex-llm/src/anthropic/decode.rs
+file: crates/cineris-llm/src/anthropic/decode.rs
 in: Decoder::feed
 find:
     if !KNOWN_EVENTS.contains(&kind) {
@@ -128,7 +128,7 @@ caught-by:
 
 [break] context-window-stop-is-max-output
 rule: A response that filled the context window stops as a context overflow, which the loop answers by compacting.
-file: crates/cortex-llm/src/anthropic/decode.rs
+file: crates/cineris-llm/src/anthropic/decode.rs
 in: stop_reason
 find: "model_context_window_exceeded" => StopReason::ContextOverflow
 replace: "model_context_window_exceeded" => StopReason::MaxOutput
@@ -137,7 +137,7 @@ caught-by:
 
 [break] cache-read-added-to-input
 rule: The provider's input count does not include cache reads, so the cache read tokens are reported as their own count and nothing is added to the input.
-file: crates/cortex-llm/src/anthropic/decode.rs
+file: crates/cineris-llm/src/anthropic/decode.rs
 in: UsageSoFar::merge
 find: self.tokens.cache_read = count;
 replace: self.tokens.input += count;

@@ -1,10 +1,10 @@
 //! `cargo xtask tui-screens [--write]`: the golden screens.
 //!
 //! The reference screens of the chosen look (`docs/architecture/tui-look/`)
-//! are drawn again by `cortex-tui`'s views through the inline presenter into
+//! are drawn again by `cineris-tui`'s views through the inline presenter into
 //! the test kit's virtual terminal, and compared cell by cell with the
 //! reference files. This runs that comparison, which is an ordinary test of
-//! `cortex-tui`'s integration binary (tier 2, so every pull request runs it
+//! `cineris-tui`'s integration binary (tier 2, so every pull request runs it
 //! too), and shows its report: each screen's rows compared, the rows other
 //! steps draw that are not built yet, and every cell that differs.
 //!
@@ -31,12 +31,12 @@ fn parse(arguments: &[String]) -> Result<bool> {
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let write = parse(arguments)?;
     let variables: &[(&str, &str)] = if write {
-        &[("CORTEX_UPDATE_SCREENS", "1")]
+        &[("CINERIS_UPDATE_SCREENS", "1")]
     } else {
         &[]
     };
     let ran = outside::run_test(
-        &["--package", "cortex-tui", "--test", "it"],
+        &["--package", "cineris-tui", "--test", "it"],
         TEST,
         variables,
         false,
@@ -49,7 +49,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         println!("The rows that differed are rewritten; the cells changed are listed above.");
         println!("Comparing again, writing nothing:");
         return outside::run_test(
-            &["--package", "cortex-tui", "--test", "it"],
+            &["--package", "cineris-tui", "--test", "it"],
             TEST,
             &[],
             false,

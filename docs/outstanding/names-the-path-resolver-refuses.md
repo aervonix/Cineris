@@ -1,6 +1,6 @@
 Windows names the path resolver cannot read (trailing dot, stream, provider path) go unchecked for off-table commands.
 
-- Area: cortex-policy
+- Area: cineris-policy
 - Owner: step 32
 
 | Item | Who | When |

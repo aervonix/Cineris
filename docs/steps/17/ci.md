@@ -1,6 +1,6 @@
 # After step 17: the project profile and memory
 
-Step 17 added `cortex-knowledge` (entries, the private store and the repository's shared profile, the text of section 5), two additions to `cortex-policy` (the exact rule of an accepted command, and a running session's learned rules), the epoch's `profile` in the log, and section 5 in the prompt's builder. Its CI times, and the measurements taken on the hosted runners, are below, one part for each of its pull requests.
+Step 17 added `cineris-knowledge` (entries, the private store and the repository's shared profile, the text of section 5), two additions to `cineris-policy` (the exact rule of an accepted command, and a running session's learned rules), the epoch's `profile` in the log, and section 5 in the prompt's builder. Its CI times, and the measurements taken on the hosted runners, are below, one part for each of its pull requests.
 
 ## The first pull request: the store
 
@@ -12,9 +12,9 @@ On the desktop, built as CI builds (`cargo xtask ci`, 2026-11-16, nothing else r
 | 2, integration | 1,323 | 14.3 s | 40 s | 36% |
 | 3, system | 206 | 9.2 s | 60 s | 15% |
 
-`cortex-knowledge`'s own 80 tests take 0.06 s of it; `cortex-policy`'s new property test, at 40 cases, 0.08 s.
+`cineris-knowledge`'s own 80 tests take 0.06 s of it; `cineris-policy`'s new property test, at 40 cases, 0.08 s.
 
-**The breaks:** `mutations/step-17.breaks`, 59 breaks, every one caught by the tests its list names (`cargo xtask mutate step-17 --jobs 2`, on the desktop). **Stress:** `cortex-knowledge`, `cortex-policy` and `cortex-protocol`, 298 tests, 100 times each under seeds 0 to 99, every test passing every time; before the review's fixes, the six crates whose tests changed, 943 tests, 50 times each.
+**The breaks:** `mutations/step-17.breaks`, 59 breaks, every one caught by the tests its list names (`cargo xtask mutate step-17 --jobs 2`, on the desktop). **Stress:** `cineris-knowledge`, `cineris-policy` and `cineris-protocol`, 298 tests, 100 times each under seeds 0 to 99, every test passing every time; before the review's fixes, the six crates whose tests changed, 943 tests, 50 times each.
 
 ## The first pull request, on the hosted runners
 
@@ -42,7 +42,7 @@ The PR's run is 43853462567, at `e450d36`.
 
 ### Its measurements on the runners
 
-`try` run 43851211647 (`perf -p cortex-knowledge`, a release build, medians), beside the desktop's and the budgets proposed for `docs/performance-budgets.md`:
+`try` run 43851211647 (`perf -p cineris-knowledge`, a release build, medians), beside the desktop's and the budgets proposed for `docs/performance-budgets.md`:
 
 | What | Proposed | Desktop | Linux runner | Windows runner |
 |---|---|---|---|---|
@@ -57,11 +57,11 @@ The load at the caps is over 5 ms on the hosted runners. The recommendation, whi
 
 ## The second pull request: the wiring
 
-On the desktop, built as CI builds (`cargo xtask ci`, 2026-11-16, with other sessions' work beside it, so the totals are not comparable with the first pull request's): `cortex-knowledge` 0.1 s of unit tests and 1.0 s of integration tests above the tests' start, `cortex-core` 1.4 s, 6.3 s and 0.9 s of system tests, `cortex-agent` 0.2 s and 3.5 s. The whole run: tier 1 at 19.1 s of 20 (`xtask`'s own tests are 6.9 s of it), tier 2 at 23.8 s of 40, tier 3 at 11.3 s of 60.
+On the desktop, built as CI builds (`cargo xtask ci`, 2026-11-16, with other sessions' work beside it, so the totals are not comparable with the first pull request's): `cineris-knowledge` 0.1 s of unit tests and 1.0 s of integration tests above the tests' start, `cineris-core` 1.4 s, 6.3 s and 0.9 s of system tests, `cineris-agent` 0.2 s and 3.5 s. The whole run: tier 1 at 19.1 s of 20 (`xtask`'s own tests are 6.9 s of it), tier 2 at 23.8 s of 40, tier 3 at 11.3 s of 60.
 
 **What the observer adds to a `shell` call,** on the call's own path (`perf_observing_a_command`, a release build on the desktop, medians of 20,000): a line that is not a build, test or check 0.11 µs; a line the observer does not take 0.04 µs; a command the store knows and confirmed today 0.34 µs (0.59 µs with the store at its caps); a command the store does not know 0.30 µs (0.90 µs at the caps). Storing what was learned is beside the turn.
 
-**The breaks:** `mutations/step-17.breaks`, 108 breaks, 49 of them this pull request's, every one caught by the tests its list names (`cargo xtask mutate step-17 --jobs 2`, on the desktop, on the pull request's last commit). **Stress:** `cortex-knowledge`, `cortex-core`, `cortex-agent`, `cortex-config` and `cortex-policy`, 1,031 tests, 50 times each under seeds 0 to 49, every test passing every time. Two earlier runs each failed once: `trust::sys_trust_for_the_run_reaches_all_four`, which is [a known item](../../outstanding/a-base-capture-beside-the-turns-git.md) and not this step's; and this step's own test of an expired entry, which read a notice it had not waited for (the last review found it in the same hour, and it waits now).
+**The breaks:** `mutations/step-17.breaks`, 108 breaks, 49 of them this pull request's, every one caught by the tests its list names (`cargo xtask mutate step-17 --jobs 2`, on the desktop, on the pull request's last commit). **Stress:** `cineris-knowledge`, `cineris-core`, `cineris-agent`, `cineris-config` and `cineris-policy`, 1,031 tests, 50 times each under seeds 0 to 49, every test passing every time. Two earlier runs each failed once: `trust::sys_trust_for_the_run_reaches_all_four`, which is [a known item](../../outstanding/a-base-capture-beside-the-turns-git.md) and not this step's; and this step's own test of an expired entry, which read a notice it had not waited for (the last review found it in the same hour, and it waits now).
 
 **Windows.** `try` run 43862916628 ran the five crates' tests on a hosted Windows runner before the pull request was opened: nothing failed, the two tests whose programs are `.cmd` files included.
 
@@ -119,7 +119,7 @@ The PR's run is 43871451116, at `c64ddb3`.
 
 <!-- end of what cargo xtask ci-times wrote, section "wiring-pr" -->
 
-`pr-size` on the second pull request: Linux 12,309,928 bytes (11.74 MB of 16), 417,856 more than `main`; Windows 14,391,296 bytes (13.72 MB of 18), 542,720 more. It is the first of the three that links `cortex-knowledge` into the binary.
+`pr-size` on the second pull request: Linux 12,309,928 bytes (11.74 MB of 16), 417,856 more than `main`; Windows 14,391,296 bytes (13.72 MB of 18), 542,720 more. It is the first of the three that links `cineris-knowledge` into the binary.
 
 Two things these tables show that are not this step's: `main`'s own Linux run at `3c5ee17` was on a slow runner (tier 2 at 46 s of 40), and Windows' tier 3 is at 82 s of 90 on `main` itself on a 9 ms runner. The second pull request adds 5.5 s to it in the A/B above.
 
@@ -130,14 +130,14 @@ Two things these tables show that are not this step's: `main`'s own Linux run at
 | Crate | Before | After | Change |
 |---|---:|---:|---:|
 | The whole binary | 11,892,072 | 12,309,928 | +417,856 |
-| `cortex_knowledge` | 0 | 112,661 | +112,661 |
-| `toml` (`cortex-knowledge` turns on its `display` feature, which writes TOML) | 200,118 | 289,128 | +89,010 |
+| `cineris_knowledge` | 0 | 112,661 | +112,661 |
+| `toml` (`cineris-knowledge` turns on its `display` feature, which writes TOML) | 200,118 | 289,128 | +89,010 |
 | In no symbol: headers, unwind tables, padding | 3,232,521 | 3,303,994 | +71,473 |
-| `cortex_core` (the wiring) | 411,859 | 473,484 | +61,625 |
+| `cineris_core` (the wiring) | 411,859 | 473,484 | +61,625 |
 | `std` (generic code made for the new types) | 2,007,965 | 2,060,641 | +52,676 |
 | `tokio` | 355,355 | 371,029 | +15,674 |
-| `cortex_agent` | 239,605 | 243,323 | +3,718 |
-| `cortex_protocol` | 112,586 | 116,115 | +3,529 |
+| `cineris_agent` | 239,605 | 243,323 | +3,718 |
+| `cineris_protocol` | 112,586 | 116,115 | +3,529 |
 
 For step 33: a quarter of it is the crate and a fifth is `toml`'s writer, which a store that wrote its own file would not need, if the size is wanted back.
 
@@ -158,5 +158,5 @@ For step 33: a quarter of it is the crate and a fifth is `toml`'s writer, which 
 
 The A/B above was taken before the branch was rebased onto the re-decide step's change (`ffe45b6`); the new system test starts the binary twelve times and no shell.
 
-**The breaks:** `mutations/step-17.breaks` has 123, 15 of them the third pull request's. On its last commit, the 58 that the change touches (`cargo xtask mutate step-17 --changed origin/main`: 18 new or changed in the list, 29 by their file, 11 by a test they name) each did what the list expects; the other 65 were run on the second pull request's last commit. **Stress:** `cortex-cli`, `cortex-core` and `cortex-knowledge`, 453 tests, 50 times each under seeds 0 to 49, every test passing every time.
+**The breaks:** `mutations/step-17.breaks` has 123, 15 of them the third pull request's. On its last commit, the 58 that the change touches (`cargo xtask mutate step-17 --changed origin/main`: 18 new or changed in the list, 29 by their file, 11 by a test they name) each did what the list expects; the other 65 were run on the second pull request's last commit. **Stress:** `cineris-cli`, `cineris-core` and `cineris-knowledge`, 453 tests, 50 times each under seeds 0 to 49, every test passing every time.
 

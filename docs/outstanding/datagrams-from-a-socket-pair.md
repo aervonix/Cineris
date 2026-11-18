@@ -1,6 +1,6 @@
 With the network off, a datagram `socketpair` can `sendto` a local datagram socket by path, such as journald's.
 
-- Area: cortex-sandbox
+- Area: cineris-sandbox
 - Owner: step 32
 
 | Item | Who | When |

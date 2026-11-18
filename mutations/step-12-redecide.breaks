@@ -8,21 +8,21 @@
 
 [break] no-second-decision
 rule: A call that has not started, decided before a change or a narrowing, is planned and decided again.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::pump
 find: ) && self.is_stale(position, narrowed)
 replace: ) && false
-packages: cortex-agent, cortex-core
+packages: cineris-agent, cineris-core
 caught-by:
     redecide::a_write_through_a_link_an_earlier_call_made_is_planned_and_decided_again
     redecide::in_a_mixed_response_nothing_reaches_through_a_link_unjudged_whatever_the_order
-    cortex-core::it redecide::sys_a_copy_through_a_link_an_earlier_command_made_is_asked_about_again
-    cortex-core::it redecide::sys_a_write_through_a_link_an_earlier_command_made_is_planned_again_and_asked_about
-    cortex-core::it redecide::sys_a_read_through_a_link_an_earlier_command_made_is_planned_again_and_asked_about
+    cineris-core::it redecide::sys_a_copy_through_a_link_an_earlier_command_made_is_asked_about_again
+    cineris-core::it redecide::sys_a_write_through_a_link_an_earlier_command_made_is_planned_again_and_asked_about
+    cineris-core::it redecide::sys_a_read_through_a_link_an_earlier_command_made_is_planned_again_and_asked_about
 
 [break] changes-not-counted
 rule: A call that ran and may have changed the file system counts, when it finishes.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::finished
 find: self.changes += 1;
 replace: self.changes += 0;
@@ -32,7 +32,7 @@ caught-by:
 
 [break] every-call-counts
 rule: A call that did not run, or that may change nothing, does not count: nothing is decided twice when nothing could change the answer.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::finished
 find: if call.ran
 replace: if true || call.ran
@@ -42,7 +42,7 @@ caught-by:
 
 [break] a-read-only-command-counts
 rule: A command the policy found only reads does not count as a change.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::planned
 find: footprint.may_change &= !only_reads;
 replace:
@@ -51,20 +51,20 @@ caught-by:
 
 [break] narrowing-ignored
 rule: A call decided before the policy's rules narrowed is decided again.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::is_stale
 find: changes: self.changes, narrowed
 replace: changes: self.changes, narrowed: self.calls[position].decided.narrowed
-packages: cortex-agent, cortex-core
+packages: cineris-agent, cineris-core
 caught-by:
     redecide::a_call_decided_before_a_rule_was_taken_back_is_decided_again
-    cortex-core::it redecide::a_call_allowed_by_an_approval_revoked_while_it_waits_is_asked_about
-    cortex-core::it redecide::a_call_decided_before_the_level_was_lowered_is_decided_again_and_refused
-    cortex-core::it knowledge::sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about
+    cineris-core::it redecide::a_call_allowed_by_an_approval_revoked_while_it_waits_is_asked_about
+    cineris-core::it redecide::a_call_decided_before_the_level_was_lowered_is_decided_again_and_refused
+    cineris-core::it knowledge::sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about
 
 [break] no-wait-for-a-later-running-call
 rule: A call decided again waits for a call it now conflicts with that is running, a later one too.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::pump
 find: let waits_for_running = self.calls[position + 1..]
 replace: let waits_for_running = false && self.calls[position + 1..]
@@ -73,7 +73,7 @@ caught-by:
 
 [break] no-wait-behind-a-call-still-to-be-decided-again
 rule: While a call that may change the file system runs, and an answer may be a stop, a later call with side effects waits for every earlier call that has not started.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::pump
 find: && matches!(earlier.state, CallState::Ready(_))
 replace: && false
@@ -82,7 +82,7 @@ caught-by:
 
 [break] moved-under-a-later-call-runs
 rule: A call planned again onto a path a later call has already used does not run.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::pump
 find: if used_later {
 replace: if false {
@@ -91,122 +91,122 @@ caught-by:
 
 [break] the-engine-forgets-a-revoke
 rule: Revoking an approval in force counts as a narrowing.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::revoke
 find: self.narrow();
 occurrence: 1
 replace:
-packages: cortex-policy, cortex-core
+packages: cineris-policy, cineris-core
 caught-by:
-    cortex-policy::it narrowed::revoking_an_approval_in_force_narrows_and_revoking_nothing_does_not
-    cortex-core::it redecide::a_call_allowed_by_an_approval_revoked_while_it_waits_is_asked_about
+    cineris-policy::it narrowed::revoking_an_approval_in_force_narrows_and_revoking_nothing_does_not
+    cineris-core::it redecide::a_call_allowed_by_an_approval_revoked_while_it_waits_is_asked_about
 
 [break] the-engine-forgets-a-stored-revoke
 rule: Revoking an approval stored for the project counts as a narrowing.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::revoke
 find: self.narrow();
 occurrence: 2
 replace:
 caught-by:
-    cortex-policy::it narrowed::revoking_an_approval_stored_for_the_project_narrows
+    cineris-policy::it narrowed::revoking_an_approval_stored_for_the_project_narrows
 
 [break] the-engine-forgets-a-learned-command-taken-off
 rule: Taking a learned command off counts as a narrowing.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::set_learned
 find: if before.iter().any(|rule| !kept.contains(&rule)) {
 replace: if false {
-packages: cortex-policy, cortex-core
+packages: cineris-policy, cineris-core
 caught-by:
-    cortex-policy::it narrowed::taking_a_learned_command_off_narrows_and_adding_one_does_not
-    cortex-core::it knowledge::sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about
+    cineris-policy::it narrowed::taking_a_learned_command_off_narrows_and_adding_one_does_not
+    cineris-core::it knowledge::sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about
 
 [break] a-new-engine-without-the-learned-commands
 rule: An engine put in force for a change of level is given the session's learned commands with the swap.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EngineInForce::replace_with
 find: let given = engine.set_learned(learned);
 replace: let given = { let _ = learned; Ok(()) };
 caught-by:
-    cortex-core policy::tests::a_new_engine_is_put_in_force_with_the_learned_commands_given
-    cortex-core::it knowledge::sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
+    cineris-core policy::tests::a_new_engine_is_put_in_force_with_the_learned_commands_given
+    cineris-core::it knowledge::sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
 
 [break] a-learned-list-refused-whole-does-not-narrow
 rule: A learned list refused whole takes away the learned rules in force, which counts as a narrowing.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::set_learned
 find: if !before.is_empty() {
 replace: if false {
 caught-by:
-    cortex-policy::it narrowed::a_learned_list_refused_whole_narrows_when_it_takes_rules_away
+    cineris-policy::it narrowed::a_learned_list_refused_whole_narrows_when_it_takes_rules_away
 
 [break] a-new-engine-is-no-narrowing
 rule: Another engine in force for a change of level counts as a narrowing, and carries the count of the one it replaces.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EngineInForce::replace_with
 find: in_force.narrowed() + 1
 replace: 0
 caught-by:
-    cortex-core::it redecide::a_call_decided_before_the_level_was_lowered_is_decided_again_and_refused
+    cineris-core::it redecide::a_call_decided_before_the_level_was_lowered_is_decided_again_and_refused
 
 [break] an-allowed-call-is-asked-again
 rule: A call a person allowed, decided again with the same question about the same accesses, is not asked again.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: decide
 find: Outcome::Ask(question) if self.was_allowed(call, &question) => Decision::Allow,
 replace: Outcome::Ask(question) if false && self.was_allowed(call, &question) => Decision::Allow,
 caught-by:
-    cortex-core::it redecide::sys_a_call_a_person_allowed_is_not_asked_again_when_it_is_decided_again
+    cineris-core::it redecide::sys_a_call_a_person_allowed_is_not_asked_again_when_it_is_decided_again
 
 [break] an-answer-kept-without-its-accesses
 rule: An answer is kept with the call's accesses as they were shown: a command whose directory moved is asked again.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::was_allowed
 find: earlier.question == *question && Some(&earlier.accesses) == accesses(call).as_ref()
 replace: earlier.question == *question
 caught-by:
-    cortex-core::it redecide::sys_a_command_whose_directory_moved_is_asked_about_again
+    cineris-core::it redecide::sys_a_command_whose_directory_moved_is_asked_about_again
 
 [break] an-answer-kept-by-the-turn-alone
 rule: An answer is kept by the loop's own id for the call, not by anything a provider may repeat.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::was_allowed
 find: .find(|allowed| allowed.item == *call.item)
 replace: .find(|allowed| allowed.turn == *call.turn)
 caught-by:
-    cortex-core::it redecide::sys_an_answer_is_not_carried_to_a_later_call_that_has_the_same_provider_id
+    cineris-core::it redecide::sys_an_answer_is_not_carried_to_a_later_call_that_has_the_same_provider_id
 
 [break] the-working-directory-not-judged
 rule: A command that may write is judged where it runs: in the call's own working directory too, when that is in the workspace.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_command
 find: (here != *cwd || self.in_scope(cwd))
 replace: (here != *cwd)
 caught-by:
-    cortex-policy::it working_directory::a_command_that_may_write_is_asked_about_in_a_protected_working_directory
+    cineris-policy::it working_directory::a_command_that_may_write_is_asked_about_in_a_protected_working_directory
 
 [break] an-unmodelled-line-not-judged-where-it-runs
 rule: A line the analysis does not model is judged where it runs, as a command that may write.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_command
 find: if self.in_scope(cwd) {
 replace: if false {
 caught-by:
-    cortex-policy::it working_directory::a_command_that_may_write_is_asked_about_in_a_protected_working_directory
+    cineris-policy::it working_directory::a_command_that_may_write_is_asked_about_in_a_protected_working_directory
 
 [break] a-new-engine-keeps-the-approvals-it-was-made-with
 rule: Another engine put in force takes over the approvals of the one in force at that moment: a revoke made meanwhile is not lost.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EngineInForce::replace_with
 find: engine.keep_approvals_of(&in_force);
 replace:
 caught-by:
-    cortex-core::it redecide::a_revoke_made_while_the_level_changes_is_not_lost
+    cineris-core::it redecide::a_revoke_made_while_the_level_changes_is_not_lost
 
 [break] a-change-started-in-the-same-look-not-seen
 rule: A call that may change the file system, started in the round's look, holds back a later call with side effects behind an earlier call that has not started, in the same look.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::pump
 find: changing |= footprint.may_change;
 replace:
@@ -215,65 +215,65 @@ caught-by:
 
 [break] a-replacement-takes-no-lock
 rule: Another engine is put in force under the lock a revoke and a record hold, so neither is lost to it.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EngineInForce::replace_with
 find: let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
 replace:
 caught-by:
-    cortex-core policy::tests::each_change_of_the_engine_in_force_holds_the_lock_while_it_works
+    cineris-core policy::tests::each_change_of_the_engine_in_force_holds_the_lock_while_it_works
 
 [break] a-record-takes-no-lock
 rule: An answer is recorded in the engine in force under the lock a replacement holds.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EngineInForce::record
 find: let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
 replace:
 caught-by:
-    cortex-core policy::tests::each_change_of_the_engine_in_force_holds_the_lock_while_it_works
+    cineris-core policy::tests::each_change_of_the_engine_in_force_holds_the_lock_while_it_works
 
 [break] a-revoke-takes-no-lock
 rule: Approvals are taken back from the engine in force under the lock a replacement holds.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EngineInForce::revoke
 find: let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
 replace:
 caught-by:
-    cortex-core policy::tests::each_change_of_the_engine_in_force_holds_the_lock_while_it_works
+    cineris-core policy::tests::each_change_of_the_engine_in_force_holds_the_lock_while_it_works
 
 [break] a-stop-of-the-turn-moves-no-count
 rule: Stopping the turn moves the count of narrowings, so the calls of it that have not started are decided again and stopped.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::stop_turn
 find: self.in_force.stop();
 replace:
 os: linux
 caught-by:
-    cortex-core::it redecide::sys_a_stop_raised_around_a_command_that_only_reads_stops_the_calls_after_it
+    cineris-core::it redecide::sys_a_stop_raised_around_a_command_that_only_reads_stops_the_calls_after_it
 
 [break] an-answer-recorded-round-the-lock
 rule: A person's answer is recorded through the engine in force, under the lock a change of level holds.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: Policy::ask
 find: in_force.record(&question, &choice)
 replace: in_force.get().record(&question, &choice)
 caught-by:
-    cortex-core::it redecide::a_revoke_made_while_the_level_changes_is_not_lost
+    cineris-core::it redecide::a_revoke_made_while_the_level_changes_is_not_lost
 
 [break] a-revoke-made-round-the-lock
 rule: A revoke is made through the engine in force, under the lock a change of level holds.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::revoke
 find: self.in_force.revoke(ids)
 replace: self.in_force.get().revoke(ids)
 caught-by:
-    cortex-core::it redecide::a_revoke_made_while_the_level_changes_is_not_lost
+    cineris-core::it redecide::a_revoke_made_while_the_level_changes_is_not_lost
 
 [break] a-stop-is-no-narrowing
 rule: A stop of the turn counts as a narrowing, so every call that has not started is decided again and stopped.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EngineInForce::stop
 find: .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
 replace: .fetch_add(0, std::sync::atomic::Ordering::AcqRel)
 caught-by:
-    cortex-core policy::tests::a_stop_and_a_change_of_engine_move_the_count_which_only_grows
+    cineris-core policy::tests::a_stop_and_a_change_of_engine_move_the_count_which_only_grows
 

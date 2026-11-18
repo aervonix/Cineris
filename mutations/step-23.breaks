@@ -3,25 +3,25 @@
 
 [break] a-caught-panic-puts-the-terminal-back
 rule: A panic on a thread other than the one that entered the terminal does not put the terminal back: the program may catch it and go on drawing.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: restores_on_panic
 find: *ENTERED_ON.lock().unwrap_or_else(PoisonError::into_inner) == Some(std::thread::current().id())
 replace: ENTERED_ON.lock().unwrap_or_else(PoisonError::into_inner).is_some()
 caught-by:
-    cortex-term::it system::sys_a_panic_caught_on_another_thread_leaves_the_terminal_to_the_program
+    cineris-term::it system::sys_a_panic_caught_on_another_thread_leaves_the_terminal_to_the_program
 
 [break] no-panic-puts-the-terminal-back
 rule: A panic on the thread that entered the terminal puts it back before the panic's message is printed.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: restores_on_panic
 find: == Some(std::thread::current().id())
 replace: == None
 caught-by:
-    cortex-term::it system::sys_the_terminal_is_put_back_after_a_panic
+    cineris-term::it system::sys_the_terminal_is_put_back_after_a_panic
 
 [break] tui-settings-a-project-may-set
 rule: Every key of [tui], [keys] and [terminal] is the user's own: a project's file cannot change how the user's terminal looks or which keys do what.
-file: crates/cortex-config/src/schema/sections.rs
+file: crates/cineris-config/src/schema/sections.rs
 find:
     [UserOnly, Now]
     pub glyphs
@@ -29,20 +29,20 @@ replace:
     [Preference, Now]
     pub glyphs
 caught-by:
-    cortex-config::it trust::every_key_has_a_trust_class
+    cineris-config::it trust::every_key_has_a_trust_class
 
 [break] the-interface-cannot-hold-later-calls
 rule: A core whose front end can stop the turn from a question holds every later call with side effects while the question is open.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::answers_may_stop
 find: || self.stops_from_questions
 replace:
 caught-by:
-    cortex-core::it approvals::with_answers_may_stop_a_later_call_waits_for_the_open_question
+    cineris-core::it approvals::with_answers_may_stop_a_later_call_waits_for_the_open_question
 
 [break] the-wake-hook-every-event
 rule: The queue's hook is called when it goes from empty to holding something, not for every event: one wake a burst.
-file: crates/cortex-core/src/events.rs
+file: crates/cineris-core/src/events.rs
 in: EventQueue::queued
 find: if was_empty {
 replace: if true {
@@ -51,7 +51,7 @@ caught-by:
 
 [break] the-wake-hook-never-on-close
 rule: Closing a client's queue calls its hook, so a reader on its own thread learns the client is gone.
-file: crates/cortex-core/src/events.rs
+file: crates/cineris-core/src/events.rs
 in: EventQueue::close
 find:
     self.wake.notify_one();
@@ -64,7 +64,7 @@ caught-by:
 
 [break] a-dialog-takes-typing-meant-for-the-editor
 rule: A dialog takes no key until its answers have been drawn, a grace after its first frame, whether or not anyone was typing: keys typed before they could see it are the editor's.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::takes_keys
 find: self.ready.takes_keys(at)
 replace: self.ready.shown().is_some()
@@ -74,7 +74,7 @@ caught-by:
 
 [break] typing-carries-on-into-a-dialog
 rule: Typing that carries on through a dialog's arrival never answers it: since the review of step 23 each key it does not take holds it a quiet second (the pause since the key before it was folded into that).
-file: crates/cortex-tui/src/app/ready.rs
+file: crates/cineris-tui/src/app/ready.rs
 in: Readiness::ready_at
 find: Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
 replace: Some(ready)
@@ -83,7 +83,7 @@ caught-by:
 
 [break] answers-shown-before-they-can-be-pressed
 rule: A dialog draws its answers only once they can be pressed, at the end of its grace.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::view
 find: let ready = self.ready.ready(now);
 replace: let ready = true;
@@ -93,7 +93,7 @@ caught-by:
 
 [break] the-loop-sleeps-through-the-grace
 rule: The loop wakes at the end of a dialog's grace to draw its answers, though nothing else happens.
-file: crates/cortex-tui/src/app.rs
+file: crates/cineris-tui/src/app.rs
 in: run_with
 find: timeout = Some(timeout.map_or(wait, |timeout| timeout.min(wait)));
 replace: let _ = wait;
@@ -102,7 +102,7 @@ caught-by:
 
 [break] the-loop-reads-past-the-end
 rule: Once the application has ended the loop reads nothing more from the terminal: what is typed after the last key it takes is the shell's.
-file: crates/cortex-tui/src/app.rs
+file: crates/cineris-tui/src/app.rs
 in: run_with
 find:
     if app.exit().is_some() {
@@ -115,7 +115,7 @@ caught-by:
 
 [break] a-lasting-answer-for-what-was-not-seen
 rule: A request any of whose rows did not fit the window offers no lasting answer: no lasting rule is added for what could not be read.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::answers
 find: let lasting = !(self.leaving || clipped);
 replace: let lasting = !self.leaving;
@@ -124,7 +124,7 @@ caught-by:
 
 [break] leaving-the-sandbox-for-longer
 rule: A request to leave the sandbox offers only "run once" and "deny".
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::answers
 find: let lasting = !(self.leaving || clipped);
 replace: let lasting = !clipped;
@@ -133,7 +133,7 @@ caught-by:
 
 [break] the-leave-form-with-the-sandbox-off
 rule: The leave-the-sandbox form is for a session whose sandbox is enforcing: with it off every command runs outside it, and is asked as any other call.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::request
 find: .is_some_and(|session| session.sandbox == SandboxStatus::Enforcing)
 replace: .is_some()
@@ -142,7 +142,7 @@ caught-by:
 
 [break] detail-is-never-clipped
 rule: Detail taller than its room is clipped, with a line that says how much more there is.
-file: crates/cortex-tui/src/view/dialog.rs
+file: crates/cineris-tui/src/view/dialog.rs
 in: approval
 find: if detail.len() > room {
 replace: if false {
@@ -153,7 +153,7 @@ caught-by:
 
 [break] the-dialog-overflows-the-window
 rule: The dialog fits the window: when its rows are more than the window has, its detail gives way, not its question.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::draw
 find: let over = fitted.lines.len().saturating_sub(rows);
 replace: let over = 0;
@@ -162,7 +162,7 @@ caught-by:
 
 [break] a-dialog-answered-before-it-is-drawn
 rule: A key read before a dialog's first frame was written never answers it.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::takes_keys
 find: self.ready.takes_keys(at)
 replace: true
@@ -172,7 +172,7 @@ caught-by:
 
 [break] no-second-interrupt
 rule: A second interrupt within two seconds of the first stops running commands at once.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::interrupt
 find: at.saturating_duration_since(last) <= SECOND_INTERRUPT
 replace: false
@@ -181,7 +181,7 @@ caught-by:
 
 [break] running-only-once-the-turn-starts
 rule: A prompt sent makes the interface running at once, so that Esc straight after Enter interrupts the turn it started.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::submit
 find:
     if started {
@@ -197,7 +197,7 @@ caught-by:
 
 [break] events-not-held-while-opening
 rule: The session's events are held while the app's open is under way, so that its header is the first block.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::drain
 find: if self.opening || self.reading {
 replace: if self.reading {
@@ -206,7 +206,7 @@ caught-by:
 
 [break] a-resumed-sessions-events-not-held
 rule: While a stored session's history is read its events wait, so that the history comes first, and those it already holds are dropped.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::drain
 find: if self.opening || self.reading {
 replace: if self.opening {
@@ -215,7 +215,7 @@ caught-by:
 
 [break] events-the-history-holds-shown-twice
 rule: Of the events held while the history was read, those it already holds (seq up to the read's) are dropped.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: ReadMark::holds
 find: None => self.whole && event.seq <= self.seq
 replace: None => false
@@ -224,7 +224,7 @@ caught-by:
 
 [break] ctrl-t-flips-the-wrong-way
 rule: Ctrl+T turns the running round's box the other way from what it shows now.
-file: crates/cortex-tui/src/app/items.rs
+file: crates/cineris-tui/src/app/items.rs
 in: Mapper::toggle_round
 find: round.open = Some(!crate::view::shows_detail(round, look));
 replace: round.open = Some(round.calls.iter().all(|call| call.detail == Detail::None));
@@ -233,7 +233,7 @@ caught-by:
 
 [break] a-running-commands-output-kept-whole
 rule: The interface keeps only the tail of a running command's output: a command that prints a gigabyte costs it a bounded amount.
-file: crates/cortex-tui/src/app/items.rs
+file: crates/cineris-tui/src/app/items.rs
 in: keep_tail
 find: if text.len() <= OUTPUT_TAIL {
 replace: if true {
@@ -242,7 +242,7 @@ caught-by:
 
 [break] deltas-after-a-resync-taken
 rule: After an item's resync its deltas are not taken, and the completed item's text past what arrived is added, so an answer never loses or doubles its middle.
-file: crates/cortex-tui/src/app/items.rs
+file: crates/cineris-tui/src/app/items.rs
 in: Mapper::delta
 find:
     if response.resync {
@@ -256,7 +256,7 @@ caught-by:
 
 [break] a-stopped-responses-calls-left-running
 rule: A response that stopped part-way runs none of its calls, and they end as interrupted, so their round can commit.
-file: crates/cortex-tui/src/app/items.rs
+file: crates/cineris-tui/src/app/items.rs
 in: Mapper::response_completed
 find: Some(StopReason::Interrupted | StopReason::Error | StopReason::MalformedToolCall)
 replace: Some(StopReason::Paused)
@@ -265,16 +265,16 @@ caught-by:
 
 [break] an-abort-leaves-the-terminal-raw
 rule: An abort puts the terminal back: SIGABRT is one of the signals whose handler restores it.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: ENDING
 find: libc::SIGABRT
 replace: libc::SIGQUIT
 caught-by:
-    cortex-term::it system::sys_the_terminal_is_put_back_after_an_abort
+    cineris-term::it system::sys_the_terminal_is_put_back_after_an_abort
 
 [break] held-prompts-lost-when-the-open-fails
 rule: Prompts held while the session was being opened come back into the editor when the open fails.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::open_failed
 find: self.give_back_held();
 replace: self.held_prompts.clear();
@@ -284,7 +284,7 @@ caught-by:
 
 [break] held-prompts-lost-on-an-early-interrupt
 rule: An interrupt before the session is open gives the held prompts back into the editor.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::interrupt
 find: self.give_back_held();
 replace: self.held_prompts.clear();
@@ -293,7 +293,7 @@ caught-by:
 
 [break] a-prompt-held-for-no-session
 rule: With no session open and none on its way, a prompt is given back with a line that says how to start one; it is not held for ever.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::submit
 find: if self.opening || self.open.is_some() {
 replace: if true {
@@ -302,7 +302,7 @@ caught-by:
 
 [break] a-fork-of-a-session-not-open
 rule: A session is forked from its log, so --fork opens it first, and forks it once it is open.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::send_open
 find: Pending::ForkFrom(id)
 replace: Pending::Open
@@ -311,7 +311,7 @@ caught-by:
 
 [break] a-forks-original-left-open
 rule: The session a fork was made from is closed once the fork is open.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::opened
 find: self.forked_from.take()
 replace: self.forked_from.clone().filter(|_| false)
@@ -320,7 +320,7 @@ caught-by:
 
 [break] new-leaves-the-old-session-open
 rule: /new closes the session open now before it opens another.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::new_session
 find: if let Some(session) = self.session.take() {
 replace: if let Some(session) = None::<SessionState> {
@@ -329,7 +329,7 @@ caught-by:
 
 [break] a-command-not-built-goes-to-the-model
 rule: A slash command of 09-tui that this build does not have is said to be missing, and is no prompt for the model.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::slash_command
 find: if NOT_YET.contains(&name) {
 replace: if NOT_YET.contains(&name) && false {
@@ -338,7 +338,7 @@ caught-by:
 
 [break] resynced-output-kept-in-part
 rule: A tool result whose output deltas stopped (item.resync) is shown from the result's own text, not from the part that streamed.
-file: crates/cortex-tui/src/app/items.rs
+file: crates/cineris-tui/src/app/items.rs
 in: Mapper::result
 find: Detail::Output(text) if !resynced => text.clone()
 replace: Detail::Output(text) => text.clone()
@@ -347,16 +347,16 @@ caught-by:
 
 [break] a-mistyped-rule-dropped
 rule: A rule of --allow or --deny that cannot be read stops the interactive application with exit code 2, as it stops a headless run: a mistyped deny is never dropped.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cineris-cli/src/interactive.rs
 in: core_options
-find: .push(cortex_core::parse_rule(text, action)?);
-replace: .extend(cortex_core::parse_rule(text, action).ok());
+find: .push(cineris_core::parse_rule(text, action)?);
+replace: .extend(cineris_core::parse_rule(text, action).ok());
 caught-by:
-    cortex-cli::system runs::sys_exit_2_for_mistakes_and_invalid_configuration_before_anything_is_sent
+    cineris-cli::system runs::sys_exit_2_for_mistakes_and_invalid_configuration_before_anything_is_sent
 
 [break] answers-counted-as-drawn-unseen
 rule: A dialog's answers count as drawn only once a frame with them has been drawn: a key cannot answer what was not shown, though the grace is over.
-file: crates/cortex-tui/src/app/ready.rs
+file: crates/cineris-tui/src/app/ready.rs
 in: Readiness::takes_keys
 find: self.answers_drawn && self.ready(at)
 replace: self.ready(at)
@@ -365,7 +365,7 @@ caught-by:
 
 [break] esc-in-the-grace-stops-the-turn
 rule: In a dialog's grace its own keys that type nothing (Esc) do nothing: a key meant to deny never stops the turn instead.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::key
 find: action.is_some_and(dialogs) && (typed(key).is_none() || after_taken)
 replace: false
@@ -375,7 +375,7 @@ caught-by:
 
 [break] ctrl-t-lost-in-a-dialog
 rule: Ctrl+T opens and closes the round's box from a dialog, in its grace and after it.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::key
 find: | Action::ToggleRound
 replace:
@@ -384,7 +384,7 @@ caught-by:
 
 [break] the-detail-gives-way-before-the-lasting-note
 rule: A dialog too tall drops the line of what a lasting answer would allow before it cuts the detail: the command stays whole.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::draw
 find: if !shape.withheld && self.says_what_lasts() {
 replace: if false {
@@ -393,7 +393,7 @@ caught-by:
 
 [break] a-tiny-window-cuts-the-question
 rule: In a window too small for any detail, a dialog keeps its question and its answers: the rows between them are dropped.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::draw
 find: if lines.len() > rows {
 replace: if false {
@@ -402,7 +402,7 @@ caught-by:
 
 [break] new-forgets-the-command-line
 rule: /new opens its session with the settings the command line gave the first, in memory only after --no-session.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::new_session
 find: let (settings, ephemeral) = self.fresh.clone();
 replace: let (settings, ephemeral) = (SessionSettings::default(), false);
@@ -411,7 +411,7 @@ caught-by:
 
 [break] a-failed-forks-original-left-open
 rule: The session a fork was made from is closed when the fork fails too.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::open_failed
 find: if let Some(original) = self.forked_from.take() {
 replace: if let Some(original) = None::<SessionId> {
@@ -420,7 +420,7 @@ caught-by:
 
 [break] a-failed-open-shows-anothers-events
 rule: Of the events held while a session was being opened, a failed open shows only the notices: the rest are of a session that is not this client's.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::open_failed
 find: if matches!(event.event, Event::Notice(_)) {
 replace: if true {
@@ -429,7 +429,7 @@ caught-by:
 
 [break] an-update-of-another-session-taken
 rule: With no session open on this client, an update of another session is not taken for one.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::event
 find: if self.session.is_some() {
 replace: if true {
@@ -438,25 +438,25 @@ caught-by:
 
 [break] a-panic-of-the-interface-is-success
 rule: A panic of the interface ends the program with exit code 1 and the report's place.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cineris-cli/src/interactive.rs
 in: ending
 find: return (exit::INTERNAL, Some(said));
 replace: return (exit::COMPLETED, Some(said));
 caught-by:
-    cortex-cli::bin/cortex interactive::tests::a_panic_of_the_interface_is_exit_1_and_points_at_its_report
+    cineris-cli::bin/cineris interactive::tests::a_panic_of_the_interface_is_exit_1_and_points_at_its_report
 
 [break] the-end-of-the-connection-never-said
 rule: A queue the core closed is the end of the connection: the application is told, and ends.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cineris-cli/src/interactive.rs
 in: inbound
 find: None if closed && !*gone_said => {
 replace: None if false => {
 caught-by:
-    cortex-cli::bin/cortex interactive::tests::a_closed_queue_is_the_end_of_the_connection_said_once
+    cineris-cli::bin/cineris interactive::tests::a_closed_queue_is_the_end_of_the_connection_said_once
 
 [break] answers-cut-on-one-row
 rule: The answers wrap between answers onto as many rows as they need, so that each is drawn whole.
-file: crates/cortex-tui/src/view/dialog.rs
+file: crates/cineris-tui/src/view/dialog.rs
 in: answer_rows
 find: if items > 0 && row.width() + gap + item.width() > width {
 replace: if false {
@@ -465,7 +465,7 @@ caught-by:
 
 [break] an-answer-pressed-though-cut
 rule: Only an answer drawn whole can be pressed.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::draw
 find: .filter(|(_, whole)| **whole)
 replace:
@@ -474,7 +474,7 @@ caught-by:
 
 [break] the-detail-cut-before-it-must-be
 rule: A detail that fits the window is shown whole: it gives way only to what does not fit.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::draw
 find: rows.max(LEAST_DETAIL)
 replace: rows.saturating_sub(8).max(LEAST_DETAIL)
@@ -483,7 +483,7 @@ caught-by:
 
 [break] the-question-cut-at-the-edge
 rule: The question is wrapped, never cut.
-file: crates/cortex-tui/src/view/dialog.rs
+file: crates/cineris-tui/src/view/dialog.rs
 in: approval
 find: width.saturating_sub(2).max(1)
 replace: usize::MAX
@@ -492,7 +492,7 @@ caught-by:
 
 [break] a-diff-cut-sideways-unseen
 rule: A diff's line wider than the window loses its end, and that counts as clipped: no lasting answer is offered for it.
-file: crates/cortex-tui/src/view/dialog.rs
+file: crates/cineris-tui/src/view/dialog.rs
 in: approval
 find: sideways = cut_any;
 replace: let _ = cut_any;
@@ -501,7 +501,7 @@ caught-by:
 
 [break] an-unreadable-dialog-answered
 rule: In a window too small for the question and the answers together, no answer is taken.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::draw
 find: readable = rows >= question + answer_rows;
 replace: readable = true;
@@ -510,7 +510,7 @@ caught-by:
 
 [break] the-loop-woken-for-answers-that-cannot-show
 rule: A dialog too small to show its answers asks for no frame for them: the loop is not kept busy.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::deadline
 find: if self.ready.answers_drawn() || self.unreadable {
 replace: if self.ready.answers_drawn() {
@@ -519,7 +519,7 @@ caught-by:
 
 [break] a-paste-lost-from-the-note
 rule: While a note is written, a paste is the note's, not the hidden editor's.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find: .is_some_and(|dialog| dialog.paste(text))
 replace: .is_some_and(|_| text.is_empty() && false)
@@ -528,7 +528,7 @@ caught-by:
 
 [break] the-note-shows-its-start
 rule: A note longer than its row shows its end, where the typing is.
-file: crates/cortex-tui/src/view/dialog.rs
+file: crates/cineris-tui/src/view/dialog.rs
 in: note_row
 find: if let Some(last) = rows.last() {
 replace: if let Some(last) = rows.first() {
@@ -537,7 +537,7 @@ caught-by:
 
 [break] keys-read-together-answer
 rule: Keys that come in one read were typed together: none of them answers a dialog, though a stall made the read before them long ago.
-file: crates/cortex-tui/src/app.rs
+file: crates/cineris-tui/src/app.rs
 in: take
 find: if matches!(event, Event::Key(_)) && terminal.queued() {
 replace: if false {
@@ -546,7 +546,7 @@ caught-by:
 
 [break] a-dialog-drawn-in-the-old-look
 rule: When the look changes, an open dialog is drawn again in it, not taken from what was drawn before.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::set_caps
 find: dialog.restyled();
 replace: let _ = dialog;
@@ -555,99 +555,99 @@ caught-by:
 
 [break] a-first-limit-applied-untrusted
 rule: A project's first limit where there was none waits for trust (the owner's decision of 2026-11-16); a value at or below a limit in effect applies always.
-file: crates/cortex-config/src/schema/mod.rs
+file: crates/cineris-config/src/schema/mod.rs
 in: Trust::class
 find: (Some(_), None) => TrustClass::FirstLimit
 replace: (Some(_), None) => TrustClass::Preference
-packages: cortex-config, cortex-core
+packages: cineris-config, cineris-core
 caught-by:
-    cortex-config::it trust::a_project_may_tighten_the_mode_and_the_limits_and_not_loosen_them
-    cortex-config::it waits::a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units
-    cortex-core::it trust::a_projects_first_limit_waits_for_trust
+    cineris-config::it trust::a_project_may_tighten_the_mode_and_the_limits_and_not_loosen_them
+    cineris-config::it waits::a_length_of_time_is_tightened_against_the_one_in_effect_in_any_units
+    cineris-core::it trust::a_projects_first_limit_waits_for_trust
 
 [break] a-headless-client-asked-to-trust
 rule: Only a client that declared it answers trust questions is asked: headless mode, which answers nothing, is never asked, as before step 23.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: Core::trust_for
 find:
     .askable(&[client.0], crate::clients::Kind::Trust)
     .is_empty()
 replace: .queue(client).is_none()
 caught-by:
-    cortex-core::it trusting::a_headless_client_is_never_asked
+    cineris-core::it trusting::a_headless_client_is_never_asked
 
 [break] a-refused-project-asked-again
 rule: A project the user said never to trust is not asked about at later starts.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: look
 find: if stored.is_refused() ||
 replace: if
 caught-by:
-    cortex-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
+    cineris-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
 
 [break] not-now-forgotten
 rule: A project answered "not now" is not asked about again in the same process.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: answer_trust
 find: .insert(question.key.clone());
 replace: .contains(&question.key);
 caught-by:
-    cortex-core::it trusting::not_now_is_untrusted_and_not_asked_again_in_this_process
+    cineris-core::it trusting::not_now_is_untrusted_and_not_asked_again_in_this_process
 
 [break] never-not-kept
 rule: "Never for this project" is kept in the trust store, so that later starts do not ask either.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: answer_trust
 find: .refuse(&question.key, &question.root)
 replace: .forget(&question.key)
 caught-by:
-    cortex-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
+    cineris-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
 
 [break] changed-rules-not-marked
 rule: A project trusted with its rules changed since is asked about them with each marked changed.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: look
 find: changed: trusted
 replace: changed: false
 caught-by:
-    cortex-core::it trusting::a_project_whose_rules_changed_is_asked_about_them
+    cineris-core::it trusting::a_project_whose_rules_changed_is_asked_about_them
 
 [break] a-profiles-rules-not-pinned
 rule: Trust pins and lists every rule the project's files hold, in each profile they define as well as outside any.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: pinned_rules
 find: rules.profiles.push((name.clone(), rules_of));
 replace: let _ = rules_of;
 caught-by:
-    cortex-core::it trusting::a_yes_pins_what_was_shown_and_the_session_is_trusted
+    cineris-core::it trusting::a_yes_pins_what_was_shown_and_the_session_is_trusted
 
 [break] never-not-said-at-open
 rule: A session in a project the user said never to trust says so at its open, with the command that changes it.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: trust
 find: stored.is_refused().then(
 replace: false.then(
-packages: cortex-core, cortex-cli
+packages: cineris-core, cineris-cli
 caught-by:
-    cortex-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it
+    cineris-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it
 
 [break] never-not-listed
-rule: `cortex permissions list` names a project the user said never to trust, with the commands that change it.
-file: crates/cortex-core/src/manage.rs
+rule: `cineris permissions list` names a project the user said never to trust, with the commands that change it.
+file: crates/cineris-core/src/manage.rs
 in: Core::project_trust
 find:
     if stored.is_refused() {
         return Ok(TrustState::Never);
     }
 replace:
-packages: cortex-core, cortex-cli
+packages: cineris-core, cineris-cli
 caught-by:
-    cortex-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it
-    cortex-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
+    cineris-cli::system tui::sys_a_never_survives_a_restart_and_permissions_trust_clears_it
+    cineris-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
 
 [break] trust-it-answers-not-now
 rule: In the trust dialog, `y` trusts the project, `n` and `Esc` are not now, and `x` is never.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::key
 find:
     trusted: true,
@@ -660,7 +660,7 @@ caught-by:
 
 [break] trusted-from-a-clipped-list
 rule: A trust question whose list did not fit cannot be trusted from there: not now and never stay.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::answers
 find:
     if !clipped {
@@ -672,7 +672,7 @@ caught-by:
 
 [break] a-questions-choice-one-off
 rule: A question's choice is picked by its digit, counted from one.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::key
 find: (digit as usize).checked_sub(1)
 replace: Some(digit as usize)
@@ -681,116 +681,116 @@ caught-by:
 
 [break] a-new-session-read-as-stored
 rule: Only a session opened from the store has a history to draw: a new one's open is not read back, so that what it said is shown.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::done
 find: self.opened(result.session, false, now);
 replace: self.opened(result.session, true, now);
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::a_new_session_reads_no_history
 
 [break] the-list-ordered-by-creation
 rule: `session/list` gives the session used last first, across projects, not the one made last.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: Core::list
 find: .cmp(&time(&a.updated_at))
 replace: .cmp(&time(&b.updated_at))
-packages: cortex-core
+packages: cineris-core
 caught-by:
     turns::the_list_gives_the_session_used_last_first
 
 [break] a-compaction-left-for-the-next-prompt
 rule: A compaction asked for during a turn's last request runs in a turn of its own when that turn ends and nothing follows it.
-file: crates/cortex-agent/src/turn.rs
+file: crates/cineris-agent/src/turn.rs
 in: Session::compact_turn
 find: .position(|pending| matches!(pending, Pending::Compact(_)))?;
 replace: .position(|pending| matches!(pending, Pending::Steer(_)))?;
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
     context::a_compaction_asked_for_during_the_last_request_runs_when_the_turn_ends
 
 [break] the-interface-not-withdrawn-at-the-end
 rule: When the interface ends, what it was asked and never answered is withdrawn outside the lane, so that a question nobody will answer does not hold the end.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cineris-cli/src/interactive.rs
 in: CoreThread::start
 find: core.disconnect(client.id).await;
 replace: ;
-packages: cortex-cli
+packages: cineris-cli
 caught-by:
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
 
 [break] the-end-behind-the-lane
 rule: The operations that change a session run on a task of their own, so that the end of the interface is never behind the one in progress.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cineris-cli/src/interactive.rs
 in: CoreThread::start
 find: dispatcher.send(ticket, op);
 replace: { let result = core.handle(client.id, op).await.map_err(|e| *e); push(&thread_done, Inbound::Done(ticket, result)); thread_slot.wake(); }
-packages: cortex-cli
+packages: cineris-cli
 caught-by:
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
 
 [break] the-viewer-opens-at-the-first-box
 rule: The viewer opens with the latest tool box selected.
-file: crates/cortex-tui/src/app/state/viewer.rs
+file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::open_viewer
 find: _ => boxes.checked_sub(1)
 replace: _ => boxes.checked_sub(boxes)
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
 
 [break] the-viewer-enter-does-not-open
 rule: Enter opens the selected box with all its detail, and closes it again.
-file: crates/cortex-tui/src/app/state/viewer.rs
+file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::viewer_act
 find: if !state.open.remove(&selected) {
 replace: if state.open.remove(&selected) {
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
 
 [break] the-viewer-draws-no-box-selected
 rule: The selected box is drawn as selected: its border in the accent, with what Enter does.
-file: crates/cortex-tui/src/app/state/viewer.rs
+file: crates/cineris-tui/src/app/state/viewer.rs
 in: block_rows
 find: selected: state.selected == Some(round)
 replace: selected: false
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
 
 [break] the-viewer-search-does-not-move
 rule: A search scrolls to the next row that holds what was typed.
-file: crates/cortex-tui/src/app/state/viewer.rs
+file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::viewer_search
 find: state.scroll.anchor = Anchor::At { block, row };
 replace: let _ = (block, row);
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::the_viewer_searches_and_says_when_nothing_is_found
 
 [break] the-viewer-title-counts-two-turns-as-a-range
 rule: The viewer's title names two turns with "and".
-file: crates/cortex-tui/src/view/viewer.rs
+file: crates/cineris-tui/src/view/viewer.rs
 in: title
 find: said.push(format!("turns {first} and {last}"))
 replace: said.push(format!("turns {first} to {last}"))
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
     screens::the_views_draw_the_reference_screens
 
 [break] the-rounds-not-kept-as-rounds
 rule: A finished round is committed apart, with the round, so that the viewer can draw it again as a box.
-file: crates/cortex-tui/src/transcript.rs
+file: crates/cineris-tui/src/transcript.rs
 in: Transcript::commit_parts
 find: Some(round) => out.push(Committed::Round(round, lines)),
 replace: Some(_) => push_lines(&mut out, lines),
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
     app::tests::view_n_opens_that_box_and_the_page_keys_scroll
@@ -798,77 +798,77 @@ caught-by:
 
 [break] a-dialogs-sentences-at-the-whole-width
 rule: A dialog's sentences wrap at the prose width, as the transcript's do.
-file: crates/cortex-tui/src/view/dialog.rs
+file: crates/cineris-tui/src/view/dialog.rs
 in: approval
 find: let prose = look.prose_width.min(width);
 replace: let prose = width;
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     screens::the_views_draw_the_reference_screens
 
 [break] a-signal-not-handed-over
 rule: A signal that ends the program is handed to it, which ends gracefully with the signal's code.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: on_ending
 find: super::hand_over(128 + u8::try_from(signal).unwrap_or(0))
 replace: super::hand_over(0)
-packages: cortex-term, cortex-cli
+packages: cineris-term, cineris-cli
 caught-by:
-    cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
+    cineris-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
 
 [break] a-signals-code-lost
 rule: The binary ends a signal's graceful end with the code the signal's own end would have given.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cineris-cli/src/interactive.rs
 in: ending
 find: Ok(Exit::Signal(code)) => (code, None)
 replace: Ok(Exit::Signal(_)) => (exit::COMPLETED, None)
-packages: cortex-cli
+packages: cineris-cli
 caught-by:
-    cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
-    cortex-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
+    cineris-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_the_trust_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_a_resumed_sessions_trust_question_waits
+    cineris-cli::system tui::sys_the_application_ends_at_once_while_the_undos_question_waits
 
 [break] ctrl-o-does-not-show-a-dialog-whole
 rule: Ctrl+O in an approval or trust dialog shows its request whole, in the viewer.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::key
 find: (Asks::Approval { .. } | Asks::Trust { .. }, Action::ShowWhole) => Keyed::ShowWhole
 replace: (Asks::Approval { .. } | Asks::Trust { .. }, Action::ShowWhole) => Keyed::Nothing
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog
 
 [break] a-whole-view-outlives-its-dialog
 rule: A request shown whole closes the viewer when its dialog is no longer the one open.
-file: crates/cortex-tui/src/app/state/viewer.rs
+file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::viewing
 find: .is_none_or(|id| self.dialogs.front().is_some_and(|dialog| &dialog.id == id))
 replace: .is_none_or(|_| true)
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::ctrl_o_shows_the_request_whole_and_esc_returns_to_its_dialog
 
 [break] an-older-file-answer-shown
 rule: Rows for any `@` query but the latest are dropped: an older answer never replaces a newer one.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::file_rows
 find: if generation != elsewhere.generation {
 replace: if generation == u64::MAX {
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
-    cortex-tui::it input::rows_for_an_older_file_query_are_never_shown_over_a_newer_one
+    cineris-tui::it input::rows_for_an_older_file_query_are_never_shown_over_a_newer_one
 
 [break] the-file-match-on-the-keys-path
 rule: The workspace's paths are matched on a thread of their own, so that a key's frame never waits for the match.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::done
 find: match super::files::FileSearch::start(files.paths, self.waker.clone()) {
 replace: match Err::<super::files::FileSearch, _>(files.paths) {
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::files::the_workspace_files_are_listed_on_the_first_at_and_not_when_the_session_opens
     app::tests::files::at_the_cap_a_keys_frame_never_waits_for_the_file_match
@@ -876,102 +876,102 @@ caught-by:
 [break] a-dialog-shown-under-the-viewer
 rule: A dialog is shown by the inline screen's frame alone: under the viewer its grace has not begun. Since the review of step 23 the viewer's closing also starts the dialog's grace again, a second guard that leaves nothing this break can show.
 expect: survives
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::drawn
 find: if self.viewing() {
 replace: if self.viewing() && at < self.began {
-packages: cortex-tui
+packages: cineris-tui
 
 [break] a-read-overtakes-a-write
 rule: A read sent while a write is under way runs after it, in the lane: it sees every write sent before it.
-file: crates/cortex-rpc/src/lane.rs
+file: crates/cineris-rpc/src/lane.rs
 in: Routes::route
 find: if self.in_flight.load(Ordering::SeqCst) > 0 {
 replace: if self.in_flight.load(Ordering::SeqCst) > usize::MAX - 1 {
-packages: cortex-rpc
+packages: cineris-rpc
 caught-by:
-    cortex-rpc lane::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
+    cineris-rpc lane::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
 
 [break] the-workspace-walk-unbounded
 rule: The walk for `workspace/files` stops once it has met its bound of files, and says there were more.
-file: crates/cortex-tools/src/walk.rs
+file: crates/cineris-tools/src/walk.rs
 in: files_met
 find: if found.len() >= most {
 replace: if found.len() >= usize::MAX {
-packages: cortex-tools
+packages: cineris-tools
 caught-by:
     walk::tests::the_workspace_walk_stops_at_its_bound_and_says_there_were_more
 
 [break] never-waits-for-the-next-start
 rule: Never is in force in the session it was said in, as at a later start.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: answer_trust
 find: self::trust(inner, place.state.as_ref(), &place.root, &place.load)
 occurrence: 4
 replace: Ok(trust)
-packages: cortex-core
+packages: cineris-core
 caught-by:
     trusting::never_is_kept_across_starts_until_the_project_is_trusted
 
 [break] a-questions-choices-drawn-as-they-are
 rule: A question's choices are drawn with every character that acts unseen escaped, as all outside text is.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::answers
-find: cortex_term::sanitize(choice)
+find: cineris_term::sanitize(choice)
 replace: std::borrow::Cow::<str>::Borrowed(choice.as_str())
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::a_questions_choices_are_drawn_with_what_acts_unseen_escaped
 
 [break] an-abort-handed-over
 rule: SIGABRT is not handed to the program: an abort ends the process at once, by its default action.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: on_ending
 find: signal != libc::SIGABRT &&
 replace: signal != 0 &&
-packages: cortex-term, cortex-cli
+packages: cineris-term, cineris-cli
 caught-by:
-    cortex-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
+    cineris-cli::system tui::sys_a_signal_ends_the_application_gracefully_with_its_code
 
 [break] a-history-file-kept-open
 rule: Each prompt is appended to the history file opened afresh under its lock, so that another process's compaction loses none.
-file: crates/cortex-cli/src/history.rs
+file: crates/cineris-cli/src/history.rs
 in: append
 find:
     for prompt in queue {
-        let _lock = cortex_base::private::hold_lock(path).ok().flatten();
+        let _lock = cineris_base::private::hold_lock(path).ok().flatten();
         if let Ok(mut file) = open(path) {
 replace:
     let mut kept = open(path).ok();
     for prompt in queue {
         if let Some(file) = kept.as_mut() {
-packages: cortex-cli
+packages: cineris-cli
 caught-by:
     history::tests::a_prompt_after_another_process_compacts_the_file_is_kept
 
 [break] a-request-to-askers-gone-waits
 rule: A request that ends with its askers, put when none of them is connected, is dropped at once, so that whoever waits is told.
-file: crates/cortex-core/src/clients.rs
+file: crates/cineris-core/src/clients.rs
 in: Clients::put
 find: if ends_with_askers && !reached {
 replace: if ends_with_askers && !reached && asked.is_empty() {
-packages: cortex-core
+packages: cineris-core
 caught-by:
     clients::tests::a_request_put_to_askers_already_gone_ends_at_once
 
 [break] a-deadline-under-the-viewer
 rule: Under the viewer no dialog is drawn, so none of its times is due: the loop sleeps.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::deadline
 find: if self.viewing() {
 replace: if self.viewing() && self.dialogs.is_empty() {
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::a_viewer_opened_over_a_dialog_in_its_grace_leaves_nothing_due
 
 [break] a-viewer-key-not-the-last-key
 rule: Back from the viewer a dialog starts its grace again, so that a key typed as it closes answers nothing (since the review of step 23; a key in the viewer was the key before the next).
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find:
     dialog.hide();
@@ -980,66 +980,66 @@ find:
 replace:
     }
     return taken;
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tests::a_key_straight_after_the_viewer_closes_does_not_answer
 
 [break] files-wait-in-the-lane
 rule: The workspace's files never wait in the core thread's lane.
-file: crates/cortex-rpc/src/lane.rs
+file: crates/cineris-rpc/src/lane.rs
 in: Routes::route
 find: if matches!(op, Op::WorkspaceFiles(_)) {
 replace: if matches!(op, Op::WorkspaceFiles(_)) && self.in_flight.load(Ordering::SeqCst) == 0 {
-packages: cortex-rpc
+packages: cineris-rpc
 caught-by:
-    cortex-rpc lane::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
+    cineris-rpc lane::tests::a_read_after_a_write_waits_for_it_and_one_alone_runs_beside
 
 [break] a-withdrawn-question-called-answered
 rule: A question is resolved as answered only when an answer came; one withdrawn because its askers left is cancelled.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: Core::put_them_back
 find: if !closed && matches!(answered, Some(Ok(_))) {
 replace: if !closed {
-packages: cortex-core
+packages: cineris-core
 caught-by:
     asking::a_question_whose_client_went_away_ends_as_no_answer
 
 [break] a-changed-word-cut-at-its-change
 rule: Of a replaced line, the whole changed words are bold, and the punctuation and spaces around them plain (the owner, 2026-11-16).
-file: crates/cortex-tui/src/app/tools.rs
+file: crates/cineris-tui/src/app/tools.rs
 in: emphasise
 find: for piece in [Piece::Word, Piece::Mark] {
 replace: for piece in [Piece::Mark, Piece::Word] {
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tools::tests::whole_changed_words_are_bold_and_what_is_around_them_plain
 
 [break] punctuation-outweighs-a-word
 rule: A diff's words are compared by themselves, so that punctuation never outweighs a word that stayed.
-file: crates/cortex-tui/src/app/tools.rs
+file: crates/cineris-tui/src/app/tools.rs
 in: emphasise
 find: .filter(|(_, kind)| *kind == piece)
 replace: .filter(|(_, kind)| *kind != Piece::Space && piece != Piece::Space)
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tools::tests::a_word_that_stayed_is_never_bold_whatever_the_punctuation_does
 
 [break] a-long-line-not-trimmed
 rule: Two lines are compared by what is left once their common start and end are taken off.
-file: crates/cortex-tui/src/app/tools.rs
+file: crates/cineris-tui/src/app/tools.rs
 in: changed
 find: let start = (0..a.len().min(b.len())).take_while(|&i| same(i, i)).count();
 replace: let start = 0;
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tools::tests::a_long_line_is_compared_by_what_is_left_between_its_common_ends
 
 [break] a-word-cut-inside-its-cluster
 rule: A diff's tokens are cut by grapheme clusters, so that a mark or a joiner stays with what it joins.
-file: crates/cortex-tui/src/app/tools.rs
+file: crates/cineris-tui/src/app/tools.rs
 in: tokens
 find: let first = cluster.chars().next().unwrap_or(' ');
 replace: let first = cluster.chars().last().unwrap_or(' ');
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     app::tools::tests::a_word_of_any_script_is_bold_whole

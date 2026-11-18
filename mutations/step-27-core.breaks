@@ -1,62 +1,62 @@
-# Step 27: the changes to `cortex-core` the RPC server needs, each on a
+# Step 27: the changes to `cineris-core` the RPC server needs, each on a
 # commit of its own (docs/steps/27/answered.md, "What changes outside
-# cortex-rpc and cortex-cli"). The rules broken one at a time, with the
+# cineris-rpc and cineris-cli"). The rules broken one at a time, with the
 # tests that must fail.
 
 # ------------------------------------------------- sessions kept running
 
 [break] a-kept-session-ends-with-its-client
 rule: With `keep_sessions`, a disconnect ends no session: it goes on with no client.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: disconnect
 find: if live.sink.unsubscribe(client.0) && !keep && live.sink.subscribers().is_empty() {
 replace: if live.sink.unsubscribe(client.0) && live.sink.subscribers().is_empty() {
 caught-by:
-    cortex-core::it lifecycle::with_keep_sessions_a_session_runs_on_when_its_client_goes
+    cineris-core::it lifecycle::with_keep_sessions_a_session_runs_on_when_its_client_goes
 
 [break] a-question-with-no-client-is-refused-at-once
 rule: With `keep_sessions`, an approval in a session with no client at all waits for a `user` client to open it.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: ask
 find: let waits = self.waits_for_a_client && subscribers.is_empty();
 replace: let waits = false;
 caught-by:
-    cortex-core::it lifecycle::with_keep_sessions_a_question_with_no_client_waits_for_a_user_to_open_the_session
-    cortex-core::it lifecycle::with_keep_sessions_a_question_with_no_client_is_denied_at_its_time_limit
+    cineris-core::it lifecycle::with_keep_sessions_a_question_with_no_client_waits_for_a_user_to_open_the_session
+    cineris-core::it lifecycle::with_keep_sessions_a_question_with_no_client_is_denied_at_its_time_limit
 
 [break] a-client-that-answers-no-approvals-makes-a-question-wait
 rule: With `keep_sessions`, a session whose clients are there and answer no approvals still gets the default at once.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: ask
 find: let waits = self.waits_for_a_client && subscribers.is_empty();
 replace: let waits = self.waits_for_a_client;
 caught-by:
-    cortex-core::it lifecycle::with_keep_sessions_a_client_that_answers_no_approvals_still_gets_the_default
+    cineris-core::it lifecycle::with_keep_sessions_a_client_that_answers_no_approvals_still_gets_the_default
 
 [break] a-session-put-together-for-a-client-that-left-is-kept
 rule: With `keep_sessions`, a session put together for a client that left meanwhile is still ended.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: still_wanted
 find: let kept = self.inner.options.keep_sessions && !put_together;
 replace: let kept = self.inner.options.keep_sessions;
 caught-by:
-    cortex-core::it lifecycle::with_keep_sessions_a_session_started_for_a_client_that_left_does_not_run_on
+    cineris-core::it lifecycle::with_keep_sessions_a_session_started_for_a_client_that_left_does_not_run_on
 
 # ------------------------------------------- the queue bounded by bytes
 
 [break] the-queue-is-never-full-of-bytes
 rule: A client's queue is full once the deltas it holds reach its byte bound, merged ones counted whole.
-file: crates/cortex-core/src/events.rs
+file: crates/cineris-core/src/events.rs
 in: EventQueue::push
 find: let full_of_bytes = state.delta_bytes >= self.delta_bytes;
 replace: let full_of_bytes = false;
 caught-by:
-    cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
-    cortex-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
+    cineris-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
+    cineris-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
 
 [break] a-merged-delta-is-not-counted
 rule: The bytes of a delta merged into the one before it count towards the bound.
-file: crates/cortex-core/src/events.rs
+file: crates/cineris-core/src/events.rs
 in: EventQueue::push
 find:
                     *delta_bytes += size;
@@ -64,22 +64,22 @@ find:
 replace:
                     return;
 caught-by:
-    cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
-    cortex-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
+    cineris-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
+    cineris-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
 
 [break] the-bytes-taken-are-not-given-back
 rule: The bytes of a delta the reader takes are no longer held, so a reader that keeps up is never full of them.
-file: crates/cortex-core/src/events.rs
+file: crates/cineris-core/src/events.rs
 in: EventQueue::try_next
 find: state.delta_bytes = state.delta_bytes.saturating_sub(delta_size(&delta.delta));
 replace: let _ = delta_size(&delta.delta);
 caught-by:
-    cortex-core events::tests::the_bytes_held_go_down_as_the_reader_takes_deltas
-    cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
+    cineris-core events::tests::the_bytes_held_go_down_as_the_reader_takes_deltas
+    cineris-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
 
 [break] a-whole-event-is-dropped-past-the-bytes
 rule: Whole events are never dropped, past the byte bound as past the count.
-file: crates/cortex-core/src/events.rs
+file: crates/cineris-core/src/events.rs
 in: EventQueue::push
 find:
         if let Event::ItemDelta(delta) = &event.event {
@@ -92,52 +92,52 @@ replace:
             return;
         }
 caught-by:
-    cortex-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
-    cortex-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
+    cineris-core events::tests::a_stopped_reader_holds_a_bounded_number_of_bytes_of_one_long_item
+    cineris-core::it events::a_reader_that_stops_during_one_long_item_holds_bounded_bytes_and_one_resync
 
 # ------------------------------------------------- supervisor routing
 
 [break] a-supervisor-with-a-grant-is-asked-nothing
 rule: A `supervisor` that declared `approvals` and has a grant is put every approval of its session.
-file: crates/cortex-core/src/clients.rs
+file: crates/cineris-core/src/clients.rs
 in: Clients::askable
 find: kind == Kind::Approval && entry.grant.is_some()
 replace: false
 caught-by:
-    cortex-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
+    cineris-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
 
 [break] a-supervisor-without-a-grant-is-asked
 rule: A `supervisor` without a grant is asked nothing.
-file: crates/cortex-core/src/clients.rs
+file: crates/cineris-core/src/clients.rs
 in: Clients::askable
 find: kind == Kind::Approval && entry.grant.is_some()
 replace: kind == Kind::Approval
 caught-by:
-    cortex-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
-    cortex-core::it approvals::only_a_user_client_is_asked_and_only_its_answer_counts
+    cineris-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
+    cineris-core::it approvals::only_a_user_client_is_asked_and_only_its_answer_counts
 
 [break] a-supervisor-is-put-questions-and-trust
 rule: Questions and trust are a person's: a supervisor is put approvals only.
-file: crates/cortex-core/src/clients.rs
+file: crates/cineris-core/src/clients.rs
 in: Clients::askable
 find: kind == Kind::Approval && entry.grant.is_some()
 replace: entry.grant.is_some()
 caught-by:
-    cortex-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
+    cineris-core clients::tests::a_supervisor_with_a_grant_is_put_approvals_and_nothing_else
 
 [break] an-allow-beyond-the-grant-is-taken
 rule: A supervisor's allow is taken only where its grant covers the call; beyond it the request stays open for the users.
-file: crates/cortex-core/src/clients.rs
+file: crates/cineris-core/src/clients.rs
 in: Clients::answer
 find: let judged = judge.map_or(Judged::Beyond, |judge| judge(&grant));
 replace: let judged = judge.map_or(Judged::Within, |_| Judged::Within);
 caught-by:
-    cortex-core clients::tests::a_supervisors_allow_is_taken_only_within_its_grant_and_as_once
-    cortex-core::it supervising::a_call_beyond_the_grant_is_not_taken_from_the_supervisor_and_the_user_answers
+    cineris-core clients::tests::a_supervisors_allow_is_taken_only_within_its_grant_and_as_once
+    cineris-core::it supervising::a_call_beyond_the_grant_is_not_taken_from_the_supervisor_and_the_user_answers
 
 [break] a-supervisors-allow-is-taken-as-it-named
 rule: A supervisor's allow within its grant is taken as `allow_once`, whatever scope it named.
-file: crates/cortex-core/src/clients.rs
+file: crates/cineris-core/src/clients.rs
 in: Clients::answer
 find:
                     choice: ApprovalChoice::AllowOnce,
@@ -148,221 +148,221 @@ replace:
                     note,
                 });
 caught-by:
-    cortex-core clients::tests::a_supervisors_allow_is_taken_only_within_its_grant_and_as_once
-    cortex-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+    cineris-core clients::tests::a_supervisors_allow_is_taken_only_within_its_grant_and_as_once
+    cineris-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
 
 [break] a-supervisors-answer-is-recorded
 rule: A supervisor's answer never reaches `Engine::record`.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: ask
 find: if by_supervisor {
 replace: if by_supervisor && response.note.as_deref() == Some("never") {
 caught-by:
-    cortex-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+    cineris-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
 
 [break] a-second-supervisor-joins
 rule: A session has at most one supervisor: a second one's `session/open` is refused `supervisor_present`.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: supervisor && clients.is_supervisor(other)
 replace: supervisor && clients.is_supervisor(other) && other == u64::MAX
 caught-by:
-    cortex-core::it supervising::a_session_has_at_most_one_supervisor
+    cineris-core::it supervising::a_session_has_at_most_one_supervisor
 
 [break] a-user-is-refused-beside-a-supervisor
 rule: Only a second supervisor is refused: a user may join a supervised session.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: supervisor && clients.is_supervisor(other)
 replace: clients.is_supervisor(other)
 caught-by:
-    cortex-core::it supervising::a_session_has_at_most_one_supervisor
+    cineris-core::it supervising::a_session_has_at_most_one_supervisor
 
 [break] the-grant-takes-the-sessions-level
 rule: Who decides is the grant's: its level, not the session's under which the call was asked.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: grant_engine
 find: lease.grant.level = grant_level(grant, confined_here);
 replace: let _ = grant_level(grant, confined_here);
 caught-by:
-    cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
+    cineris-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
 
 [break] unrestricted-is-handed-on
 rule: A grant's level is at most `autonomous`: `unrestricted` is never handed on.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: grant_level
-find: let level = cortex_policy::level::lower(&grant.grant.level, &Level::Autonomous);
+find: let level = cineris_policy::level::lower(&grant.grant.level, &Level::Autonomous);
 replace: let level = grant.grant.level.clone();
 caught-by:
-    cortex-core policy::tests::a_grant_never_widens_what_the_session_holds
+    cineris-core policy::tests::a_grant_never_widens_what_the_session_holds
 
 [break] the-grants-allow-rules-are-left-out
 rule: The grant's allow rules decide what it covers.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: grant_engine
 find: && !lease.grant.rules.contains(rule)
 replace: && lease.grant.rules.contains(rule)
 caught-by:
-    cortex-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
-    cortex-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
+    cineris-core policy::tests::a_grant_covers_what_its_rules_and_level_allow
+    cineris-core::it supervising::sys_a_supervisor_allows_a_call_within_its_grant_once_and_nothing_is_recorded
 
 [break] the-grant-is-not-narrowed-by-the-session
 rule: A grant never widens what the session holds: its scope is `standing.narrow(grant)`, with the session's `ask` and `deny` rules.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: grant_engine
 find: let mut lease = standing.narrow(grant, template.sandbox)
-replace: let mut lease = Ok::<Lease, cortex_policy::NarrowError>(grant.clone())
+replace: let mut lease = Ok::<Lease, cineris_policy::NarrowError>(grant.clone())
 caught-by:
-    cortex-core policy::tests::a_grant_never_widens_what_the_session_holds
+    cineris-core policy::tests::a_grant_never_widens_what_the_session_holds
 
 # ------------------------------------------------- closing a view
 
 [break] an-observers-close-ends-a-session
 rule: Only a client that may drive a session ends it by closing it: an observer's close never does.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: if self.may_drive(client).is_ok() && live.sink.subscribers().is_empty() {
 replace: if live.sink.subscribers().is_empty() {
 caught-by:
-    cortex-core::it closing::an_observers_close_never_ends_a_session
+    cineris-core::it closing::an_observers_close_never_ends_a_session
 
 [break] an-observers-disconnect-ends-a-session
 rule: An observer's disconnect never ends a session.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: disconnect
 find: let keep = self.inner.options.keep_sessions || !drives;
 replace: let keep = self.inner.options.keep_sessions;
 caught-by:
-    cortex-core::it closing::an_observers_disconnect_never_ends_a_session
+    cineris-core::it closing::an_observers_disconnect_never_ends_a_session
 
 [break] a-closed-view-keeps-its-questions
 rule: A client that closes its view of a session leaves the session's open questions: its answer is refused.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: self.inner.clients.leave(&params.session_id, client);
 replace: let _ = &params.session_id;
 caught-by:
-    cortex-core::it closing::a_client_that_closes_its_view_leaves_the_sessions_open_questions
-    cortex-core::it closing::an_undos_question_ends_when_its_asker_closes_its_view
+    cineris-core::it closing::a_client_that_closes_its_view_leaves_the_sessions_open_questions
+    cineris-core::it closing::an_undos_question_ends_when_its_asker_closes_its_view
 
 [break] a-question-left-by-its-last-asker-waits
 rule: A question that ends with its askers ends as no answer when its last asker closes its view.
-file: crates/cortex-core/src/clients.rs
+file: crates/cineris-core/src/clients.rs
 in: Clients::leave
 find: !open.ends_with_askers || open.asked.iter().any(|asked| clients.contains_key(asked))
 replace: !open.ends_with_askers || !clients.is_empty()
 caught-by:
-    cortex-core::it closing::an_undos_question_ends_when_its_asker_closes_its_view
+    cineris-core::it closing::an_undos_question_ends_when_its_asker_closes_its_view
 
 # ------------------------------------------------- paging
 
 [break] the-list-cursor-is-ignored
 rule: A page of `session/list` holds what comes after the last summary of the page before, in the list's order.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: .is_none_or(|after| after.is_before(summary))
 replace: .is_none_or(|after| after.is_before(summary) || !after.session.as_str().is_empty())
 caught-by:
-    cortex-core::it turns::the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages
+    cineris-core::it turns::the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages
 
 [break] the-lists-tie-is-not-broken-by-the-id
 rule: Two sessions used at the same moment are told apart by their ids, so a page boundary between them skips neither.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: ListCursor::is_before
 find: time < self.updated_at || (time == self.updated_at && summary.session_id < self.session)
 replace: time < self.updated_at
 caught-by:
-    cortex-core core::tests::a_list_cursor_gives_what_comes_after_it_ties_broken_by_the_id
+    cineris-core core::tests::a_list_cursor_gives_what_comes_after_it_ties_broken_by_the_id
 
 [break] the-list-says-there-is-no-more
 rule: A page that has sessions after it gives the cursor to them.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: sessions.iter().any(|summary| at.is_before(summary))
 replace: sessions.iter().any(|summary| at.is_before(summary) && summary.turns == u64::MAX)
 caught-by:
-    cortex-core::it turns::the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages
+    cineris-core::it turns::the_list_is_paged_by_the_last_summary_given_so_nothing_moves_between_pages
 
 [break] the-items-in-progress-come-on-every-page
 rule: `session/read` gives the items in progress only in the last page, so a page's end never splits them from the log after it.
-file: crates/cortex-core/src/paging.rs
+file: crates/cineris-core/src/paging.rs
 in: page
 find: if next < total {
 replace: if next < total && limit == usize::MAX {
 caught-by:
-    cortex-core paging::tests::nothing_moves_between_pages_when_items_in_progress_end_out_of_order
-    cortex-core::it events::the_items_in_progress_come_whole_in_the_last_page_of_a_read
+    cineris-core paging::tests::nothing_moves_between_pages_when_items_in_progress_end_out_of_order
+    cineris-core::it events::the_items_in_progress_come_whole_in_the_last_page_of_a_read
 
 [break] an-item-that-completed-is-given-twice
 rule: An item that completed between a read's two looks is given once, from the log.
-file: crates/cortex-core/src/paging.rs
+file: crates/cineris-core/src/paging.rs
 in: page
 find: .is_some_and(|id| !logged.iter().any(|logged| logged.id() == Some(id)))
 replace: .is_some_and(|id| !id.is_empty())
 caught-by:
-    cortex-core paging::tests::an_item_is_given_once_and_one_can_be_read_by_its_id
+    cineris-core paging::tests::an_item_is_given_once_and_one_can_be_read_by_its_id
 
 [break] an-item-in-progress-is-not-read-by-its-id
 rule: One item read by its id is found in progress too, and said to be incomplete.
-file: crates/cortex-core/src/paging.rs
+file: crates/cineris-core/src/paging.rs
 in: page
 find: let found: Vec<Item> = progress.into_iter().filter(is).collect();
 replace: let found: Vec<Item> = progress.into_iter().filter(|_| false).collect();
 caught-by:
-    cortex-core paging::tests::an_item_is_given_once_and_one_can_be_read_by_its_id
-    cortex-core::it events::an_item_in_progress_can_be_read_with_what_it_has_so_far
+    cineris-core paging::tests::an_item_is_given_once_and_one_can_be_read_by_its_id
+    cineris-core::it events::an_item_in_progress_can_be_read_with_what_it_has_so_far
 
 [break] a-client-that-opens-while-an-approval-is-put-is-never-put-it
 rule: Once an approval's request is open, every client of the session that may answer and was not asked is put it: one that opened the session between the look at who may answer and the request being open included.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::ask
 find: if !asked.contains(&client) {
 replace: if false && !asked.contains(&client) {
 caught-by:
-    cortex-core::it approvals::a_client_that_opens_the_session_while_an_approval_is_being_put_is_put_it
+    cineris-core::it approvals::a_client_that_opens_the_session_while_an_approval_is_being_put_is_put_it
 
 
 # ------------------------------------------------- the review of the second pull request
 
 [break] a-raise-to-unrestricted-is-taken
 rule: Where the core may not give `unrestricted`, a `session/set` that raises to it is refused, before anything else of the request is made ready.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: Core::set
 find: inner.may_hold(&level)?;
 replace: let _ = inner.may_hold(&level);
 caught-by:
-    cortex-core::it settings::unrestricted_is_refused_where_the_core_may_not_give_it
+    cineris-core::it settings::unrestricted_is_refused_where_the_core_may_not_give_it
 
 [break] a-grants-path-allow-lifts-a-path-question
 rule: A grant never lifts a question about a path: its `read` and `write` allow rules are not used.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: left_out
 find: && (matches!(rule.effect, EffectKind::Read | EffectKind::Write)
 replace: && (false
 caught-by:
-    cortex-core policy::tests::a_grant_lifts_no_question_about_a_path
+    cineris-core policy::tests::a_grant_lifts_no_question_about_a_path
 
 [break] a-command-rests-on-a-sandbox-it-does-not-run-in
 rule: A command's leave to run rests on the sandbox only where the narrowed scope is the session's own and its commands are confined.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: grant_engine
 find: let confined_here = confined && same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
 replace: let confined_here = confined || same_scope(&lease.grant.sandbox, &standing.grant.sandbox);
 caught-by:
-    cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
+    cineris-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
 
 [break] a-narrower-network-is-the-same-scope
 rule: A narrower network is a narrower scope.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: same_scope
 find: && first.network == second.network
 replace: && first.network == first.network
 caught-by:
-    cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
+    cineris-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
 
 [break] the-judge-reads-the-session-as-it-was
 rule: A supervisor's allow is judged by the session as it is when the answer comes: its template, standing lease and confinement, not as they were when the question was put.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: judge
 find:
         Some(Arc::new(move |grant: &Lease| {
@@ -383,51 +383,51 @@ replace:
         let confined = sandboxed.load(std::sync::atomic::Ordering::Acquire);
         Some(Arc::new(move |grant: &Lease| {
 caught-by:
-    cortex-core::it supervising::a_reload_that_tightens_the_rules_reaches_an_open_requests_judge
-    cortex-core::it supervising::a_supervisors_allow_is_judged_by_the_session_as_it_is_when_it_answers
+    cineris-core::it supervising::a_reload_that_tightens_the_rules_reaches_an_open_requests_judge
+    cineris-core::it supervising::a_supervisors_allow_is_judged_by_the_session_as_it_is_when_it_answers
 
 [break] an-expired-grant-covers-what-it-allows
 rule: A grant whose expiry has passed by the core's clock covers nothing, and says so.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: grant_engine
 find: if expired(grant, template.clock.now()) {
 replace: if expired(grant, template.clock.now()) && grant.id.as_str().is_empty() {
 caught-by:
-    cortex-core policy::tests::an_expired_grant_covers_nothing
-    cortex-core::it supervising::an_expired_grant_takes_no_allow
+    cineris-core policy::tests::an_expired_grant_covers_nothing
+    cineris-core::it supervising::an_expired_grant_takes_no_allow
 
 [break] a-time-to-stop-is-not-judged
 rule: A grant whose `time` to stop has passed covers nothing.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: expired
 find: at || grant.stop_when.iter().any(|condition| {
 replace: at || grant.stop_when.is_empty() && grant.stop_when.iter().any(|condition| {
 caught-by:
-    cortex-core policy::tests::an_expired_grant_covers_nothing
+    cineris-core policy::tests::an_expired_grant_covers_nothing
 
 [break] a-read-cursor-of-another-session-is-taken
 rule: A `session/read` cursor of another session is refused.
-file: crates/cortex-core/src/paging.rs
+file: crates/cineris-core/src/paging.rs
 in: start_of
 find: if named != session.as_str() {
 replace: if named.is_empty() {
 caught-by:
-    cortex-core paging::tests::a_cursor_is_refused_on_another_session_or_another_branch
+    cineris-core paging::tests::a_cursor_is_refused_on_another_session_or_another_branch
 
 [break] a-read-cursor-on-another-branch-is-taken
 rule: A `session/read` cursor whose last item is not where it was (a rewind moved the session to another branch) is refused.
-file: crates/cortex-core/src/paging.rs
+file: crates/cineris-core/src/paging.rs
 in: start_of
 find: (at == last).then_some(count)
 replace: (!at.is_empty() || !last.is_empty()).then_some(count)
 caught-by:
-    cortex-core paging::tests::a_cursor_is_refused_on_another_session_or_another_branch
+    cineris-core paging::tests::a_cursor_is_refused_on_another_session_or_another_branch
 
 # ------------------------------------------------- the second review of the fixes
 
 [break] a-fork-is-written-before-its-level-is-judged
 rule: A fork is written only once the level it would open at has passed the gate: a refused fork leaves no stored session.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: inner.may_hold(&loaded.settings.permissions.mode)?;
 replace:
@@ -443,98 +443,98 @@ replace:
     }
     inner.may_hold(&loaded.settings.permissions.mode)?;
 caught-by:
-    cortex-core::it settings::a_refused_fork_leaves_no_stored_session
+    cineris-core::it settings::a_refused_fork_leaves_no_stored_session
 
 [break] a-refused-level-holds-back-the-rest-of-a-reload
 rule: A level the core may not give is left out of a reload, which applies the rest, a tightening and trust taken away included.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: apply
 find: if refused_level && touches(std::slice::from_ref(&change.key), &["permissions.mode"]) {
 replace: if false && touches(std::slice::from_ref(&change.key), &["permissions.mode"]) {
 caught-by:
-    cortex-core::it reload::a_reload_applies_the_rest_beside_a_level_the_core_may_not_give
-    cortex-core::it reload::trust_taken_away_holds_when_the_reload_brings_a_level_the_core_may_not_give
+    cineris-core::it reload::a_reload_applies_the_rest_beside_a_level_the_core_may_not_give
+    cineris-core::it reload::trust_taken_away_holds_when_the_reload_brings_a_level_the_core_may_not_give
 
 [break] a-refused-profile-is-chosen
 rule: A profile refused for its level is not chosen: not its name, and the session's own choices are not dropped for it.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: apply
 find: Some(profile) if !refused_profile => {
 replace: Some(profile) => {
 caught-by:
-    cortex-core::it reload::a_refused_profile_leaves_nothing_of_it_beside_trust_taken_away
+    cineris-core::it reload::a_refused_profile_leaves_nothing_of_it_beside_trust_taken_away
 
 [break] a-refused-profile-changes-more-than-trust
 rule: Of a profile refused for its level, only what trust taken away takes is applied.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: apply
 find: if refused_profile && !held_back {
 replace: if refused_profile && false {
 caught-by:
-    cortex-core::it reload::a_refused_profile_leaves_nothing_of_it_beside_trust_taken_away
+    cineris-core::it reload::a_refused_profile_leaves_nothing_of_it_beside_trust_taken_away
 
 [break] a-grants-command-rule-applies-unconfined
 rule: A grant's `exec` allow rules apply only where the session's own scope confines the command.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: left_out
 find: || (rule.effect == EffectKind::Exec && !confined_here))
 replace: || (rule.effect == EffectKind::Exec && false))
 caught-by:
-    cortex-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
+    cineris-core policy::tests::a_command_is_within_only_where_it_runs_in_the_sandbox_it_was_judged_in
 
 [break] the-supervisor-is-not-told-its-grants-limits
 rule: A supervisor is told, when it opens a session, what of its grant does not apply there and why.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: tell_grant_limits
 find: live.hooks.tell(message);
 replace: let _ = message;
 caught-by:
-    cortex-core::it supervising::a_supervisor_is_told_what_of_its_grant_does_not_apply_in_the_session
+    cineris-core::it supervising::a_supervisor_is_told_what_of_its_grant_does_not_apply_in_the_session
 
 [break] a-grants-unconfined-commands-are-not-said
 rule: The notice of a grant's limits names its allow rules of commands where a command would not run confined in the session's own scope, and why.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: limits_in
 find: if !made.confined_here {
 replace: if made.confined_here && false {
 caught-by:
-    cortex-core::it supervising::a_supervisor_is_told_what_of_its_grant_does_not_apply_in_the_session
-    cortex-core policy::tests::the_supervisor_is_told_what_of_its_grant_applies_unconfined
+    cineris-core::it supervising::a_supervisor_is_told_what_of_its_grant_does_not_apply_in_the_session
+    cineris-core policy::tests::the_supervisor_is_told_what_of_its_grant_applies_unconfined
 
 # ------------------------------------------------- the third review of the fixes
 
 [break] a-grant-that-makes-no-engine-is-not-said
 rule: A grant whose engine cannot be made covers nothing, and the supervisor is told so, with why.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: grant_engine
 find: let engine = Engine::start(parts)
 replace: let engine = Engine::start(parts).or_else(|_| Engine::start(template.clone()))
 caught-by:
-    cortex-core policy::tests::a_grant_whose_engine_cannot_be_made_covers_nothing_and_says_why
+    cineris-core policy::tests::a_grant_whose_engine_cannot_be_made_covers_nothing_and_says_why
 
 [break] a-guided-grant-is-taken-as-guided
 rule: A grant at `guided`, which is not there yet, is read as `supervised`.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: grant_level
 find: let level = if level == Level::Guided {
 replace: let level = if level == Level::Guided && false {
 caught-by:
-    cortex-core policy::tests::a_guided_grant_is_read_as_supervised
+    cineris-core policy::tests::a_guided_grant_is_read_as_supervised
 
 [break] a-scope-is-compared-by-its-text
 rule: Two scopes are the same when each holds the other, however their roots are spelled or split.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: same_scope
 find: let same = |a: &PathSet, b: &PathSet| within(a, b) && within(b, a);
 replace: let same = |a: &PathSet, b: &PathSet| a.all == b.all && a.roots == b.roots;
 caught-by:
-    cortex-core policy::tests::a_scope_is_compared_by_what_it_holds
+    cineris-core policy::tests::a_scope_is_compared_by_what_it_holds
 
 [break] what-applies-unconfined-is-not-said
 rule: The notice of a grant's limits says which of its allow rules do apply where commands are not confined: those of tools and hosts.
-file: crates/cortex-core/src/policy.rs
+file: crates/cineris-core/src/policy.rs
 in: limits_in
 find: let others = allows(&[EffectKind::Ext, EffectKind::Network]);
 replace: let others: Vec<String> = Vec::new();
 caught-by:
-    cortex-core policy::tests::the_supervisor_is_told_what_of_its_grant_applies_unconfined
+    cineris-core policy::tests::the_supervisor_is_told_what_of_its_grant_applies_unconfined

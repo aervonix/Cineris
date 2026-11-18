@@ -1,9 +1,9 @@
 //! `cargo xtask decide`: ask the permission engine about one command line
 //! (`docs/testing-and-ci.md`, "Asking the permission engine").
 //!
-//! The engine is in `cortex-policy`, which `xtask` does not build: `xtask`
+//! The engine is in `cineris-policy`, which `xtask` does not build: `xtask`
 //! is built before every CI job, and the engine would add its crates to
-//! each. So this runs the probe that is an ignored test of `cortex-policy`'s
+//! each. So this runs the probe that is an ignored test of `cineris-policy`'s
 //! integration binary, with the case in its environment, and shows what it
 //! prints.
 
@@ -47,12 +47,12 @@ fn environment(arguments: &[String]) -> Result<Vec<(&'static str, String)>> {
                 command.extend(rest.by_ref().cloned());
                 break;
             }
-            "--level" => variables.push(("CORTEX_DECIDE_LEVEL", value(argument)?)),
+            "--level" => variables.push(("CINERIS_DECIDE_LEVEL", value(argument)?)),
             "--rule" => rules.push(value(argument)?),
-            "--shell" => variables.push(("CORTEX_DECIDE_SHELL", value(argument)?)),
-            "--workspace" => variables.push(("CORTEX_DECIDE_WORKSPACE", value(argument)?)),
-            "--cwd" => variables.push(("CORTEX_DECIDE_CWD", value(argument)?)),
-            "--untrusted" => variables.push(("CORTEX_DECIDE_UNTRUSTED", "1".to_owned())),
+            "--shell" => variables.push(("CINERIS_DECIDE_SHELL", value(argument)?)),
+            "--workspace" => variables.push(("CINERIS_DECIDE_WORKSPACE", value(argument)?)),
+            "--cwd" => variables.push(("CINERIS_DECIDE_CWD", value(argument)?)),
+            "--untrusted" => variables.push(("CINERIS_DECIDE_UNTRUSTED", "1".to_owned())),
             "--help" | "-h" => return Err(USAGE.to_owned()),
             flag if flag.starts_with('-') && command.is_empty() => {
                 return Err(format!("unknown flag `{flag}`\n\n{USAGE}"));
@@ -66,9 +66,9 @@ fn environment(arguments: &[String]) -> Result<Vec<(&'static str, String)>> {
     if rules.iter().any(|rule| rule.contains('\n')) {
         return Err("a rule is one line".to_owned());
     }
-    variables.push(("CORTEX_DECIDE_COMMAND", command.join(" ")));
+    variables.push(("CINERIS_DECIDE_COMMAND", command.join(" ")));
     if !rules.is_empty() {
-        variables.push(("CORTEX_DECIDE_RULES", rules.join("\n")));
+        variables.push(("CINERIS_DECIDE_RULES", rules.join("\n")));
     }
     Ok(variables)
 }
@@ -82,7 +82,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             "--quiet",
             "--locked",
             "-p",
-            "cortex-policy",
+            "cineris-policy",
             "--test",
             "it",
             "--",
@@ -161,18 +161,18 @@ mod tests {
                 .find(|(each, _)| *each == name)
                 .map(|(_, value)| value.as_str())
         };
-        assert_eq!(value("CORTEX_DECIDE_COMMAND"), Some("git push --force"));
-        assert_eq!(value("CORTEX_DECIDE_LEVEL"), Some("read-only"));
+        assert_eq!(value("CINERIS_DECIDE_COMMAND"), Some("git push --force"));
+        assert_eq!(value("CINERIS_DECIDE_LEVEL"), Some("read-only"));
         assert_eq!(
-            value("CORTEX_DECIDE_RULES"),
+            value("CINERIS_DECIDE_RULES"),
             Some("user allow exec cargo build *\nproject deny exec git push *")
         );
-        assert_eq!(value("CORTEX_DECIDE_UNTRUSTED"), Some("1"));
-        assert_eq!(value("CORTEX_DECIDE_SHELL"), None);
+        assert_eq!(value("CINERIS_DECIDE_UNTRUSTED"), Some("1"));
+        assert_eq!(value("CINERIS_DECIDE_SHELL"), None);
 
         // One word holding the whole line is the same line.
         let one = environment(&strings(&["git status && git log"])).unwrap();
-        assert!(one.contains(&("CORTEX_DECIDE_COMMAND", "git status && git log".to_owned())));
+        assert!(one.contains(&("CINERIS_DECIDE_COMMAND", "git status && git log".to_owned())));
     }
 
     #[test]

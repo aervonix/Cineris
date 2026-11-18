@@ -24,7 +24,7 @@ Storing and querying statistics pulls against three budgets: start-up (nothing m
 - (**Added after the independent review of step 16:** the day's limits count every process's spending from the monthly files: before each request a day-limited session reads what they gained, and each request line says which day's purse it was charged to, so a purse skips its own. With statistics off a session with a day's limit is refused. [architecture/18-usage.md](../architecture/18-usage.md), "Limits on one day".)
 - Nothing is read at start-up. The aggregates are loaded on first use.
 - Old months are folded into the aggregates and deleted after a retention period.
-- `cortex stats` shows, resets and disables.
+- `cineris stats` shows, resets and disables.
 
 ## Why
 
@@ -38,4 +38,4 @@ Ad-hoc queries over history. The run engine's evaluation reports will want riche
 
 ## Revisit when
 
-The run engine's reports need queries that aggregates cannot serve. A database can then be added behind `cortex-stats` for that data alone, as an optional feature, without touching the hot path.
+The run engine's reports need queries that aggregates cannot serve. A database can then be added behind `cineris-stats` for that data alone, as an optional feature, without touching the hot path.

@@ -1,8 +1,8 @@
 An entry's source has the session and the date and not the item: the tools' contract gives a tool no call id.
 
-- Area: cortex-knowledge
+- Area: cineris-knowledge
 - Owner: a step that changes the tools' contract, or step 24
 
 | Item | Who | When |
 |---|---|---|
-| **The item an entry of the project's memory was learned from.** An entry's source is "the session and item it came from and the date" ([14-adaptation.md](../architecture/14-adaptation.md), "Entries"), and the protocol's `EntrySource` has `item_id`. Step 17 fills the session and the date and leaves the item empty: `cortex-tools` gives a tool neither its call's id nor its item's (`Proposal` carries the turn's number, `RunCx` neither), so neither `remember` nor the observer of shell commands can name it. Filling it is an addition to the tools' contract: the call's id in `RunCx`, which the core's adapters then pass to `cortex-knowledge` (`Learned::item`, which the store already reads and writes). | A step that changes the tools' contract for another reason, or step 24, whose panel shows where an entry came from | When a panel or a command needs to open the item an entry was learned in |
+| **The item an entry of the project's memory was learned from.** An entry's source is "the session and item it came from and the date" ([14-adaptation.md](../architecture/14-adaptation.md), "Entries"), and the protocol's `EntrySource` has `item_id`. Step 17 fills the session and the date and leaves the item empty: `cineris-tools` gives a tool neither its call's id nor its item's (`Proposal` carries the turn's number, `RunCx` neither), so neither `remember` nor the observer of shell commands can name it. Filling it is an addition to the tools' contract: the call's id in `RunCx`, which the core's adapters then pass to `cineris-knowledge` (`Learned::item`, which the store already reads and writes). | A step that changes the tools' contract for another reason, or step 24, whose panel shows where an entry came from | When a panel or a command needs to open the item an entry was learned in |

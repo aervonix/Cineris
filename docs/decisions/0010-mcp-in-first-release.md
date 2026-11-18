@@ -32,7 +32,7 @@ The protocol changed fundamentally in its July 2026 revision: no handshake, no s
 ## Decision
 
 - Tools only. Standard I/O, and HTTP with static credentials. Both protocol eras.
-- The official SDK, client features only, confined to `cortex-mcp` behind our own transport trait and a cargo feature.
+- The official SDK, client features only, confined to `cineris-mcp` behind our own transport trait and a cargo feature.
 - Tools are reached through `tool_search` and `tool_call`, shared with extension tools, with opt-in direct exposure per server.
 - Existing configurations are read: the project's `.mcp.json` live, and other clients' per-user files by import.
 - Every tool definition is hashed at approval. A change needs approval again.

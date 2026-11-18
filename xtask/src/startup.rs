@@ -1,14 +1,14 @@
 //! `cargo xtask startup BINARY [--runs N] [--budget desktop|linux|windows]`:
 //! the start-up budgets of `docs/performance-budgets.md`, "Start-up",
 //! measured on a built binary (step 13b). `--profile PROFILE` in place of
-//! `BINARY` builds `cortex` in that cargo profile first (`release`, `dist`)
+//! `BINARY` builds `cineris` in that cargo profile first (`release`, `dist`)
 //! and measures that: what the `try` workflow runs.
 //!
 //! - **`--version`**, from starting the process to its exit, under both of
-//!   its names: the binary itself, and a hard link (or a copy) named `cx`
+//!   its names: the binary itself, and a hard link (or a copy) named `cin`
 //!   beside it in a directory of its own (`docs/decisions/0013-naming.md`).
 //! - **A trivial headless run**, from starting the process to its request
-//!   reaching the network: `cortex -p hi` against a listener of this
+//!   reaching the network: `cineris -p hi` against a listener of this
 //!   command's own on the loopback interface, which reads the request's
 //!   head and closes the connection. The run then ends with its own error;
 //!   only the time to the request is counted. Its home, configuration,
@@ -105,7 +105,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         fs::canonicalize(&binary).map_err(|error| format!("{}: {error}", binary.display()))?;
     let (version_budget, headless_budget) = budget(&column)?;
 
-    let scratch = std::env::temp_dir().join(format!("cortex-startup-{}", std::process::id()));
+    let scratch = std::env::temp_dir().join(format!("cineris-startup-{}", std::process::id()));
     let _ = fs::remove_dir_all(&scratch);
     fs::create_dir_all(&scratch).map_err(|error| format!("{}: {error}", scratch.display()))?;
     // Absolute, not canonical: on Windows a canonical path is the
@@ -149,7 +149,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     Ok(())
 }
 
-/// Builds `cortex` in `profile` and returns where it is.
+/// Builds `cineris` in `profile` and returns where it is.
 fn build(profile: &str) -> Result<PathBuf> {
     if profile.is_empty()
         || !profile
@@ -169,20 +169,20 @@ fn build(profile: &str) -> Result<PathBuf> {
         "--profile",
         profile,
         "--package",
-        "cortex-cli",
+        "cineris-cli",
         "--bin",
-        "cortex",
+        "cineris",
     ])?;
     built(profile)
 }
 
-/// Where `cortex` built in `profile` is.
+/// Where `cineris` built in `profile` is.
 fn built(profile: &str) -> Result<PathBuf> {
     let metadata = workspace::metadata(&workspace::root())?;
     Ok(metadata
         .target_directory
         .join(profile_directory(profile))
-        .join(format!("cortex{}", std::env::consts::EXE_SUFFIX)))
+        .join(format!("cineris{}", std::env::consts::EXE_SUFFIX)))
 }
 
 /// The directory under `target/` that cargo builds a profile into: `dev`
@@ -204,9 +204,9 @@ fn measure(
 ) -> Result<Vec<(String, Vec<f64>)>> {
     let alias_dir = scratch.join("bin");
     fs::create_dir_all(&alias_dir).map_err(|error| error.to_string())?;
-    let alias = alias_dir.join(format!("cx{}", std::env::consts::EXE_SUFFIX));
+    let alias = alias_dir.join(format!("cin{}", std::env::consts::EXE_SUFFIX));
     if fs::hard_link(binary, &alias).is_err() {
-        fs::copy(binary, &alias).map_err(|error| format!("could not make `cx`: {error}"))?;
+        fs::copy(binary, &alias).map_err(|error| format!("could not make `cin`: {error}"))?;
     }
     let home = scratch.join("home");
     let workspace = match tree {
@@ -225,7 +225,7 @@ fn measure(
     let environment = environment(&home, port)?;
 
     let mut rows = Vec::new();
-    for (name, program) in [("cortex", binary), ("cx", alias.as_path())] {
+    for (name, program) in [("cineris", binary), ("cin", alias.as_path())] {
         // The first run fills the file cache; it is not counted.
         let mut times = Vec::with_capacity(runs);
         for run in 0..=runs {
@@ -254,9 +254,9 @@ fn measure(
                 .args(extra)
                 .current_dir(&workspace)
                 .envs(environment.iter().map(|(name, value)| (name, value)))
-                .env_remove("CORTEX_LOG")
-                .env_remove("CORTEX_CONFIG")
-                .env_remove("CORTEX_DATA_DIR")
+                .env_remove("CINERIS_LOG")
+                .env_remove("CINERIS_CONFIG")
+                .env_remove("CINERIS_DATA_DIR")
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
@@ -273,7 +273,7 @@ fn measure(
         }
         Ok(times)
     };
-    for (name, program) in [("cortex", binary), ("cx", alias.as_path())] {
+    for (name, program) in [("cineris", binary), ("cin", alias.as_path())] {
         rows.push((
             format!("headless `{name} -p`, to its request"),
             headless(program, &[])?,
@@ -313,7 +313,7 @@ fn measure(
 
 /// What a row that only shows where the time goes starts with. It has no
 /// budget of its own.
-const BREAKDOWN: &str = "breakdown: headless `cortex -p`";
+const BREAKDOWN: &str = "breakdown: headless `cineris -p`";
 
 /// The environment of a headless run: a home of its own, a configuration
 /// that sends the request to `port`, and a key.
@@ -335,9 +335,9 @@ fn environment(home: &Path, port: u16) -> Result<Vec<(String, String)>> {
         ("ANTHROPIC_API_KEY".to_owned(), "sk-startup".to_owned()),
     ];
     let config = if cfg!(windows) {
-        PathBuf::from(path(&["AppData", "Roaming", "cortex-harness"]))
+        PathBuf::from(path(&["AppData", "Roaming", "cineris"]))
     } else {
-        PathBuf::from(path(&[".config", "cortex-harness"]))
+        PathBuf::from(path(&[".config", "cineris"]))
     };
     fs::create_dir_all(&config).map_err(|error| error.to_string())?;
     fs::write(
@@ -407,7 +407,7 @@ mod tests {
     fn startup_needs_one_binary_or_one_profile() {
         let error = run(&[]).unwrap_err();
         assert!(error.contains("--profile PROFILE"), "{error}");
-        let error = run(&strings(&["target/cortex", "--profile", "dist"])).unwrap_err();
+        let error = run(&strings(&["target/cineris", "--profile", "dist"])).unwrap_err();
         assert!(error.contains("not both"), "{error}");
         // Nothing reaches cargo that is not a profile's name.
         let error = run(&strings(&["--profile", "dist --config x"])).unwrap_err();

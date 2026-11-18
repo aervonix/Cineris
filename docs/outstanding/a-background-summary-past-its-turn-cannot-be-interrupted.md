@@ -1,6 +1,6 @@
 `interrupt` on an idle session does not stop a background summary request, which runs on and goes uncounted.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: step 32
 
 | Item | Who | When |

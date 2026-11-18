@@ -1,6 +1,6 @@
-# Step 13b: the command line and headless mode, in cortex-cli, and what it
-# added to cortex-core (the subcommands' functions), cortex-llm (tools
-# reduced for a strict variant) and cortex-protocol (the headless records).
+# Step 13b: the command line and headless mode, in cineris-cli, and what it
+# added to cineris-core (the subcommands' functions), cineris-llm (tools
+# reduced for a strict variant) and cineris-protocol (the headless records).
 #
 # Each rule of the headless page that the binary carries is broken here:
 # the exit codes, standard output holding the result alone, the jsonl
@@ -10,46 +10,46 @@
 
 [break] exit-code-mapped-wrongly
 rule: A failure of kind `auth` exits with code 3.
-file: crates/cortex-cli/src/exit.rs
+file: crates/cineris-cli/src/exit.rs
 in: for_kind
 find: ErrorKind::Auth => AUTH
 replace: ErrorKind::Auth => PROVIDER
 caught-by:
-    cortex-cli::bin/cortex exit::tests::each_kind_of_failure_has_the_code_of_the_table
-    cortex-cli::system runs::sys_exit_3_with_no_key_or_a_rejected_one
+    cineris-cli::bin/cineris exit::tests::each_kind_of_failure_has_the_code_of_the_table
+    cineris-cli::system runs::sys_exit_3_with_no_key_or_a_rejected_one
 
 [break] interrupted-code-ignores-the-signal
 rule: A run interrupted by SIGTERM, or Ctrl-Break, exits with 143; by SIGINT with 130.
-file: crates/cortex-cli/src/exit.rs
+file: crates/cineris-cli/src/exit.rs
 in: for_outcome
 find: TurnOutcome::Interrupted => signal.map_or(INTERRUPTED, Signal::code)
 replace: TurnOutcome::Interrupted => INTERRUPTED
 caught-by:
-    cortex-cli::bin/cortex exit::tests::each_outcome_has_the_code_of_the_table
-    cortex-cli::system signals::sys_sigterm_interrupts_the_turn_and_exits_143
+    cineris-cli::bin/cineris exit::tests::each_outcome_has_the_code_of_the_table
+    cineris-cli::system signals::sys_sigterm_interrupts_the_turn_and_exits_143
 
 [break] diagnostics-on-standard-output
 rule: Standard output carries only the result; what the run says to a person goes to standard error.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: Front::say
 find: eprintln!("{}: {}", self.plan.name, crate::visible(text));
 replace: println!("{}: {}", self.plan.name, crate::visible(text));
 caught-by:
-    cortex-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
+    cineris-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
 
 [break] jsonl-event-without-its-envelope
 rule: Each event line of jsonl is the parameters of a session/event notification, which the generated schema describes.
-file: crates/cortex-cli/src/report.rs
+file: crates/cineris-cli/src/report.rs
 in: event_line
 find: line(serde_json::to_string(event))
 replace: line(serde_json::to_string(&event.event))
 caught-by:
-    cortex-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
-    cortex-cli::system runs::sys_exit_7_at_a_limit
+    cineris-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
+    cineris-cli::system runs::sys_exit_7_at_a_limit
 
 [break] jsonl-without-its-session-record
 rule: The first line of jsonl is the session record.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: in_core
 find:
     front
@@ -61,102 +61,102 @@ find:
         .await;
 replace: let _ = (model, report::start_line);
 caught-by:
-    cortex-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
+    cineris-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
 
 [break] fail-on-denial-not-set
 rule: --fail-on-denial reaches the core, so the first call nobody can approve ends the run with code 6.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: start_core
 find: options.fail_on_denial = run.fail_on_denial;
 replace: options.fail_on_denial = false;
 caught-by:
-    cortex-cli::system runs::sys_exit_6_with_fail_on_denial_and_a_denial_listed_without_it
+    cineris-cli::system runs::sys_exit_6_with_fail_on_denial_and_a_denial_listed_without_it
 
 [break] denials-left-out-of-the-result
 rule: The result lists the calls refused because nothing could approve them.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: finish
 find: let denials = denials(core, collector);
 replace: let denials = Vec::new();
 caught-by:
-    cortex-cli::system runs::sys_exit_6_with_fail_on_denial_and_a_denial_listed_without_it
+    cineris-cli::system runs::sys_exit_6_with_fail_on_denial_and_a_denial_listed_without_it
 
 [break] second-ctrl-c-not-sent-as-now
 rule: A second Ctrl-C is turn/interrupt with now: running commands are killed at once.
-file: crates/cortex-cli/src/signals.rs
+file: crates/cineris-cli/src/signals.rs
 in: Counter::next
 find: Act::Tell(Interrupt { signal, now: true })
 replace: Act::Tell(Interrupt { signal, now: false })
 caught-by:
-    cortex-cli::bin/cortex signals::tests::a_second_ctrl_c_kills_now_and_a_third_exits
-    cortex-cli::system signals::sys_a_second_ctrl_c_kills_running_commands_at_once
+    cineris-cli::bin/cineris signals::tests::a_second_ctrl_c_kills_now_and_a_third_exits
+    cineris-cli::system signals::sys_a_second_ctrl_c_kills_running_commands_at_once
 
 [break] guard-not-given-to-the-core
 rule: The core is given the guard: the binary's own path and its hidden subcommand, so no command outlives a killed harness.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: start_core
 find: options.guard.clone_from(&plan.guard);
 replace: let _ = &plan.guard;
 caught-by:
-    cortex-cli::system signals::sys_a_killed_harness_leaves_no_command_running
+    cineris-cli::system signals::sys_a_killed_harness_leaves_no_command_running
 
 [break] guard-subcommand-not-dispatched
 rule: The hidden subcommand runs the guard, before anything else is done.
-file: crates/cortex-cli/src/main.rs
+file: crates/cineris-cli/src/main.rs
 in: main
 find: if rest.first().is_some_and(|first| first == args::GUARD) {
 replace: if rest.first().is_some_and(|first| first == "not-the-guard") {
 caught-by:
-    cortex-cli::system signals::sys_a_killed_harness_leaves_no_command_running
+    cineris-cli::system signals::sys_a_killed_harness_leaves_no_command_running
 
 [break] invoked-name-ignored-in-help
-rule: Help prints the name the program was started with, cortex or cx.
-file: crates/cortex-cli/src/main.rs
+rule: Help prints the name the program was started with, cineris or cx.
+file: crates/cineris-cli/src/main.rs
 in: dispatch
 find: print_out(&help::help(topic, name));
 replace: print_out(&help::help(topic, COMMAND));
 caught-by:
-    cortex-cli::system names::sys_help_differs_only_in_the_name_used
+    cineris-cli::system names::sys_help_differs_only_in_the_name_used
 
 [break] piped-input-after-the-prompt
 rule: Standard input comes first, as context, and the prompt after it.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: prompt
 find: (false, false) => Some(format!("{piped}\n\n{words}"))
 replace: (false, false) => Some(format!("{words}\n\n{piped}"))
 caught-by:
-    cortex-cli::system runs::sys_piped_input_comes_before_the_prompt_and_a_tool_call_is_not_on_standard_output
+    cineris-cli::system runs::sys_piped_input_comes_before_the_prompt_and_a_tool_call_is_not_on_standard_output
 
 [break] system-append-not-passed
 rule: --system-append reaches the system prompt.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: start_core
 find: options.system_append.clone_from(&run.system_append);
 replace: let _ = &run.system_append;
 caught-by:
-    cortex-cli::system runs::sys_piped_input_comes_before_the_prompt_and_a_tool_call_is_not_on_standard_output
+    cineris-cli::system runs::sys_piped_input_comes_before_the_prompt_and_a_tool_call_is_not_on_standard_output
 
 [break] deltas-not-asked-for
 rule: With --include-deltas, jsonl carries item.delta events.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: in_core
 find: info.capabilities.deltas = run.include_deltas && run.format == Format::Jsonl;
 replace: info.capabilities.deltas = false;
 caught-by:
-    cortex-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
+    cineris-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
 
 [break] no-session-keeps-a-log
 rule: --no-session keeps the session in memory, so it is not listed.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: session
 find: ephemeral: plan.run.no_session
 replace: ephemeral: false
 caught-by:
-    cortex-cli::system runs::sys_continue_resumes_the_latest_session_and_no_session_keeps_none
+    cineris-cli::system runs::sys_continue_resumes_the_latest_session_and_no_session_keeps_none
 
 [break] core-runtime-without-io
 rule: The core thread's runtime has its I/O driver on, which the HTTP client's sockets need.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: core_thread
 find:
     tokio::runtime::Builder::new_current_thread()
@@ -169,71 +169,71 @@ replace:
         .build()
     {
 caught-by:
-    cortex-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
+    cineris-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
 
 [break] a-read-counted-as-a-change
 rule: files_changed lists what the run wrote, not what it read.
-file: crates/cortex-cli/src/report.rs
+file: crates/cineris-cli/src/report.rs
 in: changed_files
 find: .is_some_and(|kind| WRITTEN.contains(&kind))
 replace: .is_some_and(|kind| kind != "unchanged")
 caught-by:
-    cortex-cli::bin/cortex report::tests::the_result_is_the_last_text_and_the_turns_own_end
-    cortex-cli::system runs::sys_exit_7_at_a_limit
+    cineris-cli::bin/cineris report::tests::the_result_is_the_last_text_and_the_turns_own_end
+    cineris-cli::system runs::sys_exit_7_at_a_limit
 
 [break] trust-pins-only-the-allow-rules
 rule: Trusting a project pins every rule its files hold, allow, deny and ask, so the next start reads it as trusted.
-file: crates/cortex-core/src/manage.rs
+file: crates/cineris-core/src/manage.rs
 in: Core::trust_project
 find: let pin = [Definition::of_project_rules(&rules)];
 replace:
-    let allowed = cortex_policy::ProjectRules {
+    let allowed = cineris_policy::ProjectRules {
         base: rules
             .base
             .iter()
-            .filter(|rule| rule.action == cortex_protocol::lease::RuleAction::Allow)
+            .filter(|rule| rule.action == cineris_protocol::lease::RuleAction::Allow)
             .cloned()
             .collect(),
         profiles: rules.profiles.clone(),
     };
     let pin = [Definition::of_project_rules(&allowed)];
-packages: cortex-cli
+packages: cineris-cli
 caught-by:
-    cortex-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start
+    cineris-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start
 
 [break] strict-tools-sent-whole
 rule: A tool sent to Anthropic as strict is reduced to what strict mode takes.
-file: crates/cortex-llm/src/anthropic/request.rs
+file: crates/cineris-llm/src/anthropic/request.rs
 in: tools
 find: budget.reduce(&tool.schema)
 replace: (std::borrow::Cow::Borrowed(&tool.schema), true)
-packages: cortex-llm, cortex-cli
+packages: cineris-llm, cineris-cli
 caught-by:
-    cortex-cli::system tools::sys_anthropic_strict_tools_carry_no_keyword_strict_mode_refuses
+    cineris-cli::system tools::sys_anthropic_strict_tools_carry_no_keyword_strict_mode_refuses
 
 [break] openai-strict-functions-sent-whole
 rule: A function sent to OpenAI as strict is reduced to what strict mode takes, or sent as not strict.
-file: crates/cortex-llm/src/openai_chat/request.rs
+file: crates/cineris-llm/src/openai_chat/request.rs
 in: tools
 find: budget.reduce(&tool.schema)
 replace: (std::borrow::Cow::Borrowed(&tool.schema), true)
-packages: cortex-llm, cortex-cli
+packages: cineris-llm, cineris-cli
 caught-by:
-    cortex-cli::system tools::sys_openai_strict_functions_carry_no_keyword_strict_mode_refuses
+    cineris-cli::system tools::sys_openai_strict_functions_carry_no_keyword_strict_mode_refuses
 
 [break] strict-request-limits-ignored
 rule: Anthropic's strict tools stay within its limits on a whole request.
-file: crates/cortex-llm/src/strict.rs
+file: crates/cineris-llm/src/strict.rs
 in: Budget::reduce
 find:
     if self.tools + 1 > limits.tools
         || self.optional + optional > limits.optional
         || self.unions + unions > limits.unions
 replace: if false
-packages: cortex-llm, cortex-cli
+packages: cineris-llm, cineris-cli
 caught-by:
-    cortex-llm strict::tests::anthropic_tools_stay_strict_while_the_request_has_room
-    cortex-cli::system tools::sys_anthropic_strict_tools_carry_no_keyword_strict_mode_refuses
+    cineris-llm strict::tests::anthropic_tools_stay_strict_while_the_request_has_room
+    cineris-cli::system tools::sys_anthropic_strict_tools_carry_no_keyword_strict_mode_refuses
 
 # In today's toolbox the one open object is `tool_call`'s `arguments`, and
 # that tool is past Anthropic's limit on optional parameters as well, so a
@@ -241,78 +241,78 @@ caught-by:
 # this break.
 [break] strict-open-object-kept
 rule: An object that takes any key cannot be strict: it is sent whole, and the tool not strict.
-file: crates/cortex-llm/src/strict.rs
+file: crates/cineris-llm/src/strict.rs
 in: fits
 find: if (typed_object || object.contains_key("properties"))
 replace: if (object.contains_key("properties"))
-packages: cortex-llm, cortex-cli
+packages: cineris-llm, cineris-cli
 caught-by:
-    cortex-llm strict::tests::a_schema_the_rules_cannot_take_is_sent_whole_and_not_strict
+    cineris-llm strict::tests::a_schema_the_rules_cannot_take_is_sent_whole_and_not_strict
 
 # What the independent review found untested, with the tests it asked for.
 
 [break] deny-rules-become-allow-rules
 rule: --deny adds a rule that denies, which holds even where nothing is asked.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: start_core
 find: (&run.deny, RuleAction::Deny)
 replace: (&run.deny, RuleAction::Allow)
 caught-by:
-    cortex-cli::system runs::sys_exit_6_with_fail_on_denial_and_a_denial_listed_without_it
+    cineris-cli::system runs::sys_exit_6_with_fail_on_denial_and_a_denial_listed_without_it
 
 [break] trust-project-not-set
 rule: --trust-project treats the project as trusted for the run.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: start_core
 find: options.trust_project = run.trust_project;
 replace: options.trust_project = false;
 caught-by:
-    cortex-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start
+    cineris-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start
 
 [break] resume-opens-another-session
 rule: --resume ID continues the session ID.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: session
 find: Choice::Resume(id) => open(id.clone())
 replace: Choice::Resume(_) => open(String::from("s_another"))
 caught-by:
-    cortex-cli::system runs::sys_continue_resumes_the_latest_session_and_no_session_keeps_none
+    cineris-cli::system runs::sys_continue_resumes_the_latest_session_and_no_session_keeps_none
 
 [break] input-that-is-not-utf8-refused
 rule: Standard input that is not UTF-8 is read with U+FFFD in its place, not refused.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: prompt
 find: String::from_utf8_lossy(&bytes).into_owned()
 replace: String::from_utf8(bytes).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?
 caught-by:
-    cortex-cli::system runs::sys_piped_input_comes_before_the_prompt_and_a_tool_call_is_not_on_standard_output
+    cineris-cli::system runs::sys_piped_input_comes_before_the_prompt_and_a_tool_call_is_not_on_standard_output
 
 [break] control-characters-shown-raw
 rule: Text shown at a terminal has its control characters, other than a line break and a tab, written as escapes.
-file: crates/cortex-cli/src/main.rs
+file: crates/cineris-cli/src/main.rs
 in: visible
-find: cortex_base::visible_keeping(text, &['\n', '\t'])
+find: cineris_base::visible_keeping(text, &['\n', '\t'])
 replace: std::borrow::Cow::Borrowed(text)
 caught-by:
-    cortex-cli::bin/cortex tests::control_characters_are_shown_as_escapes
+    cineris-cli::bin/cineris tests::control_characters_are_shown_as_escapes
 
 [break] unknown-provider-taken
 rule: auth login and logout refuse a provider the core does not know.
-file: crates/cortex-cli/src/commands.rs
+file: crates/cineris-cli/src/commands.rs
 in: auth
 find: known_provider(&context, &core, &provider)?;
 occurrence: 2
 replace:
 caught-by:
-    cortex-cli::system commands::sys_a_key_stored_with_auth_login_is_used_and_never_shown
+    cineris-cli::system commands::sys_a_key_stored_with_auth_login_is_used_and_never_shown
 
 [break] strict-takes-any-keyword
 rule: A schema with a keyword the strict rules are not known to take is not sent as strict.
-file: crates/cortex-llm/src/strict.rs
+file: crates/cineris-llm/src/strict.rs
 in: fits
 find: if object.keys().any(|keyword| !rules.takes(keyword))
 replace: if false
-packages: cortex-llm
+packages: cineris-llm
 caught-by:
     strict::tests::a_keyword_the_rules_do_not_know_keeps_a_tool_out_of_strict_mode
 
@@ -321,31 +321,31 @@ caught-by:
 
 [break] shell-cache-ignores-its-key
 rule: A kept version is used only while the shell's path, size and modification time are the ones it was kept under.
-file: crates/cortex-core/src/shell_cache.rs
+file: crates/cineris-core/src/shell_cache.rs
 in: lookup
 find: .find(|entry| stamp.matches(entry))
 replace: .find(|entry| entry["program"].as_str().is_some())
 caught-by:
-    cortex-core shell_cache::tests::a_changed_size_or_time_or_program_asks_again
+    cineris-core shell_cache::tests::a_changed_size_or_time_or_program_asks_again
 
 [break] shell-cache-takes-any-text
 rule: What the model is told of a shell's version is never whatever a file says: text that does not look like a version is a miss.
-file: crates/cortex-core/src/shell_cache.rs
+file: crates/cineris-core/src/shell_cache.rs
 in: lookup
 find: plausible(version).then(|| version.to_owned())
 replace: Some(version.to_owned())
 caught-by:
-    cortex-core shell_cache::tests::a_file_that_is_not_understood_is_a_miss
+    cineris-core shell_cache::tests::a_file_that_is_not_understood_is_a_miss
 
 [break] shell-version-not-kept
 rule: A shell asked on the side has its answer kept for the runs after.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: find_shell
 find: shell_cache::store(&file, &stamp, version, clock.as_ref());
 replace: let _ = (&file, &stamp, version, &clock);
-packages: cortex-core, cortex-cli
+packages: cineris-core, cineris-cli
 caught-by:
-    cortex-cli::system tools::sys_the_shells_version_is_kept_for_the_runs_after_the_first
+    cineris-cli::system tools::sys_the_shells_version_is_kept_for_the_runs_after_the_first
 
 # Found after step 13b merged: a signal tested in the instant after the
 # request arrived stopped the binary before the scripted server had written
@@ -353,9 +353,9 @@ caught-by:
 
 [break] server-misses-an-early-hang-up
 rule: A client that hangs up before the scripted server's script reaches `hang_until_closed` still opens its gate.
-file: crates/cortex-testkit/src/server.rs
+file: crates/cineris-testkit/src/server.rs
 in: serve
 find: if played.is_err()
 replace: if played.is_err() && false
 caught-by:
-    cortex-testkit server::tests::a_client_that_hangs_up_before_the_hold_still_opens_its_gate
+    cineris-testkit server::tests::a_client_that_hangs_up_before_the_hold_still_opens_its_gate

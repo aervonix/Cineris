@@ -5,7 +5,7 @@
 //! A test that passes once may depend on an order of events that the run
 //! happened to have. Two kinds of test are worth repeating:
 //!
-//! - tests whose rig seeds the order (`cortex-agent`'s): repeat `n` runs
+//! - tests whose rig seeds the order (`cineris-agent`'s): repeat `n` runs
 //!   with seed `first + n`, so each repeat tries another order, and a
 //!   failure names the seed that brings it back;
 //! - tests that start processes or cross threads, where the machine decides
@@ -47,14 +47,14 @@ such run is printed and counted. --strict runs nothing again: every failure
 counts (for a session that is fixing a known flake).
 
 A test that failed is run again in the same order with
-    CORTEX_TEST_SEED=<seed> cargo xtask test -p <crate> -E 'test(=<name>)'";
+    CINERIS_TEST_SEED=<seed> cargo xtask test -p <crate> -E 'test(=<name>)'";
 
 /// The variable a seeded test rig reads the first seed from
-/// (`cortex_testkit::seed::FIRST_SEED`).
-const FIRST_SEED: &str = "CORTEX_TEST_FIRST_SEED";
+/// (`cineris_testkit::seed::FIRST_SEED`).
+const FIRST_SEED: &str = "CINERIS_TEST_FIRST_SEED";
 
-/// The variable that fixes one seed (`cortex_testkit::seed::SEED`).
-const SEED: &str = "CORTEX_TEST_SEED";
+/// The variable that fixes one seed (`cineris_testkit::seed::SEED`).
+const SEED: &str = "CINERIS_TEST_SEED";
 
 /// How many times each test is run when the count is not given.
 const COUNT: u32 = 100;
@@ -441,8 +441,8 @@ struct Summary {
 /// How many seeds of a failing test are listed.
 const SEEDS_SHOWN: usize = 12;
 
-/// How the test kit's timeout report begins (`cortex_testkit::watch`).
-const WATCH_REPORT: &str = "== cortex-testkit: this test has run";
+/// How the test kit's timeout report begins (`cineris_testkit::watch`).
+const WATCH_REPORT: &str = "== cineris-testkit: this test has run";
 
 /// How many lines of a failure's text are shown.
 pub(crate) const LINES_SHOWN: usize = 6;
@@ -687,7 +687,7 @@ mod tests {
     fn a_squeeze_is_this_commands_and_not_nextests() {
         let request = Request::parse(&strings(&[
             "-p",
-            "cortex-testkit",
+            "cineris-testkit",
             "--load",
             "6",
             "--cores",
@@ -704,12 +704,12 @@ mod tests {
         );
         assert_eq!(
             request.command().join(" "),
-            "nextest run --profile stress --stress-count 100 -p cortex-testkit server::"
+            "nextest run --profile stress --stress-count 100 -p cineris-testkit server::"
         );
         // The build before the squeeze runs nothing, whatever goes after `--`.
         let request = Request::parse(&strings(&[
             "-p",
-            "cortex-testkit",
+            "cineris-testkit",
             "--cores",
             "2",
             "server::",
@@ -720,7 +720,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             request.build_command().join(" "),
-            "nextest run --profile stress --no-run -p cortex-testkit server::"
+            "nextest run --profile stress --no-run -p cineris-testkit server::"
         );
     }
 
@@ -735,11 +735,11 @@ mod tests {
     fn a_request_is_read_and_what_it_does_not_know_goes_to_nextest() {
         let request = Request::parse(&strings(&[
             "-p",
-            "cortex-agent",
+            "cineris-agent",
             "--count",
             "300",
             "-p",
-            "cortex-tools",
+            "cineris-tools",
             "--first-seed",
             "1000",
             "denials::",
@@ -751,7 +751,7 @@ mod tests {
         assert_eq!(
             request,
             Request {
-                packages: strings(&["cortex-agent", "cortex-tools"]),
+                packages: strings(&["cineris-agent", "cineris-tools"]),
                 count: 300,
                 first_seed: 1000,
                 squeeze: Squeeze::default(),
@@ -761,7 +761,7 @@ mod tests {
         );
         assert_eq!(
             request.command().join(" "),
-            "nextest run --profile stress --stress-count 300 -p cortex-agent -p cortex-tools \
+            "nextest run --profile stress --stress-count 300 -p cineris-agent -p cineris-tools \
              denials:: --run-ignored only"
         );
     }
@@ -769,15 +769,18 @@ mod tests {
     #[test]
     fn a_package_is_read_in_every_spelling_and_nothing_after_the_dashes_is() {
         let request = Request::parse(&strings(&[
-            "--package=cortex-agent",
-            "-pcortex-tools",
+            "--package=cineris-agent",
+            "-pcineris-tools",
             "--",
             "-p",
             "--count",
         ]))
         .unwrap();
 
-        assert_eq!(request.packages, strings(&["cortex-agent", "cortex-tools"]));
+        assert_eq!(
+            request.packages,
+            strings(&["cineris-agent", "cineris-tools"])
+        );
         assert_eq!(request.count, 100);
         assert_eq!(request.rest, strings(&["--", "-p", "--count"]));
     }
@@ -785,7 +788,7 @@ mod tests {
     #[test]
     fn the_run_is_given_the_first_seed_and_no_seed_that_is_fixed() {
         let request =
-            Request::parse(&strings(&["-p", "cortex-agent", "--first-seed", "1000"])).unwrap();
+            Request::parse(&strings(&["-p", "cineris-agent", "--first-seed", "1000"])).unwrap();
         let cargo = request.cargo(std::path::Path::new("."));
         let variable = |name: &str| {
             cargo
@@ -795,16 +798,16 @@ mod tests {
         };
 
         assert_eq!(
-            variable("CORTEX_TEST_FIRST_SEED"),
+            variable("CINERIS_TEST_FIRST_SEED"),
             Some(Some("1000".to_owned()))
         );
         // Removed, whatever the caller's environment holds.
-        assert_eq!(variable("CORTEX_TEST_SEED"), Some(None));
+        assert_eq!(variable("CINERIS_TEST_SEED"), Some(None));
     }
 
     #[test]
     fn a_hundred_times_from_seed_zero_when_not_told() {
-        let request = Request::parse(&strings(&["-p", "cortex-agent"])).unwrap();
+        let request = Request::parse(&strings(&["-p", "cineris-agent"])).unwrap();
 
         assert_eq!((request.count, request.first_seed), (100, 0));
     }
@@ -837,10 +840,10 @@ mod tests {
             let failure = "<failure type=\"test failure with exit code 101\">no</failure>";
             let odd = if repeat % 2 == 1 { failure } else { "" };
             xml.push_str(&format!(
-                "<testsuite name=\"cortex-agent::it@stress-{repeat}\" tests=\"3\">
-    <testcase name=\"rounds::steady\" classname=\"cortex-agent::it\" time=\"0.01\"></testcase>
-    <testcase name=\"denials::needs_one_order\" classname=\"cortex-agent::it\" time=\"0.01\">{odd}</testcase>
-    <testcase name=\"denials::broken\" classname=\"cortex-agent::it\" time=\"0.01\">{failure}</testcase>
+                "<testsuite name=\"cineris-agent::it@stress-{repeat}\" tests=\"3\">
+    <testcase name=\"rounds::steady\" classname=\"cineris-agent::it\" time=\"0.01\"></testcase>
+    <testcase name=\"denials::needs_one_order\" classname=\"cineris-agent::it\" time=\"0.01\">{odd}</testcase>
+    <testcase name=\"denials::broken\" classname=\"cineris-agent::it\" time=\"0.01\">{failure}</testcase>
 </testsuite>\n"
             ));
         }
@@ -859,20 +862,20 @@ mod tests {
             "
 3 test(s), 4 time(s) each, with seeds 1000 to 1003.
 
-FAILED 4 of 4 times: cortex-agent::it denials::broken
+FAILED 4 of 4 times: cineris-agent::it denials::broken
   It fails every time: the order of events is not what it depends on.
   seeds: 1000, 1001, 1002, 1003
   failure, under seed 1000:
     | no
   all of it: target/nextest/stress/junit.xml
-  again: CORTEX_TEST_SEED=1000 cargo xtask test -p cortex-agent -E 'test(=denials::broken)'
+  again: CINERIS_TEST_SEED=1000 cargo xtask test -p cineris-agent -E 'test(=denials::broken)'
 
-FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
+FAILED 2 of 4 times: cineris-agent::it denials::needs_one_order
   seeds: 1001, 1003
   failure, under seed 1001:
     | no
   all of it: target/nextest/stress/junit.xml
-  again: CORTEX_TEST_SEED=1001 cargo xtask test -p cortex-agent -E 'test(=denials::needs_one_order)'
+  again: CINERIS_TEST_SEED=1001 cargo xtask test -p cineris-agent -E 'test(=denials::needs_one_order)'
 "
         );
     }
@@ -993,7 +996,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
             listed("cx::it", "flaky"),
             listed("cx::it", "retried"),
             listed("cx::it", "fine"),
-            listed("cx", "other"),
+            listed("cin", "other"),
         ];
         let chosen: Vec<(String, u64)> = super::flakes_to_run(&cases, &list, 1000)
             .into_iter()
@@ -1009,7 +1012,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
     fn the_run_once_more_is_of_the_flake_alone_with_the_requests_other_arguments() {
         let request = Request::parse(&strings(&[
             "-p",
-            "cortex-agent",
+            "cineris-agent",
             "--count",
             "300",
             "-E",
@@ -1021,13 +1024,13 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
         .unwrap();
         assert!(request.strict);
         let test = crate::stall::rerun::Test {
-            binary: "cortex-agent::it".to_owned(),
+            binary: "cineris-agent::it".to_owned(),
             name: "a::b".to_owned(),
         };
         assert_eq!(
             request.once_command(&[test]).join(" "),
-            "nextest run --profile stress -p cortex-agent --run-ignored all -E \
-             (binary_id(=cortex-agent::it) and test(=a::b)) --retries 0"
+            "nextest run --profile stress -p cineris-agent --run-ignored all -E \
+             (binary_id(=cineris-agent::it) and test(=a::b)) --retries 0"
         );
     }
 
@@ -1050,14 +1053,14 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
         let report_path = folder.join("junit.xml");
         let xml = report();
         std::fs::write(&report_path, &xml).unwrap();
-        let mut words = vec!["-p", "cortex-agent"];
+        let mut words = vec!["-p", "cineris-agent"];
         if strict {
             words.push("--strict");
         }
         let request = Request::parse(&strings(&words)).unwrap();
         let listed: Vec<crate::flaky::Listed> = listed_names
             .iter()
-            .map(|name| listed("cortex-agent::it", name))
+            .map(|name| listed("cineris-agent::it", name))
             .collect();
         let mut ran = Vec::new();
         let mut said = String::new();
@@ -1091,7 +1094,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
             ""
         };
         format!(
-            "<testsuites><testsuite name=\"cortex-agent::it\"><testcase name=\"{name}\" classname=\"cortex-agent::it\" \
+            "<testsuites><testsuite name=\"cineris-agent::it\"><testcase name=\"{name}\" classname=\"cineris-agent::it\" \
              time=\"0.1\">{failure}</testcase></testsuite></testsuites>"
         )
     }
@@ -1179,7 +1182,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
         assert!(
             summary
                 .text
-                .contains("again: CORTEX_TEST_SEED=0 cargo xtask test -p a -E 'test(=t)'"),
+                .contains("again: CINERIS_TEST_SEED=0 cargo xtask test -p a -E 'test(=t)'"),
             "{}",
             summary.text
         );
@@ -1214,7 +1217,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
     | and a fifth
     | … and 4 more line(s)
   all of it: target/nextest/stress/junit.xml
-  again: CORTEX_TEST_SEED=40 cargo xtask test -p jx -E 'test(=tests::flaky)'
+  again: CINERIS_TEST_SEED=40 cargo xtask test -p jx -E 'test(=tests::flaky)'
 "
         );
         // The failure of repeat 2 differs only in its numbers: it is not
@@ -1234,7 +1237,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
     fn a_timeout_shows_what_the_test_wrote_and_a_failure_of_another_kind_is_named() {
         let xml = "<testsuite name=\"a@stress-0\"><testcase name=\"t\" classname=\"a\" \
                    time=\"10\"><failure type=\"test timeout\"/><system-err>test seed 0\nnoise \
-                   1\nnoise 2\nnoise 3\nnoise 4\nnoise 5\nnoise 6\n\n== cortex-testkit: this \
+                   1\nnoise 2\nnoise 3\nnoise 4\nnoise 5\nnoise 6\n\n== cineris-testkit: this \
                    test has run 8.0 s of the 10 s it is given (x). What it is doing:\nwaits, and \
                    for how long:\n     8.0 s  thread `main`: the gate made at a.rs:4:2\n\
                    </system-err></testcase></testsuite><testsuite name=\"a@stress-1\">\
@@ -1251,7 +1254,7 @@ FAILED 2 of 4 times: cortex-agent::it denials::needs_one_order
 
         assert!(
             summary.text.contains(
-                "  failure, under seed 0:\n    | timed out (test timeout)\n    | == cortex-testkit: \
+                "  failure, under seed 0:\n    | timed out (test timeout)\n    | == cineris-testkit: \
                  this test has run 8.0 s of the 10 s it is given (x). What it is doing:\n    | \
                  waits, and for how long:\n    |      8.0 s  thread `main`: the gate made at \
                  a.rs:4:2\n  another failure, under seed 1: panicked at a.rs:9:1:\n  all of it:"

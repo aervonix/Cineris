@@ -1,6 +1,6 @@
 The logging subscriber has no bridge for dependencies that log through the `log` crate at `warn` and above.
 
-- Area: cortex-base
+- Area: cineris-base
 - Owner: step 32, or the first step whose dependency needs it
 
 | Item | Who | When |

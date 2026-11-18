@@ -169,7 +169,7 @@ caught-by:
 
 [break] watch-limit-of-a-system-test
 rule: The watch gives a system test the 60 s nextest gives it.
-file: crates/cortex-testkit/src/watch.rs
+file: crates/cineris-testkit/src/watch.rs
 in: limit_of
 find: (_, true) => 60
 replace: (_, true) => 10
@@ -178,7 +178,7 @@ caught-by:
 
 [break] watch-keeps-a-finished-wait
 rule: A wait is reported only while it lasts.
-file: crates/cortex-testkit/src/watch.rs
+file: crates/cineris-testkit/src/watch.rs
 in: Doing::drop
 find: lock().retain(|entry| entry.id != self.id);
 replace:
@@ -187,7 +187,7 @@ caught-by:
 
 [break] gate-forgets-where-it-was-made
 rule: A gate is known by where the test made it.
-file: crates/cortex-testkit/src/gate.rs
+file: crates/cineris-testkit/src/gate.rs
 in: Gate::name
 find: format!("the gate made at {}", self.inner.made_at)
 replace: "the gate made at somewhere".to_owned()
@@ -196,7 +196,7 @@ caught-by:
 
 [break] watch-reports-at-the-kill
 rule: The report comes before nextest stops the test, at four fifths of its limit.
-file: crates/cortex-testkit/src/watch.rs
+file: crates/cineris-testkit/src/watch.rs
 find: const SHARE: f64 = 0.8;
 replace: const SHARE: f64 = 1.0;
 caught-by:
@@ -204,7 +204,7 @@ caught-by:
 
 [break] watch-misreads-the-process-start
 rule: On Linux the time is counted from the process's start.
-file: crates/cortex-testkit/src/watch.rs
+file: crates/cineris-testkit/src/watch.rs
 in: process_age
 find: after.split_whitespace().nth(19)
 replace: after.split_whitespace().nth(18)

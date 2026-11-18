@@ -1,6 +1,6 @@
 # After step 15: context management
 
-Step 15 added context management to `cortex-agent` and wired it into `cortex-core`. That is about 8,700 lines of source and tests over 52 files in the crates, with 78 new tests (76 on Windows, where two are Unix-only), and no new dependency. Measured on the step's pull request (#43) on 2026-11-14, against the main branch's run at `714db6e`, the base the branch was rebased on:
+Step 15 added context management to `cineris-agent` and wired it into `cineris-core`. That is about 8,700 lines of source and tests over 52 files in the crates, with 78 new tests (76 on Windows, where two are Unix-only), and no new dependency. Measured on the step's pull request (#43) on 2026-11-14, against the main branch's run at `714db6e`, the base the branch was rebased on:
 
 | Job | Main, `714db6e` (run 43580906780) | This step, `0d051d3` (run 43582887347) |
 |---|---|---|
@@ -17,7 +17,7 @@ Step 15 added context management to `cortex-agent` and wired it into `cortex-cor
 
 ## What this step adds to each tier
 
-**The two Windows runs above are not comparable.** This step's run started its test processes at 10 ms, and main's at 8 ms. The crates this step does not touch grew too: `cortex-llm` by 2.9 s of tier 2, `cortex-tools` by 2.3 s, `cortex-session` by 1.7 s. So the branch was measured against `main` on one runner, with the `try` workflow's A/B (run 43583320616: both trees built once, five rounds in turn, medians):
+**The two Windows runs above are not comparable.** This step's run started its test processes at 10 ms, and main's at 8 ms. The crates this step does not touch grew too: `cineris-llm` by 2.9 s of tier 2, `cineris-tools` by 2.3 s, `cineris-session` by 1.7 s. So the branch was measured against `main` on one runner, with the `try` workflow's A/B (run 43583320616: both trees built once, five rounds in turn, medians):
 
 | Windows, one runner (11 ms) | Main | This step | Added | Budget |
 |---|---|---|---|---|
@@ -71,15 +71,15 @@ The fixes after the review of step 15 (pull request #49): 48 files, about 3,400 
 | Tier 2, integration | 36.9 s | 39.2 s | +2.4 s | 40 s |
 | Tier 3, system | 88.7 s | 89.9 s | +1.3 s | 90 s |
 
-- **Of the 2.4 s in tier 2,** the crates with new integration tests account for 1.2 s: `cortex-core` 0.8 s (six tests, each a session of the core's) and `cortex-agent` 0.4 s. Crates the change does not touch moved by as much (`cortex-llm` +0.7 s, `cortex-tools` +0.3 s), and two of the five rounds of the fixes' tree were slow outliers (42.5 s and 58.1 s); the rounds in between differ by 0.5 to 1.4 s.
+- **Of the 2.4 s in tier 2,** the crates with new integration tests account for 1.2 s: `cineris-core` 0.8 s (six tests, each a session of the core's) and `cineris-agent` 0.4 s. Crates the change does not touch moved by as much (`cineris-llm` +0.7 s, `cineris-tools` +0.3 s), and two of the five rounds of the fixes' tree were slow outliers (42.5 s and 58.1 s); the rounds in between differ by 0.5 to 1.4 s.
 - **Windows tier 2 is now at 39.2 s of its 40 s budget on such a runner.** It stays under, but the next step that adds integration tests to a crate on Windows will cross the warning. Where to look first, as after step 15: what the per-request context work costs in a debug build (the context record, and the prefix check's rendering of the whole request, now twice for a request that asks for a speed tier), and the core's integration tests, whose sessions are the heaviest.
-- **Windows tier 3** is at 89.9 s of 90 s in the A/B, and was over in the pull request's first run (93.5 s, a warning). The fixes add no system test on Windows. The tier's time is `cortex-policy`'s PowerShell differential test (18 s) and `cortex-tools`' and `cortex-core`'s.
+- **Windows tier 3** is at 89.9 s of 90 s in the A/B, and was over in the pull request's first run (93.5 s, a warning). The fixes add no system test on Windows. The tier's time is `cineris-policy`'s PowerShell differential test (18 s) and `cineris-tools`' and `cineris-core`'s.
 
 ## What the fixes' runs showed
 
-- **The first run of `test-windows` failed in a test the fixes do not reach:** `cortex-tools`' `changes::sys_git_says_what_a_command_changed`, whose second look (a command that changes nothing) came back incomplete, which is what git answering after the look's time cap gives on a slow runner. The job passed when it was run again. It is step 11's test; nothing in the fixes changes the change detector.
-- **The desk stalled twice in this step's runs:** every test then in flight that wrote files (the agent's `context` tests, `cortex-config`'s, `cortex-base`'s atomic writes, `cortex-tools`' editing tests) ran out of time at once, and the next run, with nothing changed, passed whole. It matches the stall step 15 recorded above, and the side run that mutates the code met it once too. A `mutate` run's baseline is the check that catches it.
-- **A Windows `try` of `cortex-core` and `cortex-agent`** (run 43668459729: 409 tests) passed before the pull request, the three link tests on Windows among them: on the runner a link that cannot be made fails the test, so each made its symbolic link.
+- **The first run of `test-windows` failed in a test the fixes do not reach:** `cineris-tools`' `changes::sys_git_says_what_a_command_changed`, whose second look (a command that changes nothing) came back incomplete, which is what git answering after the look's time cap gives on a slow runner. The job passed when it was run again. It is step 11's test; nothing in the fixes changes the change detector.
+- **The desk stalled twice in this step's runs:** every test then in flight that wrote files (the agent's `context` tests, `cineris-config`'s, `cineris-base`'s atomic writes, `cineris-tools`' editing tests) ran out of time at once, and the next run, with nothing changed, passed whole. It matches the stall step 15 recorded above, and the side run that mutates the code met it once too. A `mutate` run's baseline is the check that catches it.
+- **A Windows `try` of `cineris-core` and `cineris-agent`** (run 43668459729: 409 tests) passed before the pull request, the three link tests on Windows among them: on the runner a link that cannot be made fails the test, so each made its symbolic link.
 
 ## Stay inside the project (2026-11-16)
 

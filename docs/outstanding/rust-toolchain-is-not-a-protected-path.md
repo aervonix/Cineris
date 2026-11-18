@@ -1,6 +1,6 @@
 `rust-toolchain.toml` can be written by a confined command and chooses the compiler the user's next `cargo` runs.
 
-- Area: cortex-policy
+- Area: cineris-policy
 - Owner: the owner, then step 32
 
 | Item | Who | When |

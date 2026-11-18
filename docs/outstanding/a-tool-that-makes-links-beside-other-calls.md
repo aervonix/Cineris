@@ -1,6 +1,6 @@
 An extension's tool that declares itself read-only or keyed and makes a link runs beside later calls, which were decided before it ended.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: step 28
 
 | Item | Who | When |
