@@ -10,24 +10,24 @@ This is not a numbered step of the build plan. It renamed the project from Corte
 
 ## The inventory
 
-Counted on `main` at `1e733de5`, before the rename.
+Counted on `main` at `88e98f85`, before the rename: the `main` this pull request renames (it was made first on `1e733de5`, and made again when step 25's first pull request merged).
 
-**In the files' text:** 1,009 files hold the name or the alias, and 1,305 paths hold the name.
+**In the files' text:** 1,026 files hold the name or the alias, and 1,313 paths hold the name.
 
 | Form | Occurrences | Becomes |
 |---|---|---|
-| `cortex` (crates, identifiers, the command, `.cortex/`, `cortex.ownerTermsRequired`) | 17,821 | `cineris` |
-| `CORTEX` (`CORTEX_*`) | 443 | `CINERIS` |
-| `cortex-harness` (folders, `@cortex-harness.invalid`, the logo files) | 267 | `cineris`, or `cineris-dev` for the developer's folders |
-| `Cortex-Harness` (the brand, the identity's name, `aervonix/Cortex-Harness`) | 160 | `Cineris` |
+| `cortex` (crates, identifiers, the command, `.cortex/`, `cortex.ownerTermsRequired`) | 18,107 | `cineris` |
+| `CORTEX` (`CORTEX_*`) | 451 | `CINERIS` |
+| `cortex-harness` (folders, `@cortex-harness.invalid`, the logo files) | 269 | `cineris`, or `cineris-dev` for the developer's folders |
+| `Cortex-Harness` (the brand, the identity's name, `aervonix/Cortex-Harness`) | 166 | `Cineris` |
 | `Cortex` (`Cortex Test`, the identity of test repositories) | 10 | `Cineris` |
 | `CORTEX-HARNESS` (Windows paths in upper case, in tests) | 3 | `CINERIS` |
 | The alias `cx`, where it is the alias | 169 | `cin` |
 
-- **By folder:** `crates/` 619 files, `docs/` 256, `xtask/` 60, `mutations/` 52, `fuzz/` 8, `.github/` 5, and the root files (`Cargo.toml`, `Cargo.lock`, `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`), `catalog/models.toml`, `corpus/Cargo.lock` and `.config/nextest.toml`.
+- **By folder:** `crates/` 625 files, `docs/` 266, `xtask/` 60, `mutations/` 53, `fuzz/` 8, `.github/` 5, and the root files (`Cargo.toml`, `Cargo.lock`, `README.md`, `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`), `catalog/models.toml`, `corpus/Cargo.lock` and `.config/nextest.toml`.
 - **Compound forms:** the 20 crates `cortex-*`, and `cortex-fuzz` and `cortex-corpus` outside the workspace; the Rust paths `cortex_*::`; `Cortex Test <test@cortex-harness.invalid>` and the other `@cortex-harness.invalid` addresses (`dev@`, `test@`, `branch@`, `combine@`); `cortex.ownerTermsRequired`; the Windows Credential Manager's entries `cortex-harness:<provider>`; the protocol's `server.name` and the statistics' `SOURCE` (`cortex-harness`); the schema annotations `x-cortex-*`; the sandbox policy's magic `cortex-sandbox-policy`; temp prefixes `cortex-harness-*` and `.cortex-*.tmp`; the live tests' `cortex-live` folders.
 - **The alias, which is also the tools' and the loop's context variable:** 169 uses took the alias's forms (a few of them a made-up test binary of that name, renamed with it consistently). They were quoted (`` `cx` ``, `"cx"`), part of a path (`bin/cx`, `/config/cx/`), a file (`cx.exe`, `CX.EXE`), a command with what follows (`` `cx --version` ``, `"cx: …"`, `Usage: cx`, `binary_id(=cx)`), or the start of a name made from it: the sandbox guard's process name `cx-tree-guard` (13 characters; `cin-tree-guard` is 14, within Linux's 15), and the test kit's markers `cx-child=`, `cx-echo`, `cx-rerun:`, `cx-launch` and the others. Three comments name the variable as `` `cx` `` and are kept. `cx.cancel`, `&cx`, `as_cx`, `cx: &RunCx` and `cx::it` are not the alias, and stay.
-- **60 environment variables:** `CORTEX_ADVERSARY`, `CORTEX_CONFIG`, `CORTEX_CORPUS_DIR`, `CORTEX_DATA_DIR`, `CORTEX_DECIDE_*` (`COMMAND`, `CWD`, `LEVEL`, `RULES`, `SHELL`, `UNTRUSTED`, `WORKSPACE`), `CORTEX_LIVE_*` (`ANTHROPIC_KEY_FILE`, `DEEPSEEK_KEY_FILE`, `OPENROUTER_KEY_FILE`, `VENICE_KEY_FILE`, `DRY_RUN`, `LEDGER`, `SCENARIOS`), `CORTEX_LOG`, `CORTEX_MODEL_MAIN`, `CORTEX_NO_SUCH_VARIABLE`, `CORTEX_OWNER_TERMS_FILE`, `CORTEX_PERF_*` (`CONFIG`, `DEMO`, `DIR`, `EDITOR_DEMO`, `FILES`, `JSON`, `ROUNDS`, `RUNS`, `SECONDS`, `SOURCE`, `SYNC`, `THREADS`, `TREE`), `CORTEX_PERMISSIONS_MODE`, `CORTEX_PRESSURE_FILE`, `CORTEX_PROPERTY_SCALE`, `CORTEX_PROPERTY_SEED`, `CORTEX_TESTKIT_*` (`PAUSE_MS`, `PROFILE`, `PROFILE_DIR`, `RERUN`, `SHELL_MODES`, `STARTS`), `CORTEX_TEST_FIRST_SEED`, `CORTEX_TEST_SEED`, `CORTEX_TEST_TMPDIR`, `CORTEX_TS_CLIENT`, `CORTEX_UPDATE_*` (`GENERATED`, `SCREENS`, `SNAPSHOT`, `SNAPSHOTS`, `TOOLBOX`), `CORTEX_WATCH_HANG`, `CORTEX_WATCH_LIMIT_MS`, `CORTEX_WATCH_STAY`.
+- **58 environment variables** (and the three prefixes `CORTEX_DECIDE_`, `CORTEX_LIVE_` and `CORTEX_UPDATE_`, which code matches on): `CORTEX_ADVERSARY`, `CORTEX_CONFIG`, `CORTEX_CORPUS_DIR`, `CORTEX_DATA_DIR`, `CORTEX_DECIDE_*` (`COMMAND`, `CWD`, `LEVEL`, `RULES`, `SHELL`, `UNTRUSTED`, `WORKSPACE`), `CORTEX_LIVE_*` (`ANTHROPIC_KEY_FILE`, `DEEPSEEK_KEY_FILE`, `OPENROUTER_KEY_FILE`, `VENICE_KEY_FILE`, `DRY_RUN`, `LEDGER`, `SCENARIOS`), `CORTEX_LOG`, `CORTEX_MODEL_MAIN`, `CORTEX_NO_SUCH_VARIABLE`, `CORTEX_OWNER_TERMS_FILE`, `CORTEX_PERF_*` (`CONFIG`, `DEMO`, `DIR`, `EDITOR_DEMO`, `FILES`, `JSON`, `ROUNDS`, `RUNS`, `SECONDS`, `SOURCE`, `SYNC`, `THREADS`, `TREE`, `TURNS`), `CORTEX_PERMISSIONS_MODE`, `CORTEX_PRESSURE_FILE`, `CORTEX_PROPERTY_SCALE`, `CORTEX_PROPERTY_SEED`, `CORTEX_TESTKIT_*` (`PAUSE_MS`, `PROFILE`, `PROFILE_DIR`, `RERUN`, `SHELL_MODES`, `STARTS`), `CORTEX_TEST_FIRST_SEED`, `CORTEX_TEST_SEED`, `CORTEX_TEST_TMPDIR`, `CORTEX_TS_CLIENT`, `CORTEX_UPDATE_*` (`GENERATED`, `SCREENS`, `SNAPSHOT`, `SNAPSHOTS`, `TOOLBOX`), `CORTEX_WATCH_HANG`, `CORTEX_WATCH_LIMIT_MS`, `CORTEX_WATCH_STAY`.
 - **File and folder names:** the 20 crates' folders; `docs/protocol/schema/cortex-protocol.schema.json` and `docs/protocol/ts/cortex-protocol.d.ts`; decisions 0030 and 0037, whose names hold a crate's; and the two logos, `assets/cortex-harness-logo-*.png`. The logos are images of a "C", which fits the new name. They were renamed, not redrawn.
 - **Generated files:** the protocol's schema and declarations, the configuration's schema and reference, `Cargo.lock` (and `fuzz/` and `corpus/`'s), the golden screens and snapshots, and the open items' index. They were renamed as text, and their own commands then wrote them again (below). The two golden transcripts (`crates/cineris-protocol/tests/golden/`) have no generator. They were renamed as text, and the names are all that changed in them (checked: the old text with the names replaced is the new text): the product's folders in example paths and messages, and the statistics' source `cineris`.
 - **Recorded provider fixtures:** the six Venice `request.json` files (the `prompt_cache_key` holds the product's name) and the fixtures' snapshots. Renamed as text, consistently with what the code sends, and not re-recorded. The Anthropic fixtures moved with their crate, unchanged.
@@ -88,11 +88,14 @@ Of the generated files, seven came out of their commands differently from the te
 
 Every branch was copied locally and rewritten with `cargo xtask rename branch BASE..<copy>`. A second run found each one already there. Nothing was pushed to step 25's branches, and the copies were deleted afterwards.
 
-**The current branches** (the coordinator's word: `worktree-step-25`, PR 1, and `worktree-step-25-session`, PR 2, both on `main` at `1e733de5`, 25 and 36 commits):
+**The branch that matters now** (the coordinator's word): `worktree-step-25-session`, step 25's second pull request, 22 commits on `main` at `88e98f85`, after its first pull request (#94) merged.
 
-- **The rebase onto this pull request's head** (`git rebase --onto <head> <R(BASE)> <copy>-renamed`, in a second checkout under `target/`) goes through with **no conflict** for both.
-- **The result,** in the session branch's tip: `cargo xtask rename --check` passes, and so do `cargo xtask outstanding --check` and `cargo fmt --all --check`.
-- **What step 25 still runs after its rebase:** `cargo xtask regen`. Its new golden screens were renamed as text, and a screen whose header holds the brand is laid out again by its command.
+- **The rewrite** (`cargo xtask rename branch 88e98f85..<copy>`) gives R(BASE) whose tree differs from this pull request's output commit only in the tool's own files (which `main` did not have) and in the seven files `regen` lays out again.
+- **The rebase onto this pull request's head** (`git rebase --onto <head> <R(BASE)> <copy>-renamed`, in a second checkout under `target/`) goes through with **no conflict**.
+- **The result,** at the branch's tip: `cargo xtask rename --check`, `cargo xtask outstanding --check`, `cargo xtask links` and `cargo fmt --all --check` pass, and all 4,691 of its tests pass at the desk (`cargo xtask test`), before any `regen`.
+- **What step 25 still runs after its rebase:** `cargo xtask regen`, as after any rebase. Its new golden screens were renamed as text, and a screen whose header holds the brand is laid out again by its command.
+
+**Before #94 merged,** the same was done with `worktree-step-25` (PR 1) and `worktree-step-25-session` as they were then, 25 and 36 commits on `1e733de5`: both rebased onto this pull request's head as it was then with no conflict.
 
 **The branches from the pause** (`worktree-step-25-wip`, `-session-wip`, `-rewind-wip` and `-firstrun-wip`: 18, 25, 24 and 24 commits on `24305e3d`, 37 commits behind `main` before the rename). Each was compared with a rebase of the same branch, not renamed, onto `main` as it was before the rename. The comparison used `git merge-tree`, which checks nothing out:
 
@@ -124,13 +127,23 @@ An independent reviewer, run on Fable, read the changes twice: first only the pa
 | 3 | The check finds the alias only in the forms the rename renames; names built on the old short form stay (`cxterm-*=`, `cxtui-*=`, `CX_PIPE`, `CXTUI_SCRATCH` and the like, `as_cx`); two test messages said "of cx" | The messages were **fixed**. The short-form names are left on purpose (below). The check's limit is written in the tool's help |
 | 4 | The alias rule renamed a made-up binary `cx` in xtask's tests to `cin` beside `cx::it`; `/config/cx` became `/config/cin` | No effect: those tests are consistent and pass. The inventory's 169 counts these uses too |
 | 5 | A `rustfmt` that cannot run was silent, and a rewrite would then differ from the output commit | **Fixed:** `apply` and `branch` fail when `rustfmt --version` does not run in the repository |
-| 6 | Symbolic links: `apply` read and wrote through one, and `branch` renamed its target | **Fixed:** both refuse a link (none is tracked). Tested on Unix; break `apply-goes-through-a-link` |
-| 7 | A file that is not UTF-8 was skipped by the check without a word | **Fixed:** the check scans its bytes for the old name. Tested; break `the-check-reads-only-text` |
-| 8 | The branch test gave the author and the committer one identity and one date; a failed write hid fast-import's message; slips in this record | **Fixed:** the test gives each its own and checks both are kept; fast-import's message comes first, and a stop of the tool's own ends the stream cleanly, with no crash report (tested). The record is corrected |
+| 6 | Symbolic links: `apply` read and wrote through one, and `branch` renamed its target | **Fixed:** both refuse a link. In the second round, `apply` was made to find a link to a folder, a link to nothing and a folder on the way that is a link too (none is tracked). Tested on Unix; break `apply-goes-through-a-link` |
+| 7 | A file that is not UTF-8 was skipped by the check without a word | **Fixed:** the check scans its bytes for the old name. Tested with bytes that are not UTF-8 and with a NUL; break `the-check-reads-only-text` |
+| 8 | The branch test gave the author and the committer one identity and one date; a failed write hid fast-import's message; slips in this record | **Fixed:** the test gives each its own and checks both are kept; fast-import's message comes first, and a stop of the tool's own ends the stream cleanly, with no crash report (the clean stop is tested, after commits were written; fast-import's message first is not). The record is corrected |
 
-**The second round,** of the changes since the full round: <!-- filled in below -->
+**The second round,** of the changes since the full round, found nothing severe:
 
-**The breaks:** `cargo xtask mutate rename-cineris`, at the desk: 18 breaks, all caught by the tests their list names. One break, the check missing the alias, was caught at first by only one of its two tests. That test planted the old name and the alias on one line, and now plants them on two. `cargo xtask mutate --check --tests`: all 2,742 breaks apply, and every `caught-by` names a test that exists.
+| # | Finding | What was done |
+|---|---|---|
+| 1 | `apply` still passed over a link to a folder or to nothing (the listing drops them) and a folder on the way that is a link | **Fixed** and tested, each kind |
+| 2 | With reftable, `HEAD` is a stub, so reading each worktree's files would not see a checked-out branch | **Fixed:** git's own worktree list is asked as well |
+| 3 | The test of a file that is not text fed valid UTF-8 with a NUL | **Fixed:** a test with bytes that are not UTF-8 |
+| 4 | The first making of NAME was not guarded, against a worktree on an unborn branch of that name | **Fixed** and tested; break `a-branch-is-made-under-a-worktree` |
+| 5 | A `rustfmt` that failed to start on one file left it as it was; `Formatter::at`'s refusal, and fast-import's message first, are not tested; the link test's ref check could not fail | **Fixed:** a failure to run rustfmt is an error, and the link now comes in a later commit, so the rewrite stops after writing. The refusal and the message order stay untested: a machine without rustfmt, or a fast-import that fails on its own, cannot be made in a test without more machinery than they are worth |
+| 6 | Slips in this record: the number of variables, the placeholder, rows 6 to 8, the session branch's commits, the slowest test | **Fixed** |
+| 7 | CONTRIBUTING.md and the help did not name the refusals | **Fixed** |
+
+**The breaks:** `cargo xtask mutate rename-cineris`, at the desk: 19 breaks, all caught by the tests their list names. One break, the check missing the alias, was caught at first by only one of its two tests. That test planted the old name and the alias on one line, and now plants them on two. `cargo xtask mutate --check --tests`: all 2,743 breaks apply, and every `caught-by` names a test that exists.
 
 ## Left open
 
