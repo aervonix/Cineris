@@ -23,7 +23,7 @@ use crate::lease::{Effect, Rule};
 use crate::message::Part;
 use crate::model::ModelInfo;
 use crate::open::{open_enum, open_union};
-use crate::project::{EntryChange, NewEntry, PlanEdit, ProjectEntry};
+use crate::project::{DetectedCommand, EntryChange, NewEntry, PlanEdit, ProjectEntry};
 use crate::session::{SandboxStatus, SessionSettings, SessionState, SessionSummary};
 use crate::usage::{ProviderLimits, SessionUsage, UsageGroup, UsageRange, UsageReport};
 
@@ -525,6 +525,30 @@ pub struct WorkspaceFilesResult {
     /// Whether there were more than the limit.
     #[serde(default)]
     pub truncated: bool,
+}
+
+/// `project/detect`: the build, test and check commands a session's project
+/// names in its own files (`Cargo.toml`, `package.json`'s scripts, a
+/// `Makefile`'s targets, `go.mod`, `pyproject.toml`), for the first run's
+/// last step (since step 25). A read, beside the lane, for any client that
+/// has the session open, as `workspace/files` is: the files are read
+/// through the session's path resolver and its read rules, and nothing is
+/// kept, learned or run.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProjectDetectParams {
+    /// The session.
+    pub session_id: SessionId,
+}
+
+/// The result of `project/detect`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ProjectDetectResult {
+    /// The commands found, by file in the order the files are looked at,
+    /// each named once. Only lines of plain words that the command
+    /// observer classes as a build, a test run or a check are given.
+    pub commands: Vec<DetectedCommand>,
 }
 
 /// `session/compact`: an idle session compacts in a turn of its own that
@@ -1543,6 +1567,8 @@ methods! {
     VerifyRun(SessionRef) -> Empty => "verify/run",
     /// Reads the model catalog.
     ModelsList(Empty) -> ModelsListResult => "models/list",
+    /// The commands a project's own files name, for the first run.
+    ProjectDetect(ProjectDetectParams) -> ProjectDetectResult => "project/detect",
     /// Lists the workspace's files, for file completion.
     WorkspaceFiles(WorkspaceFilesParams) -> WorkspaceFilesResult => "workspace/files",
     /// Reads ahead files a person named, so that the model's first read of

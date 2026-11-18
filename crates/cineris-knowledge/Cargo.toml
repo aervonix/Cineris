@@ -13,6 +13,9 @@ doctest = false
 cineris-protocol.workspace = true
 cineris-base.workspace = true
 serde.workspace = true
+# `package.json`'s scripts, for the commands the first run offers (since
+# step 25).
+serde_json.workspace = true
 thiserror.workspace = true
 # The private store and the shared profile are TOML files that a person can
 # read and edit (docs/architecture/14-adaptation.md, "Where it lives").

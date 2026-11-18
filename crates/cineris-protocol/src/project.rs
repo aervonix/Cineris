@@ -96,6 +96,28 @@ open_enum! {
     }
 }
 
+/// A command a project's own files name, found by `project/detect` (since
+/// step 25): offered at the first run, each shown in full before it is
+/// kept. Nothing is learned, proposed or run by finding it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct DetectedCommand {
+    /// What the file calls it: a script's or a target's name, or what it
+    /// is for when the file names no command (`Cargo.toml`'s `test`).
+    pub name: String,
+    /// The command line that would run: plain words, as an entry the user
+    /// writes holds them.
+    pub command: String,
+    /// For a script: what the script itself runs, as its file has it, cut
+    /// at 1,000 characters. The command line runs it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runs: Option<String>,
+    /// The file it was found in, relative to the workspace root.
+    pub source: String,
+    /// What it is for.
+    pub purpose: CommandPurpose,
+}
+
 /// The command of a `command` entry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]

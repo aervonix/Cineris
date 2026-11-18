@@ -232,6 +232,7 @@ dependencies = [
  "cineris-protocol",
  "cineris-testkit",
  "serde",
+ "serde_json",
  "thiserror",
  "toml",
  "tracing",

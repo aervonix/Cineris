@@ -2,7 +2,8 @@
 //! artifact, such as the whole output of a check (`session/artifact`), and
 //! files a person named with `@` read ahead into the system's cache
 //! (`workspace/warm`; `docs/architecture/15-efficiency.md`, "Prefetch",
-//! step 3).
+//! step 3). And the commands a project's own files name, for the first run
+//! (`project/detect`, since step 25).
 
 #![allow(
     clippy::disallowed_methods,
@@ -16,7 +17,8 @@ use std::sync::Arc;
 
 use cineris_protocol::ErrorKind;
 use cineris_protocol::methods::{
-    Empty, SessionArtifactParams, SessionArtifactResult, WorkspaceWarmParams,
+    Empty, ProjectDetectParams, ProjectDetectResult, SessionArtifactParams, SessionArtifactResult,
+    WorkspaceWarmParams,
 };
 
 use crate::clients::ClientId;
@@ -148,6 +150,53 @@ pub(crate) fn warm_files(
     warmed
 }
 
+/// `project/detect`: the commands the session's project names in its own
+/// files, each read through the session's path resolver and its read
+/// rules, on the blocking pool. Nothing is kept.
+pub(crate) async fn detect(
+    core: &Core,
+    client: ClientId,
+    params: &ProjectDetectParams,
+) -> Result<ProjectDetectResult, OpError> {
+    let live = core.open_for(client, &params.session_id)?;
+    let workspace = live.handle.state().workspace;
+    let gate = cineris_agent::Policy::read_gate(live.policy.as_ref());
+    Core::blocking(move || {
+        Ok(ProjectDetectResult {
+            commands: detect_in(Path::new(&workspace), gate.as_ref()),
+        })
+    })
+    .await
+}
+
+/// The commands the files at `workspace`'s root name, each file read only
+/// when it is inside the workspace, the gate lets it through, and it is a
+/// file no larger than `cineris_knowledge::detect::MAX_FILE`.
+pub(crate) fn detect_in(
+    workspace: &Path,
+    gate: &dyn cineris_tools::ReadGate,
+) -> Vec<cineris_protocol::project::DetectedCommand> {
+    let Ok(resolver) = cineris_base::PathResolver::new(workspace, cineris_base::PathOptions::new())
+    else {
+        return Vec::new();
+    };
+    cineris_knowledge::detect::detect(|name| {
+        let resolved = resolver.resolve(name).ok()?;
+        if !resolved.is_inside_workspace() || !gate.may_read(resolved.abs()) {
+            return None;
+        }
+        let file = std::fs::File::open(resolved.to_fs_path()).ok()?;
+        if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+            return None;
+        }
+        let mut text = String::new();
+        file.take(cineris_knowledge::detect::MAX_FILE + 1)
+            .read_to_string(&mut text)
+            .ok()?;
+        (text.len() as u64 <= cineris_knowledge::detect::MAX_FILE).then_some(text)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use cineris_base::AbsPath;
@@ -185,6 +234,43 @@ mod tests {
         .map(|path| (*path).to_owned())
         .collect();
         assert_eq!(warm_files(&scratch.dir("ws"), &paths, &NoSecrets), 1);
+    }
+
+    /// Detection reads only the files the gate lets through, inside the
+    /// workspace: a manifest the rules close, or one that is a link out of
+    /// the workspace, gives nothing.
+    #[test]
+    fn detection_reads_only_what_the_gate_lets_through_inside_the_workspace() {
+        let scratch = Scratch::outside("cineris-core-unit", "detect_in");
+        scratch.file("ws/go.mod", "module x\n");
+        scratch.file("ws/sub/Cargo.toml", "[package]\n");
+        scratch.file("outside/Makefile", "test:\n\tx\n");
+        std::fs::create_dir_all(scratch.join("ws/package.json")).unwrap();
+        let found = detect_in(&scratch.dir("ws"), &NoSecrets);
+        let lines: Vec<&str> = found.iter().map(|found| found.command.as_str()).collect();
+        assert_eq!(lines, ["go build ./...", "go test ./...", "go vet ./..."]);
+
+        /// A gate that refuses `go.mod`.
+        struct NoGo;
+        impl cineris_tools::ReadGate for NoGo {
+            fn may_read(&self, path: &AbsPath) -> bool {
+                path.file_name() != Some("go.mod")
+            }
+        }
+        assert!(detect_in(&scratch.dir("ws"), &NoGo).is_empty());
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                scratch.join("outside/Makefile"),
+                scratch.join("ws/Makefile"),
+            )
+            .unwrap();
+            assert_eq!(
+                detect_in(&scratch.dir("ws"), &NoGo),
+                Vec::new(),
+                "a link out"
+            );
+        }
     }
 
     #[test]

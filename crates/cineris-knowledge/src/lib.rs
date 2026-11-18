@@ -11,11 +11,13 @@
 //! | [`render`] | Section 5 of the system prompt, from a snapshot. |
 //! | [`observe`] | The command observer: which lines are observed, what they are for, and what a session's runs showed. |
 //! | [`learn`] | Storing what the observer saw: seen once, then active. |
+//! | [`detect`] | The commands a project's own files name, for the first run (since step 25). |
 //!
 //! Everything here blocks, and is called on the blocking pool. Nothing
 //! here is read when a session is made: the first read is at the start of
 //! a session's first turn.
 
+pub mod detect;
 pub mod entry;
 pub mod file;
 pub mod learn;

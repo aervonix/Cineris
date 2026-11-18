@@ -212,7 +212,9 @@ impl Purpose {
             .find(|purpose| purpose.as_str() == text)
     }
 
-    fn to_wire(self) -> wire::CommandPurpose {
+    /// The purpose as the protocol has it.
+    #[must_use]
+    pub fn to_wire(self) -> wire::CommandPurpose {
         match self {
             Self::Build => wire::CommandPurpose::Build,
             Self::Test => wire::CommandPurpose::Test,
