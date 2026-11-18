@@ -610,44 +610,51 @@ caught-by:
 rule: Where pastes are not known to come bracketed, keys that come many in one read with a line break inside are a paste.
 file: crates/cineris-term/src/terminal.rs
 in: Terminal::pastes
-find: (found.len() >= BURST && enter_inside)
-replace: (found.len() >= BURST && enter_inside && false)
+find: let burst = typed.keys >= BURST && typed.break_inside();
+replace: let burst = false;
 caught-by:
     cineris-term terminal::tests::a_burst_of_keys_with_a_line_break_inside_is_a_paste
+    cineris-term terminal::tests::line_feeds_and_crlf_are_a_pastes_line_breaks
+    cineris-term terminal::tests::a_focus_report_inside_a_burst_is_passed_on_beside_the_paste
+    cineris-term terminal::tests::a_frame_drawn_between_a_pastes_reads_does_not_end_its_tail
 
 [break] a-bursts-rest-is-keys
 rule: The keys that come just after a burst taken for a paste are its rest.
 file: crates/cineris-term/src/terminal.rs
 in: Terminal::pastes
-find: let in_tail = self.paste_tail.is_some_and(|until| now <= until);
+find: let in_tail = self.paste_tail.is_some_and(|waited| waited <= PASTE_TAIL);
 replace: let in_tail = false;
 caught-by:
     cineris-term terminal::tests::a_burst_of_keys_with_a_line_break_inside_is_a_paste
+    cineris-term terminal::tests::line_feeds_and_crlf_are_a_pastes_line_breaks
+    cineris-term terminal::tests::a_long_line_ended_by_enter_is_keys_and_so_is_a_short_burst
+    cineris-term terminal::tests::a_frame_drawn_between_a_pastes_reads_does_not_end_its_tail
 
 [break] a-final-enter-counts-as-inside
-rule: A line typed and ended by Enter in one read is keys: only an Enter that is not the last makes a burst a paste.
+rule: A line typed and ended by Enter in one read is keys: only a line break that is not the last makes a burst a paste.
 file: crates/cineris-term/src/terminal.rs
-in: Terminal::pastes
-find: .skip(1)
-replace: .skip(0)
+in: Typed::break_inside
+find: .any(|(at, c)| c == '\n' && at + 1 < self.text.len())
+replace: .any(|(_, c)| c == '\n')
 caught-by:
     cineris-term terminal::tests::a_burst_of_keys_with_a_line_break_inside_is_a_paste
+    cineris-term terminal::tests::a_long_line_ended_by_enter_is_keys_and_so_is_a_short_burst
 
 [break] a-control-key-in-a-burst-is-pasted
 rule: A burst with a control key in it is keys, never a paste.
 file: crates/cineris-term/src/terminal.rs
-in: paste_text
-find: KeyCode::Char(c) if plain => text.push(c),
-replace: KeyCode::Char(c) => text.push(c),
+in: part
+find: KeyCode::Char(c) if plain => Part::Types(c),
+replace: KeyCode::Char(c) if plain || c != 'j' => Part::Types(c),
 caught-by:
     cineris-term terminal::tests::a_burst_of_keys_with_a_line_break_inside_is_a_paste
 
 [break] a-known-bracketed-paste-is-still-weighed
-rule: A terminal that says it knows bracketed paste has no burst of keys taken for a paste.
+rule: A terminal that says bracketed paste is set, now or for good, has no burst of keys taken for a paste.
 file: crates/cineris-term/src/caps.rs
 in: Capabilities::apply
-find: Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1..=4),
-replace: Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1..=2),
+find: Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1 | 3),
+replace: Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1),
 caught-by:
     cineris-term caps::tests::bursts_are_taken_for_pastes_only_where_brackets_are_not_known
 
@@ -677,6 +684,135 @@ find: self.stalled = (!ended).then_some(now);
 replace: self.stalled = Some(now);
 caught-by:
     cineris-term terminal::tests::the_rest_of_a_paste_that_stalled_is_still_the_paste
+
+# What the review of the second pull request's interface found in the
+# quirks (docs/steps/25/parts/pr2-session.md, "The full review").
+
+[break] a-reset-bracketed-paste-is-trusted
+rule: A terminal that says bracketed paste is reset, asked after the start set it, will not bracket: its bursts are weighed.
+file: crates/cineris-term/src/caps.rs
+in: Capabilities::apply
+find: Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1 | 3),
+replace: Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1..=4),
+caught-by:
+    cineris-term caps::tests::bursts_are_taken_for_pastes_only_where_brackets_are_not_known
+
+[break] a-line-feed-is-no-pastes-line-break
+rule: A line feed (Ctrl+J) in a burst of keys is a paste's line break, not a key that makes the read keys.
+file: crates/cineris-term/src/terminal.rs
+in: part
+find: KeyCode::Char('j') if key.mods == Mods::CTRL => Part::LineFeed,
+replace: KeyCode::Char('j') if false => Part::LineFeed,
+caught-by:
+    cineris-term terminal::tests::line_feeds_and_crlf_are_a_pastes_line_breaks
+
+[break] crlf-is-two-line-breaks
+rule: Enter then Ctrl+J (CRLF) in a paste's keys is one line break.
+file: crates/cineris-term/src/terminal.rs
+in: typed
+find: Part::LineFeed if after_enter => after_enter = false,
+replace: Part::LineFeed if false => after_enter = false,
+caught-by:
+    cineris-term terminal::tests::line_feeds_and_crlf_are_a_pastes_line_breaks
+
+[break] a-focus-report-makes-a-burst-keys
+rule: A focus report or a reply in the same read as a burst of keys is passed on beside the paste, and does not make the keys keys.
+file: crates/cineris-term/src/terminal.rs
+in: part
+find: Event::Focus(_) | Event::Reply(_) | Event::Mouse(_) => Part::Beside,
+replace: Event::Focus(_) | Event::Reply(_) | Event::Mouse(_) => Part::Keys,
+caught-by:
+    cineris-term terminal::tests::a_focus_report_inside_a_burst_is_passed_on_beside_the_paste
+
+[break] a-long-line-ended-by-enter-is-pasted
+rule: A read whose only line break is its last key is keys however long it is: its Enter sends.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::pastes
+find: let long = typed.keys > LONG_BURST && !typed.breaks();
+replace: let long = typed.keys > LONG_BURST;
+caught-by:
+    cineris-term terminal::tests::a_long_line_ended_by_enter_is_keys_and_so_is_a_short_burst
+
+[break] a-long-line-with-no-break-is-keys
+rule: A read of more than 64 keys with no line break at all is still a paste, whose rest is the next read.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::pastes
+find: let long = typed.keys > LONG_BURST && !typed.breaks();
+replace: let long = false;
+caught-by:
+    cineris-term terminal::tests::a_long_line_ended_by_enter_is_keys_and_so_is_a_short_burst
+
+[break] a-pastes-tail-never-ends
+rule: A paste's tail ends once the reader has waited longer than it for input.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::next
+find: *waited += self.device.now().saturating_duration_since(before);
+replace: let _ = (waited, before);
+caught-by:
+    cineris-term terminal::tests::a_frame_drawn_between_a_pastes_reads_does_not_end_its_tail
+
+[break] a-pastes-tail-counts-the-time-not-waited
+rule: A paste's tail counts only the time spent waiting for input: a frame drawn between two reads of one paste does not end it.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::next
+find: let before = self.device.now();
+replace: let before = self.device.now() - PASTE_TAIL * 2;
+caught-by:
+    cineris-term terminal::tests::a_frame_drawn_between_a_pastes_reads_does_not_end_its_tail
+
+[break] a-lone-key-after-a-give-up-is-pasted
+rule: After a bracketed paste is given up on, a lone key is a key, a person's.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::pastes
+find: Some(typed) if typed.keys == 1 && !ended => self.stalled = None,
+replace: Some(typed) if false && typed.keys == 1 && !ended => self.stalled = None,
+caught-by:
+    cineris-term terminal::tests::a_lone_key_after_a_give_up_and_a_late_rest_are_keys
+
+[break] a-stalled-tail-has-no-time-limit
+rule: What comes after more than the wait with no input is not a stalled paste's rest.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::pastes
+find: let tail = now.saturating_duration_since(since) <= self.open_wait;
+replace: let tail = true;
+caught-by:
+    cineris-term terminal::tests::a_lone_key_after_a_give_up_and_a_late_rest_are_keys
+
+[break] esc-ctrl-h-is-ctrl-alt-backspace
+rule: Where Backspace sends ^H, ESC ^H is Alt+Backspace, which deletes a word.
+file: crates/cineris-term/src/input.rs
+in: Decoder::decode
+find: if self.ctrl_h_backspace && self.buffer[start..].starts_with(b"\x1b\x08") {
+replace: if false {
+caught-by:
+    cineris-term input::tests::with_ctrl_h_as_backspace_esc_ctrl_h_is_alt_backspace_and_records_are_untouched
+
+[break] the-consoles-records-are-read-once
+rule: On Windows a wait reads every console record waiting, up to the bound, so that a paste comes in one read.
+file: crates/cineris-term/src/sys/mod.rs
+in: reads_more
+find: waiting > 0 && read < READ_BYTES
+replace: false
+caught-by:
+    cineris-term sys::tests::the_consoles_records_are_read_while_more_wait_up_to_the_bound
+
+[break] the-backspace-setting-is-read-the-wrong-way
+rule: terminal.backspace = "ctrl+h" makes byte 0x08 Backspace.
+file: crates/cineris-cli/src/interactive.rs
+in: overrides
+find: BackspaceChoice::CtrlH => Some(true)
+replace: BackspaceChoice::CtrlH => Some(false)
+caught-by:
+    cineris-cli::bin/cineris interactive::tests::the_terminals_quirks_reach_the_overrides
+
+[break] the-paste-wait-is-not-read
+rule: terminal.paste_wait sets how long a bracketed paste may pause.
+file: crates/cineris-cli/src/interactive.rs
+in: overrides
+find: paste_wait: Some(terminal.paste_wait)
+replace: paste_wait: None
+caught-by:
+    cineris-cli::bin/cineris interactive::tests::the_terminals_quirks_reach_the_overrides
 
 [break] the-clipboard-trusted-in-tmux
 rule: tmux is thought not to take the clipboard sequence.
@@ -822,10 +958,33 @@ caught-by:
 rule: In the prompt editor's row, a run of four or more of one escape is drawn once with its count, so a row holds the cluster.
 file: crates/cineris-tui/src/editor/cluster.rs
 in: counted
-find: if count >= RUN {
-replace: if false {
+find: if count < RUN {
+replace: if true {
 caught-by:
     cineris-tui editor::cluster::tests::a_long_run_of_one_unseen_character_is_drawn_once_with_its_count
+    cineris-tui app::tests::a_long_run_of_unseen_characters_fits_the_prompts_row
+
+[break] a-run-of-several-unseen-characters-is-drawn-whole
+rule: In the prompt editor's row, a run of four or more escapes of different characters (text hidden in tag characters) is one mark with its count too.
+file: crates/cineris-tui/src/editor/cluster.rs
+in: counted
+find: one &= escape == first;
+replace:
+    if escape != first {
+        break;
+    }
+caught-by:
+    cineris-tui editor::cluster::tests::a_run_of_several_unseen_characters_is_one_mark_and_ascii_counts_with_x
+    cineris-tui app::tests::a_long_run_of_unseen_characters_fits_the_prompts_row
+
+[break] the-count-ignores-the-glyphs
+rule: The count's sign is the glyph set's: x where the ASCII set is chosen.
+file: crates/cineris-tui/src/editor/cluster.rs
+in: counted
+find: out.push_str(glyphs.times);
+replace: out.push('×');
+caught-by:
+    cineris-tui editor::cluster::tests::a_run_of_several_unseen_characters_is_one_mark_and_ascii_counts_with_x
     cineris-tui app::tests::a_long_run_of_unseen_characters_fits_the_prompts_row
 
 [break] the-viewer-skips-the-compaction
@@ -836,6 +995,104 @@ find: Piece::Block(Block::Round(_) | Block::Compaction { .. }) => true
 replace: Piece::Block(Block::Round(_)) => true
 caught-by:
     cineris-tui app::tests::screen::the_viewer_shows_a_reasoning_and_a_compactions_summary_whole
+
+# What the review of the second pull request's interface found in the
+# viewer's summaries (docs/steps/25/parts/pr2-session.md, "The full review").
+
+[break] a-late-summary-lands-anywhere
+rule: A compaction's summary read is shown only on the view that asked, at the stop it asked at: never over a view opened since.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::summary_read
+find:
+    let Some((stop, Asked::Reading(asked))) = state.asked else {
+        return;
+    };
+    if asked != ticket {
+        return;
+    }
+    state.asked = None;
+    if state.selected != Some(stop) || state.text.is_some() || state.whole.is_some() {
+        return;
+    }
+replace:
+    let stop = state.selected.unwrap_or_default();
+    let _ = ticket;
+caught-by:
+    cineris-tui app::tests::screen::a_late_summary_lands_only_where_it_was_asked_for
+
+[break] a-summary-shown-at-another-stop
+rule: A compaction's summary that comes after the viewer moved to another stop is not shown there.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::summary_read
+find: if state.selected != Some(stop) || state.text.is_some() || state.whole.is_some() {
+replace: if state.text.is_some() || state.whole.is_some() {
+caught-by:
+    cineris-tui app::tests::screen::a_late_summary_lands_only_where_it_was_asked_for
+
+[break] a-summary-read-says-nothing
+rule: While a compaction's summary is read the viewer's keys row says so.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::viewer_frame
+find: Asked::Reading(_) => SummaryRead::Reading
+replace: Asked::Reading(_) => SummaryRead::Failed
+caught-by:
+    cineris-tui app::tests::screen::a_late_summary_lands_only_where_it_was_asked_for
+
+[break] a-summary-that-is-not-read-says-nothing
+rule: A compaction's summary read that finds none is said in the viewer's keys row.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::summary_read
+find: None => state.asked = Some((stop, Asked::Failed))
+replace: None => {}
+caught-by:
+    cineris-tui app::tests::screen::a_late_summary_lands_only_where_it_was_asked_for
+
+[break] a-summary-read-that-fails-says-nothing
+rule: A compaction's summary read that fails is said in the viewer's keys row.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::summary_unread
+find: state.asked = Some((stop, Asked::Failed));
+replace: let _ = stop;
+caught-by:
+    cineris-tui app::tests::screen::a_late_summary_lands_only_where_it_was_asked_for
+
+[break] the-transcript-behind-a-summary-keeps-old-rows
+rule: A change of look while a summary is shown reaches the transcript's view behind it.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: Viewer::forget_rows
+find: behind.forget_rows();
+replace: let _ = behind;
+caught-by:
+    cineris-tui app::tests::screen::a_look_changed_under_a_summary_reaches_the_transcript_behind_it
+
+[break] a-summary-hides-what-a-carriage-return-takes-back
+rule: A reasoning and a compaction's summary shown whole show a bare carriage return as its symbol, and hide nothing behind it.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::show_summary
+find: crate::view::round::whole_lines(text)
+replace: crate::view::round::output_lines(text)
+caught-by:
+    cineris-tui app::tests::screen::a_summary_shown_whole_shows_a_carriage_return
+
+[break] a-click-finds-only-boxes
+rule: A click on a reasoning's or a compaction's row selects that stop and shows it whole, as Enter does.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::viewer_mouse
+find: Place::Kept { block, .. } => self.kept.stop_number(*block)
+replace: Place::Kept { block, .. } => self.kept.round_number(*block)
+caught-by:
+    cineris-tui app::tests::screen::a_click_on_a_reasoning_or_a_compaction_shows_it_whole
+
+[break] view-n-counts-the-stops
+rule: /view n opens the nth box, counted among the boxes, whatever reasoning or compaction comes before it.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::open_viewer
+find:
+    .and_then(|round| self.kept.round_block(round))
+    .and_then(|block| self.kept.stop_number(block))
+replace:
+caught-by:
+    cineris-tui app::tests::screen::view_n_opens_the_nth_box_after_a_reasoning_and_a_compaction
 
 [break] a-summary-closes-the-viewer
 rule: Esc from a summary goes back to the transcript it was opened from, not out of the viewer.
@@ -895,13 +1152,12 @@ caught-by:
     cineris-tui app::tests::screen::tab_reads_the_transcript_under_a_dialog_and_nothing_read_answers_it
 
 [break] reading-outlives-its-dialog
-rule: Reading the transcript ends with its dialog: the next dialog's keys are its own.
+rule: Reading the transcript ends with its dialog: the next dialog's keys are its own. Since the review of the second pull request the reader's id is cleared wherever its dialog leaves the queue (`reading-outlives-a-dialog-gone`), so it is never another dialog's, and comparing it with the open dialog's id, kept as a second guard, changes nothing a test can see.
 file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find: let reading = self.reading_transcript.as_ref() == Some(&id);
 replace: let reading = self.reading_transcript.is_some();
-caught-by:
-    cineris-tui app::tests::screen::esc_while_reading_goes_back_and_the_inline_screen_offers_no_reading
+expect: survives
 
 [break] esc-while-reading-is-swallowed
 rule: Esc while reading goes back to the dialog, and does not deny it.
@@ -927,7 +1183,7 @@ caught-by:
 rule: Tab starts reading only once the dialog takes keys; before, it goes where it was going.
 file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
-find: if ready && !note && self
+find: if (ready || (back && unreadable)) && !note && self
 replace: if !note && self
 caught-by:
     cineris-tui app::tests::screen::tab_before_the_dialog_is_ready_does_not_start_reading
@@ -958,6 +1214,80 @@ find: if self.reading_transcript.is_none() {
 replace: if true {
 caught-by:
     cineris-tui app::tests::screen::reading_keeps_its_way_back_shown_and_takes_only_the_scrolling_keys
+
+# What the full review of the second pull request's interface found in
+# reading under a dialog (docs/steps/25/parts/pr2-session.md, "The full
+# review").
+
+[break] a-global-key-just-back-is-swallowed
+rule: Just back from reading, Ctrl+C, Ctrl+L and the suspension act as they do anywhere, and hold nothing.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: if back && let TermEvent::Key(key) | TermEvent::Repeat(key) = event
+replace: if false && let TermEvent::Key(key) | TermEvent::Repeat(key) = event
+caught-by:
+    cineris-tui app::tests::screen::ctrl_c_and_ctrl_l_act_while_reading_and_just_back
+
+[break] reading-swallows-the-global-keys
+rule: While reading the transcript from under a dialog, and just back, Ctrl+C and Ctrl+L keep their meaning.
+file: crates/cineris-tui/src/app/state/screen.rs
+in: App::reading_global
+find: Action::Interrupt | Action::Redraw | Action::Suspend
+replace: Action::Suspend
+caught-by:
+    cineris-tui app::tests::screen::ctrl_c_and_ctrl_l_act_while_reading_and_just_back
+
+[break] an-unreadable-dialog-catches-the-keyboard
+rule: Just back at a dialog the window has grown too small for, which takes no key until it grows, Tab reads the transcript again.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: (ready || (back && unreadable))
+replace: ready
+caught-by:
+    cineris-tui app::tests::screen::back_at_a_dialog_the_window_is_too_small_for_tab_reads_again
+
+[break] reading-outlives-a-dialog-gone
+rule: Reading the transcript ends with its dialog however it goes, so that the next dialog follows the end.
+file: crates/cineris-tui/src/app/state.rs
+in: App::dialog_gone
+find: if self.reading_transcript.as_ref() == Some(id) {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::screen::a_dialog_read_under_that_ends_elsewhere_leaves_the_next_following_the_end
+
+[break] tab-reads-above-a-frame-late
+rule: The frame that first draws a dialog's answers offers tab reads above.
+file: crates/cineris-tui/src/app/state.rs
+in: App::bottom
+find:
+    let lines = dialog.view(keymap, rows, width, &self.look, now);
+    let mut keys = dialog.hint_keys(keymap);
+    if full_screen && !dialog.writing_note() && dialog.takes_keys(now)
+replace:
+    let took = dialog.takes_keys(now);
+    let lines = dialog.view(keymap, rows, width, &self.look, now);
+    let mut keys = dialog.hint_keys(keymap);
+    if full_screen && !dialog.writing_note() && took
+caught-by:
+    cineris-tui app::tests::screen::tab_reads_above_is_offered_in_the_frame_that_draws_the_answers
+
+[break] tab-reads-above-is-offered-over-a-note
+rule: While a note is being written, tab reads above is not offered.
+file: crates/cineris-tui/src/app/state.rs
+in: App::bottom
+find: && !dialog.writing_note()
+replace:
+caught-by:
+    cineris-tui app::tests::screen::the_wheel_scrolls_while_reading_and_a_note_being_written_keeps_tab
+
+[break] reading-starts-over-a-note
+rule: Tab while a note is being written is the note's, not reading.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: && !note
+replace: && (!note || true)
+caught-by:
+    cineris-tui app::tests::screen::the_wheel_scrolls_while_reading_and_a_note_being_written_keeps_tab
 
 # From mutations/step-25-rewind.breaks (part `rewind`).
 # Step 25, its second pull request: rewind and fork in the interface
