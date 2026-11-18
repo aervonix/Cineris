@@ -18,13 +18,13 @@ Cineris is under active development, built in the ordered steps of the [build pl
 
 The milestones so far:
 
-- **Reached:** the headless alpha (after step 15) and the adaptive core (after step 19).
-- **Being built now:** the interactive alpha (after step 25), the full terminal interface. Its full-screen presenter has landed; the first-run flow and rewind in the interface have not.
+- **Reached:** the headless alpha (after step 15) and the adaptive core (after step 19). No preview build was published for the alpha.
+- **Being built now:** the interactive alpha (after step 25). The full-screen presenter and the mouse have landed; rewind, fork and `/export` in the interface, and the first-run flow, have not.
 - **Next:** the first usable release (after step 34): extensions the harness can write, MCP, a hardening and a performance pass, and release binaries. Some steps on the way are built already: the Linux sandbox, the RPC server and the second provider protocol.
 
 ### What works today
 
-- **Providers.** Anthropic, and any server that speaks the OpenAI chat protocol (OpenRouter, DeepSeek, Venice.ai, Ollama, llama.cpp, vLLM, LM Studio).
+- **Providers.** Anthropic, and servers that speak the OpenAI chat protocol: OpenRouter, DeepSeek and Venice.ai, tested against their APIs, and Ollama, llama.cpp, vLLM and LM Studio, built from their documentation and not yet tried against a running server.
 - **Tools.** Reading, searching, listing and outlining files; writing and editing them with snapshots and undo; a shell tool; a plan the agent keeps; and `remember`.
 - **Permissions.** Permission levels from read-only to unrestricted, rules you can add per run, and project trust.
 - **Sandbox.** Linux only, with Landlock and seccomp. Windows has process-tree and resource limits but no sandbox yet.
