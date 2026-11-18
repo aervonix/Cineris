@@ -44,12 +44,8 @@ pub(crate) enum Picker {
     Permissions(Vec<StoredApproval>),
     /// `/theme`: the built-in themes.
     Theme(Vec<ThemeChoice>),
-    /// `/rewind`: the earlier prompts, newest first, and the branch's last
-    /// turn (since step 25).
-    Rewind {
-        points: Vec<super::rewind::Point>,
-        last: u64,
-    },
+    /// `/rewind`: the earlier prompts, newest first (since step 25).
+    Rewind(Vec<super::rewind::Point>),
 }
 
 /// What `config/get` is asked for.
@@ -139,7 +135,7 @@ impl App {
                     self.say("A turn is running: stop it with esc, then undo.");
                     return;
                 }
-                if self.rewind_under_way() {
+                if self.rewind_under_way() || self.undoing() {
                     self.say("A rewind is under way: /undo can undo once it is done.");
                     return;
                 }
@@ -721,9 +717,9 @@ impl App {
                 self.switch_to(summary.session_id.clone());
             }
             Picker::Permissions(_) => {}
-            Picker::Rewind { points, last } => {
+            Picker::Rewind(points) => {
                 if let Some(point) = points.get(index).cloned() {
-                    self.rewind_to(point, last);
+                    self.rewind_to(point);
                 }
             }
             Picker::Theme(choices) => {

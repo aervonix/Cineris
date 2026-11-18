@@ -169,8 +169,8 @@ enum Pending {
     /// A rewind of this session, answered.
     Rewind(SessionId),
     /// A page of this session's active branch, read again for the viewer
-    /// and the full screen after a rewind or an undo.
-    Reread(SessionId),
+    /// and the full screen after a rewind or an undo: which read it is.
+    Reread(SessionId, u64),
     /// A fork of the session open here, to be opened in its place.
     Fork(Box<rewind::Forking>),
 }
@@ -426,6 +426,8 @@ pub struct App {
     open_said: Option<String>,
     /// How many of its own questions the application has asked.
     own_dialogs: u64,
+    /// How many times the transcript has been read again.
+    rereads: u64,
     /// An export under way.
     exporting: Option<export::Exporting>,
     /// The full screen's transcript is being read from under the dialog
@@ -617,6 +619,7 @@ impl App {
             rewound_notice: None,
             open_said: None,
             own_dialogs: 0,
+            rereads: 0,
             exporting: None,
             reading_transcript: None,
             back_from_reading: None,
@@ -1694,7 +1697,12 @@ impl App {
                 self.read_again(session);
             }
             (Pending::Points(id), Ok(OpResult::SessionRead(page))) => self.points_read(&id, page),
-            (Pending::Points(id), Err(error)) => self.points_unread(&id, &error),
+            // An answer of another kind ends what waited for it as an error
+            // does, so that nothing is left waiting (the review of this
+            // part).
+            (Pending::Points(id), result) => {
+                self.points_unread(&id, &result.err().unwrap_or_else(unexpected));
+            }
             (Pending::RewindPrompt(id), Ok(OpResult::SessionRead(page))) => {
                 self.rewind_prompt_read(&id, &page);
             }
@@ -1703,28 +1711,28 @@ impl App {
             (Pending::RewindPlan(id), Ok(OpResult::SessionRewindPlan(plan))) => {
                 self.rewind_planned(&id, plan);
             }
-            (Pending::RewindPlan(id) | Pending::Rewind(id), Err(error)) => {
-                self.rewind_failed(&id, &error);
+            (Pending::RewindPlan(id) | Pending::Rewind(id), result)
+                if !matches!(
+                    result,
+                    Ok(OpResult::SessionRewindPlan(_) | OpResult::SessionRewind(_))
+                ) =>
+            {
+                self.rewind_failed(&id, &result.err().unwrap_or_else(unexpected));
             }
             (Pending::Rewind(id), Ok(OpResult::SessionRewind(result))) => {
                 self.rewound(&id, result.session);
             }
-            (Pending::Reread(id), Ok(OpResult::SessionRead(page))) => {
-                self.reread_page(&id, page, now);
+            (Pending::Reread(id, number), Ok(OpResult::SessionRead(page))) => {
+                self.reread_page(&id, number, page, now);
             }
-            (Pending::Reread(id), Err(error)) => self.reread_failed(&id, &error, now),
+            (Pending::Reread(id, number), result) => {
+                self.reread_failed(&id, number, &result.err().unwrap_or_else(unexpected), now);
+            }
             (Pending::Fork(forking), Ok(OpResult::SessionFork(result))) => {
                 self.fork_opened(*forking, result.session, now);
             }
             (Pending::Fork(forking), result) => {
-                let error = result.err().unwrap_or_else(|| {
-                    ErrorData::new(
-                        cineris_protocol::ErrorKind::Internal,
-                        "unexpected_result",
-                        "The fork's answer was not a session.",
-                    )
-                });
-                self.fork_failed(*forking, &error, now);
+                self.fork_failed(*forking, &result.err().unwrap_or_else(unexpected), now);
             }
             (Pending::Permissions, Ok(OpResult::PermissionsList(list))) => {
                 self.permissions_listed(list.approvals);
@@ -2718,6 +2726,15 @@ impl ReadMark {
             None => self.whole && event.seq <= self.seq,
         }
     }
+}
+
+/// The error an answer of another kind than the one asked for stands for.
+fn unexpected() -> ErrorData {
+    ErrorData::new(
+        cineris_protocol::ErrorKind::Internal,
+        "unexpected_result",
+        "The core answered with something other than what was asked for.",
+    )
 }
 
 /// `text` on one line, its runs of white space one space, cut after

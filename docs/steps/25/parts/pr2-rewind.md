@@ -24,8 +24,9 @@ Part of step 25's second pull request: `/rewind`, its question, fork from it and
 - **`cineris-session` changed**, which "What changes outside `cineris-tui`" did not foresee: the reasons a file cannot be put back were sentences only; `FileRestore::cannot` names them, so the protocol carries a value and the interface its own words.
 - **The notice has two wordings.** Inline it is the design's (`… what is above this line is no longer part of it.`); in the transcript read again for the viewer and the full screen, where what is above is the active branch, it is `Rewound to before turn 12. The conversation goes on from there.`
 - **What is read again replaces the whole kept transcript.** After a switch in `/sessions` the viewer showed the earlier sessions' blocks above the new header; after a rewind it shows the session's active branch alone, then what was kept since the rewind.
-- **A prompt sent while the transcript is read again waits for the read,** so that its turn is not read once from the log and again from its events; `/new`, a switch, `/undo`, `/rewind` and a fork wait for it too, and say so. The read is milliseconds in process.
+- **A prompt sent while the transcript is read again waits for the read,** so that its turn is not read once from the log and again from its events; `/new`, a switch, `/undo`, `/rewind` and a fork wait for it too, and say so, and a second `/undo` waits for the first (a switch during an undo stays allowed, as step 23's fixes have it). The read is milliseconds in process.
 - **`/undo` is drawn as a rewind is** (its notice, the transcript read again); its prompt is not put back into the editor, which the design asks only of a rewind.
+- **The question counts the plan's turns**, not the picker's: `The plan undoes 3 turns.` The mark holds the plan's turns, so a turn run since the points were read is counted where the person reads it (the review, below).
 - **`/sessions`' `Tab` on another session** closes the one open and forks the other at its end by the `--fork` path (opened, forked, closed); on the session open it forks it directly.
 - **A row holds at most 512 bytes of its prompt**, on one line, before the menu sanitises and cuts it; the whole prompt is read again (`session/read` of its item) when its point is chosen, for the editor.
 
@@ -41,6 +42,23 @@ Part of step 25's second pull request: `/rewind`, its question, fork from it and
 
 `mutations/step-25-rewind.breaks`, 29 breaks, run with `cargo xtask mutate step-25-rewind` on the laptop: **all 29 caught** by the tests their lists name (the baselines: `cineris-rpc` 50 tests, `cineris-core` 432, `cineris-tui` 637, all passing). The first run left one not caught, `the-mark-leaves-out-the-turns`: the break dropped each turn's id from the hash but kept its line break, so the number of turns still moved the mark; it now drops the turns whole, and is caught. The breaks of earlier steps whose code this part moved (`step-13a/observer-rewinds`, `step-21/tab-accepts-in-the-effort-picker`, two of `step-23-fixes`' switch guards and its resolution, `step-24-panels/a-dialog-leaves-the-focus-on-a-panel`, `step-25/a-finished-block-is-not-kept` and `the-viewer-skips-the-compaction`, two of `step-27-prompts`) find it where it is now, and all 10 are still caught by their tests; `cargo xtask mutate --check` passes.
 
+## The independent review
+
+A reviewer that had not seen the building read the diff (`c39fe2dd..294de103`), read only, against point 4 of the design. Nothing High. What it found, and what was done:
+
+| # | Found | Done |
+|---|---|---|
+| 1 | Medium. The question said the turns the picker counted, which the mark does not hold: a turn another client ran between the points' read and the plan's would be undone unsaid. | It says the plan's count. `the_question_counts_the_turns_of_the_plan_not_of_the_picker`; break `the-question-counts-the-turns-the-picker-read`. |
+| 2 | Medium. The point is the item before the prompt, so a rewind can take what the log holds after the turn before: its last checkpoint when its checks changed a file, and a plan edited between the turns. | The design names that item and the protocol has no other; the plan shows those files and its count. Left open with a recommendation: [a-rewind-to-before-a-prompt-takes-what-followed-the-turn-before](../../../outstanding/a-rewind-to-before-a-prompt-takes-what-followed-the-turn-before.md). |
+| 3 | Low. An answer of another kind than the one asked for left the points, the rewind or the read again waiting for good. | Ended as an error is. `an_answer_of_another_kind_ends_the_rewind`; break `an-answer-of-another-kind-leaves-the-rewind-waiting`. |
+| 4 | Low. Two reads again of one session could mix their pages (two quick `/undo`s). | Each read has a number, and a second `/undo` waits for the first. `new_a_switch_and_another_undo_wait_for_the_read_again`; break `a-second-undo-while-one-is-on-its-way`. |
+| 5 | Low. A prompt sent between the point chosen and the plan is not held. | Left: the core refuses a rewind under a turn, and a plan that moved by its mark; a turn's end closes the question. |
+| 6 | Low. The question showed the whole prompt on one line, not its first line. | Its first line, with the ellipsis when there is more. |
+| 7 | Low. A fork's notice comes above the new session's header. | Left: it says what happened before the fork is drawn, as a switch's header follows what came before it. |
+| 8 | Low, older. The viewer's reveal finds the selected stop's block by its round. | Not this part's code; told to the session that leads the step. |
+| tests | A partial view in the viewer could offer `1`; a turn ending under the question, the waits of `/new` and a switch, and `Esc` in the grace had no real check. | `one_is_refused_until_every_file_of_the_plan_was_drawn_whole` checks a partial view first; `a_turn_ending_under_the_question_closes_it_and_rewinds_nothing`; `new_a_switch_and_another_undo_wait_for_the_read_again`; the grace test checks the question is still drawn. Breaks `a-turn-ending-under-the-question-leaves-the-rewind-waiting`, `new-leaves-while-a-rewind-is-read-again`. The plan read's refusal under a turn has no test: the core's rig holds no turn open cheaply. |
+
 ## Left open
 
 - [rewind-and-fork-have-no-test-of-the-real-binary](../../../outstanding/rewind-and-fork-have-no-test-of-the-real-binary.md): no pseudo-terminal test of `/rewind` in process or under `cineris attach`, with a recommendation.
+- [a-rewind-to-before-a-prompt-takes-what-followed-the-turn-before](../../../outstanding/a-rewind-to-before-a-prompt-takes-what-followed-the-turn-before.md): the point the protocol can name, and what it takes with it, with a recommendation.

@@ -69,8 +69,10 @@ pub(crate) struct Point {
     pub(crate) before: ItemId,
     /// When it was sent, as a row says it (`14:32`), when that is known.
     pub(crate) time: Option<String>,
-    /// The prompt, cut to a row's worth.
+    /// The prompt on one line, cut to a row's worth: the picker's row.
     pub(crate) text: String,
+    /// The prompt's first line, cut: what the question shows of it.
+    pub(crate) first: String,
 }
 
 /// The points being read for the `/rewind` picker.
@@ -89,8 +91,6 @@ pub(super) struct Reading {
 pub(super) struct Rewinding {
     session: SessionId,
     point: Point,
-    /// The branch's last turn when the points were read.
-    last: u64,
     /// The prompt whole, once read: it goes back into the editor.
     prompt: Option<String>,
     /// The mark of the plan shown, once the plan has come.
@@ -102,6 +102,8 @@ pub(super) struct Rewinding {
 #[derive(Debug)]
 pub(super) struct Rereading {
     session: SessionId,
+    /// Which read this is: a page of an earlier one is not this one's.
+    number: u64,
     /// The kept blocks before this place are replaced: what was kept after
     /// it (the rewind's notice, and on) is kept after what is read.
     from: usize,
@@ -140,7 +142,7 @@ impl App {
             self.say("A session is being opened: /rewind can go back once it is.");
             return;
         }
-        if self.rewind_under_way() {
+        if self.rewind_under_way() || self.undoing() {
             self.say("A rewind is under way: /rewind can go back again once it is done.");
             return;
         }
@@ -159,6 +161,14 @@ impl App {
     /// Whether a rewind is being chosen, asked about, done, or drawn again.
     pub(super) fn rewind_under_way(&self) -> bool {
         self.points.is_some() || self.rewinding.is_some() || self.rereading.is_some()
+    }
+
+    /// Whether an undo is on its way: its result is drawn again too, so a
+    /// second change of the history waits for it (the review of this part).
+    pub(super) fn undoing(&self) -> bool {
+        self.pending
+            .values()
+            .any(|pending| matches!(pending, Pending::Undo(_)))
     }
 
     /// Asks for a page of `session`'s active branch, its result for `pending`.
@@ -200,12 +210,14 @@ impl App {
                         .created_at
                         .as_ref()
                         .and_then(|at| self.local_time(at));
+                    let ellipsis = self.look.glyphs.ellipsis;
                     reading.points.push(Point {
                         turn: reading.turns,
                         item: message.id.clone(),
                         before,
                         time,
-                        text: row_text(message, self.look.glyphs.ellipsis),
+                        text: row_text(message, ellipsis),
+                        first: first_line(message, ellipsis),
                     });
                 }
             }
@@ -222,13 +234,12 @@ impl App {
             self.say("There is no earlier prompt to go back to: /new starts afresh.");
             return;
         }
-        let last = reading.turns;
         let mut points = reading.points;
         points.reverse();
         let rows = points.iter().map(point_row).collect();
         self.open_picker(
             "rewind",
-            super::Picker::Rewind { points, last },
+            super::Picker::Rewind(points),
             Menu::picker("rewind", rows, 0, None).forking("fork from here"),
         );
     }
@@ -262,7 +273,7 @@ impl App {
     // ---------------------------------------------------- plan, question
 
     /// A point was chosen: its plan is asked for, and its prompt read whole.
-    pub(super) fn rewind_to(&mut self, point: Point, last: u64) {
+    pub(super) fn rewind_to(&mut self, point: Point) {
         let Some(session) = self.needs_session("rewind") else {
             return;
         };
@@ -286,7 +297,6 @@ impl App {
         self.rewinding = Some(Rewinding {
             session,
             point,
-            last,
             prompt: None,
             mark: None,
         });
@@ -317,10 +327,11 @@ impl App {
             return;
         };
         rewinding.mark = Some(plan.mark.clone());
+        // The turns undone are the plan's, which the mark holds: one run
+        // since the points were read is among them, and said.
         let ask = RewindAsk {
             turn: rewinding.point.turn,
-            last: rewinding.last,
-            prompt: rewinding.point.text.clone(),
+            prompt: rewinding.point.first.clone(),
             plan,
         };
         self.own_dialogs += 1;
@@ -414,15 +425,31 @@ impl App {
         let mut transcript = Transcript::new();
         transcript.keep_finished();
         transcript.push(Block::Header(self.header_of(&state)));
+        self.rereads += 1;
+        let number = self.rereads;
         self.rereading = Some(Rereading {
             session: session.clone(),
+            number,
             from: self.kept.len(),
             transcript,
             mapper: Mapper::new(self.mapper.highlighter().clone()),
             seen: HashSet::new(),
             turns: 0,
         });
-        self.read_page(session, None, Pending::Reread);
+        self.read_reread_page(session, number, None);
+    }
+
+    /// Asks for a page of the transcript read again, read `number`.
+    fn read_reread_page(&mut self, session: SessionId, number: u64, cursor: Option<String>) {
+        let ticket = self.link.send(Op::SessionRead(SessionReadParams {
+            session_id: session.clone(),
+            item_id: None,
+            limit: Some(HISTORY_PAGE),
+            cursor,
+            redacted: false,
+        }));
+        self.pending
+            .insert(ticket, Pending::Reread(session, number));
     }
 
     /// An item whose events came while the transcript is read again.
@@ -441,13 +468,14 @@ impl App {
     pub(super) fn reread_page(
         &mut self,
         session: &SessionId,
+        number: u64,
         page: SessionReadResult,
         now: Instant,
     ) {
         let Some(rereading) = self
             .rereading
             .as_mut()
-            .filter(|rereading| rereading.session == *session)
+            .filter(|rereading| rereading.session == *session && rereading.number == number)
         else {
             return;
         };
@@ -473,7 +501,7 @@ impl App {
             );
         }
         if let Some(cursor) = page.next_cursor {
-            self.read_page(session.clone(), Some(cursor), Pending::Reread);
+            self.read_reread_page(session.clone(), number, Some(cursor));
             return;
         }
         let Some(mut rereading) = self.rereading.take() else {
@@ -493,11 +521,17 @@ impl App {
 
     /// The transcript could not be read again: why is said, the views keep
     /// what they had, and the prompts sent meanwhile go.
-    pub(super) fn reread_failed(&mut self, session: &SessionId, error: &ErrorData, now: Instant) {
+    pub(super) fn reread_failed(
+        &mut self,
+        session: &SessionId,
+        number: u64,
+        error: &ErrorData,
+        now: Instant,
+    ) {
         if self
             .rereading
             .as_ref()
-            .is_some_and(|rereading| rereading.session == *session)
+            .is_some_and(|rereading| rereading.session == *session && rereading.number == number)
         {
             self.rereading = None;
             self.error(error);
@@ -599,7 +633,7 @@ impl App {
             return;
         }
         match picker {
-            super::Picker::Rewind { points, .. } => {
+            super::Picker::Rewind(points) => {
                 let Some(point) = points.get(index) else {
                     return;
                 };
@@ -647,7 +681,7 @@ impl App {
             self.say("Your prompts are still being sent: a fork can be made once they are.");
             return;
         }
-        if self.opening || self.reading || self.rewind_under_way() {
+        if self.opening || self.reading || self.rewind_under_way() || self.undoing() {
             self.say("The session is being read: a fork can be made once it is.");
             return;
         }
@@ -723,6 +757,22 @@ fn row_text(message: &UserMessageItem, ellipsis: &str) -> String {
         row.push_str(ellipsis);
     }
     row
+}
+
+/// A prompt's first line, cut to a row's worth, with `ellipsis` when there
+/// is more.
+fn first_line(message: &UserMessageItem, ellipsis: &str) -> String {
+    let text = prompt_text(message);
+    let first = text.trim_start().lines().next().unwrap_or_default();
+    let mut end = first.len().min(ROW_TEXT);
+    while !first.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut line = first[..end].trim_end().to_owned();
+    if end < text.trim().len() {
+        line.push_str(ellipsis);
+    }
+    line
 }
 
 /// A point's row: `turn 12  14:32  fix the lexer…`. The menu sanitises it
