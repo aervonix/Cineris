@@ -224,6 +224,7 @@ Every key a Cineris configuration file may hold. The design is in [architecture/
 | `keys.menu` | table of list of text | not set | user only | at once | A completion menu's. |
 | `keys.picker` | table of list of text | not set | user only | at once | A picker's. |
 | `keys.toggle` | table of list of text | not set | user only | at once | The `/effort` picker's fast-mode toggle. |
+| `keys.fork` | table of list of text | not set | user only | at once | The fork of the pickers that fork (`/rewind`'s, `/sessions`'): `fork`. |
 | `keys.search` | table of list of text | not set | user only | at once | The history search's. |
 | `keys.focus` | table of list of text | not set | user only | at once | A focused tool box's or panel's. |
 | `keys.dialog` | table of list of text | not set | user only | at once | A dialog's: the answers to an approval, a question or trust. |

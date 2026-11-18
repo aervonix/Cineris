@@ -484,12 +484,13 @@ pub(crate) fn restyle(
 /// Every table of `[keys]`, by its name: each must be here, or its
 /// bindings are dropped with no word (the review of step 25 found
 /// `viewer` and `screen` missing).
-fn key_tables(keys: &KeySettings) -> [(&'static str, &cineris_config::schema::Bindings); 10] {
+fn key_tables(keys: &KeySettings) -> [(&'static str, &cineris_config::schema::Bindings); 11] {
     [
         ("editor", &keys.editor),
         ("menu", &keys.menu),
         ("picker", &keys.picker),
         ("toggle", &keys.toggle),
+        ("fork", &keys.fork),
         ("search", &keys.search),
         ("focus", &keys.focus),
         ("dialog", &keys.dialog),

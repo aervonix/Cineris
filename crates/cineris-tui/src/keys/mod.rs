@@ -48,6 +48,10 @@ pub enum Context {
     /// above [`Context::Picker`]: there `Tab` toggles and only `Enter`
     /// accepts.
     Toggle,
+    /// A picker that forks on `Tab` (`/rewind`'s and `/sessions'`, since
+    /// step 25), above [`Context::Picker`]: there `Tab` forks and only
+    /// `Enter` accepts.
+    Fork,
     /// The history search (`Ctrl+R`).
     Search,
     /// A live tool box or a panel that has the focus (`Ctrl+P`).
@@ -73,6 +77,7 @@ impl Context {
             Self::Menu => "menu",
             Self::Picker => "picker",
             Self::Toggle => "toggle",
+            Self::Fork => "fork",
             Self::Search => "search",
             Self::Focus => "focus",
             Self::Dialog => "dialog",
@@ -178,6 +183,10 @@ pub enum Action {
     PickerRemove,
     /// Turn the picker's toggle on or off: fast mode in `/effort` (`Tab`).
     ToggleFast,
+    /// Fork from the picker's selected row, in a picker that forks:
+    /// `/rewind` forks from before the prompt, `/sessions` at the
+    /// session's end (`Tab`, since step 25).
+    PickerFork,
 
     // ------------------------------------------------------------ search
     /// The next older match (`Ctrl+R`, `Up`).
@@ -548,6 +557,7 @@ pub const ACTIONS: &[Entry] = &[
     ),
     entry(Action::PickerRemove, Context::Picker, "remove", &["delete"]),
     entry(Action::ToggleFast, Context::Toggle, "fast", &["tab"]),
+    entry(Action::PickerFork, Context::Fork, "fork", &["tab"]),
     entry(
         Action::SearchOlder,
         Context::Search,

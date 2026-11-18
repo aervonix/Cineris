@@ -173,6 +173,10 @@ pub struct Menu {
     pub empty: Empty,
     /// A toggle row under the rows, in a picker that has one.
     pub toggle: Option<Toggle>,
+    /// What forking does, in a picker that forks from its selected row
+    /// (`fork from here`, since step 25): its row under the rows names the
+    /// key.
+    pub fork: Option<String>,
     /// What is typed into a picker to filter it.
     pub filter: String,
     /// The row the caller marked as current (`current` in `/model`).
@@ -192,6 +196,7 @@ impl Menu {
             rows: Vec::new(),
             empty: Empty::NoMatch,
             toggle: None,
+            fork: None,
             filter: String::new(),
             current: None,
             selected: 0,
@@ -227,6 +232,14 @@ impl Menu {
         menu.current = Some(selected);
         menu.select(selected);
         menu
+    }
+
+    /// The picker forks from its selected row, as `label` says (since step
+    /// 25).
+    #[must_use]
+    pub fn forking(mut self, label: impl Into<String>) -> Self {
+        self.fork = Some(label.into());
+        self
     }
 
     /// The selected row's index in [`rows`](Self::rows), if there is one.

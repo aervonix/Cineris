@@ -113,6 +113,10 @@ pub enum Outcome {
     FileChosen(String),
     /// A picker's toggle changed: its name, and the new state.
     Toggled(String, bool),
+    /// A picker that forks was asked to fork from its selected row (since
+    /// step 25): the picker's name, and the row's index among the rows it
+    /// was opened with. The picker is closed.
+    Forked(String, usize),
     /// A picker's selected row is to be removed: the picker's name, and
     /// the row's index among the rows it was opened with. The picker stays
     /// open; the caller opens it again with the rows that are left.
@@ -324,11 +328,15 @@ impl Input {
         }
         match &self.menu {
             Some(menu) if matches!(menu.kind, Kind::Picker(_)) => {
+                let mut contexts = Vec::with_capacity(4);
                 if menu.toggle.is_some() {
-                    vec![Context::Toggle, Context::Picker, Context::Menu]
-                } else {
-                    vec![Context::Picker, Context::Menu]
+                    contexts.push(Context::Toggle);
                 }
+                if menu.fork.is_some() {
+                    contexts.push(Context::Fork);
+                }
+                contexts.extend([Context::Picker, Context::Menu]);
+                contexts
             }
             Some(_) => vec![Context::Menu, Context::Editor],
             None => vec![Context::Editor],
@@ -839,6 +847,17 @@ impl Input {
                     toggle.on = !toggle.on;
                     Outcome::Toggled(name.clone(), toggle.on)
                 }
+                _ => Outcome::Ignored(action),
+            },
+            Action::PickerFork => match self.menu.as_ref() {
+                Some(menu) if menu.fork.is_some() => match (&menu.kind, menu.picked()) {
+                    (Kind::Picker(name), Some(index)) => {
+                        let name = name.clone();
+                        self.menu = None;
+                        Outcome::Forked(name, index)
+                    }
+                    _ => Outcome::Ignored(action),
+                },
                 _ => Outcome::Ignored(action),
             },
 
