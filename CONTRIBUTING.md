@@ -114,6 +114,22 @@ What it leaves out, and why, `cargo xtask regen --list` prints: the tables of `d
 
 **The open items' index never stops a rebase** (since the tenth tooling step). Every open item is a file of its own, and the index of `docs/outstanding/README.md` is written from them by `cargo xtask outstanding`. Git merges the index line by line, keeping both sides' lines (`merge=union` in `.gitattributes`), so two branches that each added an item rebase without a conflict there. What such a merge can get wrong (a line twice, the line of an item whose file is gone, a line lost, lines out of order) `cargo xtask rules` and `links` find, since they compare the whole page with what the command writes. **After a rebase, the one command is `cargo xtask outstanding`**, then commit the index it wrote; `regen` runs it too. Before merging, rebase onto the `main` of the moment and run it, as for any merge: an index that was right on an older `main` may not be on this one.
 
+## Renaming the project
+
+The project was renamed to Cineris in [decision 0038](docs/decisions/0038-the-project-is-named-cineris.md). `cargo xtask rename` made the change, and stays for two jobs: keeping the old names out, and bringing across a branch made before the rename. Its table of old and new names, and its short list of kept files and lines with the reason for each (`cargo xtask rename --kept`), are in `xtask/src/rename.rs` and nowhere else.
+
+- **`cargo xtask rename apply`** renames the working tree: every file's text, then the names of files and folders, after checking that no two paths become one. A text that changed is put back in the form its tools give it: a `Cargo.lock` in cargo's order, a Rust file that was formatted formatted again. A second run changes nothing. `--regen` then runs `cargo xtask regen` and `cargo xtask outstanding`, since the screens' layout depends on the names' widths.
+- **`cargo xtask rename --check`** fails on an old name left outside the kept lines. The repo rules run it, so the lint job does.
+- **`cargo xtask rename branch BASE..TIP`** brings a branch made before the rename across, without checking anything out. It passes BASE's tree through the same function `apply` uses, as a commit R(BASE) on top of BASE, and then each commit of the range, renamed in its tree, its paths, its message and its identities, with its dates kept, in a line on R(BASE). It writes them with `git fast-import` and points a new branch at the last (TIP's name with `-renamed`, or `--to NAME`). R(BASE) is what `apply` makes of BASE, so a rebase from it replays only the branch's own changes, already in the new names:
+
+  ```
+  cargo xtask rename branch BASE..my-branch
+  git rebase --onto origin/main <R(BASE), as printed> my-branch-renamed
+  cargo xtask regen && cargo xtask outstanding && cargo xtask rename --check
+  ```
+
+  The rebase stops only where the branch and `main` changed the same lines since BASE: the hand edits that followed the rename, or anything else merged since. A generated file that stops it is settled as after any rebase ("After a rebase", above). Run the command from a checkout of the renamed `main`, so that the tool that runs is the one the tree was renamed with: `git switch --detach origin/main` in the worktree, or a second checkout under `target/`. BASE is where the branch left `main`, a commit from before the rename: `git merge-base origin/main my-branch`. The same range always gives the same commits, so a second run finds the branch already there; one that holds other commits is replaced only with `--force`, and never while a worktree has it checked out.
+
 ## Lints
 
 The lint levels are in the root `Cargo.toml` under `[workspace.lints]`, the lists they use are in `clippy.toml`, and CI turns every warning into an error. The project-specific rules:
@@ -143,6 +159,7 @@ Clippy treats `#[test]` functions and `#[cfg(test)]` modules as tests. Helper fu
 `cargo xtask rules` is the part of the static checks that no off-the-shelf tool does. It fails when:
 
 - **A file contains an absolute home-directory path.** Write `~` or a path relative to the repository. Every file is scanned, binary files included.
+- **A file holds a name from before the rename to Cineris**, in its text or its path, in any case, or the old alias where it is quoted or named as a command: `cargo xtask rename --check`, below. A line that must keep one goes in the tool's list of kept lines, with its reason.
 - **A crate depends on a workspace crate it must not**, a heavy third-party crate is used outside its owner crate, or a manifest breaks the conventions above.
 - **`docs/dependencies.md` and the manifests disagree.**
 - **Anything but a dev-dependency turns on a crate's `test-hooks` or `test-support` feature** (or `cineris-term`'s `pty`, or `cineris-tui`'s `test-kit`): another kind of dependency, a feature of the crate itself (`default` above all), or a feature of another crate that passes it on. The feature holds code for tests, and must not be in a build of the product.

@@ -62,6 +62,9 @@ pub(crate) fn check_repository(root: &Path) -> Result<Vec<Violation>> {
         let path = root.join(file);
         let bytes = fs::read(&path).map_err(|error| format!("could not read {file}: {error}"))?;
         violations.extend(home_paths::check(file, &bytes));
+        // No name from before decision 0038, outside the rename's kept
+        // files and lines (`cargo xtask rename --check`).
+        violations.extend(crate::rename::violations(file, &bytes));
         if file.starts_with(".github/workflows/") {
             violations.extend(workflows::check(file, &String::from_utf8_lossy(&bytes)));
         }

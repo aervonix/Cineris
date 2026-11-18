@@ -1435,6 +1435,7 @@ With the `dev` profile's optimised dependencies the cold Windows column would be
 **The repo rules** are the checks no off-the-shelf tool does. `cargo xtask rules` runs them, and a test runs them again on both OSes:
 
 - no file contains an absolute home-directory path (every file is scanned, binary files included);
+- **no file holds a name from before the rename to Cineris** (since the rename, [decision 0038](decisions/0038-the-project-is-named-cineris.md)), in its text or its path, outside the kept files and lines that `cargo xtask rename --kept` lists ([CONTRIBUTING.md](../CONTRIBUTING.md), "Renaming the project");
 - the crate dependency rules of [architecture/01-workspace.md](architecture/01-workspace.md), read from `cargo metadata`, and the manifest conventions (the `cineris-` prefix, `publish = false`, shared lints, no doc tests, one integration-test binary);
 - `cineris-protocol` depends on serde and serde_json and nothing else, and on schemars only as an optional dependency behind its `schema` feature;
 - `docs/dependencies.md` agrees with the manifests;
