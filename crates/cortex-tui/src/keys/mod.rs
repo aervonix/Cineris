@@ -840,6 +840,14 @@ impl KeyMap {
     /// The default keys of every action.
     #[must_use]
     pub fn defaults() -> Self {
+        // Parsed once, then copied: a map is made for every input, and the
+        // table grew with the viewer's and the full screen's keys (step 25).
+        static DEFAULTS: std::sync::OnceLock<KeyMap> = std::sync::OnceLock::new();
+        DEFAULTS.get_or_init(Self::parse_defaults).clone()
+    }
+
+    /// The defaults, parsed from the table.
+    fn parse_defaults() -> Self {
         let mut map = HashMap::new();
         let mut gestures = HashMap::new();
         for entry in ACTIONS {
