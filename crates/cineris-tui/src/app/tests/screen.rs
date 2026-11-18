@@ -1373,7 +1373,8 @@ fn back_at_a_dialog_the_window_is_too_small_for_tab_reads_again() {
     let ready = dialog_wake(&mut app);
     let at = |ms: u64| ready + Duration::from_millis(ms);
     key(&mut app, "tab", at(100));
-    app.resize(79, 3);
+    // One row: no room for the question and its answers together.
+    app.resize(79, 1);
     let _ = app.screen_frame(at(100));
     key(&mut app, "esc", at(200));
     // Its moment, in a window too small for its answers.
@@ -1381,6 +1382,12 @@ fn back_at_a_dialog_the_window_is_too_small_for_tab_reads_again() {
     let _ = app.screen_frame(later);
     app.drawn(later);
     assert_eq!(app.deadline(), None, "no moment: the window is too small");
+    // What is typed goes nowhere: the dialog takes no key, and the hidden
+    // editor none either.
+    key(&mut app, "y", later + Duration::from_millis(20));
+    key(&mut app, "enter", later + Duration::from_millis(30));
+    assert_eq!(approvals(&link), 0);
+    assert_eq!(app.input().editor().expanded(), "");
     key(&mut app, "tab", later + Duration::from_millis(50));
     let rows = text(&app.screen_frame(later + Duration::from_millis(50)).0);
     assert!(
@@ -1391,6 +1398,7 @@ fn back_at_a_dialog_the_window_is_too_small_for_tab_reads_again() {
     app.resize(79, 20);
     let back = later + Duration::from_millis(100);
     key(&mut app, "tab", back);
+    let _ = app.screen_frame(back);
     let again = dialog_wake(&mut app);
     assert!(again >= back + QUIET, "{:?}", again.duration_since(back));
     key(&mut app, "y", again + Duration::from_millis(50));
