@@ -34,13 +34,13 @@ use cineris_tui::keys::KeyMap;
 /// This binary as the application (`app`, `key`, `viewer`, `plain`, or
 /// `job`: run by a shell), or as a shell that runs it as its job
 /// (`leader`).
-const SIGNALS: Role = Role::new("cxtui-signals=");
+const SIGNALS: Role = Role::new("cintui-signals=");
 /// A bound on every wait, which only a broken test reaches.
 const LIMIT: Duration = Duration::from_secs(30);
 /// A notice the application shows in its first frame.
 const NOTICE: &str = "SIGNALS-NOTICE";
 /// The variable that names the report file.
-const REPORT: &str = "CXTUI_SIGNALS_REPORT";
+const REPORT: &str = "CINTUI_SIGNALS_REPORT";
 
 fn append(path: &Path, line: &str) {
     use std::io::Write as _;
@@ -289,7 +289,7 @@ fn wait_result(report: &Path, job: bool) -> String {
 /// frame, then closes the terminal: every handle on its other end goes.
 /// Returns what the report says.
 fn close_the_terminal(case: &str, test: &str, job: bool) -> String {
-    let dir = std::env::temp_dir().join(format!("cxtui-{test}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("cintui-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let report = dir.join("report.txt");

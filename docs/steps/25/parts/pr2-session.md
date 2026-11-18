@@ -96,3 +96,7 @@ The breaks that the code moved (`a-burst-with-a-line-break-is-keys`, `a-bursts-r
 - **"The read filled its buffer" on Windows** (M3c's second way): draining every waiting record into one read makes a Windows read what a Unix read is, and needs no change to `Device` or `Ready`.
 - **Showing `/copy`'s text and a stored output with `\r` as its symbol** (L7's reach): they are a command's output and what is copied by hand, shown as a terminal would show them; only the two views the finding named, of text a model wrote, changed.
 - **Clearing the reader's ids in `rewind.rs`** (L2): that file is the rewind part's, and its question is answered only by a key, which reaches a ready dialog after the ids are cleared.
+
+## Across the rename
+
+This pull request was brought across the rename to Cineris with `cargo xtask rename branch` and a rebase onto the renamed `main`, which stopped nowhere; `regen` changed nothing, and `rename --check` found no old name. The test labels built on the old short form in the two files this pull request touches are renamed with it: `cintui-signals=` and `CINTUI_SIGNALS_REPORT` in `cineris-tui`'s signal tests, `cincli-tui=` in `cineris-cli`'s terminal tests. The others the rename's record lists stay for a later fix session.
