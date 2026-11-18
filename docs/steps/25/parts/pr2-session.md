@@ -115,3 +115,52 @@ An independent reviewer read the fixes made after the full review (`65fcf5a7..16
 **What was decided against.** For finding 6, having the read's answer reach the view behind: shown only at the stop it was asked at, on the view on top, it would have cleared the words and shown nothing, which giving the read up does at once. For finding 5, setting the flag from the text of a bracketed paste given up on: the decoder holds a piece's last `\r` back until it knows what follows, and the given-up text does not say which it was, so the first read after a give-up is taken as it comes.
 
 **Breaks.** Run with the rest of this round's, on the desktop's side slot ([pr2-rewind.md](pr2-rewind.md), "The review of the fixes"): the five above that Linux builds are each caught by the test named beside it, and the earlier breaks of the code they touched (the paste's in `Terminal::pastes` and `typed`, the summary's in `summary_read` and `show_summary`, the export's in `export_read`) are caught as before. `a-zero-or-superscript-device-name-is-written-to` is `os: windows`, left to a Windows runner with the two earlier breaks of `not_a_file`.
+
+## The pull request's CI
+
+<!-- written by cargo xtask ci-times, section "The pull request's CI": it replaces this up to the end mark -->
+Pull request 100, on `main` at `7fca878`. "Main" is main's own run at `7fca878` (run 44410799170).
+The PR's run is 44412943430, at `910d707`.
+
+| Job | Main, `7fca878` | The PR at `910d707` |
+|---|---|---|
+| `lint-linux` | 64 s | 54 s |
+| `test-linux` | 108 s | 129 s |
+| `lint-windows` | 104 s | 98 s |
+| `test-windows` | 405 s | 202 s |
+| `pr-size-linux` (blocks nothing) | — | 338 s |
+| `ts-client` (blocks nothing) | — | 48 s |
+| `pr-size-windows` (blocks nothing) | — | 307 s |
+
+| Time above process start, against the budget | Linux, main (3 ms) | Linux, `910d707` (4 ms) | Windows, main (8 ms) | Windows, `910d707` (8 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 13.5 s | 22.1 s | 19.8 s | 20.6 s |
+| Tier 2, integration (40 s) | 18.2 s | 29.0 s | 46.4 s | 44.2 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 22.7 s | 33.1 s | 96.8 s | 88.3 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The pull request's CI" -->
+
+## The tiers, both trees on one runner
+
+<!-- written by cargo xtask ci-times, section "The tiers, both trees on one runner": it replaces this up to the end mark -->
+### Windows, both trees on one runner
+
+`try` with `-f against=main` (run 44411593306), the median of 5 runs each, on one runner at 8.0 ms a process start:
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 21.1 s (2,899 tests) | 19.5 s (2,792) | +1.5 s | 20 s |
+| 2, integration | 43.3 s (1,542 tests) | 41.9 s (1,528) | +1.4 s | 40 s |
+| 3, system | 86.6 s (200 tests) | 83.6 s (199) | +3.0 s | 90 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The tiers, both trees on one runner" -->
+
+## Runs
+
+- **Stress at the desk, loaded** (`--cores 2 --load 6`, `cineris-tui`, `-term`, `-cli` and `-core`), on the head before the last rebase: 1,402 tests 50 times each.
+  - The only failure was one timeout, under the first seed, while the disk stalled (91.7% at its worst over 10 s).
+  - The earlier stress, at the head before the last review's fixes, found the rewind plan's files in a varying order (fixed, with a test), and timeouts only in a stalled first iteration.
+- **Ubuntu 22.04** (try 44411618237): nothing failed. Its tier 1 read 132% of the budget on a runner that started a test's process in 7 ms, against 79% on one at 2 ms (try 44391457198). That is the runner, not this change: on Windows, both trees on one runner, the A/B above gives this pull request +1.5 s.
+- **The Windows-only breaks** (the export's devices and streams): all caught on runners (try 44382339969 and 44403940358).
+- **The Windows test job against its five minutes.** The first run of this pull request's checks (job 135185626939) ran every test green, then was cut off while uploading its report, at 5m04s, on a slow runner (8 ms a process start): about 50 s of setup, a build of 2m21s from `main`'s warm cache, and 1m38s of tests. Run again, on a quicker runner, it took 3m22s. On the slowest runners the Windows test job now has almost no room left in its five minutes, and the build is most of it.
+
