@@ -8,6 +8,8 @@
 
 # Cineris
 
+*Cineris* (said "SIN-er-is") is Latin for "of ash": a harness rebuilt from scratch.
+
 A terminal agent harness that learns your project, your models and your habits, and stays fast while it does. It is an LLM agent loop that reads and edits code, runs commands and talks to several model providers, written from scratch in Rust for Linux and Windows.
 
 > **Status: early development.** The design is written down and the repository skeleton is in place. The harness itself is not built yet, and there is nothing to install. The [build plan](docs/build-plan.md) lists the steps from here to a first usable release.
