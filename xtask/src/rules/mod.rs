@@ -61,13 +61,7 @@ pub(crate) fn check_repository(root: &Path) -> Result<Vec<Violation>> {
     for file in &files {
         let path = root.join(file);
         let bytes = fs::read(&path).map_err(|error| format!("could not read {file}: {error}"))?;
-        violations.extend(home_paths::check(file, &bytes));
-        // No name from before decision 0038, outside the rename's kept
-        // files and lines (`cargo xtask rename --check`).
-        violations.extend(crate::rename::violations(file, &bytes));
-        if file.starts_with(".github/workflows/") {
-            violations.extend(workflows::check(file, &String::from_utf8_lossy(&bytes)));
-        }
+        violations.extend(file_rules(file, &bytes));
         if rust_source::is_read(file) {
             sources.insert(file.clone(), String::from_utf8_lossy(&bytes).into_owned());
         }
@@ -92,6 +86,19 @@ pub(crate) fn check_repository(root: &Path) -> Result<Vec<Violation>> {
     violations.extend(dependency_list::check(&metadata.packages, &list));
 
     Ok(violations)
+}
+
+/// The rules each file is held to by itself, whatever else is in the
+/// repository: no home-directory path, no name from before decision 0038
+/// outside the rename's kept files and lines (`cargo xtask rename --check`),
+/// and a workflow's rules.
+pub(crate) fn file_rules(file: &str, bytes: &[u8]) -> Vec<Violation> {
+    let mut violations = home_paths::check(file, bytes);
+    violations.extend(crate::rename::violations(file, bytes));
+    if file.starts_with(".github/workflows/") {
+        violations.extend(workflows::check(file, &String::from_utf8_lossy(bytes)));
+    }
+    violations
 }
 
 /// The rules about the docs alone: every link inside the repository leads
