@@ -33,7 +33,7 @@ All ten resolutions were **accepted as recommended on 2026-11-12** and are no lo
 | 2 | Inline or full screen by default | **Inline.** Full screen is an option. | Accepted. Confirmed on 2026-11-13 by the Windows Terminal checklist. [Decision 0002](decisions/0002-tui-rendering.md) |
 | 3 | Panes | **Stacked panels** above the editor. Side by side only in the full-screen presenter on wide windows. | Accepted. |
 | 4 | Look and feel | **Roomy 2**, chosen on 2026-11-14 after three rounds of proposals, in place of the draft accepted on 2026-11-12. Glyph-led blocks, answers apart, tool rounds in boxes that expand, a rounded input box with a hint row, and the logo's purple used sparingly. Specified in [architecture/09-tui.md](architecture/09-tui.md). | Accepted. [Decision 0033](decisions/0033-tui-look.md) |
-| 5 | Command and directory names | **Changed.** The command is `cineris`, **plus a short alias, `cin`**, that runs the same program on both OSes. The alias ships as a link to the one executable. Step 2 checks both names for clashes and reports. | Accepted. [Decision 0013](decisions/0013-naming.md) |
+| 5 | Command and directory names | **Changed.** The command is `cineris`, **plus a short alias, `cin`**, that runs the same program on both OSes. The alias ships as a link to the one executable. Step 2 checks both names for clashes and reports. | Accepted. [Decision 0013](decisions/0013-naming.md); the names changed on 2026-11-18 ([decision 0038](decisions/0038-the-project-is-named-cineris.md)) |
 | 6 | How far to go on sandboxing | **Linux sandbox in the first release. Windows AppContainer after it.** | Accepted. [Decision 0009](decisions/0009-sandboxing.md) |
 | 7 | How much the harness learns without asking | **Observed facts become active with a notice. Anything a model inferred waits for review.** | Accepted. |
 | 8 | Experimenting with per-model variants | **Opt-in only.** Variants are compared offline with the evaluation engine. | Accepted. |
@@ -63,7 +63,7 @@ Three items that step 1 left outstanding, and the repository's name. Step 2 reco
 | **The name of the default level.** Making one autonomy model renamed the default from `standard` to `supervised`. | **`supervised`.** `standard` is not used, as a level or as a display name. | [Decision 0026](decisions/0026-one-autonomy-model.md) |
 | **MCP scope in the first release:** tools only, through search. | **Accepted as written.** No longer provisional. | [Decision 0010](decisions/0010-mcp-in-first-release.md) |
 | **The repository's name.** | **`Cineris`**, public. Settled. | This page |
-| **The name clash step 2 found.** Snowflake's coding-agent CLI installs a command named `cortex`; two vendor tools install `cx`. | **The names stay `cortex` and `cx`.** The "never overwrite another program's command" rule stays. | [Decision 0013](decisions/0013-naming.md), with the findings |
+| **The name clash step 2 found.** Snowflake's coding-agent CLI installs a command named `cortex`; two vendor tools install `cx`. | **The names stay `cortex` and `cx`.** The "never overwrite another program's command" rule stays. | [Decision 0013](decisions/0013-naming.md), with the findings. Superseded on 2026-11-18: the project is renamed Cineris, with a new install rule ([decision 0038](decisions/0038-the-project-is-named-cineris.md)). |
 | **The details of the `/usage` refresh:** the setting `usage.refresh`, user-only, run only on request, never on a timer. | **Confirmed.** Built in steps 16 and 24, and with each later provider. | [architecture/18-usage.md](architecture/18-usage.md) |
 
 ### Added on 2026-11-12: speed tiers, fail-closed leases, and a `CLAUDE.md`
@@ -75,6 +75,16 @@ Two additions the owner made when step 3 began, and one decision from its review
 | **Speed tiers.** | Provider fast modes available in Cineris, starting with Anthropic's (Opus 5.5 and Fable 5.2, about 2.5 times faster for twice the price per token). Designed at the protocol level in step 3, so that the contract does not need reopening: a speed setting for the session and per role; the speed each request ran at in its usage record, priced at that speed's rate; events for a fallback to standard speed and for a cooldown; which speeds a model offers, in the model info. Other providers' tiers fit the same concept without their differences being flattened. **For the terminal UI:** the `/effort` picker shows a fast-mode toggle on `Tab`, with the hint `tab - fast mode`, only when the current model offers a fast speed. The UI is otherwise our own, not a copy of another harness's command or icon. | [decision 0027](decisions/0027-speed-tiers.md), which also lists the steps that build each part, the answer on utility roles from the step's review (they run at `standard` and do not inherit a fast session speed, unless set per role), and two details left for steps 5 and 13. [architecture/04-providers.md](architecture/04-providers.md), [architecture/11-rpc-protocol.md](architecture/11-rpc-protocol.md) |
 | **Enforced values fail closed.** | Decided in the review of step 3. A lease, a grant, a rule or a hard limit with a field or a value a build does not know is refused whole, with its own error code. It is never ignored and never kept: a dropped restriction would widen a lease. Everything that only informs stays tolerant. | [decision 0028](decisions/0028-enforced-values-fail-closed.md), [architecture/11-rpc-protocol.md](architecture/11-rpc-protocol.md) |
 | **A repo-root `CLAUDE.md`.** | One line that includes `AGENTS.md`, so that Claude Code sessions load the repository's rules by themselves. | The file. It is documentation: a pull request that changes only it skips the Rust build. |
+
+### Added on 2026-11-18: the name Cineris
+
+The owner renamed the project, and changed the rule for a command name another program already has.
+
+| Question | The owner's answer, 2026-11-18 | Recorded in |
+|---|---|---|
+| **The name.** | **Cineris**: Latin for "of ash", for a harness rebuilt from scratch, said "SIN-er-is". The command is `cineris`, the alias `cin`, the crates `cineris-*`, the variables `CINERIS_*`, the folders `cineris` and `.cineris/`. A clean switch: nothing reads the old names, nothing migrates, history is not rewritten. | [Decision 0038](decisions/0038-the-project-is-named-cineris.md) |
+| **A command name another program already provides.** | **Taken only on a yes.** The installer asks a yes/no question that names the other program and its path, with no as the default. With no terminal to ask on it never takes the name. A yes makes our command the one that runs and leaves the other program's file as it was. | [Decision 0038](decisions/0038-the-project-is-named-cineris.md), rule 5 below, step 34 |
+| **The domain.** | **`cineris.dev`**, bought by the owner. No links to it until a site exists. | [Decision 0038](decisions/0038-the-project-is-named-cineris.md) |
 
 ### Answered in step 4 and later
 
