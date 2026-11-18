@@ -2,13 +2,13 @@
 
 The screens of step 25 that no reference screen draws yet, composed as text in the look of [decision 0033](../../../decisions/0033-tui-look.md) and [tui-look/](../../../architecture/tui-look/README.md), for the coordinator to judge against Roomy 2 and the golden screens before they are built widely; the owner sees them afterwards, for information. They are drafts: once the coordinator has answered, the ones kept become golden screens in `tui-look/` (step 25's third pull request), drawn by the real views and compared cell by cell. Until then the layout they show is kept easy to change. A script wrote them, so that every row is the width the window allows, one column less than the window's. They were revised after the design's review ([answered.md](../answered.md), "What the review found").
 
-- **The first run** (F1a to F4) is drawn inline, as the rest of the application is: each step takes the input box's place, as a dialog does, under the set-up card, which stays in the live region while the steps before the session run and is never committed (the coordinator's answer, 2026-11-17). Once a step is answered, one dim line saying what it did is committed to the scrollback, so the steps already taken stay above the one being asked. The order is the provider, the imports, the mode, then the project: the configuration file is written after the mode, before the session opens, so that the first session is made with what the person chose. Step 4 comes after the session opened: the session's header card is committed above it, the only card then, and its trust question (screen 2c) came before it when the project has something to trust.
+- **The first run** (F1a to F4) is drawn inline, as the rest of the application is. **Since the third pull request these are the golden screens** (`tui-look/f1a.txt` to `f4.txt`), drawn by the application itself and revised to the coordinator's answers: the imports' rows unpicked with each one's key named, no `unrestricted`, the set-up card never committed, the store named as each system's store is, the levels' sentences as 06's table has them, and a mask written `[redacted]` as the harness writes it everywhere else. The drafts' wording is replaced by the views' own; where a sentence wraps differently, it is the prose width's doing. As drafted: each step takes the input box's place, as a dialog does, under the set-up card, which stays in the live region while the steps before the session run and is never committed (the coordinator's answer, 2026-11-17). Once a step is answered, one dim line saying what it did is committed to the scrollback, so the steps already taken stay above the one being asked. The order is the provider, the imports, the mode, then the project: the configuration file is written after the mode, before the session opens, so that the first session is made with what the person chose. Step 4 comes after the session opened: the session's header card is committed above it, the only card then, and its trust question (screen 2c) came before it when the project has something to trust.
 - **The full-screen presenter** (F5, F6) draws the same views. F5 is a window of 150 columns, where the panels sit in a column of their own beside the transcript; below the width at which they move there ([answered.md](../answered.md), design point 2), they are stacked above the input box as inline. As in step 24, a panel without the focus is drawn collapsed and the focused one whole. F6 is search.
 - **What is illustration.** The providers, the files found, the servers and the commands are examples. F1a is Linux's wording and F1b Windows'.
 
 ### F1a. The first run, step 1: a key found in the environment (Linux)
 
-100 columns, 20 rows.
+100 columns, 21 rows. Now golden screen [f1a](../../../architecture/tui-look/f1a.txt).
 
 ```text
 ╭──────────────────────────────────────────────────────────────╮
@@ -20,22 +20,23 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
 ◇ Provider  1 of 4
   A key for anthropic is in the environment, in ANTHROPIC_API_KEY. Use it from
-  there, or store a key: it is kept in ~/.config/cineris/credentials.toml,
-  which only you can read, and never in a file of settings.
+  there, or store a key: it is kept in
+  ~/.config/cineris/credentials.toml, which only you can read, and never
+  in a file of settings.
 
-  ◆ anthropic    its key from ANTHROPIC_API_KEY, as it is set
-    anthropic    store a key
-    openai       store a key
-    openrouter   store a key
-    deepseek     store a key
-    venice       store a key
+  ◆ anthropic   its key from ANTHROPIC_API_KEY, as it is set
+    anthropic   store a key
+    openai      store a key
+    openrouter  store a key
+    deepseek    store a key
+    venice      store a key
 
   enter chooses · s skips this step · x skips the set-up
 ```
 
 ### F1b. The first run, step 1: a key typed, nothing of it drawn (Windows)
 
-100 columns, 16 rows.
+100 columns, 16 rows. Now golden screen [f1b](../../../architecture/tui-look/f1b.txt).
 
 ```text
 ╭──────────────────────────────────────────────────────────────╮
@@ -58,7 +59,7 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
 ### F2a. The first run, step 2: what other tools left, nothing read or picked yet
 
-100 columns, 28 rows.
+100 columns, 28 rows. Now golden screen [f2a](../../../architecture/tui-look/f2a.txt).
 
 ```text
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
@@ -71,29 +72,29 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ╰──────────────────────────────────────────────────────────────╯
 
 ◇ Imports  2 of 4
-  Other tools left these. None is read, started or put in the prompt unless
-  you pick it, and what is left unpicked stays off. What you pick holds in
-  every project.
+  Other tools left these. None is read, started or put in the prompt unless you
+  pick it, and what is left unpicked stays off. What you pick holds in every
+  project.
 
     Instructions
-  ◆ ☐ AGENTS.md, CLAUDE.md          read as each project's instructions;
-                                    off unless picked (compat.instructions)
+  ◆ ☐ AGENTS.md, CLAUDE.md            read as each project's instructions; off
+                                      unless picked (compat.instructions)
     Skills
     ☐ .claude/skills, .agents/skills  yours and each project's, once this
-                                     version reads skills; off unless picked
-                                     (compat.skills)
+                                      version reads skills; off unless picked
+                                      (compat.skills)
     MCP servers
-    ▸ ~/.claude.json                Claude Code's: space reads it
-    ▸ ~/.cursor/mcp.json            Cursor's: space reads it
-      .mcp.json, .vscode/mcp.json   this project's: offered in its sessions,
-                                    after trust, never imported
+    ▸ ~/.claude.json                  Claude Code's: space reads it
+    ▸ ~/.cursor/mcp.json              Cursor's: space reads it
+      .mcp.json, .vscode/mcp.json     this project's: offered in its sessions,
+                                      after trust, never imported
 
-  space picks or reads · enter keeps what is picked · s skips this step
+  space picks · enter keeps what is picked · s skips this step · x skips the set-up
 ```
 
 ### F2b. The first run, step 2: one MCP file read, each server's command whole, one holding a credential
 
-100 columns, 29 rows.
+100 columns, 34 rows. Now golden screen [f2b](../../../architecture/tui-look/f2b.txt).
 
 ```text
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
@@ -106,30 +107,35 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ╰──────────────────────────────────────────────────────────────╯
 
 ◇ Imports  2 of 4
-  ~/.claude.json holds 3 MCP servers. One picked is written to your settings
-  with its command as shown here, and starts only once this version runs MCP
-  servers, in the sandbox.
+  Other tools left these. None is read, started or put in the prompt unless you
+  pick it, and what is left unpicked stays off. What you pick holds in every
+  project.
 
     Instructions
-    ☑ AGENTS.md, CLAUDE.md          read as each project's instructions
+    ☑ AGENTS.md, CLAUDE.md            read as each project's instructions; off
+                                      unless picked (compat.instructions)
     Skills
-    ☐ .claude/skills, .agents/skills  off unless picked (compat.skills)
+    ☐ .claude/skills, .agents/skills  yours and each project's, once this
+                                      version reads skills; off unless picked
+                                      (compat.skills)
     MCP servers
-    ▾ ~/.claude.json                Claude Code's
-  ◆   ☑ docs       npx -y @example/docs-mcp --root ~/src/docs
-      ☐ tracker    https://tracker.example.com/mcp
-                   its Authorization header comes from TRACKER_AUTH, which you
-                   set
-        github     docker run -i --rm -e GITHUB_TOKEN=[masked]
-                   ghcr.io/example/github-mcp:1.4
-                   holds a credential in its command: not imported
+    ▾ ~/.claude.json                  Claude Code's
+  ◆   ☑ docs     npx -y @example/docs-mcp --root ~/src/docs
+      ☐ tracker  https://tracker.example.com/mcp
+                 its Authorization header comes from TRACKER_AUTH, which you set
+        github   docker run -i --rm -e GITHUB_TOKEN=[redacted]
+                 ghcr.io/example/github-mcp:1.4
+                 holds a credential in its command: not imported
+    ▸ ~/.cursor/mcp.json              Cursor's: space reads it
+      .mcp.json, .vscode/mcp.json     this project's: offered in its sessions,
+                                      after trust, never imported
 
-  space picks · enter keeps what is picked · s skips this step
+  space picks · enter keeps what is picked · s skips this step · x skips the set-up
 ```
 
 ### F3. The first run, step 3: the mode, before the session opens
 
-100 columns, 21 rows.
+100 columns, 22 rows. Now golden screen [f3](../../../architecture/tui-look/f3.txt).
 
 ```text
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
@@ -145,19 +151,20 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ◇ Mode  3 of 4
   How much the agent does before it asks you. /mode changes it at any time.
 
-    read-only      reads, and runs only commands known to read; asks before
-                   any other, and never writes
-  ◆ supervised     reads and edits files in this project without asking; asks
-                   before a command that is not known to be safe
-    autonomous     runs commands in the sandbox without asking; asks before
-                   leaving it
+    read-only   reads, and runs only commands known to read; asks before any
+                other, and never writes
+  ◆ supervised  reads and edits files in this project without asking; asks
+                before a command that is not on a safe list, and before anything
+                outside the project
+    autonomous  runs commands in the sandbox without asking; asks before leaving
+                it, using the network or writing outside the project
 
-  enter chooses · s keeps supervised
+  enter chooses · s keeps supervised · x skips the set-up
 ```
 
 ### F4. The first run, step 4: the project's commands, after the session opened and trust was asked (screen 2c)
 
-100 columns, 23 rows.
+100 columns, 22 rows. Now golden screen [f4](../../../architecture/tui-look/f4.txt).
 
 ```text
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
@@ -167,22 +174,21 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ╭──────────────────────────────────────────────────────────────╮
 │ ◆ Cineris 0.1.0                                       │
 │                                                              │
-│   opus-5.5 high  ·  ~/src/parser on main                     │
-│   Knows nothing about this project yet.                      │
+│   claude-opus-5-5 high  ·  ~/src/parser                      │
 ╰──────────────────────────────────────────────────────────────╯
 
 · Project: ~/src/parser trusted.
 
 ◇ Commands  4 of 4
-  Found in Cargo.toml. Each one picked joins the project profile as an entry
+  Found in Cargo.toml. Each one picked joins the project's profile as an entry
   you wrote: it runs without asking, and the checks at a turn's end use it.
 
-  ◆ ☐ build    cargo build --workspace
-    ☐ test     cargo test --workspace
-    ☐ check    cargo clippy --workspace --all-targets -- -D warnings
-    ☐ format   cargo fmt --all -- --check
+  ◆ ☐ build   cargo build --workspace
+    ☐ test    cargo test --workspace
+    ☐ check   cargo clippy --workspace --all-targets -- -D warnings
+    ☐ format  cargo fmt --all -- --check
 
-  space picks · e edits · enter keeps what is picked · s skips this step
+  space picks · e edits · enter keeps what is picked · s skips this step     opus-5.5 high · fast
 ```
 
 ### F5. The full-screen presenter at 150 columns: panels beside the transcript, the plan focused
