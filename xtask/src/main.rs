@@ -45,6 +45,7 @@ mod perf;
 mod perf_ab;
 mod records;
 mod regen;
+mod rename;
 mod replace;
 mod rules;
 mod runs;
@@ -61,6 +62,12 @@ mod tiers;
 mod try_result;
 mod try_run;
 mod workspace;
+
+/// The test kit, under a name that does not change with the project's: the
+/// rename's tests keep their text through the rename (`rename.rs`, `KEPT`),
+/// so they cannot name the crate.
+#[cfg(test)]
+use cortex_testkit as testkit;
 
 /// Failures are messages for the person at the terminal.
 type Result<T> = std::result::Result<T, String>;
@@ -308,6 +315,13 @@ Working on the code
                     or deleted) and the checks to run on them, in one command
                     the shell guard accepts: all or none, and every file put
                     back when a check fails. `apply --help` has the format.
+  rename apply [--regen] | --check | --kept | branch BASE..TIP [--to NAME]
+                    The names before decision 0038 turned into Cineris's: the
+                    working tree (contents, then paths; a second run changes
+                    nothing), a check for any left outside the kept lines
+                    (`rules` runs it), or each commit of a branch made before
+                    the rename made again in the new names, to rebase onto the
+                    renamed main. `rename --help` has the rest.
   decision new \"TITLE\" [--status TEXT] [--dry-run]
                     The next numbered decision record, from the template, and
                     its row in docs/decisions/README.md.
@@ -395,6 +409,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "ci-times" => runs::ci_times(rest),
         "ci-log" => ci_log::run(rest),
         "replace" => replace::run(rest),
+        "rename" => rename::run(rest),
         "apply" => apply::run(rest),
         "rules" => checks::rules(),
         "links" => checks::links(),
