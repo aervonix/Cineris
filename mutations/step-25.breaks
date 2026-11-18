@@ -75,7 +75,7 @@ caught-by:
 rule: Putting the terminal back turns mouse reporting off before it leaves the alternate screen.
 file: crates/cortex-term/src/terminal.rs
 in: Terminal::end
-find: end.extend_from_slice(MOUSE_OFF);
+find: end.extend_from_slice(self.mouse_sequence(false));
 replace: end.extend_from_slice(b"");
 caught-by:
     cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
@@ -84,7 +84,7 @@ caught-by:
 rule: Leaving the alternate screen turns mouse reporting off with it.
 file: crates/cortex-term/src/terminal.rs
 in: Terminal::alternate
-find: bytes.extend_from_slice(MOUSE_OFF);
+find: bytes.extend_from_slice(self.mouse_sequence(false));
 replace: bytes.extend_from_slice(b"");
 caught-by:
     cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
@@ -101,7 +101,7 @@ caught-by:
 rule: Continued after a stop, the alternate screen comes back with the mouse, if it was asked for.
 file: crates/cortex-term/src/terminal.rs
 in: Terminal::resume
-find: again.extend_from_slice(MOUSE_ON);
+find: again.extend_from_slice(self.mouse_sequence(true));
 replace: again.extend_from_slice(b"");
 caught-by:
     cortex-term terminal::tests::a_resume_turns_the_mouse_on_again_with_the_alternate_screen
@@ -546,3 +546,12 @@ find: app.mouse = settings.terminal.mouse.unwrap_or(true);
 replace: app.mouse = true;
 caught-by:
     cortex-cli::bin/cortex interactive::tests::the_interfaces_settings_take_the_mouse_and_the_presenter
+
+[break] windows-asks-the-terminal-for-the-mouse
+rule: On Windows the terminal is asked for no mouse report: a pseudo-console gives them to the program as typed keys.
+file: crates/cortex-term/src/caps.rs
+in: Capabilities::detect
+find: vt_mouse: platform == Platform::Unix
+replace: vt_mouse: true
+caught-by:
+    cortex-term terminal::tests::on_windows_the_terminal_is_asked_for_no_mouse_reports

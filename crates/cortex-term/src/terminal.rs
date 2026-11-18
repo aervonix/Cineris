@@ -435,7 +435,7 @@ impl<D: Device> Terminal<D> {
             sys::set_alternate(true);
             let mut bytes = ALTERNATE_ON.to_vec();
             if self.mouse {
-                bytes.extend_from_slice(MOUSE_ON);
+                bytes.extend_from_slice(self.mouse_sequence(true));
                 self.decoder.set_mouse(true);
                 sys::set_mouse_input(true);
             }
@@ -443,7 +443,7 @@ impl<D: Device> Terminal<D> {
         } else {
             let mut bytes = Vec::new();
             if self.mouse {
-                bytes.extend_from_slice(MOUSE_OFF);
+                bytes.extend_from_slice(self.mouse_sequence(false));
                 self.decoder.set_mouse(false);
                 sys::set_mouse_input(false);
             }
@@ -475,7 +475,22 @@ impl<D: Device> Terminal<D> {
         }
         self.decoder.set_mouse(on);
         sys::set_mouse_input(on);
-        self.device.write(if on { MOUSE_ON } else { MOUSE_OFF })
+        let sequence = self.mouse_sequence(on);
+        if sequence.is_empty() {
+            return Ok(());
+        }
+        self.device.write(sequence)
+    }
+
+    /// The sequence that turns the terminal's mouse reports on or off: none
+    /// where the terminal is not asked for them by sequences (Windows, where
+    /// the console's mouse input is used instead, `Capabilities::vt_mouse`).
+    fn mouse_sequence(&self, on: bool) -> &'static [u8] {
+        match (self.caps.vt_mouse, on) {
+            (false, _) => b"",
+            (true, true) => MOUSE_ON,
+            (true, false) => MOUSE_OFF,
+        }
     }
 
     /// Whether the mouse is reported now: the alternate screen is on, and
@@ -620,7 +635,7 @@ impl<D: Device> Terminal<D> {
         if self.alternate {
             again.extend_from_slice(ALTERNATE_ON);
             if self.mouse {
-                again.extend_from_slice(MOUSE_ON);
+                again.extend_from_slice(self.mouse_sequence(true));
                 sys::set_mouse_input(true);
             }
         }
@@ -686,7 +701,7 @@ impl<D: Device> Terminal<D> {
         let alternate = std::mem::take(&mut self.alternate);
         if alternate {
             if self.mouse {
-                end.extend_from_slice(MOUSE_OFF);
+                end.extend_from_slice(self.mouse_sequence(false));
                 sys::set_mouse_input(false);
             }
             end.extend_from_slice(ALTERNATE_OFF);
@@ -949,6 +964,35 @@ mod tests {
                 .ends_with(&[ALTERNATE_OFF, END].concat())
         );
         assert!(!leaves(sys::restore_sequence()));
+    }
+
+    /// On Windows the terminal is asked for no mouse report (a
+    /// pseudo-console would give the reports to the program as typed
+    /// keys): the alternate screen and the program's wish for the mouse
+    /// write no mouse sequence, and the decoder still reads the reports the
+    /// console's own mouse records are written as (step 25).
+    #[test]
+    fn on_windows_the_terminal_is_asked_for_no_mouse_reports() {
+        let device = script(&[(Ready::Input, b"\x1b[<64;10;5M")]);
+        let written = device.written.clone();
+        let windows = Capabilities::detect(|_| None, Platform::Windows, Overrides::default());
+        assert!(!windows.vt_mouse);
+        assert!(caps().vt_mouse, "Unix asks for them");
+        let mut terminal = Terminal::with_device(device, windows).unwrap();
+        terminal.set_mouse(true).unwrap();
+        terminal.alternate(true).unwrap();
+        let out = written.lock().unwrap().clone();
+        assert!(holds(&out, ALTERNATE_ON));
+        assert!(!holds(&out, b"\x1b[?1000h") && !holds(&out, b"\x1b[?1006h"));
+        assert!(matches!(
+            terminal.next(None).unwrap(),
+            Some(Event::Mouse(crate::Mouse {
+                kind: crate::MouseKind::Wheel(crate::Wheel::Up),
+                ..
+            }))
+        ));
+        terminal.alternate(false).unwrap();
+        assert!(!holds(&written.lock().unwrap(), b"\x1b[?1000l"));
     }
 
     fn holds(bytes: &[u8], part: &[u8]) -> bool {

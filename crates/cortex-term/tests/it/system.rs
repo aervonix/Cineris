@@ -292,20 +292,36 @@ fn sys_keys_arrive_with_their_modifiers() {
     session.wait_exit(LIMIT);
 }
 
-/// The mouse, on with the alternate screen, reaches the program as a
-/// terminal reports it (SGR, mode 1006): the wheel and a click, and on
-/// Windows through ConPTY, which is what this measures there (step 25: the
-/// console's mouse input is on with the alternate screen).
+/// The mouse, on with the alternate screen. On Unix the terminal is asked
+/// for its reports, which reach the program as themselves: the wheel and a
+/// click. On Windows, under a pseudo-console (Windows Terminal), the
+/// terminal is asked for nothing: a pseudo-console passes the modes on and
+/// then gives the terminal's reports to the program as typed keys, which
+/// would type them into the prompt (measured in step 25), so the terminal
+/// keeps its own wheel and selection there.
 #[test]
 fn sys_the_mouse_reaches_the_program_on_the_alternate_screen() {
     let mut session = Session::start(&this_binary(), &DEMO.arguments("mouse"), 100, 30).answering();
     session.wait_for(LIMIT, "the first frame", |t| t.shows(STATUS_MARK));
-    session.send(b"\x1b[<64;10;5M");
-    last_key(&mut session, "Wheel up");
-    session.send(b"\x1b[<0;4;3M");
-    last_key(&mut session, "Press Left");
-    session.send(b"\x1b[<0;4;3m");
-    last_key(&mut session, "Release Left");
+    if cfg!(windows) {
+        let mut out = Vec::new();
+        for chunk in session.recording() {
+            out.extend_from_slice(&chunk.bytes);
+        }
+        for mode in ["?1000h", "?1002h", "?1003h", "?1006h"] {
+            assert!(
+                !String::from_utf8_lossy(&out).contains(mode),
+                "the terminal was asked for the mouse ({mode})"
+            );
+        }
+    } else {
+        session.send(b"\x1b[<64;10;5M");
+        last_key(&mut session, "Wheel up");
+        session.send(b"\x1b[<0;4;3M");
+        last_key(&mut session, "Press Left");
+        session.send(b"\x1b[<0;4;3m");
+        last_key(&mut session, "Release Left");
+    }
     session.send(b"\x03");
     session.wait_exit(LIMIT);
 }

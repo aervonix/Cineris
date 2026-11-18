@@ -131,10 +131,14 @@ pub(crate) fn set_mouse_input(on: bool) {
     }
     let input = handle(STD_INPUT_HANDLE);
     if let Some(mode) = console_mode(input) {
+        // QuickEdit takes the mouse for the console's own selection: off
+        // while the program has the mouse (the extended flags say so), and
+        // as the program found it after.
+        let found_quick_edit = INPUT_MODE.load(Ordering::SeqCst) & QUICK_EDIT;
         let wanted = if on {
-            mode | ENABLE_MOUSE_INPUT
+            (mode | ENABLE_MOUSE_INPUT | EXTENDED_FLAGS) & !QUICK_EDIT
         } else {
-            mode & !ENABLE_MOUSE_INPUT
+            (mode & !ENABLE_MOUSE_INPUT & !QUICK_EDIT) | found_quick_edit | EXTENDED_FLAGS
         };
         if wanted != mode {
             set_mode(input, wanted);
@@ -144,6 +148,14 @@ pub(crate) fn set_mouse_input(on: bool) {
         BUTTONS.store(0, Ordering::SeqCst);
     }
 }
+
+/// The console's QuickEdit mode, which takes the mouse for its own
+/// selection (`ENABLE_QUICK_EDIT_MODE`).
+const QUICK_EDIT: u32 = 0x0040;
+
+/// The flag that says the QuickEdit and insert modes are set too
+/// (`ENABLE_EXTENDED_FLAGS`).
+const EXTENDED_FLAGS: u32 = 0x0080;
 
 /// The buttons the last mouse record said were down, to tell a press from
 /// a release.
