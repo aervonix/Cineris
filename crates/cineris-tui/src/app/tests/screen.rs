@@ -913,21 +913,121 @@ fn tab_reads_the_transcript_under_a_dialog_and_nothing_read_answers_it() {
         key(&mut app, binding, at(300 + 10 * n as u64));
     }
     assert_eq!(approvals(&link), 0, "a key read while reading answered");
-    // Back, and its quiet again.
+    // Back, and its quiet again: its next moment is a second on.
     let back = at(400);
     key(&mut app, "tab", back);
+    assert_eq!(app.deadline(), Some(back + QUIET));
     let rows = text(&app.screen_frame(back).0);
     assert!(
-        rows.last()
-            .is_some_and(|row| row.contains("tab reads above")),
+        !rows.last().is_some_and(|row| row.contains("goes back")),
         "{rows:#?}"
     );
+    // Just back, before it is ready: keys go nowhere, the hidden editor
+    // included, whose `Enter` would send (the focused review of step 25).
     key(&mut app, "y", back + Duration::from_millis(200));
+    key(&mut app, "enter", back + Duration::from_millis(300));
     assert_eq!(approvals(&link), 0, "a key just after going back answered");
+    assert_eq!(app.input().editor().expanded(), "");
+    assert!(
+        !link
+            .take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, cineris_protocol::methods::Op::TurnStart(_))),
+        "Enter just after going back sent the editor's text"
+    );
     let again = dialog_wake(&mut app);
     assert!(again >= back + QUIET, "{:?}", again.duration_since(back));
     key(&mut app, "y", again + Duration::from_millis(50));
     assert_eq!(approvals(&link), 1, "a key after the quiet answers");
+}
+
+/// `Tab` before the dialog takes keys is not reading: it goes where it was
+/// going, and the dialog is answered as usual once ready (the focused review
+/// of step 25).
+#[test]
+fn tab_before_the_dialog_is_ready_does_not_start_reading() {
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 2, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    key(&mut app, "tab", asked + Duration::from_millis(50));
+    let ready = dialog_wake(&mut app);
+    let rows = text(&app.screen_frame(ready).0);
+    assert!(
+        rows.iter().any(|row| row.contains("Allow once")),
+        "{rows:#?}"
+    );
+    key(&mut app, "y", ready + Duration::from_millis(50));
+    assert_eq!(approvals(&link), 1, "a Tab in the grace started reading");
+}
+
+/// While reading, at 80 columns with a turn running, the row's first words
+/// are the way back; `Ctrl+F` opens no search under the dialog, a paste goes
+/// nowhere, a held `Tab` does not toggle, and a request that comes keeps
+/// the reader's place (the focused review of step 25).
+#[test]
+fn reading_keeps_its_way_back_shown_and_takes_only_the_scrolling_keys() {
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 3, now);
+    app.resize(80, 20);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    drain(&mut app, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    let at = |ms: u64| ready + Duration::from_millis(ms);
+    key(&mut app, "tab", at(100));
+    let (lines, _) = app.screen_frame(at(100));
+    let rows = text(&lines);
+    let reading_row = rows
+        .iter()
+        .rev()
+        .find(|row| row.contains("goes back"))
+        .unwrap_or_else(|| panic!("no way back shown: {rows:#?}"));
+    assert!(reading_row.contains("tab goes back"), "{rows:#?}");
+    key(&mut app, "pageup", at(200));
+    let _ = app.screen_frame(at(200));
+    assert!(!app.screen_follows());
+    key(&mut app, "ctrl+f", at(300));
+    assert_eq!(app.search_query(), None, "a search opened under the dialog");
+    app.terminal(&TermEvent::Paste("pasted".to_owned()), at(400));
+    assert_eq!(app.input().editor().expanded(), "");
+    app.terminal(
+        &TermEvent::Repeat(crate::keys::parse("tab").unwrap()),
+        at(500),
+    );
+    let rows = text(&app.screen_frame(at(500)).0);
+    assert!(
+        rows.iter().any(|row| row.contains("tab goes back")),
+        "a held Tab went back: {rows:#?}"
+    );
+    link.give(Inbound::Request(
+        cineris_protocol::jsonrpc::RequestId::Number(8),
+        crate::testkit::approval("c_8"),
+    ));
+    drain(&mut app, at(600));
+    let _ = app.screen_frame(at(600));
+    assert!(!app.screen_follows(), "a request moved the reader's place");
+}
+
+/// Inline, `Tab` under a dialog starts no reading: the dialog answers as
+/// before.
+#[test]
+fn inline_tab_under_a_dialog_starts_no_reading() {
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Inline, 2, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    key(&mut app, "tab", ready + Duration::from_millis(50));
+    key(&mut app, "y", ready + Duration::from_millis(100));
+    assert_eq!(approvals(&link), 1);
 }
 
 /// `Esc` while reading goes back to the dialog too, and does not deny it;
@@ -947,38 +1047,43 @@ fn esc_while_reading_goes_back_and_the_inline_screen_offers_no_reading() {
     assert_eq!(approvals(&link), 0, "esc while reading denied the call");
     let rows = text(&app.screen_frame(ready + Duration::from_millis(200)).0);
     assert!(
-        rows.last()
-            .is_some_and(|row| row.contains("tab reads above")),
+        rows.last().is_some_and(|row| row.contains("esc denies"))
+            && !rows.iter().any(|row| row.contains("goes back")),
         "back at the dialog: {rows:#?}"
     );
 
     // Reading ends with its dialog however it goes: one resolved elsewhere,
     // and the next opens as a dialog, not read.
-    key(&mut app, "tab", ready + Duration::from_millis(300));
+    let ready = dialog_wake(&mut app);
+    key(&mut app, "tab", ready + Duration::from_millis(50));
+    let rows = text(&app.screen_frame(ready + Duration::from_millis(50)).0);
+    assert!(
+        rows.iter().any(|row| row.contains("goes back")),
+        "{rows:#?}"
+    );
     link.give(event(Event::RequestResolved(
         cineris_protocol::event::RequestResolved {
             request_id: cineris_protocol::jsonrpc::RequestId::Number(7),
             resolution: cineris_protocol::event::Resolution::Answered,
         },
     )));
-    drain(&mut app, ready + Duration::from_millis(400));
+    drain(&mut app, ready + Duration::from_millis(100));
     crate::testkit::ask(
         &mut app,
         &link,
         8,
         crate::testkit::approval("c_8"),
-        ready + Duration::from_millis(500),
+        ready + Duration::from_millis(200),
     );
-    let rows = text(&app.screen_frame(ready + Duration::from_millis(500)).0);
+    let rows = text(&app.screen_frame(ready + Duration::from_millis(200)).0);
     assert!(
-        rows.last()
-            .is_some_and(|row| row.contains("tab reads above")),
+        !rows.iter().any(|row| row.contains("goes back")),
         "the next dialog opened read: {rows:#?}"
     );
     let _ = approvals(&link);
     // Well past its grace and the quiet of the last key read: its answers
     // drawn, and its own keys its own.
-    let later = ready + Duration::from_millis(500) + crate::app::dialog::QUIET * 2;
+    let later = ready + Duration::from_millis(200) + crate::app::dialog::QUIET * 2;
     let _ = app.frame(later);
     app.drawn(later);
     key(&mut app, "y", later + Duration::from_millis(50));

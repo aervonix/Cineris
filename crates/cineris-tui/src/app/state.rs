@@ -204,16 +204,31 @@ fn reload_lines(applied: &[String], errors: &[String], notes: &[String]) -> Vec<
 }
 
 /// The keys row while the transcript is read from under a dialog.
+/// The way back to the dialog first, so that a narrow row keeps it.
 fn reading_keys(keymap: &crate::keys::KeyMap) -> Vec<String> {
+    let key = |action| {
+        keymap
+            .keys_of(action)
+            .first()
+            .map(|key| crate::keys::name(*key))
+    };
+    let mut keys = vec![reading_back(keymap), "reading the transcript".to_owned()];
+    if let (Some(up), Some(down)) = (
+        key(crate::keys::Action::ScreenPageUp),
+        key(crate::keys::Action::ScreenPageDown),
+    ) {
+        keys.push(format!("{up}/{down} scroll"));
+    }
+    keys
+}
+
+/// How to go back to the dialog from reading.
+fn reading_back(keymap: &crate::keys::KeyMap) -> String {
     let back = keymap
         .keys_of(crate::keys::Action::DialogTranscript)
         .first()
         .map_or_else(|| "esc".to_owned(), |key| crate::keys::name(*key));
-    vec![
-        "reading the transcript".to_owned(),
-        "pgup/pgdn scroll".to_owned(),
-        format!("{back} goes back"),
-    ]
+    format!("{back} goes back")
 }
 
 /// The most files read ahead for one prompt: the core reads no more of one
@@ -386,6 +401,10 @@ pub struct App {
     /// with this request's id, which stays up (since step 25). Reading ends
     /// with that dialog however it goes: another one never opens read.
     reading_transcript: Option<RequestId>,
+    /// Back from reading under the dialog with this request's id: until it
+    /// is ready again, keys and pastes hold it and go nowhere, never to the
+    /// hidden editor (the focused review of step 25).
+    back_from_reading: Option<RequestId>,
     /// A look at the configuration's files is due after this frame.
     look_due: bool,
     /// When the last look was asked for.
@@ -563,6 +582,7 @@ impl App {
             writer: start.export,
             exporting: None,
             reading_transcript: None,
+            back_from_reading: None,
             look_due: false,
             last_look: None,
             theme_picked: None,
@@ -951,30 +971,49 @@ impl App {
                 _ => {}
             }
         }
+        // The full screen's transcript read from under a dialog (since step
+        // 25): no key or paste read there, or just back before the dialog is
+        // ready again, reaches the dialog or the hidden editor.
+        if self.full_screen()
+            && let Some(dialog) = self.dialogs.front()
+        {
+            let id = dialog.id.clone();
+            let ready = dialog.takes_keys(at);
+            let note = dialog.writing_note();
+            let reading = self.reading_transcript.as_ref() == Some(&id);
+            let back = self.back_from_reading.as_ref() == Some(&id) && !ready;
+            if self.back_from_reading.is_some() && !back {
+                self.back_from_reading = None;
+            }
+            match event {
+                TermEvent::Key(key) if reading => return self.reading_key(*key, at, false),
+                TermEvent::Repeat(key) if reading => return self.reading_key(*key, at, true),
+                TermEvent::Key(_) | TermEvent::Repeat(_) | TermEvent::Paste(_)
+                    if back || (reading && matches!(event, TermEvent::Paste(_))) =>
+                {
+                    self.not_taken(at);
+                    return true;
+                }
+                // Into reading: a press, not a repeat, once the dialog takes
+                // keys; before, the key goes where it was going.
+                TermEvent::Key(key)
+                    if ready
+                        && !note
+                        && self
+                            .input
+                            .keymap()
+                            .lookup(&[crate::keys::Context::Dialog], *key)
+                            == Some(crate::keys::Action::DialogTranscript) =>
+                {
+                    self.reading_transcript = Some(id);
+                    return true;
+                }
+                _ => {}
+            }
+        }
         // The full-screen presenter's own keys (step 25): scrolling and its
         // search, where neither the input nor a dialog has a use for them.
         // Moving the view is not typing at anything.
-        // The full screen's transcript read from under a dialog (since step
-        // 25): its keys never reach the dialog.
-        if let TermEvent::Key(key) | TermEvent::Repeat(key) = event
-            && self.full_screen()
-            && self.viewer.is_none()
-            && let Some(dialog) = self.dialogs.front()
-        {
-            if self.reading_transcript.as_ref() == Some(&dialog.id) {
-                return self.reading_key(*key, at);
-            }
-            if !dialog.writing_note()
-                && self
-                    .input
-                    .keymap()
-                    .lookup(&[crate::keys::Context::Dialog], *key)
-                    == Some(crate::keys::Action::DialogTranscript)
-            {
-                self.reading_transcript = Some(dialog.id.clone());
-                return true;
-            }
-        }
         if let TermEvent::Key(key) | TermEvent::Repeat(key) = event {
             let searching = self.screen_searching();
             if self.screen_key(*key) {
@@ -1462,8 +1501,11 @@ impl App {
     }
 
     fn request(&mut self, id: RequestId, request: ServerRequest) {
-        // A dialog asks about what just happened, at the end.
-        self.screen_follow();
+        // A dialog asks about what just happened, at the end; not while the
+        // transcript is read from under one, whose place is kept.
+        if self.reading_transcript.is_none() {
+            self.screen_follow();
+        }
         let dialog = match request {
             ServerRequest::Approval(approval) => {
                 self.mapper.waiting(&mut self.transcript, &approval.call_id);
@@ -2328,23 +2370,37 @@ impl App {
                 // Reading the transcript (since step 25): the dialog stays up
                 // as its first line, and its row says how to read and how to
                 // go back.
-                Some(dialog) if reading => (
-                    dialog
+                Some(dialog) if reading => {
+                    // The question's first row, cut to leave room for the way
+                    // back, which a window too small for the keys row still
+                    // shows.
+                    let back = format!("  {}", reading_back(keymap));
+                    let room = width.saturating_sub(crate::editor::cluster::width(&back));
+                    let first = dialog
                         .view(keymap, rows, width, &self.look, now)
                         .into_iter()
-                        .take(1)
-                        .collect(),
-                    reading_keys(keymap),
-                ),
+                        .next()
+                        .unwrap_or_default();
+                    let mut line = crate::layout::cut(&first, room, self.look.glyphs.ellipsis);
+                    line.push(cineris_term::Span::new(
+                        back,
+                        self.look.theme.style(crate::theme::Token::Hint),
+                    ));
+                    (vec![line], reading_keys(keymap))
+                }
                 Some(dialog) => {
                     let mut keys = dialog.hint_keys(keymap);
+                    // Offered once it can be pressed, after the key that
+                    // refuses, so that a narrow row still shows it.
                     if full_screen
                         && !dialog.writing_note()
+                        && dialog.takes_keys(now)
                         && let Some(key) = keymap
                             .keys_of(crate::keys::Action::DialogTranscript)
                             .first()
                     {
-                        keys.push(format!("{} reads above", crate::keys::name(*key)));
+                        let at = keys.len().min(1);
+                        keys.insert(at, format!("{} reads above", crate::keys::name(*key)));
                     }
                     (dialog.view(keymap, rows, width, &self.look, now), keys)
                 }
