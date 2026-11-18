@@ -56,6 +56,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is accepted and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
 - [a-file-held-open-on-ntfs-and-its-stamp](a-file-held-open-on-ntfs-and-its-stamp.md): NTFS updates a directory entry's stamp lazily while a writer holds a file open, so the index may read it every pass or keep an old outline. Owner: a later index step, or step 33.
+- [a-provider-key-break-no-longer-bites](a-provider-key-break-no-longer-bites.md): The step 13a break `provider-key-variables-left-in` no longer fails any test: the providers' key variables reach the shell tool's list of what to remove by two paths, and the break empties only one. Owner: the coordinator.
 - [a-supervisor-lowering-a-wait](a-supervisor-lowering-a-wait.md): A client that is not a `user` is refused every tighten-only key in `session/new`'s overrides, a shorter value too; taking a lower one needs a comparison with a second load. Owner: step 37.
 - [a-verify-test-waits-on-a-timer-nothing-advances](a-verify-test-waits-on-a-timer-nothing-advances.md): A test of the checks after a turn waited once on Windows for a turn's end that never came, its core on a fake timer the test does not advance; one CI flake. Owner: the coordinator, who gives it to a small fix session after step 27's third pull request.
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored there (the interactive half is done). Owner: step 32.
@@ -186,6 +187,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.
 - [windows-tier-2-at-its-budget](windows-tier-2-at-its-budget.md): Windows' tier 2 is at its 40 s budget on the slower hosted runners: `main` alone reads 97% of it, and step 27's second pull request takes it past. Owner: the owner (the budget), then a tooling step.
+- [xtask-is-rooted-where-it-was-built](xtask-is-rooted-where-it-was-built.md): `cargo xtask` finds the repository from where its binary was built, not from the current directory, so a binary built in one checkout and run from another checks the first one's tree. Owner: the coordinator.
 
 ### Windows
 
