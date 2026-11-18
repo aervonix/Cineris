@@ -537,3 +537,12 @@ replace:
     let caps = *terminal.caps();
 caught-by:
     cortex-tui app::tests::screen::every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off
+
+[break] the-interface-ignores-terminal-mouse
+rule: The interface's settings take the mouse from [terminal], for the in-process interface and cortex attach alike.
+file: crates/cortex-cli/src/interactive.rs
+in: app_settings
+find: app.mouse = settings.terminal.mouse.unwrap_or(true);
+replace: app.mouse = true;
+caught-by:
+    cortex-cli::bin/cortex interactive::tests::the_interfaces_settings_take_the_mouse_and_the_presenter
