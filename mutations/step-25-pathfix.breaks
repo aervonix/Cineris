@@ -1,8 +1,11 @@
 # Step 25, a follow-up to the rename: the core's test of a command's
 # environment read `PATH` from the model's copy of the output, whose long
 # line is cut, and now reads the whole output
-# (docs/steps/25/parts/pr1c-windows-path.md). The break shows that the test
-# now sees the end of a `PATH` longer than a line, which no other test does.
+# (docs/steps/25/parts/pr1c-windows-path.md). The breaks show that the test
+# now sees the whole of a `PATH` longer than a line, as it was given: its
+# end, its first entry, its order and its repeats. Each runs `cineris-core`'s
+# tests only, where the test is; `cineris-tools`' unit tests of
+# `absolute_entries` give it four entries at most.
 
 [break] path-loses-what-follows-its-first-entries
 rule: `PATH` keeps every absolute directory it was given, in order, however long it is: only the empty and relative entries are dropped.
@@ -10,6 +13,46 @@ file: crates/cineris-tools/src/shell/env.rs
 in: absolute_entries
 find: .collect();
 replace: .take(32).collect();
+packages: cineris-core
+caught-by:
+    cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
+
+[break] path-loses-its-first-entry
+rule: `PATH` keeps its first absolute directory: only the empty and relative entries are dropped.
+file: crates/cineris-tools/src/shell/env.rs
+in: absolute_entries
+find: .collect();
+replace: .skip(1).collect();
+packages: cineris-core
+caught-by:
+    cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
+
+[break] path-put-in-order
+rule: `PATH` keeps the order it was given in, which is the order programs are looked for in.
+file: crates/cineris-tools/src/shell/env.rs
+in: absolute_entries
+find: OsString::from(kept.join(&separator.to_string()))
+replace:
+    {
+        let mut kept = kept;
+        kept.sort_unstable();
+        OsString::from(kept.join(&separator.to_string()))
+    }
+packages: cineris-core
+caught-by:
+    cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
+
+[break] path-repeats-taken-out
+rule: `PATH` keeps a directory it names twice: nothing but the empty and relative entries is dropped.
+file: crates/cineris-tools/src/shell/env.rs
+in: absolute_entries
+find: OsString::from(kept.join(&separator.to_string()))
+replace:
+    {
+        let mut kept = kept;
+        kept.dedup();
+        OsString::from(kept.join(&separator.to_string()))
+    }
 packages: cineris-core
 caught-by:
     cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
