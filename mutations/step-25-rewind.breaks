@@ -34,8 +34,8 @@ caught-by:
 rule: A turn run since the plan was shown changes the plan's mark.
 file: crates/cineris-core/src/rewind.rs
 in: turns_part
-find: text.push_str(turn.as_str());
-replace: let _ = turn;
+find: for turn in &plan.turns {
+replace: for turn in plan.turns.iter().take(0) {
 caught-by:
     cineris-core::it rewind_plan::a_conversation_only_rewind_is_held_to_the_plans_turns_alone
 
