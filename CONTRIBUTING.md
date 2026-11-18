@@ -62,7 +62,8 @@ docs/              the specification
 docs/protocol/     generated: the protocol's JSON Schema and TypeScript declarations
 docs/configuration/  generated: the configuration file's JSON Schema and reference
 assets/            the logo
-AGENTS.md          the rules for agents; CLAUDE.md is one line that includes it
+AGENTS.md          the rules and commands for anyone changing the code, an agent included; CLAUDE.md includes it
+.worktreeinclude   the one private file (CLAUDE.local.md, gitignored) Claude Code copies into a new worktree
 .config/nextest.toml, clippy.toml, deny.toml, rustfmt.toml, rust-toolchain.toml
 .github/workflows/ci.yml             the blocking checks
 .github/workflows/main.yml           after each merge: release build, size, crate count

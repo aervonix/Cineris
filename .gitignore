@@ -3,3 +3,6 @@
 
 # Local agent worktrees.
 /.claude/worktrees/
+
+# A maintainer's private notes for their local agent sessions. Never committed.
+/CLAUDE.local.md
