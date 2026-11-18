@@ -21,5 +21,15 @@ cineris-llm.workspace = true
 cineris-term = { workspace = true, features = ["pty"] }
 serde_json.workspace = true
 
+[features]
+# The scripted provider, run by hand for the Windows Terminal checklist
+# (`cargo run -p cineris-testkit --example scripted-provider --features
+# scripted-provider`). A feature of its own so that test builds do not link it.
+scripted-provider = []
+
+[[example]]
+name = "scripted-provider"
+required-features = ["scripted-provider"]
+
 [lints]
 workspace = true
