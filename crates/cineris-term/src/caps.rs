@@ -107,9 +107,9 @@ pub struct Capabilities {
     /// terminal's erase character, which the terminal layer reads as it
     /// enters the terminal.
     pub backspace_ctrl_h: bool,
-    /// The terminal said it knows bracketed paste (DECRQM 2004), so its
-    /// pastes come bracketed and no burst of keys is taken for one (since
-    /// step 25). Known only from its reply; until then, `false`.
+    /// The terminal said bracketed paste is set (DECRQM 2004 answered 1 or
+    /// 3), so its pastes come bracketed and no burst of keys is taken for
+    /// one (since step 25). Known only from its reply; until then, `false`.
     pub paste_confirmed: bool,
     /// The terminal is thought to take the clipboard sequence (OSC 52),
     /// which it never answers (since step 25): not the old console host,
@@ -227,8 +227,12 @@ impl Capabilities {
                 _ => {}
             },
             Reply::Mode { mode: 9001, state } => self.win32_input = matches!(state, 1..=3),
-            // Known, set or not: the terminal brackets its pastes (step 25).
-            Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1..=4),
+            // Set, now or for good: the terminal brackets its pastes (step
+            // 25). The query follows the start's `CSI ? 2004 h` in one write,
+            // so a terminal that brackets says so; reset (2) or permanently
+            // reset (4) after that says it will not, and its bursts are
+            // weighed (the review of step 25's second pull request).
+            Reply::Mode { mode: 2004, state } => self.paste_confirmed = matches!(state, 1 | 3),
             Reply::Keyboard(_) => self.keyboard = true,
             Reply::Background(r, g, b) => self.background = Some((r, g, b)),
             Reply::Mode { .. } | Reply::DeviceAttributes => {}
@@ -315,14 +319,15 @@ mod tests {
         assert!(!detect_with(&xterm, Platform::Unix, told(false)).clipboard);
     }
 
-    /// A terminal that says it knows bracketed paste, set or not, has no
-    /// burst of keys taken for a paste; one that does not know it, or does
-    /// not say, has. The override trusts the brackets, or asks for none
-    /// (step 25).
+    /// A terminal that says bracketed paste is set, now or for good, has no
+    /// burst of keys taken for a paste; one that says it is reset (asked
+    /// after the start set it, so it will not bracket), does not know it,
+    /// or does not say, has. The override trusts the brackets, or asks for
+    /// none (step 25, and its second pull request's review).
     #[test]
     fn bursts_are_taken_for_pastes_only_where_brackets_are_not_known() {
         let xterm = [("TERM", "xterm-256color")];
-        for (state, rates) in [(1, false), (2, false), (3, false), (4, false), (0, true)] {
+        for (state, rates) in [(1, false), (2, true), (3, false), (4, true), (0, true)] {
             let mut caps = detect(&xterm, Platform::Unix);
             assert!(caps.rates_pastes(), "not known until it says");
             caps.apply(&Reply::Mode { mode: 2004, state });

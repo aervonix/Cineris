@@ -2113,6 +2113,45 @@ fn in_the_box(row: &str) -> &str {
         .trim_start()
 }
 
+/// Waits for `condition` after the keys `names` were sent, the program's
+/// output from the piece `from` on: a key that did not arrive as itself
+/// fails with the bytes each was sent as and what the program wrote since,
+/// kept in memory and printed only then (step 25's design: a key that does
+/// not arrive says what came of it; the review of its second pull request).
+fn wait_after_keys(
+    session: &mut Session,
+    from: usize,
+    names: &[&str],
+    mut condition: impl FnMut(&VTerm) -> bool,
+) {
+    let deadline = Instant::now() + LIMIT;
+    while !condition(session.screen()) {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() || (session.step(left).is_none() && session.ended()) {
+            let since: Vec<u8> = session.recording()[from.min(session.recording().len())..]
+                .iter()
+                .flat_map(|chunk| chunk.bytes.iter().copied())
+                .collect();
+            let shown = &since[since.len().saturating_sub(4096)..];
+            let sent: Vec<String> = names
+                .iter()
+                .map(|name| {
+                    let bytes =
+                        cineris_testkit::pty::key_bytes(name, cfg!(windows)).unwrap_or_default();
+                    format!("{name} as {:?}", String::from_utf8_lossy(&bytes))
+                })
+                .collect();
+            panic!(
+                "waited {LIMIT:?} for {names:?} to reach the application as themselves; sent: \
+                 {}; the program wrote since (its last 4 KiB): {:?}; the screen:\n{}",
+                sent.join(", "),
+                String::from_utf8_lossy(shown),
+                session.screen().dump()
+            );
+        }
+    }
+}
+
 /// F1 to F12 and the arrows reach the application as themselves, through
 /// ConPTY on Windows as win32 input records, as Windows Terminal sends them
 /// (step 25, `function-keys-through-conpty`): each function key, bound to
@@ -2130,10 +2169,11 @@ fn sys_function_keys_and_the_arrows_reach_the_application() {
     phases.mark("the function keys");
     for n in 1..=12 {
         type_text(&mut session, &format!("a{n}"));
+        let from = session.recording().len();
         session.send_key(&format!("f{n}"));
         type_text(&mut session, &format!("b{n}"));
         let (before, after) = (format!("a{n}"), format!("b{n}"));
-        session.wait_for(LIMIT, &format!("F{n} ended the line"), |t| {
+        wait_after_keys(&mut session, from, &[&format!("f{n}")], |t| {
             let rows = t.screen();
             rows.iter().any(|row| in_the_box(row).ends_with(&before))
                 && rows.iter().any(|row| in_the_box(row).starts_with(&after))
@@ -2141,6 +2181,7 @@ fn sys_function_keys_and_the_arrows_reach_the_application() {
     }
 
     phases.mark("the arrows");
+    let from = session.recording().len();
     session.send_key("f1");
     type_text(&mut session, "pq");
     session.send_key("left");
@@ -2151,7 +2192,8 @@ fn sys_function_keys_and_the_arrows_reach_the_application() {
     type_text(&mut session, "U");
     session.send_key("down");
     type_text(&mut session, "D");
-    session.wait_for(LIMIT, "the arrows moved in the prompt", |t| {
+    let arrows = ["f1", "left", "right", "up", "down"];
+    wait_after_keys(&mut session, from, &arrows, |t| {
         let rows = t.screen();
         rows.iter().any(|row| in_the_box(row).ends_with("b12U"))
             && rows.iter().any(|row| in_the_box(row) == "pMqND")

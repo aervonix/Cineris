@@ -71,6 +71,23 @@ pub(crate) fn restore_sequence() -> &'static [u8] {
     RESTORE[usize::from(PROTOCOLS.load(Ordering::SeqCst) & 7)]
 }
 
+/// The most one wait for input reads, in bytes: one `read` of the terminal
+/// on Unix, and on Windows the console's records gathered until this many
+/// bytes or none waits (the review of step 25's second pull request). A
+/// paste comes in one read where it can, so that its line breaks are seen
+/// inside it and not at a read's end.
+pub(crate) const READ_BYTES: usize = 4096;
+
+/// Whether a wait that has read `read` bytes of input reads the console's
+/// records again: while `waiting` more are there, up to [`READ_BYTES`]
+/// (Windows; since the review of step 25's second pull request, when one
+/// read of at most 64 records, about 32 pasted characters with their key
+/// releases, cut a paste into many).
+#[cfg(any(windows, test))]
+pub(crate) fn reads_more(read: usize, waiting: u32) -> bool {
+    waiting > 0 && read < READ_BYTES
+}
+
 /// The whole milliseconds left until `deadline` at `now`, rounded up, for a
 /// wait that takes milliseconds: `u32::MAX`, which is no end, when there is
 /// no deadline, and just under it for a deadline too far away to count
@@ -316,6 +333,17 @@ mod tests {
         // Exactly the most a wait counts is still an end.
         let most = std::time::Duration::from_millis(u64::from(u32::MAX));
         assert_eq!(millis_left(Some(now + most), now), u32::MAX - 1);
+    }
+
+    /// The console's records are read again while more wait, up to the
+    /// bound a read on Unix has: a paste comes in one read, not 64 records
+    /// at a time (the review of step 25's second pull request).
+    #[test]
+    fn the_consoles_records_are_read_while_more_wait_up_to_the_bound() {
+        assert!(reads_more(0, 1));
+        assert!(reads_more(READ_BYTES - 1, 200));
+        assert!(!reads_more(READ_BYTES, 200), "the bound");
+        assert!(!reads_more(100, 0), "nothing more waits");
     }
 
     #[test]

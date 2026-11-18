@@ -188,6 +188,15 @@ impl Machine {
     /// starts PowerShell 7 once a machine to ask. These tests are not about
     /// which PowerShell runs a command (`cineris-tools`' tests run each
     /// shell).
+    ///
+    /// On Windows the terminal's brackets are trusted
+    /// (`terminal.bracketed_paste = true`), unless `extra` says anything of
+    /// the terminal: a pseudo-console that does not pass mode 2004's reply
+    /// on would leave the binary weighing bursts of keys, and two prompts
+    /// these tests send back to back, or a line and `\r\r`, can come in one
+    /// read with a line break inside, a paste that sends nothing (the
+    /// review of step 25's second pull request). Elsewhere the virtual
+    /// terminal answers the query, which the binary trusts.
     pub fn user_config(&self, extra: &str) {
         let file = self.dirs().user_config.unwrap();
         fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -202,11 +211,16 @@ impl Machine {
         } else {
             ""
         };
+        let paste = if cfg!(windows) && !extra.contains("terminal") {
+            "terminal.bracketed_paste = true\n"
+        } else {
+            ""
+        };
         fs::write(
             file,
             format!(
                 "session.durability = \"never\"\ncredentials.store = \"file\"\nmodel.main = \
-                 \"{MODEL}\"\nretry.attempts = 1\nproviders.anthropic.base_url = \"{}\"\n{shell}{extra}",
+                 \"{MODEL}\"\nretry.attempts = 1\nproviders.anthropic.base_url = \"{}\"\n{shell}{paste}{extra}",
                 self.server.base_url()
             ),
         )

@@ -561,53 +561,64 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
         if count == 0 {
             continue;
         }
+        let before = into.len();
         // SAFETY: zeroed records are plain data, filled by the call.
         let mut records: [INPUT_RECORD; 64] = unsafe { std::mem::zeroed() };
-        let mut read = 0;
-        // SAFETY: the array and its length; `read` is a local the call
-        // fills.
-        let ok = unsafe {
-            ReadConsoleInputW(
-                input,
-                records.as_mut_ptr(),
-                u32::try_from(records.len()).unwrap_or(0),
-                &raw mut read,
-            )
-        };
-        if ok == 0 {
-            return gone(io::Error::last_os_error());
-        }
-
-        let before = into.len();
-        for record in &records[..usize::try_from(read).unwrap_or(0)] {
-            match u32::from(record.EventType) {
-                KEY_EVENT => {
-                    // SAFETY: the record says it holds a key event.
-                    let key = unsafe { record.Event.KeyEvent };
-                    // SAFETY: with virtual-terminal input every key event
-                    // carries a character; the union holds it as UTF-16.
-                    let unit = unsafe { key.uChar.UnicodeChar };
-                    if key.bKeyDown != 0 && unit != 0 {
-                        for _ in 0..key.wRepeatCount.max(1) {
-                            push_unit(unit, into);
+        // Every record waiting, up to the bound, in one wait: a paste comes
+        // whole, as one read gives it on Unix, and not 64 records at a time
+        // (the review of step 25's second pull request).
+        while super::reads_more(into.len() - before, count) {
+            let mut read = 0;
+            // SAFETY: the array and its length; `read` is a local the call
+            // fills. Records are waiting, so the call does not block.
+            let ok = unsafe {
+                ReadConsoleInputW(
+                    input,
+                    records.as_mut_ptr(),
+                    u32::try_from(records.len()).unwrap_or(0),
+                    &raw mut read,
+                )
+            };
+            if ok == 0 {
+                return gone(io::Error::last_os_error());
+            }
+            for record in &records[..usize::try_from(read).unwrap_or(0)] {
+                match u32::from(record.EventType) {
+                    KEY_EVENT => {
+                        // SAFETY: the record says it holds a key event.
+                        let key = unsafe { record.Event.KeyEvent };
+                        // SAFETY: with virtual-terminal input every key
+                        // event carries a character; the union holds it as
+                        // UTF-16.
+                        let unit = unsafe { key.uChar.UnicodeChar };
+                        if key.bKeyDown != 0 && unit != 0 {
+                            for _ in 0..key.wRepeatCount.max(1) {
+                                push_unit(unit, into);
+                            }
                         }
                     }
+                    // Kept until it is reported: a read that also brought
+                    // keys reports them first, and the resize on the next
+                    // wait.
+                    WINDOW_BUFFER_SIZE_EVENT => RESIZED.store(true, Ordering::SeqCst),
+                    // The console's mouse input is never turned on (since
+                    // step 25's follow-up: with QuickEdit off, a
+                    // pseudo-console asks the terminal for the mouse, whose
+                    // reports then come as typed keys), so none comes; a
+                    // record is still read as the report it stands for, for
+                    // step 33 (outstanding/the-mouse-under-windows-terminal.md).
+                    MOUSE_EVENT => {
+                        // SAFETY: the record says it holds a mouse event.
+                        let mouse = unsafe { record.Event.MouseEvent };
+                        push_mouse(&mouse, into);
+                    }
+                    _ => {}
                 }
-                // Kept until it is reported: a read that also brought keys
-                // reports them first, and the resize on the next wait.
-                WINDOW_BUFFER_SIZE_EVENT => RESIZED.store(true, Ordering::SeqCst),
-                // The console's mouse input is never turned on (since step
-                // 25's follow-up: with QuickEdit off, a pseudo-console asks
-                // the terminal for the mouse, whose reports then come as
-                // typed keys), so none comes; a record is still read as the
-                // report it stands for, for step 33
-                // (outstanding/the-mouse-under-windows-terminal.md).
-                MOUSE_EVENT => {
-                    // SAFETY: the record says it holds a mouse event.
-                    let mouse = unsafe { record.Event.MouseEvent };
-                    push_mouse(&mouse, into);
-                }
-                _ => {}
+            }
+            // SAFETY: `count` is a local the call fills. A failure reads no
+            // more now; the next wait meets it.
+            if unsafe { GetNumberOfConsoleInputEvents(input, &raw mut count) } == 0 {
+                count = 0;
             }
         }
         if into.len() > before {

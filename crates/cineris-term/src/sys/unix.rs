@@ -656,7 +656,7 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
             drain(wake);
         }
         if fds[0].revents != 0 {
-            let mut buffer = [0u8; 4096];
+            let mut buffer = [0u8; super::READ_BYTES];
             // SAFETY: reads into a local buffer of its own length.
             let read = unsafe { libc::read(STDIN, buffer.as_mut_ptr().cast(), buffer.len()) };
             match usize::try_from(read) {
