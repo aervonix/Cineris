@@ -492,10 +492,28 @@ pub(crate) struct Formatter {
 }
 
 impl Formatter {
-    pub(crate) fn at(root: &Path) -> Self {
-        Self {
-            at: Some(root.to_path_buf()),
+    /// `rustfmt` in `root`, once it has answered: a rename whose formatter
+    /// cannot run would give other text than the one that renamed `main`.
+    pub(crate) fn at(root: &Path) -> Result<Self> {
+        let ran = Command::new("rustfmt")
+            .arg("--version")
+            .current_dir(root)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !ran {
+            return Err(
+                "rustfmt does not run here: the rename formats again each Rust file it changes, \
+                 and without it its text would differ from the one that renamed main \
+                 (`rustup component add rustfmt`)"
+                    .to_owned(),
+            );
         }
+        Ok(Self {
+            at: Some(root.to_path_buf()),
+        })
     }
 
     #[cfg(test)]
@@ -649,7 +667,24 @@ pub(crate) fn violations(file: &str, bytes: &[u8]) -> Vec<Violation> {
                 .to_owned(),
         });
     }
-    let Ok(text) = std::str::from_utf8(bytes) else {
+    let Some(text) = std::str::from_utf8(bytes)
+        .ok()
+        .filter(|text| !text.contains('\0'))
+    else {
+        // Bytes that are not text are not renamed: the check says so of one
+        // that holds the old name.
+        if String::from_utf8_lossy(bytes)
+            .to_ascii_lowercase()
+            .contains("cortex")
+        {
+            found.push(Violation {
+                file: file.to_owned(),
+                line: None,
+                message: "a file that is not UTF-8 text holds an old name of the project, \
+                          which the rename does not change: make it again with the new name"
+                    .to_owned(),
+            });
+        }
         return found;
     };
     if !may_hold_old(text) {
@@ -757,7 +792,7 @@ pub(crate) fn check_moves<'a>(moves: impl IntoIterator<Item = (&'a str, &'a str)
 
 /// `cargo xtask rename apply [--regen]`
 fn apply(root: &Path, regen: bool) -> Result<()> {
-    let applied = apply_tree(root, &Formatter::at(root))?;
+    let applied = apply_tree(root, &Formatter::at(root)?)?;
     if applied.written == 0 && applied.moved == 0 {
         println!("Nothing to change: the tree has the new names.");
     } else {
@@ -798,6 +833,15 @@ pub(crate) struct Applied {
 /// The working tree at `root` renamed: every file's text, then the paths.
 pub(crate) fn apply_tree(root: &Path, formatter: &Formatter) -> Result<Applied> {
     let files = workspace::repository_files(root)?;
+    // A link is read through and written through, and its target is never
+    // renamed: refused, as `branch` refuses one. None is tracked.
+    if let Some(link) = files.iter().find(|file| {
+        fs::symlink_metadata(root.join(file)).is_ok_and(|meta| meta.file_type().is_symlink())
+    }) {
+        return Err(format!(
+            "{link} is a symbolic link: the rename does not rename links"
+        ));
+    }
     let renamed: Vec<Result<Renamed>> = in_parallel(&files, |file| {
         let bytes =
             fs::read(root.join(file)).map_err(|error| format!("could not read {file}: {error}"))?;

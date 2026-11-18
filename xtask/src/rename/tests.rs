@@ -353,6 +353,16 @@ fn the_check_finds_a_planted_old_name_and_says_where() {
         found[1].message
     );
 
+    // A file that is not text is not renamed, and the check says so when
+    // it holds the old name.
+    let found = violations("assets/data.bin", b"\0\x01Cortex\0");
+    assert_eq!(found.len(), 1);
+    assert!(
+        found[0].message.contains("not UTF-8 text"),
+        "{}",
+        found[0].message
+    );
+
     let found = violations("crates/cortex-x/src/lib.rs", b"fn x() {}\n");
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].line, None);
@@ -365,7 +375,7 @@ fn the_check_finds_a_planted_old_name_and_says_where() {
         .is_empty()
     );
     // An image's bytes are not text.
-    assert!(violations("assets/logo.png", b"\x89PNG\0\0cortex\0CX.EXE").is_empty());
+    assert!(violations("assets/logo.png", b"\x89PNG\0\0\0CX.EXE").is_empty());
 }
 
 #[test]
@@ -565,7 +575,7 @@ fn the_pieces_of_a_branch_rewrite_read_and_write_gits_formats() {
 /// names leave it.
 #[test]
 fn sys_a_rust_file_is_formatted_again_only_when_it_was_formatted() {
-    let formatter = Formatter::at(&crate::workspace::root());
+    let formatter = Formatter::at(&crate::workspace::root()).unwrap();
     let formatted = "use clap_like::y;\nuse cortex_base::x;\n\nfn f() {\n    \
                      let some_long_variable_name = \
                      cortex_protocol::some_function_name(argument_one, argument_two_x);\n}\n";
@@ -613,9 +623,9 @@ fn git(dir: &Path, arguments: &[&str]) -> String {
         .env("GIT_AUTHOR_NAME", "Cortex-Harness")
         .env("GIT_AUTHOR_EMAIL", "dev@cortex-harness.invalid")
         .env("GIT_AUTHOR_DATE", "1700000000 +0100")
-        .env("GIT_COMMITTER_NAME", "Cortex-Harness")
-        .env("GIT_COMMITTER_EMAIL", "dev@cortex-harness.invalid")
-        .env("GIT_COMMITTER_DATE", "1700000000 +0100")
+        .env("GIT_COMMITTER_NAME", "Cortex Test")
+        .env("GIT_COMMITTER_EMAIL", "test@cortex-harness.invalid")
+        .env("GIT_COMMITTER_DATE", "1700000600 +0000")
         .output()
         .unwrap();
     assert!(
@@ -723,12 +733,15 @@ fn sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main() {
             &repo,
             &[
                 "log",
-                "--format=%an <%ae>|%cn <%ce>|%s",
+                "--date=raw",
+                "--format=%an <%ae> %ad|%cn <%ce> %cd|%s",
                 &format!("{}..{}", first.base, first.tip)
             ]
         ),
-        "Cineris <dev@cineris.invalid>|Cineris <dev@cineris.invalid>|Add a file to cineris-a\n\
-         Cineris <dev@cineris.invalid>|Cineris <dev@cineris.invalid>|Change cineris-a's notes"
+        "Cineris <dev@cineris.invalid> 1700000000 +0100|\
+         Cineris Test <test@cineris.invalid> 1700000600 +0000|Add a file to cineris-a\n\
+         Cineris <dev@cineris.invalid> 1700000000 +0100|\
+         Cineris Test <test@cineris.invalid> 1700000600 +0000|Change cineris-a's notes"
     );
     assert_eq!(
         git(
@@ -751,10 +764,39 @@ fn sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main() {
         "refs/heads/main\nrefs/heads/step"
     );
 
-    git(
-        &repo,
-        &["update-ref", "refs/heads/step-renamed", &first.tip],
+    // The command: it names the new branch, finds it there on a second
+    // run, and replaces one that holds other commits only with --force,
+    // and never while a worktree is rebasing it.
+    let options = |force: bool| branch::Options {
+        base: base.clone(),
+        tip: "step".to_owned(),
+        to: "step-renamed".to_owned(),
+        force,
+    };
+    let said = branch::run_in(&at, &options(false), &Formatter::none()).unwrap();
+    assert!(
+        said.contains(&format!(
+            "git rebase --onto origin/main {} step-renamed",
+            first.base
+        )),
+        "{said}"
     );
+    assert_eq!(git(&repo, &["rev-parse", "step-renamed"]), first.tip);
+    let said = branch::run_in(&at, &options(false), &Formatter::none()).unwrap();
+    assert!(said.contains("already holds these commits"), "{said}");
+    git(&repo, &["update-ref", "refs/heads/step-renamed", &base]);
+    let refused = branch::run_in(&at, &options(false), &Formatter::none()).unwrap_err();
+    assert!(refused.contains("--force replaces it"), "{refused}");
+    assert_eq!(git(&repo, &["rev-parse", "step-renamed"]), base);
+    let rebasing = repo.join(".git").join("rebase-merge");
+    std::fs::create_dir_all(&rebasing).unwrap();
+    std::fs::write(rebasing.join("head-name"), "refs/heads/step-renamed\n").unwrap();
+    let refused = branch::run_in(&at, &options(true), &Formatter::none()).unwrap_err();
+    assert!(refused.contains("being rebased"), "{refused}");
+    assert_eq!(git(&repo, &["rev-parse", "step-renamed"]), base);
+    std::fs::remove_dir_all(&rebasing).unwrap();
+    branch::run_in(&at, &options(true), &Formatter::none()).unwrap();
+    assert_eq!(git(&repo, &["rev-parse", "step-renamed"]), first.tip);
     git(
         &repo,
         &[
@@ -832,13 +874,56 @@ fn the_repo_rules_find_a_planted_old_name() {
     let rules = crate::rules::file_rules;
     let found = rules(
         "docs/page.md",
-        b"# Cineris\n\nSet CORTEX_LOG, then run `cx --version`.\n",
+        b"# Cineris\n\nSet CORTEX_LOG.\nThen run `cx --version`.\n",
     );
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert_eq!(found[0].line, Some(3));
+    let lines: Vec<Option<usize>> = found.iter().map(|violation| violation.line).collect();
+    assert_eq!(lines, [Some(3), Some(4)], "{found:?}");
     assert_eq!(rules("crates/cortex-x/src/lib.rs", b"").len(), 1);
     assert!(rules("docs/page.md", b"# Cineris\n\nRun `cin --version`.\n").is_empty());
     let row = b"| **The name clash step 2 found.** Snowflake's CLI installs `cortex`. |\n";
     assert!(rules("docs/build-plan.md", row).is_empty());
     assert_eq!(rules("docs/other.md", row).len(), 1);
+}
+
+/// A symbolic link is refused, by `apply` and by `branch` alike: `apply`
+/// would read and write through it, and neither renames its target.
+#[cfg(unix)]
+#[test]
+fn sys_a_symbolic_link_is_refused_by_both() {
+    let scratch = Scratch::outside("xtask-rename", "links");
+    let repo = scratch.git_init("repo");
+    write(&repo, "notes.md", "cortex\n");
+    std::os::unix::fs::symlink("notes.md", repo.join("link.md")).unwrap();
+    git(&repo, &["add", "--all"]);
+    git(&repo, &["commit", "--quiet", "-m", "Start"]);
+    let base = git(&repo, &["rev-parse", "HEAD"]);
+    write(&repo, "more.md", "more\n");
+    git(&repo, &["add", "--all"]);
+    git(&repo, &["commit", "--quiet", "-m", "More"]);
+
+    let error = super::apply_tree(&repo, &Formatter::none()).err().unwrap();
+    assert!(error.contains("link.md is a symbolic link"), "{error}");
+    assert_eq!(
+        std::fs::read_to_string(repo.join("notes.md")).unwrap(),
+        "cortex\n"
+    );
+
+    let at = branch::Git::at(&repo);
+    let error = branch::rewrite(&at, &base, &at.commit("HEAD").unwrap(), &Formatter::none())
+        .err()
+        .unwrap();
+    assert!(error.contains("link.md in"), "{error}");
+    // It stopped fast-import as asked: no crash report, no ref left behind.
+    let crashed = std::fs::read_dir(repo.join(".git")).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .starts_with("fast_import_crash")
+    });
+    assert!(!crashed);
+    assert_eq!(
+        git(&repo, &["for-each-ref", "--format=%(refname)"]),
+        "refs/heads/main"
+    );
 }

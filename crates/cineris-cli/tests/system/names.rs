@@ -42,12 +42,12 @@ fn assert_same_under_both_names(machine: &Machine, args: &[&str], expected_code:
     assert_eq!(
         as_cx.stdout,
         swap(&as_cineris.stdout),
-        "standard output of cx {args:?}"
+        "standard output of cin {args:?}"
     );
     assert_eq!(
         as_cx.stderr,
         swap(&as_cineris.stderr),
-        "standard error of cx {args:?}"
+        "standard error of cin {args:?}"
     );
 }
 

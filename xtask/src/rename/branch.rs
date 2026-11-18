@@ -33,19 +33,27 @@ use crate::Result;
 /// `cargo xtask rename branch …`
 pub(super) fn run(root: &Path, arguments: &[&str]) -> Result<()> {
     let options = Options::parse(arguments)?;
-    let git = Git::at(root);
+    let formatter = Formatter::at(root)?;
+    let report = run_in(&Git::at(root), &options, &formatter)?;
+    println!("{report}");
+    Ok(())
+}
+
+/// The rewrite of `options`' range in the repository `git` works in, and the
+/// branch it names set; returns what to print.
+pub(super) fn run_in(git: &Git, options: &Options, formatter: &Formatter) -> Result<String> {
     let base = git.commit(&options.base)?;
     let tip = git.commit(&options.tip)?;
-    let rewritten = rewrite(&git, &base, &tip, &Formatter::at(root))?;
+    let rewritten = rewrite(git, &base, &tip, formatter)?;
     let target = format!("refs/heads/{}", options.to);
     let short = |id: &str| id.chars().take(12).collect::<String>();
     match git.optional(&["rev-parse", "--verify", "--quiet", &target])? {
         Some(existing) if existing == rewritten.tip => {
-            println!(
+            return Ok(format!(
                 "{} already holds these commits ({}): nothing to change.",
                 options.to,
                 short(&rewritten.tip)
-            );
+            ));
         }
         Some(existing) => {
             if !options.force {
@@ -56,14 +64,14 @@ pub(super) fn run(root: &Path, arguments: &[&str]) -> Result<()> {
                     short(&existing)
                 ));
             }
-            git.refuse_checked_out(&target)?;
+            git.refuse_in_use(&target)?;
             git.run(&["update-ref", &target, &rewritten.tip, &existing])?;
         }
         None => {
             git.run(&["update-ref", &target, &rewritten.tip, ""])?;
         }
     }
-    println!(
+    Ok(format!(
         "Rewrote {} commit(s) of {}..{}: {} is at {}, on {} ({} renamed).\n\
          To bring it onto the renamed main:\n\n  \
          git rebase --onto origin/main {} {}\n\n\
@@ -77,8 +85,7 @@ pub(super) fn run(root: &Path, arguments: &[&str]) -> Result<()> {
         options.base,
         rewritten.base,
         options.to,
-    );
-    Ok(())
+    ))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -250,9 +257,20 @@ pub(super) fn rewrite(
         }
         stream
             .write_all(b"done\n")
-            .map_err(|error| format!("could not write to fast-import: {error}"))?;
+            .map_err(|error| format!("{WRITE_FAILED}: {error}"))?;
         Ok(made)
     })();
+    // A reason of the tool's own to stop (a link, a merge) comes between two
+    // commands of the stream: end it there, so that fast-import stops as
+    // asked and leaves no crash report, and say that reason.
+    let own_stop = written
+        .as_ref()
+        .err()
+        .filter(|error| !error.starts_with(WRITE_FAILED))
+        .cloned();
+    if own_stop.is_some() {
+        let _ = stream.write_all(b"done\n");
+    }
     drop(stream);
     let output = import
         .wait_with_output()
@@ -260,13 +278,18 @@ pub(super) fn rewrite(
     let _ = git.run(&["update-ref", "-d", &temporary]);
     let marks_text = std::fs::read_to_string(&marks).unwrap_or_default();
     let _ = std::fs::remove_file(&marks);
-    let made = written?;
+    if let Some(error) = own_stop {
+        return Err(error);
+    }
+    // fast-import's own word first: a write that failed because it stopped
+    // says only that the pipe closed.
     if !output.status.success() {
         return Err(format!(
             "fast-import failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
+    let made = written?;
     let ids: HashMap<u32, &str> = marks_text
         .lines()
         .filter_map(|line| {
@@ -285,6 +308,10 @@ pub(super) fn rewrite(
         commits: commits.len(),
     })
 }
+
+/// How a failed write to fast-import begins: it stopped, and its own
+/// message says why.
+const WRITE_FAILED: &str = "could not write to fast-import";
 
 /// One entry of a tree as fast-import is given it: its mode, the blob (an
 /// object's id or a mark) and its renamed path.
@@ -329,29 +356,25 @@ impl Writer {
                 wanted.push(key);
             }
         }
+        if let Some(link) = entries.iter().find(|entry| entry.mode == "120000") {
+            return Err(format!(
+                "{} in {commit} is a symbolic link: the rename does not rename links, \
+                 as `apply` does not",
+                link.path
+            ));
+        }
         let mut read = Vec::with_capacity(wanted.len());
         for (id, path) in wanted {
             let (bytes, kind) = reader.get(&id)?;
             if kind != "blob" {
                 return Err(format!("{id} at {path} is a {kind}, not a blob"));
             }
-            let link = entries
-                .iter()
-                .any(|entry| entry.path == path && entry.mode == "120000");
-            read.push((id, path, bytes, link));
+            read.push((id, path, bytes));
         }
-        let renamed = in_parallel(&read, |(_, path, bytes, link)| {
-            if *link {
-                // A link's blob is the path it leads to.
-                std::str::from_utf8(bytes).ok().and_then(|target| {
-                    let renamed = rename_path(target);
-                    (renamed != target).then(|| renamed.into_owned().into_bytes())
-                })
-            } else {
-                transform(path, bytes, formatter).contents
-            }
+        let renamed = in_parallel(&read, |(_, path, bytes)| {
+            transform(path, bytes, formatter).contents
         });
-        for ((id, path, _, _), contents) in read.into_iter().zip(renamed) {
+        for ((id, path, _), contents) in read.into_iter().zip(renamed) {
             let data = match contents {
                 Some(contents) => {
                     let mark = self.next_mark;
@@ -362,7 +385,7 @@ impl Writer {
                     blob.push(b'\n');
                     stream
                         .write_all(&blob)
-                        .map_err(|error| format!("could not write to fast-import: {error}"))?;
+                        .map_err(|error| format!("{WRITE_FAILED}: {error}"))?;
                     format!(":{mark}")
                 }
                 None => id.clone(),
@@ -420,7 +443,7 @@ impl Writer {
         text.push('\n');
         stream
             .write_all(text.as_bytes())
-            .map_err(|error| format!("could not write to fast-import: {error}"))?;
+            .map_err(|error| format!("{WRITE_FAILED}: {error}"))?;
         Ok(mark)
     }
 }
@@ -607,19 +630,20 @@ impl Git {
         .ok_or_else(|| format!("{name} is not a commit"))
     }
 
-    /// Fails when a worktree has `reference` checked out: moving it would
-    /// leave that worktree's files out of step with its branch.
-    fn refuse_checked_out(&self, reference: &str) -> Result<()> {
-        let list = self.run(&["worktree", "list", "--porcelain"])?;
-        if list
-            .lines()
-            .any(|line| line.strip_prefix("branch ") == Some(reference))
-        {
-            return Err(format!(
-                "{reference} is checked out in a worktree: it is not replaced"
-            ));
+    /// Fails when a worktree uses `reference`: has it checked out, or is in
+    /// the middle of rebasing or bisecting it (its `HEAD` is detached then,
+    /// and `git worktree list` names no branch). Moving it would leave that
+    /// worktree out of step with its branch.
+    fn refuse_in_use(&self, reference: &str) -> Result<()> {
+        let common = PathBuf::from(self.run(&[
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-common-dir",
+        ])?);
+        match crate::branch::used_elsewhere(&common, reference, None) {
+            Some(refusal) => Err(format!("{refusal}; --force does not replace it")),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     fn spawn(&self, arguments: &[&str], stdout: Stdio) -> Result<Child> {
