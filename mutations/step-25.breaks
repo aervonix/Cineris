@@ -1273,3 +1273,12 @@ find: self.rewind_question_closed();
 replace: let _ = &dialog;
 caught-by:
     cineris-tui app::tests::rewind::a_turn_ending_under_the_question_closes_it_and_rewinds_nothing
+
+[break] the-viewer-reveals-by-the-round
+rule: The viewer brings the selected stop into view by its place among the stops, not among the rounds.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::viewer_frame
+find: state.selected.and_then(|stop| self.kept.stop_block(stop))
+replace: state.selected.and_then(|stop| self.kept.round_block(stop))
+caught-by:
+    cineris-tui app::tests::screen::the_viewer_reveals_the_selected_stop_after_a_reasoning_and_a_compaction

@@ -376,9 +376,7 @@ impl App {
             self.viewer_search(&mut state, width);
         }
         if std::mem::take(&mut state.reveal)
-            && let Some(block) = state
-                .selected
-                .and_then(|round| self.kept.round_block(round))
+            && let Some(block) = state.selected.and_then(|stop| self.kept.stop_block(stop))
         {
             let rows = block_rows(self, &state, block, width);
             let start = usize::from(self.kept.get(block).is_some_and(|kept| kept.gap));
