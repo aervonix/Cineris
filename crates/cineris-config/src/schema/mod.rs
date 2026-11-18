@@ -31,7 +31,7 @@
 //! | `[reserved <trust>]` | A section whose keys the step that builds it will declare. Anything in it is accepted, unread. |
 
 mod json;
-mod redact;
+pub(crate) mod redact;
 mod reference;
 mod sections;
 mod types;
