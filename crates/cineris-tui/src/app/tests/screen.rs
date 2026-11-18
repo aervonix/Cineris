@@ -845,6 +845,49 @@ fn the_viewer_shows_a_reasoning_and_a_compactions_summary_whole() {
     assert!(!app.viewing());
 }
 
+/// The viewer brings the selected stop into view by its place among the
+/// stops, not among the rounds (found reviewing step 25's rewind part):
+/// opened on a long transcript that starts with a reasoning and a
+/// compaction, it shows the last round; moved up to the reasoning, it shows
+/// the reasoning.
+#[test]
+fn the_viewer_reveals_the_selected_stop_after_a_reasoning_and_a_compaction() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 20, now);
+    reasoned_and_compacted(&mut app, &link, now);
+    for n in 2..=4 {
+        for step in turn(n, &format!("Turn {n}."), ANSWER, OUTPUT) {
+            for inbound in step {
+                link.give(inbound);
+            }
+            drain(&mut app, now);
+            let _ = app.frame(now);
+        }
+    }
+    // The reasoning's own row, not the keys row's word for it.
+    let shows_reasoning = |rows: &[String]| {
+        rows[..rows.len() - 1]
+            .iter()
+            .any(|row| row.contains("∴ Reasoned for"))
+    };
+    key(&mut app, "ctrl+o", now);
+    let rows = text(&app.viewer_frame(20, 99, now));
+    assert!(
+        !shows_reasoning(&rows),
+        "opened away from the last round: {rows:#?}"
+    );
+    for _ in 0..4 {
+        key(&mut app, "up", now);
+        let _ = app.viewer_frame(20, 99, now);
+    }
+    let rows = text(&app.viewer_frame(20, 99, now));
+    assert!(rows[19].trim_end().ends_with("reasoning"), "{rows:#?}");
+    assert!(
+        shows_reasoning(&rows),
+        "the reasoning selected out of view: {rows:#?}"
+    );
+}
+
 /// The approvals' answers sent so far.
 fn approvals(link: &Scripted) -> usize {
     std::mem::take(&mut link.script().answers).len()
