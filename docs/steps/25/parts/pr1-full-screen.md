@@ -86,3 +86,19 @@ A reviewer that had not seen the building read the whole diff (`24305e3d..8e6a45
 | 15 | Low. The search worker: its copy of the transcript, the first build on the interface's thread, an unbounded query, a worker that cannot start. | The query holds 256 characters, and a worker that cannot start says `the search could not start` (`the_query_is_bounded_and_the_more_below_row_follows_the_glyphs`); the rest is [the-search-worker-keeps-a-copy-of-the-transcript](../../../outstanding/the-search-worker-keeps-a-copy-of-the-transcript.md). |
 | 16 | Low. Smaller points. | The more-below row uses the glyph set's separator (same test). The column is kept with no panel open, so the transcript is not laid out again as panels come and go, and 09-tui says so, with the 97 columns at 140. No scrolling key under a dialog, and a view in the live rows that moves, are [the-full-screen-under-a-dialog](../../../outstanding/the-full-screen-under-a-dialog.md) and [a-view-in-the-live-rows-moves](../../../outstanding/a-view-in-the-live-rows-moves.md). |
 | 17 | Low. Docs: `draw_screen` still public, 16 KiB in 09-tui, a doc comment over the wrong function, a stale test comment. | `Terminal::draw_screen` and its test are removed (an API change, listed below); 09-tui says 64 KiB; the comments are right. |
+
+### The second review, of the fixes
+
+A second reviewer, not anchored on either, read the fixes' diff (`8e6a45e3..92b95899`), read only. What it found and what was done; each fix with a test that fails without it and a break, under "What the second review of the first pull request's fixes found" in `mutations/step-25.breaks`.
+
+| # | Found | Done |
+|---|---|---|
+| 1 | The new Windows mouse test read the wheel up at the wrong place: it would have failed on Windows, where alone it is built. | It checks every report's kind, in order. |
+| 2 | Under a dialog, a key the dialog passed while the search was open went to the hidden editor, whose `Enter` would send what it held; a paste went into the search's query and its answer moved the window off the end the request had followed. | A passed key goes to the search, never the editor; under a dialog the search does not move the window. `app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog` (now with `Enter`, the query and the editor checked), `app::tests::screen::the_search_does_not_move_the_window_under_a_dialog`. |
+| 3 | The suspended way out never suspended: `Ctrl+Z` is the editor's undo, and `global.suspend` has no default key. | The test binds a key to it, and the played terminal marks the stop: on, off with the mouse first, the stop, on again. |
+| 4 | The system test's click could read the box's row from a frame before every `PageUp` was taken (ConPTY gives each its own record). | It waits for the top: the header card's model row as the window's fourth. |
+| 5 | The deadline's test checks the arithmetic, not the waits; a remainder of exactly `u32::MAX` ms was "no end". | Capped below "no end". Moving `millis_left` out of either loop would bring the restarted timeout back and fail no test: neither wait can be run in a unit test (they read the real terminal), so that is held by review, as it is said here. |
+| 6 | The viewer's half of the mouse rule (a gesture that closes the viewer restarts a dialog's grace) had no test. | `app::tests::dialogs::a_gesture_that_closes_the_viewer_restarts_the_dialogs_grace`. |
+| 7 | Three open items misstated the code. | Corrected: `the-full-screen-under-a-dialog` (`Ctrl+O` shows the request alone; keys before readiness hold the dialog), `a-view-in-the-live-rows-moves` (the top is clamped, not moved by the kept rows), `a-full-screen-frame-copies-the-open-answer` (which run each figure is from). |
+
+It found the writing lock (no deadlock), the deadline waits (interrupted calls, wakes, zero and no timeout, overflow) and the other fixes as the first table says.

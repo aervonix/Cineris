@@ -487,3 +487,53 @@ find: self.look.glyphs.separator
 replace: "·"
 caught-by:
     cortex-tui app::tests::screen::the_query_is_bounded_and_the_more_below_row_follows_the_glyphs
+
+# What the second review of the first pull request's fixes found.
+
+[break] a-key-under-a-dialog-reaches-the-hidden-editor
+rule: A key a dialog passes while the full screen's search is open goes to the search, never the hidden editor, whose Enter would send.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find: Keyed::Pass if self.screen_searching() =>
+replace: Keyed::Pass if false =>
+caught-by:
+    cortex-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
+
+[break] the-search-moves-the-window-under-a-dialog
+rule: Under a dialog the search's answer does not move the window off the end the request followed.
+file: crates/cortex-tui/src/app/state/screen.rs
+in: App::reveal_match
+find: if !self.dialogs.is_empty() {
+replace: if false {
+caught-by:
+    cortex-tui app::tests::screen::the_search_does_not_move_the_window_under_a_dialog
+
+[break] a-gesture-that-closes-the-viewer-leaves-the-dialog-ready
+rule: A gesture that closes the viewer restarts a waiting dialog's grace, as its key does.
+file: crates/cortex-tui/src/app/state.rs
+in: App::terminal
+find:
+    if self.viewer.is_none() {
+        self.panels.restart();
+        if let Some(dialog) = self.dialogs.front_mut() {
+            dialog.hide();
+        }
+    }
+replace:
+    if self.viewer.is_none() {
+        self.panels.restart();
+    }
+caught-by:
+    cortex-tui app::tests::dialogs::a_gesture_that_closes_the_viewer_restarts_the_dialogs_grace
+
+[break] the-suspension-leaves-the-alternate-screen-on
+rule: Suspended from the full screen, the program turns the mouse and the alternate screen off before it stops.
+file: crates/cortex-tui/src/app.rs
+in: take
+find:
+    terminal.alternate(false)?;
+    let caps = *terminal.caps();
+replace:
+    let caps = *terminal.caps();
+caught-by:
+    cortex-tui app::tests::screen::every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off

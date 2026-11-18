@@ -824,6 +824,47 @@ fn the_wheel_does_not_hide_a_dialogs_answers() {
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
+/// A gesture bound to closing the viewer closes it as its key does: a
+/// dialog waiting under the viewer starts its grace again, and its answers
+/// are not drawn the moment the viewer is gone (the second review of step
+/// 25).
+#[test]
+fn a_gesture_that_closes_the_viewer_restarts_the_dialogs_grace() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    let wheel = vec!["wheel_down".to_owned()];
+    let (keymap, errors) = crate::keys::KeyMap::with_table([("viewer.close", wheel.as_slice())]);
+    assert!(errors.is_empty(), "{errors:?}");
+    // A new map hides the dialog: its first frame again.
+    app.set_keymap(keymap);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let ready = wake(&mut app).expect("the answers' frame");
+    assert!(answers_shown(&mut app, ready));
+    press(&mut app, "ctrl+o", ready + Duration::from_millis(100));
+    assert!(app.viewing(), "the request shown whole");
+    let closed = ready + Duration::from_millis(600);
+    app.terminal(
+        &TermEvent::Mouse(cortex_term::Mouse {
+            kind: cortex_term::MouseKind::Wheel(cortex_term::Wheel::Down),
+            col: 5,
+            row: 5,
+            mods: cortex_term::Mods::NONE,
+        }),
+        closed,
+    );
+    assert!(!app.viewing(), "the gesture closed the viewer");
+    assert!(
+        !answers_shown(&mut app, closed),
+        "the answers drawn the moment the viewer closed"
+    );
+    app.drawn(closed);
+    let again = wake(&mut app).expect("the answers again");
+    assert!(again >= closed + GRACE);
+    assert!(answers_shown(&mut app, again));
+    assert!(answers(&link).is_empty());
+}
+
 /// Two approvals at once; `y` answers the first and is held a little long:
 /// its repeats never answer the second, which was not seen yet.
 #[test]
