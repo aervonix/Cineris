@@ -1234,6 +1234,37 @@ mod tests {
         );
     }
 
+    /// The quirks' settings of `[terminal]` reach the terminal layer's
+    /// overrides: `backspace` as whether byte 0x08 is Backspace (`auto`
+    /// left to the terminal's erase character), and `bracketed_paste`,
+    /// `paste_wait` and `clipboard` as they are (step 25; the review of its
+    /// second pull request).
+    #[test]
+    fn the_terminals_quirks_reach_the_overrides() {
+        let defaults = overrides(&TerminalSettings::default());
+        assert_eq!(defaults.backspace_ctrl_h, None);
+        assert_eq!(defaults.bracketed_paste, None);
+        assert_eq!(defaults.paste_wait, Some(Duration::from_secs(2)));
+        assert_eq!(defaults.clipboard, None);
+        for (backspace, ctrl_h, told) in [
+            (BackspaceChoice::Del, Some(false), false),
+            (BackspaceChoice::CtrlH, Some(true), true),
+        ] {
+            let settings = TerminalSettings {
+                backspace,
+                bracketed_paste: Some(told),
+                paste_wait: Duration::from_millis(500),
+                clipboard: Some(told),
+                ..TerminalSettings::default()
+            };
+            let overrides = overrides(&settings);
+            assert_eq!(overrides.backspace_ctrl_h, ctrl_h);
+            assert_eq!(overrides.bracketed_paste, Some(told));
+            assert_eq!(overrides.paste_wait, Some(Duration::from_millis(500)));
+            assert_eq!(overrides.clipboard, Some(told));
+        }
+    }
+
     /// The interface's settings take the mouse from `[terminal]`, on unless
     /// set off, and the presenter from `[tui]`: both interfaces build theirs
     /// with `app_settings` (step 25).

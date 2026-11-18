@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 
 use crate::caps::{Capabilities, Overrides, Platform};
 use crate::inline::Sink;
-use crate::input::{Decoder, Event, Key, KeyCode, Reply};
+use crate::input::{Decoder, Event, KeyCode, Mods, Reply};
 use crate::sys::{self, Ready};
 
 /// How long a lone ESC waits for the rest of a sequence before it is taken
@@ -57,43 +57,128 @@ use crate::sys::{self, Ready};
 pub const ESCAPE_WAIT: Duration = Duration::from_millis(50);
 
 /// The keys of one read that are taken for a paste, where pastes are not
-/// known to come bracketed (since step 25): at least this many with an
-/// `Enter` among them that is not the last. Typing puts no more than a few
+/// known to come bracketed (since step 25): at least this many with a line
+/// break among them that is not the last. Typing puts no more than a few
 /// keys in one read, and never a line break in the middle of them.
 pub(crate) const BURST: usize = 8;
 
-/// Or more than this many, with no line break: a long line pasted.
+/// Or more than this many with no line break at all: a long line pasted,
+/// whose rest may come in the next read. A read whose only line break is
+/// its last key is keys however long it is: a line typed through a stall,
+/// or sent by a program (`tmux send-keys`), and ended by `Enter` (the
+/// review of step 25's second pull request).
 pub(crate) const LONG_BURST: usize = 64;
 
-/// After a burst taken for a paste, keys that come within this are its rest:
-/// a paste's last read may hold a few keys and its `Enter`.
+/// After a burst taken for a paste, keys that come within this much time
+/// spent waiting for input are its rest: a paste's last read may hold a few
+/// keys and its line break. Only the time the reader waited counts, not
+/// the time between one read's handling and the next's: a frame drawn
+/// between two reads of one paste does not cut its tail short (the review
+/// of step 25's second pull request).
 pub(crate) const PASTE_TAIL: Duration = Duration::from_millis(50);
 
 /// The end of a bracketed paste.
 const PASTE_END: &[u8] = b"\x1b[201~";
 
-/// The text of `found`, when every event of it is a key that types (text
-/// with at most `Shift`, `Enter` or `Tab`): what a paste of it would be.
-fn paste_text(found: &[Event]) -> Option<String> {
-    if found.is_empty() {
-        return None;
+/// What one event of a read is to a paste of the read (since step 25).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Part {
+    /// A key that types this character: text with at most `Shift`, `Tab`,
+    /// or `Enter`, a line break (`\n`).
+    Types(char),
+    /// `Ctrl+J`, which a line feed (byte 0x0a) reads as: a line break, or
+    /// with the `Enter` just before it one line break (`\r\n`).
+    LineFeed,
+    /// Not a key: a focus report, a reply, the mouse. Passed on beside the
+    /// paste, it does not make the keys keys (the review of step 25's second
+    /// pull request).
+    Beside,
+    /// A key no paste holds (one with `Ctrl` or `Alt`, a sequence's, a
+    /// repeat), or a paste of its own: the read is keys.
+    Keys,
+}
+
+fn part(event: &Event) -> Part {
+    match event {
+        Event::Key(key) => {
+            let plain = !key.mods.contains(Mods::CTRL)
+                && !key.mods.contains(Mods::ALT)
+                && !key.mods.contains(Mods::SUPER);
+            match key.code {
+                KeyCode::Char(c) if plain => Part::Types(c),
+                KeyCode::Enter if plain => Part::Types('\n'),
+                KeyCode::Tab if key.mods.is_empty() => Part::Types('\t'),
+                KeyCode::Char('j') if key.mods == Mods::CTRL => Part::LineFeed,
+                _ => Part::Keys,
+            }
+        }
+        Event::Focus(_) | Event::Reply(_) | Event::Mouse(_) => Part::Beside,
+        Event::Repeat(_) | Event::Paste(_) | Event::Resize { .. } | Event::Resumed => Part::Keys,
     }
-    let mut text = String::new();
+}
+
+/// What the keys of one read type, as a paste of them would hold it.
+#[derive(Debug, Default)]
+struct Typed {
+    /// The text, each line break `\n`.
+    text: String,
+    /// How many characters it holds: none when the read had no key.
+    keys: usize,
+}
+
+impl Typed {
+    /// Whether a line break has more text after it.
+    fn break_inside(&self) -> bool {
+        self.text
+            .char_indices()
+            .any(|(at, c)| c == '\n' && at + 1 < self.text.len())
+    }
+
+    /// Whether it holds a line break.
+    fn breaks(&self) -> bool {
+        self.text.contains('\n')
+    }
+}
+
+/// What the keys of `found` type, when every key of it types (what is
+/// beside them, a focus report or a reply, does not count): what a paste of
+/// it would hold. `Enter` then `Ctrl+J` is one line break. `None` when a
+/// key no paste holds is among them.
+fn typed(found: &[Event]) -> Option<Typed> {
+    let mut typed = Typed::default();
+    let mut after_enter = false;
     for event in found {
-        let Event::Key(key) = event else {
-            return None;
-        };
-        let plain = !key.mods.contains(crate::Mods::CTRL)
-            && !key.mods.contains(crate::Mods::ALT)
-            && !key.mods.contains(crate::Mods::SUPER);
-        match key.code {
-            KeyCode::Char(c) if plain => text.push(c),
-            KeyCode::Enter if plain => text.push('\n'),
-            KeyCode::Tab if plain && key.mods.is_empty() => text.push('\t'),
-            _ => return None,
+        match part(event) {
+            Part::Types(c) => {
+                typed.text.push(c);
+                typed.keys += 1;
+                after_enter = c == '\n';
+            }
+            Part::LineFeed if after_enter => after_enter = false,
+            Part::LineFeed => {
+                typed.text.push('\n');
+                typed.keys += 1;
+            }
+            Part::Beside => {}
+            Part::Keys => return None,
         }
     }
-    Some(text)
+    Some(typed)
+}
+
+/// `found` with its keys made one paste of `text`, where its first key
+/// was; what is beside them is kept, in its order.
+fn as_paste(found: Vec<Event>, text: String) -> Vec<Event> {
+    let mut text = Some(text);
+    let mut events = Vec::new();
+    for event in found {
+        if part(&event) == Part::Beside {
+            events.push(event);
+        } else if let Some(text) = text.take() {
+            events.push(Event::Paste(text));
+        }
+    }
+    events
 }
 
 /// The start sequence for `caps`: [`START`], without bracketed paste where
@@ -350,9 +435,10 @@ pub struct Terminal<D: Device = System> {
     /// How long a paste or a sequence may go with no input before it is
     /// given up on: [`OPEN_WAIT`], or `terminal.paste_wait`.
     open_wait: Duration,
-    /// Until when keys that come are the rest of a paste taken from a
-    /// burst of keys (since step 25).
-    paste_tail: Option<Instant>,
+    /// After a paste taken from a burst of keys, how long the reader has
+    /// waited for input since: keys that come within [`PASTE_TAIL`] of
+    /// waiting are its rest (since step 25).
+    paste_tail: Option<Duration>,
     /// A bracketed paste was given up on: when its tail last had input.
     /// What follows of it, to its end marker, is still the paste's (since
     /// step 25).
@@ -676,7 +762,14 @@ impl<D: Device> Terminal<D> {
                 (None, timeout) => timeout,
             };
             self.bytes.clear();
-            match self.device.wait(wait, &mut self.bytes)? {
+            let before = self.device.now();
+            let ready = self.device.wait(wait, &mut self.bytes)?;
+            // A paste's tail counts the time spent waiting for input, and
+            // only that (the review of step 25's second pull request).
+            if let Some(waited) = self.paste_tail.as_mut() {
+                *waited += self.device.now().saturating_duration_since(before);
+            }
+            match ready {
                 Ready::Input => {
                     self.decoder.feed(&self.bytes, &mut found);
                     found = self.pastes(found);
@@ -712,20 +805,27 @@ impl<D: Device> Terminal<D> {
     /// its end marker; and, where pastes are not known to come bracketed,
     /// a burst of keys no one types.
     fn pastes(&mut self, found: Vec<Event>) -> Vec<Event> {
-        let now = self.device.now();
         let ended = self
             .bytes
             .windows(PASTE_END.len())
             .any(|window| window == PASTE_END);
-        let text = paste_text(&found);
+        let typed = typed(&found);
         if let Some(since) = self.stalled {
+            let now = self.device.now();
             let tail = now.saturating_duration_since(since) <= self.open_wait;
-            match &text {
+            match &typed {
+                // Nothing typed (a focus report, a reply): the tail goes
+                // on, unless the end marker came.
+                Some(typed) if typed.keys == 0 => {
+                    if ended {
+                        self.stalled = None;
+                    }
+                }
                 // A lone key after the give-up is a key: a person's.
-                Some(_) if found.len() == 1 && !ended => self.stalled = None,
-                Some(text) if tail => {
+                Some(typed) if typed.keys == 1 && !ended => self.stalled = None,
+                Some(typed) if tail => {
                     self.stalled = (!ended).then_some(now);
-                    return vec![Event::Paste(text.clone())];
+                    return as_paste(found, typed.text.clone());
                 }
                 // The end marker alone ends it; anything else does too.
                 _ => self.stalled = None,
@@ -734,23 +834,20 @@ impl<D: Device> Terminal<D> {
         if !self.caps.rates_pastes() {
             return found;
         }
-        let Some(text) = text else {
+        let Some(typed) = typed else {
             self.paste_tail = None;
             return found;
         };
-        let in_tail = self.paste_tail.is_some_and(|until| now <= until);
-        let enter_inside = found.iter().rev().skip(1).any(|event| {
-            matches!(
-                event,
-                Event::Key(Key {
-                    code: KeyCode::Enter,
-                    ..
-                })
-            )
-        });
-        if in_tail || (found.len() >= BURST && enter_inside) || found.len() > LONG_BURST {
-            self.paste_tail = Some(now + PASTE_TAIL);
-            return vec![Event::Paste(text)];
+        // Nothing typed: the tail is left as it is.
+        if typed.keys == 0 {
+            return found;
+        }
+        let in_tail = self.paste_tail.is_some_and(|waited| waited <= PASTE_TAIL);
+        let burst = typed.keys >= BURST && typed.break_inside();
+        let long = typed.keys > LONG_BURST && !typed.breaks();
+        if in_tail || burst || long {
+            self.paste_tail = Some(Duration::ZERO);
+            return as_paste(found, typed.text);
         }
         self.paste_tail = None;
         found
@@ -1028,6 +1125,18 @@ mod tests {
 
     fn caps() -> Capabilities {
         Capabilities::detect(|_| None, Platform::Unix, Overrides::default())
+    }
+
+    /// Capabilities that trust the terminal's brackets: no burst is weighed.
+    fn trusted() -> Capabilities {
+        Capabilities::detect(
+            |_| None,
+            Platform::Unix,
+            Overrides {
+                bracketed_paste: Some(true),
+                ..Overrides::default()
+            },
+        )
     }
 
     fn script(steps: &[(Ready, &[u8])]) -> Script {
@@ -1317,6 +1426,195 @@ mod tests {
         assert_eq!(
             terminal.next(None).unwrap(),
             Some(Event::Key(Key::plain(KeyCode::Enter)))
+        );
+    }
+
+    /// A paste's line breaks as each terminal sends them: `\r`, `\n` (read
+    /// as `Ctrl+J`), and `\r\n` (one line break), in a burst, in its tail,
+    /// and in the rest of a bracketed paste that stalled: none of them an
+    /// `Enter` that sends (the review of step 25's second pull request).
+    #[test]
+    fn line_feeds_and_crlf_are_a_pastes_line_breaks() {
+        for (first, rest) in [
+            (&b"first line\nsecond li"[..], &b"ne\n"[..]),
+            (b"first line\r\nsecond li", b"ne\r\n"),
+        ] {
+            let device = script(&[(Ready::Input, first), (Ready::Input, rest)]);
+            let mut terminal = Terminal::with_device(device, caps()).unwrap();
+            assert_eq!(
+                terminal.next(None).unwrap(),
+                Some(Event::Paste("first line\nsecond li".to_owned())),
+                "{first:?}"
+            );
+            assert_eq!(
+                terminal.next(None).unwrap(),
+                Some(Event::Paste("ne\n".to_owned())),
+                "{rest:?}"
+            );
+        }
+        // A stalled paste's rest, where bursts are not weighed.
+        let device = script(&[
+            (Ready::Input, b"\x1b[200~first part\r\n"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"second\r\npart\nend\x1b[201~"),
+        ]);
+        let mut terminal = Terminal::with_device(device, trusted()).unwrap();
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("first part\n".to_owned()))
+        );
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("second\npart\nend".to_owned()))
+        );
+    }
+
+    /// A focus report or a reply that comes in the same read as a burst's
+    /// keys is passed on beside the paste, and does not make the keys keys
+    /// (the review of step 25's second pull request).
+    #[test]
+    fn a_focus_report_inside_a_burst_is_passed_on_beside_the_paste() {
+        let device = script(&[(Ready::Input, b"first line\r\x1b[Isecond line")]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("first line\nsecond line".to_owned()))
+        );
+        assert_eq!(terminal.next(None).unwrap(), Some(Event::Focus(true)));
+    }
+
+    /// A line ended by `Enter` in one read is keys however long it is, and
+    /// its `Enter` sends: typing through a stall, or a program's
+    /// `send-keys`. Fewer than eight keys with a line break inside are keys
+    /// too. A long read with no line break at all is still taken for a
+    /// paste, whose rest the next read is (the review of step 25's second
+    /// pull request).
+    #[test]
+    fn a_long_line_ended_by_enter_is_keys_and_so_is_a_short_burst() {
+        let long = format!("{}\r", "x".repeat(100));
+        let unbroken = "y".repeat(100);
+        let device = script(&[
+            (Ready::Input, long.as_bytes()),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"ab\rcd"),
+            (Ready::Timeout, b""),
+            (Ready::Input, unbroken.as_bytes()),
+            (Ready::Input, b"z\r"),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        for _ in 0..100 {
+            assert_eq!(
+                terminal.next(None).unwrap(),
+                Some(Event::Key(Key::plain(KeyCode::Char('x'))))
+            );
+        }
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Enter)))
+        );
+        assert_eq!(
+            terminal.next(Some(Duration::from_millis(200))).unwrap(),
+            None
+        );
+        let short: Vec<_> = (0..5).map(|_| terminal.next(None).unwrap()).collect();
+        assert_eq!(
+            short[2],
+            Some(Event::Key(Key::plain(KeyCode::Enter))),
+            "{short:?}"
+        );
+        assert_eq!(
+            terminal.next(Some(Duration::from_millis(200))).unwrap(),
+            None
+        );
+        assert_eq!(terminal.next(None).unwrap(), Some(Event::Paste(unbroken)));
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("z\n".to_owned()))
+        );
+    }
+
+    /// A paste's tail counts the time the reader waited for input, not the
+    /// time between handling one read and the next: a frame drawn after a
+    /// burst, while the paste's rest waited, does not make the rest keys;
+    /// time waited with nothing does (the review of step 25's second pull
+    /// request).
+    #[test]
+    fn a_frame_drawn_between_a_pastes_reads_does_not_end_its_tail() {
+        let device = script(&[
+            (Ready::Input, b"first line\rsecond li"),
+            (Ready::Input, b"ne\r"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"x\r"),
+        ]);
+        let elapsed = Arc::clone(&device.elapsed);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("first line\nsecond li".to_owned()))
+        );
+        // A frame that took longer than the tail, the paste's rest waiting.
+        *elapsed.lock().unwrap() += PASTE_TAIL * 2;
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("ne\n".to_owned()))
+        );
+        // Longer than the tail waited with nothing: keys again.
+        assert_eq!(terminal.next(Some(PASTE_TAIL)).unwrap(), None);
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Char('x'))))
+        );
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Enter)))
+        );
+    }
+
+    /// After a bracketed paste is given up on, a lone key is a person's: an
+    /// `Enter` alone sends, and what follows is keys. And the rest that
+    /// comes after more than the wait with no input is not the paste's
+    /// (the review of step 25's second pull request).
+    #[test]
+    fn a_lone_key_after_a_give_up_and_a_late_rest_are_keys() {
+        let device = script(&[
+            (Ready::Input, b"\x1b[200~first"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"\r"),
+            (Ready::Input, b"second\rpart"),
+        ]);
+        let mut terminal = Terminal::with_device(device, trusted()).unwrap();
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("first".to_owned()))
+        );
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Enter)))
+        );
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Char('s'))))
+        );
+
+        let device = script(&[
+            (Ready::Input, b"\x1b[200~first"),
+            (Ready::Timeout, b""),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"second\rpart"),
+        ]);
+        let mut terminal = Terminal::with_device(device, trusted()).unwrap();
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Paste("first".to_owned()))
+        );
+        assert_eq!(
+            terminal.next(Some(OPEN_WAIT + STEP)).unwrap(),
+            None,
+            "past the wait with nothing"
+        );
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Char('s'))))
         );
     }
 

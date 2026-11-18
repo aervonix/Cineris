@@ -461,6 +461,13 @@ impl Decoder {
                 start += 1;
                 continue;
             }
+            // And after ESC, `Alt+Backspace`, which deletes a word (the
+            // review of step 25's second pull request).
+            if self.ctrl_h_backspace && self.buffer[start..].starts_with(b"\x1b\x08") {
+                events.push(Event::Key(Key::with(KeyCode::Backspace, Mods::ALT)));
+                start += 2;
+                continue;
+            }
             match step(&self.buffer[start..], flushing) {
                 Step::Done(used, event) => {
                     start += used;
@@ -1423,6 +1430,44 @@ mod tests {
                 decode(bytes.as_bytes()),
                 keys(&[(*code, *mods)]),
                 "{bytes:?}"
+            );
+        }
+    }
+
+    /// Where Backspace sends `^H` (step 25, `backspace-sent-as-ctrl-h`),
+    /// `ESC ^H` is `Alt+Backspace`, which deletes a word, as `ESC DEL` is
+    /// elsewhere; without the choice it stays `Ctrl+Alt+Backspace`. A win32
+    /// input record says which key it was, either way: the choice does not
+    /// touch one (the review of step 25's second pull request).
+    #[test]
+    fn with_ctrl_h_as_backspace_esc_ctrl_h_is_alt_backspace_and_records_are_untouched() {
+        let with = |on: bool, bytes: &[u8]| {
+            let mut decoder = Decoder::new();
+            decoder.set_ctrl_h_backspace(on);
+            let mut events = Vec::new();
+            decoder.feed(bytes, &mut events);
+            decoder.flush(&mut events);
+            events
+        };
+        assert_eq!(
+            with(true, b"\x1b\x08\x08"),
+            keys(&[(KeyCode::Backspace, Mods::ALT), (KeyCode::Backspace, N)])
+        );
+        assert_eq!(
+            with(false, b"\x1b\x08"),
+            keys(&[(KeyCode::Backspace, Mods::CTRL | Mods::ALT)])
+        );
+        for on in [true, false] {
+            let records = format!(
+                "{}{}{}",
+                record(0x08, 8, true, LEFT_CTRL),
+                record(0x08, 8, false, LEFT_CTRL),
+                record(0x08, 8, true, 0),
+            );
+            assert_eq!(
+                with(on, records.as_bytes()),
+                keys(&[(KeyCode::Backspace, Mods::CTRL), (KeyCode::Backspace, N)]),
+                "{on}"
             );
         }
     }
