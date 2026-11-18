@@ -15,7 +15,7 @@ use super::tui::{LIMIT, quit, shows_ever};
 use super::{MODEL, Machine};
 
 /// A key typed at the terminal, which no byte the binary writes may hold.
-const TYPED: &str = "sk-ant-typed-Qx7vR2firstrunZ9kL";
+const TYPED: &str = "Qx7vR2Zt9kLw4Mp8Hd3Jc6Ny5Bf";
 
 /// Whether `text` holds any eight characters of [`TYPED`] in a row.
 fn holds_any_of_the_key(text: &str) -> Option<String> {
@@ -135,6 +135,28 @@ fn sys_the_first_run_in_an_empty_home_reaches_a_working_session() {
     assert_eq!(machine.server.requests().len(), 1);
 
     quit(&mut session, &phases);
+    // No file the binary wrote but the store holds any of it: the log, the
+    // history, the session's files, the configuration.
+    let store = machine.dirs().credentials_file().unwrap();
+    let mut holding = Vec::new();
+    let mut folders = vec![machine.home.clone(), machine.workspace.clone()];
+    while let Some(folder) = folders.pop() {
+        for entry in std::fs::read_dir(&folder).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path != store
+                && let Ok(bytes) = std::fs::read(&path)
+                && let Some(piece) = holds_any_of_the_key(&String::from_utf8_lossy(&bytes))
+            {
+                holding.push((path, piece));
+            }
+        }
+    }
+    assert!(
+        holding.is_empty(),
+        "files that hold a piece of the key: {holding:?}"
+    );
 }
 
 /// `cineris auth login` at a terminal reads the key without echo: its row
