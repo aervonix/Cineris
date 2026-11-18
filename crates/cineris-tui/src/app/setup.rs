@@ -215,6 +215,10 @@ pub(crate) struct Worker {
     jobs: Sender<Job>,
     answers: Receiver<Answer>,
     waker: Arc<Mutex<Option<cineris_term::Waker>>>,
+    /// How many jobs were asked, and how many answers taken: the worker
+    /// owes the difference.
+    asked: std::sync::atomic::AtomicUsize,
+    taken: std::sync::atomic::AtomicUsize,
 }
 
 impl std::fmt::Debug for Worker {
@@ -263,6 +267,8 @@ impl Worker {
             jobs,
             answers,
             waker,
+            asked: std::sync::atomic::AtomicUsize::new(0),
+            taken: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -273,18 +279,41 @@ impl Worker {
 
     /// Hands `job` to the worker.
     pub(crate) fn ask(&self, job: Job) {
-        let _ = self.jobs.send(job);
+        if self.jobs.send(job).is_ok() {
+            self.asked
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     /// An answer that has come, if one has.
     pub(crate) fn answer(&self) -> Option<Answer> {
-        self.answers.try_recv().ok()
+        let answer = self.answers.try_recv().ok();
+        if answer.is_some() {
+            self.taken
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+        answer
     }
 
-    /// Waits at most `limit` for an answer: for tests, which have no loop
-    /// to wake.
+    /// Waits at most `limit` for an answer the worker owes: for tests,
+    /// which have no loop to wake. `None` when it owes none.
     #[cfg(any(test, feature = "test-kit"))]
     pub(crate) fn wait(&self, limit: std::time::Duration) -> Option<Answer> {
-        self.answers.recv_timeout(limit).ok()
+        use std::sync::atomic::Ordering::Relaxed;
+        if self.taken.load(Relaxed) >= self.asked.load(Relaxed) {
+            return None;
+        }
+        let answer = self.answers.recv_timeout(limit).ok();
+        if answer.is_some() {
+            self.taken.fetch_add(1, Relaxed);
+        }
+        answer
+    }
+
+    /// Whether every job asked has been answered and taken.
+    #[cfg(any(test, feature = "test-kit"))]
+    pub(crate) fn settled(&self) -> bool {
+        use std::sync::atomic::Ordering::Relaxed;
+        self.taken.load(Relaxed) >= self.asked.load(Relaxed)
     }
 }
