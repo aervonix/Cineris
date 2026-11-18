@@ -532,6 +532,45 @@ impl App {
             .map(|search| search.query.clone())
     }
 
+    /// A key while the transcript is read from under a dialog (since step
+    /// 25): the full screen's scrolling keys and the arrows move it, the
+    /// dialog's transcript key or `Esc` goes back to the dialog, whose quiet
+    /// starts again, and nothing else does anything: no key pressed while
+    /// reading reaches the dialog. The global keys keep their meaning.
+    pub(super) fn reading_key(&mut self, key: Key, at: Instant) -> bool {
+        let keymap = self.input.keymap();
+        if let Some(action @ (Action::Interrupt | Action::Redraw)) = keymap.lookup(&[], key) {
+            let outcome = if action == Action::Interrupt {
+                self.input.interrupt_hidden()
+            } else {
+                self.input.act(action)
+            };
+            self.outcome(outcome, at);
+            return true;
+        }
+        let back = keymap.lookup(&[Context::Dialog], key) == Some(Action::DialogTranscript)
+            || (key.code == KeyCode::Esc && key.mods.is_empty());
+        if back {
+            self.reading_transcript = None;
+            // Back at the question: the quiet of step 23 starts again, so no
+            // key pressed while reading, nor one just after, answers it.
+            self.not_taken(at);
+            return true;
+        }
+        let action = keymap
+            .lookup(&[Context::Screen], key)
+            .filter(|action| action.context() == Context::Screen)
+            .or(match (key.code, key.mods.is_empty()) {
+                (KeyCode::Up, true) => Some(Action::ScreenLineUp),
+                (KeyCode::Down, true) => Some(Action::ScreenLineDown),
+                _ => None,
+            });
+        if let Some(action) = action {
+            self.screen_act(action, None);
+        }
+        true
+    }
+
     /// Whether the full screen's search is open.
     pub(super) fn screen_searching(&self) -> bool {
         self.screen

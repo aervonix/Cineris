@@ -845,6 +845,160 @@ fn the_viewer_shows_a_reasoning_and_a_compactions_summary_whole() {
     assert!(!app.viewing());
 }
 
+/// The approvals' answers sent so far.
+fn approvals(link: &Scripted) -> usize {
+    std::mem::take(&mut link.script().answers).len()
+}
+
+/// The loop's wake for the dialog: a frame at its moment. Returns it.
+fn dialog_wake(app: &mut super::App) -> Instant {
+    let due = app.deadline().expect("the dialog's moment");
+    let _ = app.frame(due);
+    app.drawn(due);
+    due
+}
+
+/// In the full screen, `Tab` moves from a dialog to the transcript and back
+/// while the dialog stays up (since step 25): its row offers it; while
+/// reading, the dialog is its first line, the row says how to scroll and go
+/// back, the keys scroll the transcript, and none of them, the dialog's own
+/// answers included, answers it; back at the dialog its quiet starts again,
+/// so a key just after does not answer either, and one after the quiet
+/// does.
+#[test]
+fn tab_reads_the_transcript_under_a_dialog_and_nothing_read_answers_it() {
+    use crate::app::dialog::QUIET;
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 3, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    let rows = text(&app.screen_frame(ready).0);
+    assert!(
+        rows.last()
+            .is_some_and(|row| row.contains("tab reads above")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("Allow once")),
+        "{rows:#?}"
+    );
+    let at = |ms: u64| ready + Duration::from_millis(ms);
+    key(&mut app, "tab", at(100));
+    let rows = text(&app.screen_frame(at(100)).0);
+    assert!(
+        rows.last()
+            .is_some_and(|row| row.contains("reading the transcript")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter().any(|row| row.contains("Run cargo build")),
+        "{rows:#?}"
+    );
+    assert!(
+        !rows.iter().any(|row| row.contains("Allow once")),
+        "{rows:#?}"
+    );
+    assert!(app.screen_follows());
+    key(&mut app, "pageup", at(200));
+    let _ = app.screen_frame(at(200));
+    assert!(!app.screen_follows(), "the transcript scrolled");
+    // The dialog's own keys, read while reading, answer nothing.
+    for (n, binding) in ["y", "s", "a", "n", "e", "enter", "1"]
+        .into_iter()
+        .enumerate()
+    {
+        key(&mut app, binding, at(300 + 10 * n as u64));
+    }
+    assert_eq!(approvals(&link), 0, "a key read while reading answered");
+    // Back, and its quiet again.
+    let back = at(400);
+    key(&mut app, "tab", back);
+    let rows = text(&app.screen_frame(back).0);
+    assert!(
+        rows.last()
+            .is_some_and(|row| row.contains("tab reads above")),
+        "{rows:#?}"
+    );
+    key(&mut app, "y", back + Duration::from_millis(200));
+    assert_eq!(approvals(&link), 0, "a key just after going back answered");
+    let again = dialog_wake(&mut app);
+    assert!(again >= back + QUIET, "{:?}", again.duration_since(back));
+    key(&mut app, "y", again + Duration::from_millis(50));
+    assert_eq!(approvals(&link), 1, "a key after the quiet answers");
+}
+
+/// `Esc` while reading goes back to the dialog too, and does not deny it;
+/// the inline screen offers no reading, which has the terminal's own
+/// scrollback (since step 25).
+#[test]
+fn esc_while_reading_goes_back_and_the_inline_screen_offers_no_reading() {
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 2, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    key(&mut app, "tab", ready + Duration::from_millis(100));
+    key(&mut app, "esc", ready + Duration::from_millis(200));
+    assert_eq!(approvals(&link), 0, "esc while reading denied the call");
+    let rows = text(&app.screen_frame(ready + Duration::from_millis(200)).0);
+    assert!(
+        rows.last()
+            .is_some_and(|row| row.contains("tab reads above")),
+        "back at the dialog: {rows:#?}"
+    );
+
+    // Reading ends with its dialog however it goes: one resolved elsewhere,
+    // and the next opens as a dialog, not read.
+    key(&mut app, "tab", ready + Duration::from_millis(300));
+    link.give(event(Event::RequestResolved(
+        cineris_protocol::event::RequestResolved {
+            request_id: cineris_protocol::jsonrpc::RequestId::Number(7),
+            resolution: cineris_protocol::event::Resolution::Answered,
+        },
+    )));
+    drain(&mut app, ready + Duration::from_millis(400));
+    crate::testkit::ask(
+        &mut app,
+        &link,
+        8,
+        crate::testkit::approval("c_8"),
+        ready + Duration::from_millis(500),
+    );
+    let rows = text(&app.screen_frame(ready + Duration::from_millis(500)).0);
+    assert!(
+        rows.last()
+            .is_some_and(|row| row.contains("tab reads above")),
+        "the next dialog opened read: {rows:#?}"
+    );
+    let _ = approvals(&link);
+    // Well past its grace and the quiet of the last key read: its answers
+    // drawn, and its own keys its own.
+    let later = ready + Duration::from_millis(500) + crate::app::dialog::QUIET * 2;
+    let _ = app.frame(later);
+    app.drawn(later);
+    key(&mut app, "y", later + Duration::from_millis(50));
+    assert_eq!(
+        approvals(&link),
+        1,
+        "the next dialog's keys were read as reading"
+    );
+
+    let (mut app, link) = long_session(Presenter::Inline, 2, now);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    let (_, live, _) = app.frame(ready);
+    assert!(
+        !text(&live).iter().any(|row| row.contains("reads above")),
+        "{:#?}",
+        text(&live)
+    );
+}
+
 /// A match inside a closed box opens the box while it is the current
 /// match, its border saying the search opened it; a new query closes it,
 /// and ending the search on it leaves it open.

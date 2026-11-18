@@ -867,3 +867,42 @@ find: let state = if enhanced { ENHANCED } else { 0 };
 replace: let state = 0;
 caught-by:
     cineris-testkit pty::tests::a_named_key_is_sent_as_its_win32_records_or_its_sequence
+
+# Reading the transcript from under a dialog (the coordinator's answer on
+# the first pull request's open item).
+
+[break] a-key-read-under-a-dialog-reaches-it
+rule: While the transcript is read from under a dialog, no key reaches the dialog: none answers it.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: if self.reading_transcript.as_ref() == Some(&dialog.id) {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::screen::tab_reads_the_transcript_under_a_dialog_and_nothing_read_answers_it
+
+[break] going-back-to-the-dialog-skips-its-quiet
+rule: Going back to the dialog from the transcript restarts its quiet, so a key just after does not answer it.
+file: crates/cineris-tui/src/app/state/screen.rs
+in: App::reading_key
+find: self.not_taken(at);
+replace: let _ = at;
+caught-by:
+    cineris-tui app::tests::screen::tab_reads_the_transcript_under_a_dialog_and_nothing_read_answers_it
+
+[break] reading-outlives-its-dialog
+rule: Reading the transcript ends with its dialog: the next dialog's keys are its own.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: if self.reading_transcript.as_ref() == Some(&dialog.id) {
+replace: if self.reading_transcript.is_some() {
+caught-by:
+    cineris-tui app::tests::screen::esc_while_reading_goes_back_and_the_inline_screen_offers_no_reading
+
+[break] esc-while-reading-is-swallowed
+rule: Esc while reading goes back to the dialog, and does not deny it.
+file: crates/cineris-tui/src/app/state/screen.rs
+in: App::reading_key
+find: || (key.code == KeyCode::Esc && key.mods.is_empty())
+replace: || false
+caught-by:
+    cineris-tui app::tests::screen::esc_while_reading_goes_back_and_the_inline_screen_offers_no_reading

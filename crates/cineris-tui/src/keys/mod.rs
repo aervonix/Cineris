@@ -249,6 +249,9 @@ pub enum Action {
     Never,
     /// Show the request's detail whole, in the viewer (`Ctrl+O`).
     ShowWhole,
+    /// In the full screen, move from the dialog to the transcript, to read
+    /// what led to it while it stays up, and back (`Tab`, since step 25).
+    DialogTranscript,
 
     // ------------------------------------------------------------ viewer
     /// Select the box before (`Up`, `k`), or scroll a row up when there is
@@ -618,6 +621,12 @@ pub const ACTIONS: &[Entry] = &[
         Context::Dialog,
         "show_whole",
         &["ctrl+o"],
+    ),
+    entry(
+        Action::DialogTranscript,
+        Context::Dialog,
+        "transcript",
+        &["tab"],
     ),
     entry(Action::ViewerUp, Context::Viewer, "up", &["up", "k"]),
     entry(Action::ViewerDown, Context::Viewer, "down", &["down", "j"]),

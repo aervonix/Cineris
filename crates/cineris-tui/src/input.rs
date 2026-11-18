@@ -904,7 +904,8 @@ impl Input {
             | Action::Deny
             | Action::DenyWithNote
             | Action::Never
-            | Action::ShowWhole => Outcome::Ignored(action),
+            | Action::ShowWhole
+            | Action::DialogTranscript => Outcome::Ignored(action),
 
             // ---------------------------------------- viewer and screen
             // The viewer's and the full screen's keys are the
