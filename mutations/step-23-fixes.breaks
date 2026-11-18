@@ -266,7 +266,7 @@ caught-by:
 rule: A request settled elsewhere closes its own dialog, and no other.
 file: crates/cineris-tui/src/app/state.rs
 in: App::event
-find: .position(|dialog| dialog.id == resolved.request_id)
+find: .position(|dialog| dialog.is_for(&resolved.request_id))
 replace: .position(|_| true)
 caught-by:
     app::tests::dialogs::with_two_dialogs_a_key_answers_the_one_shown_and_another_ones_end_leaves_it
@@ -1216,18 +1216,18 @@ caught-by:
 [break] a-switch-while-a-history-is-read
 rule: /sessions does not switch while a session's history is being read.
 file: crates/cineris-tui/src/app/state/commands.rs
-in: App::switch_to
-find: if self.opening || self.reading {
-replace: if self.opening {
+in: App::leave_for
+find: if self.opening || self.reading || self.rewind_under_way() {
+replace: if self.opening || self.rewind_under_way() {
 caught-by:
     app::tests::sessions::a_switch_while_a_history_is_read_is_refused_and_the_read_goes_on
 
 [break] a-switch-while-a-session-opens
 rule: /sessions does not switch while a session is being opened.
 file: crates/cineris-tui/src/app/state/commands.rs
-in: App::switch_to
-find: if self.opening || self.reading {
-replace: if self.reading {
+in: App::leave_for
+find: if self.opening || self.reading || self.rewind_under_way() {
+replace: if self.reading || self.rewind_under_way() {
 caught-by:
     app::tests::sessions::a_switch_while_a_session_opens_is_refused
 

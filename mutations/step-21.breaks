@@ -183,8 +183,8 @@ caught-by:
 rule: In a picker with a toggle, Tab toggles and only Enter accepts.
 file: crates/cineris-tui/src/input.rs
 in: Input::contexts
-find: vec![Context::Toggle, Context::Picker, Context::Menu]
-replace: vec![Context::Picker, Context::Menu]
+find: contexts.push(Context::Toggle);
+replace: let _ = Context::Toggle;
 caught-by:
     bindings::every_default_binding_does_its_action
 
