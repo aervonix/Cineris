@@ -104,11 +104,16 @@ enum Raw {
     Drop,
 }
 
-/// Masks the strings of `value`, and returns how many it changed.
+/// Masks the strings of `value`, and returns how many it changed. A
+/// string the redactor hands back owned but the same is not a change: an
+/// entry is marked altered only for what it no longer holds (the full
+/// review of step 25's second pull request).
 fn walk(value: &mut Value, redactor: &dyn Redactor, free_form: bool, raw: Raw) -> usize {
     match value {
         Value::String(text) => {
-            if let Cow::Owned(masked) = redactor.redact(text) {
+            if let Cow::Owned(masked) = redactor.redact(text)
+                && masked != *text
+            {
                 *text = masked;
                 return 1;
             }
@@ -189,6 +194,58 @@ pub(crate) mod tests {
             json!("[redacted]")
         );
         assert!(!exported.to_string().contains("hunter2"));
+    }
+
+    /// The core's filter, for tests.
+    #[derive(Debug)]
+    struct Filter(cineris_base::SecretFilter);
+
+    impl Redactor for Filter {
+        fn redact<'a>(&self, text: &'a str) -> Cow<'a, str> {
+            self.0.redact(text)
+        }
+    }
+
+    /// A message that quotes a web address whose password is masked
+    /// already (one an export wrote, or the log's own text copied back) is
+    /// not marked altered: nothing in it changed, and a resume would drop
+    /// the reasoning after it for nothing (the full review of step 25's
+    /// second pull request).
+    #[test]
+    fn a_message_quoting_a_masked_address_is_not_marked_altered() {
+        let filter = Filter(cineris_base::SecretFilter::new());
+        let quoted = json!({"item": {"parts": [
+            {"kind": "text", "text": "the proxy is http://alice:[redacted]@proxy.example:3128/"}
+        ]}});
+        let mut entry = quoted.clone();
+        assert!(!value(&mut entry, &filter), "{entry}");
+        assert_eq!(entry, quoted);
+        assert_eq!(for_export(&mut entry, &filter), 0);
+        // The same address with its password is masked, and marked.
+        let mut entry = json!({"item": {"parts": [
+            {"kind": "text", "text": "the proxy is http://alice:hunter2@proxy.example:3128/"}
+        ]}});
+        assert!(value(&mut entry, &filter));
+        assert_eq!(entry, quoted);
+    }
+
+    /// Hands back an owned copy of every text, changed or not.
+    #[derive(Debug)]
+    struct OwnedCopy;
+
+    impl Redactor for OwnedCopy {
+        fn redact<'a>(&self, text: &'a str) -> Cow<'a, str> {
+            Cow::Owned(text.to_owned())
+        }
+    }
+
+    /// A redactor that hands back the same text owned changed nothing:
+    /// the entry is not marked, and an export counts nothing.
+    #[test]
+    fn the_same_text_handed_back_owned_is_no_change() {
+        let mut entry = json!({"item": {"parts": [{"kind": "text", "text": "hello"}]}});
+        assert!(!value(&mut entry, &OwnedCopy));
+        assert_eq!(for_export(&mut entry, &OwnedCopy), 0);
     }
 
     #[test]
