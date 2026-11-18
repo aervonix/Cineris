@@ -948,7 +948,7 @@ caught-by:
 [break] a-request-moves-the-readers-place
 rule: A request that comes while the transcript is read keeps the reader's place.
 file: crates/cineris-tui/src/app/state.rs
-in: App::request
+in: App::show_dialog
 find: if self.reading_transcript.is_none() {
 replace: if true {
 caught-by:

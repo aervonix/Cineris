@@ -666,11 +666,11 @@ fn a_command_lines_prompt_that_is_a_command_is_done_as_one() {
 #[test]
 fn a_command_lines_prompt_that_is_a_command_not_built_yet_is_given_back() {
     let now = Instant::now();
-    let (mut app, link) = app_with(now, Some("/rewind 3"));
+    let (mut app, link) = app_with(now, Some("/lease 3"));
     opened(&mut app, &link, now);
     assert!(turn_start(&link.take_sent()).is_empty());
-    assert_eq!(app.input().editor().expanded(), "/rewind 3");
-    assert!(notices(&mut app, now).contains("/rewind is not in this build yet"));
+    assert_eq!(app.input().editor().expanded(), "/lease 3");
+    assert!(notices(&mut app, now).contains("/lease is not in this build yet"));
     assert!(!app.running());
 }
 

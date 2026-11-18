@@ -211,27 +211,43 @@ impl Kept {
                 }
                 block => Piece::Block(block),
             };
-            if matches!(piece, Piece::Block(Block::Round(_))) {
-                self.rounds.push(self.blocks.len());
-            }
-            let stop = match &piece {
-                Piece::Block(Block::Round(_) | Block::Compaction { .. }) => true,
-                Piece::Block(Block::Reasoning(reasoning)) => reasoning
-                    .summary
-                    .as_deref()
-                    .unwrap_or(&reasoning.text)
-                    .trim()
-                    .chars()
-                    .next()
-                    .is_some(),
-                _ => false,
-            };
-            if stop {
-                self.stops.push(self.blocks.len());
-            }
-            let kept = KeptBlock { piece, gap, after };
-            self.bytes += kept.bytes();
-            self.blocks.push(kept);
+            self.push(KeptBlock { piece, gap, after });
+        }
+    }
+
+    /// Keeps one block, after the others.
+    fn push(&mut self, kept: KeptBlock) {
+        if matches!(kept.piece, Piece::Block(Block::Round(_))) {
+            self.rounds.push(self.blocks.len());
+        }
+        let stop = match &kept.piece {
+            Piece::Block(Block::Round(_) | Block::Compaction { .. }) => true,
+            Piece::Block(Block::Reasoning(reasoning)) => reasoning
+                .summary
+                .as_deref()
+                .unwrap_or(&reasoning.text)
+                .trim()
+                .chars()
+                .next()
+                .is_some(),
+            _ => false,
+        };
+        if stop {
+            self.stops.push(self.blocks.len());
+        }
+        self.bytes += kept.bytes();
+        self.blocks.push(kept);
+    }
+
+    /// The blocks before `from` replaced by `head` (since step 25: the
+    /// transcript read again from the active branch after a rewind or an
+    /// undo); those from `from` on are kept after it, as they were.
+    pub fn replace_before(&mut self, from: usize, head: impl IntoIterator<Item = Finished>) {
+        let tail = self.blocks.split_off(from.min(self.blocks.len()));
+        *self = Self::default();
+        self.extend(head);
+        for kept in tail {
+            self.push(kept);
         }
     }
 

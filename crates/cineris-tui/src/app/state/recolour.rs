@@ -27,6 +27,13 @@ pub(super) struct Recolouring {
     lines: usize,
 }
 
+impl Recolouring {
+    /// The code block as the highlighter knows it.
+    pub(super) fn id(&self) -> BlockId {
+        self.id
+    }
+}
+
 impl App {
     /// Hands the highlighter, whole, each code block with a late line of the
     /// answers kept from `from` on.

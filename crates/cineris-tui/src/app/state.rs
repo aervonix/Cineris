@@ -54,6 +54,7 @@ mod export;
 mod panel;
 mod recolour;
 mod restyle;
+mod rewind;
 pub(super) mod screen;
 mod viewer;
 
@@ -61,7 +62,7 @@ pub use restyle::{Restyle, Restyled};
 
 use commands::{Picker, Shown};
 
-use super::dialog::{Dialog, Keyed, QUIET, REPEAT};
+use super::dialog::{Asks, Dialog, DialogId, Keyed, QUIET, REPEAT};
 use super::items::Mapper;
 use super::link::{Inbound, Link, Ticket};
 use super::panels::{ItemEditFor, Panels, Seen};
@@ -72,7 +73,7 @@ use crate::focus::Target;
 use crate::input::{Delivery, Input, Outcome, SendMode};
 use crate::transcript::kept::Kept;
 use crate::transcript::{Block, Committed, Transcript};
-use crate::view::{self, Header, Hint, HintRow, Look, RunningKeys};
+use crate::view::{self, Hint, HintRow, Look, RunningKeys};
 
 /// The window in which a second interrupt is "stop now"
 /// (`docs/architecture/02-runtime.md`, "Cancellation").
@@ -158,6 +159,20 @@ enum Pending {
     Export(SessionId),
     /// A compaction's summary, read for the viewer (since step 25).
     Summary(SessionId),
+    /// A page of this session's prompts, for the `/rewind` picker (since
+    /// step 25).
+    Points(SessionId),
+    /// The prompt of the point chosen, read whole.
+    RewindPrompt(SessionId),
+    /// The plan of a rewind of this session.
+    RewindPlan(SessionId),
+    /// A rewind of this session, answered.
+    Rewind(SessionId),
+    /// A page of this session's active branch, read again for the viewer
+    /// and the full screen after a rewind or an undo.
+    Reread(SessionId),
+    /// A fork of the session open here, to be opened in its place.
+    Fork(Box<rewind::Forking>),
 }
 
 /// A prompt on its way to the core, for its answer.
@@ -274,6 +289,10 @@ const COMMANDS: &[(&str, &str)] = &[
     ),
     ("quit", "Quit"),
     ("reload", "Read the configuration files again"),
+    (
+        "rewind",
+        "Go back to before an earlier prompt, or fork from it",
+    ),
     ("sessions", "Switch to another session of this workspace"),
     ("status", "The session's model, mode, sandbox and limits"),
     ("theme", "Choose the colours, for this run"),
@@ -288,7 +307,7 @@ const COMMANDS: &[(&str, &str)] = &[
 
 /// The slash commands of 09-tui that this build does not have yet: one is
 /// said to be missing, not sent to the model as a prompt.
-const NOT_YET: &[&str] = &["rewind", "lease", "extend", "mcp", "extensions", "export"];
+const NOT_YET: &[&str] = &["lease", "extend", "mcp", "extensions"];
 
 /// The panels' block and the bottom of a frame, and where the cursor goes
 /// in the bottom: a row of it and a column, or none for a dialog.
@@ -395,16 +414,28 @@ pub struct App {
     restyle: Option<Restyle>,
     /// The program's writer of `/export`'s files (since step 25).
     writer: Option<crate::export::Writer>,
+    /// `/rewind`'s points being read (since step 25).
+    points: Option<rewind::Reading>,
+    /// A rewind from its point chosen to its answer.
+    rewinding: Option<rewind::Rewinding>,
+    /// The transcript being read again after a rewind or an undo.
+    rereading: Option<rewind::Rereading>,
+    /// The inline rewind's notice, and the words it is kept in.
+    rewound_notice: Option<(String, String)>,
+    /// What is said once the session being opened is: a fork's notice.
+    open_said: Option<String>,
+    /// How many of its own questions the application has asked.
+    own_dialogs: u64,
     /// An export under way.
     exporting: Option<export::Exporting>,
     /// The full screen's transcript is being read from under the dialog
     /// with this request's id, which stays up (since step 25). Reading ends
     /// with that dialog however it goes: another one never opens read.
-    reading_transcript: Option<RequestId>,
+    reading_transcript: Option<DialogId>,
     /// Back from reading under the dialog with this request's id: until it
     /// is ready again, keys and pastes hold it and go nowhere, never to the
     /// hidden editor (the focused review of step 25).
-    back_from_reading: Option<RequestId>,
+    back_from_reading: Option<DialogId>,
     /// A look at the configuration's files is due after this frame.
     look_due: bool,
     /// When the last look was asked for.
@@ -580,6 +611,12 @@ impl App {
             dialogs: VecDeque::new(),
             restyle: start.restyle,
             writer: start.export,
+            points: None,
+            rewinding: None,
+            rereading: None,
+            rewound_notice: None,
+            open_said: None,
+            own_dialogs: 0,
             exporting: None,
             reading_transcript: None,
             back_from_reading: None,
@@ -1065,7 +1102,9 @@ impl App {
                 // neither (a global key, one it had no use for).
                 let (holds, typing, took) = match &keyed {
                     Keyed::Pass => (true, true, false),
-                    Keyed::Answer(_) | Keyed::Changed | Keyed::ShowWhole => (false, false, true),
+                    Keyed::Answer(_) | Keyed::Rewound(_) | Keyed::Changed | Keyed::ShowWhole => {
+                        (false, false, true)
+                    }
                     Keyed::Nothing if !ready => (true, !after_taken, false),
                     Keyed::Nothing if repeat => (false, false, true),
                     Keyed::Nothing | Keyed::Global(_) => {
@@ -1083,7 +1122,10 @@ impl App {
                 }
                 // A key the dialog took is not a second `Ctrl+C`'s first: the
                 // quit it armed is disarmed.
-                if matches!(keyed, Keyed::Answer(_) | Keyed::Changed | Keyed::ShowWhole) {
+                if matches!(
+                    keyed,
+                    Keyed::Answer(_) | Keyed::Rewound(_) | Keyed::Changed | Keyed::ShowWhole
+                ) {
                     self.input.disarm_quit();
                 }
                 match keyed {
@@ -1110,6 +1152,10 @@ impl App {
                     }
                     Keyed::Answer(response) => {
                         self.answer(response);
+                        true
+                    }
+                    Keyed::Rewound(choice) => {
+                        self.rewind_answered(choice);
                         true
                     }
                     Keyed::ShowWhole => {
@@ -1210,6 +1256,10 @@ impl App {
     /// to send it does not send it as a prompt (the review of step 23).
     fn closed_from_outside(&mut self, closed: Vec<Dialog>, now: Instant) {
         for mut dialog in closed {
+            if let Asks::Rewind { .. } = dialog.asks {
+                self.rewind_question_closed();
+                continue;
+            }
             let Some(note) = dialog.take_note().filter(|note| !note.trim().is_empty()) else {
                 continue;
             };
@@ -1243,6 +1293,7 @@ impl App {
             }
             Outcome::Picked(name, index) => self.picked(&name, index),
             Outcome::Toggled(name, on) => self.toggled(&name, on),
+            Outcome::Forked(name, index) => self.forked(&name, index),
             Outcome::Removed(name, index) => self.removed(&name, index),
             Outcome::PickerClosed(_) => self.picker = None,
             Outcome::OpenViewer => self.open_viewer(None),
@@ -1277,8 +1328,10 @@ impl App {
             return;
         };
         // The prompts held while the session opened are still on their way:
-        // this one follows them, never ahead of one of them.
-        if self.held_sent.is_some() {
+        // this one follows them, never ahead of one of them. While the
+        // transcript is read again after a rewind, it waits for the read, so
+        // that its turn is not read twice (since step 25).
+        if self.held_sent.is_some() || self.rereading.is_some() {
             self.held_prompts.push_back(text);
             self.start_running(at);
             return;
@@ -1400,7 +1453,9 @@ impl App {
         if let Some(call) = dialog.call() {
             self.mapper.answered(&mut self.transcript, call);
         }
-        self.link.respond(dialog.id, response);
+        if let DialogId::Request(id) = dialog.id {
+            self.link.respond(id, response);
+        }
     }
 
     // ------------------------------------------------------------- core
@@ -1501,11 +1556,6 @@ impl App {
     }
 
     fn request(&mut self, id: RequestId, request: ServerRequest) {
-        // A dialog asks about what just happened, at the end; not while the
-        // transcript is read from under one, whose place is kept.
-        if self.reading_transcript.is_none() {
-            self.screen_follow();
-        }
         let dialog = match request {
             ServerRequest::Approval(approval) => {
                 self.mapper.waiting(&mut self.transcript, &approval.call_id);
@@ -1520,6 +1570,16 @@ impl App {
             ServerRequest::Trust(trust) => Dialog::trust(id, trust),
             ServerRequest::Question(question) => Dialog::question(id, question),
         };
+        self.show_dialog(dialog);
+    }
+
+    /// A dialog is to be answered, after those before it.
+    fn show_dialog(&mut self, dialog: Dialog) {
+        // A dialog asks about what just happened, at the end; not while the
+        // transcript is read from under one, whose place is kept.
+        if self.reading_transcript.is_none() {
+            self.screen_follow();
+        }
         self.dialogs.push_back(dialog);
         // No panel is drawn while a dialog is up, and none keeps the focus;
         // after it, a panel's readiness starts again.
@@ -1623,11 +1683,48 @@ impl App {
                 self.error(&error);
             }
             (Pending::Undo(_), Ok(OpResult::SessionUndo(result))) => {
+                let session = result.session.session_id.clone();
                 self.session = Some(result.session);
                 self.say(
                     "The last turn is undone: it is out of the conversation, and the files it \
                      changed are as they were before it.",
                 );
+                // Drawn as a rewind's is: the viewer's and the full screen's
+                // transcript read again (since step 25).
+                self.read_again(session);
+            }
+            (Pending::Points(id), Ok(OpResult::SessionRead(page))) => self.points_read(&id, page),
+            (Pending::Points(id), Err(error)) => self.points_unread(&id, &error),
+            (Pending::RewindPrompt(id), Ok(OpResult::SessionRead(page))) => {
+                self.rewind_prompt_read(&id, &page);
+            }
+            // Said, if it matters, when the rewind is done.
+            (Pending::RewindPrompt(_), _) => {}
+            (Pending::RewindPlan(id), Ok(OpResult::SessionRewindPlan(plan))) => {
+                self.rewind_planned(&id, plan);
+            }
+            (Pending::RewindPlan(id) | Pending::Rewind(id), Err(error)) => {
+                self.rewind_failed(&id, &error);
+            }
+            (Pending::Rewind(id), Ok(OpResult::SessionRewind(result))) => {
+                self.rewound(&id, result.session);
+            }
+            (Pending::Reread(id), Ok(OpResult::SessionRead(page))) => {
+                self.reread_page(&id, page, now);
+            }
+            (Pending::Reread(id), Err(error)) => self.reread_failed(&id, &error, now),
+            (Pending::Fork(forking), Ok(OpResult::SessionFork(result))) => {
+                self.fork_opened(*forking, result.session, now);
+            }
+            (Pending::Fork(forking), result) => {
+                let error = result.err().unwrap_or_else(|| {
+                    ErrorData::new(
+                        cineris_protocol::ErrorKind::Internal,
+                        "unexpected_result",
+                        "The fork's answer was not a session.",
+                    )
+                });
+                self.fork_failed(*forking, &error, now);
             }
             (Pending::Permissions, Ok(OpResult::PermissionsList(list))) => {
                 self.permissions_listed(list.approvals);
@@ -1711,6 +1808,7 @@ impl App {
     /// opened for it, is closed.
     fn open_failed(&mut self, error: Option<&ErrorData>, now: Instant) {
         self.opening = false;
+        self.open_said = None;
         if let Some(original) = self.forked_from.take() {
             let ticket = self.link.send(Op::SessionClose(SessionRef {
                 session_id: original,
@@ -1873,17 +1971,11 @@ impl App {
             }));
             self.pending.insert(ticket, Pending::Said);
         }
-        let main = state.roles.get(&ModelRole::Main);
-        self.transcript.push(Block::Header(Header {
-            version: self.version.clone(),
-            model: main
-                .map(|role| role.model.as_str().to_owned())
-                .unwrap_or_default(),
-            effort: main.and_then(|role| role.effort_in_effect.clone().or(role.effort.clone())),
-            folder: self.folder.clone(),
-            branch: None,
-            profile: None,
-        }));
+        if let Some(said) = self.open_said.take() {
+            self.say(&said);
+        }
+        let header = self.header_of(&state);
+        self.transcript.push(Block::Header(header));
         // A stored session's history is drawn under its header before
         // anything that happens next (`docs/architecture/09-tui.md`,
         // "Resume"); its events wait for it.
@@ -2106,6 +2198,13 @@ impl App {
                 self.read_mark = None;
             }
         }
+        // While the transcript is read again, what comes live is drawn
+        // from its events, and not again from the read (since step 25).
+        if self.rereading.is_some()
+            && let Some(item) = item_of(&event.event)
+        {
+            self.seen_while_read_again(&event.session_id, item);
+        }
         match &event.event {
             Event::TurnStarted(_) => {
                 if let Some(number) = event
@@ -2189,7 +2288,7 @@ impl App {
                 if let Some(at) = self
                     .dialogs
                     .iter()
-                    .position(|dialog| dialog.id == resolved.request_id)
+                    .position(|dialog| dialog.is_for(&resolved.request_id))
                     && let Some(dialog) = self.dialogs.remove(at)
                 {
                     if let Some(call) = dialog.call() {
@@ -2316,7 +2415,9 @@ impl App {
         let parts = self.transcript.commit_parts(width, &self.look);
         let commit: Vec<Line> = parts.into_iter().flat_map(Committed::into_lines).collect();
         let before = self.kept.len();
-        self.kept.extend(self.transcript.take_finished());
+        let finished = self.transcript.take_finished();
+        let finished = self.kept_words(finished);
+        self.kept.extend(finished);
         // Code whose colours were late is asked for again, and what came of
         // it drawn (step 25).
         self.ask_colours(before);
@@ -2611,6 +2712,25 @@ impl ReadMark {
             None => self.whole && event.seq <= self.seq,
         }
     }
+}
+
+/// `text` on one line, its runs of white space one space, cut after
+/// `most` characters with `ellipsis` (since step 25: a fork's note in
+/// `/sessions`). Sanitised where it is drawn.
+pub(super) fn one_line_cut(text: &str, most: usize, ellipsis: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if line.chars().count() <= most {
+        return line;
+    }
+    let mut cut: String = line.chars().take(most).collect();
+    // At the end of a word, where there is one to end at.
+    if line.chars().nth(most).is_some_and(|next| next != ' ')
+        && let Some(space) = cut.rfind(' ')
+    {
+        cut.truncate(space);
+    }
+    cut.push_str(ellipsis);
+    cut
 }
 
 /// The item an event is of, if it is of one.

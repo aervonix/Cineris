@@ -1,8 +1,10 @@
 //! A dialog in the input box's place: the request it answers, its keys, and
 //! the guard that keeps typing meant for the editor from answering it
 //! (`docs/steps/23/answered.md`, "The design, before building", points 2
-//! and 3). It asks one of three things: may a tool call run (an approval),
-//! may the project be trusted (trust), or a question of the core's.
+//! and 3). It asks one of four things: may a tool call run (an approval),
+//! may the project be trusted (trust), a question of the core's, or, the
+//! application's own, whether to put the files back in a rewind (since step
+//! 25: `docs/steps/25/answered.md`, point 4).
 //!
 //! **Only keys meant for it answer it.** A dialog can appear while the
 //! person is typing: an approval while a steering message is being
@@ -68,6 +70,13 @@
 //! **A note is the note's.** Once "deny with a note" is chosen (or "answer"
 //! to a question with no choices), keys and a paste go to the note, and its
 //! row shows the note's end.
+//!
+//! **The rewind's question** is answered by its digits: `1` rewinds and puts
+//! the plan's files back, `2` rewinds the conversation only, and `Esc`
+//! cancels, sending nothing. No answer is preselected and `Enter` chooses
+//! nothing. `1` puts files back, so it is offered by the rule of a lasting
+//! answer: only once every file of the plan was drawn whole, in the dialog
+//! or in the viewer (`Ctrl+O`, [`Dialog::seen_whole`]).
 
 use std::time::Instant;
 
@@ -76,6 +85,8 @@ use cineris_protocol::methods::{
     ApprovalChoice, ApprovalDetail, ApprovalRequest, ApprovalResponse, QuestionRequest,
     QuestionResponse, ServerResponse, TrustRequest, TrustResponse,
 };
+
+pub(crate) use crate::view::dialog::RewindAsk;
 use cineris_term::{Key, Line};
 
 #[cfg(any(test, feature = "test-kit"))]
@@ -86,7 +97,7 @@ use super::ready::Readiness;
 pub(crate) use super::ready::{QUIET, REPEAT};
 use super::tools;
 use crate::keys::{Action, Context, KeyMap, name, typed};
-use crate::view::dialog::{self, Answer, ApprovalView, QuestionView, TrustView};
+use crate::view::dialog::{self, Answer, ApprovalView, QuestionView, RewindView, TrustView};
 use crate::view::{DiffLine, Look};
 
 /// The fewest rows a dialog's detail is given.
@@ -94,6 +105,16 @@ const LEAST_DETAIL: usize = 2;
 
 /// The most choices of a question that a digit picks.
 const CHOICES: usize = 9;
+
+/// Which dialog it is: a request of the core's, answered through the link,
+/// or a question of the application's own (since step 25).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum DialogId {
+    /// A request of the core's, by its id.
+    Request(RequestId),
+    /// The application's own question, by its number.
+    Own(u64),
+}
 
 /// What a dialog asks.
 #[derive(Debug, Clone)]
@@ -108,6 +129,9 @@ pub(crate) enum Asks {
     Trust { request: TrustRequest },
     /// A question of the core's.
     Question { request: QuestionRequest },
+    /// Whether to put the files back in a rewind (since step 25): the
+    /// application's own question, which the core's plan fills.
+    Rewind { ask: Box<RewindAsk> },
 }
 
 /// One answer a dialog offers: an action of its keys, or a question's
@@ -141,7 +165,7 @@ struct Shape {
 /// One dialog. See the [module documentation](self).
 #[derive(Debug, Clone)]
 pub(crate) struct Dialog {
-    pub(crate) id: RequestId,
+    pub(crate) id: DialogId,
     pub(crate) asks: Asks,
     /// When it is ready: its first frame, the input no dialog took while it
     /// was up or just before it came ([`QUIET`] after), the earliest it can
@@ -164,6 +188,9 @@ pub(crate) struct Dialog {
     note: Option<String>,
     /// Its rows as last drawn, and what for.
     cache: Option<(Drawn, Vec<Line>)>,
+    /// Every row of it was drawn in the viewer (`Ctrl+O`): what the
+    /// dialog had to cut has been seen (since step 25, the rewind's).
+    seen_whole: bool,
 }
 
 /// What a key did to a dialog.
@@ -179,12 +206,15 @@ pub(crate) enum Keyed {
     Answer(ServerResponse),
     /// The request is to be shown whole, in the viewer (`Ctrl+O`).
     ShowWhole,
+    /// The rewind's question is answered (since step 25): with files put
+    /// back or not, or cancelled (`None`), which sends nothing.
+    Rewound(Option<bool>),
     /// Nothing.
     Nothing,
 }
 
 impl Dialog {
-    fn new(id: RequestId, asks: Asks, leaving: bool) -> Self {
+    fn new(id: DialogId, asks: Asks, leaving: bool) -> Self {
         Self {
             id,
             asks,
@@ -194,6 +224,7 @@ impl Dialog {
             unreadable: false,
             note: None,
             cache: None,
+            seen_whole: false,
         }
     }
 
@@ -204,24 +235,53 @@ impl Dialog {
             _ => Vec::new(),
         };
         let leaving = confined && dialog::outside_sandbox(&request);
-        Self::new(id, Asks::Approval { request, diff }, leaving)
+        Self::new(
+            DialogId::Request(id),
+            Asks::Approval { request, diff },
+            leaving,
+        )
     }
 
     /// The trust question of a session being opened.
     pub(crate) fn trust(id: RequestId, request: TrustRequest) -> Self {
-        Self::new(id, Asks::Trust { request }, false)
+        Self::new(DialogId::Request(id), Asks::Trust { request }, false)
     }
 
     /// A question of the core's.
     pub(crate) fn question(id: RequestId, request: QuestionRequest) -> Self {
-        Self::new(id, Asks::Question { request }, false)
+        Self::new(DialogId::Request(id), Asks::Question { request }, false)
+    }
+
+    /// The rewind's question, the application's own `number`th (since step
+    /// 25).
+    pub(crate) fn rewind(number: u64, ask: RewindAsk) -> Self {
+        Self::new(
+            DialogId::Own(number),
+            Asks::Rewind { ask: Box::new(ask) },
+            false,
+        )
+    }
+
+    /// Whether it answers the core's request `id`.
+    pub(crate) fn is_for(&self, id: &RequestId) -> bool {
+        matches!(&self.id, DialogId::Request(own) if own == id)
     }
 
     /// The call the dialog is about, if it is about one.
     pub(crate) fn call(&self) -> Option<&cineris_protocol::CallId> {
         match &self.asks {
             Asks::Approval { request, .. } => Some(&request.call_id),
-            Asks::Trust { .. } | Asks::Question { .. } => None,
+            Asks::Trust { .. } | Asks::Question { .. } | Asks::Rewind { .. } => None,
+        }
+    }
+
+    /// Every row of it was drawn in the viewer: what the dialog cut has
+    /// been seen, and what is offered only for what was seen whole (the
+    /// rewind's `1`) is offered from now on.
+    pub(crate) fn seen_whole(&mut self) {
+        if !self.seen_whole {
+            self.seen_whole = true;
+            self.cache = None;
         }
     }
 
@@ -290,7 +350,10 @@ impl Dialog {
                 note: None,
             }),
             Asks::Trust { .. } => ServerResponse::Trust(TrustResponse::default()),
-            Asks::Question { .. } => ServerResponse::Question(QuestionResponse { answer: None }),
+            // The rewind's `Esc` is `Keyed::Rewound(None)`, before this.
+            Asks::Question { .. } | Asks::Rewind { .. } => {
+                ServerResponse::Question(QuestionResponse { answer: None })
+            }
         }
     }
 
@@ -299,7 +362,7 @@ impl Dialog {
         let note = (!note.trim().is_empty()).then_some(note);
         match &self.asks {
             Asks::Question { .. } => ServerResponse::Question(QuestionResponse { answer: note }),
-            Asks::Approval { .. } | Asks::Trust { .. } => {
+            Asks::Approval { .. } | Asks::Trust { .. } | Asks::Rewind { .. } => {
                 ServerResponse::Approval(ApprovalResponse {
                     choice: ApprovalChoice::Deny,
                     note,
@@ -372,7 +435,10 @@ impl Dialog {
             if action == Some(Action::ShowWhole)
                 && typed(key).is_none()
                 && self.ready.shown().is_some()
-                && matches!(self.asks, Asks::Approval { .. } | Asks::Trust { .. })
+                && matches!(
+                    self.asks,
+                    Asks::Approval { .. } | Asks::Trust { .. } | Asks::Rewind { .. }
+                )
             {
                 return Keyed::ShowWhole;
             }
@@ -388,6 +454,21 @@ impl Dialog {
         }
         // Only what was drawn whole can be pressed.
         let drawn = |pick: Pick| self.offered.contains(&pick);
+        // The rewind's question (since step 25): its two answers by their
+        // digits, and `Esc` cancels, sending nothing. `Enter` is nothing.
+        if let Asks::Rewind { .. } = &self.asks {
+            if let Some(digit) = typed(key).and_then(|c| c.to_digit(10))
+                && let Some(place) = (digit as usize).checked_sub(1)
+                && drawn(Pick::Choice(place))
+            {
+                return Keyed::Rewound(Some(place == 0));
+            }
+            return match action {
+                Some(Action::Deny) => Keyed::Rewound(None),
+                Some(Action::ShowWhole) => Keyed::ShowWhole,
+                _ => unused(key),
+            };
+        }
         // A question's choice, by its digit.
         if let Asks::Question { request } = &self.asks
             && let Some(digit) = typed(key).and_then(|c| c.to_digit(10))
@@ -469,7 +550,9 @@ impl Dialog {
         if self.note.is_some() {
             let enter = match &self.asks {
                 Asks::Question { .. } => "enter sends the answer",
-                Asks::Approval { .. } | Asks::Trust { .. } => "enter denies with the note",
+                Asks::Approval { .. } | Asks::Trust { .. } | Asks::Rewind { .. } => {
+                    "enter denies with the note"
+                }
             };
             return vec![enter.to_owned(), "esc goes back".to_owned()];
         }
@@ -484,10 +567,13 @@ impl Dialog {
             Asks::Approval { .. } => "denies",
             Asks::Trust { .. } => "is not now",
             Asks::Question { .. } => "leaves it unanswered",
+            Asks::Rewind { .. } => "cancels",
         };
         let mut keys = vec![format!("{deny} {what}")];
-        if matches!(self.asks, Asks::Approval { .. } | Asks::Trust { .. })
-            && let Some(whole) = keymap.keys_of(Action::ShowWhole).into_iter().next()
+        if matches!(
+            self.asks,
+            Asks::Approval { .. } | Asks::Trust { .. } | Asks::Rewind { .. }
+        ) && let Some(whole) = keymap.keys_of(Action::ShowWhole).into_iter().next()
         {
             keys.push(format!("{} shows it whole", name(whole)));
         }
@@ -589,6 +675,16 @@ impl Dialog {
                 width,
                 look,
             ),
+            Asks::Rewind { ask } => dialog::rewind(
+                ask,
+                &RewindView {
+                    answers: shape.answers.clone(),
+                    answers_hidden: shape.hidden,
+                    detail_rows: shape.detail_rows,
+                },
+                width,
+                look,
+            ),
         }
     }
 
@@ -686,6 +782,8 @@ impl Dialog {
             }
             Asks::Trust { .. } => pick == Pick::Act(Action::AllowOnce),
             Asks::Question { .. } => false,
+            // Putting files back: offered only for a plan seen whole.
+            Asks::Rewind { .. } => pick == Pick::Choice(0),
         }
     }
 
@@ -743,6 +841,28 @@ impl Dialog {
                 }
                 answers.push(act(Action::Deny, "Not now"));
                 answers.push(act(Action::Never, dialog::third_trust_answer(request)));
+                answers
+            }
+            // `1` only once every file of the plan was drawn whole, here
+            // or in the viewer.
+            Asks::Rewind { .. } => {
+                let choice = |place: usize, label: &str| {
+                    (
+                        Pick::Choice(place),
+                        Answer {
+                            key: (place + 1).to_string(),
+                            label: label.to_owned(),
+                        },
+                    )
+                };
+                let mut answers = Vec::new();
+                if !clipped || self.seen_whole {
+                    answers.push(choice(0, "Rewind it and put back the files listed"));
+                }
+                answers.push(choice(
+                    1,
+                    "Rewind the conversation only; the files stay as they are",
+                ));
                 answers
             }
             Asks::Question { request } if request.choices.is_empty() => vec![
