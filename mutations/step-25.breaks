@@ -875,8 +875,8 @@ caught-by:
 rule: While the transcript is read from under a dialog, no key reaches the dialog: none answers it.
 file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
-find: if self.reading_transcript.as_ref() == Some(&dialog.id) {
-replace: if false {
+find: TermEvent::Key(key) if reading => return self.reading_key(*key, at, false)
+replace: TermEvent::Key(key) if false => return self.reading_key(*key, at, false)
 caught-by:
     cineris-tui app::tests::screen::tab_reads_the_transcript_under_a_dialog_and_nothing_read_answers_it
 
@@ -893,8 +893,8 @@ caught-by:
 rule: Reading the transcript ends with its dialog: the next dialog's keys are its own.
 file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
-find: if self.reading_transcript.as_ref() == Some(&dialog.id) {
-replace: if self.reading_transcript.is_some() {
+find: let reading = self.reading_transcript.as_ref() == Some(&id);
+replace: let reading = self.reading_transcript.is_some();
 caught-by:
     cineris-tui app::tests::screen::esc_while_reading_goes_back_and_the_inline_screen_offers_no_reading
 
@@ -906,3 +906,50 @@ find: || (key.code == KeyCode::Esc && key.mods.is_empty())
 replace: || false
 caught-by:
     cineris-tui app::tests::screen::esc_while_reading_goes_back_and_the_inline_screen_offers_no_reading
+
+# What the focused review of reading under a dialog found.
+
+[break] a-key-just-back-from-reading-reaches-the-editor
+rule: Just back from reading, until the dialog is ready, keys and pastes go nowhere: never the hidden editor, whose Enter would send.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: if back || (reading && matches!(event, TermEvent::Paste(_)))
+replace: if reading && matches!(event, TermEvent::Paste(_))
+caught-by:
+    cineris-tui app::tests::screen::tab_reads_the_transcript_under_a_dialog_and_nothing_read_answers_it
+
+[break] reading-starts-before-the-dialog-is-ready
+rule: Tab starts reading only once the dialog takes keys; before, it goes where it was going.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: if ready && !note && self
+replace: if !note && self
+caught-by:
+    cineris-tui app::tests::screen::tab_before_the_dialog_is_ready_does_not_start_reading
+
+[break] reading-opens-the-search
+rule: While reading, only the scrolling keys act: not the search, whose row the dialog hides.
+file: crates/cineris-tui/src/app/state/screen.rs
+in: App::reading_key
+find: | Action::ScreenLineDown
+replace: | Action::ScreenLineDown | Action::ScreenSearch
+caught-by:
+    cineris-tui app::tests::screen::reading_keeps_its_way_back_shown_and_takes_only_the_scrolling_keys
+
+[break] a-held-tab-goes-back
+rule: A held Tab or Esc does not go back from reading: only a press does.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: TermEvent::Repeat(key) if reading => return self.reading_key(*key, at, true)
+replace: TermEvent::Repeat(key) if reading => return self.reading_key(*key, at, false)
+caught-by:
+    cineris-tui app::tests::screen::reading_keeps_its_way_back_shown_and_takes_only_the_scrolling_keys
+
+[break] a-request-moves-the-readers-place
+rule: A request that comes while the transcript is read keeps the reader's place.
+file: crates/cineris-tui/src/app/state.rs
+in: App::request
+find: if self.reading_transcript.is_none() {
+replace: if true {
+caught-by:
+    cineris-tui app::tests::screen::reading_keeps_its_way_back_shown_and_takes_only_the_scrolling_keys

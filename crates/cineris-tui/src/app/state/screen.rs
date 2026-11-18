@@ -534,10 +534,13 @@ impl App {
 
     /// A key while the transcript is read from under a dialog (since step
     /// 25): the full screen's scrolling keys and the arrows move it, the
-    /// dialog's transcript key or `Esc` goes back to the dialog, whose quiet
-    /// starts again, and nothing else does anything: no key pressed while
-    /// reading reaches the dialog. The global keys keep their meaning.
-    pub(super) fn reading_key(&mut self, key: Key, at: Instant) -> bool {
+    /// dialog's transcript key or `Esc` (pressed, not repeated) goes back to
+    /// the dialog, whose quiet starts again, and nothing else does
+    /// anything: no key pressed while reading reaches the dialog or the
+    /// hidden editor, and each holds the dialog as typing does. `Ctrl+C`
+    /// and `Ctrl+L` keep their meaning.
+    pub(super) fn reading_key(&mut self, key: Key, at: Instant, repeat: bool) -> bool {
+        self.not_taken(at);
         let keymap = self.input.keymap();
         if let Some(action @ (Action::Interrupt | Action::Redraw)) = keymap.lookup(&[], key) {
             let outcome = if action == Action::Interrupt {
@@ -551,15 +554,26 @@ impl App {
         let back = keymap.lookup(&[Context::Dialog], key) == Some(Action::DialogTranscript)
             || (key.code == KeyCode::Esc && key.mods.is_empty());
         if back {
-            self.reading_transcript = None;
-            // Back at the question: the quiet of step 23 starts again, so no
-            // key pressed while reading, nor one just after, answers it.
-            self.not_taken(at);
+            if !repeat {
+                // Back at the question: the quiet of step 23 starts again
+                // (above), so no key pressed while reading, nor one just
+                // after, answers it, and until it is ready keys go nowhere.
+                self.back_from_reading = self.reading_transcript.take();
+            }
             return true;
         }
+        // The scrolling keys alone: not the search, whose row a dialog hides.
         let action = keymap
             .lookup(&[Context::Screen], key)
-            .filter(|action| action.context() == Context::Screen)
+            .filter(|action| {
+                matches!(
+                    action,
+                    Action::ScreenPageUp
+                        | Action::ScreenPageDown
+                        | Action::ScreenLineUp
+                        | Action::ScreenLineDown
+                )
+            })
             .or(match (key.code, key.mods.is_empty()) {
                 (KeyCode::Up, true) => Some(Action::ScreenLineUp),
                 (KeyCode::Down, true) => Some(Action::ScreenLineDown),
