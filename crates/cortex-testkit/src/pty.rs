@@ -162,6 +162,22 @@ impl Session {
         at
     }
 
+    /// Sends the key named `name` as the terminal would (since step 25):
+    /// on Windows, the win32 input records, a press and a release, that
+    /// Windows Terminal sends a pseudo-console, which asks for that mode and
+    /// misreads a plain sequence after an escape (`docs/conpty.md`);
+    /// elsewhere, the xterm sequence. Names: `f1` to `f12`, `up`, `down`,
+    /// `left`, `right`, `pageup`, `pagedown`.
+    ///
+    /// # Panics
+    ///
+    /// For a name it does not know, or when the terminal cannot be written.
+    pub fn send_key(&mut self, name: &str) -> Instant {
+        let bytes =
+            key_bytes(name, cfg!(windows)).unwrap_or_else(|| panic!("no key named `{name}`"));
+        self.send(&bytes)
+    }
+
     /// Resizes the terminal, as a window being resized.
     ///
     /// # Panics
@@ -351,8 +367,67 @@ impl Drop for Session {
     }
 }
 
+/// The bytes of the key named `name` as a terminal sends it: with `win32`,
+/// a press and a release as Windows Terminal's win32 input records
+/// (`CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`: the virtual key, the scan code, no
+/// character, down or up, the control keys' state, one repeat), the arrows
+/// and the page keys marked as the enhanced keys they are; otherwise the
+/// xterm sequence. `None` for a name it does not know.
+#[must_use]
+pub fn key_bytes(name: &str, win32: bool) -> Option<Vec<u8>> {
+    // The name, its virtual key, its scan code, whether it is an enhanced
+    // key, and its xterm sequence.
+    const KEYS: [(&str, u16, u16, bool, &str); 18] = [
+        ("f1", 0x70, 0x3b, false, "\x1bOP"),
+        ("f2", 0x71, 0x3c, false, "\x1bOQ"),
+        ("f3", 0x72, 0x3d, false, "\x1bOR"),
+        ("f4", 0x73, 0x3e, false, "\x1bOS"),
+        ("f5", 0x74, 0x3f, false, "\x1b[15~"),
+        ("f6", 0x75, 0x40, false, "\x1b[17~"),
+        ("f7", 0x76, 0x41, false, "\x1b[18~"),
+        ("f8", 0x77, 0x42, false, "\x1b[19~"),
+        ("f9", 0x78, 0x43, false, "\x1b[20~"),
+        ("f10", 0x79, 0x44, false, "\x1b[21~"),
+        ("f11", 0x7a, 0x57, false, "\x1b[23~"),
+        ("f12", 0x7b, 0x58, false, "\x1b[24~"),
+        ("left", 0x25, 0x4b, true, "\x1b[D"),
+        ("up", 0x26, 0x48, true, "\x1b[A"),
+        ("right", 0x27, 0x4d, true, "\x1b[C"),
+        ("down", 0x28, 0x50, true, "\x1b[B"),
+        ("pageup", 0x21, 0x49, true, "\x1b[5~"),
+        ("pagedown", 0x22, 0x51, true, "\x1b[6~"),
+    ];
+    /// The control keys' state of an enhanced key (`ENHANCED_KEY`).
+    const ENHANCED: u32 = 0x100;
+    let &(_, vk, scan, enhanced, sequence) = KEYS.iter().find(|key| key.0 == name)?;
+    if !win32 {
+        return Some(sequence.as_bytes().to_vec());
+    }
+    let state = if enhanced { ENHANCED } else { 0 };
+    let record = |down: u8| format!("\x1b[{vk};{scan};0;{down};{state};1_");
+    Some(format!("{}{}", record(1), record(0)).into_bytes())
+}
+
 #[cfg(test)]
 mod tests {
+    /// A named key's bytes: the win32 records' fields and the xterm
+    /// sequence, an arrow marked enhanced; a name it does not know is none.
+    #[test]
+    fn a_named_key_is_sent_as_its_win32_records_or_its_sequence() {
+        assert_eq!(
+            super::key_bytes("f5", true).unwrap(),
+            b"\x1b[116;63;0;1;0;1_\x1b[116;63;0;0;0;1_"
+        );
+        assert_eq!(super::key_bytes("f5", false).unwrap(), b"\x1b[15~");
+        assert_eq!(
+            super::key_bytes("up", true).unwrap(),
+            b"\x1b[38;72;0;1;256;1_\x1b[38;72;0;0;256;1_"
+        );
+        assert_eq!(super::key_bytes("pageup", false).unwrap(), b"\x1b[5~");
+        assert_eq!(super::key_bytes("f1", false).unwrap(), b"\x1bOP");
+        assert!(super::key_bytes("f13", true).is_none());
+    }
+
     use super::*;
 
     #[test]

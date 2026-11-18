@@ -331,9 +331,10 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
     phases.mark("the wheel");
     // Three notches of the wheel up, over the transcript. Under a
     // pseudo-console the terminal is not asked for the mouse (cortex-term's
-    // `Capabilities::vt_mouse`): there `PageUp` moves the view.
+    // `Capabilities::vt_mouse`): there `PageUp` moves the view, sent as
+    // Windows Terminal sends it.
     if cfg!(windows) {
-        session.send(b"\x1b[5~");
+        session.send_key("pageup");
     } else {
         session.send(b"\x1b[<64;10;5M\x1b[<64;10;5M\x1b[<64;10;5M");
     }
@@ -355,7 +356,9 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
     // record of its own with frames between, and a row read from a frame
     // before the top would be moved by the next (the second review of step
     // 25). At the top the header card's model row is the window's fourth.
-    session.send(&b"\x1b[5~".repeat(12));
+    for _ in 0..12 {
+        session.send_key("pageup");
+    }
     session.wait_for(LIMIT, "the top, and the write's box", |t| {
         t.screen()
             .get(3)
@@ -378,7 +381,9 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
     }
 
     phases.mark("back to the end");
-    session.send(&b"\x1b[6~".repeat(24));
+    for _ in 0..24 {
+        session.send_key("pagedown");
+    }
     session.wait_for(LIMIT, "the end again", |t| {
         t.shows("Line 60 of a long answer.") && !t.shows("more below")
     });
