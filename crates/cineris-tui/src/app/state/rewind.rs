@@ -174,12 +174,14 @@ impl App {
         self.points.is_some() || self.rewinding.is_some() || self.rereading.is_some()
     }
 
-    /// Whether a prompt sent now waits: a rewind was sent and its result
-    /// is not in, or the transcript is being read again after it. A prompt
-    /// whose events came before the rewind's result would be drawn from
-    /// them and again from the read.
+    /// Whether a prompt sent now waits: a rewind or an undo was sent and
+    /// its result is not in, or the transcript is being read again after
+    /// it. A prompt whose events came before the result would be drawn from
+    /// them and again from the read (the undo's since the review of the
+    /// fixes of step 25's second pull request).
     pub(super) fn holds_prompts_for_rewind(&self) -> bool {
         self.rereading.is_some()
+            || self.undoing()
             || self
                 .rewinding
                 .as_ref()
@@ -332,7 +334,12 @@ impl App {
             }
             _ => None,
         });
-        rewinding.prompt = text;
+        // A page of another read (an earlier rewind's, given up) does not
+        // take away the prompt this one read (the review of the fixes of
+        // step 25's second pull request).
+        if text.is_some() {
+            rewinding.prompt = text;
+        }
     }
 
     /// The rewind on its way for `session`, if there is one.
@@ -367,11 +374,26 @@ impl App {
         if self.rewinding_of(session).is_some() {
             self.rewinding = None;
             self.error(error);
-            if !self.held_prompts.is_empty() && self.held_sent.is_none() {
-                self.give_back_held();
-                self.stop_running();
-            }
+            self.give_back_held_for_history();
         }
+    }
+
+    /// The prompts held for a change of the history that did not happen
+    /// come back into the editor: they were meant for the conversation it
+    /// would have made. The spinner stops unless a turn runs.
+    fn give_back_held_for_history(&mut self) {
+        if !self.held_prompts.is_empty() && self.held_sent.is_none() {
+            self.give_back_held();
+            self.stop_running_unless_a_turn_runs();
+        }
+    }
+
+    /// The undo failed, or was answered with something else: why is said,
+    /// and the prompts sent while it was on its way come back (the review
+    /// of the fixes of step 25's second pull request).
+    pub(super) fn undo_failed(&mut self, error: &ErrorData) {
+        self.error(error);
+        self.give_back_held_for_history();
     }
 
     /// The question answered: `1` (files put back) or `2` sends the rewind
@@ -780,9 +802,11 @@ impl App {
         // Prompts sent while the fork was asked for were meant for the
         // fork: they come back into the editor, as an open that failed
         // gives them back, and do not run at the end of the session that
-        // stays (the review of step 25's second pull request).
+        // stays (the review of step 25's second pull request). A turn the
+        // events held meanwhile said began still runs, and can be stopped
+        // (the review of its fixes).
         self.give_back_held();
-        self.stop_running();
+        self.stop_running_unless_a_turn_runs();
     }
 }
 
