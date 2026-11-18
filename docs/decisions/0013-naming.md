@@ -1,5 +1,7 @@
 # 0013: Names: the command `cortex`, its alias `cx`, and how the alias ships
 
+> **Superseded on 2026-11-18 by [decision 0038](0038-the-project-is-named-cineris.md):** the project is now Cineris, with the command `cineris` and the alias `cin`, and a new install rule. This record stays as it was written, as the record of what was decided then.
+
 - **Status:** Accepted. The owner chose `cortex` with the short alias `cx` on 2026-11-12, and asked for the way the alias ships to be decided here. Step 2 checked both names for clashes the same day and found one that matters, on `cortex`. The owner saw the result and kept both names. The findings and the decision are under "The clash check: result and decision".
 - **Date:** 2026-11-12
 

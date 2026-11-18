@@ -18,7 +18,7 @@ One record per significant choice. Each says what the options were, what was cho
 | [0010](0010-mcp-in-first-release.md) | MCP client scope in the first release | Accepted by the owner |
 | [0011](0011-cli-parsing.md) | Command-line parsing with lexopt and hand-written help | Accepted |
 | [0012](0012-release-profile.md) | Build profiles, and unwinding on panic | Accepted. Amended on 2026-11-12: a `ci` profile for the blocking test jobs. |
-| [0013](0013-naming.md) | The command `cortex`, its alias `cx`, and how the alias ships | Accepted by the owner. Step 2's clash check found one serious clash, on `cortex`; the owner kept both names on 2026-11-12. |
+| [0013](0013-naming.md) | The command `cortex`, its alias `cx`, and how the alias ships | Superseded by [0038](0038-the-project-is-named-cineris.md) on 2026-11-18. Accepted by the owner on 2026-11-12, after step 2's clash check found one serious clash, on `cortex`. |
 | [0014](0014-search-in-process.md) | Search and file listing are in-process | Accepted |
 | [0015](0015-syntax-highlighting.md) | Syntax highlighting with syntect, loaded lazily, behind a feature | Accepted |
 | [0016](0016-context-management.md) | Append-only history, context epochs, summary-first compaction | Accepted |
@@ -43,6 +43,7 @@ One record per significant choice. Each says what the options were, what was cho
 | [0035](0035-where-the-context-limit-comes-from.md) | A request's context limit comes from a local server's probe, or from the catalog, which every model has | Accepted in step 15, on 2026-11-14 |
 | [0036](0036-the-shipped-binary-is-optimised-for-size.md) | The shipped binary (and `release`) is optimised for size (`opt-level = "s"`), without ICU (`idna_adapter` 1.0), and holds no path of the machine it was built on; each pull request shows its size. Replaces 0012's `opt-level = 3` for `dist` | Accepted by the owner in step 33's size fix, on 2026-11-16 |
 | [0037](0037-the-named-pipe-is-served-from-cineris-rpc-in-one-windows-only-module-that-may-use-unsafe.md) | The named pipe is served from cineris-rpc, in one Windows-only module that may use unsafe | Proposed in step 27 on 2026-11-16, for the owner |
+| [0038](0038-the-project-is-named-cineris.md) | The project is named Cineris | Accepted by the owner on 2026-11-18. Supersedes [decision 0013](0013-naming.md). |
 
 The owner's answers are dated 2026-11-12 unless a row says otherwise, and are recorded in the [build plan](../build-plan.md) and, from step 4 on, in each step's [records](../steps/README.md).
 
