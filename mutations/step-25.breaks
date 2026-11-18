@@ -749,7 +749,7 @@ caught-by:
 rule: Every string of every item an export reads goes through the client's stricter filter before it is serialised.
 file: crates/cineris-tui/src/export.rs
 in: Export::new
-find: added += mask(&mut value, &filter);
+find: mask(&mut value, &filter, false);
 replace: let _ = &filter;
 caught-by:
     cineris-tui export::tests::the_clients_pass_masks_every_string_and_the_title_in_both_formats
@@ -759,8 +759,8 @@ caught-by:
 rule: An export's title goes through the client's filter too.
 file: crates/cineris-tui/src/export.rs
 in: Export::new
-find: let masked = filter.redact(title).into_owned();
-replace: let masked = title.to_owned();
+find: let title = filter.redact(title).into_owned();
+replace: let title = title.to_owned();
 caught-by:
     cineris-tui export::tests::the_clients_pass_masks_every_string_and_the_title_in_both_formats
 
@@ -796,18 +796,18 @@ caught-by:
     cineris-tui app::tests::export::export_reads_the_session_masked_and_hands_the_writer_its_text
 
 [break] an-export-writes-over-a-file
-rule: An export is created new, never over a file that exists.
+rule: An export is given its name by a hard link, never over a file that exists.
 file: crates/cineris-cli/src/export.rs
-in: create
-find: let mut out = match cineris_base::private::create_new(path) {
-replace: let mut out = match std::fs::File::create(path) {
+in: Staged::place
+find: match std::fs::hard_link(&self.path, target) {
+replace: match std::fs::copy(&self.path, target).map(|_| ()) {
 caught-by:
     cineris-cli::bin/cineris export::tests::an_export_is_a_new_private_file_never_one_that_exists
 
 [break] the-second-export-of-the-day-overwrites
 rule: A second export the same day takes the next name, -2 and on.
 file: crates/cineris-cli/src/export.rs
-in: write
+in: write_with
 find: Err(ExportError::Exists(_)) => {}
 replace: Err(ExportError::Exists(name)) => return Err(ExportError::Exists(name)),
 caught-by:
@@ -1282,3 +1282,184 @@ find: state.selected.and_then(|stop| self.kept.stop_block(stop))
 replace: state.selected.and_then(|stop| self.kept.round_block(stop))
 caught-by:
     cineris-tui app::tests::screen::the_viewer_reveals_the_selected_stop_after_a_reasoning_and_a_compaction
+
+# What the full review of the second pull request found in /export, each
+# fix broken on purpose (docs/steps/25/parts/pr2-session.md, "The full
+# review of the second pull request").
+
+[break] the-core-does-not-say-it-masked
+rule: A session/read with redacted says in its result that it masked the items.
+file: crates/cineris-core/src/core.rs
+in: Core::handle
+find: redacted: params.redacted
+replace: redacted: false
+packages: cineris-core, cineris-rpc
+caught-by:
+    cineris-core::it secrets::an_export_read_of_a_logged_session_holds_no_secret_and_no_provider_block
+    cineris-core::it secrets::an_export_read_of_a_session_kept_in_memory_is_masked_the_same
+    cineris-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
+
+[break] the-wire-drops-the-masked-mark
+rule: The result's redacted reaches a client over the wire as it does in process: the conformance scenario of an export's read holds it.
+file: crates/cineris-protocol/src/methods.rs
+in: SessionReadResult
+find: #[serde(default, skip_serializing_if = "std::ops::Not::not")] pub redacted: bool
+replace: #[serde(default, skip_serializing)] pub redacted: bool
+packages: cineris-rpc
+caught-by:
+    cineris-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
+
+[break] an-export-writes-a-page-the-core-did-not-mask
+rule: /export writes nothing from a page whose result does not say the core masked it.
+file: crates/cineris-tui/src/app/state/export.rs
+in: App::export_read
+find: if !page.redacted {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::export::a_page_the_core_did_not_mask_writes_nothing_and_says_why
+
+[break] the-clients-pass-keeps-raw-fields
+rule: The client's pass drops every raw field outside the JSON that is somebody else's.
+file: crates/cineris-tui/src/export.rs
+in: mask
+find: fields.remove("raw");
+replace:
+caught-by:
+    cineris-tui export::tests::the_clients_pass_drops_every_provider_block
+
+[break] the-clients-pass-keeps-provider-block-parts
+rule: The client's pass drops every provider block part.
+file: crates/cineris-tui/src/export.rs
+in: mask
+find: items.retain(|item| item.get("kind").and_then(Value::as_str) != Some("provider_block"));
+replace:
+caught-by:
+    cineris-tui export::tests::the_clients_pass_drops_every_provider_block
+
+[break] a-raw-key-in-the-models-arguments-is-dropped
+rule: A key named raw in a tool call's arguments is the model's, kept and masked.
+file: crates/cineris-tui/src/export.rs
+in-string: arguments
+replace: arguments-not
+caught-by:
+    cineris-tui export::tests::the_clients_pass_drops_every_provider_block
+
+[break] an-address-already-masked-is-masked-again
+rule: The filter leaves a web address whose password is the mask already as it is, borrowed.
+file: crates/cineris-base/src/redact.rs
+in: userinfo
+find: || &after[..password] == MASK.as_bytes()
+replace:
+caught-by:
+    cineris-base redact::tests::an_address_whose_password_is_masked_already_is_left_alone
+
+[break] the-log-marks-what-it-did-not-change
+rule: A string the redactor hands back owned but the same is no change: the log does not mark the entry altered for it.
+file: crates/cineris-session/src/redact.rs
+in: walk
+find: && masked != *text
+replace:
+caught-by:
+    cineris-session redact::tests::the_same_text_handed_back_owned_is_no_change
+
+[break] the-markdown-counts-the-masks-it-held
+rule: The Markdown's last pass counts the masks it adds, not those the text held already.
+file: crates/cineris-tui/src/export.rs
+in: Shown::again
+find: self.added += masks_in(&masked).saturating_sub(masks_in(&text));
+replace: self.added += masks_in(&masked);
+caught-by:
+    cineris-tui export::tests::a_key_that_only_the_markdown_joins_is_masked_there
+
+[break] a-key-that-holds-a-secret-is-kept
+rule: The client's pass renames an object's key that holds a secret.
+file: crates/cineris-tui/src/export.rs
+in: mask
+find: Cow::Owned(masked) if masked != key =>
+replace: Cow::Owned(masked) if false =>
+caught-by:
+    cineris-tui export::tests::a_key_that_holds_a_secret_is_renamed_and_counted
+
+[break] a-renamed-key-writes-over-another
+rule: A key renamed to a name another key has takes a number after it, so nothing is written over.
+file: crates/cineris-tui/src/export.rs
+in: mask
+find: while fields.contains_key(&name) {
+replace: while false {
+caught-by:
+    cineris-tui export::tests::a_key_that_holds_a_secret_is_renamed_and_counted
+
+[break] a-masked-key-is-not-counted
+rule: The export's count includes the masks in the keys of its items.
+file: crates/cineris-tui/src/export.rs
+in: masks_of
+find: .map(|(key, item)| masks_in(key) + masks_of(item))
+replace: .map(|(_, item)| masks_of(item))
+caught-by:
+    cineris-tui export::tests::a_key_that_holds_a_secret_is_renamed_and_counted
+
+[break] the-markdown-is-not-masked-again
+rule: The text of each Markdown block, as shown, goes through the filter once more.
+file: crates/cineris-tui/src/export.rs
+in: Shown::again
+find: match self.filter.redact(&text) {
+replace: match Cow::<str>::Borrowed("") {
+caught-by:
+    cineris-tui export::tests::a_key_that_only_the_markdown_joins_is_masked_there
+
+[break] a-turn-with-nothing-in-progress-is-not-running
+rule: An export says a turn was running when the core said one runs, not only when an item is in progress.
+file: crates/cineris-tui/src/app/state/export.rs
+in: App::export_read
+find: exporting.running |= turn_runs || !page.incomplete.is_empty();
+replace: exporting.running |= !page.incomplete.is_empty();
+caught-by:
+    cineris-tui app::tests::export::an_export_while_a_turn_runs_with_nothing_in_progress_says_it_was_running
+
+[break] the-export-is-written-under-its-name
+rule: The export's text is written under a name of its own and given the file's name only when it is whole.
+file: crates/cineris-cli/src/export.rs
+in: Staged::write
+find: let path = folder.join(format!(".cineris-export-{:016x}.tmp", rng.next_u64()));
+replace: let path = target.to_path_buf();
+caught-by:
+    cineris-cli::bin/cineris export::tests::nothing_has_the_name_until_the_text_is_written_whole
+
+[break] the-name-of-its-own-is-left-behind
+rule: The export's name of its own is removed once the file has its name, or the write failed.
+file: crates/cineris-cli/src/export.rs
+in: Staged::drop
+find: let _ = std::fs::remove_file(&self.path);
+replace:
+caught-by:
+    cineris-cli::bin/cineris export::tests::an_export_is_a_new_private_file_never_one_that_exists
+    cineris-cli::bin/cineris export::tests::nothing_has_the_name_until_the_text_is_written_whole
+
+[break] a-device-name-is-written-to
+rule: On Windows an export to a device's name (con.md, NUL.json) is refused.
+os: windows
+file: crates/cineris-cli/src/export.rs
+in: not_a_file
+find: let device = matches!(stem, "CON" | "PRN" | "AUX" | "NUL") || numbered("COM") || numbered("LPT");
+replace: let device = numbered("") && false;
+caught-by:
+    cineris-cli::bin/cineris export::tests::a_device_or_a_stream_is_refused_on_windows
+
+[break] a-stream-of-a-file-is-written-to
+rule: On Windows an export to a stream inside a file (notes.txt:x.md) is refused.
+os: windows
+file: crates/cineris-cli/src/export.rs
+in: not_a_file
+find: if stream {
+replace: if false {
+caught-by:
+    cineris-cli::bin/cineris export::tests::a_device_or_a_stream_is_refused_on_windows
+
+[break] a-tools-name-keeps-its-line-breaks
+rule: A tool's name in the Markdown is put on one line.
+file: crates/cineris-tui/src/export.rs
+in: one_line
+find: readable(text).replace('\n', " ").replace('`', "")
+replace: readable(text).replace('`', "")
+caught-by:
+    cineris-tui export::tests::a_tools_name_stays_on_its_line

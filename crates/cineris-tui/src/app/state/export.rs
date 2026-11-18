@@ -1,9 +1,10 @@
 //! `/export` in the application (since step 25): the session read for an
 //! export, page by page, through the `Link` (`session/read` with
 //! `redacted`, a read beside the lane, so `cineris attach` exports the same
-//! way); then the client's pass and the file's text ([`crate::export`]);
-//! then the program's writer, on a thread of its own, which wakes the loop
-//! when it is done.
+//! way), each page refused unless the core says it masked it; then, on a
+//! thread of its own, the client's pass, the file's text
+//! ([`crate::export`]) and the program's writer, which wakes the loop when
+//! it is done.
 
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 
@@ -12,6 +13,10 @@ use cineris_protocol::{Item, SessionId};
 
 use super::{App, HISTORY_PAGE, Pending};
 use crate::export::{Export, ExportError, ExportFile, Format};
+
+/// The writer's answer, and how many values are masked in what it was
+/// given.
+type Written = (Result<String, ExportError>, usize);
 
 /// An export under way.
 #[derive(Debug)]
@@ -24,13 +29,11 @@ pub(super) struct Exporting {
     path: Option<String>,
     /// The items read so far, masked by the core.
     items: Vec<Item>,
-    /// How many values the core said are masked in them.
-    masked: u32,
-    /// A turn was running: what it had not finished was left out.
+    /// A turn was running while the session was read: what it had not
+    /// finished was left out.
     running: bool,
-    /// The writer's answer, once the text is with it, and how many values
-    /// are masked in what it writes.
-    writing: Option<(Receiver<Result<String, ExportError>>, usize)>,
+    /// The worker's answer, once the items are with it.
+    writing: Option<Receiver<Written>>,
 }
 
 impl App {
@@ -60,7 +63,6 @@ impl App {
             format,
             path,
             items: Vec::new(),
-            masked: 0,
             running: false,
             writing: None,
         });
@@ -79,9 +81,13 @@ impl App {
         self.pending.insert(ticket, Pending::Export(session_id));
     }
 
-    /// A page read for the export: the next is asked for, or, at the last,
-    /// the text is made and given to the writer.
+    /// A page read for the export: refused when the core does not say it
+    /// masked it; else the next is asked for, or, at the last, the items
+    /// go to a worker, which makes the text and gives it to the writer.
     pub(super) fn export_read(&mut self, session: &SessionId, page: SessionReadResult) {
+        // A turn waiting on an answer, between its rounds or running its
+        // checks has no item in progress, and is running all the same.
+        let turn_runs = self.turn_runs;
         let Some(exporting) = self
             .exporting
             .as_mut()
@@ -89,28 +95,26 @@ impl App {
         else {
             return;
         };
+        if !page.redacted {
+            // A core that does not know `redacted` read the items as they
+            // are: provider blocks, and credentials only the core can find.
+            self.exporting = None;
+            self.say(
+                "The core did not mask the session, so nothing was written: it may be older \
+                 than this client.",
+            );
+            return;
+        }
         exporting.items.extend(page.items);
-        exporting.masked = exporting.masked.saturating_add(page.masked);
-        exporting.running |= !page.incomplete.is_empty();
+        exporting.running |= turn_runs || !page.incomplete.is_empty();
         if let Some(cursor) = page.next_cursor {
             self.read_for_export(session.clone(), Some(cursor));
             return;
         }
         let title = self.session.as_ref().and_then(|state| state.title.clone());
         let items = std::mem::take(&mut exporting.items);
-        let export = Export::new(
-            session.as_str(),
-            title.as_deref(),
-            items,
-            exporting.masked,
-            exporting.running,
-        );
-        let file = ExportFile {
-            path: exporting.path.clone(),
-            session: session.as_str().to_owned(),
-            format: exporting.format,
-            text: export.text(exporting.format),
-        };
+        let (format, path, running) = (exporting.format, exporting.path.clone(), exporting.running);
+        let id = session.as_str().to_owned();
         let Some(writer) = self.writer.clone() else {
             self.exporting = None;
             return;
@@ -120,13 +124,23 @@ impl App {
         let spawned = std::thread::Builder::new()
             .name("cineris-export".to_owned())
             .spawn(move || {
-                let _ = send.send(writer(file));
+                // The client's pass and the text are made here: a long
+                // session's are not the interface's to wait on.
+                let export = Export::new(&id, title.as_deref(), items, running);
+                let (text, masked) = export.text(format);
+                let file = ExportFile {
+                    path,
+                    session: id,
+                    format,
+                    text,
+                };
+                let _ = send.send((writer(file), masked));
                 if let Some(waker) = waker {
                     waker.wake();
                 }
             });
         match spawned {
-            Ok(_) => exporting.writing = Some((answer, export.masked)),
+            Ok(_) => exporting.writing = Some(answer),
             Err(error) => {
                 self.exporting = None;
                 self.say(&format!("The export could not be started: {error}."));
@@ -148,26 +162,36 @@ impl App {
     /// Takes the writer's answer, when it has come: where the file went
     /// and how many values are masked in it, or why nothing was written.
     pub(super) fn take_export(&mut self) {
-        let Some((answer, masked)) = self
+        self.settle_export(false);
+    }
+
+    /// Takes the writer's answer, waiting for it with `wait`. Says whether
+    /// there was one to take.
+    fn settle_export(&mut self, wait: bool) -> bool {
+        let Some(answer) = self
             .exporting
             .as_ref()
             .and_then(|exporting| exporting.writing.as_ref())
         else {
-            return;
+            return false;
         };
-        let masked = *masked;
-        let sentence = match answer.try_recv() {
-            Err(TryRecvError::Empty) => return,
-            Ok(Ok(path)) => format!(
+        let answer = if wait {
+            answer.recv().map_err(|_| TryRecvError::Disconnected)
+        } else {
+            answer.try_recv()
+        };
+        let sentence = match answer {
+            Err(TryRecvError::Empty) => return false,
+            Ok((Ok(path), masked)) => format!(
                 "Exported the session to {}. {}.",
                 crate::export::readable(&path),
                 crate::export::masked_sentence(masked)
             ),
-            Ok(Err(ExportError::Exists(path))) => format!(
+            Ok((Err(ExportError::Exists(path)), _)) => format!(
                 "{} is there already: nothing was written. Name another file.",
                 crate::export::readable(&path)
             ),
-            Ok(Err(ExportError::Failed(why))) => format!(
+            Ok((Err(ExportError::Failed(why)), _)) => format!(
                 "The export could not be written, and nothing of it was kept: {}",
                 crate::export::readable(&why)
             ),
@@ -177,6 +201,7 @@ impl App {
         };
         self.exporting = None;
         self.say(&sentence);
+        true
     }
 
     /// Gives the application a writer of `/export`'s files, for tests.
@@ -185,21 +210,11 @@ impl App {
         self.writer = Some(writer);
     }
 
-    /// Waits for the writer, for tests.
+    /// Waits for the worker's answer and takes it, for tests: the worker
+    /// always answers, or ends, so the wait has an end without a clock.
+    /// Says whether an export was being written.
     #[cfg(test)]
-    pub(crate) fn wait_for_export(&mut self, within: std::time::Duration) -> bool {
-        let until = std::time::Instant::now() + within;
-        while std::time::Instant::now() < until {
-            let waiting = self
-                .exporting
-                .as_ref()
-                .is_some_and(|exporting| exporting.writing.is_some());
-            if !waiting {
-                return true;
-            }
-            self.take_export();
-            std::thread::yield_now();
-        }
-        false
+    pub(crate) fn wait_for_export(&mut self) -> bool {
+        self.settle_export(true)
     }
 }
