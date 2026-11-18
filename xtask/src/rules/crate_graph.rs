@@ -474,7 +474,7 @@ fn check_conventions(package: &Package, manifest: &str, violations: &mut Vec<Vio
     if !package.publish_disabled {
         problem(format!(
             "`{name}` must set `publish.workspace = true` (which is `publish = false`). The \
-             crates are not published (decision 0013)."
+             crates are not published (decision 0038)."
         ));
     }
     if !has_workspace_lints(manifest) {

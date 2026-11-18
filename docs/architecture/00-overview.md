@@ -122,7 +122,7 @@ These are referred to from the other pages as "the invariants".
 | Name | Meaning |
 |---|---|
 | Cineris | The project. |
-| `cineris`, `cin` | The command, and its short alias. Both names run the same program ([decision 0013](../decisions/0013-naming.md)). |
+| `cineris`, `cin` | The command, and its short alias. Both names run the same program ([decision 0038](../decisions/0038-the-project-is-named-cineris.md)). |
 | Session | One conversation with its log, artifacts and checkpoints. |
 | Turn | Everything from one user prompt until the session is idle again: one or more model requests, tool rounds, retries and compaction. |
 | Item | One unit inside a turn: a user message, an assistant message, a tool call with its result, or a notice. |

@@ -17,7 +17,7 @@
 //!
 //! The program behaves identically under both names. It reads the name it
 //! was started with only to echo it in usage, help and error text
-//! (`docs/decisions/0013-naming.md`).
+//! (`docs/decisions/0038-the-project-is-named-cineris.md`).
 
 #![allow(
     clippy::print_stdout,

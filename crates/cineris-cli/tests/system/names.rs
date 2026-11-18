@@ -1,4 +1,4 @@
-//! The program under both of its names (`docs/decisions/0013-naming.md`):
+//! The program under both of its names (`docs/decisions/0038-the-project-is-named-cineris.md`):
 //! the same behaviour, and help and usage text in the name it was started
 //! with.
 

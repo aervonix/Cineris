@@ -6,7 +6,7 @@
 //!
 //! - **`--version`**, from starting the process to its exit, under both of
 //!   its names: the binary itself, and a hard link (or a copy) named `cin`
-//!   beside it in a directory of its own (`docs/decisions/0013-naming.md`).
+//!   beside it in a directory of its own (`docs/decisions/0038-the-project-is-named-cineris.md`).
 //! - **A trivial headless run**, from starting the process to its request
 //!   reaching the network: `cineris -p hi` against a listener of this
 //!   command's own on the loopback interface, which reads the request's
