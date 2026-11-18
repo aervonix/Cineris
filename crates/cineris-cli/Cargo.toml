@@ -7,7 +7,7 @@ license.workspace = true
 publish.workspace = true
 
 # One executable. `cin` is a link to it, never a second build target
-# (docs/decisions/0013-naming.md).
+# (docs/decisions/0038-the-project-is-named-cineris.md).
 [[bin]]
 name = "cineris"
 path = "src/main.rs"

@@ -1,5 +1,5 @@
 //! The help, written by hand (decision 0011) and printed in the name the
-//! program was started with: `cineris` or `cin` (decision 0013).
+//! program was started with: `cineris` or `cin` (decision 0038).
 
 use std::fmt::Write as _;
 

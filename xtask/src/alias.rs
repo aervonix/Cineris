@@ -1,7 +1,7 @@
 //! `cargo xtask alias`: builds `cineris` and puts its alias `cin` beside it, so
 //! that both names can be run from the target directory.
 //!
-//! One executable, two names (`docs/decisions/0013-naming.md`). `cin` is a
+//! One executable, two names (`docs/decisions/0038-the-project-is-named-cineris.md`). `cin` is a
 //! link to `cineris`, never a second build target.
 
 use std::env::consts::EXE_SUFFIX;

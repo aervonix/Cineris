@@ -827,7 +827,7 @@ Every row is a test, or a group of tests, that runs on the Windows job.
 | Credentials | A key round-trips through the real Windows Credential Manager, under an entry name of the test's own that no real entry has, removed when the test ends, pass or fail (`crates/cineris-config/tests/it/credentials.rs`). |
 | Configuration | Files with a byte-order mark and CRLF parse, and an error in one names the same line as it would without them. Built in step 9 (`crates/cineris-config/tests/it/loading.rs`). |
 | Extension scripts | The script engine builds and runs, and a script's host calls are denied exactly as on Linux. |
-| Command names | The binary behaves identically as `cineris.exe` and `cin.exe`. The install script creates the alias as a hard link, falls back to a copy, and never overwrites another program's `cin`. |
+| Command names | The binary behaves identically as `cineris.exe` and `cin.exe`. The install script creates the alias as a hard link, falls back to a copy, and takes a name another program provides only on the user's yes, never with no terminal to ask on, leaving the other program's file as it was ([decision 0038](decisions/0038-the-project-is-named-cineris.md)). |
 
 What CI cannot check is how a real terminal window looks. That is the manual checklist in [measurements/windows-terminal-checklist.md](measurements/windows-terminal-checklist.md), run by the owner at the points the build plan names.
 
