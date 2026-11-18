@@ -19,7 +19,7 @@ Cineris is under active development, built in the ordered steps of the [build pl
 The milestones so far:
 
 - **Reached:** the headless alpha (after step 15) and the adaptive core (after step 19). No preview build was published for the alpha.
-- **Being built now:** the interactive alpha (after step 25). The full-screen presenter and the mouse have landed; rewind, fork and `/export` in the interface, and the first-run flow, have not.
+- **Being built now:** the interactive alpha (after step 25). The full screen and the mouse (not yet on Windows) have landed; rewind and fork inside the interface, `/export` and the first-run flow have not.
 - **Next:** the first usable release (after step 34): extensions the harness can write, MCP, a hardening and a performance pass, and release binaries. Some steps on the way are built already: the Linux sandbox, the RPC server and the second provider protocol.
 
 ### What works today
@@ -28,11 +28,11 @@ The milestones so far:
 - **Tools.** Reading, searching, listing and outlining files; writing and editing them with snapshots and undo; a shell tool; a plan the agent keeps; and `remember`.
 - **Permissions.** Permission levels from read-only to unrestricted, rules you can add per run, and project trust.
 - **Sandbox.** Linux only, with Landlock and seccomp. Windows has process-tree and resource limits but no sandbox yet.
-- **Sessions.** Stored, listed, continued, resumed and forked, with context compaction.
+- **Sessions.** Stored, listed, continued, resumed and forked from the command line (forking inside the interface is not built yet), with context compaction.
 - **Adapting.** A project profile and memory you can review (`cineris project`), a repository map, local usage and cost statistics (`cineris usage`), and verification of a turn against the project's own checks.
 - **Headless mode.** `cineris -p`, with text, JSON or JSON-lines output and exit codes.
 - **RPC server.** `cineris serve` speaks JSON-RPC over standard input or a local socket, and `cineris attach` runs the terminal interface on a running server.
-- **Terminal interface.** Inline and full-screen, with panels, the mouse, `/usage`, `/plan`, `/project`, `/verify`, `/undo` and hot-reloaded settings.
+- **Terminal interface.** Inline and full screen, with panels, the mouse (not yet on Windows), `/usage`, `/plan`, `/project`, `/verify`, `/undo` and hot-reloaded settings.
 
 Still to come: extensions, MCP, the Windows sandbox, and everything after the first release in the build plan.
 
