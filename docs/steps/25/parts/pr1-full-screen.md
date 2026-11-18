@@ -113,3 +113,29 @@ A second reviewer, not anchored on either, read the fixes' diff (`8e6a45e3..92b9
 | 7 | Three open items misstated the code. | Corrected: `the-full-screen-under-a-dialog` (`Ctrl+O` shows the request alone; keys before readiness hold the dialog), `a-view-in-the-live-rows-moves` (the top is clamped, not moved by the kept rows), `a-full-screen-frame-copies-the-open-answer` (which run each figure is from). |
 
 It found the writing lock (no deadlock), the deadline waits (interrupted calls, wakes, zero and no timeout, overflow) and the other fixes as the first table says.
+
+## The pull request's CI
+
+<!-- written by cargo xtask ci-times, section "The pull request's CI": it replaces this up to the end mark -->
+Pull request 94, on `main` at `1e733de`. "Main" is main's own run at `1e733de` (run 44352361969).
+The PR's run is 44364311801, at `9344498`.
+
+| Job | Main, `1e733de` | The PR at `9344498` |
+|---|---|---|
+| `lint-linux` | 48 s | 69 s |
+| `test-linux` | 120 s | 140 s |
+| `lint-windows` | 106 s | 102 s |
+| `test-windows` | 184 s | 247 s |
+| `pr-size-linux` (blocks nothing) | — | 263 s |
+| `ts-client` (blocks nothing) | — | 13 s |
+| `pr-size-windows` (blocks nothing) | — | 331 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `9344498` (5 ms) | Windows, main (5 ms) | Windows, `9344498` (6 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 17.0 s | 23.0 s | 8.1 s | 14.4 s |
+| Tier 2, integration (40 s) | 36.4 s | 34.0 s | 23.7 s | 39.8 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 30.0 s | 29.8 s | 57.3 s | 72.2 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The pull request's CI" -->
+
+The PR's run and main's ran on runners of different speeds (a process start of 5 and 6 ms against 4 and 5), and hosted runners differ by up to a factor of two, so the two columns do not measure this pull request: the A/B with both trees on one runner, in "Measurements", does (+0.4 s in tier 1 on each system, tiers 2 and 3 within ±0.3 s). Windows' tier 2 read 39.8 s of its 40 s on the slower runner, against 22.4 s in the A/B.
