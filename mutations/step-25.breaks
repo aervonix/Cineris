@@ -751,9 +751,12 @@ file: crates/cineris-tui/src/export.rs
 in: Export::new
 find: mask(&mut value, &filter, false);
 replace: let _ = &filter;
+# The application's test of the whole read no longer catches it: the
+# Markdown's last pass, since the full review, masks its token too.
 caught-by:
     cineris-tui export::tests::the_clients_pass_masks_every_string_and_the_title_in_both_formats
-    cineris-tui app::tests::export::export_reads_the_session_masked_and_hands_the_writer_its_text
+    cineris-tui export::tests::the_clients_pass_drops_every_provider_block
+    cineris-tui export::tests::a_key_that_holds_a_secret_is_renamed_and_counted
 
 [break] the-title-is-not-masked
 rule: An export's title goes through the client's filter too.
@@ -774,8 +777,10 @@ caught-by:
     cineris-tui export::tests::markdown_lays_the_session_out_in_order_with_fences_nothing_closes
 
 # What an export's Markdown is made safe by is `/copy`'s, shared since step
-# 25 (`export::readable`): step 23's two breaks of it, in
-# `mutations/step-23-fixes.breaks`, name the export's test too.
+# 25 (`export::readable`): step 23's break of what acts unseen, in
+# `mutations/step-23-fixes.breaks`, names the export's test too. Its break
+# of control characters does not: the sanitizer after the filter makes a
+# control character the filter kept into its picture.
 
 [break] an-export-reads-unmasked
 rule: /export reads the session with session/read's redacted.
@@ -1331,8 +1336,8 @@ caught-by:
 rule: The client's pass drops every provider block part.
 file: crates/cineris-tui/src/export.rs
 in: mask
-find: items.retain(|item| item.get("kind").and_then(Value::as_str) != Some("provider_block"));
-replace:
+find: item.get("kind").and_then(Value::as_str) != Some("provider_block")
+replace: item.get("kind").and_then(Value::as_str) != Some("")
 caught-by:
     cineris-tui export::tests::the_clients_pass_drops_every_provider_block
 

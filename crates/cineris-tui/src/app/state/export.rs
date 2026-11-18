@@ -165,15 +165,14 @@ impl App {
         self.settle_export(false);
     }
 
-    /// Takes the writer's answer, waiting for it with `wait`. Says whether
-    /// there was one to take.
-    fn settle_export(&mut self, wait: bool) -> bool {
+    /// Takes the writer's answer, waiting for it with `wait`.
+    fn settle_export(&mut self, wait: bool) {
         let Some(answer) = self
             .exporting
             .as_ref()
             .and_then(|exporting| exporting.writing.as_ref())
         else {
-            return false;
+            return;
         };
         let answer = if wait {
             answer.recv().map_err(|_| TryRecvError::Disconnected)
@@ -181,7 +180,7 @@ impl App {
             answer.try_recv()
         };
         let sentence = match answer {
-            Err(TryRecvError::Empty) => return false,
+            Err(TryRecvError::Empty) => return,
             Ok((Ok(path), masked)) => format!(
                 "Exported the session to {}. {}.",
                 crate::export::readable(&path),
@@ -201,7 +200,6 @@ impl App {
         };
         self.exporting = None;
         self.say(&sentence);
-        true
     }
 
     /// Gives the application a writer of `/export`'s files, for tests.
@@ -210,11 +208,11 @@ impl App {
         self.writer = Some(writer);
     }
 
-    /// Waits for the worker's answer and takes it, for tests: the worker
-    /// always answers, or ends, so the wait has an end without a clock.
-    /// Says whether an export was being written.
+    /// Waits for the worker's answer, when an export is being written,
+    /// and takes it, for tests: the worker always answers, or ends, so the
+    /// wait has an end without a clock. A frame may have taken it already.
     #[cfg(test)]
-    pub(crate) fn wait_for_export(&mut self) -> bool {
-        self.settle_export(true)
+    pub(crate) fn wait_for_export(&mut self) {
+        self.settle_export(true);
     }
 }

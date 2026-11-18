@@ -983,10 +983,13 @@ file: crates/cineris-tui/src/export.rs
 in: readable
 find: .filter(|&c| matches!(c, '\n' | '\t') || cineris_term::sanitize::visible(c).is_none())
 replace: .filter(|_| true)
+# Not the export's Markdown test: `cineris_term::sanitize`, after the
+# filter, turns a control character it kept into its picture, so the
+# Markdown holds none either way (found running it in step 25's full
+# review of the second pull request).
 caught-by:
     app::tests::output::copy_drops_control_characters_and_escapes_what_acts_unseen
     app::tests::output::copy_of_an_answer_of_control_characters_copies_nothing
-    export::tests::markdown_holds_no_control_character_and_nothing_that_acts_unseen
 
 [break] copy-keeps-what-acts-unseen
 rule: `/copy` writes what acts unseen (a bidirectional override, a tag character, a zero-width space) as its escape, as the screen shows it.
