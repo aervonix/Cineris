@@ -8,8 +8,8 @@ The first of step 25's three pull requests: the full-screen presenter, the mouse
 |---|---|
 | `cortex-term`: `full.rs` | `Full` and `Screen`: the whole screen in one write, inside a synchronized update, only the rows that changed, each placed by its number; a resize, a redraw and a failed write have the next frame write every row. |
 | `cortex-term`: `input.rs` | The mouse decoder: mode 1006's reports, and mode 1000's own form while the mouse is on (`Decoder::set_mouse`); `Event::Mouse` with `Mouse`, `MouseKind`, `Button`, `Wheel`. |
-| `cortex-term`: `terminal.rs`, `sys/` | `Terminal::set_mouse` and `mouse`: modes 1000 and 1006 on with the alternate screen and off before it, at the end and on a resumption; the four emergency restores with the alternate screen on turn them off; on Windows the console's mouse input with the alternate screen, and a mouse record written as the SGR report the decoder reads. `draw_screen` is gone. |
-| `cortex-testkit`: `vterm.rs` | Modes 1000 and 1006 in the virtual terminal's `Modes`. |
+| `cortex-term`: `terminal.rs`, `sys/` | `Terminal::set_mouse` and `mouse`: modes 1000 and 1006 on with the alternate screen and off before it, at the end and on a resumption; the four emergency restores with the alternate screen on turn them off; on Windows the console's mouse input with the alternate screen (QuickEdit off meanwhile), a mouse record written as the SGR report the decoder reads, and no mode asked of the terminal (`Capabilities::vt_mouse`, departure 7). The terminal demo's `mouse` option names each mouse event. `draw_screen` is gone. |
+| `cortex-testkit`: `vterm.rs`, `pty.rs` | Modes 1000 and 1006 in the virtual terminal's `Modes`; `Session::send_key` and `key_bytes`, a named key sent as Windows Terminal sends it to a pseudo-console (win32 input records) and as its xterm sequence elsewhere. |
 | `cortex-tui`: `transcript/kept.rs`, `transcript.rs` | `Kept`, the finished blocks, and `Transcript::keep_finished`, `take_finished`, `open_rows` (what an answer still streaming has committed) and `rewrap_open`. |
 | `cortex-tui`: `markdown/mod.rs` | `Markdown::keeping`, `take_source`, `render_source` and `code_lines`, `restarted`; `Source` and `CodeColours`. |
 | `cortex-tui`: `app/scroll.rs` | The window over the kept blocks and the live rows, which follows the end until moved up, made only near what it shows. |
@@ -63,6 +63,16 @@ The first of step 25's three pull requests: the full-screen presenter, the mouse
 The frame budget (performance-budgets.md) holds with room to spare. A long answer still open costs more per frame, because its committed rows are put together for each frame: [a-full-screen-frame-copies-the-open-answer](../../../outstanding/a-full-screen-frame-copies-the-open-answer.md).
 
 **200 turns in each presenter** (`perf_two_hundred_turns_in_each_presenter`, the musl `dist` build, a workspace of 20,000 files of real code, the desktop; the table is in [performance-budgets.md](../../../performance-budgets.md), "Memory"): inline 30.4 MB resident after the turns, 38.2 MB at the peak, against 40; full screen 30.5 MB, 33.2 MB after scrolling, resizing and searching, 39.0 MB at the peak, against 80. The inline peak is near its budget, but it is the index's first pass, before any turn (34.2 MB), not the session.
+
+**The tiers, both trees on one runner** (`try` with `-f against`, the median of 5 runs each; each tier's time above the start of its processes):
+
+| Tier | Windows, PR (main) | Change | Linux, PR (main) | Change |
+|---|---|---|---|---|
+| 1, unit | 9.3 s (9.0 s) | +0.4 s | 22.8 s (22.4 s) | +0.4 s |
+| 2, integration | 22.4 s (22.5 s) | −0.1 s | 33.9 s (33.5 s) | +0.3 s |
+| 3, system | 53.2 s (53.4 s) | −0.3 s | 30.2 s (29.9 s) | +0.3 s |
+
+Windows is run 44360402752 at 58d79545 (5 ms a process start), Linux run 44353520501 at 513fd21 (6 ms; the Windows mouse changes since then build nothing new on Linux). Main's Linux tier 1 was over its 20 s warning line already; the fail line is 30 s. The growth is the 53 to 56 new tests (`cortex-tui`'s unit tests +0.48 s on Windows, +0.77 s on Linux; `cortex-term`'s `full` tests +0.33 s in tier 2). One existing test moved on both systems, `view::input::tests::the_cursor_is_after_the_text_and_never_on_the_edge` (+0.033 s and +0.068 s): it makes 660 inputs, each with the default key map, which this pull request's viewer and screen keys made longer to parse. `KeyMap::defaults` now parses the table once and copies it (198 µs a map against 0.3 µs, a debug build at the desk), and the test went from 0.33 s to 0.21 s there.
 
 ## The independent review
 
