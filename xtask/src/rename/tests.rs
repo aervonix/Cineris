@@ -357,6 +357,8 @@ fn the_check_finds_a_planted_old_name_and_says_where() {
     // it holds the old name.
     let found = violations("assets/data.bin", b"\0\x01Cortex\0");
     assert_eq!(found.len(), 1);
+    let found = violations("assets/data.bin", b"\xff\xfeCortex");
+    assert_eq!(found.len(), 1, "bytes that are not UTF-8, with no NUL");
     assert!(
         found[0].message.contains("not UTF-8 text"),
         "{}",
@@ -402,14 +404,14 @@ fn the_whole_tree_renamed_once_is_renamed() {
     // On every core: the searches run unoptimised in a test's build.
     let problems: Vec<String> = super::in_parallel(&files, |file| {
         let bytes = std::fs::read(root.join(file)).unwrap();
-        let once = transform(file, &bytes, &none);
+        let once = transform(file, &bytes, &none).unwrap();
         let Some(text) = once.contents else {
             // Unchanged: its second pass is its first.
             return violations(&once.path, &bytes)
                 .first()
                 .map(ToString::to_string);
         };
-        let twice = transform(&once.path, &text, &none);
+        let twice = transform(&once.path, &text, &none).unwrap();
         if twice.path != once.path || twice.contents.is_some() {
             return Some(format!("{file} changes on the second pass"));
         }
@@ -476,7 +478,8 @@ fn a_file_that_is_not_text_keeps_its_bytes_and_moves() {
         "assets/cortex-harness-logo-dark-background.png",
         image,
         &none,
-    );
+    )
+    .unwrap();
     assert_eq!(out.path, "assets/cineris-logo-dark-background.png");
     assert!(out.contents.is_none());
 }
@@ -583,7 +586,8 @@ fn sys_a_rust_file_is_formatted_again_only_when_it_was_formatted() {
         "crates/cortex-a/src/lib.rs",
         formatted.as_bytes(),
         &formatter,
-    );
+    )
+    .unwrap();
     let out = String::from_utf8(out.contents.unwrap()).unwrap();
     assert_eq!(
         out,
@@ -596,7 +600,8 @@ fn sys_a_rust_file_is_formatted_again_only_when_it_was_formatted() {
         "crates/cortex-index/fixtures/odd.rs",
         odd.as_bytes(),
         &formatter,
-    );
+    )
+    .unwrap();
     assert_eq!(out.contents.unwrap(), b"fn  f( ) { cineris::x() }\n");
 }
 
@@ -773,6 +778,12 @@ fn sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main() {
         to: "step-renamed".to_owned(),
         force,
     };
+    // A worktree on an unborn branch of that name: nothing is made under it.
+    let head = git(&repo, &["symbolic-ref", "HEAD"]);
+    git(&repo, &["symbolic-ref", "HEAD", "refs/heads/step-renamed"]);
+    let refused = branch::run_in(&at, &options(false), &Formatter::none()).unwrap_err();
+    assert!(refused.contains("checked out"), "{refused}");
+    git(&repo, &["symbolic-ref", "HEAD", &head]);
     let said = branch::run_in(&at, &options(false), &Formatter::none()).unwrap();
     assert!(
         said.contains(&format!(
@@ -893,27 +904,23 @@ fn sys_a_symbolic_link_is_refused_by_both() {
     let scratch = Scratch::outside("xtask-rename", "links");
     let repo = scratch.git_init("repo");
     write(&repo, "notes.md", "cortex\n");
-    std::os::unix::fs::symlink("notes.md", repo.join("link.md")).unwrap();
     git(&repo, &["add", "--all"]);
     git(&repo, &["commit", "--quiet", "-m", "Start"]);
     let base = git(&repo, &["rev-parse", "HEAD"]);
-    write(&repo, "more.md", "more\n");
+    write(&repo, "more.md", "cortex\n");
     git(&repo, &["add", "--all"]);
     git(&repo, &["commit", "--quiet", "-m", "More"]);
-
-    let error = super::apply_tree(&repo, &Formatter::none()).err().unwrap();
-    assert!(error.contains("link.md is a symbolic link"), "{error}");
-    assert_eq!(
-        std::fs::read_to_string(repo.join("notes.md")).unwrap(),
-        "cortex\n"
-    );
+    std::os::unix::fs::symlink("notes.md", repo.join("link.md")).unwrap();
+    git(&repo, &["add", "--all"]);
+    git(&repo, &["commit", "--quiet", "-m", "A link"]);
 
     let at = branch::Git::at(&repo);
     let error = branch::rewrite(&at, &base, &at.commit("HEAD").unwrap(), &Formatter::none())
         .err()
         .unwrap();
     assert!(error.contains("link.md in"), "{error}");
-    // It stopped fast-import as asked: no crash report, no ref left behind.
+    // Two commits were written before it stopped, and it stopped fast-import
+    // as asked: no crash report, and no ref left behind.
     let crashed = std::fs::read_dir(repo.join(".git")).unwrap().any(|entry| {
         entry
             .unwrap()
@@ -926,4 +933,34 @@ fn sys_a_symbolic_link_is_refused_by_both() {
         git(&repo, &["for-each-ref", "--format=%(refname)"]),
         "refs/heads/main"
     );
+
+    // `apply`: a link to a file, to a folder, to nothing, and a folder on
+    // the way that is a link, each refused before anything is written.
+    let refused = |what: &str| {
+        let error = super::apply_tree(&repo, &Formatter::none()).err().unwrap();
+        assert!(
+            error.contains(&format!("{what} is a symbolic link")),
+            "{error}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo.join("notes.md")).unwrap(),
+            "cortex\n"
+        );
+    };
+    refused("link.md");
+    git(&repo, &["rm", "--quiet", "link.md"]);
+    write(&repo, "folder/inside.md", "cortex\n");
+    std::os::unix::fs::symlink("folder", repo.join("to-folder")).unwrap();
+    git(&repo, &["add", "--all"]);
+    refused("to-folder");
+    git(&repo, &["rm", "--quiet", "--cached", "to-folder"]);
+    std::fs::remove_file(repo.join("to-folder")).unwrap();
+    std::os::unix::fs::symlink("nowhere", repo.join("dangling")).unwrap();
+    git(&repo, &["add", "--all"]);
+    refused("dangling");
+    git(&repo, &["rm", "--quiet", "--cached", "dangling"]);
+    std::fs::remove_file(repo.join("dangling")).unwrap();
+    std::fs::rename(repo.join("folder"), repo.join("real")).unwrap();
+    std::os::unix::fs::symlink("real", repo.join("folder")).unwrap();
+    refused("folder");
 }

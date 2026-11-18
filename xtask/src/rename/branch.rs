@@ -68,6 +68,8 @@ pub(super) fn run_in(git: &Git, options: &Options, formatter: &Formatter) -> Res
             git.run(&["update-ref", &target, &rewritten.tip, &existing])?;
         }
         None => {
+            // A worktree on an unborn branch of this name has no ref yet.
+            git.refuse_in_use(&target)?;
             git.run(&["update-ref", &target, &rewritten.tip, ""])?;
         }
     }
@@ -372,9 +374,10 @@ impl Writer {
             read.push((id, path, bytes));
         }
         let renamed = in_parallel(&read, |(_, path, bytes)| {
-            transform(path, bytes, formatter).contents
+            transform(path, bytes, formatter).map(|renamed| renamed.contents)
         });
         for ((id, path, _), contents) in read.into_iter().zip(renamed) {
+            let contents = contents?;
             let data = match contents {
                 Some(contents) => {
                     let mark = self.next_mark;
@@ -640,10 +643,21 @@ impl Git {
             "--path-format=absolute",
             "--git-common-dir",
         ])?);
-        match crate::branch::used_elsewhere(&common, reference, None) {
-            Some(refusal) => Err(format!("{refusal}; --force does not replace it")),
-            None => Ok(()),
+        if let Some(refusal) = crate::branch::used_elsewhere(&common, reference, None) {
+            return Err(format!("{refusal}; it is not moved"));
         }
+        // git's own list too: with reftable, `HEAD` is a stub, and the files
+        // above do not say which branch a worktree has.
+        let list = self.run(&["worktree", "list", "--porcelain"])?;
+        if list
+            .lines()
+            .any(|line| line.strip_prefix("branch ") == Some(reference))
+        {
+            return Err(format!(
+                "{reference} is checked out in a worktree: it is not moved"
+            ));
+        }
+        Ok(())
     }
 
     fn spawn(&self, arguments: &[&str], stdout: Stdio) -> Result<Child> {

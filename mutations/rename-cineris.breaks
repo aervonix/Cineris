@@ -84,7 +84,7 @@ caught-by:
 rule: A Rust file that rustfmt would change as it stands (a sample of odd code) is not formatted.
 file: xtask/src/rename.rs
 in: format_rust
-find: if formatter.format(original).as_deref() != Some(original) {
+find: if formatter.format(original)?.as_deref() != Some(original) {
 replace: if false {
 caught-by:
     rename::tests::sys_a_rust_file_is_formatted_again_only_when_it_was_formatted
@@ -155,8 +155,8 @@ caught-by:
 rule: --force never replaces a branch a worktree is rebasing (its HEAD is detached then, and `git worktree list` names no branch).
 file: xtask/src/rename/branch.rs
 in: Git::refuse_in_use
-find: match crate::branch::used_elsewhere(&common, reference, None) {
-replace: match crate::branch::used_elsewhere(&common, reference, None).filter(|_| false) {
+find: if let Some(refusal) = crate::branch::used_elsewhere(&common, reference, None) {
+replace: if let Some(refusal) = crate::branch::used_elsewhere(&common, reference, None).filter(|_| false) {
 caught-by:
     rename::tests::sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main
 
@@ -164,8 +164,8 @@ caught-by:
 rule: `apply` refuses a symbolic link, as `branch` does, rather than read and write through it.
 file: xtask/src/rename.rs
 in: apply_tree
-find: if let Some(link) = files.iter().find(|file| {
-replace: if let Some(link) = files.iter().filter(|_| false).find(|file| {
+find: if let Some(link) = find_link(root, &files) {
+replace: if let Some(link) = find_link(root, &files).filter(|_| false) {
 os: linux
 caught-by:
     rename::tests::sys_a_symbolic_link_is_refused_by_both
@@ -178,3 +178,13 @@ find: if String::from_utf8_lossy(bytes)
 replace: if false && String::from_utf8_lossy(bytes)
 caught-by:
     rename::tests::the_check_finds_a_planted_old_name_and_says_where
+
+[break] a-branch-is-made-under-a-worktree
+rule: The new branch is not made while a worktree is on an unborn branch of that name.
+file: xtask/src/rename/branch.rs
+in: run_in
+find: git.refuse_in_use(&target)?;
+occurrence: 2
+replace:
+caught-by:
+    rename::tests::sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main
