@@ -1143,9 +1143,20 @@ fn what_is_typed_before_the_question_is_ready_reaches_nothing() {
     let typed = ms(now, 100);
     type_text(&mut app, "12x", typed);
     app.terminal(&TermEvent::Paste("pasted".to_owned()), typed);
+    assert_eq!(
+        app.input().editor().expanded(),
+        "",
+        "typed under the question"
+    );
     key(&mut app, "enter", typed);
-    assert_eq!(rewind_sent(&link), None, "answered before it was ready");
-    assert!(turn_start(&link.take_sent()).is_empty(), "sent as a prompt");
+    let sent = link.take_sent();
+    assert!(
+        !sent
+            .iter()
+            .any(|(_, op)| matches!(op, Op::SessionRewind(_))),
+        "answered before it was ready: {sent:#?}"
+    );
+    assert!(turn_start(&sent).is_empty(), "sent as a prompt: {sent:#?}");
     assert_eq!(app.input().editor().expanded(), "");
     let _ = app.frame(typed);
     app.drawn(typed);
