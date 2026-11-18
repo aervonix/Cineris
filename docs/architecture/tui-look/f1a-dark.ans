@@ -1,0 +1,21 @@
+[0;90m╭──────────────────────────────────────────────────────────────╮[0m
+[0;90m│[0m [0;1;38;2;122;60;251m◆[0m [0;1mCineris[0;90m 0.1.0[0m                                       [0;90m│[0m
+[0;90m│[0m                                                              [0;90m│[0m
+[0;90m│[0m   Setting up, in four short steps. Each one can be skipped,  [0;90m│[0m
+[0;90m│[0m   and x skips them all.                                      [0;90m│[0m
+[0;90m╰──────────────────────────────────────────────────────────────╯[0m
+
+[0;38;2;122;60;251m◇[0m [0;1mProvider[0;90m  1 of 4[0m
+[0m  A key for anthropic is in the environment, in ANTHROPIC_API_KEY. Use it from[0m
+[0m  there, or store a key: it is kept in[0m
+[0m  ~/.config/cineris/credentials.toml, which only you can read, and never[0m
+[0m  in a file of settings.[0m
+
+[0m  [0;38;2;122;60;251m◆[0m [0;1;38;2;141;87;252manthropic[0m   [0;90mits key from ANTHROPIC_API_KEY, as it is set[0m
+[0m    anthropic   [0;90mstore a key[0m
+[0m    openai      [0;90mstore a key[0m
+[0m    openrouter  [0;90mstore a key[0m
+[0m    deepseek    [0;90mstore a key[0m
+[0m    venice      [0;90mstore a key[0m
+
+[0m  [0;90menter chooses · s skips this step · x skips the set-up[0m                                           [0m

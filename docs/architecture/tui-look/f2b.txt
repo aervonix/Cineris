@@ -1,0 +1,34 @@
+· Provider: anthropic, its key from ANTHROPIC_API_KEY.
+
+╭──────────────────────────────────────────────────────────────╮
+│ ◆ Cineris 0.1.0                                       │
+│                                                              │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
+╰──────────────────────────────────────────────────────────────╯
+
+◇ Imports  2 of 4
+  Other tools left these. None is read, started or put in the prompt unless you
+  pick it, and what is left unpicked stays off. What you pick holds in every
+  project.
+
+    Instructions
+    ☑ AGENTS.md, CLAUDE.md            read as each project's instructions; off
+                                      unless picked (compat.instructions)
+    Skills
+    ☐ .claude/skills, .agents/skills  yours and each project's, once this
+                                      version reads skills; off unless picked
+                                      (compat.skills)
+    MCP servers
+    ▾ ~/.claude.json                  Claude Code's
+  ◆   ☑ docs     npx -y @example/docs-mcp --root ~/src/docs
+      ☐ tracker  https://tracker.example.com/mcp
+                 its Authorization header comes from TRACKER_AUTH, which you set
+        github   docker run -i --rm -e GITHUB_TOKEN=[redacted]
+                 ghcr.io/example/github-mcp:1.4
+                 holds a credential in its command: not imported
+    ▸ ~/.cursor/mcp.json              Cursor's: space reads it
+      .mcp.json, .vscode/mcp.json     this project's: offered in its sessions,
+                                      after trust, never imported
+
+  space picks · enter keeps what is picked · s skips this step · x skips the set-up

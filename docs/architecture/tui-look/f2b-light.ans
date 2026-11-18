@@ -1,0 +1,34 @@
+[0;90m·[0m [0;90mProvider: anthropic, its key from ANTHROPIC_API_KEY.[0m
+
+[0;90m╭──────────────────────────────────────────────────────────────╮[0m
+[0;90m│[0m [0;1;38;2;122;60;251m◆[0m [0;1mCineris[0;90m 0.1.0[0m                                       [0;90m│[0m
+[0;90m│[0m                                                              [0;90m│[0m
+[0;90m│[0m   Setting up, in four short steps. Each one can be skipped,  [0;90m│[0m
+[0;90m│[0m   and x skips them all.                                      [0;90m│[0m
+[0;90m╰──────────────────────────────────────────────────────────────╯[0m
+
+[0;38;2;122;60;251m◇[0m [0;1mImports[0;90m  2 of 4[0m
+[0m  Other tools left these. None is read, started or put in the prompt unless you[0m
+[0m  pick it, and what is left unpicked stays off. What you pick holds in every[0m
+[0m  project.[0m
+
+[0m    [0;90mInstructions[0m
+[0m    [0;38;2;122;60;251m☑[0m AGENTS.md, CLAUDE.md            [0;90mread as each project's instructions; off[0m
+[0m                                      [0;90munless picked (compat.instructions)[0m
+[0m    [0;90mSkills[0m
+[0m    [0;90m☐[0m .claude/skills, .agents/skills  [0;90myours and each project's, once this[0m
+[0m                                      [0;90mversion reads skills; off unless picked[0m
+[0m                                      [0;90m(compat.skills)[0m
+[0m    [0;90mMCP servers[0m
+[0m    [0;90m▾[0m ~/.claude.json                  [0;90mClaude Code's[0m
+[0m  [0;38;2;122;60;251m◆[0m   [0;38;2;122;60;251m☑[0m [0;1;38;2;122;60;251mdocs[0m     [0;90mnpx -y @example/docs-mcp --root ~/src/docs[0m
+[0m      [0;90m☐[0m tracker  [0;90mhttps://tracker.example.com/mcp[0m
+[0m                 [0;90mits Authorization header comes from TRACKER_AUTH, which you set[0m
+[0m        github   [0;90mdocker run -i --rm -e GITHUB_TOKEN=[redacted][0m
+[0m                 [0;90mghcr.io/example/github-mcp:1.4[0m
+[0m                 [0;90mholds a credential in its command: not imported[0m
+[0m    [0;90m▸[0m ~/.cursor/mcp.json              [0;90mCursor's: space reads it[0m
+[0m      .mcp.json, .vscode/mcp.json     [0;90mthis project's: offered in its sessions,[0m
+[0m                                      [0;90mafter trust, never imported[0m
+
+[0m  [0;90mspace picks · enter keeps what is picked · s skips this step · x skips the set-up[0m                [0m

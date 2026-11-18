@@ -1,0 +1,22 @@
+· Provider: anthropic, its key from ANTHROPIC_API_KEY.
+· Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
+
+╭──────────────────────────────────────────────────────────────╮
+│ ◆ Cineris 0.1.0                                       │
+│                                                              │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
+╰──────────────────────────────────────────────────────────────╯
+
+◇ Mode  3 of 4
+  How much the agent does before it asks you. /mode changes it at any time.
+
+    read-only   reads, and runs only commands known to read; asks before any
+                other, and never writes
+  ◆ supervised  reads and edits files in this project without asking; asks
+                before a command that is not on a safe list, and before anything
+                outside the project
+    autonomous  runs commands in the sandbox without asking; asks before leaving
+                it, using the network or writing outside the project
+
+  enter chooses · s keeps supervised · x skips the set-up
