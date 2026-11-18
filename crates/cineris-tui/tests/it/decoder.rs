@@ -21,6 +21,7 @@ fn chain(context: Context) -> Vec<Context> {
         Context::Menu => vec![Context::Menu, Context::Editor],
         Context::Picker => vec![Context::Picker, Context::Menu],
         Context::Toggle => vec![Context::Toggle, Context::Picker, Context::Menu],
+        Context::Fork => vec![Context::Fork, Context::Picker, Context::Menu],
         Context::Search => vec![Context::Search],
         Context::Focus => vec![Context::Focus],
         Context::Dialog => vec![Context::Dialog],

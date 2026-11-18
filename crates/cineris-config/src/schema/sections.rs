@@ -814,6 +814,10 @@ settings! {
         /// The `/effort` picker's fast-mode toggle.
         [UserOnly, Now]
         pub toggle: Bindings,
+        /// The fork of the pickers that fork (`/rewind`'s, `/sessions`'):
+        /// `fork`.
+        [UserOnly, Now]
+        pub fork: Bindings,
         /// The history search's.
         [UserOnly, Now]
         pub search: Bindings,

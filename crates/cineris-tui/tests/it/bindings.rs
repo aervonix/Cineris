@@ -310,6 +310,34 @@ fn check(action: Action, key: &str) {
                 "{context}: Enter accepts"
             );
         }
+        // A picker that forks (since step 25): the key forks from the row
+        // selected and closes it; `Enter` still accepts; in a picker that
+        // does not fork, the key is the menu's accept.
+        Action::PickerFork => {
+            let mut input = input();
+            input.open_picker(effort(false).forking("fork from here"));
+            press(&mut input, "down");
+            assert_eq!(
+                press(&mut input, key),
+                Outcome::Forked("effort".to_owned(), 3),
+                "{context}"
+            );
+            assert!(input.menu().is_none(), "{context}: the picker closes");
+            let mut input = crate::input();
+            input.open_picker(effort(false).forking("fork from here"));
+            assert_eq!(
+                press(&mut input, "enter"),
+                Outcome::Picked("effort".to_owned(), 2),
+                "{context}: Enter accepts"
+            );
+            let mut input = crate::input();
+            input.open_picker(effort(false));
+            assert_eq!(
+                press(&mut input, key),
+                Outcome::Picked("effort".to_owned(), 2),
+                "{context}: no fork, no forking"
+            );
+        }
         Action::SearchOlder => {
             let mut input = input();
             input.act(Action::HistorySearch);

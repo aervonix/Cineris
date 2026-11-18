@@ -110,6 +110,7 @@ keys.editor                        user only
 keys.menu                          user only
 keys.picker                        user only
 keys.toggle                        user only
+keys.fork                          user only
 keys.search                        user only
 keys.focus                         user only
 keys.dialog                        user only

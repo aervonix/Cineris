@@ -284,6 +284,18 @@
           "x-cineris-effect": "at once",
           "x-cineris-trust": "user only"
         },
+        "fork": {
+          "additionalProperties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": "The fork of the pickers that fork (`/rewind`'s, `/sessions`'): `fork`.",
+          "type": "object",
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
+        },
         "global": {
           "additionalProperties": {
             "items": {

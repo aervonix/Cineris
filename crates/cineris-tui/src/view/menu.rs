@@ -89,6 +89,22 @@ pub fn menu(input: &Input, look: &Look, width: usize) -> Option<Vec<Line>> {
         lines.push(Line::new());
         lines.push(fit(line, width, look));
     }
+    // A picker that forks says how (since step 25): `tab - fork from here`.
+    if let Some(fork) = &menu.fork {
+        let key = input
+            .keymap()
+            .keys_of(Action::PickerFork)
+            .first()
+            .map_or_else(String::new, |key| format!("{} - ", keys::name(*key)));
+        if menu.toggle.is_none() {
+            lines.push(Line::new());
+        }
+        let line = Line::from(Span::plain(" ".repeat(INDENT + 2))).with(Span::new(
+            format!("{key}{}", super::one_line(fork)),
+            look.theme.style(Token::Key),
+        ));
+        lines.push(fit(line, width, look));
+    }
     Some(lines)
 }
 
