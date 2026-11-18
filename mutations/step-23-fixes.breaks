@@ -1217,8 +1217,8 @@ caught-by:
 rule: /sessions does not switch while a session's history is being read.
 file: crates/cineris-tui/src/app/state/commands.rs
 in: App::leave_for
-find: if self.opening || self.reading || self.rewind_under_way() {
-replace: if self.opening || self.rewind_under_way() {
+find: if self.opening || self.reading {
+replace: if self.opening {
 caught-by:
     app::tests::sessions::a_switch_while_a_history_is_read_is_refused_and_the_read_goes_on
 
@@ -1226,8 +1226,8 @@ caught-by:
 rule: /sessions does not switch while a session is being opened.
 file: crates/cineris-tui/src/app/state/commands.rs
 in: App::leave_for
-find: if self.opening || self.reading || self.rewind_under_way() {
-replace: if self.reading || self.rewind_under_way() {
+find: if self.opening || self.reading {
+replace: if self.reading {
 caught-by:
     app::tests::sessions::a_switch_while_a_session_opens_is_refused
 

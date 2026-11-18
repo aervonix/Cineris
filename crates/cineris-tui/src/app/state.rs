@@ -1923,6 +1923,12 @@ impl App {
             self.say("A session is being opened: /new can start another once it is.");
             return;
         }
+        // What a rewind holds (a prompt sent while the transcript is read
+        // again) is this session's (since step 25).
+        if self.rewind_under_way() {
+            self.say("A rewind is under way: /new can start another session once it is done.");
+            return;
+        }
         if let Some(session) = self.session.take() {
             let ticket = self.link.send(Op::SessionClose(SessionRef {
                 session_id: session.session_id,

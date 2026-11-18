@@ -803,8 +803,12 @@ impl App {
         }
         // Until the one under way is open and drawn, what comes back is
         // its: another is switched to after.
-        if self.opening || self.reading || self.rewind_under_way() {
+        if self.opening || self.reading {
             self.say("A session is being opened: /sessions can switch once it is.");
+            return false;
+        }
+        if self.rewind_under_way() {
+            self.say("A rewind is under way: /sessions can switch once it is done.");
             return false;
         }
         if let Some(open) = self.session.take() {
