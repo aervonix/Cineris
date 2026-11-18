@@ -1457,21 +1457,25 @@ impl App {
             self.stop_running();
             return;
         };
-        // The prompts that wait for a rewind, or for the transcript read
-        // again after it, were not sent either: they come back, and there
-        // is nothing to interrupt (the review of step 25's second pull
-        // request: they went as a new turn when the read ended).
+        // The prompts that wait for a rewind or an undo, or for the
+        // transcript read again after it, were not sent either: they come
+        // back (the review of step 25's second pull request: they went as a
+        // new turn when the read ended). A turn that runs meanwhile
+        // (another client's) is interrupted as any is (the review of its
+        // fixes).
         if self.held_sent.is_none()
             && !self.held_prompts.is_empty()
             && self.holds_prompts_for_rewind()
         {
             self.give_back_held();
-            self.stop_running();
             self.say(
                 "The prompts that waited for the rewind were not sent: they are back in the \
                  input box.",
             );
-            return;
+            if !self.turn_runs {
+                self.stop_running();
+                return;
+            }
         }
         // The held prompts not sent yet go now, queued behind the one on
         // its way and ahead of the interrupt: the core holds them with it,
@@ -1758,6 +1762,10 @@ impl App {
                 // transcript read again (since step 25).
                 self.read_again(session);
             }
+            // The prompts sent while it was on its way come back.
+            (Pending::Undo(_), result) => {
+                self.undo_failed(&result.err().unwrap_or_else(unexpected));
+            }
             (Pending::Points(id), Ok(OpResult::SessionRead(page))) => self.points_read(&id, page),
             // An answer of another kind ends what waited for it as an error
             // does, so that nothing is left waiting (the review of this
@@ -1910,6 +1918,16 @@ impl App {
         let held: Vec<String> = self.held_prompts.drain(..).collect();
         for text in held {
             self.give_back(&text);
+        }
+    }
+
+    /// The spinner the held prompts began stops, now that they are given
+    /// back, unless a turn runs (another client's, or one a held event
+    /// said began): `Esc` and `Ctrl+C` go on interrupting it (the review of
+    /// the fixes of step 25's second pull request).
+    fn stop_running_unless_a_turn_runs(&mut self) {
+        if !self.turn_runs {
+            self.stop_running();
         }
     }
 

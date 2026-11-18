@@ -1376,6 +1376,253 @@ fn a_read_again_that_fails_is_said_and_the_prompts_waiting_go() {
     assert!(notices(&mut app, now).contains("could not be read"));
 }
 
+// ------------------------------------- the review of the fixes, held prompts
+
+/// Whether `Esc` now sends an interrupt: a turn is taken to run.
+fn esc_interrupts(app: &mut App, link: &Scripted, at: Instant) -> bool {
+    let _ = link.take_sent();
+    key(app, "esc", at);
+    link.take_sent()
+        .iter()
+        .any(|(_, op)| matches!(op, Op::TurnInterrupt(_)))
+}
+
+/// A turn that began while a fork was asked for (another client's: its
+/// `turn.started` held with the fork) still runs when the fork fails: the
+/// prompts held come back, and `Esc` stops that turn (the review of the
+/// fixes of step 25's second pull request: the input showed idle).
+#[test]
+fn a_turn_begun_while_a_failed_fork_was_asked_for_can_still_be_stopped() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    key(&mut app, "tab", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionFork(_)).then_some(()));
+    type_text(&mut app, "typed ahead", now);
+    key(&mut app, "enter", now);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    give(
+        &link,
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            "session_not_stored",
+            "A session with no log cannot be forked.",
+        )),
+    );
+    drain(&mut app, now);
+    assert_eq!(app.input().editor().expanded(), "typed ahead");
+    assert!(esc_interrupts(&mut app, &link, now), "shown idle");
+}
+
+/// A rewind refused while another client's turn began gives back the
+/// prompts held for it, and `Esc` still stops that turn (the review of the
+/// fixes of step 25's second pull request).
+#[test]
+fn a_turn_begun_under_a_refused_rewind_can_still_be_stopped() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    let ready = asked(&mut app, &link, two_files(), now);
+    key(&mut app, "2", ready);
+    let (ticket, _) = rewind_sent(&link).expect("the rewind");
+    type_text(&mut app, "next", ready);
+    key(&mut app, "enter", ready);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    give(
+        &link,
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            "turn_running",
+            "A turn is running.",
+        )),
+    );
+    drain(&mut app, ready);
+    assert_eq!(app.input().editor().expanded(), "next");
+    assert!(esc_interrupts(&mut app, &link, ready), "shown idle");
+}
+
+/// `Ctrl+C` while prompts wait for the read again gives them back, and
+/// interrupts a turn another client began meanwhile (the review of the
+/// fixes of step 25's second pull request: it interrupted nothing).
+#[test]
+fn ctrl_c_gives_back_the_prompts_waiting_and_stops_a_turn_that_runs() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    run_command(&mut app, "/undo", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionUndo(_)).then_some(()));
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionUndo(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, now);
+    let _ = sent_one(&link, |op| matches!(op, Op::SessionRead(_)).then_some(()));
+    type_text(&mut app, "next", now);
+    key(&mut app, "enter", now);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    drain(&mut app, now);
+    key(&mut app, "ctrl+c", now);
+    assert_eq!(app.input().editor().expanded(), "next");
+    assert!(notices(&mut app, now).contains("waited for the rewind were not sent"));
+    let sent = link.take_sent();
+    assert!(
+        sent.iter()
+            .any(|(_, op)| matches!(op, Op::TurnInterrupt(_))),
+        "the turn that runs was not interrupted: {sent:#?}"
+    );
+    assert!(turn_start(&sent).is_empty(), "{sent:#?}");
+}
+
+/// A prompt sent between `/undo` and its result waits for it and for the
+/// read after it, as one sent after a rewind's answer does, and is drawn
+/// once; an undo that fails gives it back (the review of the fixes of step
+/// 25's second pull request: only the rewind held prompts).
+#[test]
+fn a_prompt_sent_under_an_undo_waits_for_it_and_is_drawn_once() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    run_command(&mut app, "/undo", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionUndo(_)).then_some(()));
+    type_text(&mut app, "next", now);
+    key(&mut app, "enter", now);
+    assert!(
+        turn_start(&link.take_sent()).is_empty(),
+        "sent under the undo"
+    );
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionUndo(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, now);
+    let (read, _) = sent_one(&link, |op| matches!(op, Op::SessionRead(_)).then_some(()));
+    give(&link, read, Ok(page(history()[..4].to_vec(), None)));
+    drain(&mut app, now);
+    let sent = link.take_sent();
+    let prompts = turn_start(&sent);
+    assert_eq!(prompts.len(), 1, "{sent:#?}");
+    assert_eq!(prompts[0].input, vec![Part::text("next")]);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    link.give(event(Event::ItemCompleted(ItemCompleted {
+        item: user("i_7", "next"),
+    })));
+    drain(&mut app, now);
+    let _ = app.frame(now);
+    key(&mut app, "ctrl+o", now);
+    let viewed = text(&app.viewer_frame(80, 98, now)).join("\n");
+    assert_eq!(viewed.matches("next").count(), 1, "{viewed}");
+    assert!(!viewed.contains("Third answer."), "{viewed}");
+
+    // Refused: the prompt comes back, and nothing is sent.
+    let (mut app, link) = with_history(now);
+    run_command(&mut app, "/undo", now);
+    let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionUndo(_)).then_some(()));
+    type_text(&mut app, "next", now);
+    key(&mut app, "enter", now);
+    give(
+        &link,
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Usage,
+            "nothing_to_undo",
+            "There is no turn to undo.",
+        )),
+    );
+    drain(&mut app, now);
+    assert!(
+        turn_start(&link.take_sent()).is_empty(),
+        "sent after a refusal"
+    );
+    assert_eq!(app.input().editor().expanded(), "next");
+    assert!(notices(&mut app, now).contains("no turn to undo"));
+}
+
+/// A page of an earlier rewind's prompt read, given up at its question
+/// before the page came, does not take away the prompt this rewind read:
+/// it still comes back into the editor (the review of the fixes of step
+/// 25's second pull request).
+#[test]
+fn an_earlier_rewinds_prompt_read_does_not_take_this_ones_away() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    let sent = link.take_sent();
+    let early = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::SessionRead(read) if read.item_id.is_some()))
+        .map(|(ticket, _)| *ticket)
+        .expect("turn 2's prompt read");
+    let (planned, _) = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::SessionRewindPlan(_)))
+        .expect("turn 2's plan");
+    give(
+        &link,
+        *planned,
+        Ok(OpResult::SessionRewindPlan(plan(Vec::new()))),
+    );
+    drain(&mut app, now);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let ready = app.deadline().expect("the answers' moment");
+    let _ = app.frame(ready);
+    app.drawn(ready);
+    key(&mut app, "esc", ready);
+
+    // Turn 3 now: its prompt read, then the early page.
+    rewind_picker(&mut app, &link, history(), ready);
+    key(&mut app, "enter", ready);
+    let sent = link.take_sent();
+    let (read, point) = sent
+        .iter()
+        .find_map(|(ticket, op)| match op {
+            Op::SessionRead(read) if read.item_id.is_some() => {
+                Some((*ticket, read.item_id.clone()))
+            }
+            _ => None,
+        })
+        .expect("turn 3's prompt read");
+    assert_eq!(point, Some(ItemId::from("i_5")));
+    let (planned, _) = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::SessionRewindPlan(_)))
+        .expect("turn 3's plan");
+    give(&link, read, Ok(page(vec![history()[4].clone()], None)));
+    give(
+        &link,
+        *planned,
+        Ok(OpResult::SessionRewindPlan(plan(Vec::new()))),
+    );
+    give(&link, early, Ok(page(vec![history()[2].clone()], None)));
+    drain(&mut app, ready);
+    let _ = app.frame(ready);
+    app.drawn(ready);
+    let again = app.deadline().expect("the answers' moment");
+    let _ = app.frame(again);
+    app.drawn(again);
+    key(&mut app, "2", again);
+    let (ticket, params) = rewind_sent(&link).expect("the rewind");
+    assert_eq!(params.before, Some(ItemId::from("i_5")));
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionRewind(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, again);
+    assert_eq!(app.input().editor().expanded(), "third prompt");
+    assert!(!notices(&mut app, again).contains("could not be read"));
+}
+
 /// An item whose events came while the branch is read again is drawn from
 /// them, and not again from the read; one the read says is still in
 /// progress is left to its events.

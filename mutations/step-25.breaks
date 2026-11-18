@@ -2032,7 +2032,7 @@ caught-by:
 rule: A rewind refused gives back the prompts that waited for it.
 file: crates/cineris-tui/src/app/state/rewind.rs
 in: App::rewind_failed
-find: self.give_back_held();
+find: self.give_back_held_for_history();
 replace:
 caught-by:
     cineris-tui app::tests::rewind::a_prompt_sent_after_the_answer_waits_for_the_rewind
@@ -2158,3 +2158,57 @@ find: if forking.before.is_some() && forked.before != forking.before {
 replace: if false && forked.before != forking.before {
 caught-by:
     cineris-tui app::tests::rewind::a_fork_whose_result_does_not_say_where_it_ended_holds_all_of_the_session
+
+[break] a-failed-fork-shows-a-running-turn-idle
+rule: A fork that fails gives the prompts held for it back, and stops the spinner only when no turn runs.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::fork_failed
+find: self.stop_running_unless_a_turn_runs();
+replace: self.stop_running();
+caught-by:
+    cineris-tui app::tests::rewind::a_turn_begun_while_a_failed_fork_was_asked_for_can_still_be_stopped
+
+[break] prompts-given-back-show-a-running-turn-idle
+rule: Prompts given back for a rewind or an undo that did not happen stop the spinner only when no turn runs.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::give_back_held_for_history
+find: self.stop_running_unless_a_turn_runs();
+replace: self.stop_running();
+caught-by:
+    cineris-tui app::tests::rewind::a_turn_begun_under_a_refused_rewind_can_still_be_stopped
+
+[break] ctrl-c-with-prompts-held-interrupts-nothing
+rule: Ctrl+C gives back the prompts held for a rewind or an undo, and interrupts a turn that runs.
+file: crates/cineris-tui/src/app/state.rs
+in: App::interrupt
+find: if !self.turn_runs {
+replace: if true {
+caught-by:
+    cineris-tui app::tests::rewind::ctrl_c_gives_back_the_prompts_waiting_and_stops_a_turn_that_runs
+
+[break] a-prompt-under-an-undo-does-not-wait
+rule: A prompt sent between /undo and its result waits for it and for the read after it.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::holds_prompts_for_rewind
+find: || self.undoing()
+replace:
+caught-by:
+    cineris-tui app::tests::rewind::a_prompt_sent_under_an_undo_waits_for_it_and_is_drawn_once
+
+[break] a-failed-undo-keeps-the-prompts-held
+rule: An undo that fails gives back the prompts held for it.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::undo_failed
+find: self.give_back_held_for_history();
+replace: let _ = 0;
+caught-by:
+    cineris-tui app::tests::rewind::a_prompt_sent_under_an_undo_waits_for_it_and_is_drawn_once
+
+[break] a-stale-prompt-read-takes-the-prompt-away
+rule: A page of an earlier rewind's prompt read does not take away the prompt this rewind read.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::rewind_prompt_read
+find: if text.is_some() {
+replace: if true {
+caught-by:
+    cineris-tui app::tests::rewind::an_earlier_rewinds_prompt_read_does_not_take_this_ones_away
