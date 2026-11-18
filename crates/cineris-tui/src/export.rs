@@ -6,21 +6,38 @@
 //! (`session/read` with `redacted`): the harness's credentials by their
 //! values, which the core alone holds, and every well-known key format,
 //! by the walk the session log's writer uses, with the provider's blocks
-//! dropped and what is still running left out. Then this module's stricter
-//! pass ([`Export::new`]) runs every string of every item, and the title,
-//! through [`SecretFilter`]'s formats again, before anything is serialised:
-//! a key that JSON's escapes would cut (a private key's line breaks) is
-//! still whole when it is looked at.
+//! dropped and what is still running left out; and its result says that it
+//! masked, without which the application writes nothing (a core that does
+//! not know `redacted` reads the items as they are). Then this module's
+//! stricter pass ([`Export::new`]) runs every string of every item, every
+//! key of every object, and the title, through [`SecretFilter`]'s formats
+//! again, before anything is serialised: a key that JSON's escapes would
+//! cut (a private key's line breaks) is still whole when it is looked at,
+//! and a key that holds a secret is renamed to the mask. It drops the
+//! provider's blocks again too (`raw` outside the JSON that is somebody
+//! else's, and every provider block part).
+//!
+//! **The count is of the masks the export holds,** as the core counts its
+//! own: each mask in its items' strings and keys and in its title, and, in
+//! Markdown, each the filter adds to the text as it is shown. A pass that
+//! changes nothing can add nothing to it.
 //!
 //! **What is written is safe to read.** In Markdown, control characters
-//! are made visible and what acts unseen is escaped, as `/copy` does
-//! ([`readable`]), and each block of code or output is fenced with more
-//! backticks than any run in it.
+//! are left out and what acts unseen is made visible, as `/copy` does
+//! ([`readable`]); the text of each block, as shown, goes through the
+//! filter once more, since leaving a control character out can join the
+//! halves of a key that no string held whole; each block of code or output
+//! is fenced with more backticks than any run in it; the title is escaped
+//! so that it stays one heading, and a tool's name is put on one line.
+//! The text of a prompt, an answer or a notice is otherwise written as it
+//! is, to be read as Markdown: its headings, emphasis and links are its
+//! own.
 //!
-//! **The file is the program's to write** ([`Writer`]), on a worker: this
-//! crate touches no file, and the interface's thread never waits on the
-//! disk.
+//! **The file is the program's to write** ([`Writer`]), on a worker, which
+//! makes the text too: this crate touches no file, and the interface's
+//! thread neither masks, renders nor waits on the disk.
 
+use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
@@ -104,10 +121,11 @@ pub enum ExportError {
     Failed(String),
 }
 
-/// The program's writer: creates the file new and private to the user,
-/// never over one that exists, and removes what it wrote when the write
-/// fails part of the way. Run on a worker. Returns the path written, as
-/// the person reads it.
+/// The program's writer: writes the text whole under a name of its own
+/// beside the file, private to the user, and then gives it the file's
+/// name, never over one that exists; what a write that failed wrote is
+/// removed. Run on a worker. Returns the path written, as the person reads
+/// it.
 pub type Writer = Arc<dyn Fn(ExportFile) -> Result<String, ExportError> + Send + Sync>;
 
 /// A session read for an export, masked by the client's pass too.
@@ -117,58 +135,56 @@ pub struct Export {
     pub session: String,
     /// Its title, masked.
     pub title: Option<String>,
-    /// Its items, masked.
+    /// Its items, masked, with no provider block.
     pub items: Vec<Item>,
     /// A turn was running: what it had not finished is left out.
     pub running: bool,
-    /// How many values are masked, by the core and by this pass.
+    /// How many masks the items and the title hold, the core's and this
+    /// pass's: each mask in a string or a key.
     pub masked: usize,
 }
 
 impl Export {
-    /// The export of `items`, read with `redacted` (the core said
-    /// `core_masked` values are masked in them), with the client's
-    /// stricter pass over every string of every item and over the title.
+    /// The export of `items`, read with `redacted`, with the client's
+    /// stricter pass over every string and key of every item and over the
+    /// title, and the provider's blocks dropped.
     #[must_use]
-    pub fn new(
-        session: &str,
-        title: Option<&str>,
-        items: Vec<Item>,
-        core_masked: u32,
-        running: bool,
-    ) -> Self {
+    pub fn new(session: &str, title: Option<&str>, items: Vec<Item>, running: bool) -> Self {
         let filter = SecretFilter::new();
-        let mut added = 0;
+        let mut masked = 0;
         let items = items
             .into_iter()
             .filter_map(|item| {
                 let mut value = serde_json::to_value(&item).ok()?;
-                added += mask(&mut value, &filter);
+                mask(&mut value, &filter, false);
+                let count = masks_of(&value);
                 // What does not read back after masking is left out rather
                 // than written unmasked.
-                serde_json::from_value(value).ok()
+                let item = serde_json::from_value(value).ok()?;
+                masked += count;
+                Some(item)
             })
             .collect();
         let title = title.map(|title| {
-            let masked = filter.redact(title).into_owned();
-            added += masks_in(&masked).saturating_sub(masks_in(title));
-            masked
+            let title = filter.redact(title).into_owned();
+            masked += masks_in(&title);
+            title
         });
         Self {
             session: session.to_owned(),
             title,
             items,
             running,
-            masked: usize::try_from(core_masked).unwrap_or(usize::MAX) + added,
+            masked,
         }
     }
 
-    /// The file's text in `format`.
+    /// The file's text in `format`, and how many values are masked in it.
     #[must_use]
-    pub fn text(&self, format: Format) -> String {
+    pub fn text(&self, format: Format) -> (String, usize) {
         match format {
-            Format::Markdown => self.markdown(),
-            Format::Json => self.json(),
+            Format::Markdown => self.markdown_counted(),
+            Format::Json => (self.json(), self.masked),
         }
     }
 
@@ -194,28 +210,42 @@ impl Export {
     /// The export as Markdown, safe to read.
     #[must_use]
     pub fn markdown(&self) -> String {
-        let mut out = String::new();
+        self.markdown_counted().0
+    }
+
+    /// The Markdown, and how many values are masked in it: the items' and
+    /// the title's, and those the text as shown gave up.
+    fn markdown_counted(&self) -> (String, usize) {
+        let filter = SecretFilter::new();
+        let mut shown = Shown {
+            filter: &filter,
+            added: 0,
+        };
         let title = self
             .title
             .as_deref()
-            .map(|title| readable(title).replace('\n', " "))
+            .map(|title| shown.again(readable(title).replace('\n', " ")))
             .filter(|title| !title.trim().is_empty())
             .unwrap_or_else(|| format!("Session {}", readable(&self.session)));
+        let mut body = String::new();
+        for item in &self.items {
+            shown.item(&mut body, item);
+        }
+        let masked = self.masked + shown.added;
+        let mut out = String::new();
         let _ = writeln!(out, "# {}\n", escape_line(&title));
         let _ = write!(
             out,
             "Session `{}`, exported by Cineris. {}.",
             readable(&self.session).replace('`', ""),
-            masked_sentence(self.masked)
+            masked_sentence(masked)
         );
         if self.running {
             out.push_str(" A turn was running: what it had not finished is left out.");
         }
         out.push_str("\n\n");
-        for item in &self.items {
-            item_markdown(&mut out, item);
-        }
-        out
+        out.push_str(&body);
+        (out, masked)
     }
 }
 
@@ -239,6 +269,12 @@ pub(crate) fn readable(text: &str) -> String {
         .filter(|&c| matches!(c, '\n' | '\t') || cineris_term::sanitize::visible(c).is_none())
         .collect();
     cineris_term::sanitize(&typed).into_owned()
+}
+
+/// A name inside backticks (a tool's): readable, on one line, with no
+/// backtick to end its span.
+fn one_line(text: &str) -> String {
+    readable(text).replace('\n', " ").replace('`', "")
 }
 
 /// A heading's text: what would end it or make it something else
@@ -279,7 +315,7 @@ fn fenced(out: &mut String, info: &str, content: &str) {
     let _ = writeln!(out, "{fence}\n");
 }
 
-/// The text of `parts`, safe to read, with an image said as one.
+/// The text of `parts`, readable, with an image said as one.
 fn parts_text(parts: &[Part]) -> String {
     let mut text = String::new();
     for part in parts {
@@ -293,86 +329,163 @@ fn parts_text(parts: &[Part]) -> String {
     text
 }
 
-fn item_markdown(out: &mut String, item: &Item) {
-    match item {
-        Item::UserMessage(message) => {
-            out.push_str("## You\n\n");
-            let _ = writeln!(out, "{}\n", parts_text(&message.parts).trim_end());
+/// The Markdown's text as it is shown, masked once more, and how many
+/// masks that added.
+struct Shown<'a> {
+    filter: &'a SecretFilter,
+    added: usize,
+}
+
+impl Shown<'_> {
+    /// `text`, a block as it is shown, through the filter once more:
+    /// leaving out a control character, or joining two parts, can make
+    /// one key of two halves that no string held whole.
+    fn again(&mut self, text: String) -> String {
+        match self.filter.redact(&text) {
+            Cow::Borrowed(_) => text,
+            Cow::Owned(masked) => {
+                self.added += masks_in(&masked).saturating_sub(masks_in(&text));
+                masked
+            }
         }
-        Item::AssistantMessage(message) => {
-            out.push_str("## Answer\n\n");
-            for part in &message.parts {
-                match part {
-                    Part::Reasoning(reasoning) if !reasoning.text.trim().is_empty() => {
-                        out.push_str("Reasoning:\n\n");
-                        for line in readable(&reasoning.text).lines() {
-                            let _ = writeln!(out, "> {line}");
-                        }
-                        out.push('\n');
-                    }
-                    Part::Text(text) => {
-                        let _ = writeln!(out, "{}\n", readable(&text.text).trim_end());
-                    }
-                    Part::ToolCall(call) => {
-                        let _ = writeln!(
-                            out,
-                            "Tool call `{}`:\n",
-                            readable(&call.name).replace('`', "")
-                        );
-                        let arguments =
-                            serde_json::to_string_pretty(&call.arguments).unwrap_or_default();
-                        fenced(out, "json", &readable(&arguments));
-                    }
-                    Part::Image(_) => out.push_str("[an image]\n\n"),
-                    _ => {}
+    }
+
+    fn item(&mut self, out: &mut String, item: &Item) {
+        match item {
+            Item::UserMessage(message) => {
+                out.push_str("## You\n\n");
+                let text = self.again(parts_text(&message.parts));
+                let _ = writeln!(out, "{}\n", text.trim_end());
+            }
+            Item::AssistantMessage(message) => {
+                out.push_str("## Answer\n\n");
+                for part in &message.parts {
+                    self.part(out, part);
                 }
             }
-        }
-        Item::ToolResult(result) => {
-            let outcome = match result.outcome {
-                ToolOutcome::Success => "done",
-                ToolOutcome::Error => "failed",
-                ToolOutcome::Denied => "refused",
-                ToolOutcome::Interrupted => "stopped",
-                _ => "ended",
-            };
-            let _ = writeln!(
-                out,
-                "Result of `{}`, {outcome}:\n",
-                readable(&result.tool).replace('`', "")
-            );
-            fenced(out, "text", &parts_text(&result.content));
-        }
-        Item::Notice(notice) => {
-            for line in readable(&notice.text).lines() {
-                let _ = writeln!(out, "> {line}");
+            Item::ToolResult(result) => {
+                let outcome = match result.outcome {
+                    ToolOutcome::Success => "done",
+                    ToolOutcome::Error => "failed",
+                    ToolOutcome::Denied => "refused",
+                    ToolOutcome::Interrupted => "stopped",
+                    _ => "ended",
+                };
+                let tool = self.again(one_line(&result.tool));
+                let _ = writeln!(out, "Result of `{tool}`, {outcome}:\n");
+                let text = self.again(parts_text(&result.content));
+                fenced(out, "text", &text);
             }
-            out.push('\n');
+            Item::Notice(notice) => {
+                for line in self.again(readable(&notice.text)).lines() {
+                    let _ = writeln!(out, "> {line}");
+                }
+                out.push('\n');
+            }
+            Item::Summary(summary) => {
+                out.push_str("## Summary of the turns before\n\n");
+                let text = self.again(readable(&summary.text));
+                let _ = writeln!(out, "{}\n", text.trim_end());
+            }
+            _ => {}
         }
-        Item::Summary(summary) => {
-            out.push_str("## Summary of the turns before\n\n");
-            let _ = writeln!(out, "{}\n", readable(&summary.text).trim_end());
+    }
+
+    /// A part of an answer.
+    fn part(&mut self, out: &mut String, part: &Part) {
+        match part {
+            Part::Reasoning(reasoning) if !reasoning.text.trim().is_empty() => {
+                out.push_str("Reasoning:\n\n");
+                for line in self.again(readable(&reasoning.text)).lines() {
+                    let _ = writeln!(out, "> {line}");
+                }
+                out.push('\n');
+            }
+            Part::Text(text) => {
+                let text = self.again(readable(&text.text));
+                let _ = writeln!(out, "{}\n", text.trim_end());
+            }
+            Part::ToolCall(call) => {
+                let name = self.again(one_line(&call.name));
+                let _ = writeln!(out, "Tool call `{name}`:\n");
+                let arguments = serde_json::to_string_pretty(&call.arguments).unwrap_or_default();
+                let arguments = self.again(readable(&arguments));
+                fenced(out, "json", &arguments);
+            }
+            Part::Image(_) => out.push_str("[an image]\n\n"),
+            _ => {}
         }
-        _ => {}
     }
 }
 
-/// Masks every string in `value` with `filter`, and returns how many
-/// masks it added.
-fn mask(value: &mut Value, filter: &SecretFilter) -> usize {
+/// The fields of an item whose JSON is somebody else's: a tool call's
+/// arguments (the model's), a tool result's payload (the tool's) and an
+/// error's details. A key named `raw` inside one is theirs, not a
+/// provider's block, and is kept, masked like the rest.
+const FREE_FORM: [&str; 3] = ["arguments", "payload", "details"];
+
+/// The client's pass over an item as JSON: every string and every key
+/// masked with `filter`, a key that held a secret renamed to what the
+/// filter makes of it (with ` 2`, ` 3` and so on after it when another key
+/// has that name); and, outside JSON that is somebody else's
+/// (`free_form`), every provider block dropped: a `raw` field, and a part
+/// of the kind `provider_block`, which is nothing else.
+fn mask(value: &mut Value, filter: &SecretFilter, free_form: bool) {
     match value {
         Value::String(text) => {
-            let masked = filter.redact(text);
-            if let std::borrow::Cow::Owned(masked) = masked {
-                let added = masks_in(&masked).saturating_sub(masks_in(text));
+            if let Cow::Owned(masked) = filter.redact(text) {
                 *text = masked;
-                added.max(1)
-            } else {
-                0
             }
         }
-        Value::Array(items) => items.iter_mut().map(|item| mask(item, filter)).sum(),
-        Value::Object(fields) => fields.values_mut().map(|item| mask(item, filter)).sum(),
+        Value::Array(items) => {
+            if !free_form {
+                items.retain(|item| {
+                    item.get("kind").and_then(Value::as_str) != Some("provider_block")
+                });
+            }
+            for item in items {
+                mask(item, filter, free_form);
+            }
+        }
+        Value::Object(fields) => {
+            if !free_form {
+                fields.remove("raw");
+            }
+            let mut renamed = Vec::new();
+            for (key, mut item) in std::mem::take(fields) {
+                let inner = free_form || FREE_FORM.contains(&key.as_str());
+                mask(&mut item, filter, inner);
+                match filter.redact(&key) {
+                    Cow::Owned(masked) if masked != key => renamed.push((masked, item)),
+                    _ => {
+                        fields.insert(key, item);
+                    }
+                }
+            }
+            // After every key that stays, so that none is written over.
+            for (masked, item) in renamed {
+                let mut name = masked.clone();
+                let mut n = 1;
+                while fields.contains_key(&name) {
+                    n += 1;
+                    name = format!("{masked} {n}");
+                }
+                fields.insert(name, item);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+/// How many masks the strings and the keys of `value` hold.
+fn masks_of(value: &Value) -> usize {
+    match value {
+        Value::String(text) => masks_in(text),
+        Value::Array(items) => items.iter().map(masks_of).sum(),
+        Value::Object(fields) => fields
+            .iter()
+            .map(|(key, item)| masks_in(key) + masks_of(item))
+            .sum(),
         Value::Null | Value::Bool(_) | Value::Number(_) => 0,
     }
 }
