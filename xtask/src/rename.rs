@@ -75,6 +75,11 @@ apply       Rewrites the working tree (the files git tracks, and new files it
             knows the alias in the forms `apply` renames, not every word
             built on it.
 
+What it refuses: a symbolic link (neither `apply` nor `branch` renames
+one), a machine where rustfmt does not run (the text would differ from
+the one that renamed main), and NAME while a worktree has it checked out,
+or is rebasing or bisecting it.
+
 --kept      Lists the kept files and lines, each with its reason.
 
 branch      Makes each commit of BASE..TIP again, its tree passed through what
@@ -523,9 +528,13 @@ impl Formatter {
         Self { at: None }
     }
 
-    /// `text` formatted, or `None` when it cannot be (it does not parse).
-    fn format(&self, text: &str) -> Option<String> {
-        let root = self.at.as_ref()?;
+    /// `text` formatted, or `None` when it cannot be (it does not parse);
+    /// an error when rustfmt itself could not be run.
+    fn format(&self, text: &str) -> Result<Option<String>> {
+        let Some(root) = self.at.as_ref() else {
+            return Ok(None);
+        };
+        let failed = |error: std::io::Error| format!("could not run rustfmt: {error}");
         let mut child = Command::new("rustfmt")
             .args(["--edition", "2024", "--emit", "stdout", "--config-path"])
             .arg(root.join("rustfmt.toml"))
@@ -534,16 +543,18 @@ impl Formatter {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
-            .ok()?;
-        let mut stdin = child.stdin.take()?;
+            .map_err(failed)?;
+        let mut stdin = child.stdin.take().ok_or("rustfmt has no input")?;
         let input = text.to_owned();
         let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
-        let output = child.wait_with_output().ok()?;
-        writer.join().ok()?.ok()?;
+        let output = child.wait_with_output().map_err(failed)?;
+        // A text it refuses to parse closes its input early: that is its
+        // answer, not a failure to run.
+        let _ = writer.join();
         if !output.status.success() {
-            return None;
+            return Ok(None);
         }
-        String::from_utf8(output.stdout).ok()
+        Ok(String::from_utf8(output.stdout).ok())
     }
 
     fn formats(&self) -> bool {
@@ -561,36 +572,36 @@ pub(crate) struct Renamed {
 /// [`rename_text`], then cargo's order for a `Cargo.lock` and `rustfmt` for a
 /// Rust file that was formatted. A file that is not UTF-8 text (an image)
 /// keeps its bytes.
-pub(crate) fn transform(path: &str, bytes: &[u8], formatter: &Formatter) -> Renamed {
+pub(crate) fn transform(path: &str, bytes: &[u8], formatter: &Formatter) -> Result<Renamed> {
     let new_path = rename_path(path).into_owned();
-    let contents = std::str::from_utf8(bytes)
+    let text = std::str::from_utf8(bytes)
         .ok()
-        .filter(|text| !text.contains('\0'))
-        .and_then(|text| {
-            let Cow::Owned(renamed) = rename_text(&new_path, text) else {
-                return None;
-            };
+        .filter(|text| !text.contains('\0'));
+    let contents = match text.map(|text| (text, rename_text(&new_path, text))) {
+        Some((text, Cow::Owned(renamed))) => {
             let renamed = if new_path.ends_with("Cargo.lock") {
                 sort_lock(&renamed)
             } else if new_path.ends_with(".rs") && formatter.formats() {
-                format_rust(text, renamed, formatter)
+                format_rust(text, renamed, formatter).map_err(|error| format!("{path}: {error}"))?
             } else {
                 renamed
             };
             Some(renamed.into_bytes())
-        });
-    Renamed {
+        }
+        _ => None,
+    };
+    Ok(Renamed {
         path: new_path,
         contents,
-    }
+    })
 }
 
 /// The renamed text of a Rust file, formatted when the file was.
-fn format_rust(original: &str, renamed: String, formatter: &Formatter) -> String {
-    if formatter.format(original).as_deref() != Some(original) {
-        return renamed;
+fn format_rust(original: &str, renamed: String, formatter: &Formatter) -> Result<String> {
+    if formatter.format(original)?.as_deref() != Some(original) {
+        return Ok(renamed);
     }
-    formatter.format(&renamed).unwrap_or(renamed)
+    Ok(formatter.format(&renamed)?.unwrap_or(renamed))
 }
 
 /// A `Cargo.lock` with its packages, and each package's dependencies, in
@@ -822,6 +833,38 @@ fn apply(root: &Path, regen: bool) -> Result<()> {
     Ok(())
 }
 
+/// A symbolic link among the files, or in a folder on the way to one, or a
+/// link git tracks (which the listing passes over when it leads to a folder
+/// or nowhere).
+fn find_link(root: &Path, files: &[String]) -> Option<String> {
+    let is_link =
+        |path: &Path| fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
+    for file in files {
+        let mut path = root.to_path_buf();
+        let mut walked = Vec::new();
+        for part in file.split('/') {
+            path.push(part);
+            walked.push(part);
+            if is_link(&path) {
+                return Some(walked.join("/"));
+            }
+        }
+    }
+    if root.join(".git").exists() {
+        let listed = Command::new("git")
+            .args(["ls-files", "--stage", "-z"])
+            .current_dir(root)
+            .output()
+            .ok()?;
+        return String::from_utf8_lossy(&listed.stdout)
+            .split('\0')
+            .find(|entry| entry.starts_with("120000 "))
+            .and_then(|entry| entry.split_once('\t'))
+            .map(|(_, path)| path.to_owned());
+    }
+    None
+}
+
 /// What [`apply_tree`] did.
 pub(crate) struct Applied {
     /// Files whose text changed.
@@ -837,9 +880,7 @@ pub(crate) fn apply_tree(root: &Path, formatter: &Formatter) -> Result<Applied> 
     let files = workspace::repository_files(root)?;
     // A link is read through and written through, and its target is never
     // renamed: refused, as `branch` refuses one. None is tracked.
-    if let Some(link) = files.iter().find(|file| {
-        fs::symlink_metadata(root.join(file)).is_ok_and(|meta| meta.file_type().is_symlink())
-    }) {
+    if let Some(link) = find_link(root, &files) {
         return Err(format!(
             "{link} is a symbolic link: the rename does not rename links"
         ));
@@ -847,7 +888,7 @@ pub(crate) fn apply_tree(root: &Path, formatter: &Formatter) -> Result<Applied> 
     let renamed: Vec<Result<Renamed>> = in_parallel(&files, |file| {
         let bytes =
             fs::read(root.join(file)).map_err(|error| format!("could not read {file}: {error}"))?;
-        Ok(transform(file, &bytes, formatter))
+        transform(file, &bytes, formatter)
     });
     let renamed = renamed.into_iter().collect::<Result<Vec<_>>>()?;
     check_moves(
