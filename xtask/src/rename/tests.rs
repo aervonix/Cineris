@@ -641,10 +641,96 @@ fn git(dir: &Path, arguments: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+/// A file of a test's repository, its folders made (the tests that use it
+/// run on Unix).
+#[cfg(unix)]
 fn write(repo: &Path, file: &str, text: &str) {
     let path = repo.join(file);
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, text).unwrap();
+}
+
+/// The rewrite on every system, in as few gits as it can be shown in (each
+/// starts in about 0.05 s on a hosted Windows runner): a base and a commit
+/// on it, made by one `fast-import`, made again in the new names, with a
+/// file whose lines end in CR LF kept byte for byte but for the name.
+#[test]
+fn sys_a_branch_is_made_again_in_the_new_names_on_every_system() {
+    let scratch = Scratch::outside("xtask-rename", "every-system");
+    let repo = scratch.git_init("repo");
+    let commit = |mark: u32, from: &str, file: &str, text: &str| {
+        let at = 1_700_000_000 + u64::from(mark) * 60;
+        format!(
+            "commit refs/heads/step\nmark :{mark}\n\
+             author Cortex-Harness <dev@cortex-harness.invalid> {at} +0100\n\
+             committer Cortex Test <test@cortex-harness.invalid> {} +0000\n\
+             data 13\nAdd to cortex\n{from}M 100644 inline {file}\ndata {}\n{text}\n",
+            at + 30,
+            text.len()
+        )
+    };
+    let stream = commit(1, "", "crates/cortex-a/src/lib.rs", "use cortex_b::x;\r\n")
+        + &commit(2, "from :1\n", "docs/cx.md", "Run `cx` or `cortex`.\n");
+    let mut child = std::process::Command::new("git")
+        .args(["fast-import", "--quiet"])
+        .current_dir(&repo)
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_CONFIG_GLOBAL", repo.join("no-such-git-config"))
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    std::io::Write::write_all(&mut child.stdin.take().unwrap(), stream.as_bytes()).unwrap();
+    assert!(child.wait().unwrap().success());
+
+    let at = branch::Git::at(&repo);
+    let made = branch::rewrite(
+        &at,
+        &at.commit("step~1").unwrap(),
+        &at.commit("step").unwrap(),
+        &Formatter::none(),
+    )
+    .unwrap();
+    assert_eq!(made.commits, 1);
+    let shown = git(
+        &repo,
+        &[
+            "show",
+            "--date=raw",
+            "--format=%an <%ae> %ad|%cn <%ce> %cd|%s",
+            "--name-only",
+            &made.tip,
+        ],
+    );
+    assert_eq!(
+        shown,
+        "Cineris <dev@cineris.invalid> 1700000120 +0100|\
+         Cineris Test <test@cineris.invalid> 1700000150 +0000|Add to cineris\n\n\
+         docs/cx.md"
+    );
+    let lib = git(
+        &repo,
+        &[
+            "cat-file",
+            "-p",
+            &format!("{}:crates/cineris-a/src/lib.rs", made.tip),
+        ],
+    );
+    assert_eq!(lib, "use cineris_b::x;");
+    // Its CR LF is kept: 17 characters and the two of the line's end.
+    let size = git(
+        &repo,
+        &[
+            "cat-file",
+            "-s",
+            &format!("{}:crates/cineris-a/src/lib.rs", made.tip),
+        ],
+    );
+    assert_eq!(size, "19");
+    let page = git(
+        &repo,
+        &["cat-file", "-p", &format!("{}:docs/cx.md", made.tip)],
+    );
+    assert_eq!(page, "Run `cin` or `cineris`.");
 }
 
 /// The branch rewrite end to end, in a repository of its own:
@@ -656,6 +742,11 @@ fn write(repo: &Path, file: &str, text: &str) {
 ///   in their trees, paths, messages and identities, and the same commits
 ///   on a second run;
 /// - `git rebase --onto main R(BASE)` then goes through with no conflict.
+///
+/// On Unix only: it starts some 70 gits, which take 6 s on a hosted Windows
+/// runner. What it shows is git's logic and the tool's, the same on every
+/// system; the test before it shows the rewrite on Windows too.
+#[cfg(unix)]
 #[test]
 fn sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main() {
     let scratch = Scratch::outside("xtask-rename", "branch");
