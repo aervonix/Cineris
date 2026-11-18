@@ -148,3 +148,33 @@ find: if parents.len() != 1 {
 replace: if parents.len() > 2 {
 caught-by:
     rename::tests::sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main
+
+# What the review found.
+
+[break] a-branch-being-rebased-is-replaced
+rule: --force never replaces a branch a worktree is rebasing (its HEAD is detached then, and `git worktree list` names no branch).
+file: xtask/src/rename/branch.rs
+in: Git::refuse_in_use
+find: match crate::branch::used_elsewhere(&common, reference, None) {
+replace: match crate::branch::used_elsewhere(&common, reference, None).filter(|_| false) {
+caught-by:
+    rename::tests::sys_a_branch_made_before_the_rename_rebases_onto_the_renamed_main
+
+[break] apply-goes-through-a-link
+rule: `apply` refuses a symbolic link, as `branch` does, rather than read and write through it.
+file: xtask/src/rename.rs
+in: apply_tree
+find: if let Some(link) = files.iter().find(|file| {
+replace: if let Some(link) = files.iter().filter(|_| false).find(|file| {
+os: linux
+caught-by:
+    rename::tests::sys_a_symbolic_link_is_refused_by_both
+
+[break] the-check-reads-only-text
+rule: The check finds the old name in a file that is not UTF-8 text, which the rename cannot change.
+file: xtask/src/rename.rs
+in: violations
+find: if String::from_utf8_lossy(bytes)
+replace: if false && String::from_utf8_lossy(bytes)
+caught-by:
+    rename::tests::the_check_finds_a_planted_old_name_and_says_where
