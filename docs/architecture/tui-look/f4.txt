@@ -3,7 +3,7 @@
 · Mode: supervised. Written to ~/.config/cineris/config.toml.
 
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cineris 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                              │
 │                                                              │
 │   claude-opus-5-5 high  ·  ~/src/parser                      │
 ╰──────────────────────────────────────────────────────────────╯

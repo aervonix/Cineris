@@ -2,7 +2,7 @@
 · Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
 
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cineris 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                              │
 │                                                              │
 │   Setting up, in four short steps. Each one can be skipped,  │
 │   and x skips them all.                                      │
