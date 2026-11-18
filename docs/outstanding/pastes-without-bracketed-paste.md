@@ -1,8 +1,0 @@
-Pastes in terminals without bracketed paste are not detected, so a pasted line break sends the prompt.
-
-- Area: cineris-term
-- Owner: step 25
-
-| Item | Who | When |
-|---|---|---|
-| **A paste in a terminal without bracketed paste arrives as keys.** 09-tui's capability table says such pastes "are rate-detected", and nothing detects them yet: in such a terminal a pasted line break is `Enter`, which sends the prompt. Windows Terminal, the common Linux terminals, tmux, and the old console host under ConPTY have bracketed paste; the old console host's own window may not. Step 21 built the editor's half (a paste is inserted as text, never through the key map). The detection belongs where reads happen, in `cineris-term`, which would give keys that arrive many in one read, faster than anyone types, as an `Event::Paste`. | Step 25 (terminal quirks, each with an override) | Before the first release |
