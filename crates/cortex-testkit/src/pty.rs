@@ -51,6 +51,9 @@ pub struct Session {
     started: Instant,
     ended: bool,
     answering: bool,
+    /// Whether the terminal answering knows the win32 input mode, as
+    /// Windows Terminal does.
+    win32_input: bool,
     exit: Option<ExitStatus>,
 }
 
@@ -112,6 +115,7 @@ impl Session {
             started,
             ended: false,
             answering: false,
+            win32_input: true,
             exit: None,
         }
     }
@@ -121,6 +125,15 @@ impl Session {
     #[must_use]
     pub fn answering(mut self) -> Self {
         self.answering = true;
+        self
+    }
+
+    /// Answers as a terminal that does not know Windows Terminal's win32
+    /// input mode (9001), as xterm and most Unix terminals (since step 25):
+    /// a program asks such a terminal for the mouse by its sequences.
+    #[must_use]
+    pub fn without_win32_input(mut self) -> Self {
+        self.win32_input = false;
         self
     }
 
@@ -195,7 +208,12 @@ impl Session {
         self.recording.push(chunk);
         if self.answering {
             for query in self.term.take_queries() {
-                let reply = answer(query, &self.term);
+                let reply = match query {
+                    crate::vterm::Query::Mode(9001) if !self.win32_input => {
+                        b"\x1b[?9001;0$y".to_vec()
+                    }
+                    query => answer(query, &self.term),
+                };
                 let _ = self.writer.write_all(&reply);
             }
         }

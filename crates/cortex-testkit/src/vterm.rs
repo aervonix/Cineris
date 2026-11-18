@@ -349,6 +349,16 @@ impl VTerm {
         self.screen.iter().any(|row| row.text().contains(text))
     }
 
+    /// Whether the normal screen, kept while the alternate one is shown,
+    /// holds `text` (since step 25): what was written just before a
+    /// program took the alternate screen, in the same read.
+    #[must_use]
+    pub fn shows_under_the_alternate(&self, text: &str) -> bool {
+        self.saved_screen
+            .as_ref()
+            .is_some_and(|(rows, _)| rows.iter().any(|row| row.text().contains(text)))
+    }
+
     /// The screen as text, one row a line, for a failure message.
     #[must_use]
     pub fn dump(&self) -> String {
@@ -1047,6 +1057,35 @@ impl VTerm {
             index += 1;
         }
     }
+}
+
+/// The private modes that ask a terminal for mouse reports, in any of
+/// their forms and encodings (since step 25).
+pub const MOUSE_MODES: [u32; 9] = [9, 1000, 1001, 1002, 1003, 1005, 1006, 1015, 1016];
+
+/// Every private mode `bytes` asks a terminal to set, parameter by
+/// parameter (since step 25): `ESC [ ? 1003 ; 1006 h`, the form a
+/// pseudo-console uses, sets two, which a search for `?1003h` never finds.
+#[must_use]
+pub fn modes_set(bytes: &[u8]) -> Vec<u32> {
+    let mut modes = Vec::new();
+    let mut at = 0;
+    while let Some(found) = bytes[at..].windows(3).position(|w| w == b"\x1b[?") {
+        let begin = at + found + 3;
+        let end = bytes[begin..]
+            .iter()
+            .position(|b| !(b.is_ascii_digit() || *b == b';'))
+            .map_or(bytes.len(), |n| begin + n);
+        if bytes.get(end) == Some(&b'h') {
+            modes.extend(
+                bytes[begin..end]
+                    .split(|b| *b == b';')
+                    .filter_map(|part| std::str::from_utf8(part).ok()?.parse::<u32>().ok()),
+            );
+        }
+        at = end;
+    }
+    modes
 }
 
 /// What a modern terminal answers to `query`, for a driver that plays one.

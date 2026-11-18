@@ -118,45 +118,6 @@ fn our_input_mode(found: u32) -> u32 {
         & !(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT | ENABLE_MOUSE_INPUT)
 }
 
-/// Turns the console's mouse input on or off (since step 25): on only
-/// while the alternate screen is shown and the program wants the mouse.
-/// The mode the program found is what every restore puts back.
-pub(crate) fn set_mouse_input(on: bool) {
-    // Under the writing lock, which the emergency restore takes too: the
-    // mode read here is never written back after a restore put the
-    // console's own back (the review of step 25).
-    let _writing = writing(None);
-    if !ACTIVE.load(Ordering::SeqCst) {
-        return;
-    }
-    let input = handle(STD_INPUT_HANDLE);
-    if let Some(mode) = console_mode(input) {
-        // QuickEdit takes the mouse for the console's own selection: off
-        // while the program has the mouse (the extended flags say so), and
-        // as the program found it after.
-        let found_quick_edit = INPUT_MODE.load(Ordering::SeqCst) & QUICK_EDIT;
-        let wanted = if on {
-            (mode | ENABLE_MOUSE_INPUT | EXTENDED_FLAGS) & !QUICK_EDIT
-        } else {
-            (mode & !ENABLE_MOUSE_INPUT & !QUICK_EDIT) | found_quick_edit | EXTENDED_FLAGS
-        };
-        if wanted != mode {
-            set_mode(input, wanted);
-        }
-    }
-    if !on {
-        BUTTONS.store(0, Ordering::SeqCst);
-    }
-}
-
-/// The console's QuickEdit mode, which takes the mouse for its own
-/// selection (`ENABLE_QUICK_EDIT_MODE`).
-const QUICK_EDIT: u32 = 0x0040;
-
-/// The flag that says the QuickEdit and insert modes are set too
-/// (`ENABLE_EXTENDED_FLAGS`).
-const EXTENDED_FLAGS: u32 = 0x0080;
-
 /// The buttons the last mouse record said were down, to tell a press from
 /// a release.
 static BUTTONS: AtomicU32 = AtomicU32::new(0);
@@ -629,9 +590,12 @@ pub(crate) fn wait(timeout: Option<Duration>, into: &mut Vec<u8>) -> io::Result<
                 // Kept until it is reported: a read that also brought keys
                 // reports them first, and the resize on the next wait.
                 WINDOW_BUFFER_SIZE_EVENT => RESIZED.store(true, Ordering::SeqCst),
-                // Only while the program has the console's mouse input on
-                // (the alternate screen, step 25), where the console gives
-                // the mouse as a record rather than as the terminal's text.
+                // The console's mouse input is never turned on (since step
+                // 25's follow-up: with QuickEdit off, a pseudo-console asks
+                // the terminal for the mouse, whose reports then come as
+                // typed keys), so none comes; a record is still read as the
+                // report it stands for, for step 33
+                // (outstanding/the-mouse-under-windows-terminal.md).
                 MOUSE_EVENT => {
                     // SAFETY: the record says it holds a mouse event.
                     let mouse = unsafe { record.Event.MouseEvent };

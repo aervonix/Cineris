@@ -550,10 +550,6 @@ pub(crate) fn suspend() {
     unsafe { libc::raise(libc::SIGTSTP) };
 }
 
-/// The console's mouse input, which only Windows has: a terminal is asked
-/// for the mouse by the sequences alone.
-pub(crate) fn set_mouse_input(_on: bool) {}
-
 /// The window's size, columns then rows.
 pub(crate) fn size() -> io::Result<(u16, u16)> {
     let mut size = MaybeUninit::<libc::winsize>::zeroed();

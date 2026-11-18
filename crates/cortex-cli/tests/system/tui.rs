@@ -171,8 +171,14 @@ fn path(path: &std::path::Path) -> String {
 /// Waits for the first frame, and checks it came in time.
 fn first_frame(session: &mut Session, phases: &Phases) {
     phases.mark("the binary starts");
+    // The full screen takes the alternate screen at once: the shell's line
+    // may come in the same read, under it, or (through ConPTY, which paints
+    // on its own clock) never be painted at all, the switch marking the
+    // start instead. Then the time to the first frame below is from the
+    // switch, near nothing, and checks little: the start-up budget is
+    // `cargo xtask startup`'s, and the inline tests keep this check.
     let starting = session.wait_for(LIMIT, "the shell to start the binary", |t| {
-        t.shows(STARTING)
+        t.shows(STARTING) || t.shows_under_the_alternate(STARTING) || t.modes().alternate
     });
     let drawn = session.wait_for(LIMIT, "the first frame", |t| {
         READY.iter().any(|ready| t.shows(ready))
@@ -292,9 +298,10 @@ fn sys_a_turn_with_tools_runs_in_the_interface_and_the_terminal_is_put_back() {
 }
 
 /// The full-screen presenter in the real binary (step 25): `--fullscreen`
-/// draws on the alternate screen with the mouse reported, runs a turn,
-/// scrolls up with the wheel sent as the terminal sends it (which on
-/// Windows goes through the console's mouse input), re-wraps on a resize,
+/// draws on the alternate screen with the mouse reported (on Unix, in a
+/// terminal without the win32 input mode; on Windows the mouse is not
+/// asked for, and `PageUp` moves the view), runs a turn, scrolls up with
+/// the wheel sent as the terminal sends it, re-wraps on a resize,
 /// and quitting leaves the terminal as it was: the main screen as the shell
 /// left it, the mouse and the alternate screen off, and the modes the
 /// shell had.
@@ -313,13 +320,31 @@ fn sys_the_full_screen_runs_a_turn_scrolls_and_leaves_the_terminal_as_it_was() {
         &json!({"path": "notes.txt", "content": "kept in the box\n"}),
     );
     machine.reply_text(&answer);
+    // On Unix, a terminal like xterm, which does not know the win32
+    // input mode: the one where the mouse is asked for by its sequences.
     let mut session = machine.tui(&["--fullscreen"]);
+    if cfg!(unix) {
+        session = session.without_win32_input();
+    }
     first_frame(&mut session, &phases);
     if cfg!(unix) {
         // Through ConPTY the modes are the console's, not these.
         let modes = session.screen().modes();
         assert!(modes.alternate, "on the alternate screen");
         assert!(modes.mouse && modes.mouse_sgr, "the mouse is reported");
+    } else {
+        // Nothing asks for the mouse through a pseudo-console, in any form.
+        let written: Vec<u8> = session
+            .recording()
+            .iter()
+            .flat_map(|chunk| chunk.bytes.iter().copied())
+            .collect();
+        let set = cortex_testkit::vterm::modes_set(&written);
+        assert!(
+            !set.iter()
+                .any(|mode| cortex_testkit::vterm::MOUSE_MODES.contains(mode)),
+            "the mouse was asked for: every mode set was {set:?}"
+        );
     }
 
     phases.mark("the turn");

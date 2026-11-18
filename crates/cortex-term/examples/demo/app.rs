@@ -303,7 +303,6 @@ fn start_turn(stream: &Arc<Stream>, options: &Options, waker: cortex_term::Waker
     });
 }
 
-/// A key as the status line names it: `Ctrl+Shift+a`, `Alt+Enter`.
 /// A mouse event's name, as the status line shows it.
 #[must_use]
 pub fn mouse_name(mouse: cortex_term::Mouse) -> String {
@@ -320,6 +319,7 @@ pub fn mouse_name(mouse: cortex_term::Mouse) -> String {
     }
 }
 
+/// A key as the status line names it: `Ctrl+Shift+a`, `Alt+Enter`.
 pub fn key_name(key: Key) -> String {
     let mut name = String::new();
     for (modifier, word) in [
