@@ -26,7 +26,10 @@
 //! for events, and those no step took are not compared, so the transcript
 //! does not depend on timing. Each carrier's `seq` is checked to increase,
 //! and [`Lines`] checks that no event at or below a `session/read`'s `seq`
-//! arrives after the read's result.
+//! arrives after the read's result. A `session/read` with `redacted` (an
+//! export's) must say in its result that it masked: a client writes
+//! nothing without it, and a server that dropped the field on one carrier
+//! would read the same as one that never knew it.
 //!
 //! **`usage.updated`** is compared as each session's last one, after the
 //! sequence: the loop sends one at most once a frame while a response
@@ -343,6 +346,19 @@ fn read() -> Step {
     })
 }
 
+/// A read of the whole session for an export (since step 25).
+fn read_for_export() -> Step {
+    call(|ctx| {
+        Op::SessionRead(SessionReadParams {
+            session_id: ctx.session(),
+            item_id: None,
+            limit: None,
+            cursor: None,
+            redacted: true,
+        })
+    })
+}
+
 fn close() -> Step {
     call(|ctx| Op::SessionClose(ctx.session_ref()))
 }
@@ -644,6 +660,19 @@ pub fn scenarios() -> Vec<Scenario> {
                 close(),
             ],
         },
+        // Last, so that the scenarios before keep their folders' numbers.
+        Scenario {
+            name: "a session read for an export",
+            files: vec![],
+            model: vec![anthropic::text(&["Noted."])],
+            steps: vec![
+                new_session(),
+                prompt("the token is ghp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8"),
+                Step::Until("session.idle"),
+                read_for_export(),
+                close(),
+            ],
+        },
     ]
 }
 
@@ -728,7 +757,7 @@ pub struct Transcript(pub Vec<Value>);
 /// # Panics
 ///
 /// When a step cannot be taken: the connection ended, or an event's `seq`
-/// did not increase.
+/// did not increase; or when a read for an export does not say it masked.
 pub fn run(
     scenario: &Scenario,
     carrier: &mut dyn Carrier,
@@ -797,7 +826,15 @@ pub fn run(
             Step::Call(make) => {
                 let op = make(&ctx);
                 let method = op.method();
+                let for_export = matches!(&op, Op::SessionRead(params) if params.redacted);
                 let result = carrier.call(op);
+                if for_export && let Ok(OpResult::SessionRead(read)) = &result {
+                    assert!(
+                        read.redacted,
+                        "{}: a read for an export does not say it masked the items",
+                        scenario.name
+                    );
+                }
                 keep(&mut ctx, &mut kept, method, result);
             }
             Step::Start(make) => {

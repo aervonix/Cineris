@@ -1417,6 +1417,7 @@ impl Core {
                     next_cursor: page.next_cursor,
                     seq,
                     masked,
+                    redacted: params.redacted,
                 }))
             }
             Op::SessionFork(params) => {

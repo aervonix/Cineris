@@ -1659,7 +1659,7 @@ export interface SessionReadParams {
   item_id?: ItemId | null;
   /** The most items to return. */
   limit?: number | null;
-  /** For an export (since step 25): every item's text masked by the core's own secret filter, as the session log's writer masks it, the provider's blocks (`raw`) left out, and the items still in progress left out (named in `incomplete`). A session kept only in memory is masked the same. */
+  /** For an export (since step 25): every item's text masked by the core's own secret filter, as the session log's writer masks it, the provider's blocks (`raw`) left out, and the items still in progress left out (named in `incomplete`). A session kept only in memory is masked the same. The result says it was masked (its `redacted`). */
   redacted?: boolean;
   /** The session. */
   session_id: SessionId;
@@ -1675,6 +1675,8 @@ export interface SessionReadResult {
   masked?: number;
   /** Present when there are more. */
   next_cursor?: string | null;
+  /** The items were masked for an export, as `redacted` asked (since step 25). A client that asked for `redacted` writes nothing without it: a server that does not know the field reads the items unmasked, and its result reads `false` here. */
+  redacted?: boolean;
   /** The `seq` of the last event sent for the session when the items were read. Events after it are not in this result. */
   seq: number;
 }

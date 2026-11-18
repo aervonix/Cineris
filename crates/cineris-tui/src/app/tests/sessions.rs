@@ -137,6 +137,7 @@ fn read_result(items: Vec<Item>, incomplete: &[&str], seq: u64) -> OpResult {
         next_cursor: None,
         seq,
         masked: 0,
+        redacted: false,
     })
 }
 
@@ -404,6 +405,7 @@ fn a_switch_while_a_history_is_read_is_refused_and_the_read_goes_on() {
             next_cursor: Some("500".to_owned()),
             seq: 40,
             masked: 0,
+            redacted: false,
         })),
     ));
     drain(&mut app, now);
@@ -840,6 +842,7 @@ fn a_history_whose_page_fails_part_way_draws_nothing_twice() {
             next_cursor: Some("500".to_owned()),
             seq: 9,
             masked: 0,
+            redacted: false,
         })),
     ));
     drain(&mut app, now);
@@ -888,6 +891,7 @@ fn a_history_whose_page_fails_part_way_shows_what_it_does_not_hold_and_cuts_noth
             next_cursor: Some("500".to_owned()),
             seq: 9,
             masked: 0,
+            redacted: false,
         })),
     ));
     drain(&mut app, now);
@@ -1036,6 +1040,7 @@ fn a_long_historys_read_keeps_only_the_last_pages_worth_of_ids() {
             next_cursor: Some("700".to_owned()),
             seq: 9,
             masked: 0,
+            redacted: false,
         })),
     ));
     drain(&mut app, now);

@@ -5995,7 +5995,7 @@
           ]
         },
         "redacted": {
-          "description": "For an export (since step 25): every item's text masked by the\ncore's own secret filter, as the session log's writer masks it, the\nprovider's blocks (`raw`) left out, and the items still in progress\nleft out (named in `incomplete`). A session kept only in memory is\nmasked the same.",
+          "description": "For an export (since step 25): every item's text masked by the\ncore's own secret filter, as the session log's writer masks it, the\nprovider's blocks (`raw`) left out, and the items still in progress\nleft out (named in `incomplete`). A session kept only in memory is\nmasked the same. The result says it was masked (its `redacted`).",
           "type": "boolean"
         },
         "session_id": {
@@ -6037,6 +6037,10 @@
             "string",
             "null"
           ]
+        },
+        "redacted": {
+          "description": "The items were masked for an export, as `redacted` asked (since\nstep 25). A client that asked for `redacted` writes nothing without\nit: a server that does not know the field reads the items unmasked,\nand its result reads `false` here.",
+          "type": "boolean"
         },
         "seq": {
           "description": "The `seq` of the last event sent for the session when the items were\nread. Events after it are not in this result.",

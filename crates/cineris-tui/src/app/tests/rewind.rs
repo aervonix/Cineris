@@ -60,6 +60,7 @@ fn page(items: Vec<Item>, next: Option<&str>) -> OpResult {
         next_cursor: next.map(str::to_owned),
         seq: 9,
         masked: 0,
+        redacted: false,
     })
 }
 
