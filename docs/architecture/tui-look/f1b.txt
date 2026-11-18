@@ -1,0 +1,16 @@
+╭──────────────────────────────────────────────────────────────╮
+│ ◆ Cineris 0.1.0                                       │
+│                                                              │
+│   Setting up, in four short steps. Each one can be skipped,  │
+│   and x skips them all.                                      │
+╰──────────────────────────────────────────────────────────────╯
+
+◇ Provider  1 of 4
+  Paste or type the key for anthropic. Nothing of it is shown. It is stored in
+  Windows Credential Manager, for this machine only, and is never written to a
+  file of settings, the log or the prompt history.
+
+╭─────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◆ 108 characters, hidden                                                                        │
+╰─────────────────────────────────────────────────────────────────────────────────────────────────╯
+  enter stores it · ctrl+u clears it · esc goes back

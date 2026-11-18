@@ -21,6 +21,7 @@
 //!   that differ, from the real views, and prints every changed cell:
 //!   a reference screen changes only that way, for the owner to see.
 
+mod first_run;
 mod scenario;
 
 use std::fmt::Write as _;
@@ -37,7 +38,7 @@ use self::scenario::{BACKGROUNDS, Row, SPECS, Spec, compose};
 /// draw (step 22's, step 21's input box and menus, and step 23's
 /// placeholder and viewer frame), and the application's dialogs. When a
 /// later step builds the rows it owns, its counts go up here.
-const COMPARED: [(&str, usize); 19] = [
+const COMPARED: [(&str, usize); 25] = [
     ("0", 11),
     ("1", 40),
     ("1b", 11),
@@ -57,6 +58,12 @@ const COMPARED: [(&str, usize); 19] = [
     ("7c", 40),
     ("8a", 39),
     ("8b", 51),
+    ("f1a", 21),
+    ("f1b", 16),
+    ("f2a", 28),
+    ("f2b", 34),
+    ("f3", 22),
+    ("f4", 22),
 ];
 
 fn reference_dir() -> PathBuf {

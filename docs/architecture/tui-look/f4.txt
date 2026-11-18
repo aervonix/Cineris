@@ -1,0 +1,22 @@
+· Provider: anthropic, its key from ANTHROPIC_API_KEY.
+· Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
+· Mode: supervised. Written to ~/.config/cineris/config.toml.
+
+╭──────────────────────────────────────────────────────────────╮
+│ ◆ Cineris 0.1.0                                       │
+│                                                              │
+│   claude-opus-5-5 high  ·  ~/src/parser                      │
+╰──────────────────────────────────────────────────────────────╯
+
+· Project: ~/src/parser trusted.
+
+◇ Commands  4 of 4
+  Found in Cargo.toml. Each one picked joins the project's profile as an entry
+  you wrote: it runs without asking, and the checks at a turn's end use it.
+
+  ◆ ☐ build   cargo build --workspace
+    ☐ test    cargo test --workspace
+    ☐ check   cargo clippy --workspace --all-targets -- -D warnings
+    ☐ format  cargo fmt --all -- --check
+
+  space picks · e edits · enter keeps what is picked · s skips this step     opus-5.5 high · fast

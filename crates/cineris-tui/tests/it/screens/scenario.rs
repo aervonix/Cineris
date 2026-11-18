@@ -71,7 +71,7 @@ pub(crate) struct Spec {
 }
 
 /// Every reference screen.
-pub(crate) const SPECS: [Spec; 19] = [
+pub(crate) const SPECS: [Spec; 25] = [
     spec("0"),
     spec("1"),
     spec("1b"),
@@ -111,6 +111,13 @@ pub(crate) const SPECS: [Spec; 19] = [
     },
     spec("8a"),
     spec("8b"),
+    // Step 25: the first run.
+    spec("f1a"),
+    spec("f1b"),
+    spec("f2a"),
+    spec("f2b"),
+    spec("f3"),
+    spec("f4"),
 ];
 
 const fn spec(id: &'static str) -> Spec {
@@ -896,6 +903,10 @@ fn screen_plan() -> Plan {
 
 /// The screen `spec` on `background`.
 pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
+    // The first run's screens are the application's frames (step 25).
+    if spec.id.starts_with('f') {
+        return super::first_run::compose(spec, background, session());
+    }
     let look = look(spec, background);
     let width = spec.columns - 1;
     let highlighter = highlighter();

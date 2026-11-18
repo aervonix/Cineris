@@ -1303,13 +1303,13 @@ impl App {
                         "esc leaves it as it was".to_owned(),
                     ]
                 } else {
-                    let mut keys = vec![
+                    // The session is open: `x` would do what `s` does.
+                    vec![
                         "space picks".to_owned(),
                         "e edits".to_owned(),
                         "enter keeps what is picked".to_owned(),
-                    ];
-                    keys.extend(skip);
-                    keys
+                        "s skips this step".to_owned(),
+                    ]
                 };
                 (
                     StepView {
