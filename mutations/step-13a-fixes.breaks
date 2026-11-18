@@ -143,7 +143,7 @@ caught-by:
 [break] two-history-changes-at-once
 rule: A second change of history does not begin while one is under way.
 file: crates/cineris-agent/src/session.rs
-in: SessionHandle::change_history
+in: SessionHandle::may_change
 find:
     if inbox.changing {
         return Err(history_changing());

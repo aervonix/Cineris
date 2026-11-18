@@ -1,8 +1,0 @@
-A rewind or a fork "to before a prompt" goes to the item before it, and so also undoes what the log holds after that item and before the prompt: the end of the turn before it, in part, and a plan edited between the two.
-
-- Area: cineris-core
-- Owner: step 25
-
-| Item | Who | When |
-|---|---|---|
-| **A rewind to before a prompt takes what followed the turn before.** `/rewind` and its fork go to "the item before that prompt" ([steps/25/answered.md](../steps/25/answered.md), point 4), the only point the protocol can name (`session/rewind`'s `to`, `session/fork`'s `at`). The core undoes every entry of the active branch after that item's entry, and the log can hold entries there that are not the next turn's: the turn before's last checkpoint, which its end writes after its last item when the project's checks changed a file (`LogStore::end_turn`), and a plan the person edited between the two turns. Such a rewind then puts back the files the checks changed, counts the turn before as undone in part (`turns`), and drops the plan edit; `/undo` goes back to the entry before the turn's first and keeps them, so the two disagree. Nothing is put back unseen: the plan shows those files, and its count of turns is what the question says (since the review of step 25's rewind). Found by the independent review of step 25's rewind part. Recommendation: a "before this item" form for `to` and `at` (an addition: the core resolves it to the entry before the item's own, as `/undo` does), which the interface then sends with the prompt's id. | Step 25, or the next step that touches rewinding | Before the first release |
