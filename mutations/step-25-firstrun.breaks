@@ -135,7 +135,6 @@ find: crate::schema::redact::without_url_users(&shown).unwrap_or_else(|| shown.i
 replace: shown.into_owned();
 caught-by:
     cineris-config import::tests::a_credential_in_a_command_or_an_address_is_masked_and_refused
-    cineris-config import::tests::values_are_dropped_and_names_kept
 
 [break] the-writer-writes-over-a-file
 rule: The first run's writer makes only a file that does not exist.
@@ -155,12 +154,12 @@ replace: if false {
 caught-by:
     cineris-config write::tests::a_server_that_cannot_be_imported_is_never_written
 
-[break] a-script-name-not-plain-words-is-offered
-rule: A command is offered only as plain words, so a name from a file never reaches the screen as a command.
+[break] a-script-name-with-a-space-is-offered
+rule: A script's name is one word: `check me` would run `check` with `me`, so it is not offered. (Plain words are held by the observer's table too: a name it classes is plain, so breaking `normal_line`'s check alone changes nothing.)
 file: crates/cineris-knowledge/src/detect.rs
-in: Found::offer
-find: let Some(line) = normal_line(command).filter(|line| line == command) else {
-replace: let Some(line) = Some(command.to_owned()) else {
+in: npm
+find: if name.is_empty() || name.contains(char::is_whitespace) {
+replace: if name.is_empty() {
 caught-by:
     cineris-knowledge detect::tests::scripts_are_offered_by_their_names_with_what_they_run
 
