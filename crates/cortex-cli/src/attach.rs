@@ -110,7 +110,7 @@ pub(crate) fn run(attach: Attach, name: &'static str) -> u8 {
     };
 
     let mut notices = Vec::new();
-    let settings = interactive::tui_settings(&loaded.settings.tui, &mut notices);
+    let settings = interactive::app_settings(&loaded.settings, &mut notices);
     let (keymap, errors) = interactive::keymap(&loaded.settings.keys);
     notices.extend(errors);
     notices.extend(here.passed_over_said());

@@ -152,8 +152,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     };
 
     let mut notices = Vec::new();
-    let mut settings = tui_settings(&loaded.settings.tui, &mut notices);
-    settings.mouse = loaded.settings.terminal.mouse.unwrap_or(true);
+    let settings = app_settings(&loaded.settings, &mut notices);
     let (keymap, errors) = keymap(&loaded.settings.keys);
     notices.extend(errors);
     notices.extend(here.passed_over_said());
@@ -390,6 +389,20 @@ pub(crate) fn core_options(
 
 /// The `[tui]` settings in the application's terms; a theme it does not
 /// know is said.
+/// The interface's settings from the configuration: `[tui]`, and the
+/// mouse from `[terminal]` (since step 25). Both interfaces, the in-process
+/// one and `cortex attach`, take theirs from here, so neither can miss a
+/// key the other reads (the review of step 25 found `attach` without the
+/// mouse).
+pub(crate) fn app_settings(
+    settings: &cortex_config::schema::Settings,
+    notices: &mut Vec<String>,
+) -> app::Settings {
+    let mut app = tui_settings(&settings.tui, notices);
+    app.mouse = settings.terminal.mouse.unwrap_or(true);
+    app
+}
+
 pub(crate) fn tui_settings(tui: &TuiSettings, notices: &mut Vec<String>) -> app::Settings {
     let theme = match tui.theme.as_str() {
         "auto" => app::ThemeChoice::Auto,
@@ -1205,6 +1218,22 @@ mod tests {
             lookup(cortex_tui::keys::Context::Viewer, "t"),
             Some(cortex_tui::keys::Action::ViewerTop)
         );
+    }
+
+    /// The interface's settings take the mouse from `[terminal]`, on unless
+    /// set off, and the presenter from `[tui]`: both interfaces build theirs
+    /// with `app_settings` (step 25).
+    #[test]
+    fn the_interfaces_settings_take_the_mouse_and_the_presenter() {
+        let mut settings = cortex_config::schema::Settings::default();
+        let mut notices = Vec::new();
+        assert!(app_settings(&settings, &mut notices).mouse);
+        settings.terminal.mouse = Some(false);
+        settings.tui.presenter = PresenterChoice::Fullscreen;
+        let app = app_settings(&settings, &mut notices);
+        assert!(!app.mouse);
+        assert_eq!(app.presenter, app::Presenter::Fullscreen);
+        assert!(notices.is_empty(), "{notices:?}");
     }
 
     #[test]
