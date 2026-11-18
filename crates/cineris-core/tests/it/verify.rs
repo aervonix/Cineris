@@ -22,7 +22,7 @@ use crate::{Front, World, calls, says, texts};
 
 /// A program in the workspace and the line that runs it: a shell script
 /// on Linux, a batch file on Windows, whichever shell the machine has.
-fn program(world: &World, name: &str, unix: &str, windows: &str) -> String {
+pub(crate) fn program(world: &World, name: &str, unix: &str, windows: &str) -> String {
     if cfg!(windows) {
         world.put(
             &format!("{name}.cmd"),
@@ -42,12 +42,12 @@ fn program(world: &World, name: &str, unix: &str, windows: &str) -> String {
 }
 
 /// The model writes a file, which sends its turn to the checks.
-fn writes(id: &str, path: &str) -> Response {
+pub(crate) fn writes(id: &str, path: &str) -> Response {
     calls(&[(id, "write", json!({"path": path, "content": "x\n"}))])
 }
 
 /// The user's own checks, in the user's file.
-fn user_checks(world: &World, lines: &[&str], extra: &str) {
+pub(crate) fn user_checks(world: &World, lines: &[&str], extra: &str) {
     let quoted: Vec<String> = lines
         .iter()
         .map(|line| format!("'{}'", line.replace('\'', "")))
@@ -654,7 +654,8 @@ fn sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_bac
             .op(Op::SessionRewind(
                 cineris_protocol::methods::SessionRewindParams {
                     session_id: front.session.clone(),
-                    to: keep,
+                    to: Some(keep),
+                    before: None,
                     restore_files: true,
                     plan: None,
                 },

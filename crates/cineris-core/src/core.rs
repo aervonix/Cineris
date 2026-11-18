@@ -49,7 +49,7 @@ use cineris_protocol::methods::{
 };
 use cineris_protocol::model::ModelRole;
 use cineris_protocol::session::{SandboxStatus, SessionSettings, SessionSummary};
-use cineris_protocol::{ErrorData, ErrorKind, ItemId, LeaseId, SessionId};
+use cineris_protocol::{ErrorData, ErrorKind, LeaseId, SessionId};
 use cineris_session::entry::{LeaseEvent, LeaseRecord};
 use cineris_session::{Body, Git, Restore, SessionsRoot};
 use cineris_tools::PlanBoard;
@@ -80,8 +80,8 @@ const KEEP: &str = "Keep them as they are";
 /// Where a rewind goes back to.
 #[derive(Debug, Clone)]
 enum Back {
-    /// To after this item: `session/rewind`.
-    To(ItemId),
+    /// To a point named by an item: `session/rewind`.
+    To(crate::rewind::Point),
     /// To before the last turn: `session/undo`.
     Undo,
 }
@@ -1423,6 +1423,7 @@ impl Core {
             Op::SessionFork(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                let point = crate::rewind::Point::at_most_one(params.at, params.before)?;
                 let id = self.inner.ids.session_id();
                 let log = Arc::clone(&live.log);
                 // Where the fork goes back to, and its workspace; it is
@@ -1439,16 +1440,10 @@ impl Core {
                             "A session with no log cannot be forked.",
                         ));
                     };
-                    let at = match &params.at {
-                        Some(item) => {
-                            Some(disk.session.entry_of_item(item).cloned().ok_or_else(|| {
-                                error(
-                                    ErrorKind::Usage,
-                                    "unknown_item",
-                                    format!("The session has no item `{item}`."),
-                                )
-                            })?)
-                        }
+                    // Any branch of the tree: a fork does not move this
+                    // session's active position.
+                    let at = match &point {
+                        Some(point) => Some(point.entry(&disk.session, false)?),
                         None => None,
                     };
                     Ok((disk.session.header().workspace.clone(), at))
@@ -1474,31 +1469,27 @@ impl Core {
             Op::SessionRewind(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
-                self.rewind(
-                    &live,
-                    Back::To(params.to),
-                    params.restore_files,
-                    params.plan,
-                )
-                .await?;
+                let point = crate::rewind::Point::one(params.to, params.before)?;
+                self.rewind(&live, Back::To(point), params.restore_files, params.plan)
+                    .await?;
                 Ok(OpResult::SessionRewind(SessionResult {
                     session: live.handle.state(),
                 }))
             }
             Op::SessionRewindPlan(params) => {
                 let live = self.open_for(client, &params.session_id)?;
-                // Refused as the rewind would be: it is not planned under a
-                // turn, which may yet add to what it would undo.
-                if live.handle.state().running_turn.is_some() {
-                    return Err(error(
-                        ErrorKind::Usage,
-                        code::TURN_RUNNING,
-                        "A turn is running. Interrupt it, or wait for it, before planning a \
-                         rewind.",
-                    ));
-                }
+                // Refused as the rewind would be (the review of step 25's
+                // second pull request): an observer is not shown a plan it
+                // may not carry out, and nothing is planned under a turn,
+                // which may yet add to what it would undo, nor while
+                // another change of the history is under way (a rewind's
+                // question still open), which would move it. Asked, not
+                // begun: a change begun and given up would still have the
+                // loop read its history again.
+                self.may_drive(client)?;
+                let point = crate::rewind::Point::one(params.to, params.before)?;
+                live.handle.may_change_history()?;
                 let log = Arc::clone(&live.log);
-                let to = params.to;
                 // Planned as `session/rewind` plans it, and nothing changed:
                 // the files are looked at, never touched.
                 let plan = Self::blocking(move || {
@@ -1510,13 +1501,7 @@ impl Core {
                             "A session with no log cannot be rewound.",
                         ));
                     };
-                    let entry = disk.session.entry_of_item(&to).cloned().ok_or_else(|| {
-                        error(
-                            ErrorKind::Usage,
-                            "unknown_item",
-                            format!("The session has no item `{to}`."),
-                        )
-                    })?;
+                    let entry = point.entry(&disk.session, true)?;
                     disk.session
                         .plan_rewind(&entry)
                         .map_err(|failure| session_error(&failure))
@@ -1826,8 +1811,9 @@ impl Core {
         }
     }
 
-    /// Moves a session back: to an item (`session/rewind`), or to before
-    /// its last turn (`session/undo`), putting files back if asked.
+    /// Moves a session back: to a point named by an item, after it or just
+    /// before it (`session/rewind`), or to before its last turn
+    /// (`session/undo`), putting files back if asked.
     ///
     /// A file changed since the harness left it is put back only if the
     /// person says so ([07-sessions-and-context.md], "Snapshots and undo"):
@@ -1838,8 +1824,8 @@ impl Core {
     ///
     /// With the `mark` of a plan a client showed (`session/rewind_plan`,
     /// since step 25), the plan made here must be that one, or nothing is
-    /// changed (`plan_changed`): with files put back, its turns and what it
-    /// does to each file; without, its turns.
+    /// changed (`plan_changed`): its point, the position it goes back from
+    /// and its turns, and with files put back what it does to each file.
     async fn rewind(
         &self,
         live: &Arc<Live>,
@@ -1861,14 +1847,8 @@ impl Core {
                 ));
             };
             let plan = match back {
-                Back::To(item) => {
-                    let to = disk.session.entry_of_item(&item).cloned().ok_or_else(|| {
-                        error(
-                            ErrorKind::Usage,
-                            "unknown_item",
-                            format!("The session has no item `{item}`."),
-                        )
-                    })?;
+                Back::To(point) => {
+                    let to = point.entry(&disk.session, true)?;
                     disk.session
                         .plan_rewind(&to)
                         .map_err(|failure| session_error(&failure))?

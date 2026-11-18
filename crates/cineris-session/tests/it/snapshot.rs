@@ -5,8 +5,10 @@ use std::fs;
 
 use cineris_base::{AbsPath, ContentHash, PathStyle};
 use cineris_protocol::ids::{SessionId, TurnId};
-use cineris_session::entry::{Before, Body, EntryId, FileVersion};
-use cineris_session::{FileStatus, KEEP_LIMIT, Restore, RoundCheckpoint, Session, SessionError};
+use cineris_session::entry::{Before, Body, Checkpoint, EntryId, FileChange, FileVersion};
+use cineris_session::{
+    CannotRestore, FileStatus, KEEP_LIMIT, Restore, RoundCheckpoint, Session, SessionError,
+};
 use cineris_testkit::cases::{self, ensure};
 use cineris_testkit::{Rng, SeededRng};
 
@@ -78,7 +80,7 @@ fn a_turns_snapshot_restores_exactly_including_files_that_did_not_exist() {
 
     let plan = session.plan_undo().unwrap().unwrap();
     let paths: Vec<&str> = plan.files.iter().map(|file| file.path.as_str()).collect();
-    assert_eq!(paths, ["a.txt", "new/dir/n.txt", "b/c.txt", "binary.bin"]);
+    assert_eq!(paths, ["a.txt", "b/c.txt", "binary.bin", "new/dir/n.txt"]);
     assert!(
         plan.files
             .iter()
@@ -253,6 +255,49 @@ fn version_of(content: &[u8]) -> FileVersion {
     }
 }
 
+/// A plan lists its files by name, whatever order the rounds recorded them
+/// in: a round's calls run side by side, and its checkpoint lists them as
+/// they finished (a loaded stress of step 25's second pull request found
+/// the same turns planned with their files in another order from run to
+/// run).
+#[test]
+fn a_plan_lists_its_files_by_name() {
+    let world = World::new("snapshot_plan_order");
+    let mut session = world.create("s_1");
+    let turn = TurnId::new("t_1");
+    session.append(Some(&turn), user("make them")).unwrap();
+    let change = |path: &str| FileChange {
+        path: path.to_owned(),
+        before: Before::Absent,
+        after: Some(version_of(path.as_bytes())),
+    };
+    for name in ["c.txt", "a.txt", "b.txt"] {
+        world.write(name, name.as_bytes());
+    }
+    session
+        .append(
+            Some(&turn),
+            Body::Checkpoint(Checkpoint {
+                files: vec![change("c.txt"), change("a.txt")],
+            }),
+        )
+        .unwrap();
+    session
+        .append(
+            Some(&turn),
+            Body::Checkpoint(Checkpoint {
+                files: vec![change("b.txt")],
+            }),
+        )
+        .unwrap();
+    let plan = session.plan_undo().unwrap().unwrap();
+    let names: Vec<&str> = plan.files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(names, ["a.txt", "b.txt", "c.txt"]);
+    // The plan is what the rewind finds again: it is followed.
+    let done = session.rewind(&plan, &Restore::files()).unwrap();
+    assert_eq!(done.restored, ["a.txt", "b.txt", "c.txt"]);
+}
+
 /// A command changed a file that existed, and what it held before could
 /// not be recovered: only what the command left is recorded. The review
 /// of step 8 found that an undo then deleted the file and said it had put
@@ -276,11 +321,12 @@ fn undo_never_removes_a_file_whose_earlier_content_is_unknown() {
 
     let plan = session.plan_undo().unwrap().unwrap();
     let paths: Vec<&str> = plan.files.iter().map(|file| file.path.as_str()).collect();
-    assert_eq!(paths, ["keep.txt", "gone.txt"]);
+    assert_eq!(paths, ["gone.txt", "keep.txt"]);
     for file in &plan.files {
         assert_eq!(file.restore, Before::Unknown, "{file:?}");
         assert_eq!(file.status, FileStatus::CannotRestore, "{file:?}");
-        assert!(file.why_not.unwrap().contains("not recorded"), "{file:?}");
+        assert_eq!(file.cannot, Some(CannotRestore::NotRecorded), "{file:?}");
+        assert!(file.why_not().unwrap().contains("not recorded"), "{file:?}");
     }
     assert_eq!(plan.cannot_restore().len(), 2);
 
@@ -337,8 +383,8 @@ fn a_commands_changes_are_undone_as_far_as_what_was_before_is_known() {
         statuses,
         [
             ("created.txt", FileStatus::AsLeft),
-            ("tracked.rs", FileStatus::AsLeft),
-            ("edited-before.rs", FileStatus::CannotRestore)
+            ("edited-before.rs", FileStatus::CannotRestore),
+            ("tracked.rs", FileStatus::AsLeft)
         ]
     );
     let done = session.rewind(&plan, &Restore::files()).unwrap();
@@ -528,7 +574,11 @@ fn a_checkpoint_that_cannot_be_read_stops_every_file_being_put_back() {
             FileStatus::CannotRestore,
             "case {case}: {file:?}"
         );
-        assert!(file.why_not.unwrap().contains("cannot be read"), "{file:?}");
+        assert_eq!(file.cannot, Some(CannotRestore::Unreadable), "{file:?}");
+        assert!(
+            file.why_not().unwrap().contains("cannot be read"),
+            "{file:?}"
+        );
         let done = session.rewind(&plan, &Restore::files()).unwrap();
         assert!(done.restored.is_empty(), "case {case}: {done:?}");
         assert_eq!(fs::read(world.file("a.txt")).unwrap(), b"edited");
@@ -554,7 +604,8 @@ fn a_version_missing_from_the_store_is_not_offered_as_restorable() {
     let plan = session.plan_undo().unwrap().unwrap();
     let file = &plan.files[0];
     assert_eq!(file.status, FileStatus::CannotRestore, "{file:?}");
-    assert!(file.why_not.unwrap().contains("no longer in"), "{file:?}");
+    assert_eq!(file.cannot, Some(CannotRestore::Missing), "{file:?}");
+    assert!(file.why_not().unwrap().contains("no longer in"), "{file:?}");
     let done = session.rewind(&plan, &Restore::files()).unwrap();
     assert_eq!(done.not_restored.len(), 1);
     assert_eq!(fs::read(world.file("a.txt")).unwrap(), b"now");

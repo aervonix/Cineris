@@ -286,19 +286,31 @@ pub struct SessionReadResult {
     pub redacted: bool,
 }
 
-/// `session/fork`
+/// `session/fork`. Names where the new session ends by at most one of
+/// `at` and `before`; with neither it keeps all of the session. Both are
+/// refused (`invalid_params`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionForkParams {
     /// The session to fork.
     pub session_id: SessionId,
-    /// The last item the new session keeps. Absent: all of it.
+    /// The last item the new session keeps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<ItemId>,
+    /// The item the new session ends just before (since step 25): it keeps
+    /// what the session's log holds before that item's entry, and nothing
+    /// of the item or after it. A prompt's id forks from before its turn,
+    /// with whatever the log holds between the turn before and it (that
+    /// turn's last checkpoint, a plan the person edited). A core from
+    /// before step 25 ignores it, and forks all of the session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<ItemId>,
 }
 
-/// `session/rewind`: moves the active branch back to an item, putting files
-/// back if asked.
+/// `session/rewind`: moves the active branch back to an item, or to just
+/// before one, putting files back if asked. The point is named by exactly
+/// one of `to` and `before`: both, or neither, are refused
+/// (`invalid_params`).
 ///
 /// **It may ask a question** (since step 23). With `restore_files`, a file
 /// edited since the harness left it is put back only if the person says so:
@@ -314,7 +326,18 @@ pub struct SessionRewindParams {
     /// The session.
     pub session_id: SessionId,
     /// The last item to keep on the active branch.
-    pub to: ItemId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<ItemId>,
+    /// The item of the active branch to go back to just before (since step
+    /// 25): the active position becomes the entry the item's own follows,
+    /// and everything from the item on is undone, nothing before it. A
+    /// prompt's id undoes its turn and every later one, and keeps what the
+    /// log holds between the turn before and it (that turn's last
+    /// checkpoint, a plan the person edited), as `session/undo` does. A core
+    /// from before step 25 refuses a rewind with `before` alone, for want of
+    /// `to`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<ItemId>,
     /// Whether to put files back as they were at that point, from the
     /// snapshots of the turns that are undone.
     #[serde(default)]
@@ -322,25 +345,35 @@ pub struct SessionRewindParams {
     /// The `mark` of the plan `session/rewind_plan` gave, which the person
     /// was shown (since step 25). The plan is made again, and the rewind is
     /// refused (`plan_changed`), changing nothing, when it is not that one:
-    /// with `restore_files`, when its turns or what it would do to any file
-    /// differ; without, when its turns do. Absent: no plan is checked.
+    /// when the point it goes back to, the active position it goes back
+    /// from or its turns differ, and with `restore_files` also when what it
+    /// would do to any file does. Absent: no plan is checked.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
 }
 
-/// `session/rewind_plan`: what `session/rewind` to the same item would do
+/// `session/rewind_plan`: what `session/rewind` to the same point would do
 /// now, changing nothing (since step 25). A front end shows it before it
 /// asks whether to put files back: the turns it would undo, and each file
-/// they changed with what it would go back to. Refused as `session/rewind`
-/// would be: `session_not_stored` for a session with no log, `unknown_item`,
-/// `turn_running` while a turn runs.
+/// they changed with what it would go back to. The point is named as the
+/// rewind names it, by exactly one of `to` and `before`. Refused as
+/// `session/rewind` would be: `invalid_params` for both or neither,
+/// `role_not_allowed` for an observer, `session_not_stored` for a session
+/// with no log, `unknown_item`, `turn_running` while a turn runs, and
+/// `history_changing` while another change of the history is under way (a
+/// rewind's question still open).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionRewindPlanParams {
     /// The session.
     pub session_id: SessionId,
     /// The last item the rewind would keep on the active branch.
-    pub to: ItemId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to: Option<ItemId>,
+    /// The item of the active branch the rewind would go back to just
+    /// before, as `session/rewind`'s `before`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<ItemId>,
 }
 
 /// The result of `session/rewind_plan`: the plan the core would carry out
@@ -350,7 +383,7 @@ pub struct SessionRewindPlanParams {
 pub struct SessionRewindPlanResult {
     /// The turns it would undo, wholly or in part, oldest first.
     pub turns: Vec<TurnId>,
-    /// The files those turns changed, in the order they were first changed.
+    /// The files those turns changed, by name.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<RewindFile>,
     /// A checkpoint of those turns cannot be read: what they changed is not
@@ -359,6 +392,8 @@ pub struct SessionRewindPlanResult {
     pub unreadable: bool,
     /// The plan in a few characters: given back as `session/rewind`'s
     /// `plan`, it has that rewind refused when the plan has changed since.
+    /// It holds the point the rewind goes back to, the active position it
+    /// goes back from, the turns it undoes and what it does to each file.
     pub mark: String,
 }
 

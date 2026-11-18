@@ -425,7 +425,8 @@ fn sys_undo_puts_back_what_a_command_changed_where_git_still_has_it() {
         front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: keep,
+                to: Some(keep),
+                before: None,
                 restore_files: true,
                 plan: None,
             }))

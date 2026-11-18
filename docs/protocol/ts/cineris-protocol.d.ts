@@ -1601,10 +1601,12 @@ export type SessionEvent = {
     turn_id?: TurnId;
   } & Event;
 
-/** `session/fork` */
+/** `session/fork`. Names where the new session ends by at most one of `at` and `before`; with neither it keeps all of the session. Both are refused (`invalid_params`). */
 export interface SessionForkParams {
-  /** The last item the new session keeps. Absent: all of it. */
+  /** The last item the new session keeps. */
   at?: ItemId | null;
+  /** The item the new session ends just before (since step 25): it keeps what the session's log holds before that item's entry, and nothing of the item or after it. A prompt's id forks from before its turn, with whatever the log holds between the turn before and it (that turn's last checkpoint, a plan the person edited). A core from before step 25 ignores it, and forks all of the session. */
+  before?: ItemId | null;
   /** The session to fork. */
   session_id: SessionId;
 }
@@ -1693,31 +1695,35 @@ export interface SessionResult {
   session: SessionState;
 }
 
-/** `session/rewind`: moves the active branch back to an item, putting files back if asked. **It may ask a question** (since step 23). With `restore_files`, a file edited since the harness left it is put back only if the person says so: the session's `user` clients that answer questions are put one `question/ask` naming those files, with the choices "Put them back" and "Keep them as they are". No client to ask, no answer, a client that goes away, the session's close and the core's end all keep the files. The result comes once the question is settled; a session closed meanwhile is not moved back (`session_not_open`). */
+/** `session/rewind`: moves the active branch back to an item, or to just before one, putting files back if asked. The point is named by exactly one of `to` and `before`: both, or neither, are refused (`invalid_params`). **It may ask a question** (since step 23). With `restore_files`, a file edited since the harness left it is put back only if the person says so: the session's `user` clients that answer questions are put one `question/ask` naming those files, with the choices "Put them back" and "Keep them as they are". No client to ask, no answer, a client that goes away, the session's close and the core's end all keep the files. The result comes once the question is settled; a session closed meanwhile is not moved back (`session_not_open`). */
 export interface SessionRewindParams {
-  /** The `mark` of the plan `session/rewind_plan` gave, which the person was shown (since step 25). The plan is made again, and the rewind is refused (`plan_changed`), changing nothing, when it is not that one: with `restore_files`, when its turns or what it would do to any file differ; without, when its turns do. Absent: no plan is checked. */
+  /** The item of the active branch to go back to just before (since step 25): the active position becomes the entry the item's own follows, and everything from the item on is undone, nothing before it. A prompt's id undoes its turn and every later one, and keeps what the log holds between the turn before and it (that turn's last checkpoint, a plan the person edited), as `session/undo` does. A core from before step 25 refuses a rewind with `before` alone, for want of `to`. */
+  before?: ItemId | null;
+  /** The `mark` of the plan `session/rewind_plan` gave, which the person was shown (since step 25). The plan is made again, and the rewind is refused (`plan_changed`), changing nothing, when it is not that one: when the point it goes back to, the active position it goes back from or its turns differ, and with `restore_files` also when what it would do to any file does. Absent: no plan is checked. */
   plan?: string | null;
   /** Whether to put files back as they were at that point, from the snapshots of the turns that are undone. */
   restore_files?: boolean;
   /** The session. */
   session_id: SessionId;
   /** The last item to keep on the active branch. */
-  to: ItemId;
+  to?: ItemId | null;
 }
 
-/** `session/rewind_plan`: what `session/rewind` to the same item would do now, changing nothing (since step 25). A front end shows it before it asks whether to put files back: the turns it would undo, and each file they changed with what it would go back to. Refused as `session/rewind` would be: `session_not_stored` for a session with no log, `unknown_item`, `turn_running` while a turn runs. */
+/** `session/rewind_plan`: what `session/rewind` to the same point would do now, changing nothing (since step 25). A front end shows it before it asks whether to put files back: the turns it would undo, and each file they changed with what it would go back to. The point is named as the rewind names it, by exactly one of `to` and `before`. Refused as `session/rewind` would be: `invalid_params` for both or neither, `role_not_allowed` for an observer, `session_not_stored` for a session with no log, `unknown_item`, `turn_running` while a turn runs, and `history_changing` while another change of the history is under way (a rewind's question still open). */
 export interface SessionRewindPlanParams {
+  /** The item of the active branch the rewind would go back to just before, as `session/rewind`'s `before`. */
+  before?: ItemId | null;
   /** The session. */
   session_id: SessionId;
   /** The last item the rewind would keep on the active branch. */
-  to: ItemId;
+  to?: ItemId | null;
 }
 
 /** The result of `session/rewind_plan`: the plan the core would carry out (`docs/architecture/07-sessions-and-context.md`, "Snapshots and undo"). */
 export interface SessionRewindPlanResult {
-  /** The files those turns changed, in the order they were first changed. */
+  /** The files those turns changed, by name. */
   files?: Array<RewindFile>;
-  /** The plan in a few characters: given back as `session/rewind`'s `plan`, it has that rewind refused when the plan has changed since. */
+  /** The plan in a few characters: given back as `session/rewind`'s `plan`, it has that rewind refused when the plan has changed since. It holds the point the rewind goes back to, the active position it goes back from, the turns it undoes and what it does to each file. */
   mark: string;
   /** The turns it would undo, wholly or in part, oldest first. */
   turns: Array<TurnId>;

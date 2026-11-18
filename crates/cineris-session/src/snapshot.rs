@@ -295,7 +295,7 @@ pub enum FileStatus {
     EditedSince,
     /// It cannot be put back: its earlier content was too large to keep,
     /// is not known, or is missing from the store, or a checkpoint of the
-    /// undone turns cannot be read ([`FileRestore::why_not`] says which).
+    /// undone turns cannot be read ([`FileRestore::cannot`] says which).
     /// The file is left as it is.
     CannotRestore,
 }
@@ -315,11 +315,15 @@ pub struct FileRestore {
     /// Whether putting it back is safe.
     pub status: FileStatus,
     /// Why it cannot be put back, for a [`FileStatus::CannotRestore`] file.
-    pub why_not: Option<&'static str>,
+    pub cannot: Option<CannotRestore>,
 }
 
-/// Why a file cannot be put back, by name: what [`FileRestore::why_not`]
-/// says, for a front end that says it in its own words (since step 25).
+/// Why a file cannot be put back, by name, for a front end that says it in
+/// its own words (since step 25); [`CannotRestore::sentence`] says it in
+/// the store's. Since the review of step 25's second pull request the plan
+/// holds this, and the sentence is made from it, so that every reason is
+/// matched whole: it had held the sentence, matched back to a name with a
+/// catch-all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CannotRestore {
     /// What it held before was not recorded.
@@ -334,35 +338,38 @@ pub enum CannotRestore {
     ThroughALink,
 }
 
-impl FileRestore {
-    /// Why it cannot be put back, by name: `None` for a file that can be.
+impl CannotRestore {
+    /// Why, in a sentence: what a rewind reports of a file it left.
     #[must_use]
-    pub fn cannot(&self) -> Option<CannotRestore> {
-        match self.why_not? {
-            why_not::NOT_RECORDED => Some(CannotRestore::NotRecorded),
-            why_not::TOO_LARGE => Some(CannotRestore::TooLarge),
-            why_not::MISSING => Some(CannotRestore::Missing),
-            why_not::UNREADABLE => Some(CannotRestore::Unreadable),
-            why_not::THROUGH_A_LINK => Some(CannotRestore::ThroughALink),
-            _ => None,
+    pub fn sentence(self) -> &'static str {
+        match self {
+            Self::NotRecorded => {
+                "what it held before was not recorded (it was changed by a command, and its \
+                 earlier content could not be recovered), so it cannot be put back"
+            }
+            Self::TooLarge => "its earlier content was too large to keep, so it cannot be put back",
+            Self::Missing => {
+                "its earlier content is no longer in the session's store, so it cannot be put back"
+            }
+            Self::Unreadable => {
+                "a checkpoint of the undone turns cannot be read, so what they changed is not \
+                 fully known, and no file is put back"
+            }
+            Self::ThroughALink => {
+                "a directory on its way is now a link, or the file itself is, so putting it back \
+                 would write somewhere else; it is left as it is"
+            }
         }
     }
 }
 
-/// Why a file cannot be put back.
-mod why_not {
-    pub(super) const NOT_RECORDED: &str = "what it held before was not recorded (it was changed \
-                                           by a command, and its earlier content could not be \
-                                           recovered), so it cannot be put back";
-    pub(super) const TOO_LARGE: &str =
-        "its earlier content was too large to keep, so it cannot be put back";
-    pub(super) const MISSING: &str =
-        "its earlier content is no longer in the session's store, so it cannot be put back";
-    pub(super) const UNREADABLE: &str = "a checkpoint of the undone turns cannot be read, so what \
-                                         they changed is not fully known, and no file is put back";
-    pub(super) const THROUGH_A_LINK: &str = "a directory on its way is now a link, or the file \
-                                             itself is, so putting it back would write somewhere \
-                                             else; it is left as it is";
+impl FileRestore {
+    /// Why it cannot be put back, in a sentence: `None` for a file that can
+    /// be.
+    #[must_use]
+    pub fn why_not(&self) -> Option<&'static str> {
+        self.cannot.map(CannotRestore::sentence)
+    }
 }
 
 /// Whether `name`, under `root`, is now reached through a symbolic link: a
@@ -416,7 +423,9 @@ pub struct RewindPlan {
     pub from: Option<EntryId>,
     /// The turns it undoes, wholly or in part, oldest first.
     pub turns: Vec<TurnId>,
-    /// The files those turns changed, in the order they were first changed.
+    /// The files those turns changed, by name (since step 25: in the order
+    /// first changed before, which differed from run to run for calls run
+    /// side by side).
     pub files: Vec<FileRestore>,
     /// Checkpoints of those turns that this build cannot read: damaged, or
     /// written in a newer format. What they changed is not known, so when
@@ -539,16 +548,18 @@ pub(crate) fn file_status(
         (Some(a), Some(b)) => a.hash == b.hash,
         _ => false,
     };
-    let cannot = |why: &'static str| (FileStatus::CannotRestore, Some(why));
+    let cannot = |why: CannotRestore| (FileStatus::CannotRestore, Some(why));
     let linked = through_a_link(root, &path, !matches!(restore, Before::Absent))?;
-    let (status, why_not) = match restore {
-        _ if unreadable => cannot(why_not::UNREADABLE),
-        _ if linked => cannot(why_not::THROUGH_A_LINK),
+    let (status, cannot) = match restore {
+        _ if unreadable => cannot(CannotRestore::Unreadable),
+        _ if linked => cannot(CannotRestore::ThroughALink),
         // Nothing to go back to: never removed, never overwritten.
-        Before::Unknown => cannot(why_not::NOT_RECORDED),
+        Before::Unknown => cannot(CannotRestore::NotRecorded),
         _ if restore.is(now.as_ref()) => (FileStatus::AlreadyRestored, None),
-        Before::Version(version) if !version.kept => cannot(why_not::TOO_LARGE),
-        Before::Version(version) if !store.has_blob(&version.hash) => cannot(why_not::MISSING),
+        Before::Version(version) if !version.kept => cannot(CannotRestore::TooLarge),
+        Before::Version(version) if !store.has_blob(&version.hash) => {
+            cannot(CannotRestore::Missing)
+        }
         _ if same(now, left) => (FileStatus::AsLeft, None),
         _ => (FileStatus::EditedSince, None),
     };
@@ -558,7 +569,7 @@ pub(crate) fn file_status(
         left,
         now,
         status,
-        why_not,
+        cannot,
     })
 }
 
@@ -575,7 +586,7 @@ pub(crate) fn put_back(
         return Err(SessionError::Invalid(format!(
             "`{}` cannot be put back: {}",
             file.path,
-            why_not::THROUGH_A_LINK
+            CannotRestore::ThroughALink.sentence()
         )));
     }
     match file.restore {

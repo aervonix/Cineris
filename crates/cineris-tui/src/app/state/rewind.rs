@@ -10,9 +10,12 @@
 //!    that began a turn only its row and the ids a rewind and a fork need,
 //!    for as long as the picker is open. The first prompt is not a point:
 //!    going back before it is `/new`. The picker lists them newest first.
-//! 2. **The plan.** A point chosen asks the core what a rewind to the item
-//!    before it would do (`session/rewind_plan`), and reads the prompt
-//!    whole (`session/read` of its item), for the editor afterwards.
+//! 2. **The plan.** A point chosen asks the core what a rewind to just
+//!    before its prompt would do (`session/rewind_plan` with `before` the
+//!    prompt's item: since the review of step 25's second pull request, the
+//!    state before the prompt's own entry, not after the item before it),
+//!    and reads the prompt whole (`session/read` of its item), for the
+//!    editor afterwards.
 //! 3. **The question,** in the input box's place: the plan's files, then
 //!    `1` (rewind, files put back), `2` (the conversation only), `Esc`
 //!    (nothing sent). It is a dialog, with the dialogs' rules of keys
@@ -27,8 +30,8 @@
 //!    read again waits for it, so that its turn is not read twice.
 //!
 //! **Fork:** `Tab` in the `/rewind` picker forks from before the point
-//! (`session/fork` with `at` the item before the prompt); in `/sessions`
-//! it forks the selected session at its end. The fork is opened in this
+//! (`session/fork` with `before` the prompt's item); in `/sessions` it
+//! forks the selected session at its end. The fork is opened in this
 //! one's place, and the session it came from is left as it was.
 
 use std::collections::HashSet;
@@ -63,10 +66,8 @@ const LONG_AGO: Duration = Duration::from_secs(24 * 60 * 60);
 pub(crate) struct Point {
     /// The turn it began, counted from one along the active branch.
     pub(crate) turn: u64,
-    /// The prompt's item.
+    /// The prompt's item: a rewind and a fork go back to just before it.
     pub(crate) item: ItemId,
-    /// The item before it: what a rewind keeps, and where a fork ends.
-    pub(crate) before: ItemId,
     /// When it was sent, as a row says it (`14:32`), when that is known.
     pub(crate) time: Option<String>,
     /// The prompt on one line, cut to a row's worth: the picker's row.
@@ -80,8 +81,6 @@ pub(crate) struct Point {
 pub(super) struct Reading {
     session: SessionId,
     points: Vec<Point>,
-    /// The last item read: the one before the next prompt.
-    last: Option<ItemId>,
     /// The turns counted so far.
     turns: u64,
 }
@@ -152,7 +151,6 @@ impl App {
         self.points = Some(Reading {
             session: session.clone(),
             points: Vec::new(),
-            last: None,
             turns: 0,
         });
         self.read_page(session, None, Pending::Points);
@@ -203,9 +201,7 @@ impl App {
                 && message.delivery.as_ref() != Some(&ItemDelivery::Steer)
             {
                 reading.turns += 1;
-                if reading.turns > 1
-                    && let Some(before) = reading.last.clone()
-                {
+                if reading.turns > 1 {
                     let time = message
                         .created_at
                         .as_ref()
@@ -214,15 +210,11 @@ impl App {
                     reading.points.push(Point {
                         turn: reading.turns,
                         item: message.id.clone(),
-                        before,
                         time,
                         text: row_text(message, ellipsis),
                         first: first_line(message, ellipsis),
                     });
                 }
-            }
-            if let Some(id) = item.id() {
-                reading.last = Some(ItemId::from(id));
             }
         }
         if let Some(cursor) = page.next_cursor {
@@ -290,7 +282,8 @@ impl App {
             .link
             .send(Op::SessionRewindPlan(SessionRewindPlanParams {
                 session_id: session.clone(),
-                to: point.before.clone(),
+                to: None,
+                before: Some(point.item.clone()),
             }));
         self.pending
             .insert(ticket, Pending::RewindPlan(session.clone()));
@@ -361,7 +354,8 @@ impl App {
         };
         let ticket = self.link.send(Op::SessionRewind(SessionRewindParams {
             session_id: rewinding.session.clone(),
-            to: rewinding.point.before.clone(),
+            to: None,
+            before: Some(rewinding.point.item.clone()),
             restore_files,
             plan: rewinding.mark.clone(),
         }));
@@ -623,8 +617,8 @@ impl App {
 
     // -------------------------------------------------------------- fork
 
-    /// `Tab` in a picker that forks: `/rewind`'s forks from before the
-    /// point, `/sessions`' forks the session at its end.
+    /// `Tab` in a picker that forks: `/rewind`'s forks from just before the
+    /// point's prompt, `/sessions`' forks the session at its end.
     pub(super) fn forked(&mut self, name: &str, index: usize) {
         let Some((opened, picker)) = self.picker.take() else {
             return;
@@ -638,7 +632,7 @@ impl App {
                     return;
                 };
                 self.fork_here(
-                    Some(point.before.clone()),
+                    Some(point.item.clone()),
                     format!(
                         "Forked from before turn {}: this is a new session, and the one it came \
                          from is kept as it was.",
@@ -669,10 +663,11 @@ impl App {
         }
     }
 
-    /// Forks the session open here at `at` (its end when `None`), and
-    /// opens the fork in its place. Until the fork's answer, what comes is
-    /// held, and a prompt sent waits for the fork.
-    fn fork_here(&mut self, at: Option<ItemId>, said: String) {
+    /// Forks the session open here from just before the item `before` (at
+    /// its end when `None`), and opens the fork in its place. Until the
+    /// fork's answer, what comes is held, and a prompt sent waits for the
+    /// fork.
+    fn fork_here(&mut self, before: Option<ItemId>, said: String) {
         if self.running.is_some() {
             self.say("A turn is running: wait for it to end, or stop it with esc, then fork.");
             return;
@@ -692,7 +687,8 @@ impl App {
         self.opening = true;
         let ticket = self.link.send(Op::SessionFork(SessionForkParams {
             session_id: state.session_id.clone(),
-            at,
+            at: None,
+            before,
         }));
         self.pending.insert(
             ticket,

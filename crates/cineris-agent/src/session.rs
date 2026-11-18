@@ -742,6 +742,29 @@ impl SessionHandle {
     /// `session_not_open` after [`close`](Self::close).
     pub fn change_history(&self) -> Result<HistoryChange, Box<ErrorData>> {
         let mut inbox = self.shared.lock();
+        Self::may_change(&inbox)?;
+        inbox.changing = true;
+        Ok(HistoryChange {
+            shared: Arc::clone(&self.shared),
+            made: false,
+        })
+    }
+
+    /// Whether a change to the session's history could begin now, refused
+    /// as [`change_history`](Self::change_history) would refuse it, without
+    /// beginning one: for a read that must be refused as the change it
+    /// plans would be (`session/rewind_plan`, since the review of step 25's
+    /// second pull request). A change begun and dropped would have the loop
+    /// read its history again; this changes nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`change_history`](Self::change_history).
+    pub fn may_change_history(&self) -> Result<(), Box<ErrorData>> {
+        Self::may_change(&self.shared.lock())
+    }
+
+    fn may_change(inbox: &Inbox) -> Result<(), Box<ErrorData>> {
         if inbox.closed {
             return Err(Box::new(ErrorData::new(
                 ErrorKind::Usage,
@@ -760,11 +783,7 @@ impl SessionHandle {
         if inbox.changing {
             return Err(history_changing());
         }
-        inbox.changing = true;
-        Ok(HistoryChange {
-            shared: Arc::clone(&self.shared),
-            made: false,
-        })
+        Ok(())
     }
 
     /// Closes the session: a running turn is interrupted, and the loop

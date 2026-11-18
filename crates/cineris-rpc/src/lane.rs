@@ -379,13 +379,15 @@ mod tests {
         let plan = || {
             Op::SessionRewindPlan(SessionRewindPlanParams {
                 session_id: session.clone(),
-                to: ItemId::from("i_1"),
+                to: Some(ItemId::from("i_1")),
+                before: None,
             })
         };
         assert_eq!(routes.route(&plan()), Route::Beside);
         let rewind = Op::SessionRewind(SessionRewindParams {
             session_id: session.clone(),
-            to: ItemId::from("i_1"),
+            to: Some(ItemId::from("i_1")),
+            before: None,
             restore_files: true,
             plan: None,
         });

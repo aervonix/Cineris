@@ -699,6 +699,7 @@ async fn session(
             Op::SessionFork(SessionForkParams {
                 session_id: SessionId::from(id.as_str()),
                 at: None,
+                before: None,
             })
         }
         Choice::Continue => {

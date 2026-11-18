@@ -462,11 +462,45 @@ pub fn scenarios() -> Vec<Scenario> {
                 call(|ctx| {
                     Op::SessionRewind(SessionRewindParams {
                         session_id: ctx.session(),
-                        to: ctx.items[1].clone(),
+                        to: Some(ctx.items[1].clone()),
+                        before: None,
                         restore_files: false,
                         plan: None,
                     })
                 }),
+                read(),
+                close(),
+            ],
+        },
+        Scenario {
+            // `before` (since the review of step 25's second pull request):
+            // a rewind, its plan and a fork name their point by one form.
+            name: "a rewind and a fork to before a prompt",
+            files: vec![],
+            model: vec![anthropic::text(&["One."]), anthropic::text(&["Two."])],
+            steps: vec![
+                new_session(),
+                prompt("first"),
+                Step::Until("session.idle"),
+                prompt("second"),
+                Step::Until("session.idle"),
+                json_call("session/rewind_plan", |ctx| {
+                    json!({"session_id": ctx.session(), "to": ctx.items[1],
+                        "before": ctx.items[2]})
+                }),
+                json_call(
+                    "session/rewind",
+                    |ctx| json!({"session_id": ctx.session(), "restore_files": false}),
+                ),
+                json_call("session/rewind", |ctx| {
+                    json!({"session_id": ctx.session(), "before": ctx.items[2],
+                        "restore_files": false})
+                }),
+                read(),
+                json_call(
+                    "session/fork",
+                    |ctx| json!({"session_id": ctx.session(), "before": ctx.items[2]}),
+                ),
                 read(),
                 close(),
             ],
