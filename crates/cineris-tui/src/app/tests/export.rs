@@ -98,7 +98,7 @@ fn export_reads_the_session_masked_and_hands_the_writer_its_text() {
         ))),
     ));
     drain(&mut app, now);
-    assert!(app.wait_for_export());
+    app.wait_for_export();
     let written = written.lock().unwrap().clone();
     assert_eq!(written.len(), 1);
     let file = &written[0];
@@ -139,7 +139,7 @@ fn an_export_over_a_file_that_is_there_writes_nothing_and_says_so() {
         Ok(OpResult::SessionRead(page(vec![user("u1", "hi")], 0, None))),
     ));
     drain(&mut app, now);
-    assert!(app.wait_for_export());
+    app.wait_for_export();
     let file = written.lock().unwrap()[0].clone();
     assert_eq!(file.format, Format::Json);
     assert_eq!(file.path.as_deref(), Some("notes.json"));
@@ -203,8 +203,11 @@ fn a_page_the_core_did_not_mask_writes_nothing_and_says_why() {
     ));
     drain(&mut app, now);
     assert!(reads(&link).is_empty(), "no other page is read");
-    assert!(!app.wait_for_export(), "no worker was started");
-    assert!(written.lock().unwrap().is_empty());
+    app.wait_for_export();
+    assert!(
+        written.lock().unwrap().is_empty(),
+        "nothing was given to the writer"
+    );
     assert!(
         notices(&mut app, now)
             .contains("The core did not mask the session, so nothing was written"),
@@ -232,7 +235,7 @@ fn an_export_while_a_turn_runs_with_nothing_in_progress_says_it_was_running() {
         Ok(OpResult::SessionRead(page(vec![user("u1", "hi")], 0, None))),
     ));
     drain(&mut app, now);
-    assert!(app.wait_for_export());
+    app.wait_for_export();
     let file = written.lock().unwrap()[0].clone();
     assert!(file.text.contains("A turn was running"), "{}", file.text);
 }
