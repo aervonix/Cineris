@@ -84,3 +84,38 @@ The third of step 25's pull requests, in the part that builds the first run and 
 3. `F2b` with a real `~/.claude.json`: each command whole, a token in an argument masked.
 4. The mode step without the sandbox (Windows until its sandbox step): `autonomous` not offered.
 5. `cineris auth login anthropic` in Windows Terminal and in the old console host: the row, `Ctrl+U`, `Esc`, and the terminal as it was afterwards.
+
+## The binary's size
+
+Measured early, as the coordinator asked, before more was built, on try run 44418596981 (`size --check --against-main`, at `3b95969a` on `main` `bb8f58d0`):
+
+| System | This pull request | Budget | Used | Against `main` |
+|---|---|---|---|---|
+| Windows, `dist` | 18,116,608 bytes (17.28 MiB) | 18 MiB | 96.0% | +257 KB (`main` 17,852,928) |
+| Linux musl, `dist` | 14,944,680 bytes (14.25 MiB) | 16 MiB | 89% | +188 KB |
+
+Under both budgets. After this pull request, about 757 KB is left on Windows.
+
+**By crate** (`size --breakdown`, the Linux build at the desk, through `rx`, against `main` built the same way): `cineris_tui` +55.6 KB, the standard library +41.9 KB, headers and unwind tables +36.3 KB, the binary's own crate (`cineris`) +28.6 KB, `serde_json` +5.4 KB, `cineris_core` +5.2 KB, `cineris_protocol` +5.1 KB, `tokio` +4.3 KB, `cineris_knowledge` +2.9 KB, `cineris_term` +2.6 KB, `cineris_config` +2.0 KB; the rest under 1 KB each. 191,952 bytes in all.
+
+**By symbol** (`nm` of the two unstripped builds): 242 symbols new or grown (169,594 bytes) and 38 gone or shrunk (−13,928). The largest are the first run's own code:
+
+- `App::first_run_view` +14.1 KB;
+- the program's `Setup::write_config` +9.8 KB and `read_servers` +8.8 KB;
+- `App::bottom` +9.1 KB;
+- `App::first_run_answers` +7.7 KB;
+- the setup worker's thread body +7.4 KB;
+- `Setup::discover` +5.7 KB;
+- `App::first_run_key` +5.5 KB;
+- `serde_json`'s reading of a list of another client's servers +5.4 KB;
+- `hint_row` +5.4 KB;
+- the core's handler +5.2 KB (`project/detect`);
+- `secret::read_key` +2.9 KB.
+
+**Cuts seen, not made** (none is free: each changes code beyond a few lines, and together they come to about 15 KB of the 188 KB):
+
+- The setup worker's two channel types (`Job` and `Answer`) each instantiate the standard library's channel (`send`, `recv`, `drop`: about 5.5 KB in all); one channel type, an enum, would share one copy.
+- The standard library's stable sort of `(String, toml::Value)` pairs appears twice, about 4 KB each, in two codegen units of the same generic code (a `BTreeMap` built from an iterator, as it reads). Building the configuration's table once, or `codegen-units = 1` for `dist` (a build-time cost, and a change for every crate), would keep one.
+- `App::bottom` grew by the first run's branch inside it (+9.1 KB). Moving that branch into a function of its own would not shrink it, only move it.
+
+So the first run's cost is its own code, and no cheap cut would change the picture. The budget question (Windows at 96%) goes to the owner with the Windows test job's time.
