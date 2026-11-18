@@ -165,6 +165,16 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     let history = history_for(&env, &workspace);
     // `/export` writes in the folder the person started in.
     let started_in = here.cwd.clone().unwrap_or_else(|| workspace.clone());
+    // The first run, when the user's configuration file does not exist
+    // (since step 25): its program, on the application's worker.
+    let setup: Option<Arc<dyn app::Setup>> = crate::setup::first_run_due(&env).map(|file| {
+        Arc::new(crate::setup::ProgramSetup::new(
+            core.core.clone(),
+            env.clone(),
+            workspace.clone(),
+            file,
+        )) as Arc<dyn app::Setup>
+    });
 
     // A panic of the interface's own unwinds to here: the terminal has been
     // put back by then (the terminal layer's hook, and its drop), and the
@@ -190,7 +200,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
                 highlighter: Highlighter::new(move || wake.wake()),
                 restyle: Some(Box::new(restyle)),
                 export: Some(crate::export::writer(started_in)),
-                setup: None,
+                setup,
             };
             (Box::new(link) as Box<dyn Link>, start)
         })

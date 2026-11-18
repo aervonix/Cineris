@@ -148,6 +148,22 @@ impl Core {
             .collect()
     }
 
+    /// The credential store a key is kept in, and where, in words for a
+    /// person (since step 25: the first run says where a key it stores
+    /// goes, as `auth login` at a terminal does).
+    #[must_use]
+    pub fn credential_store(&self) -> (cineris_config::StoreKind, String) {
+        let store = &self.inner.providers.store;
+        (store.kind(), store.describe(&self.inner.options.env))
+    }
+
+    /// Whether the sandbox enforces on this machine (since step 25: the
+    /// first run offers `autonomous` only then).
+    #[must_use]
+    pub fn sandbox_status(&self) -> cineris_protocol::session::SandboxStatus {
+        self.inner.sandbox.status()
+    }
+
     /// Keeps `key` for `provider` in the credential store.
     ///
     /// # Errors

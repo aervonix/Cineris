@@ -134,8 +134,10 @@ impl Run {
     /// The step's first frame, then the time it takes keys.
     fn ready(&mut self) -> Vec<String> {
         self.now += Duration::from_secs(2);
-        let live = self.frame();
+        let _ = self.frame();
         self.now += Duration::from_millis(1500);
+        let live = self.frame();
+        assert_eq!(self.app.deadline(), None, "its keys are drawn");
         live
     }
 
@@ -456,6 +458,47 @@ fn a_prompt_typed_at_the_first_frame_chooses_nothing() {
     assert!(
         live.iter().any(|row| row == "◇ Imports  2 of 4"),
         "{live:#?}"
+    );
+}
+
+/// A step's keys are drawn at the end of its grace, when the loop is due to
+/// draw, and it takes none before: a key before then holds it a quiet
+/// second more, its keys hidden again.
+#[test]
+fn a_steps_keys_are_drawn_at_the_end_of_its_grace_and_taken_only_then() {
+    let mut run = Run::new(fake());
+    let live = run.frame();
+    assert!(
+        !live.iter().any(|row| row.contains("enter chooses")),
+        "{live:#?}"
+    );
+    let due = run.app.deadline().expect("the step's keys are due");
+    assert!(due > run.now, "not before its grace");
+    run.now = due - Duration::from_millis(100);
+    run.key("down");
+    let later = run.app.deadline().expect("due again");
+    assert!(
+        later >= due + Duration::from_millis(900),
+        "a quiet second after the key"
+    );
+    run.now = later;
+    let live = run.frame();
+    assert!(
+        live.iter().any(|row| row.contains("enter chooses")),
+        "{live:#?}"
+    );
+    assert_eq!(run.app.deadline(), None);
+    run.key("enter");
+    assert_eq!(
+        squash(&run.scrollback.join(" ")),
+        "",
+        "the first row was chosen at the next frame, not the second: the down was dropped"
+    );
+    let _ = run.frame();
+    assert!(
+        squash(&run.scrollback.join(" ")).contains("its key from ANTHROPIC_API_KEY"),
+        "{:#?}",
+        run.scrollback
     );
 }
 

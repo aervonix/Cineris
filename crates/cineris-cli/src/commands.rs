@@ -805,6 +805,17 @@ pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
             AuthCommand::Login { provider } => {
                 known_provider(&context, &core, &provider)?;
                 let stdin = io::stdin();
+                // At a terminal the key is read without echo, and never drawn
+                // (since step 25).
+                if stdin.is_terminal() && io::stdout().is_terminal() {
+                    let key = read_at_terminal(&context, &core, &provider)?;
+                    core.store_credential(&provider, &key).map_err(|error| {
+                        context.say(&error.message);
+                        exit::AUTH
+                    })?;
+                    out!("Stored the key of {provider}.\n");
+                    return Ok(exit::COMPLETED);
+                }
                 if stdin.is_terminal() {
                     context.say(&format!(
                         "give the key on standard input, so that it is not echoed or kept in \
@@ -854,6 +865,43 @@ pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
             }
         }
     })())
+}
+
+/// Reads a key for `provider` at the terminal, without echo
+/// (`cineris_tui::secret::read_key`): `Esc` or `Ctrl+C` stores nothing, and
+/// a signal ends the command with its code.
+fn read_at_terminal(context: &Context, core: &Core, provider: &str) -> Result<Secret, Done> {
+    let (kind, described) = core.credential_store();
+    let store = crate::setup::key_store(kind, &described);
+    if let cineris_tui::app::setup::KeyStore::Unavailable(why) = &store {
+        context.say(&format!("no key can be stored here: {why}"));
+        return Err(exit::AUTH);
+    }
+    let asking = cineris_tui::secret::Asking {
+        provider: provider.to_owned(),
+        kept: store.kept(),
+        ascii_only: store.ascii_only(),
+    };
+    let read = cineris_tui::secret::read_key(cineris_tui::app::Overrides::default(), &asking);
+    if let Some(code) = cineris_tui::app::signalled() {
+        cineris_tui::app::signal_ended();
+        return Err(code);
+    }
+    match read {
+        Ok(Some(key)) => Ok(key),
+        Ok(None) => {
+            context.say("no key was stored");
+            Err(exit::USAGE)
+        }
+        Err(error) => {
+            context.say(&format!(
+                "the terminal could not be used ({error}): give the key on standard input \
+                 instead, `{} auth login {provider} < key-file`",
+                context.name
+            ));
+            Err(exit::USAGE)
+        }
+    }
 }
 
 /// Refuses a provider the core does not know: a key stored under a typo

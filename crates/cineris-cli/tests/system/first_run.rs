@@ -1,0 +1,179 @@
+//! The first run and `cineris auth login` at a terminal, end to end (since
+//! step 25): the real binary under a pseudo-terminal, in a home with no
+//! configuration file, against the scripted model and the file store in
+//! the test's own folders (never the system's keychain).
+//!
+//! A step takes keys only once its keys are drawn, at the end of its grace
+//! (as a dialog's answers): each key is sent once the screen shows them.
+
+use std::time::Duration;
+
+use cineris_testkit::VTerm;
+use cineris_testkit::pty::Session;
+
+use super::tui::{LIMIT, quit, shows_ever};
+use super::{MODEL, Machine};
+
+/// A key typed at the terminal, which no byte the binary writes may hold.
+const TYPED: &str = "sk-ant-typed-Qx7vR2firstrunZ9kL";
+
+/// Whether `text` holds any eight characters of [`TYPED`] in a row.
+fn holds_any_of_the_key(text: &str) -> Option<String> {
+    let key: Vec<char> = TYPED.chars().collect();
+    key.windows(8)
+        .map(|window| window.iter().collect::<String>())
+        .find(|piece| text.contains(piece.as_str()))
+}
+
+/// Waits until the screen shows every one of `what` at once.
+fn wait_all(session: &mut Session, what: &[&str]) {
+    let said = what.join(" and ");
+    session.wait_for(LIMIT, &said, |t: &VTerm| {
+        what.iter().all(|one| t.shows(one))
+    });
+}
+
+/// The bytes the binary wrote, read raw, not as frames.
+fn raw(session: &Session) -> String {
+    let bytes: Vec<u8> = session
+        .recording()
+        .iter()
+        .flat_map(|chunk| chunk.bytes.iter().copied())
+        .collect();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// The configuration a test gives on the command line: the scripted model,
+/// the file store, nothing kept. The user's file is the first run's to
+/// write.
+fn arguments(machine: &Machine) -> Vec<String> {
+    let mut arguments = Vec::new();
+    for setting in [
+        format!("providers.anthropic.base_url={}", machine.server.base_url()),
+        format!("model.main={MODEL}"),
+        "credentials.store=file".to_owned(),
+        "session.durability=never".to_owned(),
+        "retry.attempts=1".to_owned(),
+    ] {
+        arguments.push("-c".to_owned());
+        arguments.push(setting);
+    }
+    arguments
+}
+
+/// The first run in a home with no configuration file reaches a working
+/// session: a key typed (never drawn, never written raw), nothing
+/// imported, the mode kept; the file is written, the session opens, a
+/// prompt is answered, and the terminal is put back.
+#[test]
+fn sys_the_first_run_in_an_empty_home_reaches_a_working_session() {
+    let phases = cineris_testkit::Phases::new(
+        "sys_the_first_run_in_an_empty_home_reaches_a_working_session",
+    );
+    let machine = Machine::new("first_run_empty_home");
+    let user_config = machine.dirs().user_config.unwrap();
+    std::fs::remove_file(&user_config).unwrap();
+    machine.reply_text("The build is green.");
+    let arguments = arguments(&machine);
+    let arguments: Vec<&str> = arguments.iter().map(String::as_str).collect();
+    let mut session = machine.tui(&arguments);
+
+    phases.mark("the provider");
+    wait_all(&mut session, &["Provider  1 of 4", "enter chooses"]);
+    // The key in the environment is offered by its variable's name; the
+    // second row stores a key for the same provider.
+    session.send(b"\x1b[B");
+    session.wait_for(LIMIT, "the second row selected", |t| {
+        t.screen().iter().any(|text| {
+            text.contains("anthropic") && text.contains("store a key") && !text.starts_with("    ")
+        })
+    });
+    session.send(b"\r");
+    phases.mark("the key");
+    wait_all(&mut session, &["Paste or type the key", "enter stores it"]);
+    session.send(TYPED.as_bytes());
+    let count = format!("{} characters, hidden", TYPED.len());
+    wait_all(&mut session, &[&count, "enter stores it"]);
+    session.send(b"\r");
+
+    phases.mark("the imports");
+    wait_all(
+        &mut session,
+        &["Imports  2 of 4", "enter keeps what is picked"],
+    );
+    session.send(b"\r");
+    phases.mark("the mode");
+    wait_all(&mut session, &["Mode  3 of 4", "enter chooses"]);
+    session.send(b"\r");
+
+    phases.mark("the session opens");
+    session.wait_for(LIMIT, "the first run's last line", |t| {
+        shows_ever(t, "Set-up done.")
+    });
+    session.wait_for(LIMIT, "the input box", |t| t.shows("Describe a task"));
+    session.send(b"is the build green?");
+    session.send(b"\r");
+    session.wait_for(LIMIT, "the answer", |t| {
+        shows_ever(t, "The build is green.")
+    });
+
+    // What was chosen is in the file, which reads back.
+    let written = std::fs::read_to_string(&user_config).unwrap();
+    assert!(written.contains("instructions = false"), "{written}");
+    assert!(written.contains("mode = \"supervised\""), "{written}");
+    // The key is in the store, and nowhere the binary wrote.
+    let stored = std::fs::read_to_string(machine.dirs().credentials_file().unwrap()).unwrap();
+    assert!(stored.contains(TYPED), "the key reached the store");
+    assert_eq!(
+        holds_any_of_the_key(&raw(&session)),
+        None,
+        "a piece of the key was written"
+    );
+    let history = session.screen().history().join("\n");
+    assert_eq!(holds_any_of_the_key(&history), None, "{history}");
+    assert!(!written.contains(TYPED));
+    assert_eq!(machine.server.requests().len(), 1);
+
+    quit(&mut session, &phases);
+}
+
+/// `cineris auth login` at a terminal reads the key without echo: its row
+/// counts the characters, the store has the key, and no byte written holds
+/// any of it.
+#[test]
+fn sys_auth_login_at_a_terminal_reads_the_key_without_echo() {
+    let phases =
+        cineris_testkit::Phases::new("sys_auth_login_at_a_terminal_reads_the_key_without_echo");
+    let machine = Machine::new("auth_login_terminal");
+    let mut session = machine.tui(&["auth", "login", "anthropic"]);
+    phases.mark("the key");
+    wait_all(
+        &mut session,
+        &["Paste or type the key for anthropic", "enter stores it"],
+    );
+    session.send(TYPED.as_bytes());
+    let count = format!("{} characters, hidden", TYPED.len());
+    wait_all(&mut session, &[&count]);
+    session.send(b"\r");
+    session.wait_for(LIMIT, "the key stored", |t| {
+        shows_ever(t, "Stored the key of anthropic.")
+    });
+    phases.mark("the binary ends");
+    session.wait_for(LIMIT, "the shell's verdict", |t| {
+        t.shows(cineris_testkit::role::RESTORED) || t.shows(cineris_testkit::role::NOT_RESTORED)
+    });
+    assert!(
+        session.screen().shows(cineris_testkit::role::RESTORED),
+        "the terminal was not put back:
+{}",
+        session.screen().dump()
+    );
+    let stored = std::fs::read_to_string(machine.dirs().credentials_file().unwrap()).unwrap();
+    assert!(stored.contains(TYPED), "the key reached the store");
+    assert_eq!(
+        holds_any_of_the_key(&raw(&session)),
+        None,
+        "a piece of the key was written"
+    );
+    let _ = session.wait_exit(Duration::from_secs(30));
+}

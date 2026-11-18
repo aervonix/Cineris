@@ -905,6 +905,9 @@ impl App {
         if self.viewing() {
             return None;
         }
+        if let Some(due) = self.first_run_deadline() {
+            return Some(due);
+        }
         self.dialogs.front().and_then(Dialog::deadline)
     }
 
@@ -1606,6 +1609,10 @@ impl App {
             drained.changed = true;
         }
         if self.take_colours() {
+            drained.changed = true;
+        }
+        // The first run's worker wakes the loop when it answers (step 25).
+        if self.first_run_answers() {
             drained.changed = true;
         }
         let mut taken = 0;
@@ -2522,7 +2529,7 @@ impl App {
         // An export's writer that has answered.
         self.take_export();
         // What the first run's worker answered, and what follows (step 25).
-        self.first_run_answers();
+        let _ = self.first_run_answers();
         // The spinner's frame follows the clock, one every `SPIN`.
         let since = now.saturating_duration_since(self.began).as_millis();
         self.tick = usize::try_from(since / super::SPIN.as_millis()).unwrap_or(0);

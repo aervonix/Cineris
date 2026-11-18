@@ -38,6 +38,7 @@
 )]
 
 mod commands;
+mod first_run;
 mod live;
 mod names;
 mod runs;
