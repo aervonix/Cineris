@@ -277,7 +277,8 @@ fn a_rewind_goes_back_to_the_plan_of_that_point() {
         front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: keep,
+                to: Some(keep),
+                before: None,
                 restore_files: false,
                 plan: None,
             }))
@@ -333,6 +334,7 @@ fn a_rewind_or_a_fork_at_a_plan_calls_result_keeps_the_plan_that_call_made() {
                 cineris_protocol::methods::SessionForkParams {
                     session_id: front.session.clone(),
                     at: Some(result_of("c2")),
+                    before: None,
                 },
             ))
             .await
@@ -360,7 +362,8 @@ fn a_rewind_or_a_fork_at_a_plan_calls_result_keeps_the_plan_that_call_made() {
         front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: result_of("c2"),
+                to: Some(result_of("c2")),
+                before: None,
                 restore_files: false,
                 plan: None,
             }))
@@ -375,7 +378,8 @@ fn a_rewind_or_a_fork_at_a_plan_calls_result_keeps_the_plan_that_call_made() {
         front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: result_of("c1"),
+                to: Some(result_of("c1")),
+                before: None,
                 restore_files: false,
                 plan: None,
             }))

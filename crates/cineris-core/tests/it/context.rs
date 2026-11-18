@@ -204,7 +204,8 @@ fn a_compaction_asked_for_is_undone_by_a_rewind_to_before_it() {
         front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: first_answer,
+                to: Some(first_answer),
+                before: None,
                 restore_files: false,
                 plan: None,
             }))

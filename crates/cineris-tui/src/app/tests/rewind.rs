@@ -158,14 +158,20 @@ fn asked(app: &mut App, link: &Scripted, files: Vec<RewindFile>, at: Instant) ->
         .find(|(_, op)| matches!(op, Op::SessionRead(read) if read.item_id.is_some()))
         .map(|(ticket, _)| *ticket)
         .expect("the prompt read whole");
-    let (planned, to) = sent
+    let (planned, point) = sent
         .iter()
         .find_map(|(ticket, op)| match op {
-            Op::SessionRewindPlan(params) => Some((*ticket, params.to.clone())),
+            Op::SessionRewindPlan(params) => {
+                Some((*ticket, (params.to.clone(), params.before.clone())))
+            }
             _ => None,
         })
         .expect("the plan asked for");
-    assert_eq!(to, ItemId::from("i_2"), "the item before turn 2's prompt");
+    assert_eq!(
+        point,
+        (None, Some(ItemId::from("i_3"))),
+        "just before turn 2's prompt"
+    );
     give(link, prompt, Ok(page(vec![history()[2].clone()], None)));
     give(link, planned, Ok(OpResult::SessionRewindPlan(plan(files))));
     drain(app, at);
@@ -298,7 +304,11 @@ fn one_rewinds_and_puts_the_files_back_by_the_plan_shown() {
     }
     key(&mut app, "1", ready);
     let (_, params) = rewind_sent(&link).expect("the rewind");
-    assert_eq!(params.to, ItemId::from("i_2"));
+    assert_eq!(
+        (params.to, params.before),
+        (None, Some(ItemId::from("i_3"))),
+        "just before turn 2's prompt"
+    );
     assert!(params.restore_files);
     assert_eq!(params.plan.as_deref(), Some("aaaa-bbbb"));
 }
@@ -792,7 +802,11 @@ fn tab_in_the_rewind_picker_forks_from_before_the_point() {
         _ => None,
     });
     assert_eq!(fork.session_id, SessionId::from(SESSION));
-    assert_eq!(fork.at, Some(ItemId::from("i_2")));
+    assert_eq!(
+        (fork.at, fork.before),
+        (None, Some(ItemId::from("i_3"))),
+        "just before turn 2's prompt"
+    );
     give(
         &link,
         ticket,
@@ -923,7 +937,7 @@ fn tab_in_sessions_forks_the_open_session_at_its_end() {
         _ => None,
     });
     assert_eq!(fork.session_id, SessionId::from(SESSION));
-    assert_eq!(fork.at, None, "at its end");
+    assert_eq!((fork.at, fork.before), (None, None), "at its end");
 }
 
 /// Another session is opened to be forked, then the fork opened in this
@@ -967,7 +981,7 @@ fn tab_in_sessions_forks_another_session_at_its_end() {
         _ => None,
     });
     assert_eq!(fork.session_id, SessionId::from("s_other"));
-    assert_eq!(fork.at, None);
+    assert_eq!((fork.at, fork.before), (None, None));
 }
 
 // --------------------------------------------------------- hostile text

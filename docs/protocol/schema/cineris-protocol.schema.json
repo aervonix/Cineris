@@ -5839,7 +5839,7 @@
       "description": "An event with its envelope: which session, where in its sequence, and which turn. The event's own fields sit beside the envelope's."
     },
     "SessionForkParams": {
-      "description": "`session/fork`",
+      "description": "`session/fork`. Names where the new session ends by at most one of\n`at` and `before`; with neither it keeps all of the session. Both are\nrefused (`invalid_params`).",
       "properties": {
         "at": {
           "anyOf": [
@@ -5850,7 +5850,18 @@
               "type": "null"
             }
           ],
-          "description": "The last item the new session keeps. Absent: all of it."
+          "description": "The last item the new session keeps."
+        },
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The item the new session ends just before (since step 25): it keeps\nwhat the session's log holds before that item's entry, and nothing\nof the item or after it. A prompt's id forks from before its turn,\nwith whatever the log holds between the turn before and it (that\nturn's last checkpoint, a plan the person edited). A core from\nbefore step 25 ignores it, and forks all of the session."
         },
         "session_id": {
           "$ref": "#/$defs/SessionId",
@@ -6082,10 +6093,21 @@
       "type": "object"
     },
     "SessionRewindParams": {
-      "description": "`session/rewind`: moves the active branch back to an item, putting files\nback if asked.\n\n**It may ask a question** (since step 23). With `restore_files`, a file\nedited since the harness left it is put back only if the person says so:\nthe session's `user` clients that answer questions are put one\n`question/ask` naming those files, with the choices \"Put them back\" and\n\"Keep them as they are\". No client to ask, no answer, a client that goes\naway, the session's close and the core's end all keep the files. The\nresult comes once the question is settled; a session closed meanwhile is\nnot moved back (`session_not_open`).",
+      "description": "`session/rewind`: moves the active branch back to an item, or to just\nbefore one, putting files back if asked. The point is named by exactly\none of `to` and `before`: both, or neither, are refused\n(`invalid_params`).\n\n**It may ask a question** (since step 23). With `restore_files`, a file\nedited since the harness left it is put back only if the person says so:\nthe session's `user` clients that answer questions are put one\n`question/ask` naming those files, with the choices \"Put them back\" and\n\"Keep them as they are\". No client to ask, no answer, a client that goes\naway, the session's close and the core's end all keep the files. The\nresult comes once the question is settled; a session closed meanwhile is\nnot moved back (`session_not_open`).",
       "properties": {
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The item of the active branch to go back to just before (since step\n25): the active position becomes the entry the item's own follows,\nand everything from the item on is undone, nothing before it. A\nprompt's id undoes its turn and every later one, and keeps what the\nlog holds between the turn before and it (that turn's last\ncheckpoint, a plan the person edited), as `session/undo` does. A core\nfrom before step 25 refuses a rewind with `before` alone, for want of\n`to`."
+        },
         "plan": {
-          "description": "The `mark` of the plan `session/rewind_plan` gave, which the person\nwas shown (since step 25). The plan is made again, and the rewind is\nrefused (`plan_changed`), changing nothing, when it is not that one:\nwith `restore_files`, when its turns or what it would do to any file\ndiffer; without, when its turns do. Absent: no plan is checked.",
+          "description": "The `mark` of the plan `session/rewind_plan` gave, which the person\nwas shown (since step 25). The plan is made again, and the rewind is\nrefused (`plan_changed`), changing nothing, when it is not that one:\nwhen the point it goes back to, the active position it goes back\nfrom or its turns differ, and with `restore_files` also when what it\nwould do to any file does. Absent: no plan is checked.",
           "type": [
             "string",
             "null"
@@ -6101,31 +6123,54 @@
           "description": "The session."
         },
         "to": {
-          "$ref": "#/$defs/ItemId",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "description": "The last item to keep on the active branch."
         }
       },
       "required": [
-        "session_id",
-        "to"
+        "session_id"
       ],
       "type": "object"
     },
     "SessionRewindPlanParams": {
-      "description": "`session/rewind_plan`: what `session/rewind` to the same item would do\nnow, changing nothing (since step 25). A front end shows it before it\nasks whether to put files back: the turns it would undo, and each file\nthey changed with what it would go back to. Refused as `session/rewind`\nwould be: `session_not_stored` for a session with no log, `unknown_item`,\n`turn_running` while a turn runs.",
+      "description": "`session/rewind_plan`: what `session/rewind` to the same point would do\nnow, changing nothing (since step 25). A front end shows it before it\nasks whether to put files back: the turns it would undo, and each file\nthey changed with what it would go back to. The point is named as the\nrewind names it, by exactly one of `to` and `before`. Refused as\n`session/rewind` would be: `invalid_params` for both or neither,\n`role_not_allowed` for an observer, `session_not_stored` for a session\nwith no log, `unknown_item`, `turn_running` while a turn runs, and\n`history_changing` while another change of the history is under way (a\nrewind's question still open).",
       "properties": {
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The item of the active branch the rewind would go back to just\nbefore, as `session/rewind`'s `before`."
+        },
         "session_id": {
           "$ref": "#/$defs/SessionId",
           "description": "The session."
         },
         "to": {
-          "$ref": "#/$defs/ItemId",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
           "description": "The last item the rewind would keep on the active branch."
         }
       },
       "required": [
-        "session_id",
-        "to"
+        "session_id"
       ],
       "type": "object"
     },
@@ -6133,14 +6178,14 @@
       "description": "The result of `session/rewind_plan`: the plan the core would carry out\n(`docs/architecture/07-sessions-and-context.md`, \"Snapshots and undo\").",
       "properties": {
         "files": {
-          "description": "The files those turns changed, in the order they were first changed.",
+          "description": "The files those turns changed, by name.",
           "items": {
             "$ref": "#/$defs/RewindFile"
           },
           "type": "array"
         },
         "mark": {
-          "description": "The plan in a few characters: given back as `session/rewind`'s\n`plan`, it has that rewind refused when the plan has changed since.",
+          "description": "The plan in a few characters: given back as `session/rewind`'s\n`plan`, it has that rewind refused when the plan has changed since.\nIt holds the point the rewind goes back to, the active position it\ngoes back from, the turns it undoes and what it does to each file.",
           "type": "string"
         },
         "turns": {

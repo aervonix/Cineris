@@ -81,6 +81,7 @@ fn a_fork_for_a_client_that_left_meanwhile_does_not_run_on() {
             let mut forked = std::pin::pin!(front.op(Op::SessionFork(SessionForkParams {
                 session_id: front.session.clone(),
                 at: None,
+                before: None,
             })));
             for _ in 0..steps {
                 assert!(

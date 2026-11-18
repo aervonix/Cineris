@@ -849,6 +849,7 @@ fn unrestricted_is_refused_where_the_core_may_not_give_it() {
                 cineris_protocol::methods::SessionForkParams {
                     session_id: front.session.clone(),
                     at: None,
+                    before: None,
                 },
             ))
             .await
@@ -1054,6 +1055,7 @@ fn a_refused_fork_leaves_no_stored_session() {
                 cineris_protocol::methods::SessionForkParams {
                     session_id: front.session.clone(),
                     at: None,
+                    before: None,
                 },
             ))
             .await

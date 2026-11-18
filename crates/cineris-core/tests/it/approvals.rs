@@ -610,7 +610,8 @@ fn an_observer_starts_nothing_changes_no_history_and_ends_nothing() {
                 .op(Op::SessionRewind(
                     cineris_protocol::methods::SessionRewindParams {
                         session_id: front.session.clone(),
-                        to: first,
+                        to: Some(first),
+                        before: None,
                         restore_files: true,
                         plan: None,
                     },
@@ -623,6 +624,7 @@ fn an_observer_starts_nothing_changes_no_history_and_ends_nothing() {
                     cineris_protocol::methods::SessionForkParams {
                         session_id: front.session.clone(),
                         at: None,
+                        before: None,
                     },
                 ))
                 .await,

@@ -329,7 +329,8 @@ fn a_rewind_puts_the_files_and_the_conversation_back() {
         let rewound = front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: keep,
+                to: Some(keep),
+                before: None,
                 restore_files: true,
                 plan: None,
             }))
@@ -360,6 +361,7 @@ fn a_fork_is_a_new_session_with_the_same_conversation() {
             .op(Op::SessionFork(SessionForkParams {
                 session_id: front.session.clone(),
                 at: None,
+                before: None,
             }))
             .await
             .unwrap();
@@ -546,7 +548,8 @@ fn a_read_after_a_rewind_gives_the_content_the_rewind_took_away() {
         front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: keep,
+                to: Some(keep),
+                before: None,
                 restore_files: false,
                 plan: None,
             }))
@@ -610,7 +613,8 @@ fn a_file_a_rewind_put_back_is_read_again_before_it_is_changed() {
         front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: keep,
+                to: Some(keep),
+                before: None,
                 restore_files: true,
                 plan: None,
             }))
@@ -666,7 +670,8 @@ fn a_file_read_only_in_a_rewound_turn_is_read_again_before_it_is_overwritten() {
         front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: keep,
+                to: Some(keep),
+                before: None,
                 restore_files: false,
                 plan: None,
             }))
@@ -717,7 +722,8 @@ fn no_turn_starts_while_a_rewind_is_under_way() {
         // is under way and cannot be over.
         let mut rewind = std::pin::pin!(front.op(Op::SessionRewind(SessionRewindParams {
             session_id: front.session.clone(),
-            to: keep,
+            to: Some(keep),
+            before: None,
             restore_files: false,
             plan: None,
         })));
@@ -740,7 +746,8 @@ fn no_turn_starts_while_a_rewind_is_under_way() {
         let again = front
             .op(Op::SessionRewind(SessionRewindParams {
                 session_id: front.session.clone(),
-                to: cineris_protocol::ItemId::new("i_0"),
+                to: Some(cineris_protocol::ItemId::new("i_0")),
+                before: None,
                 restore_files: false,
                 plan: None,
             }))

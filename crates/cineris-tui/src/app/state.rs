@@ -1637,6 +1637,7 @@ impl App {
                 let ticket = self.link.send(Op::SessionFork(SessionForkParams {
                     session_id: original.clone(),
                     at: None,
+                    before: None,
                 }));
                 self.pending.insert(ticket, Pending::Open);
                 self.forked_from = Some(original);

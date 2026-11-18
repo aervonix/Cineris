@@ -705,9 +705,10 @@ impl Session {
 
     /// What a rewind to `to` undoes, read from the log: the turns, and for
     /// each file the undone rounds changed, the earliest `before` (what to
-    /// go back to) and the latest `after` (what the harness left). And the
-    /// checkpoints among them that cannot be read: damaged, or written in
-    /// a newer format, so that what they changed is not known.
+    /// go back to) and the latest `after` (what the harness left), by the
+    /// file's name. And the checkpoints among them that cannot be read:
+    /// damaged, or written in a newer format, so that what they changed is
+    /// not known.
     fn undone(&self, to: &EntryId) -> Result<Undone> {
         let branch = self.log.branch();
         let Some(position) = branch.iter().position(|id| id == to) else {
@@ -753,6 +754,12 @@ impl Session {
                 }
             }
         }
+        // By name, not in the order the rounds recorded them: a round's
+        // calls run side by side, so its checkpoint lists them in the order
+        // they happened to finish, and the same turns made a plan whose
+        // files came in another order from one run to the next (found by a
+        // loaded stress of step 25's second pull request).
+        changes.sort_by(|one, other| one.0.cmp(&other.0));
         Ok(Undone {
             turns,
             changes,
@@ -823,7 +830,7 @@ impl Session {
                 let file = snapshot::file_status(&self.store, &root, change, blocked)?;
                 let why_not = match file.status {
                     FileStatus::AlreadyRestored => None,
-                    FileStatus::CannotRestore => file.why_not.map(str::to_owned),
+                    FileStatus::CannotRestore => file.why_not().map(str::to_owned),
                     FileStatus::EditedSince if !overwrite.contains(file.path.as_str()) => {
                         Some("it was changed after the harness left it".to_owned())
                     }
