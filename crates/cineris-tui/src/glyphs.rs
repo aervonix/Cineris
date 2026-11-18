@@ -71,6 +71,11 @@ pub struct Glyphs {
     /// How many of one thing, as in the prompt's `\u{e0041}×12`: `×`
     /// (since the review of step 25's second pull request).
     pub times: &'static str,
+    /// A folded row that opens, as a file of the first run's imports: `▸`
+    /// (since step 25).
+    pub folded: &'static str,
+    /// An open row of the same: `▾` (since step 25).
+    pub unfolded: &'static str,
 }
 
 /// The spinner of the Unicode set: an eight-frame braille cycle.
@@ -109,6 +114,8 @@ impl Glyphs {
         arrow: "→",
         range: "–",
         times: "×",
+        folded: "▸",
+        unfolded: "▾",
     };
 
     /// The ASCII set, for a terminal without Unicode (and the old console
@@ -141,6 +148,8 @@ impl Glyphs {
         arrow: "->",
         range: "-",
         times: "x",
+        folded: "+",
+        unfolded: "-",
     };
 
     /// The set for a terminal: Unicode where it shows Unicode, ASCII
@@ -197,6 +206,8 @@ impl Glyphs {
             self.arrow,
             self.range,
             self.times,
+            self.folded,
+            self.unfolded,
         ];
         all.extend_from_slice(self.spinner);
         all

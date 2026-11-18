@@ -147,6 +147,7 @@ pub(crate) fn run(attach: Attach, name: &'static str) -> u8 {
                 // configuration as the in-process core does.
                 restyle: Some(Box::new(interactive::restyle)),
                 export: Some(crate::export::writer(started_in)),
+                setup: None,
             };
             (Box::new(link) as Box<dyn Link>, start)
         })

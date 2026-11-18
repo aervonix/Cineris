@@ -23,6 +23,7 @@
 //! | [`approval`] | A request to run `cargo build`, with three answers |
 //! | [`ask`] | A request given, and its dialog's first frame drawn |
 //! | [`shown_dialog`] | An approval given and drawn until it is ready: the time a key answers it |
+//! | [`FakeSetup`], [`app_first_run`] | The first run's program in a test: providers, what other tools left, servers, and what it was asked to store and write (since step 25) |
 //!
 //! Time is the test's: every call that draws or reads input takes the
 //! [`Instant`] it happens at, and nothing waits.
@@ -341,6 +342,122 @@ fn app_built(
     app_built_with(now, prompt, open, settings, Highlighter::off())
 }
 
+// ---------------------------------------------------------------- first run
+
+/// What a [`FakeSetup`] was asked to do.
+#[derive(Debug, Default)]
+pub struct SetupLog {
+    /// Each key stored: the provider and the key's text, which the test
+    /// compares with what it typed.
+    pub stored: Vec<(String, String)>,
+    /// Each file read, by its path.
+    pub read: Vec<String>,
+    /// Each configuration written.
+    pub written: Vec<crate::app::setup::Chosen>,
+}
+
+/// The first run's program in a test (since step 25): answers from what
+/// it holds, and keeps what it was asked.
+#[derive(Debug, Clone, Default)]
+pub struct FakeSetup {
+    /// What [`providers`](crate::app::Setup::providers) answers.
+    pub providers: crate::app::setup::Providers,
+    /// What [`discover`](crate::app::Setup::discover) answers.
+    pub found: crate::app::setup::Found,
+    /// Each file's servers, by its path.
+    pub servers: BTreeMap<String, Vec<crate::app::setup::McpServer>>,
+    /// Why storing a key fails, when it does.
+    pub store_fails: Option<String>,
+    /// What it was asked.
+    pub log: Arc<Mutex<SetupLog>>,
+}
+
+impl FakeSetup {
+    /// What it was asked so far.
+    ///
+    /// # Panics
+    ///
+    /// Never: a poisoned lock is taken as it is.
+    pub fn log(&self) -> MutexGuard<'_, SetupLog> {
+        self.log.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl crate::app::Setup for FakeSetup {
+    fn providers(&self) -> Result<crate::app::setup::Providers, String> {
+        Ok(self.providers.clone())
+    }
+
+    fn store_key(&self, provider: &str, key: cineris_base::Secret) -> Result<(), String> {
+        if let Some(why) = &self.store_fails {
+            return Err(why.clone());
+        }
+        self.log()
+            .stored
+            .push((provider.to_owned(), key.expose().to_owned()));
+        Ok(())
+    }
+
+    fn discover(&self) -> crate::app::setup::Found {
+        self.found.clone()
+    }
+
+    fn read_servers(&self, path: &str) -> Result<Vec<crate::app::setup::McpServer>, String> {
+        self.log().read.push(path.to_owned());
+        self.servers
+            .get(path)
+            .cloned()
+            .ok_or_else(|| "it is not there".to_owned())
+    }
+
+    fn write_config(&self, chosen: &crate::app::setup::Chosen) -> Result<String, String> {
+        self.log().written.push(chosen.clone());
+        Ok("~/.config/cineris/config.toml".to_owned())
+    }
+}
+
+/// An application at the start of a first run on `setup` in a window of
+/// `columns` by `rows`, opening a new session in [`WORKSPACE`] once the
+/// steps before it are done, and its link.
+#[must_use]
+pub fn app_first_run(
+    now: Instant,
+    setup: &FakeSetup,
+    columns: usize,
+    rows: usize,
+) -> (App, Scripted) {
+    let link = Scripted::default();
+    let start = Start {
+        version: "0.1.0".to_owned(),
+        folder: "~/src/parser".to_owned(),
+        cwd: None,
+        workspace: WORKSPACE.to_owned(),
+        open: Open::New {
+            workspace: WORKSPACE.to_owned(),
+            settings: SessionSettings::default(),
+            ephemeral: false,
+        },
+        prompt: None,
+        settings: Settings::default(),
+        keymap: KeyMap::defaults(),
+        notices: Vec::new(),
+        history: Box::new(MemoryHistory::new()),
+        highlighter: Highlighter::off(),
+        restyle: None,
+        export: None,
+        setup: Some(Arc::new(setup.clone())),
+    };
+    let app = App::new(
+        Box::new(link.clone()),
+        start,
+        &caps(),
+        columns - 1,
+        rows,
+        now,
+    );
+    (app, link)
+}
+
 fn app_built_with(
     now: Instant,
     prompt: Option<&str>,
@@ -363,6 +480,7 @@ fn app_built_with(
         highlighter,
         restyle: None,
         export: None,
+        setup: None,
     };
     let app = App::new(Box::new(link.clone()), start, &caps(), 99, 40, now);
     (app, link)

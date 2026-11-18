@@ -752,6 +752,7 @@ fn app_dialog(
         highlighter: Highlighter::off(),
         restyle: None,
         export: None,
+        setup: None,
     };
     let mut caps = super::capabilities(spec);
     caps.background = Some(background);

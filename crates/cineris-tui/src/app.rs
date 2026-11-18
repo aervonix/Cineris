@@ -31,6 +31,7 @@
 //! | `dialog` | The dialogs in the input box's place, and their keys |
 //! | `ready` | When a dialog or a panel takes keys: the rule they share (step 24) |
 //! | `panels` | The panels: the `Panel` kind, their layout in the live region, their focus and readiness (step 24) |
+//! | [`setup`] | What the first run asks of the program: the [`Setup`] trait and the worker its calls run on (step 25) |
 //! | `wording` | What an error says, and what to do next |
 
 pub(crate) mod dialog;
@@ -41,6 +42,7 @@ mod panels;
 mod ready;
 mod scroll;
 mod search;
+pub mod setup;
 mod state;
 mod tools;
 mod wording;
@@ -57,6 +59,7 @@ pub use cineris_term::{Capabilities, ColorDepth, Overrides, Waker, signal_ended,
 use cineris_term::{Device, Event, Frame, Full, Inline, Scheduler, Screen, Terminal, Wake};
 
 pub use link::{Inbound, Link, Ticket};
+pub use setup::Setup;
 pub use state::{App, Drained, Effect, Restyle, Restyled, SECOND_INTERRUPT};
 
 use crate::glyphs::Glyphs;
@@ -222,6 +225,11 @@ pub struct Start {
     /// What writes `/export`'s files, on a worker (since step 25). `None`:
     /// `/export` says it is not available.
     pub export: Option<crate::export::Writer>,
+    /// What the first run asks of the program (since step 25): with one,
+    /// the first run's steps come before the session opens. The program
+    /// gives one when the user's configuration file does not exist; `cineris
+    /// attach` never does.
+    pub setup: Option<std::sync::Arc<dyn Setup>>,
 }
 
 impl std::fmt::Debug for Start {
@@ -230,6 +238,7 @@ impl std::fmt::Debug for Start {
             .field("version", &self.version)
             .field("open", &self.open)
             .field("settings", &self.settings)
+            .field("setup", &self.setup.is_some())
             .finish_non_exhaustive()
     }
 }

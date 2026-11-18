@@ -38,6 +38,7 @@ mod commands;
 mod dialogs;
 mod export;
 mod files;
+mod first_run;
 mod measure;
 mod output;
 mod panels;
