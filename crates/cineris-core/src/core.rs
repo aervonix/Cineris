@@ -1555,6 +1555,9 @@ impl Core {
                     truncated,
                 }))
             }
+            Op::ProjectDetect(params) => Ok(OpResult::ProjectDetect(
+                crate::reads::detect(self, client, &params).await?,
+            )),
             Op::WorkspaceWarm(params) => Ok(OpResult::WorkspaceWarm(crate::reads::warm(
                 self, client, params,
             )?)),

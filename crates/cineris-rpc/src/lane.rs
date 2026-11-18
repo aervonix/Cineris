@@ -55,6 +55,7 @@ pub fn reads(op: &Op) -> bool {
         Op::SessionList(_)
             | Op::SessionRead(_)
             | Op::WorkspaceFiles(_)
+            | Op::ProjectDetect(_)
             | Op::ModelsList(_)
             | Op::ConfigGet(_)
             | Op::PermissionsList(_)
@@ -393,6 +394,23 @@ mod tests {
         });
         assert_eq!(routes.route(&rewind), Route::Lane { write: true });
         assert_eq!(routes.route(&plan()), Route::Lane { write: false });
+    }
+
+    /// The first run's look at the project's commands (since step 25) is
+    /// a read: beside the lane alone, behind a write sent before it.
+    #[test]
+    fn detecting_a_projects_commands_is_a_read() {
+        let session = SessionId::from("s_1");
+        let routes = Routes::default();
+        let detect = || {
+            Op::ProjectDetect(cineris_protocol::methods::ProjectDetectParams {
+                session_id: session.clone(),
+            })
+        };
+        assert!(reads(&detect()));
+        assert_eq!(routes.route(&detect()), Route::Beside);
+        assert_eq!(routes.route(&revoke(&session)), Route::Lane { write: true });
+        assert_eq!(routes.route(&detect()), Route::Lane { write: false });
     }
 
     /// An operation that panics in the lane is answered as failed, and the

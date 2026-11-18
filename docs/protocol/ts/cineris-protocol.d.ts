@@ -34,6 +34,8 @@ export interface ClientMethods {
   "plan/get": { params: SessionRef; result: PlanResult };
   /** Applies a user's edits to the plan. */
   "plan/update": { params: PlanUpdateParams; result: PlanResult };
+  /** The commands a project's own files name, for the first run. */
+  "project/detect": { params: ProjectDetectParams; result: ProjectDetectResult };
   /** Reads the project profile and memory. */
   "project/list": { params: ProjectListParams; result: ProjectEntriesResult };
   /** Accepts, edits, disables, deletes or promotes entries. */
@@ -452,6 +454,20 @@ export type Delta = ({
   } & ToolArgsDelta) | ({
     kind: "tool_output";
   } & TextDelta);
+
+/** A command a project's own files name, found by `project/detect` (since step 25): offered at the first run, each shown in full before it is kept. Nothing is learned, proposed or run by finding it. */
+export interface DetectedCommand {
+  /** The command line that would run: plain words, as an entry the user writes holds them. */
+  command: string;
+  /** What the file calls it: a script's or a target's name, or what it is for when the file names no command (`Cargo.toml`'s `test`). */
+  name: string;
+  /** What it is for. */
+  purpose: CommandPurpose;
+  /** For a script: what the script itself runs, as its file has it, cut at 1,000 characters. The command line runs it. */
+  runs?: string | null;
+  /** The file it was found in, relative to the workspace root. */
+  source: string;
+}
 
 /** The detail of an approval for a change to a file. */
 export interface DiffDetail {
@@ -1247,6 +1263,18 @@ export interface Prices {
   output: number;
   /** Rate cards that replace this one for larger requests, by ascending threshold. The last tier whose threshold the request passes applies. */
   tiers?: Array<PriceTier>;
+}
+
+/** `project/detect`: the build, test and check commands a session's project names in its own files (`Cargo.toml`, `package.json`'s scripts, a `Makefile`'s targets, `go.mod`, `pyproject.toml`), for the first run's last step (since step 25). A read, beside the lane, for any client that has the session open, as `workspace/files` is: the files are read through the session's path resolver and its read rules, and nothing is kept, learned or run. */
+export interface ProjectDetectParams {
+  /** The session. */
+  session_id: SessionId;
+}
+
+/** The result of `project/detect`. */
+export interface ProjectDetectResult {
+  /** The commands found, by file in the order the files are looked at, each named once. Only lines of plain words that the command observer classes as a build, a test run or a check are given. */
+  commands: Array<DetectedCommand>;
 }
 
 /** A result that is project entries. */
