@@ -114,7 +114,14 @@ jobs:
   test:
     name: test-${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    # Five minutes on a pull request: rule 2's budget. Twelve on every other
+    # event, because only main saves the build cache and a run cut off saves
+    # nothing: a main run must be able to rebuild from cold and save, or every
+    # run after a cold start is cut off in turn (the first run after the
+    # rename to Cineris built from cold for 3m22s on Windows and was cut off
+    # 10 s into its tests). A cold lint job takes under 2.5 minutes, so the
+    # lint jobs keep five.
+    timeout-minutes: ${{ github.event_name == 'pull_request' && 5 || 12 }}
     strategy:
       fail-fast: false
       matrix:
