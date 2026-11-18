@@ -1,10 +1,10 @@
 //! The processes each test started, as the test kit wrote them down
 //! (`docs/testing-and-ci.md`, "What a runner would say, from a desk").
 //!
-//! With `CORTEX_TESTKIT_STARTS` naming a directory, every place in the
+//! With `CINERIS_TESTKIT_STARTS` naming a directory, every place in the
 //! workspace that starts a process writes a line to a file of its process's
 //! own there, `<binary id>\t<test name>\t<program>`, under nextest
-//! (`cortex_base::hook::started`). A process started by a test's process
+//! (`cineris_base::hook::started`). A process started by a test's process
 //! (the harness's binary, a test binary in a role) is given the variables
 //! and writes for the same test. This reads the directory back: each test's
 //! starts, by program and by [`Kind`].
@@ -20,15 +20,15 @@ use std::path::Path;
 use crate::Result;
 
 /// The variable that names the directory the starts are written to:
-/// `cortex_base::hook::STARTS`.
-pub(crate) const VARIABLE: &str = "CORTEX_TESTKIT_STARTS";
+/// `cineris_base::hook::STARTS`.
+pub(crate) const VARIABLE: &str = "CINERIS_TESTKIT_STARTS";
 
 /// What a line of the launcher becoming a program starts with:
-/// `cortex_base::hook::LAUNCHED`.
+/// `cineris_base::hook::LAUNCHED`.
 const LAUNCHED: &str = "launcher>";
 
 /// What a line of a start that asks a program its version starts with:
-/// `cortex_base::hook::PROBED`.
+/// `cineris_base::hook::PROBED`.
 const PROBED: &str = "probe>";
 
 /// What kind of process a start was, by what it costs.
@@ -44,7 +44,7 @@ pub(crate) enum Kind {
     Cmd,
     /// git.
     Git,
-    /// The harness's binary, `cortex` or `cx`.
+    /// The harness's binary, `cineris` or `cin`.
     Binary,
     /// Anything else: a test binary in a role, a helper, an editor.
     Other,
@@ -77,7 +77,7 @@ impl Kind {
             "bash" | "sh" | "dash" | "zsh" | "ksh" => Kind::Posix,
             "cmd" => Kind::Cmd,
             "git" => Kind::Git,
-            "cortex" | "cx" => Kind::Binary,
+            "cineris" | "cin" => Kind::Binary,
             _ => Kind::Other,
         }
     }
@@ -90,7 +90,7 @@ impl Kind {
             Kind::Posix => "posix shell",
             Kind::Cmd => "cmd",
             Kind::Git => "git",
-            Kind::Binary => "cortex",
+            Kind::Binary => "cineris",
             Kind::Other => "other",
             Kind::Probe => "version probe",
         }
@@ -234,21 +234,21 @@ mod tests {
     #[test]
     fn each_tests_starts_are_counted_by_kind() {
         let starts = Starts::parse(
-            "cortex-core::it\ttrust::sys_a\tpwsh\n\
-             cortex-core::it\ttrust::sys_a\tgit\n\
-             cortex-core::it\ttrust::sys_a\tgit\n\
-             cortex-core::it\ttrust::sys_b\tpowershell\n\
-             cortex-cli::system\truns::sys_c\tcortex\n\
-             cortex-cli::system\truns::sys_c\tcx\n\
-             cortex-cli::system\truns::sys_c\tsystem-0123abcd\n\
+            "cineris-core::it\ttrust::sys_a\tpwsh\n\
+             cineris-core::it\ttrust::sys_a\tgit\n\
+             cineris-core::it\ttrust::sys_a\tgit\n\
+             cineris-core::it\ttrust::sys_b\tpowershell\n\
+             cineris-cli::system\truns::sys_c\tcineris\n\
+             cineris-cli::system\truns::sys_c\tcx\n\
+             cineris-cli::system\truns::sys_c\tsystem-0123abcd\n\
              a line cut short\n",
         );
-        let a = starts.of("cortex-core::it", "trust::sys_a");
+        let a = starts.of("cineris-core::it", "trust::sys_a");
         assert_eq!((a.of(Kind::Pwsh), a.of(Kind::Git), a.total()), (1, 2, 3));
         assert_eq!(a.brief(), "pwsh 1, git 2");
-        let c = starts.of("cortex-cli::system", "runs::sys_c");
+        let c = starts.of("cineris-cli::system", "runs::sys_c");
         assert_eq!((c.of(Kind::Binary), c.of(Kind::Other)), (2, 1));
-        assert_eq!(starts.of("cortex-cli::system", "missing").total(), 0);
+        assert_eq!(starts.of("cineris-cli::system", "missing").total(), 0);
         assert_eq!(starts.by_test.len(), 3, "the short line is passed over");
     }
 
@@ -256,30 +256,30 @@ mod tests {
     fn the_launcher_becoming_a_shell_is_the_shells_start_and_not_the_binarys() {
         // The harness's binary as the launcher, beside a start of its own.
         let starts = Starts::parse(
-            "cortex-cli::system\truns::sys_x\tcortex\n\
-             cortex-cli::system\truns::sys_x\tlauncher>cortex>sh\n\
-             cortex-cli::system\truns::sys_x\tcortex\n",
+            "cineris-cli::system\truns::sys_x\tcineris\n\
+             cineris-cli::system\truns::sys_x\tlauncher>cineris>sh\n\
+             cineris-cli::system\truns::sys_x\tcineris\n",
         );
-        let x = starts.of("cortex-cli::system", "runs::sys_x");
+        let x = starts.of("cineris-cli::system", "runs::sys_x");
         assert_eq!((x.of(Kind::Posix), x.of(Kind::Binary)), (1, 1));
         // A test binary in the launcher's role: its start is taken off the
         // other starts, not the binary's.
         let starts = Starts::parse(
-            "cortex-core::it\tsandbox::sys_x\tit-0123abcd\n\
-             cortex-core::it\tsandbox::sys_x\tlauncher>it-0123abcd>bash\n\
-             cortex-core::it\tsandbox::sys_x\tcortex\n",
+            "cineris-core::it\tsandbox::sys_x\tit-0123abcd\n\
+             cineris-core::it\tsandbox::sys_x\tlauncher>it-0123abcd>bash\n\
+             cineris-core::it\tsandbox::sys_x\tcineris\n",
         );
-        let x = starts.of("cortex-core::it", "sandbox::sys_x");
+        let x = starts.of("cineris-core::it", "sandbox::sys_x");
         assert_eq!(
             (x.of(Kind::Posix), x.of(Kind::Other), x.of(Kind::Binary)),
             (1, 0, 1)
         );
         // A command wrapped and never started is no start of anything.
         let starts = Starts::parse(
-            "cortex-sandbox\tlaunch::tests::wrap\tlauncher>cortex>bash\n\
-             cortex-sandbox\tlaunch::tests::wrap\tgit\n",
+            "cineris-sandbox\tlaunch::tests::wrap\tlauncher>cineris>bash\n\
+             cineris-sandbox\tlaunch::tests::wrap\tgit\n",
         );
-        let w = starts.of("cortex-sandbox", "launch::tests::wrap");
+        let w = starts.of("cineris-sandbox", "launch::tests::wrap");
         assert_eq!(
             (w.of(Kind::Posix), w.of(Kind::Binary), w.total()),
             (0, 0, 1)
@@ -295,8 +295,8 @@ mod tests {
             ("sh", Kind::Posix),
             ("cmd", Kind::Cmd),
             ("git", Kind::Git),
-            ("cortex", Kind::Binary),
-            ("cx", Kind::Binary),
+            ("cineris", Kind::Binary),
+            ("cin", Kind::Binary),
             ("it-0590a6a4d850de8a", Kind::Other),
             ("probe>bash", Kind::Probe),
             ("probe>pwsh", Kind::Probe),
@@ -321,13 +321,13 @@ mod tests {
         assert!(Starts::read(&dir).unwrap().is_empty());
     }
 
-    /// The texts `cortex-base` writes with are the ones read here: a name
+    /// The texts `cineris-base` writes with are the ones read here: a name
     /// changed on one side only would count nothing, silently.
     #[test]
-    fn the_variable_and_the_marks_are_cortex_bases() {
+    fn the_variable_and_the_marks_are_cineris_bases() {
         let hook = std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../crates/cortex-base/src/hook.rs"),
+                .join("../crates/cineris-base/src/hook.rs"),
         )
         .unwrap();
         for line in [
@@ -337,7 +337,7 @@ mod tests {
         ] {
             assert!(
                 hook.contains(&line),
-                "cortex-base's hook.rs has no `{line}`"
+                "cineris-base's hook.rs has no `{line}`"
             );
         }
     }

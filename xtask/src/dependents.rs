@@ -5,12 +5,12 @@
 //! of it: it depends on it, as a normal or a build dependency, directly or
 //! through other workspace crates. And a crate's tests see it when they
 //! depend on such a crate themselves, as a dev-dependency. A dev-dependency
-//! is not passed on: the tests of a crate that depends on `cortex-tools` do
-//! not use `cortex-tools`' own test helpers, so the chain stops at it.
+//! is not passed on: the tests of a crate that depends on `cineris-tools` do
+//! not use `cineris-tools`' own test helpers, so the chain stops at it.
 //!
-//! Step 18 changed `cortex-tools`, ran its tests and those of the crate it
-//! was working in, and broke a `cortex-core` test it never ran: the core
-//! reaches `cortex-tools` through `cortex-agent`.
+//! Step 18 changed `cineris-tools`, ran its tests and those of the crate it
+//! was working in, and broke a `cineris-core` test it never ran: the core
+//! reaches `cineris-tools` through `cineris-agent`.
 
 use std::collections::BTreeSet;
 

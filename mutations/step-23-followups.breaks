@@ -7,272 +7,272 @@
 
 [break] sessions-list-json-through-the-terminals-escape
 rule: `sessions list --json` prints through the JSON function, not the terminal's `visible`, whose escape is not JSON.
-file: crates/cortex-cli/src/commands.rs
+file: crates/cineris-cli/src/commands.rs
 in: session_lines
 find: out.push_str(&crate::json::record(serde_json::to_string(session)));
 replace: out.push_str(&format!("{}\n", serde_json::to_string(session).unwrap_or_default()));
 caught-by:
-    cortex-cli::bin/cortex commands::tests::sessions_list_json_is_json_for_every_hostile_name
+    cineris-cli::bin/cineris commands::tests::sessions_list_json_is_json_for_every_hostile_name
 
 [break] usage-json-through-the-terminals-escape
 rule: `usage --json` prints through the JSON function.
-file: crates/cortex-cli/src/commands.rs
+file: crates/cineris-cli/src/commands.rs
 in: usage_json
 find: crate::json::record(serde_json::to_string(report))
 replace: format!("{}\n", serde_json::to_string(report).unwrap_or_default())
 caught-by:
-    cortex-cli::bin/cortex commands::tests::usage_json_is_json_for_every_hostile_name
+    cineris-cli::bin/cineris commands::tests::usage_json_is_json_for_every_hostile_name
 
 [break] stats-json-through-the-terminals-escape
 rule: `stats show --json` prints through the JSON function.
-file: crates/cortex-cli/src/commands.rs
+file: crates/cineris-cli/src/commands.rs
 in: stats_json
 find: crate::json::record(serde_json::to_string(&value))
 replace: format!("{value}\n")
 caught-by:
-    cortex-cli::bin/cortex commands::tests::stats_json_is_json_for_every_hostile_name
+    cineris-cli::bin/cineris commands::tests::stats_json_is_json_for_every_hostile_name
 
 # ------------------------------------------------------------ the workspace root
 
 [break] the-root-is-the-working-directory
 rule: Every binary finds the workspace root by walking up from the working directory; the working directory below it is where commands start.
-file: crates/cortex-cli/src/workspace.rs
+file: crates/cineris-cli/src/workspace.rs
 in: Here::of
 find: root: found.root
 replace: root: start.to_path_buf()
 caught-by:
-    cortex-cli::bin/cortex workspace::tests::the_root_is_found_by_walking_up_and_the_folder_is_kept
-    cortex-cli::system commands::sys_config_shows_and_checks_what_a_session_would_load
+    cineris-cli::bin/cineris workspace::tests::the_root_is_found_by_walking_up_and_the_folder_is_kept
+    cineris-cli::system commands::sys_config_shows_and_checks_what_a_session_would_load
 
 [break] a-subcommand-uses-the-working-directory
 rule: A subcommand acts on the project of the root it found, not of the working directory.
-file: crates/cortex-cli/src/commands.rs
+file: crates/cineris-cli/src/commands.rs
 in: Context::project
 find: core.project(&here.root)
 replace: core.project(&std::env::current_dir().unwrap_or_default())
 caught-by:
-    cortex-cli::system commands::sys_config_shows_and_checks_what_a_session_would_load
+    cineris-cli::system commands::sys_config_shows_and_checks_what_a_session_would_load
 
 [break] a-new-session-starts-at-the-root
 rule: A new session's `cwd` below the root is where its commands start, and says so in the environment.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: Which::New { cwd: Some(cwd), .. } => start_below(&root, cwd)?,
 replace: Which::New { cwd: Some(_), .. } => None,
 caught-by:
-    cortex-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
+    cineris-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
 
 [break] a-resumed-session-forgets-where-it-started
 rule: A resumed session starts its commands where its log's header says it did.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: .filter(|start| is_below(start));
 replace: .filter(|_| false);
 caught-by:
-    cortex-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
+    cineris-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
 
 [break] a-kept-start-may-leave-the-root
 rule: A start kept in a log is taken only when it names a directory below the root.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: is_below
 find: (Some(std::path::Component::Normal(only)), None) if only == name
 replace: (Some(_), _)
 caught-by:
-    cortex-core assemble::trust_and_start_tests::a_kept_start_is_below_the_root_or_not_taken
+    cineris-core assemble::trust_and_start_tests::a_kept_start_is_below_the_root_or_not_taken
 
 [break] the-environment-omits-the-start
 rule: The environment says where commands start when it is below the root.
-file: crates/cortex-agent/src/context/prompt.rs
+file: crates/cineris-agent/src/context/prompt.rs
 in: Environment::render
 find: if let Some(start) = &self.start {
 replace: if let Some(start) = None::<&String> {
-packages: cortex-agent,cortex-core
+packages: cineris-agent,cineris-core
 caught-by:
-    cortex-agent context::prompt::tests::the_environment_says_where_commands_start_only_below_the_root
-    cortex-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
+    cineris-agent context::prompt::tests::the_environment_says_where_commands_start_only_below_the_root
+    cineris-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
 
 [break] the-start-line-at-the-root-too
 rule: Started at the root, the environment is the text it always was, to the byte.
-file: crates/cortex-agent/src/context/prompt.rs
+file: crates/cineris-agent/src/context/prompt.rs
 in: Environment::render
 find: if let Some(start) = &self.start {
 replace: if let Some(start) = self.start.as_ref().or(Some(&self.workspace)) {
-packages: cortex-agent,cortex-core
+packages: cineris-agent,cineris-core
 caught-by:
-    cortex-agent context::prompt::tests::the_environment_says_where_commands_start_only_below_the_root
-    cortex-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
+    cineris-agent context::prompt::tests::the_environment_says_where_commands_start_only_below_the_root
+    cineris-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
 
 [break] instructions-only-at-the-root
 rule: Instruction files are read from the root down to where commands start.
-file: crates/cortex-agent/src/context/instructions.rs
+file: crates/cineris-agent/src/context/instructions.rs
 in: places
 find: for part in start.into_iter().flat_map(|start| start.split('/')) {
 replace: for part in None::<&str>.into_iter() {
-packages: cortex-agent,cortex-core
+packages: cineris-agent,cineris-core
 caught-by:
-    cortex-agent context::instructions::tests::a_start_below_the_root_reads_each_directory_down_to_it
-    cortex-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
+    cineris-agent context::instructions::tests::a_start_below_the_root_reads_each_directory_down_to_it
+    cineris-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
 
 [break] the-shells-text-names-the-start-at-the-root
 rule: The shell tool's text is unchanged for a session started at the root.
-file: crates/cortex-tools/src/shell/mod.rs
+file: crates/cineris-tools/src/shell/mod.rs
 find: "the workspace root".to_owned()
 replace: "the workspace root (where you started)".to_owned()
 caught-by:
-    cortex-tools shell::tests::the_tools_text_names_where_commands_start_only_below_the_root
+    cineris-tools shell::tests::the_tools_text_names_where_commands_start_only_below_the_root
 
 # ------------------------------------------------------------ the trust question's answers
 
 [break] never-on-a-trusted-projects-question
 rule: On a question about what is new in a trusted project, the third answer keeps the trust (keep), not never.
-file: crates/cortex-tui/src/app/dialog.rs
+file: crates/cineris-tui/src/app/dialog.rs
 in: Dialog::key
 find: never: !request.trusted
 replace: never: true
 caught-by:
-    cortex-tui app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
+    cineris-tui app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
 
 [break] the-keep-label-is-never
 rule: The dialog names the third answer by what it does: never for a project not trusted, keep trusting it without what is new for one trusted.
-file: crates/cortex-tui/src/view/dialog.rs
+file: crates/cineris-tui/src/view/dialog.rs
 in: third_trust_answer
 find: if !request.trusted {
 replace: if true {
 caught-by:
-    cortex-tui app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
+    cineris-tui app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
 
 [break] never-to-a-trusted-project-is-taken
 rule: A never to a question about a trusted project is refused where it is given, and the question stays open.
-file: crates/cortex-core/src/clients.rs
+file: crates/cineris-core/src/clients.rs
 in: trust_answer_problem
 find: TrustResponse { never: true, .. } if trusted_project => Some(
 replace: TrustResponse { never: true, .. } if false => Some(
 caught-by:
-    cortex-core::it trusting::an_answer_that_cannot_be_read_is_refused
+    cineris-core::it trusting::an_answer_that_cannot_be_read_is_refused
 
 [break] keep-is-not-now
 rule: Keep, to a trusted project's question, is kept in the store.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: Core::trust_for
 find: }))) if question.trusted => Some(TrustAnswer::Keep),
 replace: }))) if question.trusted => Some(TrustAnswer::NotNow),
 caught-by:
-    cortex-core::it trusting::keep_of_a_trusted_project_keeps_its_trust_without_the_new_rules
-    cortex-core::it trusting::a_trusted_folder_that_became_a_repository_is_asked_about_git
+    cineris-core::it trusting::keep_of_a_trusted_project_keeps_its_trust_without_the_new_rules
+    cineris-core::it trusting::a_trusted_folder_that_became_a_repository_is_asked_about_git
 
 [break] declined-rules-are-asked-again
 rule: Rules kept out are not asked about while they are those rules.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: look
 find: let rules_new = !trust.rules && !trust.rules_declined;
 replace: let rules_new = !trust.rules;
 caught-by:
-    cortex-core::it trusting::keep_of_a_trusted_project_keeps_its_trust_without_the_new_rules
+    cineris-core::it trusting::keep_of_a_trusted_project_keeps_its_trust_without_the_new_rules
 
 [break] a-git-only-yes-undoes-a-keep
 rule: Approving git alone leaves rules kept out kept out (the early review).
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: TrustStore::approve
 find: .any(|definition| definition.kind == TrustResourceKind::Rules)
 replace: .all(|_| true)
 caught-by:
-    cortex-policy::it trust::rules_kept_out_are_declined_while_they_are_those_rules
+    cineris-policy::it trust::rules_kept_out_are_declined_while_they_are_those_rules
 
 [break] keep-takes-back-git-trusted
 rule: Keeping trust without git never takes back git trusted before.
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: TrustStore::keep_without
 find: if git && project.git != Some(GitAnswer::Trusted) {
 replace: if git {
 caught-by:
-    cortex-policy::it trust::whether_git_was_shown_is_pinned_with_the_trust
+    cineris-policy::it trust::whether_git_was_shown_is_pinned_with_the_trust
 
 [break] a-first-yes-lifts-a-never-said-meanwhile
 rule: A yes to a project's first question does not lift a never said while it was open (the early review).
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: TrustStore::trust_unless_refused
 find: if file.refused.iter().any(|refused| refused.key == *key) {
 replace: if false {
-packages: cortex-policy,cortex-core
+packages: cineris-policy,cineris-core
 caught-by:
-    cortex-core::it trusting::a_first_yes_after_a_never_said_meanwhile_is_not_used
+    cineris-core::it trusting::a_first_yes_after_a_never_said_meanwhile_is_not_used
 
 # ------------------------------------------------------------ git pinned
 
 [break] git-trusted-with-the-project
 rule: Git reads the repository's configuration only when it was shown and trusted.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: trust
 find: repository: stored.git_trusted()
 replace: repository: true
 occurrence: 1
 caught-by:
-    cortex-core::it trust::sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git
+    cineris-core::it trust::sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git
 
 [break] git-new-not-asked
 rule: A trusted folder that has become a repository is asked about git.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: trust
 find: let git_new = !stored.git_trusted() && !stored.git_declined() && in_git(root);
 replace: let git_new = false;
 caught-by:
-    cortex-core::it trusting::a_trusted_folder_that_became_a_repository_is_asked_about_git
-    cortex-core::it trusting::a_version_1_store_asks_about_git_once_more
+    cineris-core::it trusting::a_trusted_folder_that_became_a_repository_is_asked_about_git
+    cineris-core::it trusting::a_version_1_store_asks_about_git_once_more
 
 [break] a-reload-gives-git
 rule: A reload judges git as the open does: a trusted project's git only as pinned.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: judge_pins
 find: let repository = stored.git_trusted();
 replace: let repository = true;
 caught-by:
-    cortex-core::it reload::a_reload_reads_the_git_pin_as_an_open_does
+    cineris-core::it reload::a_reload_reads_the_git_pin_as_an_open_does
 
 [break] an-unkept-yes-gives-git
 rule: A yes the store could not keep gives git only what was shown or trusted before (the early review).
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: git_after_an_unkept_yes
 find: git_shown || git_before
 replace: true
 caught-by:
-    cortex-core assemble::trust_and_start_tests::an_unkept_yes_gives_git_only_what_was_shown_or_trusted_before
+    cineris-core assemble::trust_and_start_tests::an_unkept_yes_gives_git_only_what_was_shown_or_trusted_before
 
 [break] git-not-pinned-at-trust
 rule: Trusting a project with git shown pins git.
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: TrustStore::trusted_in
 find: git: git_shown.then_some(GitAnswer::Trusted)
 replace: git: None
-packages: cortex-policy,cortex-core
+packages: cineris-policy,cineris-core
 caught-by:
-    cortex-policy::it trust::whether_git_was_shown_is_pinned_with_the_trust
-    cortex-core::it trusting::a_version_1_store_asks_about_git_once_more
+    cineris-policy::it trust::whether_git_was_shown_is_pinned_with_the_trust
+    cineris-core::it trusting::a_version_1_store_asks_about_git_once_more
 
 [break] permissions-trust-leaves-git-out
-rule: `cortex permissions trust` in a repository trusts git with the rest.
-file: crates/cortex-core/src/manage.rs
+rule: `cineris permissions trust` in a repository trusts git with the rest.
+file: crates/cineris-core/src/manage.rs
 in: Core::trust_project
 find: let git = in_git_at(&project.root);
 replace: let git = false;
 caught-by:
-    cortex-core::it trusting::a_trusted_folder_that_became_a_repository_is_asked_about_git
+    cineris-core::it trusting::a_trusted_folder_that_became_a_repository_is_asked_about_git
 
 # ------------------------------------------------------------ the store's version 2
 
 [break] version-1-refused
 rule: A version 1 store is read, with git never shown.
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: TrustStore::read
 find: if !(OLDEST..=VERSION).contains(&file.version) {
 replace: if file.version != VERSION {
-packages: cortex-policy,cortex-core
+packages: cineris-policy,cineris-core
 caught-by:
-    cortex-policy::it trust::a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2
-    cortex-core::it trusting::a_version_1_store_asks_about_git_once_more
+    cineris-policy::it trust::a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2
+    cineris-core::it trusting::a_version_1_store_asks_about_git_once_more
 
 [break] version-1-kept-on-write
 rule: Whatever version was read, a write is of this build's version.
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: TrustStore::write
 find:
     let file = File {
@@ -281,140 +281,140 @@ find:
     };
 replace:
     let file = file.clone();
-packages: cortex-policy,cortex-core
+packages: cineris-policy,cineris-core
 caught-by:
-    cortex-policy::it trust::a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2
-    cortex-core::it trusting::a_version_1_store_asks_about_git_once_more
+    cineris-policy::it trust::a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2
+    cineris-core::it trusting::a_version_1_store_asks_about_git_once_more
 
 [break] an-older-store-not-said
 rule: A store of an older version says so, for the session's notice.
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: TrustStore::project
 find: older: file.version < VERSION
 replace: older: false
-packages: cortex-policy,cortex-core
+packages: cineris-policy,cineris-core
 caught-by:
-    cortex-policy::it trust::a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2
-    cortex-core::it trusting::a_version_1_store_asks_about_git_once_more
+    cineris-policy::it trust::a_version_1_store_is_read_with_git_not_shown_and_written_as_version_2
+    cineris-core::it trusting::a_version_1_store_asks_about_git_once_more
 
 # ------------------------------------------------------------ the history
 
 [break] a-chip-kept-whole
 rule: A chip in history keeps at most `CHIP_KEEP` bytes of its text, and says so in its label.
-file: crates/cortex-tui/src/history.rs
+file: crates/cineris-tui/src/history.rs
 in: kept
 find: let room = CHIP_KEEP.min(budget);
 replace: let room = usize::MAX;
-packages: cortex-tui,cortex-cli
+packages: cineris-tui,cineris-cli
 caught-by:
-    cortex-tui history::tests::*
-    cortex-tui::it input::a_sent_paste_is_recalled_as_its_chip_kept_within_the_cap
-    cortex-cli::bin/cortex history::tests::a_pasted_chip_is_kept_cut_and_comes_back_a_chip
+    cineris-tui history::tests::*
+    cineris-tui::it input::a_sent_paste_is_recalled_as_its_chip_kept_within_the_cap
+    cineris-cli::bin/cineris history::tests::a_pasted_chip_is_kept_cut_and_comes_back_a_chip
 
 [break] a-long-text-kept-whole
 rule: A prompt's own text past `TEXT_KEEP` is cut, with a line saying how much was left out.
-file: crates/cortex-tui/src/history.rs
+file: crates/cineris-tui/src/history.rs
 in: kept
 find: let (text, dropped) = match cut_at(whole, TEXT_KEEP + SAID_ROOM) {
 replace: let (text, dropped) = match None::<&str> {
 caught-by:
-    cortex-tui history::tests::a_long_text_is_cut_with_a_line_saying_how_much
+    cineris-tui history::tests::a_long_text_is_cut_with_a_line_saying_how_much
 
 [break] history-pushed-expanded
 rule: A prompt sent is pushed to history as it was written, its chips chips.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::submit
 find: self.history.push(&crate::history::kept(&prompt));
 replace: self.history.push(&Fragment::text(text.clone()));
 caught-by:
-    cortex-tui::it input::a_sent_paste_is_recalled_as_its_chip_kept_within_the_cap
+    cineris-tui::it input::a_sent_paste_is_recalled_as_its_chip_kept_within_the_cap
 
 [break] a-search-looks-in-a-chips-text
 rule: A search through history looks in the chips' labels, not their text.
-file: crates/cortex-tui/src/history.rs
+file: crates/cineris-tui/src/history.rs
 in: matches
 find: entry.shown().to_lowercase()
 replace: entry.expanded().to_lowercase()
 caught-by:
-    cortex-tui history::tests::a_search_looks_in_labels_not_in_a_chips_text
+    cineris-tui history::tests::a_search_looks_in_labels_not_in_a_chips_text
 
 [break] compacted-by-lines-alone
 rule: The history's file is written again past `COMPACT_BYTES` as well as past `COMPACT` lines.
-file: crates/cortex-cli/src/history.rs
+file: crates/cineris-cli/src/history.rs
 in: read
 find: if lines > COMPACT || size > COMPACT_BYTES {
 replace: if lines > COMPACT {
 caught-by:
-    cortex-cli::bin/cortex history::tests::a_file_past_its_bytes_is_written_again_within_them
+    cineris-cli::bin/cineris history::tests::a_file_past_its_bytes_is_written_again_within_them
 
 [break] a-project-holds-past-its-bytes
 rule: A project holds at most `KEEP_BYTES` of its lines in memory.
-file: crates/cortex-cli/src/history.rs
+file: crates/cineris-cli/src/history.rs
 in: read
 find: if held > KEEP_BYTES {
 replace: if held > usize::MAX - 1 {
 caught-by:
-    cortex-cli::bin/cortex history::tests::a_file_past_its_bytes_is_written_again_within_them
+    cineris-cli::bin/cineris history::tests::a_file_past_its_bytes_is_written_again_within_them
 
 [break] the-whole-file-read
 rule: A start reads at most the file's last `READ_LIMIT` bytes.
-file: crates/cortex-cli/src/history.rs
+file: crates/cineris-cli/src/history.rs
 in: read_end
 find: if size <= READ_LIMIT {
 replace: if true {
 caught-by:
-    cortex-cli::bin/cortex history::tests::a_file_past_the_read_limit_is_read_from_its_end
+    cineris-cli::bin/cineris history::tests::a_file_past_the_read_limit_is_read_from_its_end
 
 [break] compacted-past-the-files-bytes
 rule: A file written again keeps every project's newest within `FILE_KEEP_BYTES`.
-file: crates/cortex-cli/src/history.rs
+file: crates/cineris-cli/src/history.rs
 in: compact
 find: if total + entry.size > FILE_KEEP_BYTES {
 replace: if false {
 caught-by:
-    cortex-cli::bin/cortex history::tests::a_file_past_its_bytes_is_written_again_within_them
+    cineris-cli::bin/cineris history::tests::a_file_past_its_bytes_is_written_again_within_them
 
 # ------------------------------------------------------------ the full review's findings
 
 [break] an-older-line-counted-as-written
 rule: A line's size in the history's bounds is the size of what is kept of it, not of the line an older build wrote.
-file: crates/cortex-cli/src/history.rs
+file: crates/cineris-cli/src/history.rs
 in: Entry::parse
 find: Self::line(&project, &prompt).len()
 replace: line.len() + 1
 caught-by:
-    cortex-cli::bin/cortex history::tests::an_older_builds_long_line_counts_as_what_is_kept
+    cineris-cli::bin/cineris history::tests::an_older_builds_long_line_counts_as_what_is_kept
 
 [break] the-prompts-sent-unbounded
 rule: What a project holds in memory stays within the bounds with the prompts sent in the run.
-file: crates/cortex-cli/src/history.rs
+file: crates/cineris-cli/src/history.rs
 in: FileHistory::push
 find: self.bound();
 replace: let _ = 0;
 caught-by:
-    cortex-cli::bin/cortex history::tests::the_prompts_sent_in_a_run_are_held_within_the_bounds
+    cineris-cli::bin/cineris history::tests::the_prompts_sent_in_a_run_are_held_within_the_bounds
 
 [break] a-start-through-a-link-out-taken
 rule: A working directory that leads out of the workspace through a link (a junction on Windows) is not where commands start. Caught on Linux by `a_start_through_a_link_out_starts_at_the_root_and_says_why`, and on Windows by `sys_a_start_through_a_junction_out_starts_at_the_root_and_says_why`.
-file: crates/cortex-cli/src/workspace.rs
+file: crates/cineris-cli/src/workspace.rs
 in: leads_inside
-find: (Ok(cwd), Ok(root)) => cortex_base::location_within(&cwd, &root)
+find: (Ok(cwd), Ok(root)) => cineris_base::location_within(&cwd, &root)
 replace: (Ok(_), Ok(_)) => true
 caught-by:
-    cortex-cli::bin/cortex workspace::tests::*
+    cineris-cli::bin/cineris workspace::tests::*
 
 [break] a-command-runs-at-the-root
 rule: A command that names no `cwd` runs where the session started.
-file: crates/cortex-tools/src/shell/mod.rs
+file: crates/cineris-tools/src/shell/mod.rs
 in: ShellTool::plan
 find: .filter(is_directory)
 replace: .filter(|_| false)
 caught-by:
-    cortex-tools::it shell::a_command_with_no_cwd_runs_where_the_session_started
+    cineris-tools::it shell::a_command_with_no_cwd_runs_where_the_session_started
 
 [break] the-shell-not-given-the-start
 rule: The session's shell is given where its commands start.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: assemble
 find:
     repository_trusted,
@@ -423,13 +423,13 @@ replace:
     repository_trusted,
             start: None
 caught-by:
-    cortex-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
+    cineris-core::it context::a_session_started_below_the_root_says_where_commands_start_and_keeps_it
 
 [break] headless-starts-at-the-root
 rule: Headless mode run below the root starts its commands where it was run.
-file: crates/cortex-cli/src/headless.rs
+file: crates/cineris-cli/src/headless.rs
 in: session
 find: .and_then(|cwd| cwd.to_str().map(str::to_owned))
 replace: .and_then(|_| None::<String>)
 caught-by:
-    cortex-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start
+    cineris-cli::system commands::sys_a_project_trusted_with_permissions_trust_is_trusted_on_the_next_start

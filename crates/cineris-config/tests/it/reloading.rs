@@ -1,0 +1,742 @@
+//! Reloading without a restart, and the rule that an invalid file never
+//! takes the configuration away
+//! (`docs/architecture/08-configuration.md`, "Reloading without a restart").
+//!
+//! Time is the fake clock's, and each file's modification time is set, not
+//! waited for: a file is given a time well before the clock's "now", so
+//! that it counts as settled, and a different one on every write, so that
+//! the write is seen.
+
+use std::fs;
+use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, SystemTime};
+
+use cineris_base::FakeClock;
+use cineris_config::{
+    Effect, KeyPath, LayerKind, LiveConfig, Loaded, ProjectTrust, Reload, Severity,
+};
+
+use crate::{Machine, value};
+
+/// The fake clock's time when a test starts.
+const NOW: &str = "2026-11-12T12:00:00Z";
+
+/// Writes a layer's file and gives it a modification time `minutes` before
+/// the clock's start.
+fn write_at(machine: &Machine, layer: LayerKind, text: &str, minutes: u64) {
+    machine.layer(layer, text);
+    set_time(&machine.file(layer), minutes);
+}
+
+fn set_time(file: &Path, minutes: u64) {
+    let now = cineris_base::UtcTime::parse(NOW).unwrap();
+    let start = SystemTime::UNIX_EPOCH + Duration::from_secs(now.unix_secs().unsigned_abs());
+    fs::File::options()
+        .write(true)
+        .open(file)
+        .unwrap()
+        .set_modified(start - Duration::from_secs(60 * minutes))
+        .unwrap();
+}
+
+fn start(machine: &Machine) -> (LiveConfig, Arc<FakeClock>) {
+    let clock = Arc::new(FakeClock::starting_at(NOW).unwrap());
+    let live = LiveConfig::start(machine.options.clone(), clock.clone())
+        .unwrap_or_else(|failure| panic!("{}", failure.render(machine.env())));
+    (live, clock)
+}
+
+#[test]
+fn a_reload_with_an_invalid_file_keeps_the_old_configuration() {
+    let machine = Machine::new("reload_invalid");
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"first\"\n[retry]\nattempts = 3\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    let mut before = live.current();
+    assert_eq!(value(&before, "model.main"), "\"first\"");
+    assert!(live.check().is_none(), "nothing has changed yet");
+
+    // Each kind of broken file: not TOML, a wrong type, an unknown key in an
+    // enforced table, a newer version.
+    for (broken, expected) in [
+        ("[model\nmain = \"second\"\n", "is not valid TOML"),
+        (
+            "[model]\nmain = \"second\"\n[retry]\nattempts = \"many\"\n",
+            "retry.attempts: expected a whole number",
+        ),
+        (
+            "[model]\nmain = \"second\"\n[permissions]\nallow_everything = true\n",
+            "is refused",
+        ),
+        (
+            "config_version = 9\n[model]\nmain = \"second\"\n",
+            "written for configuration version 9",
+        ),
+    ] {
+        write_at(&machine, LayerKind::User, broken, 50);
+        match live.check() {
+            Some(Reload::Rejected(failure)) => {
+                let text = failure.render(machine.env());
+                assert!(text.contains(expected), "{expected:?} not in:\n{text}");
+                assert!(failure.errors().count() >= 1);
+                assert!(
+                    failure
+                        .errors()
+                        .all(|error| error.severity == Severity::Error)
+                );
+            }
+            other => panic!("expected a rejected reload for {broken:?}, got {other:?}"),
+        }
+        // The configuration in force is the one from before, the very same
+        // one, and it is complete.
+        let current = live.current();
+        assert!(Arc::ptr_eq(&current, &before), "{broken:?}");
+        assert_eq!(value(&current, "model.main"), "\"first\"");
+        assert_eq!(current.settings.retry.attempts, 3);
+
+        // The same broken file is not reported again on the next check,
+        // and not on a forced reload either.
+        assert!(live.check().is_none());
+        assert_eq!(live.reload(), Reload::Unchanged);
+        assert!(Arc::ptr_eq(&live.current(), &before));
+
+        write_at(
+            &machine,
+            LayerKind::User,
+            "[model]\nmain = \"first\"\n[retry]\nattempts = 3\n",
+            40,
+        );
+        assert_eq!(
+            live.check(),
+            Some(Reload::Unchanged),
+            "fixed, and the same as before"
+        );
+        // The fixed file is the one in force now, with the same settings.
+        assert_eq!(live.current().settings, before.settings);
+        before = live.current();
+    }
+}
+
+#[test]
+fn a_valid_change_is_applied_and_says_when_each_part_takes_effect() {
+    let machine = Machine::new("reload_applied");
+    write_at(&machine, LayerKind::User, "[model]\nmain = \"first\"\n", 60);
+    let (mut live, _clock) = start(&machine);
+    let before = live.current();
+
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"second\"\nspeed = \"fast\"\n[retry]\nattempts = 2\n\
+         [session]\ndata_dir = \"~/elsewhere\"\n[tui]\ntheme = \"dusk\"\n[http]\nproxy = \"x\"\n",
+        30,
+    );
+    let Some(Reload::Applied { previous, changes }) = live.check() else {
+        panic!("expected the change to be applied");
+    };
+    assert!(Arc::ptr_eq(&previous, &before));
+    let changes: Vec<(String, Effect)> = changes
+        .into_iter()
+        .map(|change| (change.key.to_string(), change.effect))
+        .collect();
+    assert_eq!(
+        changes,
+        [
+            // A section whose keys are not declared yet: the cautious answer.
+            ("http.proxy".to_owned(), Effect::NextEpoch),
+            ("model.main".to_owned(), Effect::NextEpoch),
+            ("model.speed".to_owned(), Effect::Now),
+            ("retry.attempts".to_owned(), Effect::Now),
+            ("session.data_dir".to_owned(), Effect::Restart),
+            ("tui.theme".to_owned(), Effect::Now),
+        ]
+    );
+    let current = live.current();
+    assert_eq!(value(&current, "model.main"), "\"second\"");
+    assert_eq!(current.settings.retry.attempts, 2);
+    assert!(live.check().is_none(), "the change is reported once");
+
+    // A key that goes back to its default is a change too.
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"second\"\n",
+        20,
+    );
+    let Some(Reload::Applied { changes, .. }) = live.check() else {
+        panic!("expected the change to be applied");
+    };
+    assert_eq!(changes.len(), 5);
+    assert_eq!(live.current().settings.retry.attempts, 5);
+}
+
+#[test]
+fn a_file_that_appears_or_goes_is_a_change() {
+    let machine = Machine::new("reload_appear");
+    let (mut live, _clock) = start(&machine);
+    assert_eq!(value(&live.current(), "model.reasoning"), "\"summary\"");
+    assert!(live.current().files.iter().all(|(_, _, present)| !present));
+
+    // The project's file is created after start-up.
+    write_at(
+        &machine,
+        LayerKind::Project,
+        "[model]\nreasoning = \"none\"\n",
+        30,
+    );
+    assert!(matches!(live.check(), Some(Reload::Applied { .. })));
+    assert_eq!(value(&live.current(), "model.reasoning"), "\"none\"");
+
+    fs::remove_file(machine.file(LayerKind::Project)).unwrap();
+    assert!(matches!(live.check(), Some(Reload::Applied { .. })));
+    assert_eq!(value(&live.current(), "model.reasoning"), "\"summary\"");
+}
+
+#[test]
+fn a_file_saved_without_a_change_is_not_announced() {
+    let machine = Machine::new("reload_same");
+    write_at(&machine, LayerKind::User, "[model]\nmain = \"first\"\n", 60);
+    let (mut live, _clock) = start(&machine);
+    let before = live.current();
+
+    // Rewritten with a comment and a different time: a change on disk, and
+    // no change in what is in effect.
+    write_at(
+        &machine,
+        LayerKind::User,
+        "# a note\n[model]\nmain = \"first\"\n",
+        30,
+    );
+    assert_eq!(live.check(), Some(Reload::Unchanged));
+    // The new one is in force all the same, so that origins are right.
+    let after = live.current();
+    assert!(!Arc::ptr_eq(&after, &before));
+    assert_eq!(
+        after.origin(&KeyPath::parse("model.main").unwrap()).line,
+        Some(3)
+    );
+}
+
+#[test]
+fn a_change_of_options_reloads() {
+    let machine = Machine::new("reload_options");
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[profiles.quick]\nmodel.main = \"small\"\n[model]\nmain = \"big\"\n",
+        60,
+    );
+    write_at(
+        &machine,
+        LayerKind::Project,
+        "[sandbox]\nnetwork = \"full\"\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    assert_eq!(live.current().withheld.len(), 1);
+
+    // `/profile quick`.
+    let reload = live.update(|options| options.profile = Some("quick".to_owned()));
+    assert!(matches!(reload, Reload::Applied { .. }));
+    assert_eq!(live.current().settings.model.main.as_deref(), Some("small"));
+    assert_eq!(live.options().profile.as_deref(), Some("quick"));
+
+    // The user trusts the project.
+    let reload = live.update(|options| options.trust = ProjectTrust::Trusted);
+    let Reload::Applied { changes, .. } = reload else {
+        panic!("expected the change to be applied");
+    };
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].key.to_string(), "sandbox.network");
+    assert!(live.current().withheld.is_empty());
+
+    // A profile that does not exist is refused like any other error, and
+    // the configuration and the options stay.
+    let reload = live.update(|options| options.profile = Some("missing".to_owned()));
+    assert!(matches!(reload, Reload::Rejected(_)));
+    assert_eq!(live.current().settings.model.main.as_deref(), Some("small"));
+    assert_eq!(live.options().profile.as_deref(), Some("quick"));
+}
+
+/// A change of options that does not load is undone, and says so every
+/// time. Before, the options kept the change that failed, and a second
+/// attempt that failed the same way said `Unchanged`, as if it had worked.
+#[test]
+fn a_change_of_options_that_does_not_load_is_undone_and_refused_every_time() {
+    let machine = Machine::new("reload_options_refused");
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[profiles.quick]\nmodel.main = \"small\"\n[model]\nmain = \"big\"\n",
+        60,
+    );
+    write_at(
+        &machine,
+        LayerKind::Project,
+        "[sandbox]\nnetwork = \"full\"\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    let before = live.current();
+
+    for _ in 0..2 {
+        let reload = live.update(|options| options.profile = Some("missing".to_owned()));
+        assert!(matches!(reload, Reload::Rejected(_)), "{reload:?}");
+        assert_eq!(live.options().profile, None);
+        assert!(Arc::ptr_eq(&live.current(), &before));
+    }
+
+    // While a file is broken, every change is refused with the error, not
+    // only the first, and none of them is kept.
+    write_at(&machine, LayerKind::User, "[retry]\nattempts = 0\n", 50);
+    let Some(Reload::Rejected(broken)) = live.check() else {
+        panic!("expected the broken file to be reported");
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            live.update(|options| options.trust = ProjectTrust::Trusted),
+            Reload::Rejected(broken.clone())
+        );
+        assert_eq!(live.options().trust, ProjectTrust::Untrusted);
+        // The broken file is the one that defines the profile, so its
+        // absence is a second error.
+        let Reload::Rejected(failure) =
+            live.update(|options| options.profile = Some("quick".to_owned()))
+        else {
+            panic!("expected the profile to be refused");
+        };
+        assert_eq!(failure.diagnostics[0], broken.diagnostics[0]);
+        assert_eq!(failure.errors().count(), 2);
+        assert_eq!(live.options().profile, None);
+    }
+    assert!(Arc::ptr_eq(&live.current(), &before));
+    assert_eq!(
+        live.current().withheld.len(),
+        1,
+        "the network stays held back"
+    );
+
+    // The file is still watched under the options that stayed: fixing it
+    // is noticed, and then the change goes through.
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[profiles.quick]\nmodel.main = \"small\"\n[model]\nmain = \"big\"\n",
+        40,
+    );
+    assert_eq!(live.check(), Some(Reload::Unchanged));
+    assert!(matches!(
+        live.update(|options| options.trust = ProjectTrust::Trusted),
+        Reload::Applied { .. }
+    ));
+    assert_eq!(live.current().settings.sandbox.network.as_str(), "full");
+}
+
+/// Taking trust away always takes effect, even while a file has an error,
+/// whichever file it is, and the error is reported. What is in force is
+/// then what an untrusted load of the files in force gives: the project's
+/// allow rule and its choice of model wait for trust again, and its deny
+/// rule, its protected path and its preferences stay, since losing them
+/// would loosen what is in force. Before, the trusted project's allow rule
+/// stayed in force, and a second attempt said `Unchanged`.
+#[test]
+fn lowering_trust_takes_effect_while_a_file_is_broken() {
+    const USER: &str = "[model]\nmain = \"big\"\n";
+    const PROJECT: &str = "[model]\nmain = \"theirs\"\nreasoning = \"none\"\n\
+                           [sandbox]\nprotect = [\"vendor\"]\n\
+                           [[permissions.rules]]\neffect = \"exec\"\nmatch = \"curl *\"\n\
+                           action = \"allow\"\n\
+                           [[permissions.rules]]\neffect = \"write\"\nmatch = \"**/.env*\"\n\
+                           action = \"deny\"\n";
+    let actions = |loaded: &Loaded| -> Vec<String> {
+        loaded
+            .rules()
+            .iter()
+            .map(|placed| placed.rule.action.as_str().to_owned())
+            .collect()
+    };
+    for (broken, fixed) in [(LayerKind::User, USER), (LayerKind::Project, PROJECT)] {
+        let mut machine = Machine::new(&format!("reload_revoke_{broken}"));
+        machine.trusted();
+        write_at(&machine, LayerKind::User, USER, 60);
+        write_at(&machine, LayerKind::Project, PROJECT, 60);
+        let (mut live, _clock) = start(&machine);
+        assert_eq!(actions(&live.current()), ["allow", "deny"], "trusted");
+        assert_eq!(value(&live.current(), "model.main"), "\"theirs\"");
+
+        write_at(&machine, broken, "[retry]\nattempts = 0\n", 50);
+        assert!(matches!(live.check(), Some(Reload::Rejected(_))));
+
+        let reload = live.update(|options| options.trust = ProjectTrust::Untrusted);
+        let Reload::TrustLowered {
+            previous,
+            changes,
+            failure,
+        } = reload
+        else {
+            panic!("{broken}: expected trust to be lowered, got {reload:?}");
+        };
+        assert!(
+            failure
+                .render(machine.env())
+                .contains("retry.attempts: 0 is out of range"),
+            "{broken}: the error is reported"
+        );
+        assert_eq!(actions(&previous), ["allow", "deny"]);
+        let changed: Vec<String> = changes.iter().map(|c| c.key.to_string()).collect();
+        assert_eq!(changed, ["model.main", "permissions.rules"], "{broken}");
+
+        // Trust is lowered: what needed it waits again, the project's
+        // restrictions and preferences stay, and the user's own setting is
+        // back where the project's was.
+        let current = live.current();
+        assert_eq!(live.options().trust, ProjectTrust::Untrusted);
+        assert_eq!(actions(&current), ["deny"], "{broken}");
+        assert_eq!(
+            value(&current, "sandbox.protect"),
+            "[\"vendor\"]",
+            "{broken}"
+        );
+        assert_eq!(value(&current, "model.reasoning"), "\"none\"", "{broken}");
+        assert_eq!(value(&current, "model.main"), "\"big\"", "{broken}");
+        let held: Vec<String> = current.withheld.iter().map(|h| h.key.to_string()).collect();
+        assert_eq!(held, ["model.main", "permissions.rules"], "{broken}");
+
+        // The same error is not reported again until a file changes.
+        assert!(live.check().is_none());
+        assert_eq!(live.reload(), Reload::Unchanged);
+
+        // Once the file is fixed, the files are read again, untrusted, and
+        // that is the same configuration.
+        write_at(&machine, broken, fixed, 40);
+        assert_eq!(live.check(), Some(Reload::Unchanged), "{broken}");
+        assert_eq!(live.current().settings, current.settings);
+    }
+}
+
+/// The user selected a profile the project defines, and takes trust away
+/// while a file is broken: the profile stays selected, held to the rules
+/// for an untrusted project, as an untrusted load would hold it.
+#[test]
+fn lowering_trust_holds_a_projects_profile_to_the_untrusted_rules() {
+    let mut machine = Machine::new("reload_revoke_profile");
+    machine.trusted();
+    write_at(&machine, LayerKind::User, "profile = \"theirs\"\n", 60);
+    write_at(
+        &machine,
+        LayerKind::Project,
+        "[profiles.theirs]\nsandbox.network = \"full\"\nmodel.reasoning = \"none\"\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    assert_eq!(live.current().profile.as_deref(), Some("theirs"));
+    assert_eq!(value(&live.current(), "sandbox.network"), "\"full\"");
+
+    write_at(&machine, LayerKind::Project, "[retry\n", 50);
+    let reload = live.update(|options| options.trust = ProjectTrust::Untrusted);
+    assert!(matches!(reload, Reload::TrustLowered { .. }), "{reload:?}");
+    let current = live.current();
+    assert_eq!(current.profile.as_deref(), Some("theirs"));
+    assert_eq!(value(&current, "sandbox.network"), "\"off\"");
+    assert_eq!(value(&current, "model.reasoning"), "\"none\"");
+    assert_eq!(current.withheld.len(), 1);
+}
+
+/// What checking a file noticed stays said when trust is lowered while
+/// another file is broken: the files in force are merged again, and their
+/// warnings with them.
+#[test]
+fn lowering_trust_keeps_what_the_files_in_force_were_warned_about() {
+    let mut machine = Machine::new("reload_revoke_warnings");
+    machine.trusted();
+    write_at(&machine, LayerKind::User, "[model]\nmian = \"big\"\n", 60);
+    write_at(
+        &machine,
+        LayerKind::Project,
+        "[sandbox]\nprotect = [\"x\"]\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    let warned = machine.said(&live.current());
+    assert_eq!(warned.len(), 1, "{warned:?}");
+    assert!(warned[0].contains("model.mian: unknown key"), "{warned:?}");
+
+    write_at(&machine, LayerKind::Project, "[retry\n", 50);
+    let reload = live.update(|options| options.trust = ProjectTrust::Untrusted);
+    assert!(matches!(reload, Reload::TrustLowered { .. }), "{reload:?}");
+    assert_eq!(machine.said(&live.current()), warned);
+}
+
+#[test]
+fn the_check_on_a_key_press_runs_at_most_once_a_second() {
+    let machine = Machine::new("reload_interval");
+    write_at(&machine, LayerKind::User, "[model]\nmain = \"first\"\n", 60);
+    let (mut live, clock) = start(&machine);
+    let second = Duration::from_secs(1);
+    assert!(live.check_at_most_every(second).is_none());
+
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"second\"\n",
+        30,
+    );
+    assert!(
+        live.check_at_most_every(second).is_none(),
+        "a check ran less than a second ago, so nothing is looked at"
+    );
+    assert_eq!(live.current().settings.model.main.as_deref(), Some("first"));
+
+    clock.advance(Duration::from_millis(1500));
+    assert!(matches!(
+        live.check_at_most_every(second),
+        Some(Reload::Applied { .. })
+    ));
+    assert_eq!(
+        live.current().settings.model.main.as_deref(),
+        Some("second")
+    );
+    assert!(clock.sleeps().is_empty(), "nothing waited");
+}
+
+#[test]
+fn starting_with_an_invalid_file_is_an_error_with_nothing_to_fall_back_to() {
+    let machine = Machine::new("reload_start_invalid");
+    write_at(&machine, LayerKind::User, "[retry]\nattempts = 0\n", 60);
+    let clock = Arc::new(FakeClock::starting_at(NOW).unwrap());
+    let failure = LiveConfig::start(machine.options.clone(), clock).unwrap_err();
+    assert_eq!(
+        failure.render(machine.env()),
+        "error: ~/cineris/config.toml:2: retry.attempts: 0 is out of range: expected 1 to 20"
+    );
+}
+
+/// A link that appears in the project after the load is not followed by
+/// the next check: the project's files are found again through the path
+/// resolver first, and the configuration is reloaded through it. The check
+/// asks the file system about each file, and that follows links, which on
+/// Windows sends the account's credentials to a share a link names.
+///
+/// Here the link leads to nothing, which every OS can show: followed, it
+/// looks like the missing file it stands for, and the check says nothing.
+/// Found again, it is refused and reported.
+#[test]
+fn a_link_that_appears_in_the_project_is_found_before_it_is_followed() {
+    let machine = Machine::new("reload_link_appears");
+    write_at(&machine, LayerKind::User, "[model]\nmain = \"first\"\n", 60);
+    let (mut live, clock) = start(&machine);
+    let folder = machine
+        .file(LayerKind::Project)
+        .parent()
+        .unwrap()
+        .to_owned();
+    assert!(!folder.exists(), "no `.cineris` at the load");
+
+    if !crate::make_link(&machine.home().join("nowhere"), &folder, true) {
+        return;
+    }
+    let Some(Reload::Rejected(failure)) = live.check() else {
+        panic!("expected the link to be found and refused");
+    };
+    let said = failure.render(machine.env());
+    assert!(
+        said.contains("is not opened:") && said.contains("does not exist"),
+        "{said}"
+    );
+    // Reported once, and the configuration stays.
+    assert!(live.check().is_none());
+    assert_eq!(value(&live.current(), "model.main"), "\"first\"");
+
+    // The link goes and a real folder comes: noticed, and loaded.
+    remove_link(&folder);
+    write_at(
+        &machine,
+        LayerKind::Project,
+        "[model]\nreasoning = \"none\"\n",
+        30,
+    );
+    assert!(matches!(live.check(), Some(Reload::Applied { .. })));
+    assert_eq!(value(&live.current(), "model.reasoning"), "\"none\"");
+
+    // The same on the check on a key press.
+    fs::remove_dir_all(&folder).unwrap();
+    assert!(crate::make_link(
+        &machine.home().join("nowhere"),
+        &folder,
+        true
+    ));
+    clock.advance(Duration::from_secs(2));
+    assert!(matches!(
+        live.check_at_most_every(Duration::from_secs(1)),
+        Some(Reload::Rejected(_))
+    ));
+}
+
+/// Removes a link to a folder: a file on Unix, a folder on Windows.
+fn remove_link(link: &Path) {
+    fs::remove_file(link)
+        .or_else(|_| fs::remove_dir(link))
+        .unwrap();
+}
+
+/// The same with a link to a network share, on Windows, where it matters.
+/// The share does not exist: a check that followed the link would wait for
+/// its name to fail, and then see nothing new.
+#[cfg(windows)]
+#[test]
+fn a_link_to_a_share_that_appears_after_the_load_is_never_followed() {
+    let machine = Machine::new("reload_share_appears");
+    write_at(&machine, LayerKind::User, "[model]\nmain = \"first\"\n", 60);
+    let (mut live, _clock) = start(&machine);
+    let folder = machine
+        .file(LayerKind::Project)
+        .parent()
+        .unwrap()
+        .to_owned();
+    if !crate::make_link(
+        &Path::new(crate::NO_SUCH_SHARE).join("cineris"),
+        &folder,
+        true,
+    ) {
+        return;
+    }
+    let Some(Reload::Rejected(failure)) = live.check() else {
+        panic!("expected the link to be found and refused");
+    };
+    let said = failure.render(machine.env());
+    assert!(
+        said.contains(r"network share `\\cineris-no-such-host.invalid\share`"),
+        "{said}"
+    );
+    assert!(live.check().is_none(), "reported once");
+}
+
+/// A running session takes the keys that apply at once and keeps the
+/// others as they were (step 24): the mix has the new retry and speed, the
+/// old model and map, and where each came from follows the value. A key
+/// the newer configuration no longer sets goes back to its default, and
+/// the directories never move.
+#[test]
+fn taking_some_keys_keeps_the_rest_as_they_were() {
+    let machine = Machine::new("reload_taking");
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"first\"\n[retry]\nattempts = 3\n[index]\nmap = false\n\
+         [context]\ncompact_at = 0.8\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    let before = live.current();
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"second\"\nspeed = \"fast\"\n[retry]\nattempts = 2\n\
+         [index]\nmap = true\n",
+        30,
+    );
+    let Some(Reload::Applied { changes, .. }) = live.check() else {
+        panic!("expected the change to be applied");
+    };
+    let newer = live.current();
+    let now: Vec<KeyPath> = changes
+        .iter()
+        .filter(|change| change.effect == Effect::Now)
+        .map(|change| change.key.clone())
+        .collect();
+    let names: Vec<String> = now.iter().map(ToString::to_string).collect();
+    assert_eq!(
+        names,
+        ["context.compact_at", "model.speed", "retry.attempts"]
+    );
+
+    let mix = before.taking(&newer, &now).unwrap();
+    assert_eq!(mix.settings.retry.attempts, 2);
+    assert_eq!(value(&mix, "model.speed"), "\"fast\"");
+    // Gone from the file: its default.
+    assert_eq!(value(&mix, "context.compact_at"), "0.85");
+    assert_eq!(
+        mix.origin(&KeyPath::parse("context.compact_at").unwrap())
+            .layer,
+        LayerKind::Default
+    );
+    // What waits is as it was.
+    assert_eq!(value(&mix, "model.main"), "\"first\"");
+    assert!(!mix.settings.index.map);
+    assert_eq!(
+        mix.origin(&KeyPath::parse("retry.attempts").unwrap()),
+        newer.origin(&KeyPath::parse("retry.attempts").unwrap())
+    );
+    assert_eq!(mix.dirs, before.dirs);
+    // Taking what was left gives the newer configuration's settings.
+    let rest: Vec<KeyPath> = changes
+        .iter()
+        .filter(|change| change.effect != Effect::Now)
+        .map(|change| change.key.clone())
+        .collect();
+    let whole = mix.taking(&newer, &rest).unwrap();
+    assert_eq!(whole.settings, newer.settings);
+    assert!(whole.changes_since(&newer).is_empty());
+}
+
+/// A key taken from a configuration that no longer sets it takes the table
+/// it leaves empty with it: a role whose only setting went is no role, not
+/// a role of defaults (the review of step 24's first part, finding 13).
+#[test]
+fn taking_a_key_that_went_leaves_no_empty_table() {
+    let machine = Machine::new("reload_taking_empty");
+    write_at(
+        &machine,
+        LayerKind::User,
+        "[model]\nmain = \"first\"\n\n[model.roles.fast]\nspeed = \"fast\"\n",
+        60,
+    );
+    let (mut live, _clock) = start(&machine);
+    let before = live.current();
+    write_at(&machine, LayerKind::User, "[model]\nmain = \"first\"\n", 30);
+    let Some(Reload::Applied { changes, .. }) = live.check() else {
+        panic!("expected the change to be applied");
+    };
+    let newer = live.current();
+    let keys: Vec<KeyPath> = changes.iter().map(|change| change.key.clone()).collect();
+    let mix = before.taking(&newer, &keys).unwrap();
+    assert_eq!(mix.settings, newer.settings);
+    assert!(mix.changes_since(&newer).is_empty());
+}
+
+/// A section read again from `config/get`'s answer (dotted keys, JSON
+/// values) for a front end that rebuilds part of itself: what it holds is
+/// read, what it does not has its default, another section's keys are not
+/// taken, and a value that does not read says its key (step 24's hot
+/// reload of the look and the keys).
+#[test]
+fn a_section_is_read_from_dotted_keys_and_json_values() {
+    use cineris_config::schema::{KeySettings, TuiSettings, read_section};
+
+    let mut answer = serde_json::Map::new();
+    answer.insert("tui.theme".to_owned(), "light".into());
+    answer.insert("tui.prose_width".to_owned(), 100.into());
+    answer.insert(
+        "keys.editor".to_owned(),
+        serde_json::json!({"submit": ["ctrl+j"]}),
+    );
+    answer.insert("retry.attempts".to_owned(), 3.into());
+
+    let tui: TuiSettings = read_section(&answer, "tui").unwrap();
+    assert_eq!(tui.theme, "light");
+    assert_eq!(tui.prose_width, 100);
+    assert_eq!(tui.tool_detail, TuiSettings::default().tool_detail);
+
+    let keys: KeySettings = read_section(&answer, "keys").unwrap();
+    assert_eq!(keys.editor.0["submit"], ["ctrl+j"]);
+    assert!(keys.menu.0.is_empty());
+
+    answer.insert("tui.prose_width".to_owned(), "wide".into());
+    let error = read_section::<TuiSettings>(&answer, "tui").unwrap_err();
+    assert!(error.contains("prose_width"), "{error}");
+}

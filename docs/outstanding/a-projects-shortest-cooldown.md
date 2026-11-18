@@ -1,6 +1,6 @@
 A project's `model.speed_cooldown_min = "0s"` can make a fast tier the user chose change speed every half minute, each change a possible rewrite of the prompt cache.
 
-- Area: cortex-config
+- Area: cineris-config
 - Owner: the owner
 
 | Item | Who | When |

@@ -1,12 +1,12 @@
 # After step 18: the repository map
 
-Step 18 added `cortex-index` (the extractors, the cache, passes and the map), the map in an epoch in `cortex-agent`, the `outline` tool in `cortex-tools` and a session's index in `cortex-core`. Its CI times, and the measurements taken on the hosted runners, are below.
+Step 18 added `cineris-index` (the extractors, the cache, passes and the map), the map in an epoch in `cineris-agent`, the `outline` tool in `cineris-tools` and a session's index in `cineris-core`. Its CI times, and the measurements taken on the hosted runners, are below.
 
 ## The headless start-up with the index's pass beside it
 
 The coordinator asked that a headless run's start be measured with the repository index's first pass running beside it, and that the pass start only after the first request if it pushed the run past its budget. `cargo xtask startup` gained `--workspace DIR` for it, which runs the headless rows in a real tree, with a breakdown row that turns the map (and with it the background pass) off. On the desktop, release build, 30 runs each, the tree this repository (1,492 files indexed; the first run indexes cold, the rest warm):
 
-| Headless `cortex -p`, to its request | Median | 95th percentile | Budget |
+| Headless `cineris -p`, to its request | Median | 95th percentile | Budget |
 |---|---:|---:|---:|
 | In an empty workspace (the budget's own measurement) | 13.85 ms | 14.64 ms | 15 ms |
 | In this repository, the map on | 15.32 ms | 22.24 ms | 15 ms |
@@ -17,7 +17,7 @@ The coordinator asked that a headless run's start be measured with the repositor
 
 ## The warm map on hosted Windows runners
 
-The ignored measurement test `perf::perf_a_cold_index_a_warm_one_and_a_warm_map`, in a release build, run by `try` (`-f os=windows -f profile=release -f command="test -p cortex-index --run-ignored only --no-capture --test-threads 1"`). A warm pass over a generated tree of 20,000 files in 221 directories with one file changed, then the map; the median of 15.
+The ignored measurement test `perf::perf_a_cold_index_a_warm_one_and_a_warm_map`, in a release build, run by `try` (`-f os=windows -f profile=release -f command="test -p cineris-index --run-ignored only --no-capture --test-threads 1"`). A warm pass over a generated tree of 20,000 files in 221 directories with one file changed, then the map; the median of 15.
 
 | Run | Code | Cold pass | Warm pass and map | Slowest | Map alone | Listing | Listing without ignore files | Cache read, written |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
@@ -42,7 +42,7 @@ The third runner was slower across the board (its listing, its map and its cache
 | 2, integration | 36.7 s | 36.5 s | +0.2 s | 40 s |
 | 3, system | 89.8 s | 89.7 s | +0.2 s | 90 s |
 
-`cortex-index` adds 1.8 s to tier 1 and 1.2 s to tier 2. The largest single test is `extract::tests::deep_nesting_costs_no_more_a_line_than_a_flat_file`, 1.36 s on Windows: it is kept at a hundred thousand levels because the quadratic cost it guards is caught by its time alone. Tier 3 was at its budget on `main` already.
+`cineris-index` adds 1.8 s to tier 1 and 1.2 s to tier 2. The largest single test is `extract::tests::deep_nesting_costs_no_more_a_line_than_a_flat_file`, 1.36 s on Windows: it is kept at a hundred thousand levels because the quadratic cost it guards is caught by its time alone. Tier 3 was at its budget on `main` already.
 
 ## The pull request's CI times
 
@@ -97,4 +97,4 @@ Measured on 2026-11-15, against the main branch's run at `d6a1a14`, which the br
 
   The fixes cost 0.4 s of tier 1 for 40 more unit tests, and 1.0 s of tier 2 for 25 more integration tests: the four tests of an extractor's memory on 1 MiB inputs, about 0.1 s each, are most of it. An earlier A/B at `01bbea3` (run 43728878359) gave +1.6 s for tier 1: the two tests of the escape's tables walked all 1.1 million code points, and the two tests of the prefix chains outlined lines of a megabyte. They are now checked at the tables' edges and on 32 to 64 KiB, and their breaks are still caught.
 - **Raised (rule 11): Windows' tier 2 on the slower runners.** On a runner at 11 ms a process start, main's own tier 2 is 39.0 s against its budget of 40 s, and the PR's 40.0 s: at the budget, where CI warns, and well short of 60 s, where it fails. On the faster runners it is 23 to 35 s. The fixes' share is the 1.0 s above. **Recommendation:** leave the fixes' tests where they are, and have the step that next adds integration tests on Windows, or the tooling's next step, find what takes main's tier 2 to 39 s on those runners; the slowest of it is not this step's.
-- **The Windows `try` runs** before the PR: `test -p cortex-index -p cortex-tools -p cortex-core -p cortex-base -p cortex-agent` (run 43725766901), 1,252 tests, all passed, after a first run (43724308740) that found three tests failing on Windows only: the resolver's and a glob's reading back of escapes, and `read`'s close matches, each fixed; and `perf -p cortex-index` (run 43724310745), which measured the tree of real code on the runner ([performance-budgets.md](../../performance-budgets.md), "Data paths").
+- **The Windows `try` runs** before the PR: `test -p cineris-index -p cineris-tools -p cineris-core -p cineris-base -p cineris-agent` (run 43725766901), 1,252 tests, all passed, after a first run (43724308740) that found three tests failing on Windows only: the resolver's and a glob's reading back of escapes, and `read`'s close matches, each fixed; and `perf -p cineris-index` (run 43724310745), which measured the tree of real code on the runner ([performance-budgets.md](../../performance-budgets.md), "Data paths").

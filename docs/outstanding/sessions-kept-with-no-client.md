@@ -1,6 +1,6 @@
 A session that `serve --socket` keeps after its last client goes is never ended by time, and runs its turn on with nobody watching.
 
-- Area: cortex-core
+- Area: cineris-core
 - Owner: the owner, then a later step of the server
 
 | Item | Who | When |

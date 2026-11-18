@@ -1,6 +1,6 @@
 The word check misreads split command words, program text, tricky `cd` targets and over-bound lines, at `autonomous`.
 
-- Area: cortex-policy
+- Area: cineris-policy
 - Owner: step 32
 
 | Item | Who | When |

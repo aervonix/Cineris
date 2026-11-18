@@ -1,6 +1,6 @@
 Each later provider protocol's decoder needs a fuzz target in `fuzz/` and a line in `xtask/src/outside.rs`.
 
-- Area: cortex-llm
+- Area: cineris-llm
 - Owner: steps 31, 35 and 36
 
 | Item | Who | When |

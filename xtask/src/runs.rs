@@ -1003,12 +1003,12 @@ mod tests {
             date: "2026-11-16".to_owned(),
             jobs: Vec::new(),
         };
-        let mut failed = junit::tests::case("cortex-base", "t::a", 0.1);
+        let mut failed = junit::tests::case("cineris-base", "t::a", 0.1);
         failed.failed = true;
         let runs = [
             Measured {
                 info: info(1),
-                linux: Some(vec![junit::tests::case("cortex-base", "t::a", 0.1)]),
+                linux: Some(vec![junit::tests::case("cineris-base", "t::a", 0.1)]),
                 windows: None,
             },
             Measured {
@@ -1019,7 +1019,7 @@ mod tests {
         ];
         assert_eq!(
             failed_reports(&runs),
-            ["run 2's Windows report has 1 failed test(s) (cortex-base t::a)"]
+            ["run 2's Windows report has 1 failed test(s) (cineris-base t::a)"]
         );
         assert_eq!(failed_reports(&runs[..1]), Vec::<String>::new());
     }

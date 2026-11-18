@@ -1,6 +1,6 @@
 The catalog's single rate card records DeepSeek's off-peak requests at the peak price, an upper bound.
 
-- Area: cortex-llm
+- Area: cineris-llm
 - Owner: the owner, with step 16
 
 | Item | Who | When |

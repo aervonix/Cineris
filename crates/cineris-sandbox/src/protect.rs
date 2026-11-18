@@ -1,0 +1,737 @@
+//! The protected paths of a workspace, looked at before and after a
+//! sandboxed command (`docs/architecture/06-permissions-and-sandbox.md`,
+//! "Protected paths").
+//!
+//! Landlock only adds rights, so a path inside a writable workspace cannot
+//! be kept from changing. What decides what runs later, outside the
+//! sandbox (git's hooks and configuration, CI configuration, build and
+//! registry settings, the project's own `.cineris`), is therefore looked at
+//! before each sandboxed command and again after it. A change is found,
+//! not prevented, and the content from before is kept so that it can be put
+//! back.
+//!
+//! What is looked at:
+//!
+//! - **The fixed list:** the lease's protected paths (the workspace's
+//!   `.git/hooks`, `.git/config`, `.cineris`, `.github/workflows`, … and
+//!   `sandbox.protect`), each with everything under it.
+//! - **Names at any depth,** found by a walk of the workspace: in every
+//!   repository the walk meets, nested ones and submodules' included
+//!   (`.git/modules/*`), its `config`, `config.worktree`, `hooks` and
+//!   `info`; a bare repository (a directory with `HEAD`, `objects` and
+//!   `refs`) the same; each worktree's `config.worktree`, `commondir` and
+//!   `gitdir`; a `.git` file; `.cargo/config.toml` and `.cargo/config`;
+//!   `.npmrc`, `.yarnrc`, `.yarnrc.yml` and `.envrc`.
+//!
+//! **Bounded.** The walk lists at most [`Limits::directories`] directories
+//! and gives up after [`Limits::time`]; past either, the snapshot says it
+//! is incomplete, and what lay further was not looked at. Two looks are
+//! compared only where both reached: a path one did not reach is not
+//! reported as made or gone. Content is kept for files up to
+//! [`Limits::file_bytes`], and up to [`Limits::total_bytes`] in all; a file
+//! past either is still compared by its size, times and inode, and is not
+//! restorable. A change of mode is found and is not restorable by its
+//! content. Links are never followed: a protected path reached through a
+//! linked directory in the workspace is not looked through, and the link
+//! is what is reported.
+
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "a look at the file system, documented as blocking: its callers run it on the \
+              blocking pool, never on the core thread; it opens files to hash them"
+)]
+
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, SystemTime};
+
+/// How far a look goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// The most directories the walk lists.
+    pub directories: usize,
+    /// The longest a look may take.
+    pub time: Duration,
+    /// The largest file whose content is kept.
+    pub file_bytes: u64,
+    /// The most content kept in all.
+    pub total_bytes: u64,
+    /// The largest file whose content is hashed, when it is not kept whole.
+    /// A larger one is compared by its size and times only, and marks the
+    /// look incomplete.
+    pub hash_bytes: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            directories: 20_000,
+            time: Duration::from_millis(250),
+            file_bytes: 256 * 1024,
+            total_bytes: 4 * 1024 * 1024,
+            hash_bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+
+/// What to look at in one workspace.
+#[derive(Debug, Clone)]
+pub struct Watch {
+    workspace: PathBuf,
+    fixed: Vec<PathBuf>,
+    limits: Limits,
+}
+
+/// What the protected paths looked like at one moment.
+#[derive(Debug, Clone, Default)]
+pub struct Snapshot {
+    entries: BTreeMap<PathBuf, Entry>,
+    complete: bool,
+    /// The paths this look asked for by name, there or not.
+    asked: BTreeSet<PathBuf>,
+    /// The directories whose every entry this look went through.
+    listed: BTreeSet<PathBuf>,
+}
+
+/// One protected entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Entry {
+    kind: Kind,
+    bytes: u64,
+    modified: Option<SystemTime>,
+    stamp: Stamp,
+    /// The content, for a file small enough to keep.
+    content: Option<Vec<u8>>,
+    /// A hash of the content, for a file too large to keep whole but small
+    /// enough to read: so a change is found by the content, not only by the
+    /// times the system sets, which a file system may not move finely
+    /// enough.
+    hash: Option<cineris_base::ContentHash>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    File,
+    Directory,
+    Link,
+    Other,
+}
+
+/// What only the system sets: a program can put a file's modification
+/// time back, and cannot do that to its change time or its inode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct Stamp {
+    changed: (i64, i64),
+    inode: u64,
+    mode: u32,
+}
+
+/// How one protected path changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Change {
+    /// It was not there before.
+    Created,
+    /// It was there, and is different.
+    Modified,
+    /// It was there, and is gone.
+    Deleted,
+}
+
+impl Change {
+    /// The word for it.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Modified => "modified",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+
+/// One protected path that a command changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Changed {
+    /// The path.
+    pub path: PathBuf,
+    /// How it changed.
+    pub change: Change,
+    /// What it was before, so that it can be put back.
+    pub before: Before,
+    /// Whether its mode changed (a hook made executable), which putting
+    /// the content back does not undo.
+    pub mode_changed: bool,
+}
+
+/// What a changed path was before the command.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Before {
+    /// Nothing: putting it back is removing it.
+    Absent,
+    /// A file with this content.
+    File(Vec<u8>),
+    /// A directory. Putting it back is making it again; what was in it is
+    /// listed on its own.
+    Directory,
+    /// Something whose content was not kept: a link, a special file, or a
+    /// file too large. It cannot be put back.
+    Unknown,
+}
+
+impl Watch {
+    /// A watch on `workspace` and the protected paths in `fixed`, which
+    /// may lie inside it or outside it.
+    #[must_use]
+    pub fn new(workspace: impl Into<PathBuf>, fixed: Vec<PathBuf>) -> Self {
+        Self {
+            workspace: workspace.into(),
+            fixed,
+            limits: Limits::default(),
+        }
+    }
+
+    /// The same watch with other limits.
+    #[must_use]
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// Looks at every protected path now. It blocks, for at most the time
+    /// the limits give.
+    #[must_use]
+    pub fn take(&self) -> Snapshot {
+        let mut look = Look {
+            root: self.workspace.clone(),
+            limits: self.limits,
+            started: Instant::now(),
+            listed: 0,
+            kept: 0,
+            complete: true,
+            entries: BTreeMap::new(),
+            asked: BTreeSet::new(),
+            through: BTreeSet::new(),
+        };
+        for path in &self.fixed {
+            // A protected path reached through a link in the workspace is
+            // not looked through: the link is what is recorded, wherever
+            // it leads (found by the review of step 26).
+            if look.through_a_link(path) {
+                look.asked.insert(path.clone());
+                continue;
+            }
+            look.record_tree(path);
+        }
+        look.walk(&self.workspace);
+        Snapshot {
+            entries: look.entries,
+            complete: look.complete,
+            asked: look.asked,
+            listed: look.through,
+        }
+    }
+
+    /// What changed among the protected paths since `before`, from a look
+    /// taken now. A path one of the two looks did not reach is not
+    /// reported: it may have been there, or gone, all along.
+    #[must_use]
+    pub fn changes_since(&self, before: &Snapshot) -> (Vec<Changed>, Snapshot) {
+        let after = self.take();
+        (before.compare(&after), after)
+    }
+}
+
+impl Snapshot {
+    /// Whether every protected path was looked at, within the limits.
+    #[must_use]
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    /// How many entries it holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether it holds none.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// What differs between this look and a later one. A path that one
+    /// look holds and the other does not is reported only where the other
+    /// look reached: a look that stopped at its bound says nothing of what
+    /// lay beyond it.
+    #[must_use]
+    pub fn compare(&self, after: &Self) -> Vec<Changed> {
+        let mut changed = Vec::new();
+        for (path, old) in &self.entries {
+            match after.entries.get(path) {
+                None if after.covers(path) => changed.push(Changed {
+                    path: path.clone(),
+                    change: Change::Deleted,
+                    before: old.before(),
+                    mode_changed: false,
+                }),
+                None => {}
+                Some(new) => {
+                    if let Some(before) = new.change_from(old) {
+                        changed.push(Changed {
+                            path: path.clone(),
+                            change: Change::Modified,
+                            before,
+                            mode_changed: new.kind == old.kind && new.stamp.mode != old.stamp.mode,
+                        });
+                    }
+                }
+            }
+        }
+        for path in after.entries.keys() {
+            if !self.entries.contains_key(path) && self.covers(path) {
+                changed.push(Changed {
+                    path: path.clone(),
+                    change: Change::Created,
+                    before: Before::Absent,
+                    mode_changed: false,
+                });
+            }
+        }
+        changed.sort_by(|a, b| a.path.cmp(&b.path));
+        changed
+    }
+
+    /// Whether this look would have seen `path` had it been there, or seen
+    /// it gone: always for a complete look; for an incomplete one, only
+    /// when it asked for the path by name, or went through every entry of
+    /// its directory.
+    fn covers(&self, path: &Path) -> bool {
+        self.complete
+            || self.asked.contains(path)
+            || path
+                .parent()
+                .is_some_and(|parent| self.listed.contains(parent))
+    }
+}
+
+impl Entry {
+    /// How this entry changed from `old`, and what it was before: `None`
+    /// when it did not.
+    fn change_from(&self, old: &Self) -> Option<Before> {
+        match (old.kind, self.kind) {
+            // A directory's own times change when an entry is added or
+            // removed, and those entries are compared one by one. The
+            // directory itself has changed when it was replaced, or its
+            // mode was.
+            (Kind::Directory, Kind::Directory) => (self.stamp.inode != old.stamp.inode
+                || self.stamp.mode != old.stamp.mode)
+                .then_some(Before::Directory),
+            (old_kind, new_kind) if old_kind != new_kind => Some(old.before()),
+            // A change of mode alone (a hook made executable) is not put
+            // back by writing the content again: it is put back by hand.
+            // With the content changed as well, the content is still kept,
+            // and the mode is said to be put back by hand.
+            (Kind::File, Kind::File)
+                if self.stamp.mode != old.stamp.mode
+                    && self.content.is_some()
+                    && old.content.is_some()
+                    && self.content != old.content =>
+            {
+                Some(old.before())
+            }
+            _ if self.stamp.mode != old.stamp.mode => Some(Before::Unknown),
+            // Both contents are known: they decide. The same bytes written
+            // again are no change.
+            (Kind::File, Kind::File) if self.content.is_some() && old.content.is_some() => {
+                (self.content != old.content).then(|| old.before())
+            }
+            // Both are hashed: the hash decides, so a change of the same
+            // length with the times put back is still found, whatever the
+            // file system's change time does.
+            (Kind::File, Kind::File) if self.hash.is_some() && old.hash.is_some() => {
+                (self.hash != old.hash).then(|| old.before())
+            }
+            // Otherwise what the system sets, which a program cannot put
+            // back, and the size and the time.
+            _ => (self.stamp != old.stamp
+                || self.bytes != old.bytes
+                || self.modified != old.modified)
+                .then(|| old.before()),
+        }
+    }
+
+    fn before(&self) -> Before {
+        match (self.kind, &self.content) {
+            (Kind::File, Some(content)) => Before::File(content.clone()),
+            (Kind::Directory, _) => Before::Directory,
+            _ => Before::Unknown,
+        }
+    }
+}
+
+/// One look in progress.
+struct Look {
+    /// The workspace: links below it are not looked through.
+    root: PathBuf,
+    limits: Limits,
+    started: Instant,
+    listed: usize,
+    kept: u64,
+    complete: bool,
+    entries: BTreeMap<PathBuf, Entry>,
+    /// The paths asked for by name, there or not.
+    asked: BTreeSet<PathBuf>,
+    /// The directories whose every entry was gone through.
+    through: BTreeSet<PathBuf>,
+}
+
+/// The names a walk looks for in every directory, and what each holds that
+/// is protected.
+const BUILD_FILES: &[&str] = &[".npmrc", ".yarnrc", ".yarnrc.yml", ".envrc"];
+const CARGO_FILES: &[&str] = &["config.toml", "config"];
+const GIT_PARTS: &[&str] = &["config", "config.worktree", "hooks", "info"];
+const WORKTREE_PARTS: &[&str] = &["config.worktree", "commondir", "gitdir"];
+
+impl Look {
+    fn out_of_time(&mut self) -> bool {
+        if self.started.elapsed() > self.limits.time {
+            self.complete = false;
+        }
+        !self.complete
+    }
+
+    /// Whether a directory between the workspace and `path` is a link.
+    fn through_a_link(&self, path: &Path) -> bool {
+        // By place: a fixed protected path is written plainly, and the
+        // workspace's form may be extended-length on Windows.
+        let Some(below) = cineris_base::strip_location_prefix(path, &self.root) else {
+            return false;
+        };
+        let mut walked = self.root.clone();
+        let parts: Vec<_> = below.components().collect();
+        for part in parts.iter().take(parts.len().saturating_sub(1)) {
+            walked.push(part);
+            if fs::symlink_metadata(&walked).is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Records `path` and, for a directory, everything under it.
+    fn record_tree(&mut self, path: &Path) {
+        let Some(kind) = self.record(path) else {
+            return;
+        };
+        if kind != Kind::Directory || self.out_of_time() {
+            return;
+        }
+        let Some(children) = self.list(path) else {
+            return;
+        };
+        for (child, _) in &children {
+            self.record_tree(child);
+            if self.out_of_time() {
+                return;
+            }
+        }
+        self.through.insert(path.to_owned());
+    }
+
+    /// Records one entry, without following a link. `None` when it is not
+    /// there.
+    fn record(&mut self, path: &Path) -> Option<Kind> {
+        self.asked.insert(path.to_owned());
+        let metadata = fs::symlink_metadata(path).ok()?;
+        let kind = if metadata.file_type().is_symlink() {
+            Kind::Link
+        } else if metadata.is_dir() {
+            Kind::Directory
+        } else if metadata.is_file() {
+            Kind::File
+        } else {
+            Kind::Other
+        };
+        let bytes = metadata.len();
+        let content = (kind == Kind::File
+            && bytes <= self.limits.file_bytes
+            && self.kept + bytes <= self.limits.total_bytes)
+            .then(|| fs::read(path).ok())
+            .flatten();
+        if let Some(content) = &content {
+            self.kept += u64::try_from(content.len()).unwrap_or(u64::MAX);
+        }
+        // A file whose content is not kept is still compared by a hash, so
+        // that a change of the same length with the file's times put back
+        // is found on a file system whose change time the harness cannot
+        // trust (found on `ubuntu-22.04` by the fixes of step 26). A file
+        // too large to hash within the cap is left to its times and marks
+        // the look incomplete, so the result says it was not fully seen.
+        let hash = if kind == Kind::File && content.is_none() {
+            if bytes <= self.limits.hash_bytes {
+                hash_file(path)
+            } else {
+                self.complete = false;
+                None
+            }
+        } else {
+            None
+        };
+        self.entries.insert(
+            path.to_owned(),
+            Entry {
+                kind,
+                bytes,
+                modified: metadata.modified().ok(),
+                stamp: stamp(&metadata),
+                content,
+                hash,
+            },
+        );
+        Some(kind)
+    }
+
+    /// The entries of a directory, counted against the limit. `None` past
+    /// the limit, or when the directory cannot be read: then what is in it
+    /// is not known.
+    ///
+    /// Each entry comes with whether it is a directory, not a link to one,
+    /// as the listing itself says: no entry is asked for again, which is
+    /// most of a walk's time.
+    fn list(&mut self, directory: &Path) -> Option<Vec<(PathBuf, bool)>> {
+        if self.listed >= self.limits.directories {
+            self.complete = false;
+            return None;
+        }
+        self.listed += 1;
+        fs::read_dir(directory).ok().map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| {
+                    let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+                    (entry.path(), is_dir)
+                })
+                .collect()
+        })
+    }
+
+    /// Walks the workspace for protected names at any depth.
+    fn walk(&mut self, directory: &Path) {
+        if self.out_of_time() {
+            return;
+        }
+        let Some(children) = self.list(directory) else {
+            return;
+        };
+        let names: Vec<&str> = children
+            .iter()
+            .filter_map(|(child, _)| child.file_name().and_then(|name| name.to_str()))
+            .collect();
+        // A bare repository made of plain files.
+        if ["HEAD", "objects", "refs"]
+            .iter()
+            .all(|name| names.contains(name))
+        {
+            self.record_git(directory);
+        }
+        for (child, is_dir) in &children {
+            let is_dir = *is_dir;
+            let Some(name) = child.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            match name {
+                ".git" if is_dir => self.record_git(child),
+                ".git" => {
+                    // A `.git` file (a worktree or a submodule names its
+                    // repository there), or a link to a git directory:
+                    // recorded as the entry it is, so that the redirect is
+                    // seen. A linked `.git` is not looked through (the
+                    // second review of step 26).
+                    self.record(child);
+                }
+                ".cargo" => {
+                    // A `.cargo` directory, or a link to one: the entry
+                    // itself always, and its configuration by name through
+                    // it when it leads inside the workspace, so a change to
+                    // the real file is seen under the name `.cargo` leads
+                    // to. The `.cargo` that is a link was passed over before
+                    // (found by the third review of step 26). A link that
+                    // leads outside is recorded as the link, not looked
+                    // through: a confined command cannot change a file
+                    // outside the write roots, and the look must not read or
+                    // name one.
+                    self.record(child);
+                    if self.leads_inside(child) {
+                        for file in CARGO_FILES {
+                            self.record(&child.join(file));
+                        }
+                    }
+                }
+                name if BUILD_FILES.contains(&name) => {
+                    self.record(child);
+                }
+                _ if is_dir => self.walk(child),
+                _ => {}
+            }
+            if self.out_of_time() {
+                return;
+            }
+        }
+        self.through.insert(directory.to_owned());
+    }
+
+    /// Records the protected parts of a git directory, and of every
+    /// repository kept inside it (submodules, worktrees).
+    fn record_git(&mut self, git: &Path) {
+        for part in GIT_PARTS {
+            self.record_tree(&git.join(part));
+        }
+        // Where this git directory takes its configuration and hooks from,
+        // if it points them elsewhere (found by the third review of step
+        // 26). A worktree's `commondir` is recorded by name below; this is
+        // the one in the main repository, which was not watched.
+        self.follow_commondir(git);
+        let modules = git.join("modules");
+        if fs::symlink_metadata(&modules).is_ok_and(|metadata| metadata.is_dir()) {
+            // A module that is a link is not looked through.
+            for (module, is_dir) in self.list(&modules).unwrap_or_default() {
+                if is_dir {
+                    self.record_git(&module);
+                } else {
+                    self.record(&module);
+                }
+            }
+        }
+        let worktrees = git.join("worktrees");
+        if fs::symlink_metadata(&worktrees).is_ok_and(|metadata| metadata.is_dir()) {
+            for (worktree, is_dir) in self.list(&worktrees).unwrap_or_default() {
+                if !is_dir {
+                    self.record(&worktree);
+                    continue;
+                }
+                // Where the worktree's repository is, and its own settings.
+                for part in WORKTREE_PARTS {
+                    self.record(&worktree.join(part));
+                }
+            }
+        }
+    }
+
+    /// Records `git`'s `commondir`, and follows it to the common directory's
+    /// configuration and hooks: git reads them from where it points. The
+    /// pointer is recorded whether or not it is there, so that one a
+    /// command writes is found; the common directory is followed only when
+    /// no link lies on the way to it inside the workspace, so a link is
+    /// recorded, never looked through.
+    fn follow_commondir(&mut self, git: &Path) {
+        let pointer = git.join("commondir");
+        // The file itself is protected: a change to where it points is a
+        // change to what runs later.
+        self.record(&pointer);
+        let Ok(content) = fs::read_to_string(&pointer) else {
+            return;
+        };
+        let target = content.trim();
+        if target.is_empty() {
+            return;
+        }
+        let common = lexically_resolved(&git.join(target));
+        // Follow it only when it stays under the workspace and no link lies
+        // on the way: a `commondir` a confined command wrote to point
+        // outside the workspace must not send the look to read and name a
+        // file there (found by the third review of step 26). The pointer is
+        // already recorded above, so the redirect itself is still seen.
+        if !common.starts_with(&self.root) || self.through_a_link(&common) {
+            return;
+        }
+        for part in GIT_PARTS {
+            self.record_tree(&common.join(part));
+        }
+    }
+
+    /// Whether the walk may look through `path` into the files it names: a
+    /// real directory stays where it is, and a link is followed only when
+    /// its target is under the workspace. A link that leads outside is
+    /// recorded as the link it is (the redirect is seen), but not looked
+    /// through, so the look never reads or names a file outside the
+    /// workspace (found by the third review of step 26).
+    fn leads_inside(&self, path: &Path) -> bool {
+        match fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                let Ok(target) = fs::read_link(path) else {
+                    return false;
+                };
+                let joined = if target.is_absolute() {
+                    target
+                } else {
+                    path.parent().unwrap_or(path).join(target)
+                };
+                cineris_base::location_within(&lexically_resolved(&joined), &self.root)
+            }
+            Ok(_) => true,
+            Err(_) => true,
+        }
+    }
+}
+
+/// `path` with `.` and `..` resolved by name, following no link: a
+/// `commondir` names the common directory relative to the git directory
+/// (`../build/common`), and the result must be a path under the workspace
+/// that the walk can judge against its links, not one the file system
+/// resolved.
+fn lexically_resolved(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// A hash of the file at `path`, read in blocks so that a large file is
+/// not held in memory. `None` when it cannot be read.
+fn hash_file(path: &Path) -> Option<cineris_base::ContentHash> {
+    use std::io::Read;
+    let mut file = fs::File::open(path).ok()?;
+    let mut hasher = cineris_base::ContentHasher::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => hasher.update(&buffer[..read]),
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    Some(hasher.finish())
+}
+
+#[cfg(unix)]
+fn stamp(metadata: &fs::Metadata) -> Stamp {
+    use std::os::unix::fs::MetadataExt;
+    Stamp {
+        changed: (metadata.ctime(), metadata.ctime_nsec()),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+    }
+}
+
+#[cfg(not(unix))]
+fn stamp(metadata: &fs::Metadata) -> Stamp {
+    Stamp {
+        mode: u32::from(metadata.permissions().readonly()),
+        ..Stamp::default()
+    }
+}
+
+#[cfg(test)]
+mod tests;

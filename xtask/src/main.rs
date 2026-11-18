@@ -1,4 +1,4 @@
-//! Developer commands for the Cortex-Harness repository.
+//! Developer commands for the Cineris repository.
 //!
 //! `cargo xtask <command>`, or `./x <command>` from a shell. The commands are
 //! listed in [`USAGE`]. CI runs these same commands, so what passes here
@@ -67,13 +67,13 @@ mod workspace;
 /// rename's tests keep their text through the rename (`rename.rs`, `KEPT`),
 /// so they cannot name the crate.
 #[cfg(test)]
-use cortex_testkit as testkit;
+use cineris_testkit as testkit;
 
 /// Failures are messages for the person at the terminal.
 type Result<T> = std::result::Result<T, String>;
 
 const USAGE: &str = "\
-Developer commands for the Cortex-Harness repository.
+Developer commands for the Cineris repository.
 
 Usage: cargo xtask <command> [arguments]        (or: ./x <command> [arguments])
 
@@ -82,7 +82,7 @@ Checks and tests
                     deny. With step names, only those steps.
   test [ARGS...]    All tests, with nextest. Arguments go to `cargo nextest run`,
                     for example: test --profile fast     (tiers 1 and 2 only)
-                                 test -p cortex-agent    (one crate, and only it)
+                                 test -p cineris-agent    (one crate, and only it)
                     --dependents -p CRATE: the crate's tests and those of
                     every workspace crate that depends on it, directly or
                     not. Run it after a change of behaviour.
@@ -138,8 +138,8 @@ Checks and tests
                     secret. Without terms it passes with a warning.
   owner-guard --pre-push REMOTE [URL] | --unpushed [REMOTE]
                     The same check before a push, of each commit it sends,
-                    with the terms from ~/.config/cortex-harness/owner-terms
-                    or CORTEX_OWNER_TERMS_FILE: the git hook in
+                    with the terms from ~/.config/cineris-dev/owner-terms
+                    or CINERIS_OWNER_TERMS_FILE: the git hook in
                     xtask/hooks/pre-push runs the first.
 
 Showing that the tests bite
@@ -249,7 +249,7 @@ Not blocking (the `main` and `nightly` workflows run these)
           [--check]
                     Time `--version` under both names, and a headless run to
                     its request, against the start-up budgets. With
-                    --profile, build `cortex` in that profile first.
+                    --profile, build `cineris` in that profile first.
   perf [--runs N] [--seconds N] [--json PATH]
                     Measure the terminal layer's demo, optimised, in a
                     pseudo-terminal: start to first frame, key to frame idle
@@ -277,7 +277,7 @@ By hand only, against a real provider (never in CI)
                     and deepseek, then one headless run of the real binary.
   live --headless [PROVIDER] [--test NAME]... [--dry-run]
                     Every headless run of the real binary against the provider
-                    (anthropic when none is named, or deepseek): cortex-cli's
+                    (anthropic when none is named, or deepseek): cineris-cli's
                     tests/system/live.rs, under cargo test, with no time limit.
                     --test runs the one named (its name, or the end of it:
                     compaction); --dry-run prints what would run and sends,
@@ -292,7 +292,7 @@ By hand only, against a real provider (never in CI)
                     Keep the tools the binary sends each provider, and record
                     each one's toolbox fixture: the provider named, or every
                     provider whose key file is named.
-                    Both need CORTEX_LIVE_<PROVIDER>_KEY_FILE set to the path
+                    Both need CINERIS_LIVE_<PROVIDER>_KEY_FILE set to the path
                     of a file that holds that provider's API key. The key is
                     never given on a command line.
 
@@ -333,7 +333,7 @@ Working on the code
   regen [--list] [GENERATOR...]
                     Rebuild everything that can be rebuilt from the tree, with
                     no network and no key: what `gen` writes, every snapshot
-                    (CORTEX_UPDATE_SNAPSHOTS) and the reference screens
+                    (CINERIS_UPDATE_SNAPSHOTS) and the reference screens
                     (tui-screens --write). For after a rebase that met changes
                     to a generated file: settle the sources, take either side
                     of the file, run this. Ends by listing what differs from
@@ -344,11 +344,11 @@ Working on the code
                     items' files (each item's first line, `- Area:` and
                     `- Owner:`). Run it after adding, settling or changing an
                     item, and after a rebase. --check only compares.
-  alias [--release] Build `cortex` and put its alias `cx` beside it.
+  alias [--release] Build `cineris` and put its alias `cin` beside it.
   corpus fetch|check|path|pin [--update]
                     The pinned corpus of about 20,000 `.rs` files of real
                     code that perf_ tests measure, kept outside the repository
-                    (~/.cache/cortex-harness/corpus): fetch makes it when it
+                    (~/.cache/cineris-dev/corpus): fetch makes it when it
                     is not there whole, check and path verify it against
                     corpus/PIN, pin makes a new one. `corpus` alone has the
                     rest.
@@ -450,7 +450,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
 /// `cargo xtask gen`: every checked-in generated file.
 ///
 /// The protocol's files are generated here, from the protocol crate. The
-/// configuration's are generated by the test in `cortex-config` that checks
+/// configuration's are generated by the test in `cineris-config` that checks
 /// them, run in its writing mode, so that this crate does not have to build
 /// the configuration crate and its TOML parser before every CI job.
 fn generate() -> Result<()> {
@@ -459,21 +459,21 @@ fn generate() -> Result<()> {
 }
 
 /// The configuration's schema and reference, written by the test of
-/// `cortex-config` that checks them.
+/// `cineris-config` that checks them.
 fn generate_configuration() -> Result<()> {
     steps::cargo_with(
         &[
             "test",
             "--locked",
             "-p",
-            "cortex-config",
+            "cineris-config",
             "--test",
             "it",
             "--",
             "generated::",
             "--nocapture",
         ],
-        &[("CORTEX_UPDATE_GENERATED", "1")],
+        &[("CINERIS_UPDATE_GENERATED", "1")],
     )
 }
 

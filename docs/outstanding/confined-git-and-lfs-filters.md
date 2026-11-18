@@ -1,6 +1,6 @@
 The confined read-only git cannot run a git-lfs filter that must write, leaving change detection and undo incomplete.
 
-- Area: cortex-sandbox
+- Area: cineris-sandbox
 - Owner: step 32
 
 | Item | Who | When |

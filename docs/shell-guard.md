@@ -29,7 +29,7 @@ This page is what was found by trying, in the tooling-2 session on 2026-11-13, w
 | `$HOME` and other variables before git | `echo $HOME >/dev/null; git status` | accepted |
 | Two heredocs in one command, or a heredoc in a long chain, **with no git at all** | `mkdir -p d && cat > d/a <<'EOF'` … `EOF`, `cat > d/b <<'EOF'` … `EOF`, `ls d \| wc -l` | **refused** at times, as "too complex to verify"; one heredoc a call is accepted |
 
-Earlier sessions also saw `cargo nextest run -p cortex-base hash` refused, because `hash` is a shell builtin's name: spell such a filter `-E 'test(/ha.h::/)'`.
+Earlier sessions also saw `cargo nextest run -p cineris-base hash` refused, because `hash` is a shell builtin's name: spell such a filter `-E 'test(/ha.h::/)'`.
 
 **A word that is a shell builtin's name is refused anywhere in a command, as a plain argument, with no git in it** (found in wave 9, and tried again in the sixth tooling step):
 
@@ -93,7 +93,7 @@ Seen by the nine-settings fix (wave 11's first session) and by the seventh tooli
 **`cargo xtask apply SCRIPT`** (since the eighth tooling step) takes a script of changes and the checks to run on them, and is one command with one argument, which the guard accepts. Wave 11's seven sessions met about 40 refusals between them, and every edit became a script run in a call of its own and its check another: this is both in one call.
 
 - **The changes** are `replace --script`'s edits (`@@ file:` … `@@ from` … `@@ to` … `@@ end`, a `.rs` file by its tokens and any other by its text), and two more: `@@ write: PATH`, the file's lines, `@@ end` (a whole file, made or replaced, its parent folders made), and `@@ delete: PATH` on a line of its own. They are made in order, each on what the one before left.
-- **The checks** are lines of their own, run in the order written: `@@ check: fmt` (rustfmt on the `.rs` files the script touched), `rules`, `links`, `check STEP…` (`cargo xtask check` of those steps, such as `check breaks generated`), `build -p CRATE…` (`cargo check --all-targets`), `clippy -p CRATE…` (warnings denied) and `test ARGUMENT…` (`cargo xtask test` with them, such as `test -p cortex-tui -E 'test(/dialog/)'`). A word with a space in it is quoted.
+- **The checks** are lines of their own, run in the order written: `@@ check: fmt` (rustfmt on the `.rs` files the script touched), `rules`, `links`, `check STEP…` (`cargo xtask check` of those steps, such as `check breaks generated`), `build -p CRATE…` (`cargo check --all-targets`), `clippy -p CRATE…` (warnings denied) and `test ARGUMENT…` (`cargo xtask test` with them, such as `test -p cineris-tui -E 'test(/dialog/)'`). A word with a space in it is quoted.
 - **All or none.** Every change is made in memory first; if one cannot be made, nothing is written and no check runs. When a check fails, the checks after it do not run, and every file the script touched is put back as it was: an edited file gets its old text, a file it made is removed, one it deleted comes back. `--keep` leaves the changes in place to be mended; `--dry-run` says whether every change can be made and which checks would run, and does neither.
 - **Where it runs.** On the laptop, or at the desk as `rx --back -- cargo xtask apply SCRIPT`, so that the files it wrote there come back.
 

@@ -228,7 +228,7 @@ const PRESSURE_FILE: &str = "/proc/pressure/io";
 /// act on a stall, and a person trying one by hand, give it a pressure that
 /// was recorded or made up and never a real stall. The file is in the
 /// kernel's own form (`some avg10=… avg60=… avg300=… total=…`, and `full`).
-pub(crate) const PRESSURE_FILE_VARIABLE: &str = "CORTEX_PRESSURE_FILE";
+pub(crate) const PRESSURE_FILE_VARIABLE: &str = "CINERIS_PRESSURE_FILE";
 
 /// The I/O pressure now, or why it cannot be read: from the file that
 /// [`PRESSURE_FILE_VARIABLE`] names, when it is set and not empty, else the
@@ -1033,7 +1033,7 @@ mod tests {
         let wrong = read_pressure_from(&path);
         std::fs::remove_dir_all(&folder).unwrap();
         assert_eq!(read.unwrap().full_total, 30_200_000);
-        assert!(missing.unwrap_err().contains("CORTEX_PRESSURE_FILE"));
+        assert!(missing.unwrap_err().contains("CINERIS_PRESSURE_FILE"));
         assert!(wrong.unwrap_err().contains("not in the form expected"));
     }
 

@@ -4,16 +4,16 @@
 
 [break] full-redraws-every-row
 rule: The full-screen presenter writes only the rows that changed since the last frame.
-file: crates/cortex-term/src/full.rs
+file: crates/cineris-term/src/full.rs
 in: Full::draw
 find: if !full && self.screen.get(index) == Some(row) {
 replace: if false && self.screen.get(index) == Some(row) {
 caught-by:
-    cortex-term full::tests::the_first_frame_writes_every_row_and_the_next_only_what_changed
+    cineris-term full::tests::the_first_frame_writes_every_row_and_the_next_only_what_changed
 
 [break] full-forgets-a-failed-write
 rule: A frame the terminal did not take is drawn whole the next time.
-file: crates/cortex-term/src/full.rs
+file: crates/cineris-term/src/full.rs
 in: Full::draw
 find:
     self.scratch = rows;
@@ -23,389 +23,389 @@ replace:
     self.scratch = rows;
     return Err(error);
 caught-by:
-    cortex-term full::tests::a_failed_write_is_drawn_whole_next_time
+    cineris-term full::tests::a_failed_write_is_drawn_whole_next_time
 
 [break] full-shows-a-cursor-below-the-window
 rule: A cursor placed below the window is not shown.
-file: crates/cortex-term/src/full.rs
+file: crates/cineris-term/src/full.rs
 in: Full::draw
 find: .filter(|cursor| cursor.row < self.rows)
 replace: .filter(|cursor| cursor.row <= self.rows)
 caught-by:
-    cortex-term full::tests::a_row_is_cut_before_the_last_column_and_the_cursor_kept_inside
+    cineris-term full::tests::a_row_is_cut_before_the_last_column_and_the_cursor_kept_inside
 
 [break] kept-answer-loses-its-code-colours
 rule: A kept answer drawn again takes the colours its code lines were committed with.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: code_line
 find: let code = if colours.is_empty() {
 replace: let code = if true || colours.is_empty() {
 caught-by:
-    cortex-tui markdown::tests::a_kept_answers_code_keeps_its_colours_at_another_width
-    cortex-tui highlight::tests::a_kept_answer_records_its_code_colours_and_the_lines_that_were_late
+    cineris-tui markdown::tests::a_kept_answers_code_keeps_its_colours_at_another_width
+    cineris-tui highlight::tests::a_kept_answer_records_its_code_colours_and_the_lines_that_were_late
 
 [break] a-late-line-is-kept-as-plain
 rule: A code line committed plain because its colours were late is recorded as late, so that a redraw asks for them again.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: flush
 find: (Vec::new(), None)
 replace: (Vec::new(), Some(Vec::new()))
 caught-by:
-    cortex-tui highlight::tests::a_kept_answer_records_its_code_colours_and_the_lines_that_were_late
+    cineris-tui highlight::tests::a_kept_answer_records_its_code_colours_and_the_lines_that_were_late
 
 [break] a-kept-source-drops-text
 rule: A kept answer keeps every piece of its text as it arrived.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: push
 find: keep.text.push_str(text);
 replace: keep.text = text.to_owned();
 caught-by:
-    cortex-tui markdown::tests::a_kept_answer_draws_again_what_its_stream_committed
+    cineris-tui markdown::tests::a_kept_answer_draws_again_what_its_stream_committed
 
 [break] the-mouse-on-the-main-screen
 rule: The mouse is reported only while the alternate screen is shown, never on the main screen.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: Terminal::set_mouse
 find: if !self.alternate {
 replace: if false && !self.alternate {
 caught-by:
-    cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+    cineris-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
 
 [break] the-mouse-left-on-at-the-end
 rule: Putting the terminal back turns mouse reporting off before it leaves the alternate screen.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: Terminal::end
 find: end.extend_from_slice(self.mouse_sequence(false));
 replace: end.extend_from_slice(b"");
 caught-by:
-    cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+    cineris-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
 
 [break] the-mouse-left-on-with-the-main-screen
 rule: Leaving the alternate screen turns mouse reporting off with it.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: Terminal::alternate
 find: bytes.extend_from_slice(self.mouse_sequence(false));
 replace: bytes.extend_from_slice(b"");
 caught-by:
-    cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+    cineris-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
 
 [break] the-emergency-restore-leaves-the-mouse-on
 rule: Every emergency restore with the alternate screen on turns mouse reporting off.
-file: crates/cortex-term/src/sys/mod.rs
+file: crates/cineris-term/src/sys/mod.rs
 find: b"\x1b[?2026l\x1b[0m\x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h"
 replace: b"\x1b[?2026l\x1b[0m\x1b[?1049l\r\x1b[J\x1b[?1004l\x1b[?2004l\x1b[?7h\x1b[?25h"
 caught-by:
-    cortex-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
+    cineris-term terminal::tests::the_mouse_is_on_only_with_the_alternate_screen_and_off_on_every_way_out
 
 [break] a-resume-forgets-the-mouse
 rule: Continued after a stop, the alternate screen comes back with the mouse, if it was asked for.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: Terminal::resume
 find: again.extend_from_slice(self.mouse_sequence(true));
 replace: again.extend_from_slice(b"");
 caught-by:
-    cortex-term terminal::tests::a_resume_turns_the_mouse_on_again_with_the_alternate_screen
+    cineris-term terminal::tests::a_resume_turns_the_mouse_on_again_with_the_alternate_screen
 
 [break] the-older-report-read-with-the-mouse-off
 rule: With the mouse off, CSI M is dropped alone, and the keys after it are typed.
-file: crates/cortex-term/src/input.rs
+file: crates/cineris-term/src/input.rs
 in: Decoder::decode
 find: if !self.mouse && self.buffer[start..].starts_with(b"\x1b[M") {
 replace: if false && self.buffer[start..].starts_with(b"\x1b[M") {
 caught-by:
-    cortex-term input::tests::mouse_reports_in_the_older_form_are_taken_whole
-    cortex-term terminal::tests::the_older_mouse_report_is_read_only_while_the_mouse_is_on
+    cineris-term input::tests::mouse_reports_in_the_older_form_are_taken_whole
+    cineris-term terminal::tests::the_older_mouse_report_is_read_only_while_the_mouse_is_on
 
 [break] the-wheel-turned-the-wrong-way
 rule: A report with the wheel bit and button 0 is the wheel turned up.
-file: crates/cortex-term/src/input.rs
+file: crates/cineris-term/src/input.rs
 find: 0 => Wheel::Up,
 replace: 0 => Wheel::Down,
 caught-by:
-    cortex-term input::tests::mouse_reports_in_the_sgr_form
-    cortex-term input::tests::mouse_reports_in_the_older_form_are_taken_whole
+    cineris-term input::tests::mouse_reports_in_the_sgr_form
+    cineris-term input::tests::mouse_reports_in_the_older_form_are_taken_whole
 
 [break] a-release-read-as-a-press
 rule: The SGR form's lower-case final says a button came up.
-file: crates/cortex-term/src/input.rs
+file: crates/cineris-term/src/input.rs
 find: Some(final_byte == b'm')
 replace: Some(false)
 caught-by:
-    cortex-term input::tests::mouse_reports_in_the_sgr_form
+    cineris-term input::tests::mouse_reports_in_the_sgr_form
 
 [break] the-open-answers-rows-are-not-kept
 rule: The rows an answer commits while it is still open are kept beside it, so the full screen shows them before it finishes.
-file: crates/cortex-tui/src/transcript.rs
+file: crates/cineris-tui/src/transcript.rs
 in: Transcript::commit_parts
 find: self.open_rows.extend(lines.iter().cloned());
 replace: self.open_rows.clear();
 caught-by:
-    cortex-tui transcript::tests::every_frame_of_a_stream_is_drawn_the_same_by_both_presenters
-    cortex-tui app::tests::screen::the_same_rows_are_drawn_under_both_presenters_frame_by_frame
+    cineris-tui transcript::tests::every_frame_of_a_stream_is_drawn_the_same_by_both_presenters
+    cineris-tui app::tests::screen::the_same_rows_are_drawn_under_both_presenters_frame_by_frame
 
 [break] a-resize-does-not-lay-the-open-answer-out-again
 rule: In the full screen, a change of width lays an answer still streaming out again at the new width.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_frame
 find: self.transcript.rewrap_open(width, &self.look);
 replace: let _ = &self.look;
 caught-by:
-    cortex-tui app::tests::screen::an_answer_resized_while_it_streams_is_laid_out_again
+    cineris-tui app::tests::screen::an_answer_resized_while_it_streams_is_laid_out_again
 
 [break] a-finished-block-is-not-kept
 rule: Every block the transcript finishes is kept, for the viewer and the full screen.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::prepare
 find: self.kept.extend(self.transcript.take_finished());
 replace: let _ = self.transcript.take_finished();
 caught-by:
-    cortex-tui app::tests::screen::the_same_rows_are_drawn_under_both_presenters_frame_by_frame
-    cortex-tui app::tests::screen::the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box
+    cineris-tui app::tests::screen::the_same_rows_are_drawn_under_both_presenters_frame_by_frame
+    cineris-tui app::tests::screen::the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box
 
 [break] a-prompt-sent-does-not-follow-the-end
 rule: Sending a prompt makes the full-screen window follow the end again.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::submit
 find: self.screen_follow();
 replace: let _ = &self.screen;
 caught-by:
-    cortex-tui app::tests::screen::the_window_follows_the_end_until_it_is_moved_up
+    cineris-tui app::tests::screen::the_window_follows_the_end_until_it_is_moved_up
 
 [break] the-end-is-missed-with-nothing-live
 rule: A window moved down to the last row follows the end again, even when nothing is live below it.
-file: crates/cortex-tui/src/app/scroll.rs
+file: crates/cineris-tui/src/app/scroll.rs
 in: Scroll::starting
 find: at_end = self.block(source, probe).is_empty();
 replace: at_end = probe > source.blocks;
 caught-by:
-    cortex-tui app::scroll::tests::down_to_the_last_row_follows_again_when_nothing_is_live
-    cortex-tui app::tests::screen::the_wheel_scrolls_and_a_click_opens_or_closes_a_box
+    cineris-tui app::scroll::tests::down_to_the_last_row_follows_again_when_nothing_is_live
+    cineris-tui app::tests::screen::the_wheel_scrolls_and_a_click_opens_or_closes_a_box
 
 [break] a-click-does-not-turn-a-box-over
 rule: A click on a committed box's row in the full screen opens or closes it.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_act
 find: view.open.insert(round, now_open);
 replace: let _ = now_open;
 caught-by:
-    cortex-tui app::tests::screen::the_wheel_scrolls_and_a_click_opens_or_closes_a_box
+    cineris-tui app::tests::screen::the_wheel_scrolls_and_a_click_opens_or_closes_a_box
 
 [break] a-drag-is-taken-for-a-click
 rule: A click is a press and a release on the same cell; a release elsewhere is a drag, which does nothing.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_mouse
 find: .filter(|&pressed| pressed == (mouse.col, mouse.row))
 replace: .filter(|_| true)
 caught-by:
-    cortex-tui app::tests::screen::the_wheel_scrolls_and_a_click_opens_or_closes_a_box
+    cineris-tui app::tests::screen::the_wheel_scrolls_and_a_click_opens_or_closes_a_box
 
 [break] the-wheel-scrolls-too-little
 rule: A notch of the wheel scrolls three rows.
-file: crates/cortex-tui/src/app/state/viewer.rs
+file: crates/cineris-tui/src/app/state/viewer.rs
 find: pub(crate) const WHEEL_ROWS: usize = 3;
 replace: pub(crate) const WHEEL_ROWS: usize = 2;
 caught-by:
-    cortex-tui app::tests::screen::the_wheel_scrolls_and_a_click_opens_or_closes_a_box
+    cineris-tui app::tests::screen::the_wheel_scrolls_and_a_click_opens_or_closes_a_box
 
 [break] the-viewer-ignores-a-click
 rule: A click on a box's row in the viewer selects the box and opens it.
-file: crates/cortex-tui/src/app/state/viewer.rs
+file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::viewer_mouse
 find: self.select(&mut state, round);
 replace: let _ = round;
 caught-by:
-    cortex-tui app::tests::screen::the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box
+    cineris-tui app::tests::screen::the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box
 
 [break] the-full-screen-asks-for-no-mouse
 rule: The loop asks the terminal for the mouse the application wants, on every terminal it is given.
-file: crates/cortex-tui/src/app.rs
+file: crates/cineris-tui/src/app.rs
 in: run_with
 find: terminal.set_mouse(app.mouse())?;
 replace: terminal.set_mouse(false)?;
 caught-by:
-    cortex-tui app::tests::screen::every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off
-    cortex-tui app::tests::screen::the_viewer_turns_the_mouse_off_as_it_returns_to_the_main_screen
+    cineris-tui app::tests::screen::every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off
+    cineris-tui app::tests::screen::the_viewer_turns_the_mouse_off_as_it_returns_to_the_main_screen
 
 [break] a-gesture-is-bound-anywhere
 rule: A mouse gesture can be bound only in the viewer's and the full screen's contexts.
-file: crates/cortex-tui/src/keys/mod.rs
+file: crates/cineris-tui/src/keys/mod.rs
 in: KeyMap::with_table
 find: .filter(|_| !context.takes_gestures())
 replace: .filter(|_| false)
 caught-by:
-    cortex-tui keys::tests::a_gesture_is_bound_only_where_the_mouse_is_reported
+    cineris-tui keys::tests::a_gesture_is_bound_only_where_the_mouse_is_reported
 
 [break] the-search-minds-case
 rule: The full-screen search ignores case.
-file: crates/cortex-tui/src/app/search.rs
+file: crates/cineris-tui/src/app/search.rs
 in: work
 find: .map(|(block, text)| (block, text.to_lowercase()))
 replace: .map(|(block, text)| (block, text))
 caught-by:
-    cortex-tui app::search::tests::it_counts_each_blocks_matches_ignoring_case_and_answers_the_latest_query
-    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+    cineris-tui app::search::tests::it_counts_each_blocks_matches_ignoring_case_and_answers_the_latest_query
+    cineris-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
 
 [break] the-search-starts-at-the-oldest-match
 rule: A search goes first to the newest match.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::found
 find: search.current = total.checked_sub(1);
 replace: search.current = (total > 0).then_some(0);
 caught-by:
-    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+    cineris-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
 
 [break] the-search-does-not-go-round
 rule: Past the newest match the search goes round to the oldest.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::step_match
 find: (Some(current), true) => (current + 1) % total,
 replace: (Some(current), true) => (current + 1).min(total - 1),
 caught-by:
-    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+    cineris-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
 
 [break] a-box-the-search-opened-stays-open
 rule: A box the search opened for a match closes again when the search moves on.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::ask_search
 find: self.close_search_box(view);
 replace: let _ = &view;
 caught-by:
-    cortex-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
+    cineris-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
 
 [break] the-search-ends-and-closes-its-box
 rule: A search ended on a match inside a box it opened leaves the box open.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::search_key
 find: view.open.insert(round, true);
 replace: view.open.remove(&round);
 caught-by:
-    cortex-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
+    cineris-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
 
 [break] a-match-in-a-closed-box-stays-hidden
 rule: A match inside a closed box opens the box while it is the current match.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::reveal_match
 find: if at.is_none()
 replace: if false && at.is_none()
 caught-by:
-    cortex-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
+    cineris-tui app::tests::screen::a_match_inside_a_closed_box_opens_it_while_it_is_current
 
 [break] the-current-match-is-not-told-apart
 rule: The current match is drawn bold as well as reversed.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: marked
 find: Some(nth) if Some(nth) == current => style.reverse().bold(),
 replace: Some(nth) if Some(nth) == current => style.reverse(),
 caught-by:
-    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+    cineris-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
 
 [break] the-panels-never-go-beside
 rule: On a window of 140 columns or more, the full screen's panels sit in a column beside the transcript.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_frame
 find: let mut bottom = self.bottom(now, full, &boxes, live_len, column);
 replace: let mut bottom = self.bottom(now, full, &boxes, live_len, None);
 caught-by:
-    cortex-tui app::tests::screen::panels_sit_beside_the_transcript_on_a_wide_window
+    cineris-tui app::tests::screen::panels_sit_beside_the_transcript_on_a_wide_window
 
 [break] the-side-column-starts-a-column-late
 rule: The panels go beside the transcript from 140 columns.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: side_column
 find: (cols >= SIDE_FROM)
 replace: (cols > SIDE_FROM)
 caught-by:
-    cortex-tui app::tests::screen::panels_sit_beside_the_transcript_on_a_wide_window
+    cineris-tui app::tests::screen::panels_sit_beside_the_transcript_on_a_wide_window
 
 [break] late-code-is-never-asked-again
 rule: A kept answer's code whose colours were late is handed to the highlighter again.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::prepare
 find: self.ask_colours(before);
 replace: let _ = before;
 caught-by:
-    cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
+    cineris-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
 
 [break] the-colours-that-come-are-dropped
 rule: The colours that come for late code are put into the kept answer.
-file: crates/cortex-tui/src/app/state/recolour.rs
+file: crates/cineris-tui/src/app/state/recolour.rs
 in: App::take_colours
 find: *line = Some(colours);
 replace: *line = Some(Vec::new());
 caught-by:
-    cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
+    cineris-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
 
 [break] the-full-screen-keeps-the-plain-rows
 rule: A kept block whose colours came is drawn again by the full screen, whose view is out while its frame is made.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_frame
 find: view.forget_block(block);
 replace: let _ = block;
 caught-by:
-    cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
+    cineris-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
 
 [break] a-match-under-the-more-below-row
 rule: A match revealed on the window's last row, which the row saying there is more below covers, goes up one so that it is shown.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::reveal_match
 find: if !window.at_end && window.places.last() == Some(&Place::Kept { block, row })
 replace: if false
 caught-by:
-    cortex-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
+    cineris-tui app::tests::screen::ctrl_f_searches_the_transcript_and_goes_between_matches
 
 [break] the-consoles-wheel-turned-the-wrong-way
 rule: A console's wheel record turned away from the person is the wheel up, as a terminal's report says it.
 os: windows
-file: crates/cortex-term/src/sys/windows.rs
+file: crates/cineris-term/src/sys/windows.rs
 in: push_mouse
 find: report(if turn > 0 { 64 } else { 65 }, false);
 replace: report(if turn > 0 { 65 } else { 64 }, false);
 caught-by:
-    cortex-term sys::windows::tests::mouse_records_become_the_reports_a_terminal_sends
+    cineris-term sys::windows::tests::mouse_records_become_the_reports_a_terminal_sends
 
 [break] a-consoles-release-is-a-press
 rule: A console's record with a button no longer held is that button's release.
 os: windows
-file: crates/cortex-term/src/sys/windows.rs
+file: crates/cineris-term/src/sys/windows.rs
 in: push_mouse
 find: (true, false) => report(code, true),
 replace: (true, false) => report(code, false),
 caught-by:
-    cortex-term sys::windows::tests::mouse_records_become_the_reports_a_terminal_sends
+    cineris-term sys::windows::tests::mouse_records_become_the_reports_a_terminal_sends
 
 # What the independent review of the first pull request found, each fix
 # broken on purpose.
 
 [break] an-idle-search-answer-is-not-drawn
 rule: The search worker's answer that comes while nothing else happens is a change the loop draws.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::drain
 find: if self.take_search_answer() {
 replace: if false && self.take_search_answer() {
 caught-by:
-    cortex-tui app::tests::screen::a_search_answer_that_comes_while_idle_schedules_a_frame
+    cineris-tui app::tests::screen::a_search_answer_that_comes_while_idle_schedules_a_frame
 
 [break] late-colours-are-not-drawn-while-idle
 rule: Colours for late code that come while nothing else happens are a change the loop draws.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::drain
 find: if self.take_colours() {
 replace: if false && self.take_colours() {
 caught-by:
-    cortex-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
+    cineris-tui app::tests::screen::code_committed_plain_is_coloured_once_its_colours_come
 
 [break] typing-into-the-search-is-not-typing
 rule: Keys the full screen's search takes are typing: a dialog that comes next waits for them to pause.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find: if searching {
 replace: if false {
 caught-by:
-    cortex-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
+    cineris-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
 
 [break] a-paste-into-the-search-is-not-typing
 rule: A paste the full screen's search takes is typing too.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find:
     TermEvent::Paste(text) if self.screen_paste(text) => {
@@ -414,103 +414,103 @@ replace:
     TermEvent::Paste(text) if self.screen_paste(text) => {
         let _ = at;
 caught-by:
-    cortex-tui app::tests::dialogs::a_paste_into_the_full_screen_search_holds_a_dialog_that_comes
+    cineris-tui app::tests::dialogs::a_paste_into_the_full_screen_search_holds_a_dialog_that_comes
 
 [break] the-mouse-is-typing
 rule: The mouse answers no dialog, so it is not typing: it never hides a dialog's answers.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find: TermEvent::Mouse(mouse) if self.screen.is_some() => self.screen_mouse(*mouse),
 replace: TermEvent::Mouse(mouse) if self.screen.is_some() => { self.not_taken(at); self.screen_mouse(*mouse) }
 caught-by:
-    cortex-tui app::tests::dialogs::the_wheel_does_not_hide_a_dialogs_answers
+    cineris-tui app::tests::dialogs::the_wheel_does_not_hide_a_dialogs_answers
 
 [break] the-search-row-over-a-dialog
 rule: The search's row is not drawn over a dialog's own last row.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_frame
 find: view.search.as_ref().filter(|_| self.dialogs.is_empty())
 replace: view.search.as_ref()
 caught-by:
-    cortex-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
+    cineris-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
 
 [break] a-dialog-that-fills-the-window-loses-its-keys
 rule: A dialog that fills the full screen leaves the transcript no row, and its keys' row is drawn.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_frame
 find: let mut window = if height == 0 {
 replace: let mut window = if false {
 caught-by:
-    cortex-tui app::tests::dialogs::a_dialog_that_fills_the_full_screen_keeps_its_keys_row
+    cineris-tui app::tests::dialogs::a_dialog_that_fills_the_full_screen_keeps_its_keys_row
 
 [break] the-viewer-misses-the-open-answers-rows
 rule: The viewer opened while an answer streams shows the rows that answer has committed.
-file: crates/cortex-tui/src/app/state/viewer.rs
+file: crates/cineris-tui/src/app/state/viewer.rs
 in: App::viewer_rest
 find: (self.kept.len(), self.screen_live(width))
 replace: (self.kept.len(), std::sync::Arc::new(self.transcript.live(width, &self.look, self.tick)))
 caught-by:
-    cortex-tui app::tests::screen::the_viewer_opened_mid_stream_shows_what_the_answer_committed
+    cineris-tui app::tests::screen::the_viewer_opened_mid_stream_shows_what_the_answer_committed
 
 [break] a-keys-table-is-dropped
 rule: Every table of [keys] is read into the key map, the full screen's and the viewer's included.
-file: crates/cortex-cli/src/interactive.rs
+file: crates/cineris-cli/src/interactive.rs
 in: key_tables
 find: ("screen", &keys.screen)
 replace: ("screen", &keys.global)
 caught-by:
-    cortex-cli::bin/cortex interactive::tests::every_table_of_keys_is_read
+    cineris-cli::bin/cineris interactive::tests::every_table_of_keys_is_read
 
 [break] a-wait-to-a-deadline-rounds-down
 rule: A wait to a deadline waits for what is left of it, rounded up: never a spin of waits of nothing.
-file: crates/cortex-term/src/sys/mod.rs
+file: crates/cineris-term/src/sys/mod.rs
 in: millis_left
 find: left.as_nanos().div_ceil(1_000_000)
 replace: left.as_nanos() / 1_000_000
 caught-by:
-    cortex-term sys::tests::a_wait_to_a_deadline_takes_what_is_left_of_it
+    cineris-term sys::tests::a_wait_to_a_deadline_takes_what_is_left_of_it
 
 [break] the-query-is-not-bounded
 rule: A search's query holds at most 256 characters, however much is pasted.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::screen_paste
 find: let room = QUERY_MOST.saturating_sub(search.query.chars().count());
 replace: let room = usize::MAX;
 caught-by:
-    cortex-tui app::tests::screen::the_query_is_bounded_and_the_more_below_row_follows_the_glyphs
+    cineris-tui app::tests::screen::the_query_is_bounded_and_the_more_below_row_follows_the_glyphs
 
 [break] the-more-below-row-ignores-the-glyphs
 rule: The row that says there is more below uses the glyph set's separator.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::more_below
 find: self.look.glyphs.separator
 replace: "·"
 caught-by:
-    cortex-tui app::tests::screen::the_query_is_bounded_and_the_more_below_row_follows_the_glyphs
+    cineris-tui app::tests::screen::the_query_is_bounded_and_the_more_below_row_follows_the_glyphs
 
 # What the second review of the first pull request's fixes found.
 
 [break] a-key-under-a-dialog-reaches-the-hidden-editor
 rule: A key a dialog passes while the full screen's search is open goes to the search, never the hidden editor, whose Enter would send.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find: Keyed::Pass if self.screen_searching() =>
 replace: Keyed::Pass if false =>
 caught-by:
-    cortex-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
+    cineris-tui app::tests::dialogs::typing_into_the_full_screen_search_does_not_answer_a_dialog
 
 [break] the-search-moves-the-window-under-a-dialog
 rule: Under a dialog the search's answer does not move the window off the end the request followed.
-file: crates/cortex-tui/src/app/state/screen.rs
+file: crates/cineris-tui/src/app/state/screen.rs
 in: App::reveal_match
 find: if !self.dialogs.is_empty() {
 replace: if false {
 caught-by:
-    cortex-tui app::tests::screen::the_search_does_not_move_the_window_under_a_dialog
+    cineris-tui app::tests::screen::the_search_does_not_move_the_window_under_a_dialog
 
 [break] a-gesture-that-closes-the-viewer-leaves-the-dialog-ready
 rule: A gesture that closes the viewer restarts a waiting dialog's grace, as its key does.
-file: crates/cortex-tui/src/app/state.rs
+file: crates/cineris-tui/src/app/state.rs
 in: App::terminal
 find:
     if self.viewer.is_none() {
@@ -524,11 +524,11 @@ replace:
         self.panels.restart();
     }
 caught-by:
-    cortex-tui app::tests::dialogs::a_gesture_that_closes_the_viewer_restarts_the_dialogs_grace
+    cineris-tui app::tests::dialogs::a_gesture_that_closes_the_viewer_restarts_the_dialogs_grace
 
 [break] the-suspension-leaves-the-alternate-screen-on
 rule: Suspended from the full screen, the program turns the mouse and the alternate screen off before it stops.
-file: crates/cortex-tui/src/app.rs
+file: crates/cineris-tui/src/app.rs
 in: take
 find:
     terminal.alternate(false)?;
@@ -536,63 +536,63 @@ find:
 replace:
     let caps = *terminal.caps();
 caught-by:
-    cortex-tui app::tests::screen::every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off
+    cineris-tui app::tests::screen::every_way_out_of_the_full_screen_leaves_the_mouse_and_the_alternate_screen_off
 
 [break] the-interface-ignores-terminal-mouse
-rule: The interface's settings take the mouse from [terminal], for the in-process interface and cortex attach alike.
-file: crates/cortex-cli/src/interactive.rs
+rule: The interface's settings take the mouse from [terminal], for the in-process interface and cineris attach alike.
+file: crates/cineris-cli/src/interactive.rs
 in: app_settings
 find: app.mouse = settings.terminal.mouse.unwrap_or(true);
 replace: app.mouse = true;
 caught-by:
-    cortex-cli::bin/cortex interactive::tests::the_interfaces_settings_take_the_mouse_and_the_presenter
+    cineris-cli::bin/cineris interactive::tests::the_interfaces_settings_take_the_mouse_and_the_presenter
 
 [break] windows-asks-the-terminal-for-the-mouse
 rule: On Windows the terminal is asked for no mouse report: a pseudo-console gives them to the program as typed keys.
-file: crates/cortex-term/src/caps.rs
+file: crates/cineris-term/src/caps.rs
 in: Capabilities::detect
 find: vt_mouse: platform == Platform::Unix
 replace: vt_mouse: true
 caught-by:
-    cortex-term terminal::tests::on_windows_the_terminal_is_asked_for_no_mouse_reports
+    cineris-term terminal::tests::on_windows_the_terminal_is_asked_for_no_mouse_reports
 
 # Step 25's follow-up on the mouse under a pseudo-console: no mode asked
 # while the win32 input mode is on, and a probe that reads every parameter.
 
 [break] the-win32-input-mode-keeps-the-vt-mouse
 rule: While the win32 input mode is on, the terminal is not asked for the mouse by its sequences, whatever the system.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: Terminal::asks_vt_mouse
 find: self.caps.vt_mouse && !self.win32
 replace: self.caps.vt_mouse
 caught-by:
-    cortex-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off
+    cineris-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off
 
 [break] the-win32-reply-leaves-the-mouse-on
 rule: When the win32 input mode is turned on with the mouse asked for, the mouse goes off first.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: Terminal::reply
 find: bytes.extend_from_slice(self.mouse_sequence(false));
 replace: bytes.extend_from_slice(b"");
 caught-by:
-    cortex-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off
-    cortex-term::it system::sys_a_terminal_in_the_win32_input_mode_is_not_left_asked_for_the_mouse
+    cineris-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off
+    cineris-term::it system::sys_a_terminal_in_the_win32_input_mode_is_not_left_asked_for_the_mouse
 
 [break] the-mouse-probe-reads-one-parameter
 rule: The mouse test reads every parameter of a mode set: a combined ESC [ ? 1003 ; 1006 h is a mouse request.
-file: crates/cortex-testkit/src/vterm.rs
+file: crates/cineris-testkit/src/vterm.rs
 in: modes_set
 find: .split(|b| *b == b';')
 replace: .split(|b| *b == b'\0')
-packages: cortex-term
+packages: cineris-term
 caught-by:
-    cortex-term::it system::every_parameter_of_a_mode_set_is_read
+    cineris-term::it system::every_parameter_of_a_mode_set_is_read
 
 [break] the-mouse-off-only-where-asked
 rule: The mouse's off sequence is written wherever the terminal might have been asked for the mouse, so that a failed write can never leave it on.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: Terminal::mouse_sequence
 find: false if self.caps.vt_mouse => MOUSE_OFF
 replace: false if self.asks_vt_mouse() => MOUSE_OFF
 caught-by:
-    cortex-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off
+    cineris-term terminal::tests::the_win32_input_mode_takes_the_mouse_off_and_keeps_it_off

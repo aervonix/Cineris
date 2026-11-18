@@ -1043,11 +1043,11 @@ mod tests {
     /// one slow unit test, one integration test and one system test.
     fn cases(unit: f64, integration: f64, system: f64) -> Vec<TestCase> {
         let mut cases: Vec<TestCase> = (0..100)
-            .map(|index| case("cortex-base", &format!("t::quick_{index}"), 0.004))
+            .map(|index| case("cineris-base", &format!("t::quick_{index}"), 0.004))
             .collect();
-        cases.push(case("cortex-base", "t::slow", unit));
-        cases.push(case("cortex-core::it", "a::b", integration));
-        cases.push(case("cortex-cli::system", "sys_c", system));
+        cases.push(case("cineris-base", "t::slow", unit));
+        cases.push(case("cineris-core::it", "a::b", integration));
+        cases.push(case("cineris-cli::system", "sys_c", system));
         cases
     }
 
@@ -1568,14 +1568,14 @@ mod tests {
             text.contains("What moved, the PR against main, each side's median of 3 runs:"),
             "{text}"
         );
-        // Unit: cortex-base's slow test moved 0.5 s; integration: 1 s faster.
+        // Unit: cineris-base's slow test moved 0.5 s; integration: 1 s faster.
         assert!(text.contains("tier 1, unit (time above start)"), "{text}");
         assert!(
-            text.contains("cortex-base  t::slow  (1.000 -> 1.500 s)"),
+            text.contains("cineris-base  t::slow  (1.000 -> 1.500 s)"),
             "{text}"
         );
         assert!(
-            text.contains("cortex-core::it  a::b  (2.000 -> 1.000 s)"),
+            text.contains("cineris-core::it  a::b  (2.000 -> 1.000 s)"),
             "{text}"
         );
         // System tests did not move: no tier 3 part.
@@ -1605,7 +1605,7 @@ mod tests {
             ""
         };
         format!(
-            "<testsuites><testsuite name=\"cortex-base\"><testcase name=\"t::a\" classname=\"cortex-base\" time=\"0.010\">{failed}</testcase></testsuite></testsuites>"
+            "<testsuites><testsuite name=\"cineris-base\"><testcase name=\"t::a\" classname=\"cineris-base\" time=\"0.010\">{failed}</testcase></testsuite></testsuites>"
         )
     }
 
@@ -1640,11 +1640,11 @@ mod tests {
         assert_eq!(sides.numbers, [1, 2, 3, 5]);
         assert_eq!((sides.base.len(), sides.head.len()), (4, 4));
         assert_eq!(sides.left_out, ["round 4: head kept no report"]);
-        assert_eq!(sides.one_sided, ["cortex-base t::a"]);
+        assert_eq!(sides.one_sided, ["cineris-base t::a"]);
         assert!(sides.skipped.is_empty(), "{:?}", sides.skipped);
         for cases in sides.base.iter().chain(&sides.head) {
             assert!(
-                !cases.iter().any(|case| case.id() == "cortex-base t::a"),
+                !cases.iter().any(|case| case.id() == "cineris-base t::a"),
                 "the failed test is out of every round"
             );
         }
@@ -1661,7 +1661,7 @@ mod tests {
             ""
         };
         format!(
-            "<testsuites><testsuite name=\"cortex-base\"><testcase name=\"t::a\" classname=\"cortex-base\" time=\"0.010\">{failed}</testcase><testcase name=\"t::b\" classname=\"cortex-base\" time=\"0.020\"/></testsuite></testsuites>"
+            "<testsuites><testsuite name=\"cineris-base\"><testcase name=\"t::a\" classname=\"cineris-base\" time=\"0.010\">{failed}</testcase><testcase name=\"t::b\" classname=\"cineris-base\" time=\"0.020\"/></testsuite></testsuites>"
         )
     }
 
@@ -1691,10 +1691,10 @@ mod tests {
         let sides = sides_of(7, "try-windows", &files).unwrap();
         assert_eq!(sides.numbers, [1, 2, 3], "every round is compared");
         assert_eq!(sides.left_out, Vec::<String>::new());
-        assert_eq!(sides.skipped, ["cortex-base t::a"]);
+        assert_eq!(sides.skipped, ["cineris-base t::a"]);
         for cases in sides.base.iter().chain(&sides.head) {
             let ids: Vec<String> = cases.iter().map(TestCase::id).collect();
-            assert_eq!(ids, ["cortex-base t::b"], "t::a is out of every round");
+            assert_eq!(ids, ["cineris-base t::b"], "t::a is out of every round");
         }
 
         assert!(sides.one_sided.is_empty());
@@ -1707,7 +1707,7 @@ mod tests {
         let sides = sides_of(7, "try-windows", &files).unwrap();
         assert_eq!(sides.numbers, [1, 2, 3, 4]);
         assert_eq!(sides.left_out, Vec::<String>::new());
-        assert_eq!(sides.one_sided, ["cortex-base t::a"]);
+        assert_eq!(sides.one_sided, ["cineris-base t::a"]);
         assert!(sides.skipped.is_empty());
         let _ = std::fs::remove_dir_all(dir);
     }

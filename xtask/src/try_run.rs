@@ -32,7 +32,7 @@ COMMAND is one of:
                                    them, with the tier report; with --count,
                                    `stress` with that many repeats
   stress -p CRATE... [ARGS]...     the tests many times over (--count repeats)
-  startup                          start-up of `cortex` built in the profile
+  startup                          start-up of `cineris` built in the profile
                                    (release or dist), --count runs
   perf [ARGS]...                   the performance budgets (step 20)
   perf -p CRATE... [NAME]...       the crates' ignored `perf_` tests, in a release
@@ -54,7 +54,7 @@ COMMAND is one of:
                                    --again, --no-compile-check and --file PATH
                                    pass; --count, --load, --cores, --filter
                                    and --against are refused with it
-  partial-landlock                 the nightly's job: cortex-sandbox's tests on
+  partial-landlock                 the nightly's job: cineris-sandbox's tests on
                                    a kernel with the partial Landlock (on
                                    os=linux-22.04, the one runner that has it)
   advisories                       the nightly's advisory check
@@ -66,7 +66,7 @@ The nightly's jobs take no words, no --filter, --count, --load, --cores or
 A word of `test` or `stress` that is not `-p CRATE` goes to nextest: a test's
 name, or an option such as `--run-ignored only`. --filter takes nextest filter
 expressions, separated by `;`, each passed as one `-E` argument, spaces and
-all: `test(/shell::/) & !test(=slow); package(cortex-agent)`. nextest runs a
+all: `test(/shell::/) & !test(=slow); package(cineris-agent)`. nextest runs a
 test that any of them matches.
 
 --against REF makes `test` an A/B run: the workflow checks REF out beside the
@@ -1512,7 +1512,7 @@ mod tests {
         };
         let inputs = parse(&[
             "--command",
-            "test -p cortex-core",
+            "test -p cineris-core",
             "--os",
             "windows",
             "--against",
@@ -1537,7 +1537,7 @@ mod tests {
                 "--ref",
                 "my-branch",
                 "-f",
-                "command=test -p cortex-core",
+                "command=test -p cineris-core",
                 "-f",
                 "os=windows",
                 "-f",
@@ -1779,20 +1779,20 @@ mod tests {
     #[test]
     fn capture_no_shows_a_passing_tests_output_and_goes_only_where_it_means_that() {
         assert_eq!(
-            try_command(&["--command", "test -p cortex-tui", "--capture", "no"]).unwrap(),
-            "ci --tiers --top 20 -p cortex-tui -- --no-capture"
+            try_command(&["--command", "test -p cineris-tui", "--capture", "no"]).unwrap(),
+            "ci --tiers --top 20 -p cineris-tui -- --no-capture"
         );
         assert_eq!(
             try_command(&[
                 "--command",
-                "test -p cortex-tui",
+                "test -p cineris-tui",
                 "--capture",
                 "no",
                 "--filter",
                 "test(/frame/)"
             ])
             .unwrap(),
-            "ci --tiers --top 20 -p cortex-tui -- -E test(/frame/) --no-capture"
+            "ci --tiers --top 20 -p cineris-tui -- -E test(/frame/) --no-capture"
         );
         assert!(
             try_command(&["--command", "stress -p x", "--capture", "no"])
@@ -1850,7 +1850,7 @@ mod tests {
             .unwrap()
         };
         for profile in ["ci", "release", "dist"] {
-            for fetches in ["perf -p cortex-index", "perf -p cortex-index warm"] {
+            for fetches in ["perf -p cineris-index", "perf -p cineris-index warm"] {
                 assert!(
                     super::reads_the_corpus(&command(fetches, profile)),
                     "{fetches} in {profile}"
@@ -1862,9 +1862,9 @@ mod tests {
         for (other, profile) in [
             ("test", "ci"),
             ("test", "release"),
-            ("test -p cortex-index", "release"),
-            ("test -p cortex-index", "ci"),
-            ("stress -p cortex-index", "ci"),
+            ("test -p cineris-index", "release"),
+            ("test -p cineris-index", "ci"),
+            ("stress -p cineris-index", "ci"),
             ("perf --only editor", "ci"),
             ("startup", "release"),
         ] {
@@ -1880,21 +1880,21 @@ mod tests {
         assert_eq!(
             try_command(&[
                 "--command",
-                "test -p cortex-tools shell::",
+                "test -p cineris-tools shell::",
                 "--profile",
                 "",
                 "--count",
                 ""
             ]),
-            Ok("ci --tiers --top 20 -p cortex-tools -- shell::".to_owned())
+            Ok("ci --tiers --top 20 -p cineris-tools -- shell::".to_owned())
         );
         assert_eq!(
             try_command(&["--command", "test"]),
             Ok("ci --tiers --top 20".to_owned())
         );
         assert_eq!(
-            try_command(&["--command", "test -p cortex-base", "--profile", "release"]),
-            Ok("test --cargo-profile release --profile ci -p cortex-base".to_owned())
+            try_command(&["--command", "test -p cineris-base", "--profile", "release"]),
+            Ok("test --cargo-profile release --profile ci -p cineris-base".to_owned())
         );
     }
 
@@ -1903,16 +1903,16 @@ mod tests {
         assert_eq!(
             try_command(&[
                 "--command",
-                "test -p cortex-tools shell::cmd",
+                "test -p cineris-tools shell::cmd",
                 "--count",
                 "100"
             ]),
-            Ok("stress --count 100 --cargo-profile ci -p cortex-tools shell::cmd".to_owned())
+            Ok("stress --count 100 --cargo-profile ci -p cineris-tools shell::cmd".to_owned())
         );
         assert_eq!(
             try_command(&[
                 "--command",
-                "stress -p cortex-testkit",
+                "stress -p cineris-testkit",
                 "--count",
                 "50",
                 "--load",
@@ -1921,7 +1921,7 @@ mod tests {
                 "2"
             ]),
             Ok(
-                "stress --count 50 --cargo-profile ci -p cortex-testkit --load 6 --cores 2"
+                "stress --count 50 --cargo-profile ci -p cineris-testkit --load 6 --cores 2"
                     .to_owned()
             )
         );
@@ -1929,11 +1929,11 @@ mod tests {
         assert_eq!(
             try_command(&[
                 "--command",
-                "stress -p cortex-agent --count 300",
+                "stress -p cineris-agent --count 300",
                 "--count",
                 "5"
             ]),
-            Ok("stress --cargo-profile ci -p cortex-agent --count 300".to_owned())
+            Ok("stress --cargo-profile ci -p cineris-agent --count 300".to_owned())
         );
     }
 
@@ -1942,9 +1942,9 @@ mod tests {
         // Several filter expressions, spaces and all, each one argument.
         let arguments: Vec<String> = [
             "--command",
-            "test --package=cortex-tools -pcortex-agent --run-ignored only shell::",
+            "test --package=cineris-tools -pcineris-agent --run-ignored only shell::",
             "--filter",
-            "test(/shell::/) & !test(=slow) ; package(cortex-agent) ;",
+            "test(/shell::/) & !test(=slow) ; package(cineris-agent) ;",
         ]
         .map(str::to_owned)
         .to_vec();
@@ -1957,9 +1957,9 @@ mod tests {
                 "--top",
                 "20",
                 "-p",
-                "cortex-tools",
+                "cineris-tools",
                 "-p",
-                "cortex-agent",
+                "cineris-agent",
                 "--",
                 "--run-ignored",
                 "only",
@@ -1967,19 +1967,19 @@ mod tests {
                 "-E",
                 "test(/shell::/) & !test(=slow)",
                 "-E",
-                "package(cortex-agent)"
+                "package(cineris-agent)"
             ]
         );
         assert_eq!(
             try_command(&[
                 "--command",
-                "test -p cortex-tools",
+                "test -p cineris-tools",
                 "--count",
                 "20",
                 "--filter",
                 "test(~shell)"
             ]),
-            Ok("stress --count 20 --cargo-profile ci -p cortex-tools -E test(~shell)".to_owned())
+            Ok("stress --count 20 --cargo-profile ci -p cineris-tools -E test(~shell)".to_owned())
         );
         assert_eq!(
             try_command(&[
@@ -2036,7 +2036,7 @@ mod tests {
         assert_eq!(
             try_command(&[
                 "--command",
-                "test -p cortex-core",
+                "test -p cineris-core",
                 "--against",
                 "main",
                 "--count",
@@ -2044,7 +2044,7 @@ mod tests {
                 "--filter",
                 "test(/slow/)"
             ]),
-            Ok("ab --base ../ab-base --label main --top 20 --keep-going --count 6 -p cortex-core -- -E test(/slow/)"
+            Ok("ab --base ../ab-base --label main --top 20 --keep-going --count 6 -p cineris-core -- -E test(/slow/)"
                 .to_owned())
         );
         assert_eq!(
@@ -2095,8 +2095,8 @@ mod tests {
             Ok("perf --runs 5".to_owned())
         );
         assert_eq!(
-            try_command(&["--command", "ci --tiers -p cortex-llm"]),
-            Ok("ci --tiers -p cortex-llm".to_owned())
+            try_command(&["--command", "ci --tiers -p cineris-llm"]),
+            Ok("ci --tiers -p cineris-llm".to_owned())
         );
     }
 
@@ -2104,35 +2104,35 @@ mod tests {
     fn perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else() {
         let tests = "--run-ignored only -E test(/(^|::)perf_/) --no-capture --test-threads 1";
         assert_eq!(
-            try_command(&["--command", "perf -p cortex-index"]),
+            try_command(&["--command", "perf -p cineris-index"]),
             Ok(format!(
-                "test --cargo-profile release --profile perf -p cortex-index {tests}"
+                "test --cargo-profile release --profile perf -p cineris-index {tests}"
             ))
         );
         // The workflow's own default profile is `ci`: still a release build.
         assert_eq!(
             try_command(&[
                 "--command",
-                "perf --package=cortex-index -pcortex-session",
+                "perf --package=cineris-index -pcineris-session",
                 "--profile",
                 "ci"
             ]),
             Ok(format!(
-                "test --cargo-profile release --profile perf -p cortex-index -p cortex-session {tests}"
+                "test --cargo-profile release --profile perf -p cineris-index -p cineris-session {tests}"
             ))
         );
         assert_eq!(
-            try_command(&["--command", "perf -p cortex-index", "--profile", "dist"]),
+            try_command(&["--command", "perf -p cineris-index", "--profile", "dist"]),
             Ok(format!(
-                "test --cargo-profile dist --profile perf -p cortex-index {tests}"
+                "test --cargo-profile dist --profile perf -p cineris-index {tests}"
             ))
         );
         // A name after the crate narrows the tests: nextest takes a test that
         // matches the name and the filter.
         assert_eq!(
-            try_command(&["--command", "perf -p cortex-index warm"]),
+            try_command(&["--command", "perf -p cineris-index warm"]),
             Ok(format!(
-                "test --cargo-profile release --profile perf -p cortex-index {tests} warm"
+                "test --cargo-profile release --profile perf -p cineris-index {tests} warm"
             ))
         );
         // Without a crate it is step 20's measurement, as it was.
@@ -2142,15 +2142,15 @@ mod tests {
         );
         for (arguments, expected) in [
             (
-                &["--command", "perf -p cortex-index", "--count", "3"][..],
+                &["--command", "perf -p cineris-index", "--count", "3"][..],
                 "runs each perf test once",
             ),
             (
-                &["--command", "perf -p cortex-index", "--filter", "test(x)"],
+                &["--command", "perf -p cineris-index", "--filter", "test(x)"],
                 "goes with `test` or `stress`",
             ),
             (
-                &["--command", "perf -p cortex-index", "--load", "2"],
+                &["--command", "perf -p cineris-index", "--load", "2"],
                 "go with a stress run",
             ),
             (
@@ -2769,9 +2769,9 @@ mod tests {
     #[test]
     fn against_makes_a_crates_perf_run_a_comparison_of_the_two_trees() {
         assert_eq!(
-            try_command(&["--command", "perf -p cortex-index", "--against", "main"]),
+            try_command(&["--command", "perf -p cineris-index", "--against", "main"]),
             Ok(
-                "perf-ab --base ../ab-base --label main --cargo-profile release -p cortex-index"
+                "perf-ab --base ../ab-base --label main --cargo-profile release -p cineris-index"
                     .to_owned()
             )
         );
@@ -2780,7 +2780,7 @@ mod tests {
         assert_eq!(
             try_command(&[
                 "--command",
-                "perf -p cortex-index -pcortex-tools warm",
+                "perf -p cineris-index -pcineris-tools warm",
                 "--against",
                 "origin/main",
                 "--profile",
@@ -2790,14 +2790,14 @@ mod tests {
             ]),
             Ok(
                 "perf-ab --base ../ab-base --label origin/main --cargo-profile dist --count 3 \
-                -p cortex-index -p cortex-tools warm"
+                -p cineris-index -p cineris-tools warm"
                     .to_owned()
             )
         );
         assert_eq!(
             try_command(&[
                 "--command",
-                "perf -p cortex-index",
+                "perf -p cineris-index",
                 "--against",
                 "main",
                 "--profile",
@@ -2807,7 +2807,7 @@ mod tests {
             ]),
             Ok(
                 "perf-ab --base ../ab-base --label main --cargo-profile release --count 5 \
-                -p cortex-index"
+                -p cineris-index"
                     .to_owned()
             )
         );
@@ -2855,13 +2855,13 @@ mod tests {
         };
         assert!(super::reads_the_corpus(&command(&[
             "--command",
-            "perf -p cortex-index",
+            "perf -p cineris-index",
             "--against",
             "main"
         ])));
         assert!(!super::reads_the_corpus(&command(&[
             "--command",
-            "test -p cortex-index",
+            "test -p cineris-index",
             "--against",
             "main"
         ])));
@@ -2975,13 +2975,13 @@ mod tests {
 
     #[test]
     fn a_commit_is_said_in_the_plan() {
-        let arguments: Vec<String> = ["--command", "test -p cortex-base", "--commit", HASH]
+        let arguments: Vec<String> = ["--command", "test -p cineris-base", "--commit", HASH]
             .map(str::to_owned)
             .to_vec();
         let planned = plan(&arguments, || Ok(Vec::new())).unwrap();
         assert_eq!(
             planned.command,
-            ["ci", "--tiers", "--top", "20", "-p", "cortex-base"]
+            ["ci", "--tiers", "--top", "20", "-p", "cineris-base"]
         );
         assert!(planned.notes[0].contains(HASH), "{:?}", planned.notes);
     }

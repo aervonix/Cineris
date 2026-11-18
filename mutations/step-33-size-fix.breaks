@@ -111,7 +111,7 @@ caught-by:
 
 [break] a-host-outside-ascii-is-not-found
 rule: A URL whose host has letters outside ASCII is found, whatever is around the host.
-file: crates/cortex-llm/src/http.rs
+file: crates/cineris-llm/src/http.rs
 in: host_outside_ascii
 find: (!host.is_ascii()).then_some(host)
 replace: (!authority.is_ascii()).then_some(host)
@@ -120,7 +120,7 @@ caught-by:
 
 [break] a-port-is-taken-for-the-host
 rule: The port is not part of the host.
-file: crates/cortex-llm/src/http.rs
+file: crates/cineris-llm/src/http.rs
 in: host_outside_ascii
 find: .filter(|(_, port)| port.bytes().all(|byte| byte.is_ascii_digit()))
 replace: .filter(|_| false)
@@ -129,19 +129,19 @@ caught-by:
 
 [break] the-transport-sends-a-host-outside-ascii-to-the-url-library
 rule: The transport refuses a host outside ASCII itself, naming the xn-- form, before any client is made.
-file: crates/cortex-llm/src/transport.rs
+file: crates/cineris-llm/src/transport.rs
 in: HttpTransport::send
 find: if let Some(host) = crate::http::host_outside_ascii(&request.url) {
 replace: if let Some(host) = crate::http::host_outside_ascii(&request.url[..0]) {
 caught-by:
-    cortex-llm::it transport::a_host_outside_ascii_is_refused_with_its_ascii_form_named
+    cineris-llm::it transport::a_host_outside_ascii_is_refused_with_its_ascii_form_named
 
 [break] a-providers-host-outside-ascii-is-taken
 rule: A provider whose base_url has a host outside ASCII is refused when the core reads it, naming the key and the xn-- form.
-file: crates/cortex-core/src/provider.rs
+file: crates/cineris-core/src/provider.rs
 in: provider_info
-find: if let Some(host) = cortex_llm::http::host_outside_ascii(&info.base_url) {
-replace: if let Some(host) = cortex_llm::http::host_outside_ascii(&info.base_url[..0]) {
+find: if let Some(host) = cineris_llm::http::host_outside_ascii(&info.base_url) {
+replace: if let Some(host) = cineris_llm::http::host_outside_ascii(&info.base_url[..0]) {
 caught-by:
     provider::tests::a_base_url_whose_host_is_outside_ascii_is_refused_with_its_xn_form_named
 

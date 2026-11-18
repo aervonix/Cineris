@@ -1,12 +1,12 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/cortex-harness-logo-dark-background.png">
-    <source media="(prefers-color-scheme: light)" srcset="assets/cortex-harness-logo-light-background.png">
-    <img src="assets/cortex-harness-logo-light-background.png" alt="The Cortex-Harness logo: a hexagonal C around a terminal prompt, with two purple sparkles" width="220">
+    <source media="(prefers-color-scheme: dark)" srcset="assets/cineris-logo-dark-background.png">
+    <source media="(prefers-color-scheme: light)" srcset="assets/cineris-logo-light-background.png">
+    <img src="assets/cineris-logo-light-background.png" alt="The Cineris logo: a hexagonal C around a terminal prompt, with two purple sparkles" width="220">
   </picture>
 </p>
 
-# Cortex-Harness
+# Cineris
 
 A terminal agent harness that learns your project, your models and your habits, and stays fast while it does. It is an LLM agent loop that reads and edits code, runs commands and talks to several model providers, written from scratch in Rust for Linux and Windows.
 
@@ -38,12 +38,12 @@ You need the Rust toolchain manager, [rustup](https://rustup.rs). The toolchain 
 
 ```sh
 cargo build                # the workspace
-cargo xtask alias          # build `cortex` and put its short alias `cx` beside it
-target/debug/cortex --version
-target/debug/cx --version
+cargo xtask alias          # build `cineris` and put its short alias `cin` beside it
+target/debug/cineris --version
+target/debug/cin --version
 ```
 
-The command is `cortex`. `cx` is the same executable under a second name.
+The command is `cineris`. `cin` is the same executable under a second name.
 
 Developer commands live in the `xtask` crate. `cargo xtask` lists them, and `./x` is a shorthand for it:
 

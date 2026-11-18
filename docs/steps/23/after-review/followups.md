@@ -4,11 +4,11 @@ Five open items, found by the review of step 23 and of step 17's third pull requ
 
 | Item | The owner's decision | What was built | Recorded in |
 |---|---|---|---|
-| `json-outputs-that-escape-what-json-does-not` | Print them through `cortex project list --json`'s function, and look for the same mechanism in every `--json` output | `cortex-cli`'s `json` module (`line`, `record`), moved out of `project_view`: `usage --json`, `stats show --json`, `sessions list --json` and `project list --json` print through it; so do headless mode's `--output json` and `jsonl`, the same mechanism's twin, which printed a bidirectional control or a C1 control as the character itself. `serve` speaks JSON-RPC to a client, not to a terminal, and is left as it is | This record |
-| `the-workspace-root-is-the-working-directory` | Walk up to the root, as 08 says; show the root in the header; the working directory is the commands' first `cd` | Every binary finds the root with `find_workspace_root` (`cortex-cli`'s `workspace::Here`) and says what it passed over. `session/new` takes `cwd` below the root, kept in the session log's header as `start`; the shell runs a command with no `cwd` there; the environment and the shell's description say so only for a start below the root (a root start's prompt is the same, to the byte); instruction files are read from the root down to it | [08-configuration.md](../../../architecture/08-configuration.md), "Layers"; [07-sessions-and-context.md](../../../architecture/07-sessions-and-context.md); [11-rpc-protocol.md](../../../architecture/11-rpc-protocol.md) |
+| `json-outputs-that-escape-what-json-does-not` | Print them through `cineris project list --json`'s function, and look for the same mechanism in every `--json` output | `cineris-cli`'s `json` module (`line`, `record`), moved out of `project_view`: `usage --json`, `stats show --json`, `sessions list --json` and `project list --json` print through it; so do headless mode's `--output json` and `jsonl`, the same mechanism's twin, which printed a bidirectional control or a C1 control as the character itself. `serve` speaks JSON-RPC to a client, not to a terminal, and is left as it is | This record |
+| `the-workspace-root-is-the-working-directory` | Walk up to the root, as 08 says; show the root in the header; the working directory is the commands' first `cd` | Every binary finds the root with `find_workspace_root` (`cineris-cli`'s `workspace::Here`) and says what it passed over. `session/new` takes `cwd` below the root, kept in the session log's header as `start`; the shell runs a command with no `cwd` there; the environment and the shell's description say so only for a start below the root (a root start's prompt is the same, to the byte); instruction files are read from the root down to it | [08-configuration.md](../../../architecture/08-configuration.md), "Layers"; [07-sessions-and-context.md](../../../architecture/07-sessions-and-context.md); [11-rpc-protocol.md](../../../architecture/11-rpc-protocol.md) |
 | `trust-question-corners` (1) | On a rules-changed question, "Keep trusting it, without the new rules" in place of "Never"; never stays on a project's first question; the dialog says what each answer does | `TrustRequest.trusted` and `TrustResponse.keep`; keep is stored (`declined_rules`, `git = "declined"`) and not asked again while what is new is what it is; a line under the answers says what each does; reference screen 2c drawn again, two rows taller | [06-permissions-and-sandbox.md](../../../architecture/06-permissions-and-sandbox.md), "Project trust"; [09-tui.md](../../../architecture/09-tui.md) |
 | `trust-question-corners` (2) | Pin whether git was shown; ask again when a trusted folder becomes a repository; a new store version, an old one read with git shown only where the folder was a repository when trusted (or say what was chosen) | `trust.toml` version 2 (`git`); a version 1 store is read with git never shown (the coordinator's answer C, below) | [06-permissions-and-sandbox.md](../../../architecture/06-permissions-and-sandbox.md); [../../../security.md](../../../security.md) |
-| `history-has-no-size-limit` | A large paste is stored as its chip, its text up to a cap; the file is compacted by bytes as well as lines | `cortex_tui::history::kept`; `HistoryStore` holds `Fragment`s; the file's bounds below | [09-tui.md](../../../architecture/09-tui.md), "History"; [build-plan.md](../../../build-plan.md), step 25 (this part of its item is done) |
+| `history-has-no-size-limit` | A large paste is stored as its chip, its text up to a cap; the file is compacted by bytes as well as lines | `cineris_tui::history::kept`; `HistoryStore` holds `Fragment`s; the file's bounds below | [09-tui.md](../../../architecture/09-tui.md), "History"; [build-plan.md](../../../build-plan.md), step 25 (this part of its item is done) |
 
 ## The trust store's format
 
@@ -22,88 +22,88 @@ Five open items, found by the review of step 23 and of step 17's third pull requ
 
 | Case | Before | After |
 |---|---|---|
-| Started in `repo/src` | `repo/src` is the workspace: `repo/.cortex/config.toml` not read, the root's `AGENTS.md` not read as the root's, trust said at `repo/` not applied, sessions, approvals, knowledge and history under `src`'s key | `repo/` is the workspace, every one of those is `repo/`'s; commands start in `src`, which the environment and the shell's description say; `repo/AGENTS.md` and `repo/src/AGENTS.md` are both read |
+| Started in `repo/src` | `repo/src` is the workspace: `repo/.cineris/config.toml` not read, the root's `AGENTS.md` not read as the root's, trust said at `repo/` not applied, sessions, approvals, knowledge and history under `src`'s key | `repo/` is the workspace, every one of those is `repo/`'s; commands start in `src`, which the environment and the shell's description say; `repo/AGENTS.md` and `repo/src/AGENTS.md` are both read |
 | Started at `repo/` | `repo/` | `repo/`, the system prompt the same to the byte |
 | A session stored under `src`'s key before | Listed and continued from `repo/src` | Not listed by `sessions list` or taken by `--continue` from `repo/src`; `--resume <id>` and `sessions list --all` find it, and it opens with the workspace it was made in |
-| Trust, a never or approvals given at `repo/src` before | In force from `repo/src` | Filed under `src`'s key and no longer consulted from below `repo/`; inert, not lost (`cortex permissions` lists the projects trusted, by root). A folder with nothing above it is its own root, as before |
+| Trust, a never or approvals given at `repo/src` before | In force from `repo/src` | Filed under `src`'s key and no longer consulted from below `repo/`; inert, not lost (`cineris permissions` lists the projects trusted, by root). A folder with nothing above it is its own root, as before |
 
 ## Signature changes
 
-`cargo xtask api-diff --against origin/main --features cortex-tui/test-kit` (`main` at `a2fb9d2`):
+`cargo xtask api-diff --against origin/main --features cineris-tui/test-kit` (`main` at `a2fb9d2`):
 
-**cortex-agent**: 1 added, 0 removed, 0 changed
-
-| | Item | Before | After |
-|---|---|---|---|
-| added | `cortex_agent::Environment::start` |  | `start: Option<String>` |
-
-
-**cortex-core**: 3 added, 0 removed, 0 changed
+**cineris-agent**: 1 added, 0 removed, 0 changed
 
 | | Item | Before | After |
 |---|---|---|---|
-| added | `cortex_core::TrustState::GitNotTrusted` |  | `GitNotTrusted` |
-| added | `cortex_core::TrustState::rules_trusted` |  | `fn rules_trusted(self) -> bool` |
-| added | `cortex_core::Trusted::git` |  | `git: bool` |
+| added | `cineris_agent::Environment::start` |  | `start: Option<String>` |
 
 
-**cortex-policy**: 6 added, 0 removed, 2 changed
+**cineris-core**: 3 added, 0 removed, 0 changed
 
 | | Item | Before | After |
 |---|---|---|---|
-| added | `cortex_policy::trust::ProjectTrust::from_older_store` |  | `fn from_older_store(&self) -> bool` |
-| added | `cortex_policy::trust::ProjectTrust::git_declined` |  | `fn git_declined(&self) -> bool` |
-| added | `cortex_policy::trust::ProjectTrust::git_trusted` |  | `fn git_trusted(&self) -> bool` |
-| added | `cortex_policy::trust::ProjectTrust::rules_declined` |  | `fn rules_declined(&self, rules: &ProjectRules) -> bool` |
-| changed | `cortex_policy::trust::TrustStore::approve` | `fn approve(&self, key: &ProjectKey, definitions: &[Definition]) -> Result<ProjectTrust, TrustError>` | `fn approve(&self, key: &ProjectKey, definitions: &[Definition], git_shown: bool) -> Result<ProjectTrust, TrustError>` |
-| added | `cortex_policy::trust::TrustStore::keep_without` |  | `fn keep_without(&self, key: &ProjectKey, rules: Option<&Definition>, git: bool) -> Result<ProjectTrust, TrustError>` |
-| changed | `cortex_policy::trust::TrustStore::trust` | `fn trust(&self, key: &ProjectKey, root: &str, definitions: &[Definition]) -> Result<ProjectTrust, TrustError>` | `fn trust(&self, key: &ProjectKey, root: &str, definitions: &[Definition], git_shown: bool) -> Result<ProjectTrust, TrustError>` |
-| added | `cortex_policy::trust::TrustStore::trust_unless_refused` |  | `fn trust_unless_refused(&self, key: &ProjectKey, root: &str, definitions: &[Definition], git_shown: bool) -> Result<ProjectTrust, TrustError>` |
+| added | `cineris_core::TrustState::GitNotTrusted` |  | `GitNotTrusted` |
+| added | `cineris_core::TrustState::rules_trusted` |  | `fn rules_trusted(self) -> bool` |
+| added | `cineris_core::Trusted::git` |  | `git: bool` |
 
 
-**cortex-protocol**: 3 added, 0 removed, 0 changed
+**cineris-policy**: 6 added, 0 removed, 2 changed
 
 | | Item | Before | After |
 |---|---|---|---|
-| added | `cortex_protocol::methods::SessionNewParams::cwd` |  | `cwd: Option<String>` |
-| added | `cortex_protocol::methods::TrustRequest::trusted` |  | `trusted: bool` |
-| added | `cortex_protocol::methods::TrustResponse::keep` |  | `keep: bool` |
+| added | `cineris_policy::trust::ProjectTrust::from_older_store` |  | `fn from_older_store(&self) -> bool` |
+| added | `cineris_policy::trust::ProjectTrust::git_declined` |  | `fn git_declined(&self) -> bool` |
+| added | `cineris_policy::trust::ProjectTrust::git_trusted` |  | `fn git_trusted(&self) -> bool` |
+| added | `cineris_policy::trust::ProjectTrust::rules_declined` |  | `fn rules_declined(&self, rules: &ProjectRules) -> bool` |
+| changed | `cineris_policy::trust::TrustStore::approve` | `fn approve(&self, key: &ProjectKey, definitions: &[Definition]) -> Result<ProjectTrust, TrustError>` | `fn approve(&self, key: &ProjectKey, definitions: &[Definition], git_shown: bool) -> Result<ProjectTrust, TrustError>` |
+| added | `cineris_policy::trust::TrustStore::keep_without` |  | `fn keep_without(&self, key: &ProjectKey, rules: Option<&Definition>, git: bool) -> Result<ProjectTrust, TrustError>` |
+| changed | `cineris_policy::trust::TrustStore::trust` | `fn trust(&self, key: &ProjectKey, root: &str, definitions: &[Definition]) -> Result<ProjectTrust, TrustError>` | `fn trust(&self, key: &ProjectKey, root: &str, definitions: &[Definition], git_shown: bool) -> Result<ProjectTrust, TrustError>` |
+| added | `cineris_policy::trust::TrustStore::trust_unless_refused` |  | `fn trust_unless_refused(&self, key: &ProjectKey, root: &str, definitions: &[Definition], git_shown: bool) -> Result<ProjectTrust, TrustError>` |
 
 
-**cortex-session**: 2 added, 0 removed, 0 changed
-
-| | Item | Before | After |
-|---|---|---|---|
-| added | `cortex_session::entry::Header::start` |  | `start: Option<String>` |
-| added | `cortex_session::session::Session::create_starting_in` |  | `fn create_starting_in(project: &ProjectSessions, id: SessionId, workspace: &AbsPath, start: Option<String>, options: SessionOptions) -> Result<Self>` |
-
-
-**cortex-tools**: 1 added, 0 removed, 0 changed
+**cineris-protocol**: 3 added, 0 removed, 0 changed
 
 | | Item | Before | After |
 |---|---|---|---|
-| added | `cortex_tools::shell::ShellConfig::start` |  | `start: Option<String>` |
+| added | `cineris_protocol::methods::SessionNewParams::cwd` |  | `cwd: Option<String>` |
+| added | `cineris_protocol::methods::TrustRequest::trusted` |  | `trusted: bool` |
+| added | `cineris_protocol::methods::TrustResponse::keep` |  | `keep: bool` |
 
 
-**cortex-tui**: 10 added, 0 removed, 3 changed
+**cineris-session**: 2 added, 0 removed, 0 changed
 
 | | Item | Before | After |
 |---|---|---|---|
-| added | `cortex_tui::app::Start::cwd` |  | `cwd: Option<String>` |
-| added | `cortex_tui::editor::Fragment::shown` |  | `fn shown(&self) -> String` |
-| added | `cortex_tui::editor::Fragment::with_chips` |  | `fn with_chips(text: impl Into<String>, chips: Vec<Chip>) -> Option<Self>` |
-| added | `cortex_tui::history::CHIP_KEEP` |  | `const CHIP_KEEP: usize` |
-| added | `cortex_tui::history::CHIP_TEXT_KEEP` |  | `const CHIP_TEXT_KEEP: usize` |
-| changed | `cortex_tui::history::HistoryStore::get` | `fn get(&self, index: usize) -> Option<&str>` | `fn get(&self, index: usize) -> Option<&Fragment>` |
-| changed | `cortex_tui::history::HistoryStore::push` | `fn push(&mut self, prompt: &str)` | `fn push(&mut self, prompt: &Fragment)` |
-| added | `cortex_tui::history::TEXT_KEEP` |  | `const TEXT_KEEP: usize` |
-| added | `cortex_tui::history::is_blank` |  | `fn is_blank(prompt: &crate::editor::Fragment) -> bool` |
-| added | `cortex_tui::history::kept` |  | `fn kept(prompt: &crate::editor::Fragment) -> crate::editor::Fragment` |
-| changed | `cortex_tui::input::Input::search_found` | `fn search_found(&self) -> Option<&str>` | `fn search_found(&self) -> Option<&Fragment>` |
-| added | `cortex_tui::view::dialog::TrustView::unsaid` |  | `unsaid: bool` |
-| added | `cortex_tui::view::dialog::third_trust_answer` |  | `fn third_trust_answer(request: &cortex_protocol::methods::TrustRequest) -> &'static str` |
+| added | `cineris_session::entry::Header::start` |  | `start: Option<String>` |
+| added | `cineris_session::session::Session::create_starting_in` |  | `fn create_starting_in(project: &ProjectSessions, id: SessionId, workspace: &AbsPath, start: Option<String>, options: SessionOptions) -> Result<Self>` |
 
-No public API changes: cortex-base, cortex-config, cortex-ext, cortex-index, cortex-knowledge, cortex-llm, cortex-mcp, cortex-rpc, cortex-sandbox, cortex-stats, cortex-term, cortex-testkit.
+
+**cineris-tools**: 1 added, 0 removed, 0 changed
+
+| | Item | Before | After |
+|---|---|---|---|
+| added | `cineris_tools::shell::ShellConfig::start` |  | `start: Option<String>` |
+
+
+**cineris-tui**: 10 added, 0 removed, 3 changed
+
+| | Item | Before | After |
+|---|---|---|---|
+| added | `cineris_tui::app::Start::cwd` |  | `cwd: Option<String>` |
+| added | `cineris_tui::editor::Fragment::shown` |  | `fn shown(&self) -> String` |
+| added | `cineris_tui::editor::Fragment::with_chips` |  | `fn with_chips(text: impl Into<String>, chips: Vec<Chip>) -> Option<Self>` |
+| added | `cineris_tui::history::CHIP_KEEP` |  | `const CHIP_KEEP: usize` |
+| added | `cineris_tui::history::CHIP_TEXT_KEEP` |  | `const CHIP_TEXT_KEEP: usize` |
+| changed | `cineris_tui::history::HistoryStore::get` | `fn get(&self, index: usize) -> Option<&str>` | `fn get(&self, index: usize) -> Option<&Fragment>` |
+| changed | `cineris_tui::history::HistoryStore::push` | `fn push(&mut self, prompt: &str)` | `fn push(&mut self, prompt: &Fragment)` |
+| added | `cineris_tui::history::TEXT_KEEP` |  | `const TEXT_KEEP: usize` |
+| added | `cineris_tui::history::is_blank` |  | `fn is_blank(prompt: &crate::editor::Fragment) -> bool` |
+| added | `cineris_tui::history::kept` |  | `fn kept(prompt: &crate::editor::Fragment) -> crate::editor::Fragment` |
+| changed | `cineris_tui::input::Input::search_found` | `fn search_found(&self) -> Option<&str>` | `fn search_found(&self) -> Option<&Fragment>` |
+| added | `cineris_tui::view::dialog::TrustView::unsaid` |  | `unsaid: bool` |
+| added | `cineris_tui::view::dialog::third_trust_answer` |  | `fn third_trust_answer(request: &cineris_protocol::methods::TrustRequest) -> &'static str` |
+
+No public API changes: cineris-base, cineris-config, cineris-ext, cineris-index, cineris-knowledge, cineris-llm, cineris-mcp, cineris-rpc, cineris-sandbox, cineris-stats, cineris-term, cineris-testkit.
 
 ## The history's bounds, and the measurement behind them
 
@@ -119,7 +119,7 @@ No public API changes: cortex-base, cortex-config, cortex-ext, cortex-index, cor
 
 A size in these bounds is the size of the line this build writes for what is kept: an older build's line of a pasted log counts as the chip or cut text it is kept as (since the full review, finding 1). The reader goes through the file newest first, parsing only the lines of its project and stopping at its bounds, and a compaction holds only what it keeps, so the reader's peak is the bytes read and at most 4 MiB beside them.
 
-**Measured** with `perf_history_read_at_its_caps` (`crates/cortex-cli/src/history.rs`, ignored, run by hand: `cargo test --release -p cortex-cli --bin cortex perf_history -- --ignored --nocapture`), on the desktop through `rx`, release build, 15 runs each, a file of twenty projects whose every eighth prompt carries a 64 KiB chip:
+**Measured** with `perf_history_read_at_its_caps` (`crates/cineris-cli/src/history.rs`, ignored, run by hand: `cargo test --release -p cineris-cli --bin cineris perf_history -- --ignored --nocapture`), on the desktop through `rx`, release build, 15 runs each, a file of twenty projects whose every eighth prompt carries a 64 KiB chip:
 
 | Case | Median | Slowest | What the project holds after | The file after |
 |---|---|---|---|---|
@@ -135,8 +135,8 @@ The read runs on the history's own thread, beside the start-up, and the interfac
 | Finding | Fix | Test |
 |---|---|---|
 | A yes the store could not write gave git to a session where git was declined or never shown | `git_after_an_unkept_yes`: git only when shown or trusted before; a reload keeps it (`ForTheRun { pin, git }`) | `assemble::trust_and_start_tests::an_unkept_yes_gives_git_only_what_was_shown_or_trusted_before` |
-| A yes to git alone cleared rules kept out before | `approve` clears `declined_rules` only when it approves rules | `cortex-policy`'s `trust::rules_kept_out_are_declined_while_they_are_those_rules` |
-| No test showed git kept out of a repository whose git was not shown | A system test of the four places git trust reaches | `cortex-core`'s `trust::sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git` |
+| A yes to git alone cleared rules kept out before | `approve` clears `declined_rules` only when it approves rules | `cineris-policy`'s `trust::rules_kept_out_are_declined_while_they_are_those_rules` |
+| No test showed git kept out of a repository whose git was not shown | A system test of the four places git trust reaches | `cineris-core`'s `trust::sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git` |
 | A never said by another client while a project's first question was open was lifted by a yes (it predates this change) | `TrustStore::trust_unless_refused`, under the store's lock | `trusting::a_first_yes_after_a_never_said_meanwhile_is_not_used` |
 | A trusted repository's notice said "became a repository" after an older store was written again | One sentence that names both causes | (text) |
 
@@ -180,14 +180,14 @@ Windows' tier 2 was 41.5 s, over its budget of 40 s (the warning; it fails at 60
 | 2, integration | 28.7 s (1,480 tests) | 29.7 s (1,469) | −0.9 s | 40 s |
 | 3, system | 64.1 s (186 tests) | 62.9 s (185) | +1.3 s | 90 s |
 
-What moved in tier 1 is `cortex-cli`'s new history tests (+0.92 s together: files of 8 to 16 MiB written and read); tier 3 gains the two system tests (`trust::sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git`, and a headless run from a folder in `commands`). The Windows `try` of the changed crates alone passed (43969451213).
+What moved in tier 1 is `cineris-cli`'s new history tests (+0.92 s together: files of 8 to 16 MiB written and read); tier 3 gains the two system tests (`trust::sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git`, and a headless run from a folder in `commands`). The Windows `try` of the changed crates alone passed (43969451213).
 
 ## Stress and breaks
 
 - **Breaks:** `cargo xtask mutate step-23-followups --jobs 2`: 43 breaks, every one caught by the tests its list names (one list corrected: `version-1-kept-on-write` named a test that starts from no file, where a version 1 store cannot show; the two that read one catch it). The sixteen breaks of steps 13a, 17, 23 and 24 that named code this change rewrote were moved to the code as it is (`mutate --check`: every break applies).
 
-- **Stress, plain:** `cargo xtask stress -p cortex-cli -p cortex-core -p cortex-config --count 50` (the side slot): 652 tests, 50 times each, seeds 0 to 49: every test passed every time.
-- **Stress, loaded** (`--cores 2 --load 6`): 49 of 50 rounds passed. Once, under seed 33, `cortex-config`'s `discovery::in_the_workspace_a_link_is_looked_at_before_it_is_followed_on_unix` was stopped at 43.9 s. It is in a crate this change does not touch, it runs in milliseconds, and it was stopped while the disk stalled (every task waited on I/O 90.9% of one 10 s window). Run again under seed 33 it passed, and 100 loaded rounds of `cortex-config`'s discovery tests (seeds 0 to 99) passed every time. It is not a listed flake, and it is taken for the machine.
+- **Stress, plain:** `cargo xtask stress -p cineris-cli -p cineris-core -p cineris-config --count 50` (the side slot): 652 tests, 50 times each, seeds 0 to 49: every test passed every time.
+- **Stress, loaded** (`--cores 2 --load 6`): 49 of 50 rounds passed. Once, under seed 33, `cineris-config`'s `discovery::in_the_workspace_a_link_is_looked_at_before_it_is_followed_on_unix` was stopped at 43.9 s. It is in a crate this change does not touch, it runs in milliseconds, and it was stopped while the disk stalled (every task waited on I/O 90.9% of one 10 s window). Run again under seed 33 it passed, and 100 loaded rounds of `cineris-config`'s discovery tests (seeds 0 to 99) passed every time. It is not a listed flake, and it is taken for the machine.
 
 ## Left open
 

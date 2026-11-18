@@ -1,6 +1,6 @@
 A signal sent to the program alone while the external editor runs leaves the editor running, and the watchdog ends the program without its graceful end, leaving the prompt's folder.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 32
 
 | Item | Who | When |

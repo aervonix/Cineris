@@ -1,6 +1,6 @@
 A client that is not a `user` is refused every tighten-only key in `session/new`'s overrides, a shorter value too; taking a lower one needs a comparison with a second load.
 
-- Area: cortex-core
+- Area: cineris-core
 - Owner: step 37
 
 | Item | Who | When |

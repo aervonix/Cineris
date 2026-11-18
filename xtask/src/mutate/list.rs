@@ -15,7 +15,7 @@
 //!
 //! [break] cancellation-not-seen-in-wake
 //! rule: Cancellation is an input: a wait is ended by the turn being cancelled.
-//! file: crates/cortex-agent/src/turn.rs
+//! file: crates/cineris-agent/src/turn.rs
 //! in: wake
 //! find: cancelled.as_mut().poll(context).is_ready()
 //! replace: cancelled.as_mut().poll(context).is_ready() && false
@@ -50,7 +50,7 @@
 //!   Optional: without it, the crate the file is in.
 //! - `caught-by`: tests that must fail, one a line: a test's name as nextest
 //!   prints it (`denials::a_refused_call_stops_the_turn`), or its binary and
-//!   its name (`cortex-agent::it denials::…`). A `*` at the end stands for
+//!   its name (`cineris-agent::it denials::…`). A `*` at the end stands for
 //!   any ending. Optional: without it any failing test catches the break.
 //! - `expect: survives` marks a break that no test can catch because it
 //!   changes nothing that can be seen, kept so that the next person does
@@ -804,7 +804,7 @@ mod tests {
 
 [break] cancel-wins
 rule: A cancelled turn is seen before a report that is also ready.
-file: crates/cortex-agent/src/turn.rs
+file: crates/cineris-agent/src/turn.rs
 in: wake
 find:
     if cancelled.as_mut().poll(context).is_ready() {
@@ -815,7 +815,7 @@ replace:
     let _ = &mut cancelled;
 caught-by:
     interrupt::a_cancelled_turn_starts_nothing
-    cortex-agent::it interrupt::sys_*
+    cineris-agent::it interrupt::sys_*
 
 # Nothing can see this one.
 [break] no-difference
@@ -824,7 +824,7 @@ file: xtask/src/steps.rs
 find: results.push((step.name, elapsed, outcome));
 replace:
 occurrence: 1
-packages: xtask, cortex-base
+packages: xtask, cineris-base
 expect: survives
 ";
 
@@ -840,7 +840,7 @@ expect: survives
                     list: "mutations/loop.breaks".to_owned(),
                     line: 3,
                     rule: "A cancelled turn is seen before a report that is also ready.".to_owned(),
-                    file: "crates/cortex-agent/src/turn.rs".to_owned(),
+                    file: "crates/cineris-agent/src/turn.rs".to_owned(),
                     anchor: Some("wake".to_owned()),
                     find: "if cancelled.as_mut().poll(context).is_ready() {\n\n    return \
                            Poll::Ready(Woke::Cancelled);\n}"
@@ -851,7 +851,7 @@ expect: survives
                     packages: vec![],
                     caught_by: vec![
                         "interrupt::a_cancelled_turn_starts_nothing".to_owned(),
-                        "cortex-agent::it interrupt::sys_*".to_owned(),
+                        "cineris-agent::it interrupt::sys_*".to_owned(),
                     ],
                     expect: Expect::Caught,
                     os: None,
@@ -867,7 +867,7 @@ expect: survives
                     in_string: false,
                     replace: String::new(),
                     occurrence: Some(1),
-                    packages: vec!["xtask".to_owned(), "cortex-base".to_owned()],
+                    packages: vec!["xtask".to_owned(), "cineris-base".to_owned()],
                     caught_by: vec![],
                     expect: Expect::Survives,
                     os: None,
@@ -1005,8 +1005,11 @@ expect: survives
     fn a_break_runs_the_tests_of_the_crate_its_file_is_in() {
         let breaks = parse("mutations/loop.breaks", LIST).unwrap();
 
-        assert_eq!(breaks[0].test_packages().unwrap(), ["cortex-agent"]);
-        assert_eq!(breaks[1].test_packages().unwrap(), ["xtask", "cortex-base"]);
+        assert_eq!(breaks[0].test_packages().unwrap(), ["cineris-agent"]);
+        assert_eq!(
+            breaks[1].test_packages().unwrap(),
+            ["xtask", "cineris-base"]
+        );
     }
 
     #[test]
@@ -1163,21 +1166,21 @@ expect: survives
 
     #[test]
     fn a_test_is_named_by_its_name_or_with_its_binary() {
-        let binary = "cortex-agent::it";
+        let binary = "cineris-agent::it";
         let name = "denials::a_refused_call_stops_the_turn";
 
         assert!(names_test(name, binary, name));
         assert!(names_test(&format!("{binary} {name}"), binary, name));
         assert!(names_test("denials::*", binary, name));
         assert!(names_test(
-            "cortex-agent::it denials::a_refused*",
+            "cineris-agent::it denials::a_refused*",
             binary,
             name
         ));
         // A name is the whole name.
         assert!(!names_test("denials::a_refused_call", binary, name));
         assert!(!names_test("a_refused_call_stops_the_turn", binary, name));
-        assert!(!names_test(&format!("cortex-agent {name}"), binary, name));
+        assert!(!names_test(&format!("cineris-agent {name}"), binary, name));
         assert!(!names_test("rounds::*", binary, name));
     }
 

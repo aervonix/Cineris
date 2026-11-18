@@ -7,7 +7,7 @@ version = "0.0.0"
 edition = "2024"
 license = "MIT"
 publish = false
-repository = "https://github.com/aervonix/Cortex-Harness"
+repository = "https://github.com/aervonix/Cineris"
 
 # One table, so each crate has one version and one feature set.
 # Every third-party entry also needs a row in docs/dependencies.md
@@ -15,26 +15,26 @@ repository = "https://github.com/aervonix/Cortex-Harness"
 [workspace.dependencies]
 # Workspace crates. Which crate may depend on which is fixed by
 # docs/architecture/01-workspace.md and checked by `cargo xtask rules`.
-cortex-agent = { path = "crates/cortex-agent" }
-cortex-base = { path = "crates/cortex-base" }
-cortex-config = { path = "crates/cortex-config" }
-cortex-core = { path = "crates/cortex-core" }
-cortex-ext = { path = "crates/cortex-ext" }
-cortex-index = { path = "crates/cortex-index" }
-cortex-knowledge = { path = "crates/cortex-knowledge" }
+cineris-agent = { path = "crates/cineris-agent" }
+cineris-base = { path = "crates/cineris-base" }
+cineris-config = { path = "crates/cineris-config" }
+cineris-core = { path = "crates/cineris-core" }
+cineris-ext = { path = "crates/cineris-ext" }
+cineris-index = { path = "crates/cineris-index" }
+cineris-knowledge = { path = "crates/cineris-knowledge" }
 # Default features are off here so that a crate has to ask for the HTTP stack.
-cortex-llm = { path = "crates/cortex-llm", default-features = false }
-cortex-mcp = { path = "crates/cortex-mcp" }
-cortex-policy = { path = "crates/cortex-policy" }
-cortex-protocol = { path = "crates/cortex-protocol" }
-cortex-rpc = { path = "crates/cortex-rpc" }
-cortex-sandbox = { path = "crates/cortex-sandbox" }
-cortex-session = { path = "crates/cortex-session" }
-cortex-stats = { path = "crates/cortex-stats" }
-cortex-term = { path = "crates/cortex-term" }
-cortex-testkit = { path = "crates/cortex-testkit" }
-cortex-tools = { path = "crates/cortex-tools" }
-cortex-tui = { path = "crates/cortex-tui" }
+cineris-llm = { path = "crates/cineris-llm", default-features = false }
+cineris-mcp = { path = "crates/cineris-mcp" }
+cineris-policy = { path = "crates/cineris-policy" }
+cineris-protocol = { path = "crates/cineris-protocol" }
+cineris-rpc = { path = "crates/cineris-rpc" }
+cineris-sandbox = { path = "crates/cineris-sandbox" }
+cineris-session = { path = "crates/cineris-session" }
+cineris-stats = { path = "crates/cineris-stats" }
+cineris-term = { path = "crates/cineris-term" }
+cineris-testkit = { path = "crates/cineris-testkit" }
+cineris-tools = { path = "crates/cineris-tools" }
+cineris-tui = { path = "crates/cineris-tui" }
 
 # Third-party crates. Default features off; opt in to what is used.
 futures-core = { version = "0.3.34", default-features = false, features = ["std"] }
@@ -47,7 +47,7 @@ ignore = { version = "0.4.34", default-features = false }
 # ASCII instead of mapping it through ICU's tables (decision 0036): about
 # 135 KB less binary and 21 fewer crates. `url` asks for `idna_adapter =
 # "1"`, so without this requirement `cargo update` would move it to the
-# newest 1.x and bring ICU back. `cortex-llm` names it for this alone, and
+# newest 1.x and bring ICU back. `cineris-llm` names it for this alone, and
 # a test of its transport fails if it moves.
 idna_adapter = { version = "~1.0.0", default-features = false }
 keyring-core = { version = "1.0.1", default-features = false }
@@ -64,7 +64,7 @@ serde_json = { version = "1.0.145", default-features = false, features = ["std"]
 sha2 = { version = "0.11.1", default-features = false }
 similar = { version = "3.2.1", default-features = false, features = ["std"] }
 thiserror = { version = "2.0.21", default-features = false, features = ["std"] }
-# Syntax highlighting, behind `cortex-tui`'s `highlight` feature (decision
+# Syntax highlighting, behind `cineris-tui`'s `highlight` feature (decision
 # 0015): the packed default grammars and the pure-Rust regex engine. No
 # themes, no loading of grammar files, no HTML.
 syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "regex-fancy"] }
@@ -99,32 +99,32 @@ windows-sys = { version = "0.61.2", default-features = false }
 # and the whole table once the first release's crates are built.
 [workspace.metadata.cargo-machete]
 ignored = [
-    "cortex-agent",
-    "cortex-base",
-    "cortex-config",
-    "cortex-core",
-    "cortex-ext",
-    "cortex-index",
-    "cortex-knowledge",
-    "cortex-llm",
-    "cortex-mcp",
-    "cortex-policy",
-    "cortex-protocol",
-    "cortex-rpc",
-    "cortex-sandbox",
-    "cortex-session",
-    "cortex-stats",
-    "cortex-term",
-    "cortex-testkit",
-    "cortex-tools",
-    "cortex-tui",
+    "cineris-agent",
+    "cineris-base",
+    "cineris-config",
+    "cineris-core",
+    "cineris-ext",
+    "cineris-index",
+    "cineris-knowledge",
+    "cineris-llm",
+    "cineris-mcp",
+    "cineris-policy",
+    "cineris-protocol",
+    "cineris-rpc",
+    "cineris-sandbox",
+    "cineris-session",
+    "cineris-stats",
+    "cineris-term",
+    "cineris-testkit",
+    "cineris-tools",
+    "cineris-tui",
 ]
 
 [workspace.lints.rust]
-# Allowed per module in cortex-sandbox and cortex-term, where the OS
-# interfaces need it, in one Windows-only module of cortex-base
+# Allowed per module in cineris-sandbox and cineris-term, where the OS
+# interfaces need it, in one Windows-only module of cineris-base
 # (`private::windows`, which sets access lists; decision 0029), and in one of
-# cortex-rpc (`socket::windows`, the named pipe; decision 0037). Nowhere else.
+# cineris-rpc (`socket::windows`, the named pipe; decision 0037). Nowhere else.
 # Every block has a safety comment.
 unsafe_code = "deny"
 # Public items are documented: part of "done" for every step.
@@ -145,7 +145,7 @@ disallowed_types = "warn"
 unwrap_used = "warn"
 expect_used = "warn"
 # Nothing writes to standard output or standard error by accident.
-# cortex-cli and xtask are the two crates that allow these.
+# cineris-cli and xtask are the two crates that allow these.
 print_stdout = "warn"
 print_stderr = "warn"
 # Every unsafe block says why it is sound.

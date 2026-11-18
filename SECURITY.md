@@ -1,6 +1,6 @@
 # Security policy
 
-Cortex-Harness runs model-chosen commands and edits files on your machine, so security reports are taken seriously. The threats the design considers, and how each is handled, are in [docs/security.md](docs/security.md).
+Cineris runs model-chosen commands and edits files on your machine, so security reports are taken seriously. The threats the design considers, and how each is handled, are in [docs/security.md](docs/security.md).
 
 ## Reporting a vulnerability
 

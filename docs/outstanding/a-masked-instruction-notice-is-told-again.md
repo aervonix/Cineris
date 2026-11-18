@@ -1,6 +1,6 @@
 A masked instruction-file notice hashes differently on reload, so the file is announced as changed after every resume.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: a later step on instruction files, or step 32
 
 | Item | Who | When |

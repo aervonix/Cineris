@@ -1,6 +1,6 @@
 A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree.
 
-- Area: cortex-core
+- Area: cineris-core
 - Owner: a later index step, or step 33
 
 | Item | Who | When |

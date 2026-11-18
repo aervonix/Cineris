@@ -1,6 +1,6 @@
 A bracketed paste with no end marker for 2 seconds is split, and the remainder arrives as keys.
 
-- Area: cortex-term
+- Area: cineris-term
 - Owner: step 25
 
 | Item | Who | When |

@@ -2,21 +2,21 @@
 //! of `docs/measurements/tui-language-spike.md`.
 //!
 //! It builds the demo with optimisation (the example `demo` of
-//! `cortex-term`), then runs the ignored measurement test of `cortex-term`'s
+//! `cineris-term`), then runs the ignored measurement test of `cineris-term`'s
 //! integration binary, also optimised, which starts the demo in a
 //! pseudo-terminal (ConPTY on Windows) and prints a table: start to first
 //! frame, key to frame when idle and while streaming (and the demo's own
 //! share of it), frame cost, frame intervals and bytes per frame. What is
 //! measured, and how, is that test's documentation
-//! (`crates/cortex-term/tests/it/perf.rs`).
+//! (`crates/cineris-term/tests/it/perf.rs`).
 //!
 //! Then it does the same for the editor demo (the example `editor-demo` of
-//! `cortex-tui`, since step 21): key to frame when idle, while streaming,
+//! `cineris-tui`, since step 21): key to frame when idle, while streaming,
 //! and in an `@` menu over 100,000 paths, each with the harness's own share
-//! (`crates/cortex-tui/tests/it/perf.rs`). Then the views' own share, since
+//! (`crates/cineris-tui/tests/it/perf.rs`). Then the views' own share, since
 //! step 22: real views building and drawing a 30-row live region frame after
 //! frame, and the highlighter's first use
-//! (`crates/cortex-tui/tests/it/frames.rs`). `--only term`, `--only editor`
+//! (`crates/cineris-tui/tests/it/frames.rs`). `--only term`, `--only editor`
 //! or `--only views` runs one of the three. With `--json PATH`, the editor's
 //! table goes to `PATH.editor`.
 //!
@@ -98,7 +98,7 @@ fn demo_binary(name: &str) -> PathBuf {
 
 /// A glyph set a demo is run in, and how it is chosen: on Unix the
 /// terminal layer takes Unicode from a locale that names UTF-8
-/// (`cortex_term::Capabilities::detect`), so each demo runs under one and
+/// (`cineris_term::Capabilities::detect`), so each demo runs under one and
 /// under the plain `C` locale. On Windows the console decides, and ConPTY
 /// gets the ASCII set: there is one run, in what the console gives.
 struct GlyphSet {
@@ -162,7 +162,7 @@ fn terminal_demo(request: &Request, glyphs: &GlyphSet) -> Result<()> {
         "--locked",
         "--release",
         "-p",
-        "cortex-term",
+        "cineris-term",
         "--example",
         "demo",
         "--features",
@@ -178,21 +178,21 @@ fn terminal_demo(request: &Request, glyphs: &GlyphSet) -> Result<()> {
         .json
         .as_ref()
         .map(|json| format!("{json}{}", glyphs.suffix));
-    let mut variables = vec![("CORTEX_PERF_DEMO", demo)];
+    let mut variables = vec![("CINERIS_PERF_DEMO", demo)];
     if let Some(locale) = glyphs.locale {
         variables.push(("LC_ALL", locale));
     }
     if let Some(runs) = &runs {
-        variables.push(("CORTEX_PERF_RUNS", runs));
+        variables.push(("CINERIS_PERF_RUNS", runs));
     }
     if let Some(seconds) = &seconds {
-        variables.push(("CORTEX_PERF_SECONDS", seconds));
+        variables.push(("CINERIS_PERF_SECONDS", seconds));
     }
     if let Some(json) = &json {
-        variables.push(("CORTEX_PERF_JSON", json));
+        variables.push(("CINERIS_PERF_JSON", json));
     }
     outside::run_ignored(
-        &["--release", "--package", "cortex-term", "--test", "it"],
+        &["--release", "--package", "cineris-term", "--test", "it"],
         "perf::perf_the_demo_against_the_budgets",
         &variables,
     )
@@ -202,7 +202,7 @@ fn terminal_demo(request: &Request, glyphs: &GlyphSet) -> Result<()> {
 /// the highlighter's first use.
 fn views() -> Result<()> {
     outside::run_ignored(
-        &["--release", "--package", "cortex-tui", "--test", "it"],
+        &["--release", "--package", "cineris-tui", "--test", "it"],
         "frames::perf_frames_of_the_views_with_a_30_row_live_region",
         &[],
     )
@@ -215,7 +215,7 @@ fn editor_demo(request: &Request, glyphs: &GlyphSet) -> Result<()> {
         "--locked",
         "--release",
         "-p",
-        "cortex-tui",
+        "cineris-tui",
         "--example",
         "editor-demo",
         "--features",
@@ -230,18 +230,18 @@ fn editor_demo(request: &Request, glyphs: &GlyphSet) -> Result<()> {
         .json
         .as_ref()
         .map(|json| format!("{json}.editor{}", glyphs.suffix));
-    let mut variables = vec![("CORTEX_PERF_EDITOR_DEMO", demo)];
+    let mut variables = vec![("CINERIS_PERF_EDITOR_DEMO", demo)];
     if let Some(locale) = glyphs.locale {
         variables.push(("LC_ALL", locale));
     }
     if let Some(seconds) = &seconds {
-        variables.push(("CORTEX_PERF_SECONDS", seconds));
+        variables.push(("CINERIS_PERF_SECONDS", seconds));
     }
     if let Some(json) = &json {
-        variables.push(("CORTEX_PERF_JSON", json));
+        variables.push(("CINERIS_PERF_JSON", json));
     }
     outside::run_ignored(
-        &["--release", "--package", "cortex-tui", "--test", "it"],
+        &["--release", "--package", "cineris-tui", "--test", "it"],
         "perf::perf_the_editor_against_the_key_budgets",
         &variables,
     )

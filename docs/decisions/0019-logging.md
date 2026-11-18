@@ -29,7 +29,7 @@ Desktop pinned to 4 cores ([measurements/dependency-costs.md](../measurements/de
 ## Decision
 
 - `tracing` as the facade in every crate.
-- A small subscriber of our own in `cortex-base`: a level filter with target-prefix overrides, JSON lines to a rotated file through the log-writer thread, a human-readable stderr sink for headless and RPC modes, and span enter and exit times kept for the performance probes.
+- A small subscriber of our own in `cineris-base`: a level filter with target-prefix overrides, JSON lines to a rotated file through the log-writer thread, a human-readable stderr sink for headless and RPC modes, and span enter and exit times kept for the performance probes.
 - `trace` level compiled out of release builds.
 - Messages from dependencies that use the `log` crate are bridged at `warn` and above.
 
@@ -37,7 +37,7 @@ Specified in [architecture/02-runtime.md](../architecture/02-runtime.md).
 
 ## As built in step 13a
 
-The subscriber is `cortex_base::log`: about 500 lines with its filter and its file writer, and their tests. It implements `tracing`'s `Subscriber` directly, so `tracing` (and `tracing-core`, for one type `tracing` does not re-export) are the only dependencies, and both were in every build already through the HTTP stack.
+The subscriber is `cineris_base::log`: about 500 lines with its filter and its file writer, and their tests. It implements `tracing`'s `Subscriber` directly, so `tracing` (and `tracing-core`, for one type `tracing` does not re-export) are the only dependencies, and both were in every build already through the HTTP stack.
 
 - Built: the level filter with target-prefix overrides, replaceable while the process runs; JSON lines to a file rotated at 5 MB, five kept, owner-only, through a writer thread and a bounded queue that drops and counts when full; the stderr sink, off until given a level; open, close and busy times for every span, the last 1,024 kept; the secret filter on every message and field.
 - `trace` is compiled out of release builds by `tracing`'s own feature.

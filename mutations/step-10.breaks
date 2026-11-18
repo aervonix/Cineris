@@ -1,10 +1,10 @@
-# Step 10 (pull request 23): the editing tools and the plan, in cortex-tools.
+# Step 10 (pull request 23): the editing tools and the plan, in cineris-tools.
 # Reconstructed from the pull request description, the code's own
 # documentation and the tests, not recorded when the step was built.
 
 [break] stale-file-overwritten
 rule: A file that changed on disk since the session read it is not written or edited.
-file: crates/cortex-tools/src/change.rs
+file: crates/cineris-tools/src/change.rs
 in: Target::guard
 find: env.files.staleness(self.path.abs(), &existing.hash)
 replace:
@@ -17,7 +17,7 @@ caught-by:
 
 [break] unread-file-overwritten
 rule: A file that exists and was never read in the session is not written or edited.
-file: crates/cortex-tools/src/change.rs
+file: crates/cineris-tools/src/change.rs
 in: Target::guard
 find: env.files.staleness(self.path.abs(), &existing.hash)
 replace:
@@ -30,7 +30,7 @@ caught-by:
 
 [break] file-changed-during-call-replaced
 rule: A file that was replaced by another between the read and the write is not written over.
-file: crates/cortex-tools/src/change.rs
+file: crates/cineris-tools/src/change.rs
 in: Target::still_as_found
 find: Stamp::of(&now) == existing.stamp
 replace: true
@@ -39,7 +39,7 @@ caught-by:
 
 [break] cancelled-call-still-writes
 rule: A call cancelled before its write changes nothing and says so.
-file: crates/cortex-tools/src/change.rs
+file: crates/cineris-tools/src/change.rs
 in: Target::commit
 find: env.cancel.is_cancelled()
 replace: false
@@ -48,7 +48,7 @@ caught-by:
 
 [break] checkpoint-given-no-bytes
 rule: The checkpoint is handed the bytes the tool read, so that the change can be undone.
-file: crates/cortex-tools/src/change.rs
+file: crates/cineris-tools/src/change.rs
 in: Target::commit
 find: Found::File(existing) => Some(existing.bytes.as_slice())
 replace: Found::File(_) => None
@@ -57,7 +57,7 @@ caught-by:
 
 [break] size-limit-is-exclusive
 rule: A file of exactly the limit (16 MiB in the product) is changed; only a larger one is refused.
-file: crates/cortex-tools/src/change.rs
+file: crates/cineris-tools/src/change.rs
 in: Target::find_within
 find: metadata.len() > limit
 replace: metadata.len() >= limit
@@ -66,7 +66,7 @@ caught-by:
 
 [break] mark-dropped-by-edit
 rule: An edit keeps the file's byte-order mark byte for byte.
-file: crates/cortex-tools/src/edit.rs
+file: crates/cineris-tools/src/edit.rs
 in: edit_file
 find: if marked { new.push_str(BOM); }
 replace: if marked && false { new.push_str(BOM); }
@@ -75,7 +75,7 @@ caught-by:
 
 [break] tolerant-tier-not-reported
 rule: When the tolerant tier made the match, the result says so and shows the text it replaced.
-file: crates/cortex-tools/src/edit.rs
+file: crates/cineris-tools/src/edit.rs
 in: edit_file
 find: report_tolerant(&mut message, call.edits.len(), &places)
 replace: report_tolerant(&mut String::new(), call.edits.len(), &places)
@@ -84,7 +84,7 @@ caught-by:
 
 [break] other-count-accepted
 rule: An old that occurs a number of times other than count is refused, not edited.
-file: crates/cortex-tools/src/matching.rs
+file: crates/cineris-tools/src/matching.rs
 in: locate_one
 find: ranges.len() != edit.count
 replace: ranges.len() < edit.count
@@ -93,7 +93,7 @@ caught-by:
 
 [break] tolerant-tier-tried-after-wrong-count
 rule: The tolerant tier is tried only when the exact tier finds nothing, not when it finds the wrong number.
-file: crates/cortex-tools/src/matching.rs
+file: crates/cineris-tools/src/matching.rs
 in: locate_one
 find: !starts.is_empty()
 replace: starts.len() == edit.count
@@ -102,7 +102,7 @@ caught-by:
 
 [break] overlapping-edits-allowed
 rule: Two edits that would replace the same text are refused.
-file: crates/cortex-tools/src/matching.rs
+file: crates/cineris-tools/src/matching.rs
 in: locate
 find: second.range.start < first.range.end
 replace: second.range.start < first.range.start
@@ -111,7 +111,7 @@ caught-by:
 
 [break] partial-edits-returned
 rule: Either every edit has its place or none is applied: a call with a failed edit applies nothing.
-file: crates/cortex-tools/src/matching.rs
+file: crates/cineris-tools/src/matching.rs
 in: locate
 find: failures.is_empty()
 replace: failures.is_empty() || !found.is_empty()
@@ -121,7 +121,7 @@ caught-by:
 
 [break] write-forgets-line-endings
 rule: New content written over a file takes that file's line endings.
-file: crates/cortex-tools/src/matching.rs
+file: crates/cineris-tools/src/matching.rs
 in: rewrite
 find: vec![old.dominant; new_lines.len()]
 replace: vec![crate::textfile::Ending::Lf; new_lines.len()]
@@ -131,7 +131,7 @@ caught-by:
 
 [break] plan-call-crossing-an-edit-replaces
 rule: A user's edit to the plan wins: a plan call written without it replaces nothing and returns the current plan.
-file: crates/cortex-tools/src/plan.rs
+file: crates/cineris-tools/src/plan.rs
 in: PlanBoard::replace
 find: !unseen.is_empty()
 replace: false
@@ -140,7 +140,7 @@ caught-by:
 
 [break] plan-same-round-counts-as-shown
 rule: An edit a call was told of counts as shown only to a call of a later round, not to one written beside it in the same response.
-file: crates/cortex-tools/src/plan.rs
+file: crates/cineris-tools/src/plan.rs
 in: PlanBoard::replace
 find: told >= round
 replace: told > round
@@ -149,7 +149,7 @@ caught-by:
 
 [break] plan-delivered-clears-later-edits
 rule: A notice reaching the model clears only the edits up to its revision; later edits stay news.
-file: crates/cortex-tools/src/plan.rs
+file: crates/cineris-tools/src/plan.rs
 in: PlanBoard::delivered
 find: unseen.revision > revision
 replace: false
@@ -158,7 +158,7 @@ caught-by:
 
 [break] plan-call-not-marked-session-change
 rule: A plan call says that it changes the session, so the loop never starts it before the response has ended.
-file: crates/cortex-tools/src/plan.rs
+file: crates/cineris-tools/src/plan.rs
 find: Plan::new(summary, items).with_session_change()
 replace: Plan::new(summary, items)
 caught-by:
@@ -166,7 +166,7 @@ caught-by:
 
 [break] remember-stores-duplicates
 rule: A proposal for an entry that is already known is not stored again.
-file: crates/cortex-tools/src/remember.rs
+file: crates/cineris-tools/src/remember.rs
 find: known.kind == proposal.kind && known.text == proposal.text
 replace: false
 caught-by:

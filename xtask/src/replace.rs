@@ -262,7 +262,7 @@ usage: cargo xtask replace --script FILE [--dry-run]
 
 Makes every edit of FILE, in order, or none of them. An edit is:
 
-    @@ file: crates/cortex-tui/src/theme.rs
+    @@ file: crates/cineris-tui/src/theme.rs
     @@ in: Theme::light          (optional, Rust only)
     @@ occurrence: 2             (optional, Rust only)
     @@ text                      (optional: exact text in a .rs file too)
@@ -1009,7 +1009,7 @@ _ => 61.0
     #[test]
     fn a_file_named_two_ways_is_one_file_and_keeps_its_permissions() {
         let dir =
-            std::env::temp_dir().join(format!("cortex-xtask-replace-two-{}", std::process::id()));
+            std::env::temp_dir().join(format!("cineris-xtask-replace-two-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         let a = dir.join("a.sh");
         std::fs::write(&a, "one\ntwo\n").unwrap();
@@ -1046,7 +1046,8 @@ _ => 61.0
 
     #[test]
     fn a_script_on_real_files_writes_all_of_them_or_none() {
-        let dir = std::env::temp_dir().join(format!("cortex-xtask-replace-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("cineris-xtask-replace-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let a = dir.join("a.rs");
         let b = dir.join("b.md");

@@ -1,6 +1,6 @@
 At a task lease's edge the loop should stop and report, then fall back to the standing lease.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: step 37
 
 | Item | Who | When |

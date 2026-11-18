@@ -21,7 +21,7 @@ The libraries add 2.1 MB to a stripped release binary and 8.3 s to a clean relea
 
 ## Decision
 
-Embed the libraries, in `cortex-tools` only. The repository index reuses the walker.
+Embed the libraries, in `cineris-tools` only. The repository index reuses the walker.
 
 ## Why
 

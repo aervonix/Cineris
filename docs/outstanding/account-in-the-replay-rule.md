@@ -1,6 +1,6 @@
 Whether a request carries its account, so a provider tying reasoning to an account never gets another's.
 
-- Area: cortex-llm
+- Area: cineris-llm
 - Owner: the first step that adds such a provider, or step 53
 
 | Item | Who | When |

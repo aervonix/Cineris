@@ -10,7 +10,7 @@ fn started() {
     let _ = std::process::Command::new("sh"); // flagged
     let _ = tokio::process::Command::new(r"bash"); // flagged
     let _ = Command::new(TOOL); // flagged
-    let _ = cortex_tools::CommandLine::new("cmd"); // flagged
+    let _ = cineris_tools::CommandLine::new("cmd"); // flagged
     let _ = Shell::new("pwsh"); // flagged
     let _ = Command::new( // flagged
         "powershell",

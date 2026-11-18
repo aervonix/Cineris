@@ -239,11 +239,11 @@ pub(crate) fn against_of(log: &str) -> Option<String> {
 }
 
 /// The first seed of a stress run, from the command line its log shows
-/// (`CORTEX_TEST_FIRST_SEED=<n> cargo nextest …`); 0 when it shows none.
+/// (`CINERIS_TEST_FIRST_SEED=<n> cargo nextest …`); 0 when it shows none.
 pub(crate) fn first_seed_of(log: &str) -> u64 {
-    log.find("CORTEX_TEST_FIRST_SEED=")
+    log.find("CINERIS_TEST_FIRST_SEED=")
         .and_then(|at| {
-            let digits: String = log[at + "CORTEX_TEST_FIRST_SEED=".len()..]
+            let digits: String = log[at + "CINERIS_TEST_FIRST_SEED=".len()..]
                 .chars()
                 .take_while(char::is_ascii_digit)
                 .collect();
@@ -976,7 +976,7 @@ mod tests {
         let log = "== building the base (main) ==\n== round 1 of 5: the head (this tree) ==\n";
         assert_eq!(against_of(log).as_deref(), Some("main"));
         assert_eq!(against_of("nothing"), None);
-        let log = "$ CORTEX_TEST_FIRST_SEED=40 cargo nextest run --stress-count 9\n";
+        let log = "$ CINERIS_TEST_FIRST_SEED=40 cargo nextest run --stress-count 9\n";
         assert_eq!(first_seed_of(log), 40);
         assert_eq!(first_seed_of("no seed"), 0);
     }
@@ -986,21 +986,21 @@ mod tests {
         // The block as `ab` writes it.
         let said = crate::ab::skipped_text(&[
             crate::ab::Skipped {
-                id: "cortex-base text::a".to_owned(),
+                id: "cineris-base text::a".to_owned(),
                 rounds: vec![1, 3],
                 base: "boom".to_owned(),
                 head: "boom".to_owned(),
                 on: crate::ab::FailedOn::Both,
             },
             crate::ab::Skipped {
-                id: "cortex-llm::it replay::b".to_owned(),
+                id: "cineris-llm::it replay::b".to_owned(),
                 rounds: vec![2],
                 base: "left".to_owned(),
                 head: "right".to_owned(),
                 on: crate::ab::FailedOn::Both,
             },
             crate::ab::Skipped {
-                id: "cortex-tools::it shell::c".to_owned(),
+                id: "cineris-tools::it shell::c".to_owned(),
                 rounds: vec![1, 2],
                 base: String::new(),
                 head: "a Windows-only bug".to_owned(),
@@ -1038,15 +1038,15 @@ mod tests {
         // Round 2's head failed a test: the round is compared without it,
         // and it is named as a failure on one side.
         let failing = BRANCH.replace(
-            "<testcase name=\"replay::quick\" classname=\"cortex-llm::it\" time=\"0.520\"/>",
-            "<testcase name=\"replay::quick\" classname=\"cortex-llm::it\" time=\"0.510\"><failure message=\"boom\" type=\"test failure with exit code 101\">assertion failed: left == right</failure></testcase>",
+            "<testcase name=\"replay::quick\" classname=\"cineris-llm::it\" time=\"0.520\"/>",
+            "<testcase name=\"replay::quick\" classname=\"cineris-llm::it\" time=\"0.510\"><failure message=\"boom\" type=\"test failure with exit code 101\">assertion failed: left == right</failure></testcase>",
         );
         assert_ne!(failing, BRANCH, "the fixture changed under the test");
         keep(&dir, "work/repo/target/ab/head-round-2.xml", &failing);
         keep(
             &dir,
             "tmp/try-output.log",
-            "== building the base (origin/main) ==\n1 TEST(S) FAILED ON BOTH SIDES, and are left out:\n  cortex-base text::a (round 1)\n\nnext\n",
+            "== building the base (origin/main) ==\n1 TEST(S) FAILED ON BOTH SIDES, and are left out:\n  cineris-base text::a (round 1)\n\nnext\n",
         );
         let wall = |round: usize, base: f64, head: f64| crate::ab::Wall {
             round,
@@ -1082,22 +1082,25 @@ mod tests {
         assert!(text.contains("| Tier | The PR | `origin/main` |"), "{text}");
         assert!(
             text.contains("TESTS THAT FAILED ON ONE SIDE ONLY")
-                && text.contains("  cortex-llm::it replay::quick\n"),
+                && text.contains("  cineris-llm::it replay::quick\n"),
             "{text}"
         );
         assert!(
             text.contains("What moved, the PR against origin/main"),
             "{text}"
         );
-        assert!(text.contains("cortex-llm::it  replay::every_cut"), "{text}");
+        assert!(
+            text.contains("cineris-llm::it  replay::every_cut"),
+            "{text}"
+        );
         assert!(
             text.contains(
-                "1 TEST(S) FAILED ON BOTH SIDES, and are left out:\n  cortex-base text::a (round 1)"
+                "1 TEST(S) FAILED ON BOTH SIDES, and are left out:\n  cineris-base text::a (round 1)"
             ),
             "{text}"
         );
         assert!(
-            text.contains("FAILED cortex-llm::it replay::quick  (head round 2)\n  | assertion failed: left == right\n"),
+            text.contains("FAILED cineris-llm::it replay::quick  (head round 2)\n  | assertion failed: left == right\n"),
             "{text}"
         );
         assert!(!text.contains("The log's last lines"), "{text}");
@@ -1119,7 +1122,7 @@ mod tests {
             result.problems,
             [
                 "`try-windows` ended as failure",
-                "`try-windows`: 1 test(s) failed (cortex-llm::it replay::quick)"
+                "`try-windows`: 1 test(s) failed (cineris-llm::it replay::quick)"
             ]
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -1132,10 +1135,10 @@ mod tests {
         let failing = |xml: &str, time: &str| {
             let failed = xml.replace(
                 &format!(
-                    "<testcase name=\"replay::quick\" classname=\"cortex-llm::it\" time=\"{time}\"/>"
+                    "<testcase name=\"replay::quick\" classname=\"cineris-llm::it\" time=\"{time}\"/>"
                 ),
                 &format!(
-                    "<testcase name=\"replay::quick\" classname=\"cortex-llm::it\" time=\"{time}\"><failure message=\"boom\" type=\"test failure with exit code 101\">assertion failed</failure></testcase>"
+                    "<testcase name=\"replay::quick\" classname=\"cineris-llm::it\" time=\"{time}\"><failure message=\"boom\" type=\"test failure with exit code 101\">assertion failed</failure></testcase>"
                 ),
             );
             assert_ne!(failed, xml, "the fixture changed under the test");
@@ -1172,7 +1175,7 @@ mod tests {
             result.text
         );
         assert!(
-            !result.text.contains("FAILED cortex-llm::it replay::quick"),
+            !result.text.contains("FAILED cineris-llm::it replay::quick"),
             "{}",
             result.text
         );
@@ -1287,24 +1290,24 @@ mod tests {
         .unwrap();
         let text = &result.text;
         assert!(
-            text.contains("FAILED cortex-agent::it loop_::stops_at_the_refused_call"),
+            text.contains("FAILED cineris-agent::it loop_::stops_at_the_refused_call"),
             "{text}"
         );
         assert!(
-            text.contains("FAILED cortex-agent::it loop_::never_ends"),
+            text.contains("FAILED cineris-agent::it loop_::never_ends"),
             "{text}"
         );
         assert!(text.contains("| timed out (test timeout)"), "{text}");
         assert!(!text.contains("passes_the_second_time  ("), "{text}");
         assert!(
-            !text.contains("FAILED cortex-cli::system timing_sensitive"),
+            !text.contains("FAILED cineris-cli::system timing_sensitive"),
             "{text}"
         );
         assert_eq!(
             result.problems,
             [
                 "`try-linux` ended as failure",
-                "`try-linux`: 2 test(s) failed (cortex-agent::it loop_::stops_at_the_refused_call, cortex-agent::it loop_::never_ends)"
+                "`try-linux`: 2 test(s) failed (cineris-agent::it loop_::stops_at_the_refused_call, cineris-agent::it loop_::never_ends)"
             ]
         );
         let _ = std::fs::remove_dir_all(dir);
@@ -1321,7 +1324,7 @@ mod tests {
         keep(
             &dir,
             "tmp/try-output.log",
-            "$ CORTEX_TEST_FIRST_SEED=10 cargo nextest run\n",
+            "$ CINERIS_TEST_FIRST_SEED=10 cargo nextest run\n",
         );
         let result = job_result(
             5,
@@ -1361,15 +1364,15 @@ mod tests {
         keep(
             &dir,
             "work/repo/target/perf-ab/results.json",
-            r#"{"label":"main","profile":"release","packages":["cortex-index"],"rounds":3,
+            r#"{"label":"main","profile":"release","packages":["cineris-index"],"rounds":3,
                 "measurements":[{"name":"index.warm","unit":"ms",
                 "base":[28.0,29.0,28.5],"head":[31.0,32.5,31.5]}]}"#,
         );
         keep(
             &dir,
             "work/repo/target/nextest/perf/junit.xml",
-            "<testsuites><testsuite name=\"cortex-index::it\">\
-             <testcase name=\"perf::perf_warm\" classname=\"cortex-index::it\" time=\"4.5\"/>\
+            "<testsuites><testsuite name=\"cineris-index::it\">\
+             <testcase name=\"perf::perf_warm\" classname=\"cineris-index::it\" time=\"4.5\"/>\
              </testsuite></testsuites>",
         );
         let result = job_result(

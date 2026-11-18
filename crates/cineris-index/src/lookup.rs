@@ -1,0 +1,130 @@
+//! What the rest of the harness asks an index: the map of the workspace,
+//! and the outline of one file.
+
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "a lookup blocks on the file system, and runs on the blocking pool"
+)]
+
+use std::io::Read as _;
+
+use cineris_base::{AbsPath, open_regular};
+
+use crate::cache::CacheFile;
+use crate::extract::extract;
+use crate::language::Language;
+use crate::map::{MapRequest, render};
+use crate::outline::Outline;
+use crate::pass::{Index, Snapshot};
+use crate::text::{BINARY_PROBE, decode, is_binary};
+use crate::walk::Stamp;
+
+/// One file's outline, as the `outline` tool and `read` are given it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileOutline {
+    /// The outline.
+    pub outline: Outline,
+    /// The file's size in bytes.
+    pub size: u64,
+    /// The outline is of the file's first this many bytes: the file is
+    /// larger than the cap on one file.
+    pub covered: Option<u64>,
+}
+
+/// Why a file has no outline.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum OutlineError {
+    /// The file is not inside the workspace: the index is the workspace's.
+    #[error("it is outside the workspace")]
+    Outside,
+    /// It could not be opened as a regular file.
+    #[error("it cannot be opened: {0}")]
+    Unreadable(String),
+    /// It is a binary file.
+    #[error("it is a binary file")]
+    Binary,
+}
+
+impl Index {
+    /// The map of the workspace, built from the cache as it is now, or
+    /// `None` when the cache is missing or has nothing to show. Nothing is
+    /// kept once it is returned.
+    #[must_use]
+    pub fn map(&self, request: &MapRequest) -> Option<String> {
+        self.map_of(&self.cache()?, request)
+    }
+
+    /// The map of the workspace from the cache a pass left
+    /// ([`Index::pass_and_keep`]), without reading it again: the same map
+    /// as [`Index::map`] gives when that cache is the one on the disk.
+    #[must_use]
+    pub fn map_from(&self, snapshot: &Snapshot, request: &MapRequest) -> Option<String> {
+        self.map_of(snapshot.cache.as_ref()?, request)
+    }
+
+    fn map_of(&self, cache: &CacheFile, request: &MapRequest) -> Option<String> {
+        let root = self.root();
+        let gate = self.gate_for_pass();
+        // A path, and every directory above it: the walk goes into no
+        // directory the gate refuses.
+        let allowed = |path: &str| {
+            path.match_indices('/')
+                .map(|(at, _)| &path[..at])
+                .chain(std::iter::once(path))
+                .all(|part| root.join(part).is_ok_and(|abs| gate.may_index(&abs)))
+        };
+        render(cache, request, self.limits().max_files, &allowed)
+    }
+
+    /// The outline of the file at `path`, made from the file as it is now.
+    /// The cache is not read: one file's outline takes a fraction of a
+    /// millisecond to make, and reading the cache takes several. A file
+    /// over the cap is outlined from its first bytes up to the cap.
+    ///
+    /// # Errors
+    ///
+    /// [`OutlineError`] when the file is outside the workspace, cannot be
+    /// opened as a regular file, or is binary.
+    pub fn outline_of(&self, path: &AbsPath) -> Result<FileOutline, OutlineError> {
+        path.strip_prefix(self.root())
+            .filter(|relative| !relative.is_empty())
+            .ok_or(OutlineError::Outside)?;
+        let (handle, metadata) = open_regular(&path.to_fs_path())
+            .map_err(|error| OutlineError::Unreadable(error.to_string()))?;
+        let stamp = Stamp::of(&metadata);
+        let cap = self.limits().max_file_bytes;
+        let wanted = stamp.size.min(cap);
+        let mut reader = handle.take(wanted);
+        // The start first: a binary file is known by it, and the rest of it
+        // is not read.
+        let mut bytes = Vec::with_capacity(usize::try_from(wanted).unwrap_or(0).min(1 << 20));
+        (&mut reader)
+            .take(BINARY_PROBE as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| OutlineError::Unreadable(error.to_string()))?;
+        if is_binary(&bytes) {
+            return Err(OutlineError::Binary);
+        }
+        reader
+            .read_to_end(&mut bytes)
+            .map_err(|error| OutlineError::Unreadable(error.to_string()))?;
+        // A cut inside a character is not a character.
+        if stamp.size > cap {
+            let valid = match std::str::from_utf8(&bytes) {
+                Ok(_) => bytes.len(),
+                Err(error) if error.error_len().is_none() => error.valid_up_to(),
+                Err(_) => bytes.len(),
+            };
+            bytes.truncate(valid);
+        }
+        let name = path.file_name().unwrap_or("");
+        let text = decode(&bytes);
+        let outline = extract(Language::detect(name, &text), name, &text);
+        Ok(FileOutline {
+            outline,
+            size: stamp.size,
+            covered: (stamp.size > cap).then_some(wanted),
+        })
+    }
+}

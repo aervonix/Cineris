@@ -1,0 +1,82 @@
+compat.instructions = true
+compat.mcp = true
+compat.skills = true
+config_version = 1
+context.auto_compact = true
+context.background = true
+context.compact_at = 0.85
+context.instruction_names = []
+context.instructions_cap = 49152
+context.keep_recent_tokens = 0
+context.prepare_at = 0.7
+credentials.store = "auto"
+index.map = true
+index.map_tokens = 1500
+index.max_file_bytes = 1048576
+index.max_files = 20000
+index.pass_time = "2s"
+limits.day.cost = 20.0
+log.level = "info,cineris_llm=debug"
+managed.locked = ["sandbox.enabled"]
+model.effort = "high"
+model.fast = "claude-haiku-5-5"
+model.judge = "claude-opus-5-5"
+model.main = "claude-sonnet-5-5"
+model.reasoning = "none"
+model.roles.fast.speed = "standard"
+model.speed = "standard"
+model.speed_cooldown = "10m"
+model.speed_cooldown_min = "1m"
+model.speed_fallback = true
+model.speed_wait = "5s"
+permissions.mode = "read-only"
+permissions.rules = [
+    { action = "deny", effect = "write", match = "/etc/**" },
+    { action = "allow", effect = "exec", match = "cargo test *" },
+    { action = "deny", effect = "write", match = "**/.env*" },
+]
+profile = "review"
+project.learn = true
+project.profile_tokens = 1500
+providers.local.base_url = "http://localhost:11434"
+providers.local.first_event_timeout = "5m"
+providers.local.headers = { Authorization = { env = "LOCAL_TOKEN" }, X-Team = "[redacted]" }
+retry.attempts = 3
+retry.backoff_base = "1s"
+retry.backoff_cap = "30s"
+retry.backoff_factor = 2.0
+retry.first_event_timeout = "1m"
+retry.idle_timeout = "1m30s"
+retry.max_wait = "1m"
+rpc.approval_timeout = "10m"
+rpc.stalled_client = "30s"
+sandbox.enabled = true
+sandbox.network = "off"
+sandbox.protect = [
+    "/srv/keys",
+]
+sandbox.write = []
+session.durability = "item"
+shell.env_remove = []
+shell.max_timeout = "30m"
+shell.timeout = "2m"
+stats.enabled = true
+stats.retention = 3
+tui.density = "comfortable"
+tui.glyphs = "auto"
+tui.presenter = "inline"
+tui.prose_width = 80
+tui.reasoning = "summary"
+tui.reduced_motion = false
+tui.theme = "dusk"
+tui.tool_detail = 12
+tui.tool_output = "auto"
+tui.turn_summary = false
+usage.ranges = "calendar"
+usage.refresh = []
+usage.week_start = "monday"
+verify.commands = []
+verify.mode = "auto"
+verify.round_time = "2m"
+verify.rounds = 2
+verify.turn_time = "4m"

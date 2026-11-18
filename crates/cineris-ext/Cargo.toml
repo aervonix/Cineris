@@ -1,0 +1,20 @@
+[package]
+name = "cineris-ext"
+description = "The extension host: custom commands, skills, hooks, the script runtime and its host functions, trust pinning and extension authoring."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+cineris-protocol.workspace = true
+cineris-base.workspace = true
+cineris-policy.workspace = true
+cineris-sandbox.workspace = true
+cineris-tools.workspace = true
+
+[lints]
+workspace = true

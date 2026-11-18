@@ -9,8 +9,8 @@
 # checks or in what ships. The package has its own lockfile, and its own
 # toolchain file, which pins the nightly to a date.
 [package]
-name = "cortex-fuzz"
-description = "Fuzz targets for the stream decoders, the outline extractors and the RPC server's decoder of Cortex-Harness. Not shipped."
+name = "cineris-fuzz"
+description = "Fuzz targets for the stream decoders, the outline extractors and the RPC server's decoder of Cineris. Not shipped."
 version = "0.0.0"
 edition = "2024"
 license = "MIT"
@@ -24,12 +24,12 @@ doctest = false
 
 [dependencies]
 # The framing, and what the RPC server's `wire.rs` uses, which `src/lib.rs`
-# compiles from its own file in place of depending on `cortex-rpc`: with
+# compiles from its own file in place of depending on `cineris-rpc`: with
 # `serde` and `serde_json`, each in the build already through the others.
-cortex-base = { path = "../crates/cortex-base" }
-cortex-index = { path = "../crates/cortex-index" }
-cortex-llm = { path = "../crates/cortex-llm", default-features = false }
-cortex-protocol = { path = "../crates/cortex-protocol" }
+cineris-base = { path = "../crates/cineris-base" }
+cineris-index = { path = "../crates/cineris-index" }
+cineris-llm = { path = "../crates/cineris-llm", default-features = false }
+cineris-protocol = { path = "../crates/cineris-protocol" }
 libfuzzer-sys = "0.4.13"
 serde = { version = "1.0.229", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1.0.145", default-features = false, features = ["std"] }

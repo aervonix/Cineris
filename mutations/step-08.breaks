@@ -1,10 +1,10 @@
-# Step 8 (cortex-session), the breaks behind the review fixes of pull request 20.
+# Step 8 (cineris-session), the breaks behind the review fixes of pull request 20.
 # Reconstructed from the pull request's description and the crate's tests, not
 # kept from the step's own mutation runs.
 
 [break] before-string-is-absent
 rule: Only an explicit null says a file did not exist before a round; a string, such as "unknown", reads as unknown.
-file: crates/cortex-session/src/entry.rs
+file: crates/cineris-session/src/entry.rs
 in: visit_str
 find: Ok(Before::Unknown)
 replace: Ok(Before::Absent)
@@ -13,7 +13,7 @@ caught-by:
 
 [break] after-without-before-is-absent
 rule: A file a tool left with no record of what it was before is recorded as unknown, never as one that did not exist.
-file: crates/cortex-session/src/snapshot.rs
+file: crates/cineris-session/src/snapshot.rs
 in: RoundCheckpoint::after
 find: self.touch(file, Before::Unknown, Some(after))
 replace: self.touch(file, Before::Absent, Some(after))
@@ -22,7 +22,7 @@ caught-by:
 
 [break] unknown-before-is-restorable
 rule: A file whose earlier content is not known is never put back, removed or overwritten: the plan says it cannot be restored.
-file: crates/cortex-session/src/snapshot.rs
+file: crates/cineris-session/src/snapshot.rs
 in: file_status
 find: Before::Unknown => cannot(why_not::NOT_RECORDED)
 replace: Before::Unknown => (FileStatus::AsLeft, None)
@@ -32,7 +32,7 @@ caught-by:
 
 [break] unreadable-checkpoint-ignored
 rule: When a checkpoint of the undone turns cannot be read, no file is put back, because it may name any of them.
-file: crates/cortex-session/src/snapshot.rs
+file: crates/cineris-session/src/snapshot.rs
 in: file_status
 find: _ if unreadable
 replace: _ if false
@@ -41,7 +41,7 @@ caught-by:
 
 [break] missing-content-offered-as-restorable
 rule: A version whose content is not in the store is reported as not restorable by the plan, not offered.
-file: crates/cortex-session/src/snapshot.rs
+file: crates/cineris-session/src/snapshot.rs
 in: file_status
 find: !store.has_blob(&version.hash)
 replace: false && !store.has_blob(&version.hash)
@@ -50,7 +50,7 @@ caught-by:
 
 [break] rewind-skips-the-plans-session
 rule: A rewind refuses a plan that was made for another session, even at the same entry ids.
-file: crates/cortex-session/src/session.rs
+file: crates/cineris-session/src/session.rs
 in: rewind
 find: plan.session != *self.log.id()
 replace: false
@@ -59,7 +59,7 @@ caught-by:
 
 [break] newer-lease-decoded-as-unknown-kind
 rule: A lease line written in a newer format is refused whole by the decoder, never skipped as a kind this build does not know.
-file: crates/cortex-session/src/entry.rs
+file: crates/cineris-session/src/entry.rs
 in: decode
 find: else if kind == Kind::Lease.as_str()
 replace: else if false
@@ -68,7 +68,7 @@ caught-by:
 
 [break] lease-in-force-reads-only-tree-records
 rule: The lease in force reads every lease line, whether or not it sits in the tree, so a lease with a parent is not ignored.
-file: crates/cortex-session/src/log.rs
+file: crates/cineris-session/src/log.rs
 in: lease_in_force
 find: node.kind == Kind::Lease
 replace: node.record && node.kind == Kind::Lease
@@ -77,7 +77,7 @@ caught-by:
 
 [break] damaged-lease-line-not-noted
 rule: A damaged line that may be a lease record is noted, so that the lease in force is refused and not read without it.
-file: crates/cortex-session/src/scan.rs
+file: crates/cineris-session/src/scan.rs
 in: Scan::line
 find: if may_be_lease(line) {
 replace: if false {
@@ -87,7 +87,7 @@ caught-by:
 
 [break] entry-over-the-line-limit-accepted
 rule: An entry longer than the longest line the reader takes is refused with session_entry_too_large, and nothing is written.
-file: crates/cortex-session/src/session.rs
+file: crates/cineris-session/src/session.rs
 in: push
 find: length > self.max_line
 replace: false
@@ -97,7 +97,7 @@ caught-by:
 
 [break] lease-follows-the-durability
 rule: A lease record is flushed whatever the durability, so a crash cannot bring back a lease that had ended.
-file: crates/cortex-session/src/session.rs
+file: crates/cineris-session/src/session.rs
 in: push
 find: is_lease(&entry.body)
 replace: false
@@ -106,7 +106,7 @@ caught-by:
 
 [break] redaction-skips-lines-with-bad-bytes
 rule: A line holding a byte that is not UTF-8 is still redacted, run by run, and the byte is kept as it was.
-file: crates/cortex-session/src/store.rs
+file: crates/cineris-session/src/store.rs
 in: LineRedactor::redact
 find: self.redactor.redact(run.valid())
 replace: (if std::str::from_utf8(line).is_ok() { self.redactor.redact(run.valid()) } else { std::borrow::Cow::Borrowed(run.valid()) })
@@ -116,7 +116,7 @@ caught-by:
 
 [break] long-line-cut-inside-a-character
 rule: A line that grows too long is cut for redaction only between characters, so a secret or a character is not split.
-file: crates/cortex-session/src/store.rs
+file: crates/cineris-session/src/store.rs
 in: LineRedactor::push
 find: char_boundary(&self.pending)
 replace: self.pending.len()
@@ -125,7 +125,7 @@ caught-by:
 
 [break] file-read-past-its-length-at-open
 rule: A file is read for no more than the length it had when it was opened, so one that grows while it is read is kept as it was.
-file: crates/cortex-session/src/store.rs
+file: crates/cineris-session/src/store.rs
 in: put_opened_file
 find: source.take(opened_as.len())
 replace: source.take(u64::MAX)
@@ -134,7 +134,7 @@ caught-by:
 
 [break] not-a-regular-file-reads-as-absent
 rule: A directory, a link, a device or a FIFO is refused by put_file as not a regular file, not taken for a missing file.
-file: crates/cortex-session/src/store.rs
+file: crates/cineris-session/src/store.rs
 in: put_opened_file
 find:
     return Err(SessionError::NotARegularFile {
@@ -146,7 +146,7 @@ caught-by:
 
 [break] failed-name-list-still-takes-a-patch
 rule: Without the whole list of changed files no patch is taken, because protected files could not be left out of it.
-file: crates/cortex-session/src/base.rs
+file: crates/cineris-session/src/base.rs
 in: changed_names
 find: Ok(output) if output.success && !output.truncated =>
 replace: Ok(output) if !output.truncated =>
@@ -155,7 +155,7 @@ caught-by:
 
 [break] untracked-link-is-not-recorded-as-a-link
 rule: An untracked link is recorded by its target and never opened, so nothing outside the workspace is copied.
-file: crates/cortex-session/src/base.rs
+file: crates/cineris-session/src/base.rs
 in: untracked
 find: Ok(found) if found.file_type().is_symlink()
 replace: Ok(found) if false
@@ -164,7 +164,7 @@ caught-by:
 
 [break] unborn-session-keeps-its-base-state
 rule: When the last write under way ends after the session ended with no prompt, its directory is removed.
-file: crates/cortex-session/src/store.rs
+file: crates/cineris-session/src/store.rs
 in: Writing::drop
 find: state.abandoned && state.writers == 0
 replace: false

@@ -1,6 +1,6 @@
 Under Windows Terminal, and wherever the win32 input mode is on, the viewer and the full screen have no mouse: through a pseudo-console the terminal's mouse reports reach the program as typed keys, however they were asked for.
 
-- Area: cortex-term
+- Area: cineris-term
 - Owner: step 33
 
 | Item | Who | When |

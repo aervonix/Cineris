@@ -1,4 +1,4 @@
-# Breaks for the fixes to step 12 (the permission engine, `cortex-policy`):
+# Breaks for the fixes to step 12 (the permission engine, `cineris-policy`):
 # the findings of the review of step 12, the glob hole, and what the three
 # independent reviews of the fixes found. Each was run while the fixes were
 # made, and is kept here so that the tests stay seen to bite.
@@ -7,7 +7,7 @@
 
 [break] git-log-pretty-takes-the-next-word
 rule: `git log --pretty` takes its value only attached, so the word after it is checked as an argument of its own.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: GIT_LOG
 find: LO("pretty")
 replace: LV("pretty", T)
@@ -16,7 +16,7 @@ caught-by:
 
 [break] git-diff-u-takes-the-next-word
 rule: `git diff -U` takes its value only attached, so the word after it is checked as an argument of its own.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: GIT_DIFF
 find: SO('U')
 replace: SV('U', T)
@@ -25,7 +25,7 @@ caught-by:
 
 [break] git-diff-relative-takes-the-next-word
 rule: `git diff --relative` takes its value only attached, so the word after it is checked as an argument of its own.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: GIT_DIFF
 find: LO("relative")
 replace: LV("relative", T)
@@ -34,7 +34,7 @@ caught-by:
 
 [break] git-stash-list-pretty-takes-the-next-word
 rule: `git stash list --pretty` takes its value only attached, so the word after it is checked as an argument of its own.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: GIT_STASH_LIST
 find: LO("pretty")
 replace: LV("pretty", T)
@@ -43,7 +43,7 @@ caught-by:
 
 [break] no-out-backstop
 rule: A git line with `--out` in any word is never on the table of commands that only read.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: read_only
 find: word.text.contains("--out")
 replace: word.text.contains("--out-never")
@@ -54,7 +54,7 @@ caught-by:
 
 [break] powershell-quoted-text-not-checked
 rule: A PowerShell quoted text that reaches a program as other words than the parser read is not modelled.
-file: crates/cortex-policy/src/command/powershell.rs
+file: crates/cineris-policy/src/command/powershell.rs
 in: quoted
 find: reaches_a_program_whole(&text)?;
 replace:
@@ -64,7 +64,7 @@ caught-by:
 
 [break] powershell-quoted-text-ends-with-a-backslash
 rule: A PowerShell quoted text that ends with a backslash is not modelled.
-file: crates/cortex-policy/src/command/powershell.rs
+file: crates/cineris-policy/src/command/powershell.rs
 in: reaches_a_program_whole
 find: if text.ends_with('\\')
 replace: if text.ends_with("never")
@@ -73,7 +73,7 @@ caught-by:
 
 [break] powershell-empty-quoted-text
 rule: An empty PowerShell quoted text is not modelled: Windows PowerShell drops it.
-file: crates/cortex-policy/src/command/powershell.rs
+file: crates/cineris-policy/src/command/powershell.rs
 in: reaches_a_program_whole
 find: if text.is_empty()
 replace: if false
@@ -82,7 +82,7 @@ caught-by:
 
 [break] powershell-cmd-characters-in-quoted-text
 rule: A PowerShell quoted text with `& | < > ^ %` in it is not modelled: `cmd.exe` reads them again.
-file: crates/cortex-policy/src/command/powershell.rs
+file: crates/cineris-policy/src/command/powershell.rs
 in: reaches_a_program_whole
 find: matches!(character, '&' | '|' | '<' | '>' | '^' | '%')
 replace: matches!(character, '\u{0}')
@@ -91,7 +91,7 @@ caught-by:
 
 [break] powershell-quote-in-quoted-text
 rule: A PowerShell quoted text with a `"` in it is not modelled.
-file: crates/cortex-policy/src/command/powershell.rs
+file: crates/cineris-policy/src/command/powershell.rs
 in: reaches_a_program_whole
 find: if text.contains('"')
 replace: if text.contains('\u{0}')
@@ -102,7 +102,7 @@ caught-by:
 
 [break] any-cd-target-followed
 rule: A `cd` is followed only where its target says where it starts: `/`, `~`, `./`, `../`, `.` or `..`.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::follow_cd
 find: self.cd_target(&directory.logical, target, true)?
 replace: self.cd_target(&directory.logical, target, false)?
@@ -111,7 +111,7 @@ caught-by:
 
 [break] cd-followed-through-the-file-system
 rule: `..` in a `cd` is taken logically, as the shell takes it, not through links.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::follow_cd
 find: let real = self.locate.locate(&moved, moved.as_str())?;
 replace: let real = self.locate.locate(&directory.real, &target.text)?;
@@ -120,7 +120,7 @@ caught-by:
 
 [break] nothing-checked-after-a-lost-cd
 rule: What comes after a `cd` that is not followed is still checked from every place it may run in.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_command
 find: findings.extend(self.judge_lost(rules, part, lost, !changes_directory, listing));
 replace: let _ = (&lost, listing);
@@ -130,7 +130,7 @@ caught-by:
 
 [break] no-guess-where-a-lost-cd-leads
 rule: After a `cd` that is not followed, where it would lead with no `CDPATH` is a place too.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Lost::after
 find: lost.moved_by(engine, part);
 replace:
@@ -139,7 +139,7 @@ caught-by:
 
 [break] cd-double-dash-not-read
 rule: `cd -- dir` is `cd dir`.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: cd_operand
 find: if text == "--"
 replace: if text == "--never"
@@ -148,7 +148,7 @@ caught-by:
 
 [break] cd-p-followed
 rule: `cd -P` takes `..` through links, and is not followed.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: cd_operand
 find: 'P' => physical = true
 replace: 'P' => physical = false
@@ -157,7 +157,7 @@ caught-by:
 
 [break] lost-cd-with-a-redirection-not-tracked
 rule: A `cd` with a redirection, after one that was not followed, still moves the places.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_command
 find: if changes_directory { lost.moved_by(self, part); }
 replace: if changes_directory && part.redirects.is_empty() { lost.moved_by(self, part); }
@@ -168,7 +168,7 @@ caught-by:
 
 [break] rg-on-the-table
 rule: `rg` is not on the table of commands that only read: it reads hidden and ignored files, and runs programs.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: POSIX
 find: row(&["fd", "fdfind"], unix(FD, PATHS))
 replace: row(&["fd", "fdfind"], unix(FD, PATHS)), row(&["rg"], unix(FD, PATHS))
@@ -177,7 +177,7 @@ caught-by:
 
 [break] git-grep-no-index
 rule: `git grep --no-index` reads files git does not track, and is not on the table.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: GIT_GREP
 find: L("cached")
 replace: L("cached"), L("no-index")
@@ -186,7 +186,7 @@ caught-by:
 
 [break] git-grep-untracked
 rule: `git grep --untracked` reads files git does not track, and is not on the table.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: GIT_GREP
 find: L("cached")
 replace: L("cached"), L("untracked")
@@ -195,7 +195,7 @@ caught-by:
 
 [break] git-diff-of-two-paths-on-the-table
 rule: `git diff` of two paths outside a repository compares any two files, and is not on the table.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 find: compares_paths: true
 replace: compares_paths: false
 caught-by:
@@ -203,7 +203,7 @@ caught-by:
 
 [break] a-path-with-a-dot-component-reads-as-a-revision
 rule: A word with `/.` in it is a path, not a git revision: `src/../docs` is no range.
-file: crates/cortex-policy/src/command/table.rs
+file: crates/cineris-policy/src/command/table.rs
 in: reads_as_revision
 find: || text.contains("/.")
 replace:
@@ -214,7 +214,7 @@ caught-by:
 
 [break] no-attached-short-values
 rule: A path attached to a short option (`-o.git/x`) is checked like any other.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: may_name
 find: texts.extend(text.char_indices().skip(2).map(|(at, _)| &text[at..]));
 replace:
@@ -223,7 +223,7 @@ caught-by:
 
 [break] only-the-first-equals-value
 rule: The value after every `=` of a word is checked as a path.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: may_name
 find: text.match_indices('=')
 replace: text.match_indices('=').take(1)
@@ -234,7 +234,7 @@ caught-by:
 
 [break] no-subcommand-allow-list
 rule: An approval of a program with subcommands covers only the subcommands that choose what is built or shown.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: approval_rule
 find: || SUBCOMMANDS
 replace: || false && SUBCOMMANDS
@@ -243,7 +243,7 @@ caught-by:
 
 [break] curl-not-the-exact-line
 rule: An approval of `curl` covers only the exact line.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: EXACT_LINE
 find: "curl"
 replace: "curl-never"
@@ -252,7 +252,7 @@ caught-by:
 
 [break] no-version-after-a-name
 rule: `python3.12` is approved as `python` is: a version after the name changes nothing.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: approval_rule
 find: list.contains(&name) || list.contains(&unversioned)
 replace: list.contains(&name) || unversioned.is_empty()
@@ -261,7 +261,7 @@ caught-by:
 
 [break] windows-endings-not-stripped
 rule: `npm.cmd` is `npm`, as Windows finds it, for what an approval covers.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: approval_rule
 find: [".exe", ".cmd", ".bat", ".com", ".ps1"]
 replace: [".exe-never"]
@@ -272,10 +272,10 @@ caught-by:
 
 [break] only-allow-rules-pinned
 rule: A project's rules are pinned together, deny and ask as well as allow: dropping a deny is a change.
-file: crates/cortex-policy/src/trust.rs
+file: crates/cineris-policy/src/trust.rs
 in: Definition::of_rules
 find: .map(|rule| {
-replace: .filter(|rule| rule.action == cortex_protocol::lease::RuleAction::Allow).map(|rule| {
+replace: .filter(|rule| rule.action == cineris_protocol::lease::RuleAction::Allow).map(|rule| {
 caught-by:
     trust::a_project_that_drops_one_of_its_denials_is_not_trusted_until_approved_again
 
@@ -283,7 +283,7 @@ caught-by:
 
 [break] later-writes-not-held-back
 rule: A call with side effects written after one whose question may answer Stop waits for the answer.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::pump
 find: && stop_may_answer
 occurrence: 1
@@ -293,7 +293,7 @@ caught-by:
 
 [break] answers-may-stop-ignored
 rule: A later call runs beside a question whose answers cannot stop the turn.
-file: crates/cortex-agent/src/round.rs
+file: crates/cineris-agent/src/round.rs
 in: Round::pump
 find: let stop_may_answer = self.env.policy.answers_may_stop();
 replace: let stop_may_answer = true;
@@ -304,7 +304,7 @@ caught-by:
 
 [break] deny-matched-only-as-written
 rule: A deny or ask rule is matched against the raw line as written and with its quotes taken out.
-file: crates/cortex-policy/src/command/pattern.rs
+file: crates/cineris-policy/src/command/pattern.rs
 in: ExecPattern::restricts
 find: || self.restricts_words(&loose_words(&unquoted(line)))
 replace:
@@ -313,7 +313,7 @@ caught-by:
 
 [break] line-break-after-a-backslash-kept
 rule: A backslash before a line break joins the two lines in one word, for matching a deny.
-file: crates/cortex-policy/src/command/pattern.rs
+file: crates/cineris-policy/src/command/pattern.rs
 in: unquoted
 find: .fold(line.to_owned(), |line, join| line.replace(join, ""))
 replace: .fold(line.to_owned(), |line, _| line)
@@ -324,7 +324,7 @@ caught-by:
 
 [break] narrow-does-not-check-the-level
 rule: `narrow` refuses a level the child could not be started at under the sandbox's state.
-file: crates/cortex-policy/src/lease.rs
+file: crates/cineris-policy/src/lease.rs
 in: Lease::narrow
 find: level::check_standing(&child.grant.level, sandbox)?;
 replace: let _ = sandbox;
@@ -333,7 +333,7 @@ caught-by:
 
 [break] host-lift-not-escaped
 rule: Approving a host covers that host and no other: its name is matched literally.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 find: pattern: literal_name(&host.trim_end_matches('.').to_ascii_lowercase())
 replace: pattern: host.trim_end_matches('.').to_ascii_lowercase()
 caught-by:
@@ -341,7 +341,7 @@ caught-by:
 
 [break] always-allow-offered-without-a-store
 rule: Without a store, "always allow" is not offered.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Question::choices
 find: if self.storable
 replace: if true
@@ -352,7 +352,7 @@ caught-by:
 
 [break] nested-build-configuration
 rule: Build configuration is protected at any depth.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::is_guarded
 find: || is_build_configuration(path)
 replace:
@@ -361,7 +361,7 @@ caught-by:
 
 [break] rule-allowed-command-not-judged-where-it-runs
 rule: A command a rule allows, run after a followed `cd`, is judged where it runs.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_command
 find: findings.push(self.judge_command_write(rules, &here));
 replace: let _ = &here;
@@ -370,7 +370,7 @@ caught-by:
 
 [break] no-store-lock
 rule: Every change to the trust store and the approvals file is made under the store's lock.
-file: crates/cortex-policy/src/store_lock.rs
+file: crates/cineris-policy/src/store_lock.rs
 in: hold
 find: private::hold_lock(file)
 replace: if true { return Ok(None); } private::hold_lock(file)
@@ -381,7 +381,7 @@ caught-by:
 
 [break] complete-despite-files-elsewhere
 rule: A base state is incomplete when files outside the workspace, elsewhere in the repository, changed.
-file: crates/cortex-session/src/base.rs
+file: crates/cineris-session/src/base.rs
 in: from_git
 find: if elsewhere > 0
 replace: if elsewhere > usize::MAX - 1
@@ -390,7 +390,7 @@ caught-by:
 
 [break] root-covers-a-shared-prefix-of-text
 rule: A lease's root covers the paths below it, not every path that begins with the same text.
-file: crates/cortex-policy/src/lease.rs
+file: crates/cineris-policy/src/lease.rs
 in: covers
 find: .any(|root| path.starts_with_exactly(&root))
 replace: .any(|root| path.as_str().starts_with(root.as_str()))
@@ -399,7 +399,7 @@ caught-by:
 
 [break] expiry-moments-ordered-as-text
 rule: The earliest of a lease's expiry moments is the earliest in time, not in text.
-file: crates/cortex-policy/src/lease.rs
+file: crates/cineris-policy/src/lease.rs
 in: narrow_expiry
 find: min_by_key(|(time, _)| *time)
 replace: min_by_key(|(_, text)| text.as_str().to_owned())
@@ -410,7 +410,7 @@ caught-by:
 
 [break] patterns-judged-as-plain-names
 rule: An argument with a pattern in it is judged as every path the pattern could match.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_named
 find: let here = if pattern_word && has_wildcards(text)
 replace: let here = if false && has_wildcards(text)
@@ -419,7 +419,7 @@ caught-by:
 
 [break] no-rule-for-hidden-names
 rule: A name that begins with `.` is matched only by a pattern that begins with a `.` written out, as in the shells.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: let hidden_rule = self.shell == ShellSyntax::Posix;
 replace: let hidden_rule = false;
@@ -428,7 +428,7 @@ caught-by:
 
 [break] redirection-to-a-pattern-not-judged
 rule: A redirection to a pattern is judged as every path the pattern could match.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_part
 find: if let Some(found) = self.judge_pattern(rules, &target.text, at, &shown, how)
 replace: if let Some(found) = None::<Finding>.filter(|_| at.is_empty() && how.reads)
@@ -437,7 +437,7 @@ caught-by:
 
 [break] nothing-tried-under-a-cd-to-a-pattern
 rule: After a `cd` to a pattern, a path a part names is tried under the pattern.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_under
 find: lost.patterns.iter().find_map(
 replace: lost.patterns.iter().take(0).find_map(
@@ -446,7 +446,7 @@ caught-by:
 
 [break] protected-paths-not-matched-by-a-pattern
 rule: A pattern that could match one of the protected paths is asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: (repository || secret || cargo || guarded).then(flagged)
 replace: (repository || secret || cargo || guarded && false).then(flagged)
@@ -455,7 +455,7 @@ caught-by:
 
 [break] git-directory-not-matched-by-a-pattern
 rule: A pattern that could match `.git` at any depth is asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: could(pattern, ".git")
 replace: could(pattern, ".git-never")
@@ -464,7 +464,7 @@ caught-by:
 
 [break] secret-names-not-matched-by-a-pattern
 rule: A pattern that could match a file that looks like a secret is asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: .chain(secret_patterns())
 replace: .chain(secret_patterns().take(0))
@@ -473,7 +473,7 @@ caught-by:
 
 [break] harness-directories-below-a-pattern
 rule: A pattern that starts above one of the harness's own directories is asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: if let Some(hit) = rules.protected_under(&base)
 replace: if let Some(hit) = rules.protected_under(&base).filter(|_| false)
@@ -484,7 +484,7 @@ caught-by:
 
 [break] bracket-set-read-exactly
 rule: A `[` in a pattern is read as anything to the end of the name, so that no set is misread.
-file: crates/cortex-policy/src/expansion.rs
+file: crates/cineris-policy/src/expansion.rs
 in: NamePattern::parse
 find: if tokens.last() != Some(&Token::Star) { tokens.push(Token::Star); } break;
 replace: tokens.push(Token::Any); continue;
@@ -494,7 +494,7 @@ caught-by:
 
 [break] directories-the-line-was-in-not-kept
 rule: After a `cd` that is not followed, every directory the line was in is a place, for a `cd -` or a failed `cd`.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Lost::after
 find: for directory in visited {
 replace: for directory in visited.iter().take(0) {
@@ -503,7 +503,7 @@ caught-by:
 
 [break] cd-to-anywhere-does-not-overflow
 rule: A `cd` that could lead anywhere leaves nothing after it placed.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Lost::moved_by
 find: CdOperand::Unknown => { self.overflowed = true; return; }
 replace: CdOperand::Unknown => { return; }
@@ -512,7 +512,7 @@ caught-by:
 
 [break] later-cd-from-one-place-only
 rule: After a `cd` that is not followed, a later `cd` is taken from every place so far.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Lost::moved_by
 find: for place in &from { if let Some(logical)
 replace: for place in from.iter().take(1) { if let Some(logical)
@@ -521,7 +521,7 @@ caught-by:
 
 [break] quoted-powershell-pattern-taken-as-a-name
 rule: In PowerShell a quoted pattern is a pattern: its own commands expand it.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_named
 find: let pattern_word = !word.is_fixed() || self.shell == ShellSyntax::PowerShell;
 replace: let pattern_word = !word.is_fixed();
@@ -530,7 +530,7 @@ caught-by:
 
 [break] reading-command-with-a-pattern-refused-at-read-only
 rule: A command that only reads, with a pattern, is asked about at `read-only` and not refused.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_part
 find: reads: !writes && self.only_reads_but_for_patterns(part)
 replace: reads: false
@@ -539,7 +539,7 @@ caught-by:
 
 [break] redirection-to-a-pattern-outside-not-asked
 rule: A redirection to a pattern that starts outside the workspace is asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_part
 find: if !reads && let Some(found) = self.pattern_outside(&target.text, at, &shown)
 replace: if false && let Some(found) = self.pattern_outside(&target.text, at, &shown)
@@ -548,7 +548,7 @@ caught-by:
 
 [break] quoted-tilde-taken-for-home
 rule: A `~` the shell does not take as the home directory is a name, in a folder named `~`.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_named
 find: (text.starts_with('~') && (!home_written || self.shell == ShellSyntax::PowerShell))
 replace: (false)
@@ -557,7 +557,7 @@ caught-by:
 
 [break] repository-trust-follows-the-rules-approval
 rule: Whether git is on the table of commands that only read follows the repository's trust, not the approval of the project's rules.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_part
 find: let named = table::read_only(part, self.shell, self.repository_trusted);
 replace: let named = table::read_only(part, self.shell, self.trusted);
@@ -568,7 +568,7 @@ caught-by:
 
 [break] no-listing
 rule: A pattern is expanded against the directory as it is now, and each match judged as the name written out.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: match self.expand(&base, &names, hidden_rule) {
 replace: match Expansion::Unknown {
@@ -577,7 +577,7 @@ caught-by:
 
 [break] listing-replaces-the-text
 rule: Where an earlier part of the line may write, a pattern's text is judged as well as what the directory holds.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: match self.expand(&base, &names, hidden_rule) {
 replace: match (if how.listing { self.expand(&base, &names, hidden_rule) } else { Expansion::Unknown }) {
@@ -586,7 +586,7 @@ caught-by:
 
 [break] text-not-judged-after-a-write
 rule: Where an earlier part of the line may write, a pattern's text is judged too.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: if found.is_some() || (how.listing && !deep && !up)
 replace: if true
@@ -595,7 +595,7 @@ caught-by:
 
 [break] double-star-not-listed
 rule: A name `**` is listed as `*`, as bash reads it, so a link it matches is followed.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: match self.expand(&base, &names, hidden_rule) {
 replace: match (if deep { Expansion::Unknown } else { self.expand(&base, &names, hidden_rule) }) {
@@ -604,7 +604,7 @@ caught-by:
 
 [break] dot-patterns-not-listed
 rule: A pattern that could be `..` is listed too, so a rule meets what it matches at every level.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: match self.expand(&base, &names, hidden_rule) {
 replace: match (if up { Expansion::Unknown } else { self.expand(&base, &names, hidden_rule) }) {
@@ -613,7 +613,7 @@ caught-by:
 
 [break] a-match-not-followed-through-a-link
 rule: A match that is a link is followed before it is judged.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_match
 find: let real = if *unresolved {
 replace: let real = if false && *unresolved {
@@ -622,7 +622,7 @@ caught-by:
 
 [break] a-listed-name-never-a-link
 rule: A listed name whose kind is not known is taken for a link, and followed.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: PathResolver::list
 find: entry.file_type().map_or(true, |kind| kind.is_symlink())
 replace: entry.file_type().map_or(false, |_| false)
@@ -631,7 +631,7 @@ caught-by:
 
 [break] no-bound-on-the-names-listed
 rule: Past a thousand names, a pattern is asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 find: const MOST_NAMES_LISTED: usize = 1000;
 replace: const MOST_NAMES_LISTED: usize = 100_000;
 caught-by:
@@ -639,7 +639,7 @@ caught-by:
 
 [break] listed-after-a-part-that-may-write
 rule: After a part of the line that may write, the listing is not all a pattern can match.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Around::may_list
 find: self.others(index).all(|other| !self.writes[other])
 replace: self.others(index).all(|other| !self.writes[other] || other != usize::MAX)
@@ -648,7 +648,7 @@ caught-by:
 
 [break] a-link-made-earlier-not-seen
 rule: A part after one that makes a link is asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Around::after_a_link
 find: self.others(index).any(|other| self.links[other])
 replace: self.others(index).any(|other| self.links[other] && false)
@@ -657,7 +657,7 @@ caught-by:
 
 [break] a-rule-not-met-through-a-match
 rule: A rule that holds a name back is met through a pattern that matches it.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_match
 find: if let Some(found) = self.judge_named_path(rules, &real, shown)
 replace: if let Some(found) = self.judge_named_path(rules, &real, shown).filter(|_| !real.as_str().ends_with(".lock"))
@@ -668,7 +668,7 @@ caught-by:
 
 [break] unmodelled-words-not-checked
 rule: The words of a line the analysis does not model are checked for what they could name.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_command
 find: findings.extend(self.judge_unmodelled(rules, command, std::slice::from_ref(cwd)));
 replace:
@@ -677,7 +677,7 @@ caught-by:
 
 [break] a-word-that-may-be-a-line-not-checked
 rule: A word that may be a command line of its own (`sh -c '…'`) is checked as a line the analysis does not model.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_named
 find: if may_be_a_line(&word.text)
 replace: if may_be_a_line(&word.text) && false
@@ -686,7 +686,7 @@ caught-by:
 
 [break] only-the-raw-cut
 rule: A raw line's words are taken as written and with the quotes taken out.
-file: crates/cortex-policy/src/command/pattern.rs
+file: crates/cineris-policy/src/command/pattern.rs
 in: raw_words
 find: .chain(unquoted)
 replace: .chain(unquoted.into_iter().take(0))
@@ -697,7 +697,7 @@ caught-by:
 
 [break] tilde-backslash-home-everywhere
 rule: `~\x` is the home directory only on Windows.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: PathResolver::locate
 find: || (cfg!(windows) && written.starts_with("~\\"))
 replace: || written.starts_with("~\\")
@@ -706,7 +706,7 @@ caught-by:
 
 [break] link-rule-needs-an-argument
 rule: A part after one that makes a link is asked about when it names anything, by an argument or a redirection.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_command
 find: around.after_a_link(index) && names_something
 replace: around.after_a_link(index) && !part.arguments().is_empty()
@@ -715,7 +715,7 @@ caught-by:
 
 [break] a-lone-bracket-is-a-pattern
 rule: A `]` with no `[` before it is no pattern: the name is judged as written.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_part
 find: if !target.is_fixed() && has_wildcards(&target.text) {
 replace: if !target.is_fixed() {
@@ -724,7 +724,7 @@ caught-by:
 
 [break] dot-patterns-listed
 rule: A pattern that could match `..` (`.?`, `.*`) is judged by its text, and asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: || (hidden_rule && patterns.iter().any(|pattern| pattern.could_match_name("..", true)))
 replace:
@@ -733,7 +733,7 @@ caught-by:
 
 [break] cd-never-physical
 rule: A `cd` bash would take through links, where the logical directory is not there, is not followed.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::follow_cd
 find: if self.locate.is_directory(&real) == Some(false)
 replace: if false
@@ -742,7 +742,7 @@ caught-by:
 
 [break] operators-do-not-make-a-line
 rule: A word with a shell's operator in it may be a command line of its own.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: may_be_a_line
 find: || matches!(character, '<' | '>' | '|' | ';' | '&' | '`')
 replace:
@@ -751,7 +751,7 @@ caught-by:
 
 [break] no-places-from-cds-in-an-unmodelled-line
 rule: The words of an unmodelled line are tried from every directory a `cd` among them could lead to.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_unmodelled
 find: if !self.places_of_cds(command, &mut places)
 replace: if false
@@ -760,7 +760,7 @@ caught-by:
 
 [break] a-line-in-a-word-from-one-place
 rule: A word that may be a command line is tried from every place the part may run in.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_named
 find: findings.extend(self.judge_unmodelled(rules, &word.text, places));
 replace: findings.extend(self.judge_unmodelled(rules, &word.text, places.get(..1).unwrap_or(&[])));
@@ -769,7 +769,7 @@ caught-by:
 
 [break] zsh-double-star-not-asked
 rule: A pattern with a name `**`, which zsh reads as any depth, is asked about where a rule holds back a path below it.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_pattern
 find: if deep && let Some(hit) = rules.held_back_under(&base)
 replace: if false && let Some(hit) = rules.held_back_under(&base)
@@ -778,7 +778,7 @@ caught-by:
 
 [break] first-cd-back-is-a-place
 rule: A `cd -` before any other `cd` of the line could lead anywhere.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Lost::after
 find: if visited.len() == 1 && matches!(cd_operand(part), CdOperand::Back)
 replace: if false
@@ -787,7 +787,7 @@ caught-by:
 
 [break] quoted-tilde-home-in-a-redirection
 rule: A quoted `~` in a redirection is a name, in a folder named `~`.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::texts_of
 find: if word.text.starts_with('~') && (!word.home || self.shell == ShellSyntax::PowerShell)
 replace: if false
@@ -796,7 +796,7 @@ caught-by:
 
 [break] quoted-tilde-home-in-what-a-reading-command-names
 rule: A path a command that only reads names, beginning with `~`, is also tried as a name in a folder named `~`.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_part
 find: .filter(|name| name.text.starts_with('~'))
 replace: .filter(|_| false)
@@ -805,7 +805,7 @@ caught-by:
 
 [break] no-bound-on-the-work
 rule: Past 10,000 units of work, one command's decision is asked about.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: spend
 find: done <= MOST_WORK
 replace: true
@@ -816,7 +816,7 @@ caught-by:
 
 [break] places-of-cds-grow-as-a-power
 rule: Each `cd` of an unmodelled line is taken from where the line started and from where the `cd` before it led, so the places grow with the number of `cd`s.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::places_of_cds
 find: for place in start.iter().chain(&last) {
 replace: for place in places.clone().iter().chain(&last) {
@@ -825,7 +825,7 @@ caught-by:
 
 [break] raw-words-repeated
 rule: Each word of a raw line is checked once, however often it is there.
-file: crates/cortex-policy/src/command/pattern.rs
+file: crates/cineris-policy/src/command/pattern.rs
 in: raw_words
 find: .filter(|word| seen.insert(word.clone()))
 replace: .filter(|word| seen.insert(word.clone()) || !word.is_empty())
@@ -834,7 +834,7 @@ caught-by:
 
 [break] powershell-bare-tilde-only-home
 rule: In PowerShell a word that begins with `~` is judged both as the home directory and as a name, quoted or not: Windows PowerShell passes a bare one to a native program as it is.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_named
 find: (!home_written || self.shell == ShellSyntax::PowerShell)
 replace: !home_written

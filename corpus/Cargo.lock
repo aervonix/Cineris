@@ -869,6 +869,52 @@ dependencies = [
 ]
 
 [[package]]
+name = "cineris-corpus"
+version = "0.0.0"
+dependencies = [
+ "axum",
+ "boa_engine",
+ "chrono",
+ "clap",
+ "derive_more",
+ "futures",
+ "hyper",
+ "image",
+ "jiff",
+ "nix 0.31.3",
+ "nom 8.0.0",
+ "object 0.40.0",
+ "palette",
+ "pest",
+ "petgraph 0.8.3",
+ "ratatui",
+ "rayon",
+ "regex",
+ "reqwest",
+ "rhai",
+ "rustix",
+ "rustls",
+ "schemars",
+ "serde_json",
+ "serde_yaml",
+ "syn 2.0.119",
+ "tantivy",
+ "tar",
+ "time",
+ "tokio",
+ "tokio-tungstenite",
+ "toml 0.9.12+spec-1.1.0",
+ "tonic",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uom",
+ "wasmtime",
+ "zbus",
+ "zip",
+]
+
+[[package]]
 name = "cipher"
 version = "0.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1038,52 +1084,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "77745e017f5edba1a9c1d854f6f3a52dac8a12dd5af5d2f54aecf61e43d80d30"
 dependencies = [
  "libm",
-]
-
-[[package]]
-name = "cortex-corpus"
-version = "0.0.0"
-dependencies = [
- "axum",
- "boa_engine",
- "chrono",
- "clap",
- "derive_more",
- "futures",
- "hyper",
- "image",
- "jiff",
- "nix 0.31.3",
- "nom 8.0.0",
- "object 0.40.0",
- "palette",
- "pest",
- "petgraph 0.8.3",
- "ratatui",
- "rayon",
- "regex",
- "reqwest",
- "rhai",
- "rustix",
- "rustls",
- "schemars",
- "serde_json",
- "serde_yaml",
- "syn 2.0.119",
- "tantivy",
- "tar",
- "time",
- "tokio",
- "tokio-tungstenite",
- "toml 0.9.12+spec-1.1.0",
- "tonic",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uom",
- "wasmtime",
- "zbus",
- "zip",
 ]
 
 [[package]]

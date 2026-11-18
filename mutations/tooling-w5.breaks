@@ -4,7 +4,7 @@
 
 [break] seam-token-not-looked-at
 rule: Under a seeded order, work whose token fires before its turn comes is not run.
-file: crates/cortex-tools/src/blocking.rs
+file: crates/cineris-tools/src/blocking.rs
 in: inline::run
 find:
     if cancel.is_cancelled() {
@@ -13,23 +13,23 @@ find:
 replace:
 # The seam's own tests are built only when a crate that turns `test-hooks`
 # on is in the build.
-packages: cortex-tools, cortex-agent
+packages: cineris-tools, cineris-agent
 caught-by:
     blocking::tests::under_a_seeded_order_a_token_that_fires_first_wins_and_the_work_never_runs
 
 [break] seam-order-outlives-its-guard
 rule: When the seeded order's guard is dropped, blocking work goes back to the pool.
-file: crates/cortex-tools/src/blocking.rs
+file: crates/cineris-tools/src/blocking.rs
 in: InlineBlocking::drop
 find: *order.borrow_mut() = before
 replace: drop(before)
-packages: cortex-tools, cortex-agent
+packages: cineris-tools, cineris-agent
 caught-by:
     blocking::tests::when_the_seeded_order_ends_the_work_goes_back_to_the_pool
 
 [break] seed-is-the-same-for-every-repeat
 rule: Each repeat of a stress run has the next seed.
-file: crates/cortex-testkit/src/seed.rs
+file: crates/cineris-testkit/src/seed.rs
 in: seed_from
 find: .wrapping_add(repeat)
 replace: .wrapping_add(0)
@@ -38,7 +38,7 @@ caught-by:
 
 [break] scratch-is-left-behind
 rule: A test's directory is removed when the test ends without failing.
-file: crates/cortex-testkit/src/scratch.rs
+file: crates/cineris-testkit/src/scratch.rs
 in: Scratch::drop
 find: if !std::thread::panicking()
 replace: if false
@@ -47,7 +47,7 @@ caught-by:
 
 [break] scratch-takes-any-name
 rule: A test's directory is named by one plain name, so that making it new never removes another test's.
-file: crates/cortex-testkit/src/scratch.rs
+file: crates/cineris-testkit/src/scratch.rs
 in: Scratch::under
 find: is_one_name(name)
 replace: true
@@ -91,7 +91,7 @@ caught-by:
     checks::tests::a_run_of_one_crate_is_not_a_run_of_the_workspace
 
 [break] a-joined-package-option-is-not-seen
-rule: `-pcortex-agent`, written as one word, chooses a package like `-p cortex-agent`.
+rule: `-pcineris-agent`, written as one word, chooses a package like `-p cineris-agent`.
 file: xtask/src/checks.rs
 in: selects_packages
 find: (argument.starts_with("-p") && !argument.starts_with("--"))

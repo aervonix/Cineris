@@ -1,17 +1,17 @@
 # The agent loop
 
-The loop lives in `cortex-agent`. It owns no I/O: everything it touches it reaches through a trait, so every behaviour on this page is tested with a scripted provider and fake tools, with no network and no real clock.
+The loop lives in `cineris-agent`. It owns no I/O: everything it touches it reaches through a trait, so every behaviour on this page is tested with a scripted provider and fake tools, with no network and no real clock.
 
-| Trait | What the loop asks of it | In `cortex-agent` until the real one exists |
+| Trait | What the loop asks of it | In `cineris-agent` until the real one exists |
 |---|---|---|
-| `ModelClient` (`cortex-llm`) | One request in, a stream of events out. | The scripted provider of the test kit, in tests. |
-| `ToolSet` | The definitions to declare, and the tool a call names. | Implemented for `Toolbox` of `cortex-tools`. |
-| `Policy` | Allow, deny or ask for a planned call, and put the question. It can also say that a call changes nothing, and that the turn stops here ("Approve", below), and it counts the times its rules narrowed, by which a call is decided again ("A call is decided again", below). | `AllowAll`. The engine is `cortex-policy` (step 12), which the core adapts to this trait in step 13. |
-| `SessionStore` | Read the session once, append records, end a turn. | `MemorySessionStore`. The log is `cortex-session` (step 8), adapted in step 13. |
+| `ModelClient` (`cineris-llm`) | One request in, a stream of events out. | The scripted provider of the test kit, in tests. |
+| `ToolSet` | The definitions to declare, and the tool a call names. | Implemented for `Toolbox` of `cineris-tools`. |
+| `Policy` | Allow, deny or ask for a planned call, and put the question. It can also say that a call changes nothing, and that the turn stops here ("Approve", below), and it counts the times its rules narrowed, by which a call is decided again ("A call is decided again", below). | `AllowAll`. The engine is `cineris-policy` (step 12), which the core adapts to this trait in step 13. |
+| `SessionStore` | Read the session once, append records, end a turn. | `MemorySessionStore`. The log is `cineris-session` (step 8), adapted in step 13. |
 | `Context` | What a request contains, whether to compact first, and the compaction. | Built in step 15: not a trait any more, but the loop's own `Context`, made from `ContextParts` (the prompt's facts, the instruction files through the `InstructionFiles` seam, the project profile through the `ProfileSource` seam since step 17, the thresholds, the plan). The loop does its I/O and records for it (`turn::epochs`). See [07-sessions-and-context.md](07-sessions-and-context.md). |
 | `Verifier` | One round of the project's checks. | `NoVerifier`: skipped. The core's runs the checks through the session's own shell (step 19, "Verification", below). |
 | `EventSink` | Takes the session's events, without blocking. | The core's channel (step 13). |
-| `Stats` | Takes the statistics events. | `NoStats`. `cortex-stats` (step 16). |
+| `Stats` | Takes the statistics events. | `NoStats`. `cineris-stats` (step 16). |
 
 They are held as trait objects (`Arc<dyn ModelClient>`, `Box<dyn SessionStore>`), not as type parameters. The first draft of this page said "generic over". Objects give the same testability with no type-parameter list on every item and less to compile, and a call through one costs nothing next to a model request. As built in step 7.
 
@@ -52,7 +52,7 @@ The picture leaves out four kinds of arrow that the table has: `Compacting` is a
 | `Finishing` | Flush the log. Emit `turn.completed`. | The turn completed and a prompt is waiting → `Preparing` as a new turn. Otherwise → `Idle`. After a turn that failed or hit a limit, prompts that were waiting are held ("Steering and queued prompts"). |
 | `Interrupted` | Cancel children, record what exists, emit `turn.completed` with outcome `interrupted`. | Always → `Idle`. Queued prompts are held and the front end is told. |
 
-**The table of transitions is code.** Every change of state goes through one function, which checks it against `TRANSITIONS` (`crates/cortex-agent/src/state.rs`) in debug builds. Each transition has a scripted scenario (`crates/cortex-agent/tests/it/transitions.rs`), and one test fails when the scenarios and the table disagree in either direction: a transition with no scenario, or a scenario that makes a transition the table does not have.
+**The table of transitions is code.** Every change of state goes through one function, which checks it against `TRANSITIONS` (`crates/cineris-agent/src/state.rs`) in debug builds. Each transition has a scripted scenario (`crates/cineris-agent/tests/it/transitions.rs`), and one test fails when the scenarios and the table disagree in either direction: a transition with no scenario, or a scenario that makes a transition the table does not have.
 
 **What a request has already been through travels with it,** from state to state, as data: that the context was compacted for it, that the provider said it did not fit and a compaction answered that, that it was sent again with a higher output limit. Each is allowed once, and a new request starts clean. None of it is a flag on the session.
 
@@ -116,7 +116,7 @@ Two more answers, built in step 12:
 | Mutating, keyed | write and edit, keyed by canonical path | Calls on the same path run one at a time in call order, and so do calls where one path is inside the other. Calls on unrelated paths run in parallel. |
 | Exclusive | shell (default), tools from extensions unless they declare otherwise | Runs alone: it waits for running calls to finish, and later calls wait for it. |
 
-**A read conflicts with a write to what it reads.** A keyed call conflicts with a read-only call that reads one of its paths, lists or walks a directory that holds one, or reads something inside one. `edit a.rs` followed by `read a.rs` in one response therefore sees the edit, and `write src/new.rs` followed by `list src` sees the file. Two read-only calls never conflict. The rule is `Plan::conflicts_with` in `cortex-tools` ([05-tools.md](05-tools.md), "The tool trait"), which works from each plan's effects and paths; it was settled in step 6. A tool from an extension or an MCP server whose spec says exclusive is exclusive whatever its plan says.
+**A read conflicts with a write to what it reads.** A keyed call conflicts with a read-only call that reads one of its paths, lists or walks a directory that holds one, or reads something inside one. `edit a.rs` followed by `read a.rs` in one response therefore sees the edit, and `write src/new.rs` followed by `list src` sees the file. Two read-only calls never conflict. The rule is `Plan::conflicts_with` in `cineris-tools` ([05-tools.md](05-tools.md), "The tool trait"), which works from each plan's effects and paths; it was settled in step 6. A tool from an extension or an MCP server whose spec says exclusive is exclusive whatever its plan says.
 
 Conflicting calls always run in the model's order. Calls that do not conflict run together. The class is part of each tool's contract ([05-tools.md](05-tools.md)), and a tool may refine it per call (for example a shell command that the policy has proven read-only).
 
@@ -156,7 +156,7 @@ The user can type while a turn runs. There are two delivery modes, chosen by the
 
 **Edits to the plan** made by the user while the agent works ([05-tools.md](05-tools.md)) are delivered the same way as a steering message: as a notice at the next safe boundary. A notice never starts a turn. One that arrives while the session is idle waits, and is delivered ahead of the next prompt.
 
-The text of the notice is written by the plan itself (`PlanBoard::apply` in `cortex-tools`, step 10): what the user changed, item by item, and the plan as it now is. A `plan` call the model wrote before the notice reached it replaces nothing: the user's edit wins, and the call's result gives the model the current plan ([05-tools.md](05-tools.md), "`plan`"). The result is recorded with its round, and the notice after it, at the boundary.
+The text of the notice is written by the plan itself (`PlanBoard::apply` in `cineris-tools`, step 10): what the user changed, item by item, and the plan as it now is. A `plan` call the model wrote before the notice reached it replaces nothing: the user's edit wins, and the call's result gives the model the current plan ([05-tools.md](05-tools.md), "`plan`"). The result is recorded with its round, and the notice after it, at the boundary.
 
 A safe boundary is the only place a user message can be appended without breaking a tool round. It is the `Preparing` state. An RPC `Op::Prompt` sent while a turn is running must say which mode it wants; the loop rejects it otherwise (`turn_running`) instead of guessing. A prompt is answered at once with the turn it belongs to: the one it started, the running one it steers, or the one it will start, whose id is given when it is queued.
 
@@ -176,7 +176,7 @@ A safe boundary is the only place a user message can be appended without breakin
 
 ## Retries
 
-Retries are a separate layer between the loop and the provider's protocol and transport, with its own tests against a fake clock. As built in step 5 it is inside the model client (`ProviderClient` in `cortex-llm`): the client makes the attempts and does the waiting, and the loop sees each failed attempt as an event in the response stream, `Retry` with the error, the wait and the time of the next attempt. The loop's `Backoff` state is the time between that event and the next response's start. The rules themselves are one function with no clock and no I/O, tested row by row.
+Retries are a separate layer between the loop and the provider's protocol and transport, with its own tests against a fake clock. As built in step 5 it is inside the model client (`ProviderClient` in `cineris-llm`): the client makes the attempts and does the waiting, and the loop sees each failed attempt as an event in the response stream, `Retry` with the error, the wait and the time of the next attempt. The loop's `Backoff` state is the time between that event and the next response's start. The rules themselves are one function with no clock and no I/O, tested row by row.
 
 - **What is retried.** Errors of kind `Transient`: connection failures, timeouts, HTTP 408, 409, 429 (when the provider's error code says it is a rate limit and not a spending limit), 5xx, provider overload codes, and mid-stream failures. The per-protocol classification table is in [04-providers.md](04-providers.md).
 - **Schedule.** Exponential backoff with full jitter. Base 1 s, factor 2, cap 30 s, at most 5 attempts per request. All four are configurable.
@@ -232,7 +232,7 @@ A stop reason this build does not know is treated as `end`. A response that ends
 - **Repetition guard.** If the model issues the same call with the same arguments and gets the same result three times in a row, the loop appends a notice telling the model the call is repeating without effect. After five, it stops the turn and asks the user. The thresholds are configurable and the guard can be turned off.
 - **Wall-clock limit.** Optional, for headless runs.
 
-As built in step 7 (`crates/cortex-agent/src/ledger.rs`, `guard.rs`):
+As built in step 7 (`crates/cineris-agent/src/ledger.rs`, `guard.rs`):
 
 - **An account is a budget and what has been spent of it:** money, tokens, requests and wall-clock time, the four fields of a lease's budget ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md)). A session's ledger is the accounts it draws on. The first is its lease's. Another may be shared: every clone of an account is the same account, so sessions given one spend from one budget. Each turn also has an account of its own, which holds the limits one turn may not pass.
 - **Every request is charged before it is sent.** In `Preparing` each account is asked for one request. An account that is spent refuses, nothing is charged to any, and the turn ends with the outcome `limit`. What the request then uses, in tokens and money, is charged when its response ends. A cap on tokens or money can therefore be passed by the one request that was in flight when it was reached, and by no more.
@@ -275,7 +275,7 @@ As built in step 7, a session is two things. `Session` is the loop: one future, 
 
 The `Verifying` state, as built in step 19 ([15-efficiency.md](15-efficiency.md), "Automatic verification"; the design and its review are in [steps/19/answered.md](../steps/19/answered.md)). Choosing and running the checks is the core's `Verifier`; this is what the loop does around it.
 
-- **What changed.** A tool round's result says what its call changed, read by `cortex_tools::changed_by`: a `write` or `edit` that succeeded, unless its payload says `unchanged`; a command that ran (passed or failed), the files its look found, by git or by modification times, and the workspace root for a look that did not finish; another tool's declared writes, when it succeeded. A command's declared write of the whole workspace is not a change, and a command the engine found only reads is not looked at. `VerifyCx::written` carries what the turn changed.
+- **What changed.** A tool round's result says what its call changed, read by `cineris_tools::changed_by`: a `write` or `edit` that succeeded, unless its payload says `unchanged`; a command that ran (passed or failed), the files its look found, by git or by modification times, and the workspace root for a look that did not finish; another tool's declared writes, when it succeeded. A command's declared write of the whole workspace is not a change, and a command the engine found only reads is not looked at. `VerifyCx::written` carries what the turn changed.
 - **When a round runs.** When the model ends its turn with no tool call, something changed since the last round, fewer than `LoopConfig::verify_rounds` rounds have run (from `verify.rounds`, 2: run, feed back, run again), and the turn's and the session's own time limits leave time (`Ledger::time_left`, which a round is also given as `VerifyCx::deadline`). After a failure, a model that ends its turn having changed nothing is not checked again: the same checks on the same state would say the same.
 - **The loop waits for the round.** On an interrupt it fires the round's `cancel` (and `kill` on a second interrupt), and waits for the verifier to stop what it runs, as a tool round waits for its calls; it does not drop it. Nothing is appended while a round runs, so an interrupted round leaves the history as the last tool round left it.
 - **A failure** is appended as one notice (`NoticeSource::Verification`) and the model goes on, unless it was the last round: then the turn completes and reports the failing state, and the model is not sent it. A round in which nothing failed, while an earlier failure of the turn still stands (`VerifyOutcome::StillFailing`), ends the turn `failed` with no notice and no request: there is nothing new to tell.
@@ -287,12 +287,12 @@ The `Verifying` state, as built in step 19 ([15-efficiency.md](15-efficiency.md)
 
 ## What is recorded for adaptation
 
-At the end of each request, tool call and turn (but a turn that only verifies, which is not the model's), the loop emits a statistics event ([14-adaptation.md](14-adaptation.md)): the model and variants in effect, the outcome, durations and usage. Recording is a queue push and never blocks the loop. The events go to a `Stats` trait in `cortex-agent`; `cortex-stats` (step 16) records them, and the core connects the two.
+At the end of each request, tool call and turn (but a turn that only verifies, which is not the model's), the loop emits a statistics event ([14-adaptation.md](14-adaptation.md)): the model and variants in effect, the outcome, durations and usage. Recording is a queue push and never blocks the loop. The events go to a `Stats` trait in `cineris-agent`; `cineris-stats` (step 16) records them, and the core connects the two.
 
 **As built in step 16.**
 
 - **Every request has an event**, a summary's too (`purpose: summary`, with its role), and each request's context record. That now includes one the provider refused as too long, whose record is sent before the compaction. A summary counted by a later turn than the one that started it names that turn (`started_in`). The limits a response reported are an event too (`StatEvent::Limits`), kept as the provider's latest.
-- **Where each turn's time goes** (`cortex_agent::timing`). Every moment of a turn is in one part:
+- **Where each turn's time goes** (`cineris_agent::timing`). Every moment of a turn is in one part:
   - the model's: `connect`, `first_byte`, `streaming`, `retry` and `summary`;
   - `tools` once the response has ended, shared by the calls running;
   - `approval`: no call running and a question open;

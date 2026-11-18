@@ -1,0 +1,878 @@
+== 60 columns, unicode, true colour, dark — reading, collapsed
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 60 columns, unicode, true colour, dark — reading, focused
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 60 columns, unicode, true colour, dark — nothing kept, collapsed
+◇ {b}Project{}  {fg=a8}0 in use|
+
+== 60 columns, unicode, true colour, dark — nothing kept, focused
+◇ {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 60 columns, unicode, true colour, dark — a command waiting, focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 60 columns, unicode, true colour, dark — a command waiting, focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features --|
+    {fg=a14}--test-threads 1 --include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that s…  {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                    {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 60 columns, unicode, true colour, dark — its deletion asked, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 60 columns, unicode, true colour, dark — its deletion asked, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features --|
+    {fg=a14}--test-threads 1 --include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a11}delete this entry? y deletes · any other key keeps it|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that s…  {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                    {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 60 columns, unicode, true colour, dark — a proposal focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 60 columns, unicode, true colour, dark — a proposal focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features…  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  {fg=#8D57FC b}Errors are written as sentences that s…{}  {fg=a8}2d|
+    Errors are written as sentences that say what to do|
+    next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                    {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 60 columns, unicode, true colour, dark — a fact in use focused, a problem, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 60 columns, unicode, true colour, dark — a fact in use focused, a problem, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features…  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that s…  {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  {fg=#8D57FC b}The parser is hand-written.{}                    {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a11}problem: `.cineris/profile.toml` is not TOML: the file i…|
+
+== 60 columns, ascii, true colour, dark — reading, collapsed
+o {b}Project{}  {fg=a8}reading...|
+
+== 60 columns, ascii, true colour, dark — reading, focused
+o {b}Project{}  {fg=a8}reading...|
+
+== 60 columns, ascii, true colour, dark — nothing kept, collapsed
+o {b}Project{}  {fg=a8}0 in use|
+
+== 60 columns, ascii, true colour, dark — nothing kept, focused
+o {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 60 columns, ascii, true colour, dark — a command waiting, focused, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 60 columns, ascii, true colour, dark — a command waiting, focused, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-featur...{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features --|
+    {fg=a14}--test-threads 1 --include-ignored|
+    {fg=a8}for test | in crates/parser | may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that...  {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                    {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 60 columns, ascii, true colour, dark — its deletion asked, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 60 columns, ascii, true colour, dark — its deletion asked, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-featur...{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features --|
+    {fg=a14}--test-threads 1 --include-ignored|
+    {fg=a8}for test | in crates/parser | may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a11}delete this entry? y deletes | any other key keeps it|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that...  {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                    {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 60 columns, ascii, true colour, dark — a proposal focused, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 60 columns, ascii, true colour, dark — a proposal focused, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-featur...  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  {fg=#8D57FC b}Errors are written as sentences that...{}  {fg=a8}2d|
+    Errors are written as sentences that say what to do|
+    next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                    {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 60 columns, ascii, true colour, dark — a fact in use focused, a problem, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 60 columns, ascii, true colour, dark — a fact in use focused, a problem, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-featur...  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that...  {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  {fg=#8D57FC b}The parser is hand-written.{}                    {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a11}problem: `.cineris/profile.toml` is not TOML: the file...|
+
+== 80 columns, unicode, true colour, dark — reading, collapsed
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, true colour, dark — reading, focused
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, true colour, dark — nothing kept, collapsed
+◇ {b}Project{}  {fg=a8}0 in use|
+
+== 80 columns, unicode, true colour, dark — nothing kept, focused
+◇ {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 80 columns, unicode, true colour, dark — a command waiting, focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, true colour, dark — a command waiting, focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a14}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, true colour, dark — its deletion asked, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, true colour, dark — its deletion asked, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a14}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a11}delete this entry? y deletes · any other key keeps it|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, true colour, dark — a proposal focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, true colour, dark — a proposal focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  {fg=#8D57FC b}Errors are written as sentences that say what to do next.{}    {fg=a8}2d|
+    Errors are written as sentences that say what to do next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, true colour, dark — a fact in use focused, a problem, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, true colour, dark — a fact in use focused, a problem, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  {fg=#8D57FC b}The parser is hand-written.{}                                        {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a11}problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+
+== 80 columns, ascii, true colour, dark — reading, collapsed
+o {b}Project{}  {fg=a8}reading...|
+
+== 80 columns, ascii, true colour, dark — reading, focused
+o {b}Project{}  {fg=a8}reading...|
+
+== 80 columns, ascii, true colour, dark — nothing kept, collapsed
+o {b}Project{}  {fg=a8}0 in use|
+
+== 80 columns, ascii, true colour, dark — nothing kept, focused
+o {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 80 columns, ascii, true colour, dark — a command waiting, focused, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 80 columns, ascii, true colour, dark — a command waiting, focused, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads...{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a14}--include-ignored|
+    {fg=a8}for test | in crates/parser | may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, ascii, true colour, dark — its deletion asked, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 80 columns, ascii, true colour, dark — its deletion asked, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads...{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a14}--include-ignored|
+    {fg=a8}for test | in crates/parser | may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a11}delete this entry? y deletes | any other key keeps it|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, ascii, true colour, dark — a proposal focused, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 80 columns, ascii, true colour, dark — a proposal focused, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads...  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  {fg=#8D57FC b}Errors are written as sentences that say what to do next.{}    {fg=a8}2d|
+    Errors are written as sentences that say what to do next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, ascii, true colour, dark — a fact in use focused, a problem, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 80 columns, ascii, true colour, dark — a fact in use focused, a problem, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads...  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  {fg=#8D57FC b}The parser is hand-written.{}                                        {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a11}problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+
+== 120 columns, unicode, true colour, dark — reading, collapsed
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 120 columns, unicode, true colour, dark — reading, focused
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 120 columns, unicode, true colour, dark — nothing kept, collapsed
+◇ {b}Project{}  {fg=a8}0 in use|
+
+== 120 columns, unicode, true colour, dark — nothing kept, focused
+◇ {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 120 columns, unicode, true colour, dark — a command waiting, focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 120 columns, unicode, true colour, dark — a command waiting, focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored{}                         {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1 --include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.                                            {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                                                                {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 120 columns, unicode, true colour, dark — its deletion asked, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 120 columns, unicode, true colour, dark — its deletion asked, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored{}                         {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1 --include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a11}delete this entry? y deletes · any other key keeps it|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.                                            {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                                                                {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 120 columns, unicode, true colour, dark — a proposal focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 120 columns, unicode, true colour, dark — a proposal focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored                         {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  {fg=#8D57FC b}Errors are written as sentences that say what to do next.{}                                            {fg=a8}2d|
+    Errors are written as sentences that say what to do next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                                                                {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 120 columns, unicode, true colour, dark — a fact in use focused, a problem, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 120 columns, unicode, true colour, dark — a fact in use focused, a problem, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored                         {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.                                            {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  {fg=#8D57FC b}The parser is hand-written.{}                                                                                {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a11}problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+
+== 120 columns, ascii, true colour, dark — reading, collapsed
+o {b}Project{}  {fg=a8}reading...|
+
+== 120 columns, ascii, true colour, dark — reading, focused
+o {b}Project{}  {fg=a8}reading...|
+
+== 120 columns, ascii, true colour, dark — nothing kept, collapsed
+o {b}Project{}  {fg=a8}0 in use|
+
+== 120 columns, ascii, true colour, dark — nothing kept, focused
+o {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 120 columns, ascii, true colour, dark — a command waiting, focused, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 120 columns, ascii, true colour, dark — a command waiting, focused, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored{}                         {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1 --include-ignored|
+    {fg=a8}for test | in crates/parser | may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.                                            {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                                                                                {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 120 columns, ascii, true colour, dark — its deletion asked, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 120 columns, ascii, true colour, dark — its deletion asked, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=#8D57FC b}test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored{}                         {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1 --include-ignored|
+    {fg=a8}for test | in crates/parser | may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a11}delete this entry? y deletes | any other key keeps it|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.                                            {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                                                                                {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 120 columns, ascii, true colour, dark — a proposal focused, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 120 columns, ascii, true colour, dark — a proposal focused, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored                         {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  {fg=#8D57FC b}Errors are written as sentences that say what to do next.{}                                            {fg=a8}2d|
+    Errors are written as sentences that say what to do next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a10}+{} {fg=a8}fact{}  The parser is hand-written.                                                                                {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 120 columns, ascii, true colour, dark — a fact in use focused, a problem, collapsed
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+
+== 120 columns, ascii, true colour, dark — a fact in use focused, a problem, focused
+o {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} | 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1 --include-ignored                         {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.                                            {fg=a8}2d|
+  {fg=a10}+{} {fg=a8}fact{}  {fg=#8D57FC b}The parser is hand-written.{}                                                                                {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a11}problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+
+== 80 columns, unicode, true colour, light — reading, collapsed
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, true colour, light — reading, focused
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, true colour, light — nothing kept, collapsed
+◇ {b}Project{}  {fg=a8}0 in use|
+
+== 80 columns, unicode, true colour, light — nothing kept, focused
+◇ {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 80 columns, unicode, true colour, light — a command waiting, focused, collapsed
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, true colour, light — a command waiting, focused, focused
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a3 b}?{} {fg=a8}command{}  {fg=#7A3CFB b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a6 b}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a6 b}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a3 b}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a3 b}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a2 b}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, true colour, light — its deletion asked, collapsed
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, true colour, light — its deletion asked, focused
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a3 b}?{} {fg=a8}command{}  {fg=#7A3CFB b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a6 b}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a6 b}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a3 b}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a3 b}delete this entry? y deletes · any other key keeps it|
+  {fg=a3 b}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a2 b}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, true colour, light — a proposal focused, collapsed
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, true colour, light — a proposal focused, focused
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a3 b}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}convention{}  {fg=#7A3CFB b}Errors are written as sentences that say what to do next.{}    {fg=a8}2d|
+    Errors are written as sentences that say what to do next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a3 b}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a2 b}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, true colour, light — a fact in use focused, a problem, collapsed
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, true colour, light — a fact in use focused, a problem, focused
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a3 b}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a2 b}✓{} {fg=a8}fact{}  {fg=#7A3CFB b}The parser is hand-written.{}                                        {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a3 b}problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+
+== 80 columns, unicode, 16 colours, dark — reading, collapsed
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, 16 colours, dark — reading, focused
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, 16 colours, dark — nothing kept, collapsed
+◇ {b}Project{}  {fg=a8}0 in use|
+
+== 80 columns, unicode, 16 colours, dark — nothing kept, focused
+◇ {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 80 columns, unicode, 16 colours, dark — a command waiting, focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 16 colours, dark — a command waiting, focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a14}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 16 colours, dark — its deletion asked, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 16 colours, dark — its deletion asked, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a14}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a11}delete this entry? y deletes · any other key keeps it|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 16 colours, dark — a proposal focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 16 colours, dark — a proposal focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  {b}Errors are written as sentences that say what to do next.{}    {fg=a8}2d|
+    Errors are written as sentences that say what to do next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 16 colours, dark — a fact in use focused, a problem, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 16 colours, dark — a fact in use focused, a problem, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  {b}The parser is hand-written.{}                                        {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a11}problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+
+== 80 columns, unicode, 16 colours, light — reading, collapsed
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, 16 colours, light — reading, focused
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, 16 colours, light — nothing kept, collapsed
+◇ {b}Project{}  {fg=a8}0 in use|
+
+== 80 columns, unicode, 16 colours, light — nothing kept, focused
+◇ {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 80 columns, unicode, 16 colours, light — a command waiting, focused, collapsed
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 16 colours, light — a command waiting, focused, focused
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a3 b}?{} {fg=a8}command{}  {fg=a5 b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a6 b}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a6 b}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a3 b}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a3 b}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a2 b}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 16 colours, light — its deletion asked, collapsed
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 16 colours, light — its deletion asked, focused
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a3 b}?{} {fg=a8}command{}  {fg=a5 b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a6 b}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a6 b}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a3 b}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a3 b}delete this entry? y deletes · any other key keeps it|
+  {fg=a3 b}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a2 b}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 16 colours, light — a proposal focused, collapsed
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 16 colours, light — a proposal focused, focused
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a3 b}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}convention{}  {fg=a5 b}Errors are written as sentences that say what to do next.{}    {fg=a8}2d|
+    Errors are written as sentences that say what to do next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a3 b}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a2 b}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 16 colours, light — a fact in use focused, a problem, collapsed
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 16 colours, light — a fact in use focused, a problem, focused
+◇ {b}Project{}  {fg=a3 b}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a3 b}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a3 b}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a2 b}✓{} {fg=a8}fact{}  {fg=a5 b}The parser is hand-written.{}                                        {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a3 b}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a3 b}problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+
+== 80 columns, unicode, 256 colours, dark — reading, collapsed
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, 256 colours, dark — reading, focused
+◇ {b}Project{}  {fg=a8}reading…|
+
+== 80 columns, unicode, 256 colours, dark — nothing kept, collapsed
+◇ {b}Project{}  {fg=a8}0 in use|
+
+== 80 columns, unicode, 256 colours, dark — nothing kept, focused
+◇ {b}Project{}  {fg=a8}0 in use|
+  {fg=a8}Nothing is in use or waiting for this project.|
+
+== 80 columns, unicode, 256 colours, dark — a command waiting, focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 256 colours, dark — a command waiting, focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=i99 b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a14}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 256 colours, dark — its deletion asked, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 256 colours, dark — its deletion asked, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  {fg=i99 b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {fg=a8}2d|
+    {fg=a8}runs  {fg=a14}cargo test -p parser --all-features -- --test-threads 1|
+    {fg=a14}--include-ignored|
+    {fg=a8}for test · in crates/parser · may change files|
+    the parser's tests|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a11}in use, and still asks before it runs|
+    {fg=a8}accepting keeps it until 2027-02-14|
+    {fg=a8}check  `Cargo.toml` exists, not run in this build|
+    {fg=a8}evidence  ran 3 times and passed|
+    {fg=a11}delete this entry? y deletes · any other key keeps it|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 256 colours, dark — a proposal focused, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 256 colours, dark — a proposal focused, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  {fg=i99 b}Errors are written as sentences that say what to do next.{}    {fg=a8}2d|
+    Errors are written as sentences that say what to do next.|
+    {fg=a8}proposed by the model in session s_1 on 2026-11-14|
+    {fg=a11}waits for your review: not in use|
+    {fg=a8}accepting keeps it until 2027-01-15|
+  {fg=a10}✓{} {fg=a8}fact{}  The parser is hand-written.                                        {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, 256 colours, dark — a fact in use focused, a problem, collapsed
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+
+== 80 columns, unicode, 256 colours, dark — a fact in use focused, a problem, focused
+◇ {b}Project{}  {fg=a11}3 entries wait for review{fg=a8} · 1 in use|
+  {fg=a11}?{} {fg=a8}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {fg=a8}2d|
+  {fg=a11}?{} {fg=a8}convention{}  Errors are written as sentences that say what to do next.    {fg=a8}2d|
+  {fg=a10}✓{} {fg=a8}fact{}  {fg=i99 b}The parser is hand-written.{}                                        {fg=a8}2d|
+    The parser is hand-written.|
+    {fg=a8}observed 3 times, learned in session s_1 on 2026-11-14|
+    {fg=a8}in use|
+  {fg=a11}?{} {fg=a8}flaky{}  lex::numbers::huge times out on CI|
+  {fg=a11}problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+
+== 80 columns, unicode, no colour, dark — reading, collapsed
+◇ {b}Project{}  {d}reading…|
+
+== 80 columns, unicode, no colour, dark — reading, focused
+◇ {b}Project{}  {d}reading…|
+
+== 80 columns, unicode, no colour, dark — nothing kept, collapsed
+◇ {b}Project{}  {d}0 in use|
+
+== 80 columns, unicode, no colour, dark — nothing kept, focused
+◇ {b}Project{}  {d}0 in use|
+  {d}Nothing is in use or waiting for this project.|
+
+== 80 columns, unicode, no colour, dark — a command waiting, focused, collapsed
+◇ {b}Project{}  3 entries wait for review{d} · 1 in use|
+
+== 80 columns, unicode, no colour, dark — a command waiting, focused, focused
+◇ {b}Project{}  3 entries wait for review{d} · 1 in use|
+  ? {d}command{}  {b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {d}2d|
+    {d}runs  {b}cargo test -p parser --all-features -- --test-threads 1|
+    {b}--include-ignored|
+    {d}for test · in crates/parser · may change files|
+    the parser's tests|
+    {d}observed 3 times, learned in session s_1 on 2026-11-14|
+    in use, and still asks before it runs|
+    {d}accepting keeps it until 2027-02-14|
+    {d}check  `Cargo.toml` exists, not run in this build|
+    {d}evidence  ran 3 times and passed|
+  ? {d}convention{}  Errors are written as sentences that say what to do next.    {d}2d|
+  ✓ {d}fact{}  The parser is hand-written.                                        {d}2d|
+  ? {d}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, no colour, dark — its deletion asked, collapsed
+◇ {b}Project{}  3 entries wait for review{d} · 1 in use|
+
+== 80 columns, unicode, no colour, dark — its deletion asked, focused
+◇ {b}Project{}  3 entries wait for review{d} · 1 in use|
+  ? {d}command{}  {b}test: cargo test -p parser --all-features -- --test-threads 1…{}  {d}2d|
+    {d}runs  {b}cargo test -p parser --all-features -- --test-threads 1|
+    {b}--include-ignored|
+    {d}for test · in crates/parser · may change files|
+    the parser's tests|
+    {d}observed 3 times, learned in session s_1 on 2026-11-14|
+    in use, and still asks before it runs|
+    {d}accepting keeps it until 2027-02-14|
+    {d}check  `Cargo.toml` exists, not run in this build|
+    {d}evidence  ran 3 times and passed|
+    delete this entry? y deletes · any other key keeps it|
+  ? {d}convention{}  Errors are written as sentences that say what to do next.    {d}2d|
+  ✓ {d}fact{}  The parser is hand-written.                                        {d}2d|
+  ? {d}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, no colour, dark — a proposal focused, collapsed
+◇ {b}Project{}  3 entries wait for review{d} · 1 in use|
+
+== 80 columns, unicode, no colour, dark — a proposal focused, focused
+◇ {b}Project{}  3 entries wait for review{d} · 1 in use|
+  ? {d}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {d}2d|
+  ? {d}convention{}  {b}Errors are written as sentences that say what to do next.{}    {d}2d|
+    Errors are written as sentences that say what to do next.|
+    {d}proposed by the model in session s_1 on 2026-11-14|
+    waits for your review: not in use|
+    {d}accepting keeps it until 2027-01-15|
+  ✓ {d}fact{}  The parser is hand-written.                                        {d}2d|
+  ? {d}flaky{}  lex::numbers::huge times out on CI|
+
+== 80 columns, unicode, no colour, dark — a fact in use focused, a problem, collapsed
+◇ {b}Project{}  3 entries wait for review{d} · 1 in use|
+
+== 80 columns, unicode, no colour, dark — a fact in use focused, a problem, focused
+◇ {b}Project{}  3 entries wait for review{d} · 1 in use|
+  ? {d}command{}  test: cargo test -p parser --all-features -- --test-threads 1…  {d}2d|
+  ? {d}convention{}  Errors are written as sentences that say what to do next.    {d}2d|
+  ✓ {d}fact{}  {b}The parser is hand-written.{}                                        {d}2d|
+    The parser is hand-written.|
+    {d}observed 3 times, learned in session s_1 on 2026-11-14|
+    {d}in use|
+  ? {d}flaky{}  lex::numbers::huge times out on CI|
+  problem: `.cineris/profile.toml` is not TOML: the file is not used.|
+

@@ -20,14 +20,14 @@ pub(crate) fn root() -> PathBuf {
 /// The features a build of `packages` alone must turn on, or it builds a
 /// crate's tests without what they test.
 ///
-/// `cortex-sandbox`'s confinement tests are compiled only with its
+/// `cineris-sandbox`'s confinement tests are compiled only with its
 /// `backends` feature, on Linux. A build of the whole workspace turns it on
-/// (through `cortex-core`); a build of the crate alone does not, and its
+/// (through `cineris-core`); a build of the crate alone does not, and its
 /// tests then pass having confined nothing. Two sessions were misled by
 /// such a green run, so `test`, `stress` and `ci --tiers` of the crate turn
 /// it on themselves, and say so.
 pub(crate) fn implied_features(packages: &[String]) -> Vec<String> {
-    if cfg!(target_os = "linux") && packages.iter().any(|package| package == "cortex-sandbox") {
+    if cfg!(target_os = "linux") && packages.iter().any(|package| package == "cineris-sandbox") {
         vec!["--features".to_owned(), SANDBOX_BACKENDS.to_owned()]
     } else {
         Vec::new()
@@ -35,13 +35,13 @@ pub(crate) fn implied_features(packages: &[String]) -> Vec<String> {
 }
 
 /// What [`implied_features`] turns on.
-pub(crate) const SANDBOX_BACKENDS: &str = "cortex-sandbox/backends";
+pub(crate) const SANDBOX_BACKENDS: &str = "cineris-sandbox/backends";
 
 /// Says that a feature was turned on for the packages named.
 pub(crate) fn say_implied(features: &[String]) {
     if !features.is_empty() {
         println!(
-            "note: {SANDBOX_BACKENDS} is on: a build of cortex-sandbox alone compiles its \
+            "note: {SANDBOX_BACKENDS} is on: a build of cineris-sandbox alone compiles its \
              confinement tests out without it"
         );
     }
@@ -455,14 +455,14 @@ mod tests {
             "workspace_root": "/repo",
             "target_directory": "/repo/target",
             "packages": [{
-                "name": "cortex-agent",
-                "manifest_path": "/repo/crates/cortex-agent/Cargo.toml",
+                "name": "cineris-agent",
+                "manifest_path": "/repo/crates/cineris-agent/Cargo.toml",
                 "publish": [],
                 "dependencies": [
                     {
-                        "name": "cortex-llm", "source": null, "kind": null,
+                        "name": "cineris-llm", "source": null, "kind": null,
                         "uses_default_features": false, "features": [],
-                        "path": "/repo/crates/cortex-llm"
+                        "path": "/repo/crates/cineris-llm"
                     },
                     {
                         "name": "serde_json",
@@ -471,7 +471,7 @@ mod tests {
                     }
                 ],
                 "targets": [
-                    { "name": "cortex_agent", "kind": ["lib"], "doctest": false },
+                    { "name": "cineris_agent", "kind": ["lib"], "doctest": false },
                     { "name": "it", "kind": ["test"], "doctest": false }
                 ],
                 "features": { "test-hooks": [], "default": ["std"] }
@@ -481,8 +481,8 @@ mod tests {
         let metadata = parse_metadata(&json).unwrap();
         let package = &metadata.packages[0];
 
-        assert_eq!(package.name, "cortex-agent");
-        assert_eq!(package.manifest, "crates/cortex-agent/Cargo.toml");
+        assert_eq!(package.name, "cineris-agent");
+        assert_eq!(package.manifest, "crates/cineris-agent/Cargo.toml");
         assert!(package.publish_disabled);
         assert!(package.dependencies[0].in_workspace);
         assert!(!package.dependencies[0].default_features);
@@ -503,7 +503,8 @@ mod tests {
     /// The name starts with `sys_` because it starts git.
     #[test]
     fn sys_a_directory_that_a_checkout_ignores_is_listed_by_walking_it() {
-        let outer = std::env::temp_dir().join(format!("cortex-xtask-files-{}", std::process::id()));
+        let outer =
+            std::env::temp_dir().join(format!("cineris-xtask-files-{}", std::process::id()));
         if outer.exists() {
             std::fs::remove_dir_all(&outer).unwrap();
         }
@@ -553,7 +554,7 @@ mod tests {
     #[test]
     fn an_old_report_is_removed_and_no_report_is_no_error() {
         let directory =
-            std::env::temp_dir().join(format!("cortex-xtask-report-{}", std::process::id()));
+            std::env::temp_dir().join(format!("cineris-xtask-report-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let report = directory.join("junit.xml");
         std::fs::write(&report, "<testsuites/>").unwrap();
@@ -571,8 +572,8 @@ mod tests {
             "workspace_root": "/repo",
             "target_directory": "/repo/target",
             "packages": [{
-                "name": "cortex-base",
-                "manifest_path": "/repo/crates/cortex-base/Cargo.toml",
+                "name": "cineris-base",
+                "manifest_path": "/repo/crates/cineris-base/Cargo.toml",
                 "publish": null,
                 "dependencies": [],
                 "targets": []

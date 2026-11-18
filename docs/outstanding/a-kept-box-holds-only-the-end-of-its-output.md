@@ -1,6 +1,6 @@
 The viewer and the full screen open a finished command's box on the last 64 KiB of its output, not the whole of it.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 25
 
 | Item | Who | When |

@@ -1,7 +1,7 @@
 use std::path::Path;
 
-use cortex_testkit::Scratch;
-use cortex_testkit::scratch::git;
+use cineris_testkit::Scratch;
+use cineris_testkit::scratch::git;
 
 use super::{
     CommitInfo, Git, Holds, Kind, RecordsRequest, RewriteRequest, backup_name, batch_check,
@@ -393,7 +393,7 @@ fn repository(scratch: &Scratch) -> std::path::PathBuf {
     let config = repo.join(".git").join("config");
     let mut text = std::fs::read_to_string(&config).unwrap();
     text.push_str(
-        "[user]\n\tname = Branch Tester\n\temail = branch@cortex-harness.invalid\n\
+        "[user]\n\tname = Branch Tester\n\temail = branch@cineris.invalid\n\
          [commit]\n\tgpgsign = false\n",
     );
     std::fs::write(&config, text).unwrap();
@@ -464,8 +464,8 @@ fn imported(branch: &str, mark: u32, from: Option<u32>, file: &str, text: &str) 
         .unwrap_or_default();
     format!(
         "commit {branch}\nmark :{mark}\n\
-         author Cortex Test <test@cortex-harness.invalid> {at} +0100\n\
-         committer Cortex Test <test@cortex-harness.invalid> {at} +0100\n\
+         author Cineris Test <test@cineris.invalid> {at} +0100\n\
+         committer Cineris Test <test@cineris.invalid> {at} +0100\n\
          data {}\n{subject}\n\n{from}M 100644 inline {file}\ndata {}\n{text}\n",
         subject.len() + 1,
         text.len()
@@ -652,7 +652,7 @@ fn sys_records_are_committed_to_a_branch_not_checked_out_and_the_worktree_is_lef
             &repo,
             &["log", "-1", "--format=%an <%ae>|%cn|%s", "step-24"]
         ),
-        "Branch Tester <branch@cortex-harness.invalid>|Branch Tester|Record the CI times"
+        "Branch Tester <branch@cineris.invalid>|Branch Tester|Record the CI times"
     );
     // The worktree, its index, its branch and every other ref: as they were,
     // but for the branch the commit is on.
@@ -816,7 +816,7 @@ fn sys_fold_and_to_end_rewrite_only_the_current_branch_keep_a_backup_and_refuse_
         let was = kept(commit);
         format!(
             "{} Branch Tester",
-            was.strip_suffix(" Cortex Test").unwrap()
+            was.strip_suffix(" Cineris Test").unwrap()
         )
     };
     let b_kept = rewritten(b);

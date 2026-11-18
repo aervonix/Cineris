@@ -3,7 +3,7 @@
 
 [break] test-server-port-closes-with-its-thread
 rule: The scripted server's port stays open until its accepting thread has ended, so that the connection that wakes the thread is never refused (a refusal takes two seconds on Windows).
-file: crates/cortex-testkit/src/server.rs
+file: crates/cineris-testkit/src/server.rs
 in: SseServer::start
 find: listener: Some(kept)
 replace: listener: None
@@ -19,7 +19,7 @@ caught-by:
 
 [break] the-command-is-counted-among-what-it-left
 rule: On Windows a job lists a command for a moment after its exit; the command is never one of the processes it left running.
-file: crates/cortex-sandbox/src/tree/mod.rs
+file: crates/cineris-sandbox/src/tree/mod.rs
 in: others_among
 find: **member != command && !has_exited(**member)
 replace: !has_exited(**member)
@@ -28,7 +28,7 @@ caught-by:
 
 [break] an-exited-member-is-counted-as-left-running
 rule: A member of the job that has already exited is not a process the command left running.
-file: crates/cortex-sandbox/src/tree/mod.rs
+file: crates/cineris-sandbox/src/tree/mod.rs
 in: others_among
 find: **member != command && !has_exited(**member)
 replace: **member != command
@@ -37,7 +37,7 @@ caught-by:
 
 [break] a-member-that-cannot-be-opened-is-taken-for-gone
 rule: A member of the job that refuses to be opened is still there, and is counted as running; only an id that no process has is gone.
-file: crates/cortex-sandbox/src/tree/mod.rs
+file: crates/cineris-sandbox/src/tree/mod.rs
 in: unopened_is_gone
 find: code == Some(NO_SUCH_PROCESS)
 replace: code.is_some()

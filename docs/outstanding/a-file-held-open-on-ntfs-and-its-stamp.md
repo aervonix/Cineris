@@ -1,6 +1,6 @@
 NTFS updates a directory entry's stamp lazily while a writer holds a file open, so the index may read it every pass or keep an old outline.
 
-- Area: cortex-core
+- Area: cineris-core
 - Owner: a later index step, or step 33
 
 | Item | Who | When |

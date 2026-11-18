@@ -1,0 +1,82 @@
+compat.instructions = true                  # default
+compat.mcp = true                           # default
+compat.skills = true                        # default
+config_version = 1                          # default
+context.auto_compact = true                 # default
+context.background = true                   # default
+context.compact_at = 0.85                   # default
+context.instruction_names = []              # default
+context.instructions_cap = 49152            # default
+context.keep_recent_tokens = 0              # default
+context.prepare_at = 0.7                    # default
+credentials.store = "auto"                  # default
+index.map = true                            # default
+index.map_tokens = 1500                     # default
+index.max_file_bytes = 1048576              # default
+index.max_files = 20000                     # default
+index.pass_time = "2s"                      # default
+limits.day.cost = 20.0                      # user: ~/cineris/config.toml:29
+log.level = "info,cineris_llm=debug"        # environment: CINERIS_LOG
+managed.locked = ["sandbox.enabled"]        # managed: ~/managed/config.toml:3
+model.effort = "high"                       # profile review (user: ~/cineris/config.toml:32)
+model.fast = "claude-haiku-5-5"             # user: ~/cineris/config.toml:6
+model.judge = "claude-opus-5-5"             # command-line: --judge-model
+model.main = "claude-sonnet-5-5"            # project: ~/work/app/.cineris/config.toml:2
+model.reasoning = "none"                    # profile review (project: ~/work/app/.cineris/config.toml:10)
+model.roles.fast.speed = "standard"         # user: ~/cineris/config.toml:10
+model.speed = "standard"                    # default
+model.speed_cooldown = "10m"                # default
+model.speed_cooldown_min = "1m"             # default
+model.speed_fallback = true                 # default
+model.speed_wait = "5s"                     # command-line: -c model.speed_wait
+permissions.mode = "read-only"              # profile review (user: ~/cineris/config.toml:33)
+permissions.rules = [
+    { action = "deny", effect = "write", match = "/etc/**" },  # managed: ~/managed/config.toml:9
+    { action = "allow", effect = "exec", match = "cargo test *" },  # user: ~/cineris/config.toml:23
+    { action = "deny", effect = "write", match = "**/.env*" },  # project: ~/work/app/.cineris/config.toml:4
+]
+profile = "review"                          # user: ~/cineris/config.toml:2
+project.learn = true                        # default
+project.profile_tokens = 1500               # default
+providers.local.base_url = "http://localhost:11434"  # user: ~/cineris/config.toml:13
+providers.local.first_event_timeout = "5m"  # user: ~/cineris/config.toml:14
+providers.local.headers = { Authorization = { env = "LOCAL_TOKEN" }, X-Team = "[redacted]" }  # user: ~/cineris/config.toml:15
+retry.attempts = 3                          # user: ~/cineris/config.toml:18
+retry.backoff_base = "1s"                   # default
+retry.backoff_cap = "30s"                   # default
+retry.backoff_factor = 2.0                  # default
+retry.first_event_timeout = "1m"            # default
+retry.idle_timeout = "1m30s"                # default
+retry.max_wait = "1m"                       # project-local: ~/work/app/.cineris/config.local.toml:2
+rpc.approval_timeout = "10m"                # default
+rpc.stalled_client = "30s"                  # default
+sandbox.enabled = true                      # managed: ~/managed/config.toml:6, locked
+sandbox.network = "off"                     # default
+sandbox.protect = [
+    "/srv/keys",                            # managed: ~/managed/config.toml:7
+]
+sandbox.write = []                          # default
+session.durability = "item"                 # default
+shell.env_remove = []                       # default
+shell.max_timeout = "30m"                   # default
+shell.timeout = "2m"                        # default
+stats.enabled = true                        # default
+stats.retention = 3                         # default
+tui.density = "comfortable"                 # default
+tui.glyphs = "auto"                         # default
+tui.presenter = "inline"                    # default
+tui.prose_width = 80                        # default
+tui.reasoning = "summary"                   # default
+tui.reduced_motion = false                  # default
+tui.theme = "dusk"                          # user: ~/cineris/config.toml:36
+tui.tool_detail = 12                        # default
+tui.tool_output = "auto"                    # default
+tui.turn_summary = false                    # default
+usage.ranges = "calendar"                   # default
+usage.refresh = []                          # default
+usage.week_start = "monday"                 # default
+verify.commands = []                        # default
+verify.mode = "auto"                        # default
+verify.round_time = "2m"                    # default
+verify.rounds = 2                           # default
+verify.turn_time = "4m"                     # default

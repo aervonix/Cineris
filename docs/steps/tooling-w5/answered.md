@@ -4,7 +4,7 @@ This step is not a numbered step of the build plan: it built the developer tooli
 
 ## Decided with the owner
 
-- **The order of events in the loop's tests is seeded through `run_blocking`, behind a cargo feature.** The varying order was not the loop picking at random: it looks at what is ready in a fixed order. It was the blocking pool, where each call is planned and each result bounded. The seam is `cortex_tools::InlineBlocking`, behind the feature `test-hooks` of `cortex-tools`, which only a dev-dependency may turn on. `cargo xtask rules` checks that. What a workspace test build does with the feature is in [testing-and-ci.md](../../testing-and-ci.md), "A seeded order of events".
+- **The order of events in the loop's tests is seeded through `run_blocking`, behind a cargo feature.** The varying order was not the loop picking at random: it looks at what is ready in a fixed order. It was the blocking pool, where each call is planned and each result bounded. The seam is `cineris_tools::InlineBlocking`, behind the feature `test-hooks` of `cineris-tools`, which only a dev-dependency may turn on. `cargo xtask rules` checks that. What a workspace test build does with the feature is in [testing-and-ci.md](../../testing-and-ci.md), "A seeded order of events".
 - **"Every break still applies" is a blocking check.** `cargo xtask check` has a `breaks` step. A change that moves code out from under a break updates the break in the same pull request, or deletes it. The message names the list and the line and says which.
 - **The break lists are `mutations/<name>.breaks`,** one file for each step or crate, in a line format of our own that `xtask` reads. Not TOML: `xtask` is built before every CI job and has no TOML parser, and a parser there costs every job its build.
 - **`cargo xtask mutate` stops starting work after five minutes and carries on the next time,** so that a long list gives a shared build machine back between slices.
@@ -24,7 +24,7 @@ The 101 breaks of steps 7, 8, 9, 10, 12 and 14 were written again from the pull 
 
 **The first row is a finding about a test, not about the list.** `rounds::questions_are_asked_one_at_a_time_in_call_order_while_allowed_calls_run` is named for the rule "no other question is put while one is open", and passes with that rule removed from `Round::ask_next`. Its two questions are answered at once, so two open together look the same to it as one after the other. The rule is held by one test of step 12. The test is step 7's, and this step did not change it.
 
-**This step's own list found a flaw in the driver.** `mutations/tooling-w5.breaks` has 23 breaks of the step's own code. Two of them are of the seeded order in `cortex-tools`, whose tests are built only when `cortex-agent`'s tests are in the same build. They were reported as naming tests that do not exist: the tests with nothing broken had been run for each crate by itself, where those tests are not built. They are now run for each set of packages a break runs, and every break does what its list expects.
+**This step's own list found a flaw in the driver.** `mutations/tooling-w5.breaks` has 23 breaks of the step's own code. Two of them are of the seeded order in `cineris-tools`, whose tests are built only when `cineris-agent`'s tests are in the same build. They were reported as naming tests that do not exist: the tests with nothing broken had been run for each crate by itself, where those tests are not built. They are now run for each set of packages a break runs, and every break does what its list expects.
 
 **Step 31's own breaks were converted, and all of them still apply.** The session of step 31 kept its 87 breaks as a list of text before and after, with the tests each one failed. A script turned the list into `mutations/step-31.breaks`: the break's own name as its `rule`, the first two tests that failed as its `caught-by`. Two breaks named code that is in the file twice once layout is not counted, and were given the function they are in. All 87 apply and are caught, six of which the session's exact-text driver could no longer apply in its last run. With them `mutations/` holds 211 breaks.
 
@@ -32,19 +32,19 @@ The lists of the steps before it are a reconstruction. They hold the rules the d
 
 ## The seeded order, and the tests that were there
 
-Every test of `cortex-agent` passed under seeds 0 to 299 when the rig was seeded, and again under 1000 to 2999 before this step was reported. No test depended on the order.
+Every test of `cineris-agent` passed under seeds 0 to 299 when the rig was seeded, and again under 1000 to 2999 before this step was reported. No test depended on the order.
 
 ## Tests that still have a scratch directory of their own
 
-`cortex_testkit::Scratch` replaced the copies in the integration tests of `cortex-config`, `cortex-policy`, `cortex-session` and `cortex-agent`, where the move was a change of name. These were left:
+`cineris_testkit::Scratch` replaced the copies in the integration tests of `cineris-config`, `cineris-policy`, `cineris-session` and `cineris-agent`, where the move was a change of name. These were left:
 
 | Where | Why it was left |
 |---|---|
-| `crates/cortex-base/tests/it/main.rs` (`Scratch`, 87 uses) | `cortex-base` has no dev-dependency on the test kit, which depends on it. Its helper also makes path resolvers. Adding the edge is a decision for the crate's owner. |
-| `crates/cortex-tools/tests/it/main.rs` (`Workspace`) and `tests/it/changes.rs` (its own `git`) | The workspace is more than a directory (a path resolver, a file table, checkpoints), and step 13a was changing these files at the same time. |
-| `crates/cortex-core/tests/it/undo.rs` (`World`) | The same, and it is step 13a's crate. |
-| `crates/cortex-cli/tests/system/main.rs`, `crates/cortex-sandbox/tests/it/tree.rs` | One directory each, made in one line. |
-| Unit tests that use the system's temporary directory with the process id in the name: `cortex-session` (`lock.rs`, `store.rs`, `session.rs`), `cortex-config` (`dirs.rs`, `credentials/file.rs`), `cortex-tools` (`change.rs`, `read.rs`), `cortex-base` (`atomic.rs`, `nofollow.rs`) | Each is a few lines with its own clean-up, and some need a directory another test must not share. `Scratch::outside` is the replacement when one of them is next changed. |
+| `crates/cineris-base/tests/it/main.rs` (`Scratch`, 87 uses) | `cineris-base` has no dev-dependency on the test kit, which depends on it. Its helper also makes path resolvers. Adding the edge is a decision for the crate's owner. |
+| `crates/cineris-tools/tests/it/main.rs` (`Workspace`) and `tests/it/changes.rs` (its own `git`) | The workspace is more than a directory (a path resolver, a file table, checkpoints), and step 13a was changing these files at the same time. |
+| `crates/cineris-core/tests/it/undo.rs` (`World`) | The same, and it is step 13a's crate. |
+| `crates/cineris-cli/tests/system/main.rs`, `crates/cineris-sandbox/tests/it/tree.rs` | One directory each, made in one line. |
+| Unit tests that use the system's temporary directory with the process id in the name: `cineris-session` (`lock.rs`, `store.rs`, `session.rs`), `cineris-config` (`dirs.rs`, `credentials/file.rs`), `cineris-tools` (`change.rs`, `read.rs`), `cineris-base` (`atomic.rs`, `nofollow.rs`) | Each is a few lines with its own clean-up, and some need a directory another test must not share. `Scratch::outside` is the replacement when one of them is next changed. |
 
 ## What the independent review found
 

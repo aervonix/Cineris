@@ -10,6 +10,6 @@
 
   y Trust it   n Not now   x Never for this project
   Trust it turns these on; not now asks again at the next start; never asks no
-  more, until `cortex permissions trust`.
+  more, until `cineris permissions trust`.
 
   esc is not now · ctrl+o shows it whole

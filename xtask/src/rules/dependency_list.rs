@@ -202,23 +202,23 @@ mod tests {
     #[test]
     fn a_list_that_matches_the_manifests_passes() {
         let packages = [
-            krate("cortex-config", &["toml"]),
-            krate("cortex-knowledge", &["toml"]),
+            krate("cineris-config", &["toml"]),
+            krate("cineris-knowledge", &["toml"]),
         ];
         let list =
-            table(&["| `toml` | `cortex-config`, `cortex-knowledge` | Configuration files. |"]);
+            table(&["| `toml` | `cineris-config`, `cineris-knowledge` | Configuration files. |"]);
 
         assert_eq!(messages(&packages, &list), Vec::<String>::new());
     }
 
     #[test]
     fn a_dependency_with_no_row_fails() {
-        let found = messages(&[krate("cortex-cli", &["lexopt"])], &table(&[]));
+        let found = messages(&[krate("cineris-cli", &["lexopt"])], &table(&[]));
 
         assert_eq!(found.len(), 1);
         assert!(
             found[0].starts_with(
-                "crates/cortex-cli/Cargo.toml: `lexopt` is a dependency of cortex-cli"
+                "crates/cineris-cli/Cargo.toml: `lexopt` is a dependency of cineris-cli"
             )
         );
         assert!(found[0].contains("docs/dependencies.md has no row for it"));
@@ -227,8 +227,8 @@ mod tests {
     #[test]
     fn a_row_for_a_dependency_nobody_has_fails() {
         let found = messages(
-            &[krate("cortex-cli", &[])],
-            &table(&["| `lexopt` | `cortex-cli` | Flags. |"]),
+            &[krate("cineris-cli", &[])],
+            &table(&["| `lexopt` | `cineris-cli` | Flags. |"]),
         );
 
         assert_eq!(
@@ -242,20 +242,20 @@ mod tests {
     #[test]
     fn a_row_that_names_the_wrong_crates_fails() {
         let packages = [
-            krate("cortex-config", &["toml"]),
-            krate("cortex-knowledge", &["toml"]),
+            krate("cineris-config", &["toml"]),
+            krate("cineris-knowledge", &["toml"]),
         ];
         let found = messages(
             &packages,
-            &table(&["| `toml` | `cortex-config` | Configuration files. |"]),
+            &table(&["| `toml` | `cineris-config` | Configuration files. |"]),
         );
 
         assert_eq!(found.len(), 1);
         assert!(
             found[0]
-                .starts_with("docs/dependencies.md:6: `toml` is listed as used by cortex-config,")
+                .starts_with("docs/dependencies.md:6: `toml` is listed as used by cineris-config,")
         );
-        assert!(found[0].contains("the manifests have it in cortex-config, cortex-knowledge"));
+        assert!(found[0].contains("the manifests have it in cineris-config, cineris-knowledge"));
     }
 
     #[test]
@@ -269,10 +269,10 @@ mod tests {
     #[test]
     fn a_dependency_listed_twice_fails() {
         let list = table(&[
-            "| `toml` | `cortex-config` | a |",
-            "| `toml` | `cortex-config` | b |",
+            "| `toml` | `cineris-config` | a |",
+            "| `toml` | `cineris-config` | b |",
         ]);
-        let found = messages(&[krate("cortex-config", &["toml"])], &list);
+        let found = messages(&[krate("cineris-config", &["toml"])], &list);
 
         assert_eq!(found, ["docs/dependencies.md:7: `toml` has two rows."]);
     }

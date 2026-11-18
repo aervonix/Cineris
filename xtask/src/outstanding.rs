@@ -10,7 +10,7 @@
 //! ```text
 //! `interrupt` on an idle session does not stop a background summary request.
 //!
-//! - Area: cortex-agent
+//! - Area: cineris-agent
 //! - Owner: step 32
 //!
 //! | Item | Who | When |
@@ -20,13 +20,13 @@
 //!
 //! - **The first line** is the item in a sentence: the text of its line in
 //!   the index.
-//! - **`Area`** is the crate the item is about (`cortex-tui`), or one of
+//! - **`Area`** is the crate the item is about (`cineris-tui`), or one of
 //!   [`AREAS`]: the heading it is listed under.
 //! - **`Owner`** is who settles it, in the few words the index gives; the
 //!   table's `Who` says it in full.
 //! - **`Flaky`**, any number of times, names a test the item is about that
 //!   fails now and then for a reason not yet fixed:
-//!   `` - Flaky: `cortex-core::it trust::sys_…` ``, the test's binary and its
+//!   `` - Flaky: `cineris-core::it trust::sys_…` ``, the test's binary and its
 //!   name as nextest gives them: the list of known flakes is these, and
 //!   `stress`, `ci` and `mutate` read it ([`crate::flaky`]).
 //!
@@ -79,7 +79,7 @@ What the owner or a later step still has to settle: one file per item. Together 
 
 **This page is written by `cargo xtask outstanding`** from the items' files (since the tenth tooling step): edit an item's file, never this page. `cargo xtask rules` fails when the page is not what the command writes.
 
-- **Leaving something open:** add a file, named for the item in lowercase words joined by hyphens, and run `cargo xtask outstanding`. The file is the item in a sentence on its first line, which is its line in the index below; a blank line; the fields, a list: `- Area:` the crate it is about (`cortex-tui`) or `tooling`, `windows` or `other`, `- Owner:` who settles it, in a few words, and `- Flaky:` for each test the item is about that fails now and then, its binary and name as nextest gives them (`` - Flaky: `cortex-core::it trust::sys_…` ``), which `stress`, `ci` at the desk and `mutate`'s baseline run again once when it fails (\"Known flakes\" in [testing-and-ci.md](../testing-and-ci.md)); a blank line; and a table of one row, under the header `| Item | Who | When |`: the item in full, who settles it, and when.
+- **Leaving something open:** add a file, named for the item in lowercase words joined by hyphens, and run `cargo xtask outstanding`. The file is the item in a sentence on its first line, which is its line in the index below; a blank line; the fields, a list: `- Area:` the crate it is about (`cineris-tui`) or `tooling`, `windows` or `other`, `- Owner:` who settles it, in a few words, and `- Flaky:` for each test the item is about that fails now and then, its binary and name as nextest gives them (`` - Flaky: `cineris-core::it trust::sys_…` ``), which `stress`, `ci` at the desk and `mutate`'s baseline run again once when it fails (\"Known flakes\" in [testing-and-ci.md](../testing-and-ci.md)); a blank line; and a table of one row, under the header `| Item | Who | When |`: the item in full, who settles it, and when.
 - **Settling an item:** delete its file, run `cargo xtask outstanding`, and record the answer in the settling step's `steps/<step>/answered.md`.
 - **Changing an item:** edit its file, and run the command if its first line or a field changed.
 - **An item several steps share** stays one file, and each step that does its part leaves the file alone and records that part in its own `steps/<step>/answered.md`. Only the step that finishes the item deletes its file, so parallel steps never edit it.
@@ -93,7 +93,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ";
 
 /// A test an item names as flaky: the binary nextest runs it in and its
-/// name there, as nextest's report gives them (`cortex-core::it` and
+/// name there, as nextest's report gives them (`cineris-core::it` and
 /// `trust::sys_…`).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct Flaky {
@@ -139,8 +139,8 @@ fn is_test_name(name: &str) -> bool {
 }
 
 /// Whether `binary` is a test binary of the workspace as nextest names it:
-/// a crate's name for its unit tests (`cortex-core`), or the crate's and a
-/// target's (`cortex-core::it`, `cortex-cli::bin/cortex`).
+/// a crate's name for its unit tests (`cineris-core`), or the crate's and a
+/// target's (`cineris-core::it`, `cineris-cli::bin/cineris`).
 fn is_binary(binary: &str, crates: &BTreeSet<String>) -> bool {
     let (package, target) = match binary.split_once("::") {
         Some((package, target)) => (package, Some(target)),
@@ -227,12 +227,12 @@ pub(crate) fn parse(
                     return Err(problem(number, "`Area` is given twice"));
                 }
                 let known = AREAS.iter().any(|(key, _)| *key == value)
-                    || (value.starts_with("cortex-") && crates.contains(value));
+                    || (value.starts_with("cineris-") && crates.contains(value));
                 if !known {
                     return Err(problem(
                         number,
                         format!(
-                            "`{value}` is no area: an area is a crate of `crates/` (`cortex-tui`), \
+                            "`{value}` is no area: an area is a crate of `crates/` (`cineris-tui`), \
                              or {}",
                             AREAS.map(|(key, _)| format!("`{key}`")).join(", ")
                         ),
@@ -261,7 +261,7 @@ pub(crate) fn parse(
                         number,
                         format!(
                             "`Flaky` is `{value}`, and it should be a test's binary and its name, \
-                             as nextest's report gives them: `cortex-core::it trust::sys_x`"
+                             as nextest's report gives them: `cineris-core::it trust::sys_x`"
                         ),
                     ));
                 };
@@ -270,8 +270,8 @@ pub(crate) fn parse(
                         number,
                         format!(
                             "`{binary}` is no test binary of the workspace: a crate's unit tests \
-                             are its name (`cortex-core`), its integration tests its name and \
-                             the target's (`cortex-core::it`)"
+                             are its name (`cineris-core`), its integration tests its name and \
+                             the target's (`cineris-core::it`)"
                         ),
                     ));
                 }
@@ -567,7 +567,7 @@ mod tests {
     use super::{Flaky, difference, index, parse, read};
 
     fn crates() -> BTreeSet<String> {
-        ["cortex-core", "cortex-tui", "cortex-index"]
+        ["cineris-core", "cineris-tui", "cineris-index"]
             .map(str::to_owned)
             .into_iter()
             .collect()
@@ -583,22 +583,22 @@ mod tests {
     fn an_item_is_its_sentence_its_fields_and_its_row() {
         let text = item(
             "A flag that is not read.",
-            "- Area: cortex-tui\n- Owner: step 13\n- Flaky: `cortex-core::it trust::sys_x`\n\
-             - Flaky: cortex-tui signals::y\n",
+            "- Area: cineris-tui\n- Owner: step 13\n- Flaky: `cineris-core::it trust::sys_x`\n\
+             - Flaky: cineris-tui signals::y\n",
         );
         let parsed = parse("a-flag", &text, &crates()).unwrap();
         assert_eq!(parsed.summary, "A flag that is not read.");
-        assert_eq!(parsed.area, "cortex-tui");
+        assert_eq!(parsed.area, "cineris-tui");
         assert_eq!(parsed.owner, "step 13");
         assert_eq!(
             parsed.flaky,
             [
                 Flaky {
-                    binary: "cortex-core::it".to_owned(),
+                    binary: "cineris-core::it".to_owned(),
                     test: "trust::sys_x".to_owned()
                 },
                 Flaky {
-                    binary: "cortex-tui".to_owned(),
+                    binary: "cineris-tui".to_owned(),
                     test: "signals::y".to_owned()
                 }
             ]
@@ -618,7 +618,7 @@ mod tests {
 
     #[test]
     fn a_file_out_of_form_is_refused_at_its_line() {
-        let fields = "- Area: cortex-tui\n- Owner: step 13\n";
+        let fields = "- Area: cineris-tui\n- Owner: step 13\n";
         for (text, line, needle) in [
             (ROW.to_owned(), 1, "the first line"),
             (String::new(), 1, "the first line"),
@@ -629,67 +629,70 @@ mod tests {
                 "one line",
             ),
             (item("x", "- Owner: step 13\n"), 4, "no `- Area:`"),
-            (item("x", "- Area: cortex-tui\n"), 4, "no `- Owner:`"),
+            (item("x", "- Area: cineris-tui\n"), 4, "no `- Owner:`"),
             (
-                item("x", "- Area: cortex-nope\n- Owner: x\n"),
+                item("x", "- Area: cineris-nope\n- Owner: x\n"),
                 3,
                 "is no area",
             ),
             (item("x", "- Area: Tooling\n- Owner: x\n"), 3, "is no area"),
             (
-                item("x", "- Area: cortex-tui\n- Area: cortex-tui\n- Owner: x\n"),
+                item(
+                    "x",
+                    "- Area: cineris-tui\n- Area: cineris-tui\n- Owner: x\n",
+                ),
                 4,
                 "twice",
             ),
-            (item("x", "- Area: cortex-tui\n- Owner:\n"), 4, "empty"),
-            (item("x", "- Area: cortex-tui\n- Owner: .\n"), 4, "empty"),
+            (item("x", "- Area: cineris-tui\n- Owner:\n"), 4, "empty"),
+            (item("x", "- Area: cineris-tui\n- Owner: .\n"), 4, "empty"),
             (
-                item("x", "- Area: cortex-tui\n- Owner: x\n- Who: y\n"),
+                item("x", "- Area: cineris-tui\n- Owner: x\n- Who: y\n"),
                 5,
                 "no field",
             ),
             (
-                item("x", "Area: cortex-tui\n- Owner: x\n"),
+                item("x", "Area: cineris-tui\n- Owner: x\n"),
                 3,
                 "not a field",
             ),
             (
-                item("x", &format!("{fields}- Flaky: cortex-core\n")),
+                item("x", &format!("{fields}- Flaky: cineris-core\n")),
                 5,
                 "binary and its name",
             ),
             (
-                item("x", &format!("{fields}- Flaky: cortex-nope::it a::b\n")),
+                item("x", &format!("{fields}- Flaky: cineris-nope::it a::b\n")),
                 5,
                 "no test binary",
             ),
             (
-                item("x", &format!("{fields}- Flaky: cortex-core::it a b\n")),
+                item("x", &format!("{fields}- Flaky: cineris-core::it a b\n")),
                 5,
                 "binary and its name",
             ),
             (
-                item("x", &format!("{fields}- Flaky: cortex-core::it a(b)\n")),
+                item("x", &format!("{fields}- Flaky: cineris-core::it a(b)\n")),
                 5,
                 "exactly",
             ),
             (
-                item("x", &format!("{fields}- Flaky: cortex-core::it a:b\n")),
+                item("x", &format!("{fields}- Flaky: cineris-core::it a:b\n")),
                 5,
                 "exactly",
             ),
             (
-                item("x", &format!("{fields}- Flaky: cortex-core::it a:::b\n")),
+                item("x", &format!("{fields}- Flaky: cineris-core::it a:::b\n")),
                 5,
                 "exactly",
             ),
             (
-                item("x", &format!("{fields}- Flaky: cortex-core::it ::a\n")),
+                item("x", &format!("{fields}- Flaky: cineris-core::it ::a\n")),
                 5,
                 "exactly",
             ),
             (
-                item("x", &format!("{fields}- Flaky: cortex-core::it a::\n")),
+                item("x", &format!("{fields}- Flaky: cineris-core::it a::\n")),
                 5,
                 "exactly",
             ),
@@ -734,11 +737,11 @@ mod tests {
             ("docs/outstanding/README.md", "anything"),
             (
                 "docs/outstanding/b-two.md",
-                &*item("Two", "- Area: cortex-tui\n- Owner: step 25\n"),
+                &*item("Two", "- Area: cineris-tui\n- Owner: step 25\n"),
             ),
             (
                 "docs/outstanding/a-one.md",
-                &*item("One.", "- Area: cortex-tui\n- Owner: x\n"),
+                &*item("One.", "- Area: cineris-tui\n- Owner: x\n"),
             ),
             (
                 "docs/outstanding/odd.md",
@@ -750,7 +753,7 @@ mod tests {
             ),
             (
                 "docs/outstanding/core.md",
-                &*item("Core.", "- Area: cortex-core\n- Owner: z\n"),
+                &*item("Core.", "- Area: cineris-core\n- Owner: z\n"),
             ),
             ("docs/outstanding/bad.md", "not an item"),
             ("docs/steps/07/answered.md", "elsewhere"),
@@ -764,9 +767,9 @@ mod tests {
         let tail = &text[text.find("\n### ").unwrap()..];
         assert_eq!(
             tail,
-            "\n### cortex-core\n\n\
+            "\n### cineris-core\n\n\
              - [core](core.md): Core. Owner: z.\n\
-             \n### cortex-tui\n\n\
+             \n### cineris-tui\n\n\
              - [a-one](a-one.md): One. Owner: x.\n\
              - [b-two](b-two.md): Two. Owner: step 25.\n\
              \n### The tooling and CI\n\n\
@@ -829,8 +832,8 @@ mod tests {
                 .join(format!("xtask-outstanding-{label}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&root);
             std::fs::create_dir_all(root.join("docs/outstanding")).unwrap();
-            std::fs::create_dir_all(root.join("crates/cortex-tui")).unwrap();
-            std::fs::write(root.join("crates/cortex-tui/Cargo.toml"), "").unwrap();
+            std::fs::create_dir_all(root.join("crates/cineris-tui")).unwrap();
+            std::fs::write(root.join("crates/cineris-tui/Cargo.toml"), "").unwrap();
             for (name, text) in items {
                 std::fs::write(root.join("docs/outstanding").join(name), text).unwrap();
             }
@@ -850,7 +853,7 @@ mod tests {
 
     #[test]
     fn the_command_writes_the_index_and_check_only_compares() {
-        let one = item("One.", "- Area: cortex-tui\n- Owner: step 25\n");
+        let one = item("One.", "- Area: cineris-tui\n- Owner: step 25\n");
         let tree = Tree::new(
             "write",
             &[
@@ -875,7 +878,7 @@ mod tests {
         );
         assert!(
             tree.index_text()
-                .ends_with("### cortex-tui\n\n- [one](one.md): One. Owner: step 25.\n"),
+                .ends_with("### cineris-tui\n\n- [one](one.md): One. Owner: step 25.\n"),
             "{}",
             tree.index_text()
         );
@@ -894,13 +897,13 @@ mod tests {
 
     #[test]
     fn a_line_or_a_heading_twice_is_named_twice() {
-        let want = "a\n\n### cortex-tui\n\n- [x](x.md): x.\n";
+        let want = "a\n\n### cineris-tui\n\n- [x](x.md): x.\n";
         let doubled = difference(
-            "a\n\n### cortex-tui\n\n### cortex-tui\n\n- [x](x.md): x.\n",
+            "a\n\n### cineris-tui\n\n### cineris-tui\n\n- [x](x.md): x.\n",
             want,
         );
         assert!(
-            doubled.contains("It has twice:\n      ### cortex-tui"),
+            doubled.contains("It has twice:\n      ### cineris-tui"),
             "{doubled}"
         );
     }
@@ -915,7 +918,7 @@ mod tests {
         let entry = |name: &str| {
             (
                 format!("{name}.md"),
-                item(&format!("{name}."), "- Area: cortex-tui\n- Owner: x\n"),
+                item(&format!("{name}."), "- Area: cineris-tui\n- Owner: x\n"),
             )
         };
         let index_of = |names: &[&str]| {

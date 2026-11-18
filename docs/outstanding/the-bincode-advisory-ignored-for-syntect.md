@@ -1,6 +1,6 @@
 `deny.toml` ignores RUSTSEC-2025-0141, `bincode` unmaintained, reached only through `syntect`'s loading of its packed grammars; drop it when `syntect` moves off `bincode` or a flaw is named.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: the next step that touches highlighting, otherwise step 25
 
 | Item | Who | When |

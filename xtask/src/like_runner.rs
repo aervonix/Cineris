@@ -49,36 +49,36 @@ pub(crate) const RUNNER_THREADS: &str = "4";
 /// tooling step's table, of three system tests at a time, read Windows'
 /// system tier 84 s where runners read 39 to 71.
 const FACTORS: &[(&str, Tier, f64, f64)] = &[
-    ("cortex-agent", Tier::Integration, 1.56, 3.04),
-    ("cortex-base", Tier::Unit, 1.73, 3.62),
-    ("cortex-base", Tier::Integration, 0.75, 2.39),
-    ("cortex-cli", Tier::System, 0.96, 2.84),
-    ("cortex-config", Tier::Integration, 0.22, 0.78),
-    ("cortex-core", Tier::Unit, 0.52, 1.41),
-    ("cortex-core", Tier::Integration, 0.67, 1.28),
-    ("cortex-core", Tier::System, 1.17, 5.39),
-    ("cortex-index", Tier::Unit, 1.67, 2.45),
-    ("cortex-index", Tier::Integration, 1.76, 2.83),
-    ("cortex-llm", Tier::Unit, 1.42, 3.28),
-    ("cortex-llm", Tier::Integration, 1.45, 2.17),
-    ("cortex-llm", Tier::System, 1.68, 0.32),
-    ("cortex-policy", Tier::Unit, 1.34, 2.22),
-    ("cortex-policy", Tier::Integration, 0.80, 1.57),
-    ("cortex-policy", Tier::System, 1.12, 4.15),
-    ("cortex-sandbox", Tier::System, 4.89, 3.33),
-    ("cortex-session", Tier::Unit, 1.03, 2.35),
-    ("cortex-session", Tier::Integration, 0.80, 1.51),
-    ("cortex-session", Tier::System, 5.09, 26.69),
-    ("cortex-stats", Tier::Unit, 1.56, 2.44),
-    ("cortex-term", Tier::Unit, 1.52, 2.01),
-    ("cortex-term", Tier::Integration, 1.50, 1.99),
-    ("cortex-term", Tier::System, 1.18, 4.72),
-    ("cortex-tools", Tier::Unit, 0.99, 2.43),
-    ("cortex-tools", Tier::Integration, 1.64, 4.35),
-    ("cortex-tools", Tier::System, 2.01, 31.55),
-    ("cortex-tui", Tier::Unit, 1.57, 2.03),
-    ("cortex-tui", Tier::Integration, 1.57, 2.10),
-    ("cortex-tui", Tier::System, 3.35, 12.58),
+    ("cineris-agent", Tier::Integration, 1.56, 3.04),
+    ("cineris-base", Tier::Unit, 1.73, 3.62),
+    ("cineris-base", Tier::Integration, 0.75, 2.39),
+    ("cineris-cli", Tier::System, 0.96, 2.84),
+    ("cineris-config", Tier::Integration, 0.22, 0.78),
+    ("cineris-core", Tier::Unit, 0.52, 1.41),
+    ("cineris-core", Tier::Integration, 0.67, 1.28),
+    ("cineris-core", Tier::System, 1.17, 5.39),
+    ("cineris-index", Tier::Unit, 1.67, 2.45),
+    ("cineris-index", Tier::Integration, 1.76, 2.83),
+    ("cineris-llm", Tier::Unit, 1.42, 3.28),
+    ("cineris-llm", Tier::Integration, 1.45, 2.17),
+    ("cineris-llm", Tier::System, 1.68, 0.32),
+    ("cineris-policy", Tier::Unit, 1.34, 2.22),
+    ("cineris-policy", Tier::Integration, 0.80, 1.57),
+    ("cineris-policy", Tier::System, 1.12, 4.15),
+    ("cineris-sandbox", Tier::System, 4.89, 3.33),
+    ("cineris-session", Tier::Unit, 1.03, 2.35),
+    ("cineris-session", Tier::Integration, 0.80, 1.51),
+    ("cineris-session", Tier::System, 5.09, 26.69),
+    ("cineris-stats", Tier::Unit, 1.56, 2.44),
+    ("cineris-term", Tier::Unit, 1.52, 2.01),
+    ("cineris-term", Tier::Integration, 1.50, 1.99),
+    ("cineris-term", Tier::System, 1.18, 4.72),
+    ("cineris-tools", Tier::Unit, 0.99, 2.43),
+    ("cineris-tools", Tier::Integration, 1.64, 4.35),
+    ("cineris-tools", Tier::System, 2.01, 31.55),
+    ("cineris-tui", Tier::Unit, 1.57, 2.03),
+    ("cineris-tui", Tier::Integration, 1.57, 2.10),
+    ("cineris-tui", Tier::System, 3.35, 12.58),
     ("xtask", Tier::Unit, 1.54, 4.43),
     ("xtask", Tier::System, 1.33, 4.85),
 ];
@@ -271,17 +271,17 @@ fn on_the_runner(counts: &Counts) -> f64 {
 /// integration tier stalled on the desk's disk, and is not read) against a
 /// 9 ms runner's run of the same tree with its starts written down (`try`
 /// 43892837490). Tiers 1 and 2 start no process, and their factors are
-/// [`FACTORS`]'. `cortex-tools`' and `xtask`'s are large because
+/// [`FACTORS`]'. `cineris-tools`' and `xtask`'s are large because
 /// Windows-only tests (each shell's own) and the starts no mark covers (the
 /// owner guard's tests' own git) run only on the runner.
 const WORK_FACTORS: &[(&str, Tier, f64)] = &[
-    ("cortex-cli", Tier::System, 0.53),
-    ("cortex-core", Tier::System, 0.00),
-    ("cortex-llm", Tier::System, 0.53),
-    ("cortex-policy", Tier::System, 6.46),
-    ("cortex-sandbox", Tier::System, 0.00),
-    ("cortex-term", Tier::System, 0.00),
-    ("cortex-tools", Tier::System, 17.37),
+    ("cineris-cli", Tier::System, 0.53),
+    ("cineris-core", Tier::System, 0.00),
+    ("cineris-llm", Tier::System, 0.53),
+    ("cineris-policy", Tier::System, 6.46),
+    ("cineris-sandbox", Tier::System, 0.00),
+    ("cineris-term", Tier::System, 0.00),
+    ("cineris-tools", Tier::System, 17.37),
     ("xtask", Tier::System, 13.09),
 ];
 
@@ -708,28 +708,28 @@ mod tests {
     /// one in tier 1.
     fn desk() -> Vec<TestCase> {
         let mut cases: Vec<TestCase> = (0..100)
-            .map(|index| case("cortex-base", &format!("t::quick_{index}"), 0.002))
+            .map(|index| case("cineris-base", &format!("t::quick_{index}"), 0.002))
             .collect();
-        cases.push(case("cortex-llm::it", "decode::a", 1.002));
-        cases.push(case("cortex-new", "t::b", 1.002));
+        cases.push(case("cineris-llm::it", "decode::a", 1.002));
+        cases.push(case("cineris-new", "t::b", 1.002));
         cases
     }
 
     #[test]
     fn a_crate_is_scaled_by_its_own_factor_and_an_unknown_one_by_its_tiers() {
-        assert_eq!(factor("cortex-llm", Tier::Integration, Os::Windows), 2.17);
-        assert_eq!(factor("cortex-new", Tier::Unit, Os::Windows), 2.61);
-        assert_eq!(factor("cortex-new", Tier::Unit, Os::Linux), 1.43);
+        assert_eq!(factor("cineris-llm", Tier::Integration, Os::Windows), 2.17);
+        assert_eq!(factor("cineris-new", Tier::Unit, Os::Windows), 2.61);
+        assert_eq!(factor("cineris-new", Tier::Unit, Os::Linux), 1.43);
 
         let text = estimate(&desk());
 
-        // Windows: 1 s of cortex-llm's tier 2 is 2.2 s on the runner and
+        // Windows: 1 s of cineris-llm's tier 2 is 2.2 s on the runner and
         // 2.6 s on a slow one; 1 s of an unknown crate's tier 1 is 2.6 s.
         assert!(
             text.contains("  2, integration      1.0 s    2.2 s          2.6 s     40 s\n"),
             "{text}"
         );
-        assert!(text.contains("      most: cortex-llm 2.2 s\n"), "{text}");
+        assert!(text.contains("      most: cineris-llm 2.2 s\n"), "{text}");
         assert!(
             text.contains("  1, unit             1.0 s    2.6 s          3.2 s     20 s\n"),
             "{text}"
@@ -744,11 +744,11 @@ mod tests {
     #[test]
     fn a_tier_a_slow_runner_would_put_over_its_budget_is_named() {
         let mut cases = desk();
-        cases.push(case("cortex-tools::it", "shell::sys_x", 2.502));
+        cases.push(case("cineris-tools::it", "shell::sys_x", 2.502));
 
         let text = estimate(&cases);
 
-        // 2.5 s of cortex-tools' system tests is 78.9 s on the Windows
+        // 2.5 s of cineris-tools' system tests is 78.9 s on the Windows
         // runner, and 96 s on a slow one.
         assert!(text.contains("78.9 s"), "{text}");
         assert!(text.contains("90 s  over on a slow runner"), "{text}");
@@ -768,32 +768,32 @@ mod tests {
     fn a_tests_starts_are_charged_at_the_runners_price_and_its_work_by_its_crate() {
         // 0.104 s at the desk above a 2 ms start: 0.1 s of it the work, and
         // two bash starts at 2 ms each.
-        // `cortex-policy`'s system tests, whose work factor is well above 1.
-        let case = case("cortex-policy::it", "trust::sys_a", 0.106);
-        assert!(work_factor("cortex-policy", Tier::System) > 2.0);
-        let counts = starts(&[("cortex-policy::it", "trust::sys_a", "bash", 2)])
-            .of("cortex-policy::it", "trust::sys_a");
+        // `cineris-policy`'s system tests, whose work factor is well above 1.
+        let case = case("cineris-policy::it", "trust::sys_a", 0.106);
+        assert!(work_factor("cineris-policy", Tier::System) > 2.0);
+        let counts = starts(&[("cineris-policy::it", "trust::sys_a", "bash", 2)])
+            .of("cineris-policy::it", "trust::sys_a");
         let seconds = windows_seconds(&case, 0.002, &counts);
         // The work is the time less the two starts' desk cost.
         let work = (0.104 - 2.0 * cost(Kind::Posix, Os::Linux))
-            * work_factor("cortex-policy", Tier::System);
+            * work_factor("cineris-policy", Tier::System);
         let shells = 2.0 * cost(Kind::WindowsPowerShell, Os::Windows);
         assert!((seconds - (work + shells)).abs() < 1e-9, "{seconds}");
         // A test that started nothing is all work.
         let quiet = windows_seconds(&case, 0.002, &Counts::default());
         assert!(
-            (quiet - 0.104 * work_factor("cortex-policy", Tier::System)).abs() < 1e-9,
+            (quiet - 0.104 * work_factor("cineris-policy", Tier::System)).abs() < 1e-9,
             "{quiet}"
         );
         // A version probe at the desk costs nothing on Windows, where the
         // tests' shell is asked nothing.
-        let probed = starts(&[("cortex-policy::it", "trust::sys_a", "probe>bash", 3)])
-            .of("cortex-policy::it", "trust::sys_a");
+        let probed = starts(&[("cineris-policy::it", "trust::sys_a", "probe>bash", 3)])
+            .of("cineris-policy::it", "trust::sys_a");
         let seconds = windows_seconds(&case, 0.002, &probed);
         assert!(
             (seconds
                 - (0.104 - 3.0 * cost(Kind::Probe, Os::Linux))
-                    * work_factor("cortex-policy", Tier::System))
+                    * work_factor("cineris-policy", Tier::System))
             .abs()
                 < 1e-9,
             "{seconds}"
@@ -804,8 +804,8 @@ mod tests {
             seconds: 0.003,
             ..case.clone()
         };
-        let many = starts(&[("cortex-policy::it", "trust::sys_a", "git", 50)])
-            .of("cortex-policy::it", "trust::sys_a");
+        let many = starts(&[("cineris-policy::it", "trust::sys_a", "git", 50)])
+            .of("cineris-policy::it", "trust::sys_a");
         let seconds = windows_seconds(&short, 0.002, &many);
         assert!(
             (seconds - 50.0 * cost(Kind::Git, Os::Windows)).abs() < 1e-9,
@@ -819,11 +819,11 @@ mod tests {
         let mut cases = desk();
         // Its work is 10 ms whatever it starts, each bash 2 ms more.
         cases.push(case(
-            "cortex-core::it",
+            "cineris-core::it",
             "knowledge::sys_x",
             0.012 + shells as f64 * 0.002,
         ));
-        let starts = starts(&[("cortex-core::it", "knowledge::sys_x", "bash", shells)]);
+        let starts = starts(&[("cineris-core::it", "knowledge::sys_x", "bash", shells)]);
         (cases, starts)
     }
 
@@ -844,7 +844,7 @@ mod tests {
         );
         assert!(
             text.contains(&format!(
-                "{more:+.2} s  cortex-core::it  knowledge::sys_x  [posix shell 14]"
+                "{more:+.2} s  cineris-core::it  knowledge::sys_x  [posix shell 14]"
             )),
             "{text}"
         );
@@ -856,8 +856,8 @@ mod tests {
 
     #[test]
     fn a_crate_whose_factor_was_measured_at_0_still_shows_its_work() {
-        assert_eq!(work_factor("cortex-core", Tier::System), LEAST_WORK_FACTOR);
-        let case = case("cortex-core::it", "trust::sys_a", 1.002);
+        assert_eq!(work_factor("cineris-core", Tier::System), LEAST_WORK_FACTOR);
+        let case = case("cineris-core::it", "trust::sys_a", 1.002);
         assert!((windows_seconds(&case, 0.002, &Counts::default()) - 1.0).abs() < 1e-9);
     }
 
@@ -891,7 +891,10 @@ mod tests {
             text.contains("1 test(s) failed on one side or both"),
             "{text}"
         );
-        assert!(text.contains("cortex-core::it  knowledge::sys_x"), "{text}");
+        assert!(
+            text.contains("cineris-core::it  knowledge::sys_x"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -911,8 +914,8 @@ mod tests {
     fn the_work_factors_give_the_runners_figure_for_the_desks_run() {
         // At the desk: 0.1 s of work and two bash starts at 2 ms.
         let mut desk = desk();
-        desk.push(case("cortex-core::it", "knowledge::sys_x", 0.106));
-        let desk_starts = starts(&[("cortex-core::it", "knowledge::sys_x", "bash", 2)]);
+        desk.push(case("cineris-core::it", "knowledge::sys_x", 0.106));
+        let desk_starts = starts(&[("cineris-core::it", "knowledge::sys_x", "bash", 2)]);
         // On the runner the same test took 2 s, and a test only the runner
         // has 0.5 s.
         let mut windows = desk.clone();
@@ -922,7 +925,7 @@ mod tests {
             }
         }
         windows.push(case(
-            "cortex-core::it",
+            "cineris-core::it",
             "knowledge::sys_windows_only",
             0.502,
         ));
@@ -930,12 +933,12 @@ mod tests {
         let factor = (2.5 - 2.0 * cost(Kind::WindowsPowerShell, Os::Windows)) / 0.1;
         assert!(
             table.contains(&format!(
-                "    (\"cortex-core\", Tier::System, {factor:.2}),"
+                "    (\"cineris-core\", Tier::System, {factor:.2}),"
             )),
             "{table}"
         );
         // By construction, the desk's run is estimated at the runner's time.
-        let counts = desk_starts.of("cortex-core::it", "knowledge::sys_x");
+        let counts = desk_starts.of("cineris-core::it", "knowledge::sys_x");
         let estimated = 0.1 * factor + on_the_runner(&counts);
         assert!((estimated - 2.5).abs() < 1e-9, "{estimated}");
     }
@@ -953,15 +956,15 @@ mod tests {
         let table = measure(&desk(), &linux, &windows);
 
         assert!(
-            table.contains("    (\"cortex-llm\", Tier::Integration, 2.00, 5.00),\n"),
+            table.contains("    (\"cineris-llm\", Tier::Integration, 2.00, 5.00),\n"),
             "{table}"
         );
         assert!(
-            table.contains("    (\"cortex-new\", Tier::Unit, 2.00, 5.00),\n"),
+            table.contains("    (\"cineris-new\", Tier::Unit, 2.00, 5.00),\n"),
             "{table}"
         );
         assert!(table.contains("    (Tier::Unit, 2.00, 5.00),\n"), "{table}");
         // A crate under 0.05 s at the desk is not listed.
-        assert!(!table.contains("(\"cortex-base\""), "{table}");
+        assert!(!table.contains("(\"cineris-base\""), "{table}");
     }
 }

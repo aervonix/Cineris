@@ -1,6 +1,6 @@
 After step 33's size fix the binary has about 5 MB left on each system (Windows 13.19 of 18 MiB, Linux 11.33 of 16), with extensions and MCP to come; each pull request shows its size. Open until a step-34 build passes on both.
 
-- Area: cortex-cli
+- Area: cineris-cli
 - Owner: step 34
 
 | Item | Who | When |

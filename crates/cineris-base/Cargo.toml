@@ -1,0 +1,57 @@
+[package]
+name = "cineris-base"
+description = "Small shared primitives: error kinds, secrets, ids, clock and RNG traits, cancellation, workspace paths, text utilities, atomic file writes, message framing and the changed-file check."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+cineris-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-core.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+
+# The no-follow open: the two flags of `open` that the standard library has
+# no names for, `O_NOFOLLOW` and `O_NONBLOCK`. Used by one module,
+# `nofollow`, through the standard library's safe `custom_flags`: no
+# `unsafe`.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+# Owner-only files: an access list can only be set through the Windows API
+# (docs/decisions/0029-owner-only-files-on-windows.md). Used by one module,
+# `private::windows`, the only place in this crate where `unsafe` is allowed.
+# The no-follow open (`nofollow`) uses the flag constants of the last family
+# but one, and that module's one function that reads a reparse tag.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+    "Win32_System_Time",
+] }
+
+[features]
+# Code for tests only: the `Hold` that makes library code stop at a point
+# (`hook`). Without it a point is nothing at all. Only dev-dependencies and
+# the test kit turn it on (`cargo xtask rules`).
+test-hooks = []
+
+[dev-dependencies]
+# This crate's own tests ask for its own `test-hooks`: it cannot depend on the
+# test kit, which depends on it. Not an edge of the crate table.
+cineris-base = { workspace = true, features = ["test-hooks"] }
+
+[lints]
+workspace = true

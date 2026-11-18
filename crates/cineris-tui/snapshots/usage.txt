@@ -1,0 +1,1149 @@
+== 60 columns, unicode, true colour, dark — opened, its history being read, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left,…|
+
+== 60 columns, unicode, true colour, dark — opened, its history being read, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left,…|
+  {b}This session                              {fg=a8}     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                      {}  600.0k  $0.40|
+    anthropic haiku-5.5 fast                   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris · read…|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96%|
+  {fg=a8}left · resets 12:01 · as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets|
+  {fg=a8}15:00|
+
+== 60 columns, unicode, true colour, dark — today by provider, model; a refresh, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left,…|
+
+== 60 columns, unicode, true colour, dark — today by provider, model; a refresh, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left,…|
+  {b}This session                         {fg=a8}     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                 {}  600.0k       $0.40|
+    anthropic haiku-5.5 fast              12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in…{fg=a8}     out        cost|
+  {b}anthropic|
+    opus-5.5                             612.0k      $41.87|
+    haiku-5.5                            201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      310.0k{fg=a8}           —|
+  total                                 $1.92 est. + $41.87|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for|
+  {fg=a8}you 5s|
+  {fg=a11}A statistics file that could not be read was set aside,|
+  {fg=a11}at ~/.local/state/cineris/stats/2026-10.jsonl.bad: the|
+  {fg=a11}months it held are not counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a|
+  {fg=a8}subscription is not billed this way|
+  venice{fg=a8}  requests reset since; unknown until the next|
+  {fg=a8}request · from the refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96%|
+  {fg=a8}left · resets 12:01 · as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets|
+  {fg=a8}15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a11}openai: the refresh failed: the key was refused (401).|
+
+== 60 columns, unicode, true colour, dark — today by project, provider, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left,…|
+
+== 60 columns, unicode, true colour, dark — today by project, provider, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left,…|
+  {b}This session                         {fg=a8}     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                 {}  600.0k       $0.40|
+    anthropic haiku-5.5 fast              12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by project, provider · days …{fg=a8}     out        cost|
+  {b}~/src/parser|
+    anthropic                            612.0k      $41.87|
+    anthropic                            201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           310.0k{fg=a8}           —|
+  total                                 $1.92 est. + $41.87|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for|
+  {fg=a8}you 5s|
+  {fg=a11}A statistics file that could not be read was set aside,|
+  {fg=a11}at ~/.local/state/cineris/stats/2026-10.jsonl.bad: the|
+  {fg=a11}months it held are not counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a|
+  {fg=a8}subscription is not billed this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96%|
+  {fg=a8}left · resets 12:01 · as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets|
+  {fg=a8}15:00|
+  openrouter{fg=a8}  not available|
+
+== 60 columns, unicode, true colour, dark — a limit near, opened by itself, collapsed
+  {fg=a11}anthropic fast tier: 18% of the output token limit left,…|
+
+== 60 columns, unicode, true colour, dark — a limit near, opened by itself, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left,…|
+  {b}This session                              {fg=a8}     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                      {}  600.0k  $0.40|
+    anthropic haiku-5.5 fast                   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model                {fg=a8}     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96%|
+  {fg=a8}left · resets 12:01 · as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets|
+  {fg=a8}15:00|
+
+== 60 columns, unicode, true colour, dark — nothing near, no history, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+
+== 60 columns, unicode, true colour, dark — nothing near, no history, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {b}This session                              {fg=a8}     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                      {}  600.0k  $0.40|
+    anthropic haiku-5.5 fast                   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model                {fg=a8}     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 60 columns, ascii, true colour, dark — opened, its history being read, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today | reading...|
+  {fg=a11}anthropic fast tier: 18% of the output token limit lef...|
+
+== 60 columns, ascii, true colour, dark — opened, its history being read, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today | reading...|
+  {fg=a11}anthropic fast tier: 18% of the output token limit lef...|
+  {b}This session                              {fg=a8}     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                      {}  600.0k  $0.40|
+    anthropic haiku-5.5 fast                   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model | days in Europe/Paris | re...|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96%|
+  {fg=a8}left · resets 12:01 | as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets|
+  {fg=a8}15:00|
+
+== 60 columns, ascii, true colour, dark — today by provider, model; a refresh, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit lef...|
+
+== 60 columns, ascii, true colour, dark — today by provider, model; a refresh, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit lef...|
+  {b}This session                         {fg=a8}     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                 {}  600.0k       $0.40|
+    anthropic haiku-5.5 fast              12.0k       $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model | days ...{fg=a8}     out        cost|
+  {b}anthropic|
+    opus-5.5                             612.0k      $41.87|
+    haiku-5.5                            201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      310.0k{fg=a8}           —|
+  total                                 $1.92 est. + $41.87|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for|
+  {fg=a8}you 5s|
+  {fg=a11}A statistics file that could not be read was set aside,|
+  {fg=a11}at ~/.local/state/cineris/stats/2026-10.jsonl.bad: the|
+  {fg=a11}months it held are not counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a|
+  {fg=a8}subscription is not billed this way|
+  venice{fg=a8}  requests reset since; unknown until the next|
+  {fg=a8}request | from the refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96%|
+  {fg=a8}left · resets 12:01 | as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets|
+  {fg=a8}15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a11}openai: the refresh failed: the key was refused (401).|
+
+== 60 columns, ascii, true colour, dark — today by project, provider, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit lef...|
+
+== 60 columns, ascii, true colour, dark — today by project, provider, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit lef...|
+  {b}This session                         {fg=a8}     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                 {}  600.0k       $0.40|
+    anthropic haiku-5.5 fast              12.0k       $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by project, provider | day...{fg=a8}     out        cost|
+  {b}~/src/parser|
+    anthropic                            612.0k      $41.87|
+    anthropic                            201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           310.0k{fg=a8}           —|
+  total                                 $1.92 est. + $41.87|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for|
+  {fg=a8}you 5s|
+  {fg=a11}A statistics file that could not be read was set aside,|
+  {fg=a11}at ~/.local/state/cineris/stats/2026-10.jsonl.bad: the|
+  {fg=a11}months it held are not counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a|
+  {fg=a8}subscription is not billed this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96%|
+  {fg=a8}left · resets 12:01 | as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets|
+  {fg=a8}15:00|
+  openrouter{fg=a8}  not available|
+
+== 60 columns, ascii, true colour, dark — a limit near, opened by itself, collapsed
+  {fg=a11}anthropic fast tier: 18% of the output token limit lef...|
+
+== 60 columns, ascii, true colour, dark — a limit near, opened by itself, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit lef...|
+  {b}This session                              {fg=a8}     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                      {}  600.0k  $0.40|
+    anthropic haiku-5.5 fast                   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model                {fg=a8}     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96%|
+  {fg=a8}left · resets 12:01 | as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets|
+  {fg=a8}15:00|
+
+== 60 columns, ascii, true colour, dark — nothing near, no history, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+
+== 60 columns, ascii, true colour, dark — nothing near, no history, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {b}This session                              {fg=a8}     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                      {}  600.0k  $0.40|
+    anthropic haiku-5.5 fast                   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model                {fg=a8}     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 80 columns, unicode, true colour, dark — opened, its history being read, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, true colour, dark — opened, its history being read, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris · reading…|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, true colour, dark — today by provider, model; a refresh, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, true colour, dark — today by provider, model; a refresh, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in…{fg=a8}      in  cache read     out        cost|
+  {b}anthropic|
+    opus-5.5                               1.2M       38.4M  612.0k      $41.87|
+    haiku-5.5                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at|
+  {fg=a11}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a11}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  venice{fg=a8}  requests reset since; unknown until the next request · from the|
+  {fg=a8}refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a11}openai: the refresh failed: the key was refused (401).|
+
+== 80 columns, unicode, true colour, dark — today by project, provider, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, true colour, dark — today by project, provider, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by project, provider · days …{fg=a8}      in  cache read     out        cost|
+  {b}~/src/parser|
+    anthropic                              1.2M       38.4M  612.0k      $41.87|
+    anthropic                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at|
+  {fg=a11}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a11}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+
+== 80 columns, unicode, true colour, dark — a limit near, opened by itself, collapsed
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, true colour, dark — a limit near, opened by itself, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, true colour, dark — nothing near, no history, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+
+== 80 columns, unicode, true colour, dark — nothing near, no history, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 80 columns, ascii, true colour, dark — opened, its history being read, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today | reading...|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, ascii, true colour, dark — opened, its history being read, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today | reading...|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model | days in Europe/Paris | reading...|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96% left · resets 12:01|
+  {fg=a8}| as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, ascii, true colour, dark — today by provider, model; a refresh, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, ascii, true colour, dark — today by provider, model; a refresh, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model | days ...{fg=a8}      in  cache read     out        cost|
+  {b}anthropic|
+    opus-5.5                               1.2M       38.4M  612.0k      $41.87|
+    haiku-5.5                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at|
+  {fg=a11}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a11}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  venice{fg=a8}  requests reset since; unknown until the next request | from the|
+  {fg=a8}refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96% left · resets 12:01|
+  {fg=a8}| as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a11}openai: the refresh failed: the key was refused (401).|
+
+== 80 columns, ascii, true colour, dark — today by project, provider, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, ascii, true colour, dark — today by project, provider, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by project, provider | day...{fg=a8}      in  cache read     out        cost|
+  {b}~/src/parser|
+    anthropic                              1.2M       38.4M  612.0k      $41.87|
+    anthropic                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at|
+  {fg=a11}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a11}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96% left · resets 12:01|
+  {fg=a8}| as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+
+== 80 columns, ascii, true colour, dark — a limit near, opened by itself, collapsed
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, ascii, true colour, dark — a limit near, opened by itself, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96% left · resets 12:01|
+  {fg=a8}| as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, ascii, true colour, dark — nothing near, no history, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+
+== 80 columns, ascii, true colour, dark — nothing near, no history, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 120 columns, unicode, true colour, dark — opened, its history being read, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 120 columns, unicode, true colour, dark — opened, its history being read, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                                                          {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                                  {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast                                              10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris · reading…|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01 · as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 120 columns, unicode, true colour, dark — today by provider, model; a refresh, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 120 columns, unicode, true colour, dark — today by provider, model; a refresh, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                                                    {fg=a8}      in  cache read  cache write     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                            {}    1.2M       38.0M         2.9M  600.0k       $0.40|
+    anthropic haiku-5.5 fast                                         10.0k      400.0k            0   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris               {fg=a8}      in  cache read  cache write     out        cost|
+  {b}anthropic|
+    opus-5.5                                                          1.2M       38.4M         2.9M  612.0k      $41.87|
+    haiku-5.5                                                       440.0k        6.1M       520.0k  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                                                 800.0k           0            0  310.0k{fg=a8}           —|
+  total                                                                                     $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at ~/.local/state/cineris/stats/2026-10.jsonl.bad: the months|
+  {fg=a11}it held are not counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed this way|
+  venice{fg=a8}  requests reset since; unknown until the next request · from the refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01 · as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a11}openai: the refresh failed: the key was refused (401).|
+
+== 120 columns, unicode, true colour, dark — today by project, provider, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 120 columns, unicode, true colour, dark — today by project, provider, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                                                    {fg=a8}      in  cache read  cache write     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                            {}    1.2M       38.0M         2.9M  600.0k       $0.40|
+    anthropic haiku-5.5 fast                                         10.0k      400.0k            0   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by project, provider · days in Europe/Paris             {fg=a8}      in  cache read  cache write     out        cost|
+  {b}~/src/parser|
+    anthropic                                                         1.2M       38.4M         2.9M  612.0k      $41.87|
+    anthropic                                                       440.0k        6.1M       520.0k  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                                                      800.0k           0            0  310.0k{fg=a8}           —|
+  total                                                                                     $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at ~/.local/state/cineris/stats/2026-10.jsonl.bad: the months|
+  {fg=a11}it held are not counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01 · as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+
+== 120 columns, unicode, true colour, dark — a limit near, opened by itself, collapsed
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 120 columns, unicode, true colour, dark — a limit near, opened by itself, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                                                          {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                                  {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast                                              10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model                                            {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01 · as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 120 columns, unicode, true colour, dark — nothing near, no history, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+
+== 120 columns, unicode, true colour, dark — nothing near, no history, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {b}This session                                                          {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                                  {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast                                              10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model                                            {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 120 columns, ascii, true colour, dark — opened, its history being read, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today | reading...|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 120 columns, ascii, true colour, dark — opened, its history being read, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today | reading...|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                                                          {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                                  {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast                                              10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model | days in Europe/Paris | reading...|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96% left · resets 12:01 | as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 120 columns, ascii, true colour, dark — today by provider, model; a refresh, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 120 columns, ascii, true colour, dark — today by provider, model; a refresh, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                                                    {fg=a8}      in  cache read  cache write     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                            {}    1.2M       38.0M         2.9M  600.0k       $0.40|
+    anthropic haiku-5.5 fast                                         10.0k      400.0k            0   12.0k       $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model | days in Europe/Paris               {fg=a8}      in  cache read  cache write     out        cost|
+  {b}anthropic|
+    opus-5.5                                                          1.2M       38.4M         2.9M  612.0k      $41.87|
+    haiku-5.5                                                       440.0k        6.1M       520.0k  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                                                 800.0k           0            0  310.0k{fg=a8}           —|
+  total                                                                                     $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at ~/.local/state/cineris/stats/2026-10.jsonl.bad: the months|
+  {fg=a11}it held are not counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed this way|
+  venice{fg=a8}  requests reset since; unknown until the next request | from the refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96% left · resets 12:01 | as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a11}openai: the refresh failed: the key was refused (401).|
+
+== 120 columns, ascii, true colour, dark — today by project, provider, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 120 columns, ascii, true colour, dark — today by project, provider, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                                                    {fg=a8}      in  cache read  cache write     out        cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                            {}    1.2M       38.0M         2.9M  600.0k       $0.40|
+    anthropic haiku-5.5 fast                                         10.0k      400.0k            0   12.0k       $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by project, provider | days in Europe/Paris             {fg=a8}      in  cache read  cache write     out        cost|
+  {b}~/src/parser|
+    anthropic                                                         1.2M       38.4M         2.9M  612.0k      $41.87|
+    anthropic                                                       440.0k        6.1M       520.0k  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                                                      800.0k           0            0  310.0k{fg=a8}           —|
+  total                                                                                     $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at ~/.local/state/cineris/stats/2026-10.jsonl.bad: the months|
+  {fg=a11}it held are not counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96% left · resets 12:01 | as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+
+== 120 columns, ascii, true colour, dark — a limit near, opened by itself, collapsed
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 120 columns, ascii, true colour, dark — a limit near, opened by itself, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                                                          {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                                  {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast                                              10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model                                            {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 | requests 96% left · resets 12:01 | as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 120 columns, ascii, true colour, dark — nothing near, no history, collapsed
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+
+== 120 columns, ascii, true colour, dark — nothing near, no history, focused
+o {b}Usage{}  {fg=a8}this session $0.42 | today|
+  {b}This session                                                          {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#8D57FC b}anthropic opus-5.5                                                  {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast                                              10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% | 41 tokens/s | first token 1.2s|
+  {b}Today | by provider, model                                            {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 80 columns, unicode, true colour, light — opened, its history being read, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, true colour, light — opened, its history being read, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#7A3CFB b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris · reading…|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, true colour, light — today by provider, model; a refresh, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, true colour, light — today by provider, model; a refresh, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=#7A3CFB b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in…{fg=a8}      in  cache read     out        cost|
+  {b}anthropic|
+    opus-5.5                               1.2M       38.4M  612.0k      $41.87|
+    haiku-5.5                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a3 b}A statistics file that could not be read was set aside, at|
+  {fg=a3 b}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a3 b}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  venice{fg=a8}  requests reset since; unknown until the next request · from the|
+  {fg=a8}refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a3 b}openai: the refresh failed: the key was refused (401).|
+
+== 80 columns, unicode, true colour, light — today by project, provider, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, true colour, light — today by project, provider, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=#7A3CFB b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by project, provider · days …{fg=a8}      in  cache read     out        cost|
+  {b}~/src/parser|
+    anthropic                              1.2M       38.4M  612.0k      $41.87|
+    anthropic                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a3 b}A statistics file that could not be read was set aside, at|
+  {fg=a3 b}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a3 b}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+
+== 80 columns, unicode, true colour, light — a limit near, opened by itself, collapsed
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, true colour, light — a limit near, opened by itself, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#7A3CFB b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, true colour, light — nothing near, no history, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+
+== 80 columns, unicode, true colour, light — nothing near, no history, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=#7A3CFB b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 80 columns, unicode, 16 colours, dark — opened, its history being read, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 16 colours, dark — opened, its history being read, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris · reading…|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, 16 colours, dark — today by provider, model; a refresh, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 16 colours, dark — today by provider, model; a refresh, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in…{fg=a8}      in  cache read     out        cost|
+  {b}anthropic|
+    opus-5.5                               1.2M       38.4M  612.0k      $41.87|
+    haiku-5.5                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at|
+  {fg=a11}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a11}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  venice{fg=a8}  requests reset since; unknown until the next request · from the|
+  {fg=a8}refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a11}openai: the refresh failed: the key was refused (401).|
+
+== 80 columns, unicode, 16 colours, dark — today by project, provider, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 16 colours, dark — today by project, provider, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by project, provider · days …{fg=a8}      in  cache read     out        cost|
+  {b}~/src/parser|
+    anthropic                              1.2M       38.4M  612.0k      $41.87|
+    anthropic                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at|
+  {fg=a11}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a11}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+
+== 80 columns, unicode, 16 colours, dark — a limit near, opened by itself, collapsed
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 16 colours, dark — a limit near, opened by itself, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, 16 colours, dark — nothing near, no history, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+
+== 80 columns, unicode, 16 colours, dark — nothing near, no history, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 80 columns, unicode, 16 colours, light — opened, its history being read, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 16 colours, light — opened, its history being read, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=a5 b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris · reading…|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, 16 colours, light — today by provider, model; a refresh, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 16 colours, light — today by provider, model; a refresh, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=a5 b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in…{fg=a8}      in  cache read     out        cost|
+  {b}anthropic|
+    opus-5.5                               1.2M       38.4M  612.0k      $41.87|
+    haiku-5.5                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a3 b}A statistics file that could not be read was set aside, at|
+  {fg=a3 b}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a3 b}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  venice{fg=a8}  requests reset since; unknown until the next request · from the|
+  {fg=a8}refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a3 b}openai: the refresh failed: the key was refused (401).|
+
+== 80 columns, unicode, 16 colours, light — today by project, provider, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 16 colours, light — today by project, provider, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=a5 b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by project, provider · days …{fg=a8}      in  cache read     out        cost|
+  {b}~/src/parser|
+    anthropic                              1.2M       38.4M  612.0k      $41.87|
+    anthropic                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a3 b}A statistics file that could not be read was set aside, at|
+  {fg=a3 b}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a3 b}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+
+== 80 columns, unicode, 16 colours, light — a limit near, opened by itself, collapsed
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 16 colours, light — a limit near, opened by itself, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a3 b}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=a5 b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, 16 colours, light — nothing near, no history, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+
+== 80 columns, unicode, 16 colours, light — nothing near, no history, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=a5 b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 80 columns, unicode, 256 colours, dark — opened, its history being read, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 256 colours, dark — opened, its history being read, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today · reading…|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=i99 b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris · reading…|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, 256 colours, dark — today by provider, model; a refresh, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 256 colours, dark — today by provider, model; a refresh, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=i99 b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in…{fg=a8}      in  cache read     out        cost|
+  {b}anthropic|
+    opus-5.5                               1.2M       38.4M  612.0k      $41.87|
+    haiku-5.5                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at|
+  {fg=a11}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a11}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  venice{fg=a8}  requests reset since; unknown until the next request · from the|
+  {fg=a8}refresh, as of 10 s ago|
+  venice{fg=a8}  balance 110.00 USD left|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+  {fg=a11}openai: the refresh failed: the key was refused (401).|
+
+== 80 columns, unicode, 256 colours, dark — today by project, provider, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 256 colours, dark — today by project, provider, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {fg=a8}      in  cache read     out        cost|
+    {fg=i99 b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by project, provider · days …{fg=a8}      in  cache read     out        cost|
+  {b}~/src/parser|
+    anthropic                              1.2M       38.4M  612.0k      $41.87|
+    anthropic                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           800.0k           0  310.0k{fg=a8}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {fg=a8}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  {fg=a11}A statistics file that could not be read was set aside, at|
+  {fg=a11}~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  {fg=a11}counted here.|
+  {fg=a8}est.: what this would have cost at API prices; a subscription is not billed|
+  {fg=a8}this way|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+  openrouter{fg=a8}  not available|
+
+== 80 columns, unicode, 256 colours, dark — a limit near, opened by itself, collapsed
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, 256 colours, dark — a limit near, opened by itself, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {fg=a11}anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=i99 b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {fg=a8}· as of 2 min ago|
+  anthropic fast tier{fg=a8}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, 256 colours, dark — nothing near, no history, collapsed
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+
+== 80 columns, unicode, 256 colours, dark — nothing near, no history, focused
+◇ {b}Usage{}  {fg=a8}this session $0.42 · today|
+  {b}This session                  {fg=a8}     in  cache read  cache write     out   cost|
+    {fg=i99 b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {fg=a8}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {fg=a8}     in  cache read  cache write     out   cost|
+  anthropic{fg=a8}  not available|
+
+== 80 columns, unicode, no colour, dark — opened, its history being read, collapsed
+◇ {b}Usage{}  {d}this session $0.42 · today · reading…|
+  anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, no colour, dark — opened, its history being read, focused
+◇ {b}Usage{}  {d}this session $0.42 · today · reading…|
+  anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {d}     in  cache read  cache write     out   cost|
+    {b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {d}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in Europe/Paris · reading…|
+  anthropic{d}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {d}· as of 2 min ago|
+  anthropic fast tier{d}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, no colour, dark — today by provider, model; a refresh, collapsed
+◇ {b}Usage{}  {d}this session $0.42 · today|
+  anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, no colour, dark — today by provider, model; a refresh, focused
+◇ {b}Usage{}  {d}this session $0.42 · today|
+  anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {d}      in  cache read     out        cost|
+    {b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {d}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model · days in…{d}      in  cache read     out        cost|
+  {b}anthropic|
+    opus-5.5                               1.2M       38.4M  612.0k      $41.87|
+    haiku-5.5                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}openrouter|
+    some-open-model                      800.0k           0  310.0k{d}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {d}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  A statistics file that could not be read was set aside, at|
+  ~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  counted here.|
+  {d}est.: what this would have cost at API prices; a subscription is not billed|
+  {d}this way|
+  venice{d}  requests reset since; unknown until the next request · from the|
+  {d}refresh, as of 10 s ago|
+  venice{d}  balance 110.00 USD left|
+  anthropic{d}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {d}· as of 2 min ago|
+  anthropic fast tier{d}  output tokens 18% left · resets 15:00|
+  openrouter{d}  not available|
+  openai: the refresh failed: the key was refused (401).|
+
+== 80 columns, unicode, no colour, dark — today by project, provider, collapsed
+◇ {b}Usage{}  {d}this session $0.42 · today|
+  anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, no colour, dark — today by project, provider, focused
+◇ {b}Usage{}  {d}this session $0.42 · today|
+  anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                         {d}      in  cache read     out        cost|
+    {b}anthropic opus-5.5                 {}    1.2M       38.0M  600.0k       $0.40|
+    anthropic haiku-5.5 fast              10.0k      400.0k   12.0k       $0.02|
+  {d}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by project, provider · days …{d}      in  cache read     out        cost|
+  {b}~/src/parser|
+    anthropic                              1.2M       38.4M  612.0k      $41.87|
+    anthropic                            440.0k        6.1M  201.0k  $1.92 est.|
+  {b}~/src/site|
+    openrouter                           800.0k           0  310.0k{d}           —|
+  total                                             $41.87 metered + $1.92 est.|
+  {d}12 turns, 3m 20s: the model 0s, tools 50s, waiting for you 5s|
+  A statistics file that could not be read was set aside, at|
+  ~/.local/state/cineris/stats/2026-10.jsonl.bad: the months it held are not|
+  counted here.|
+  {d}est.: what this would have cost at API prices; a subscription is not billed|
+  {d}this way|
+  anthropic{d}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {d}· as of 2 min ago|
+  anthropic fast tier{d}  output tokens 18% left · resets 15:00|
+  openrouter{d}  not available|
+
+== 80 columns, unicode, no colour, dark — a limit near, opened by itself, collapsed
+  anthropic fast tier: 18% of the output token limit left, resets 15:00|
+
+== 80 columns, unicode, no colour, dark — a limit near, opened by itself, focused
+◇ {b}Usage{}  {d}this session $0.42 · today|
+  anthropic fast tier: 18% of the output token limit left, resets 15:00|
+  {b}This session                  {d}     in  cache read  cache write     out   cost|
+    {b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {d}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {d}     in  cache read  cache write     out   cost|
+  anthropic{d}  tokens 71% left · resets 14:32 · requests 96% left · resets 12:01|
+  {d}· as of 2 min ago|
+  anthropic fast tier{d}  output tokens 18% left · resets 15:00|
+
+== 80 columns, unicode, no colour, dark — nothing near, no history, collapsed
+◇ {b}Usage{}  {d}this session $0.42 · today|
+
+== 80 columns, unicode, no colour, dark — nothing near, no history, focused
+◇ {b}Usage{}  {d}this session $0.42 · today|
+  {b}This session                  {d}     in  cache read  cache write     out   cost|
+    {b}anthropic opus-5.5          {}   1.2M       38.0M         2.9M  600.0k  $0.40|
+    anthropic haiku-5.5 fast      10.0k      400.0k            0   12.0k  $0.02|
+  {d}  cache hit 87% · 41 tokens/s · first token 1.2s|
+  {b}Today · by provider, model    {d}     in  cache read  cache write     out   cost|
+  anthropic{d}  not available|
+

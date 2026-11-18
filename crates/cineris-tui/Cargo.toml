@@ -1,0 +1,48 @@
+[package]
+name = "cineris-tui"
+description = "The interactive UI: transcript, editor, dialogs, hint row, slash commands and themes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+doctest = false
+
+[features]
+default = ["highlight"]
+# Syntax highlighting of code blocks, with syntect, loaded on first use on a
+# thread of its own (decision 0015).
+highlight = ["dep:syntect"]
+# The editor demo (`cargo run --release -p cineris-tui --example editor-demo
+# --features demo`), for measuring key latency with the editor in the loop.
+# A feature of its own so that test builds do not link it.
+demo = []
+# The application's test kit (`testkit`): a scripted link, a session made with
+# sane defaults, and the calls that open a session and show a dialog. Code for
+# tests only: dev-dependencies turn it on, and nothing else may
+# (`cargo xtask rules`).
+test-kit = []
+
+[dependencies]
+cineris-protocol.workspace = true
+cineris-base.workspace = true
+cineris-term.workspace = true
+# The payloads of tool results and the arguments of tool calls, which the
+# protocol carries as JSON values.
+serde_json.workspace = true
+syntect = { workspace = true, optional = true }
+
+[dev-dependencies]
+cineris-testkit.workspace = true
+# The crate's integration tests use its own test kit. Not an edge of the crate
+# table.
+cineris-tui = { workspace = true, features = ["test-kit"] }
+
+[[example]]
+name = "editor-demo"
+path = "examples/editor-demo/main.rs"
+required-features = ["demo"]
+
+[lints]
+workspace = true

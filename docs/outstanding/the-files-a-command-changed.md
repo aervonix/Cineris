@@ -1,6 +1,6 @@
 The review panel lists the files the file tools changed; which files a shell command changed is in the checkpoints, not in any event.
 
-- Area: cortex-protocol
+- Area: cineris-protocol
 - Owner: none yet
 
 | Item | Who | When |

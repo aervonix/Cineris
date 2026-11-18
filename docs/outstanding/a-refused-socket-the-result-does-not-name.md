@@ -1,6 +1,6 @@
 A Unix socket refused by the filter, network on, gives a bare `EPERM` and no sandbox explanation.
 
-- Area: cortex-sandbox
+- Area: cineris-sandbox
 - Owner: step 32
 
 | Item | Who | When |

@@ -1,6 +1,6 @@
 The full screen's search counts its matches in each block's text but marks them in the drawn rows, so a match in a box's own words can take the current mark.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 33
 
 | Item | Who | When |

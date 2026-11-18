@@ -12,7 +12,7 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
 ```text
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                       │
 │                                                              │
 │   Setting up, in four short steps. Each one can be skipped,  │
 │   and x skips them all.                                      │
@@ -20,7 +20,7 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
 ◇ Provider  1 of 4
   A key for anthropic is in the environment, in ANTHROPIC_API_KEY. Use it from
-  there, or store a key: it is kept in ~/.config/cortex-harness/credentials.toml,
+  there, or store a key: it is kept in ~/.config/cineris/credentials.toml,
   which only you can read, and never in a file of settings.
 
   ◆ anthropic    its key from ANTHROPIC_API_KEY, as it is set
@@ -39,7 +39,7 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 
 ```text
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                       │
 │                                                              │
 │   Setting up, in four short steps. Each one can be skipped,  │
 │   and x skips them all.                                      │
@@ -64,7 +64,7 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
 
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                       │
 │                                                              │
 │   Setting up, in four short steps. Each one can be skipped,  │
 │   and x skips them all.                                      │
@@ -99,7 +99,7 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
 
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                       │
 │                                                              │
 │   Setting up, in four short steps. Each one can be skipped,  │
 │   and x skips them all.                                      │
@@ -136,7 +136,7 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 · Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
 
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                       │
 │                                                              │
 │   Setting up, in four short steps. Each one can be skipped,  │
 │   and x skips them all.                                      │
@@ -162,10 +162,10 @@ The screens of step 25 that no reference screen draws yet, composed as text in t
 ```text
 · Provider: anthropic, its key from ANTHROPIC_API_KEY.
 · Imports: AGENTS.md and CLAUDE.md read; the MCP server docs.
-· Mode: supervised. Written to ~/.config/cortex-harness/config.toml.
+· Mode: supervised. Written to ~/.config/cineris/config.toml.
 
 ╭──────────────────────────────────────────────────────────────╮
-│ ◆ Cortex-Harness 0.1.0                                       │
+│ ◆ Cineris 0.1.0                                       │
 │                                                              │
 │   opus-5.5 high  ·  ~/src/parser on main                     │
 │   Knows nothing about this project yet.                      │

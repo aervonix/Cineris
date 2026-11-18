@@ -1568,7 +1568,7 @@ file: crates/demo/src/lib.rs
 in: over
 find: seconds > budget
 replace: false
-packages: cortex-nowhere
+packages: cineris-nowhere
 ";
 
         let problems = check(&root, &breaks("demo", list));
@@ -1918,7 +1918,7 @@ replace: 5
 
     #[test]
     fn a_list_from_anywhere_is_read_and_may_not_take_a_lists_name() {
-        let dir = std::env::temp_dir().join(format!("cx-mutate-file-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("cin-mutate-file-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let review = dir.join("review-16.breaks");
         std::fs::write(

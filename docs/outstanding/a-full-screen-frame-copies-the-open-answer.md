@@ -1,6 +1,6 @@
 Each full-screen frame copies the rows an answer still streaming has committed, so a very long open answer costs more per frame.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 33
 
 | Item | Who | When |

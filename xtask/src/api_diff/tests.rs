@@ -62,17 +62,17 @@ fn features_are_read_with_their_crate() {
     let pair = |package: &str, feature: &str| (package.to_owned(), feature.to_owned());
     let request = Request::parse(&strings(&[
         "-p",
-        "cortex-tui",
+        "cineris-tui",
         "--features",
         "test-kit",
-        "--features=cortex-policy/test-support,cortex-tui/test-kit",
+        "--features=cineris-policy/test-support,cineris-tui/test-kit",
     ]))
     .unwrap();
     assert_eq!(
         request.features,
         [
-            pair("cortex-tui", "test-kit"),
-            pair("cortex-policy", "test-support")
+            pair("cineris-tui", "test-kit"),
+            pair("cineris-policy", "test-support")
         ]
     );
     // A crate named twice is one crate.
@@ -95,23 +95,23 @@ fn features_are_read_with_their_crate() {
 #[test]
 fn a_feature_is_turned_on_where_its_crate_has_it_and_said_where_it_does_not() {
     let tui = Library {
-        package: "cortex-tui".to_owned(),
-        json: "cortex_tui".to_owned(),
+        package: "cineris-tui".to_owned(),
+        json: "cineris_tui".to_owned(),
         features: strings(&["default", "test-kit"]),
     };
     let policy_before = Library {
-        package: "cortex-policy".to_owned(),
-        json: "cortex_policy".to_owned(),
+        package: "cineris-policy".to_owned(),
+        json: "cineris_policy".to_owned(),
         features: Vec::new(),
     };
     let asked = [
-        ("cortex-tui".to_owned(), "test-kit".to_owned()),
-        ("cortex-policy".to_owned(), "test-support".to_owned()),
-        ("cortex-core".to_owned(), "x".to_owned()),
+        ("cineris-tui".to_owned(), "test-kit".to_owned()),
+        ("cineris-policy".to_owned(), "test-support".to_owned()),
+        ("cineris-core".to_owned(), "x".to_owned()),
     ];
     let core = Library {
-        package: "cortex-core".to_owned(),
-        json: "cortex_core".to_owned(),
+        package: "cineris-core".to_owned(),
+        json: "cineris_core".to_owned(),
         features: strings(&["x"]),
     };
     let (calls, missing) = doc_calls(&[&core, &tui, &policy_before], &asked);
@@ -120,19 +120,19 @@ fn a_feature_is_turned_on_where_its_crate_has_it_and_said_where_it_does_not() {
     assert_eq!(
         calls,
         [
-            (strings(&["cortex-policy"]), Vec::new()),
-            (strings(&["cortex-core"]), strings(&["--features", "x"])),
+            (strings(&["cineris-policy"]), Vec::new()),
+            (strings(&["cineris-core"]), strings(&["--features", "x"])),
             (
-                strings(&["cortex-tui"]),
+                strings(&["cineris-tui"]),
                 strings(&["--features", "test-kit"])
             ),
         ]
     );
-    assert_eq!(missing, ["cortex-policy/test-support"]);
+    assert_eq!(missing, ["cineris-policy/test-support"]);
     // Nothing asked of these crates: one call, no flag at all.
     assert_eq!(
         doc_calls(&[&policy_before], &asked[..1]),
-        (vec![(strings(&["cortex-policy"]), Vec::new())], Vec::new())
+        (vec![(strings(&["cineris-policy"]), Vec::new())], Vec::new())
     );
 }
 
@@ -143,12 +143,12 @@ fn each_call_of_cargo_doc_has_its_crates_and_its_features_and_no_other() {
         json: package.replace('-', "_"),
         features: strings(features),
     };
-    let tui = lib("cortex-tui", &["test-kit"]);
-    let base = lib("cortex-base", &[]);
-    let policy = lib("cortex-policy", &["test-support"]);
+    let tui = lib("cineris-tui", &["test-kit"]);
+    let base = lib("cineris-base", &[]);
+    let policy = lib("cineris-policy", &["test-support"]);
     let asked = [
-        ("cortex-tui".to_owned(), "test-kit".to_owned()),
-        ("cortex-policy".to_owned(), "test-support".to_owned()),
+        ("cineris-tui".to_owned(), "test-kit".to_owned()),
+        ("cineris-policy".to_owned(), "test-support".to_owned()),
     ];
     let (commands, missing) = doc_commands(&[&base, &tui, &policy], &asked);
     assert!(missing.is_empty());
@@ -159,9 +159,9 @@ fn each_call_of_cargo_doc_has_its_crates_and_its_features_and_no_other() {
     assert_eq!(
         shown,
         [
-            (1, "-p cortex-base".to_owned()),
-            (1, "-p cortex-tui --features test-kit".to_owned()),
-            (1, "-p cortex-policy --features test-support".to_owned()),
+            (1, "-p cineris-base".to_owned()),
+            (1, "-p cineris-tui --features test-kit".to_owned()),
+            (1, "-p cineris-policy --features test-support".to_owned()),
         ]
     );
     assert!(
@@ -173,30 +173,33 @@ fn each_call_of_cargo_doc_has_its_crates_and_its_features_and_no_other() {
     let (commands, _) = doc_commands(&[&base, &tui], &[]);
     assert_eq!(commands.len(), 1);
     assert_eq!(commands[0].0, 2);
-    assert_eq!(commands[0].1[7..].join(" "), "-p cortex-base -p cortex-tui");
+    assert_eq!(
+        commands[0].1[7..].join(" "),
+        "-p cineris-base -p cineris-tui"
+    );
 }
 
 #[test]
 fn a_feature_of_a_crate_not_compared_or_that_the_crate_lacks_is_refused() {
     let head: BTreeMap<String, Library> = [(
-        "cortex-tui".to_owned(),
+        "cineris-tui".to_owned(),
         Library {
-            package: "cortex-tui".to_owned(),
-            json: "cortex_tui".to_owned(),
+            package: "cineris-tui".to_owned(),
+            json: "cineris_tui".to_owned(),
             features: strings(&["test-kit"]),
         },
     )]
     .into_iter()
     .collect();
-    let chosen = strings(&["cortex-tui"]);
+    let chosen = strings(&["cineris-tui"]);
     let feature = |package: &str, name: &str| vec![(package.to_owned(), name.to_owned())];
     assert_eq!(
-        check_features(&feature("cortex-tui", "test-kit"), &chosen, &head),
+        check_features(&feature("cineris-tui", "test-kit"), &chosen, &head),
         Ok(())
     );
-    let error = check_features(&feature("cortex-tui", "nope"), &chosen, &head).unwrap_err();
+    let error = check_features(&feature("cineris-tui", "nope"), &chosen, &head).unwrap_err();
     assert!(error.contains("has no such feature"), "{error}");
-    let error = check_features(&feature("cortex-base", "x"), &chosen, &head).unwrap_err();
+    let error = check_features(&feature("cineris-base", "x"), &chosen, &head).unwrap_err();
     assert!(
         error.contains("is not among the crates compared"),
         "{error}"
@@ -221,9 +224,9 @@ fn package(name: &str, kinds: &[&str]) -> Package {
 #[test]
 fn a_library_is_a_package_with_a_lib_target_and_its_file_has_underscores() {
     let found = libraries(&[
-        package("cortex-base", &["lib"]),
-        package("cortex-macros", &["proc-macro"]),
-        package("cortex-cli", &["bin"]),
+        package("cineris-base", &["lib"]),
+        package("cineris-macros", &["proc-macro"]),
+        package("cineris-cli", &["bin"]),
     ]);
     let names: Vec<(&str, &str)> = found
         .values()
@@ -232,11 +235,11 @@ fn a_library_is_a_package_with_a_lib_target_and_its_file_has_underscores() {
     assert_eq!(
         names,
         [
-            ("cortex-base", "cortex_base"),
-            ("cortex-macros", "cortex_macros")
+            ("cineris-base", "cineris_base"),
+            ("cineris-macros", "cineris_macros")
         ]
     );
-    assert_eq!(found["cortex-base"].features, ["backends"]);
+    assert_eq!(found["cineris-base"].features, ["backends"]);
 }
 
 fn library(name: &str) -> (String, Library) {

@@ -1,6 +1,6 @@
 # After the fifth tooling step: tier 2's time on Windows, failure text in stress, edits by script, a rig that cannot hang on a question, and the owner's colours
 
-This step added tools and test support, a little test-only code in `cortex-term` (two signal helpers behind its `pty` feature) and the owner's colours in `cortex-tui`'s theme. No dependency was added. The tables were made with `cargo xtask ci-times`, the A/B sections written by it.
+This step added tools and test support, a little test-only code in `cineris-term` (two signal helpers behind its `pty` feature) and the owner's colours in `cineris-tui`'s theme. No dependency was added. The tables were made with `cargo xtask ci-times`, the A/B sections written by it.
 
 ## On the pull request
 
@@ -23,7 +23,7 @@ The PR's run is 43691685559, at `ef5009d`.
 
 <!-- end of what cargo xtask ci-times wrote -->
 
-The two runs were on runners of different speed (start 5 and 4 ms on Linux, 6 and 10 ms on Windows), so the A/B sections below are the comparison. On the PR's run Windows' tier 2 read 30.2 s at 10 ms a process start, where the A/B's branch side read 24.8 s on a runner of the same start cost: runners of one start cost still differ by a fifth under load. Before the rebase on #49, the PR's first run of `test-windows` (43672945463) failed at a flake of `cortex-tools`, which the step did not change, on a loaded runner ([outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md](../../outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md)); its rerun passed. The static checks: `rules` 0.7 s and `breaks` 0.3 s at the desk for 921 breaks, as before the step.
+The two runs were on runners of different speed (start 5 and 4 ms on Linux, 6 and 10 ms on Windows), so the A/B sections below are the comparison. On the PR's run Windows' tier 2 read 30.2 s at 10 ms a process start, where the A/B's branch side read 24.8 s on a runner of the same start cost: runners of one start cost still differ by a fifth under load. Before the rebase on #49, the PR's first run of `test-windows` (43672945463) failed at a flake of `cineris-tools`, which the step did not change, on a loaded runner ([outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md](../../outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md)); its rerun passed. The static checks: `rules` 0.7 s and `breaks` 0.3 s at the desk for 921 breaks, as before the step.
 
 ## Windows, both trees on one runner
 
@@ -66,10 +66,10 @@ The two runs were on runners of different speed (start 5 and 4 ms on Linux, 6 an
 | 43691692866 | Both OSes, A/B against `main` at `8a894c4`, five rounds | The sections above |
 | 43692957473 | The PR's `ci` at `81c5589` | `test-windows` failed on the tier budgets alone, every test passing, on the slowest Windows runner seen (12 ms a process start): tier 1 22.2 s, tier 2 41.6 s, tier 3 138.8 s, each about twice the A/B's at 10 ms; rerun ([outstanding/windows-tier-three-margin-and-the-powershell-tests.md](../tooling-6/answered.md)) |
 | 43691694394 | Linux, `advisories`, after the ignore of RUSTSEC-2025-0141 | Passed |
-| 43691696481 | Windows, release build, `test -p cortex-testkit --run-ignored only watch::tests::sys_ --no-capture`, five repeats | Passed; the timeout report's tree 2.27 s after its waits the first time, 0.32 to 0.34 s after |
-| 43671662851 | Windows, `test -p cortex-term -p cortex-tui -p cortex-core -p cortex-agent -p cortex-testkit -p xtask` | Passed |
-| 43671665085 | Both OSes, A/B against `main` at `9ddbf67` before the rebase, five rounds | Windows: tier 2 37.4 s against 37.5 s. Linux ended in its first round on the branch's side, at a flake of `cortex-core`'s base capture ([outstanding/a-base-capture-beside-the-turns-git.md](../../outstanding/a-base-capture-beside-the-turns-git.md)); run again as 43672128881 |
-| 43667663980 | Both OSes, A/B of `cortex-llm` alone against `main`, five rounds | 2 min 24 s on Windows, 1 min 20 s on Linux, from start to end of the job |
+| 43691696481 | Windows, release build, `test -p cineris-testkit --run-ignored only watch::tests::sys_ --no-capture`, five repeats | Passed; the timeout report's tree 2.27 s after its waits the first time, 0.32 to 0.34 s after |
+| 43671662851 | Windows, `test -p cineris-term -p cineris-tui -p cineris-core -p cineris-agent -p cineris-testkit -p xtask` | Passed |
+| 43671665085 | Both OSes, A/B against `main` at `9ddbf67` before the rebase, five rounds | Windows: tier 2 37.4 s against 37.5 s. Linux ended in its first round on the branch's side, at a flake of `cineris-core`'s base capture ([outstanding/a-base-capture-beside-the-turns-git.md](../../outstanding/a-base-capture-beside-the-turns-git.md)); run again as 43672128881 |
+| 43667663980 | Both OSes, A/B of `cineris-llm` alone against `main`, five rounds | 2 min 24 s on Windows, 1 min 20 s on Linux, from start to end of the job |
 | 43663369925, 43663367508 | Tier 2 alone, profiled, on the scratch branch at `6e96c25` | Linux 14.2 s, Windows 21.2 s above the start |
 | 43663690282 | Both OSes, A/A of `main` (the scratch branch at `6e96c25`), three rounds | Windows tier 2 27.1 s (start 8 ms), Linux 10.8 s (start 3 ms) |
 | 43664837834, 43665361002 | Windows, the two timing probes (scratch branch at `089a40a` and `e48399c`) | [performance-budgets.md](../../performance-budgets.md), "Open a session, on Windows against Linux" |

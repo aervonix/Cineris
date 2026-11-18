@@ -63,7 +63,7 @@ A check is one line outside a change, and they run in the order written:
     @@ check: build -p CRATE...      cargo check --all-targets of the crates
     @@ check: clippy -p CRATE...     clippy of the crates' targets, warnings denied
     @@ check: test ARGUMENT...       cargo xtask test with these arguments, such as
-                                     test -p cortex-tui -E 'test(/dialog/)'
+                                     test -p cineris-tui -E 'test(/dialog/)'
 
 A check's words are split at spaces; quote a word that holds one ('…' or \"…\").
 Lines outside a change that begin with `#`, and empty ones, are comments.
@@ -623,8 +623,8 @@ mod tests {
     #[test]
     fn a_checks_words_are_split_at_spaces_and_kept_together_by_quotes() {
         assert_eq!(
-            words(" test -p cortex-tui -E 'test(/a b/)' \"x y\" ").unwrap(),
-            strings(&["test", "-p", "cortex-tui", "-E", "test(/a b/)", "x y"])
+            words(" test -p cineris-tui -E 'test(/a b/)' \"x y\" ").unwrap(),
+            strings(&["test", "-p", "cineris-tui", "-E", "test(/a b/)", "x y"])
         );
         assert_eq!(words("a '' b").unwrap(), strings(&["a", "", "b"]));
         assert!(words("test 'open").is_err());
@@ -784,8 +784,8 @@ text
     }
 
     /// A folder of the test's own, which goes with it.
-    fn scratch(name: &str) -> cortex_testkit::Scratch {
-        cortex_testkit::Scratch::outside("xtask-apply", name)
+    fn scratch(name: &str) -> cineris_testkit::Scratch {
+        cineris_testkit::Scratch::outside("xtask-apply", name)
     }
 
     /// Runs `script` in `dir`, every check answered by `answer`; gives the

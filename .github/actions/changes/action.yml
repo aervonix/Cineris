@@ -58,7 +58,7 @@ runs:
                 # test, so a change here needs the tests to run.
                 docs/protocol/*) code=true ;;
                 # The same for the configuration schema and reference, which
-                # are generated from the settings in cortex-config.
+                # are generated from the settings in cineris-config.
                 docs/configuration/*) code=true ;;
                 docs/* | *.md) ;;
                 # The files the shipped build and its verdict go through.

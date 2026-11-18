@@ -1,6 +1,6 @@
 The command analysis reads `cd` differently from bash (mode-000 directories) and probably from Git for Windows.
 
-- Area: cortex-policy
+- Area: cineris-policy
 - Owner: step 32, with a Windows run
 
 | Item | Who | When |

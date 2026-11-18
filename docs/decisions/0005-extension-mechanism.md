@@ -88,7 +88,7 @@ All four Rhai failures were calls to standard-library functions that do not exis
 
 ## Decision
 
-1. **Extensions are JavaScript, run by an embedded QuickJS engine** in `cortex-ext`, behind the `scripts` cargo feature. One runtime per extension, created on first use, with a memory limit and a time limit. A script can reach nothing except host functions, and each host function is checked against the extension's manifest and then against the session's permissions.
+1. **Extensions are JavaScript, run by an embedded QuickJS engine** in `cineris-ext`, behind the `scripts` cargo feature. One runtime per extension, created on first use, with a memory limit and a time limit. A script can reach nothing except host functions, and each host function is checked against the extension's manifest and then against the session's permissions.
 2. **Tools that need an ecosystem are MCP servers.** No bespoke subprocess protocol.
 3. **The simplest hooks are a command line** in configuration, with no script.
 4. **Custom commands and skills are files** and involve no code.

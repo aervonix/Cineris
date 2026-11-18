@@ -172,7 +172,7 @@ fn environment_of(root: &Path, target: &Path) -> Vec<(&'static str, String)> {
     )]
 }
 
-/// Builds `cortex` in the shipped profile, with the build's environment.
+/// Builds `cineris` in the shipped profile, with the build's environment.
 /// `target` is a target triple, or `None` for the host's.
 pub(crate) fn build(target: Option<&str>) -> Result<()> {
     build_with(&Options {
@@ -184,7 +184,7 @@ pub(crate) fn build(target: Option<&str>) -> Result<()> {
     })
 }
 
-/// How [`build_with`] builds `cortex`.
+/// How [`build_with`] builds `cineris`.
 pub(crate) struct Options<'a> {
     /// The cargo profile: `dist`, or `release` for a look that is not of the
     /// shipped binary.
@@ -199,7 +199,7 @@ pub(crate) struct Options<'a> {
     pub(crate) variables: &'a [(&'a str, &'a str)],
 }
 
-/// Builds `cortex` as `options` say, with the build machine's folders taken
+/// Builds `cineris` as `options` say, with the build machine's folders taken
 /// out of its paths.
 pub(crate) fn build_with(options: &Options) -> Result<()> {
     let root = options.tree.map_or_else(workspace::root, Path::to_path_buf);
@@ -213,9 +213,9 @@ pub(crate) fn build_with(options: &Options) -> Result<()> {
         "--profile",
         options.profile,
         "--package",
-        "cortex-cli",
+        "cineris-cli",
         "--bin",
-        "cortex",
+        "cineris",
     ];
     if let Some(target) = options.target {
         arguments.extend(["--target", target]);
@@ -401,8 +401,8 @@ mod tests {
             home: Some(PathBuf::from(&home)),
             cargo_home: Some(PathBuf::from(format!("{home}/.cargo"))),
             sysroot: Some(PathBuf::from(format!("{home}/.rustup/toolchains/x"))),
-            workspace: Some(PathBuf::from(format!("{home}/src/cortex"))),
-            target: Some(PathBuf::from(format!("{home}/src/cortex/target"))),
+            workspace: Some(PathBuf::from(format!("{home}/src/cineris"))),
+            target: Some(PathBuf::from(format!("{home}/src/cineris/target"))),
         };
         let remaps = folders.remaps();
         let order: Vec<&str> = remaps.iter().map(|(_, to)| *to).collect();
@@ -525,7 +525,7 @@ mod tests {
         let bytes =
             b"\0cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/de.rs\0\
             ./target/dist/build/x/out/generated.rs\0/rustc/58cf8f9c3/library/core/src/str/mod.rs\0\
-            ~/.config/cortex-harness\0";
+            ~/.config/cineris\0";
         assert_eq!(
             home_paths(
                 bytes,

@@ -1,6 +1,6 @@
 `/export`, in 09-tui's commands, is built by no step.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: the owner
 
 | Item | Who | When |

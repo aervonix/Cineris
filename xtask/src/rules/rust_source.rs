@@ -13,7 +13,7 @@
 //! - **A program is not started by a bare name** outside tests: a
 //!   `Command::new("git")` searches the `PATH`, relative entries and all,
 //!   in the child's working directory, which is the workspace. The harness
-//!   finds a program with `cortex_base::program` and starts it by the
+//!   finds a program with `cineris_base::program` and starts it by the
 //!   absolute path found (step 13a's review, R4). [`STARTERS`] names the
 //!   calls that start what they are given.
 
@@ -25,12 +25,12 @@ use crate::mutate::lex::{self, Token};
 
 /// The traits that are wrapped, and the file each is declared in.
 pub(super) const WRAPPED: [(&str, &str); 4] = [
-    ("crates/cortex-tools/src/contract.rs", "Tool"),
-    ("crates/cortex-tools/src/process/mod.rs", "Launcher"),
-    ("crates/cortex-agent/src/policy.rs", "Policy"),
+    ("crates/cineris-tools/src/contract.rs", "Tool"),
+    ("crates/cineris-tools/src/process/mod.rs", "Launcher"),
+    ("crates/cineris-agent/src/policy.rs", "Policy"),
     // Wrapped by the tests' clients that check what a request builds to
-    // (cortex-agent's context tests, cortex-core's secrets tests).
-    ("crates/cortex-llm/src/client.rs", "ModelClient"),
+    // (cineris-agent's context tests, cineris-core's secrets tests).
+    ("crates/cineris-llm/src/client.rs", "ModelClient"),
 ];
 
 /// The calls that start the program they are given as their first
@@ -90,7 +90,7 @@ const ALLOWED_PLACES: [(&str, &str); 2] = [
          PATH as cargo does, in a checkout they chose",
     ),
     (
-        "crates/cortex-testkit/",
+        "crates/cineris-testkit/",
         "only tests depend on the test kit (`cargo xtask rules` checks it), and a test runs the \
          machine's tools",
     ),
@@ -298,7 +298,7 @@ pub(super) fn bare_programs(file: &str, source: &str, test_file: bool) -> Vec<Vi
                 "`{starter}(\"{name}\")` starts a program by its bare name, which is looked for \
                  in the PATH's relative entries and, on Windows, in the working directory: a \
                  `{name}` in the workspace would run in its place. Find it with \
-                 `cortex_base::program` (`program::git()`, or `program::find` over \
+                 `cineris_base::program` (`program::git()`, or `program::find` over \
                  `program::path_directories()`) and start it by the path found. If a bare name is \
                  right here, say why on the line before: `{ALLOW} <reason>`."
             ),
@@ -506,7 +506,7 @@ mod tests {
     fn a_wrapped_trait_that_moved_is_an_error_not_a_pass() {
         let mut sources = BTreeMap::new();
         sources.insert(
-            "crates/cortex-tools/src/contract.rs".to_owned(),
+            "crates/cineris-tools/src/contract.rs".to_owned(),
             "pub trait Other {}\n".to_owned(),
         );
         let found = wrapped_traits(&sources);
@@ -532,7 +532,7 @@ mod tests {
     #[test]
     fn programs_started_by_a_path_or_in_tests_pass() {
         let found = bare_programs(
-            "crates/cortex-demo/src/lib.rs",
+            "crates/cineris-demo/src/lib.rs",
             &fixture("bare-programs-pass.rs"),
             false,
         );
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn each_program_started_by_a_bare_name_is_named_with_its_line() {
         let source = fixture("bare-programs-fail.rs");
-        let found = bare_programs("crates/cortex-demo/src/lib.rs", &source, false);
+        let found = bare_programs("crates/cineris-demo/src/lib.rs", &source, false);
         let expected: Vec<usize> = source
             .lines()
             .enumerate()
@@ -555,18 +555,18 @@ mod tests {
                 .message
                 .contains("`Command::new(\"git\")` starts a program")
         );
-        assert!(found[0].message.contains("cortex_base::program"));
+        assert!(found[0].message.contains("cineris_base::program"));
         // The same file in a test, in the test kit or in xtask passes.
         assert_eq!(
-            bare_programs("crates/cortex-demo/tests/it/main.rs", &source, false),
+            bare_programs("crates/cineris-demo/tests/it/main.rs", &source, false),
             []
         );
         assert_eq!(
-            bare_programs("crates/cortex-demo/src/lib.rs", &source, true),
+            bare_programs("crates/cineris-demo/src/lib.rs", &source, true),
             []
         );
         assert_eq!(
-            bare_programs("crates/cortex-testkit/src/lib.rs", &source, false),
+            bare_programs("crates/cineris-testkit/src/lib.rs", &source, false),
             []
         );
         assert_eq!(bare_programs("xtask/src/main.rs", &source, false), []);

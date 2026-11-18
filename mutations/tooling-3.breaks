@@ -36,7 +36,7 @@ caught-by:
 
 [break] tool-gains-a-default
 rule: Tool keeps no default bodies, so a wrapper cannot inherit a method it does not forward.
-file: crates/cortex-tools/src/contract.rs
+file: crates/cineris-tools/src/contract.rs
 in: Tool
 find: fn preview(&self, plan: &Plan, cx: &RunCx) -> Option<Preview>;
 replace: fn preview(&self, plan: &Plan, cx: &RunCx) -> Option<Preview>; fn added(&self) -> bool { false }
@@ -47,7 +47,7 @@ caught-by:
 
 [break] launcher-gains-a-default
 rule: Launcher keeps no default bodies.
-file: crates/cortex-tools/src/process/mod.rs
+file: crates/cineris-tools/src/process/mod.rs
 find: fn explain(&self, exit: Option<Exit>, output: &str) -> Option<String>;
 replace: fn explain(&self, exit: Option<Exit>, output: &str) -> Option<String>; fn added(&self) {}
 packages: xtask
@@ -57,7 +57,7 @@ caught-by:
 
 [break] policy-gains-a-default
 rule: Policy keeps no default bodies.
-file: crates/cortex-agent/src/policy.rs
+file: crates/cineris-agent/src/policy.rs
 find: fn read_gate(&self) -> Arc<dyn ReadGate>;
 replace: fn read_gate(&self) -> Arc<dyn ReadGate>; fn added(&self) -> u8 { 0 }
 packages: xtask
@@ -67,7 +67,7 @@ caught-by:
 
 [break] tool-call-drops-the-preview
 rule: tool_call forwards preview to the tool it calls.
-file: crates/cortex-tools/src/registry.rs
+file: crates/cineris-tools/src/registry.rs
 in: ToolCall::preview
 find: dynamic.tool.preview(&dynamic.plan, cx)
 replace: { let _ = (dynamic, cx); None }
@@ -345,44 +345,44 @@ caught-by:
 
 [break] rerun-path-not-given
 rule: The child gets the PATH it is given.
-file: crates/cortex-testkit/src/rerun.rs
+file: crates/cineris-testkit/src/rerun.rs
 in: Rerun::command
 find: command.env("PATH", path);
 replace: let _ = path;
-packages: cortex-testkit, cortex-tools
+packages: cineris-testkit, cineris-tools
 caught-by:
-    cortex-testkit rerun::tests::sys_a_rerun_test_gets_the_environment_it_is_given
-    cortex-tools::it shell_search::sys_a_relative_path_entry_does_not_make_a_file_there_the_shell
+    cineris-testkit rerun::tests::sys_a_rerun_test_gets_the_environment_it_is_given
+    cineris-tools::it shell_search::sys_a_relative_path_entry_does_not_make_a_file_there_the_shell
 
 [break] rerun-cwd-not-given
 rule: The child runs in the directory it is given.
-file: crates/cortex-testkit/src/rerun.rs
+file: crates/cineris-testkit/src/rerun.rs
 in: Rerun::command
 find: command.current_dir(cwd);
 replace: let _ = cwd;
-packages: cortex-testkit, cortex-tools
+packages: cineris-testkit, cineris-tools
 caught-by:
-    cortex-testkit rerun::tests::sys_a_rerun_test_gets_the_environment_it_is_given
-    cortex-tools::it shell_search::sys_a_relative_comspec_or_system_root_is_not_believed
-    cortex-tools::it shell_search::sys_a_relative_path_entry_does_not_make_a_file_there_the_shell
+    cineris-testkit rerun::tests::sys_a_rerun_test_gets_the_environment_it_is_given
+    cineris-tools::it shell_search::sys_a_relative_comspec_or_system_root_is_not_believed
+    cineris-tools::it shell_search::sys_a_relative_path_entry_does_not_make_a_file_there_the_shell
 
 [break] rerun-that-ran-nothing-passes
 rule: A rerun whose name matches no test fails: it would pass having run nothing.
-file: crates/cortex-testkit/src/rerun.rs
+file: crates/cineris-testkit/src/rerun.rs
 in: Rerun::run
 find: ran.stdout.contains("running 1 test") && ran.stdout.contains(" 1 passed;")
 replace: true
 caught-by:
-    cortex-testkit rerun::tests::sys_a_rerun_of_a_test_that_is_not_there_or_is_ignored_fails
+    cineris-testkit rerun::tests::sys_a_rerun_of_a_test_that_is_not_there_or_is_ignored_fails
 
 [break] rerun-said-only-at-the-start-of-a-line
 rule: What a child said is found anywhere in a line: the harness writes the test's name before its first line.
-file: crates/cortex-testkit/src/rerun.rs
+file: crates/cineris-testkit/src/rerun.rs
 in: Ran::said
 find: .filter_map(|line| line.split_once(&prefix).map(|(_, value)| value))
 replace: .filter_map(|line| line.strip_prefix(&prefix))
 caught-by:
-    cortex-testkit rerun::tests::sys_a_rerun_test_gets_the_environment_it_is_given
+    cineris-testkit rerun::tests::sys_a_rerun_test_gets_the_environment_it_is_given
 
 [break] try-filter-after-the-users-dashes
 rule: A filter goes before a `--` of the command's own, where nextest reads it.
@@ -453,8 +453,8 @@ caught-by:
 rule: The partial-Landlock run builds the sandbox's backends, without which its confinement tests are not compiled.
 file: xtask/src/nonblocking.rs
 in: partial_arguments
-find: "cortex-sandbox/backends".to_owned()
-replace: "cortex-sandbox/default".to_owned()
+find: "cineris-sandbox/backends".to_owned()
+replace: "cineris-sandbox/default".to_owned()
 caught-by:
     nonblocking::partial_tests::the_partial_case_must_be_seen_and_the_tests_must_pass
 

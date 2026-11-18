@@ -59,12 +59,12 @@ caught-by:
     outstanding::tests::a_file_out_of_form_is_refused_at_its_line
     rules::layout::tests::an_open_item_out_of_form_is_found_at_its_line
 
-[break] outstanding-any-cortex-name-is-an-area
+[break] outstanding-any-cineris-name-is-an-area
 rule: An area that names a crate names one the workspace has.
 file: xtask/src/outstanding.rs
 in: parse
-find: (value.starts_with("cortex-") && crates.contains(value))
-replace: value.starts_with("cortex-")
+find: (value.starts_with("cineris-") && crates.contains(value))
+replace: value.starts_with("cineris-")
 caught-by:
     outstanding::tests::a_file_out_of_form_is_refused_at_its_line
 

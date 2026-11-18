@@ -190,9 +190,9 @@ mod tests {
     #[test]
     fn descriptions_and_other_paths_are_left_alone() {
         for text in [
-            "~/project and ~/.config/cortex-harness",
+            "~/project and ~/.config/cineris",
             "$HOME/project",
-            "crates/cortex-cli/src/main.rs",
+            "crates/cineris-cli/src/main.rs",
             // A description of the pattern, with no user in it.
             "paths under /home/<name>/ or /home/$USER/ are rejected",
             "the root is /home/ on Linux",

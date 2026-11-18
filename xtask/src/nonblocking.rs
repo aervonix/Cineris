@@ -15,7 +15,7 @@ use crate::Result;
 use crate::{runs, shipped, steps, workspace};
 
 /// The package whose binary is shipped.
-const BINARY_PACKAGE: &str = "cortex-cli";
+const BINARY_PACKAGE: &str = "cineris-cli";
 /// The profile the binary is built and measured in.
 const PROFILE: &str = shipped::PROFILE;
 const MEBIBYTE: f64 = 1024.0 * 1024.0;
@@ -343,7 +343,7 @@ const SIZE_USAGE: &str = "\
 usage: cargo xtask size [--check] [--target TRIPLE] [--against-main]
                         [--profile release|dist] [--breakdown [--top N]] [--at COMMIT]
 
-Builds `cortex` and reports its size and the crates in the build.
+Builds `cineris` and reports its size and the crates in the build.
   --check          fail over the budget too (a home path fails every run)
   --target TRIPLE  the target to build for (the host's when not given; the
                    budgets are of x86_64-unknown-linux-musl and
@@ -814,9 +814,9 @@ fn breakdown_outcome(
 /// Where cargo puts the binary of `profile` for `target`.
 fn binary_in(target_directory: &Path, target: &str, profile: &str) -> PathBuf {
     let executable = if target.contains("windows") {
-        "cortex.exe"
+        "cineris.exe"
     } else {
-        "cortex"
+        "cineris"
     };
     target_directory.join(target).join(profile).join(executable)
 }
@@ -947,7 +947,7 @@ const STD: &str = "std (core, alloc, std)";
 /// The crate a demangled symbol belongs to: the first path of its name, which
 /// for a method of a trait is the type's (`<serde_json::Value as
 /// Debug>::fmt` is `serde_json`'s) and for generic code is the generic's own
-/// (`core::ptr::drop_in_place<cortex_core::X>` is the standard library's, the
+/// (`core::ptr::drop_in_place<cineris_core::X>` is the standard library's, the
 /// way it is for `cargo bloat`). A symbol of no Rust crate is C or assembly.
 fn crate_of(name: &str) -> String {
     const PRIMITIVES: [&str; 19] = [
@@ -1107,12 +1107,12 @@ mod tests {
     #[test]
     fn the_crates_that_grew_most_are_named_largest_first_and_a_new_one_whole() {
         let main = sizes(&[
-            ("cortex_core", 500_000),
+            ("cineris_core", 500_000),
             ("serde", 100_000),
             ("regex", 80_000),
         ]);
         let now = sizes(&[
-            ("cortex_core", 650_000),
+            ("cineris_core", 650_000),
             ("serde", 90_000),
             ("regex", 81_000),
             ("syntect", 120_000),
@@ -1120,7 +1120,7 @@ mod tests {
         assert_eq!(
             grew_most(&now, &main, 3),
             [
-                ("cortex_core".to_owned(), 150_000),
+                ("cineris_core".to_owned(), 150_000),
                 ("syntect".to_owned(), 120_000),
                 ("regex".to_owned(), 1_000),
             ]
@@ -1136,12 +1136,12 @@ mod tests {
 
     #[test]
     fn growth_past_100_kb_is_explained_by_crate_and_less_is_not() {
-        let main = sizes(&[("cortex_core", 500_000)]);
-        let now = sizes(&[("cortex_core", 650_000)]);
+        let main = sizes(&[("cineris_core", 500_000)]);
+        let now = sizes(&[("cineris_core", 650_000)]);
         assert_eq!(growth_text(100 * 1024, Some(&now), Some(&main)), None);
         let said = growth_text(150_000, Some(&now), Some(&main)).unwrap();
         assert!(said.contains("more than 100 KB"), "{said}");
-        assert!(said.contains("`cortex_core` +146.5 KB"), "{said}");
+        assert!(said.contains("`cineris_core` +146.5 KB"), "{said}");
         // Windows reads no symbols, and an older record of main's has none.
         let windows = growth_text(150_000, None, Some(&main)).unwrap();
         assert!(windows.contains("named by the Linux job"), "{windows}");
@@ -1185,15 +1185,15 @@ mod tests {
     #[test]
     fn each_crate_in_the_tree_is_counted_once() {
         let tree = "\
-cortex-cli v0.0.0 (/repo/crates/cortex-cli)
-cortex-core v0.0.0 (/repo/crates/cortex-core)
-cortex-protocol v0.0.0 (/repo/crates/cortex-protocol)
+cineris-cli v0.0.0 (/repo/crates/cineris-cli)
+cineris-core v0.0.0 (/repo/crates/cineris-core)
+cineris-protocol v0.0.0 (/repo/crates/cineris-protocol)
 serde v1.0.229
 serde_core v1.0.229
 serde_derive v1.0.229 (proc-macro)
 serde_json v1.0.154
 serde_core v1.0.229
-cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
+cineris-protocol v0.0.0 (/repo/crates/cineris-protocol) (*)
 
 [build-dependencies]
 ";
@@ -1440,9 +1440,9 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
 0000000000004700 0000000000000100 t core::fmt::write
 0000000000004700 0000000000000100 T core::fmt::write_alias
 0000000000008192 0000000000000300 r anon.0123abcd.4
-0000000000008500 0000000000000030 R cortex_core::table
+0000000000008500 0000000000000030 R cineris_core::table
 0000000000009000 0000000000000050 T memcpy
-0000000000009100 0000000000000900 B cortex_core::bss_is_not_in_the_file
+0000000000009100 0000000000000900 B cineris_core::bss_is_not_in_the_file
 0000000000009200 0000000000000000 T zero_sized
 0000000000009300 W _start
 0000000000009400 0000000000000020 W <u32 as core::fmt::Display>::fmt
@@ -1459,7 +1459,7 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
                 "<serde_json::value::Value as core::fmt::Debug>::fmt",
                 "core::fmt::write",
                 "anon.0123abcd.4",
-                "cortex_core::table",
+                "cineris_core::table",
                 "memcpy",
                 "<u32 as core::fmt::Display>::fmt",
             ],
@@ -1476,8 +1476,11 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
                 "<serde_json::value::Value as core::fmt::Debug>::fmt",
                 "serde_json",
             ),
-            ("<&cortex_core::X as core::fmt::Debug>::fmt", "cortex_core"),
-            ("core::ptr::drop_in_place<cortex_core::X>", STD),
+            (
+                "<&cineris_core::X as core::fmt::Debug>::fmt",
+                "cineris_core",
+            ),
+            ("core::ptr::drop_in_place<cineris_core::X>", STD),
             ("alloc::vec::Vec<T>::push", STD),
             ("std::io::stdio::print", STD),
             (
@@ -1510,7 +1513,7 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
                 ("serde_json".to_owned(), 240),
                 (STD.to_owned(), 120),
                 (NO_CRATE.to_owned(), 50),
-                ("cortex_core".to_owned(), 30),
+                ("cineris_core".to_owned(), 30),
             ]
         );
     }
@@ -1521,7 +1524,7 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
             ("serde_json".to_owned(), 600),
             (STD.to_owned(), 200),
             ("tokio".to_owned(), 100),
-            ("cortex_core".to_owned(), 50),
+            ("cineris_core".to_owned(), 50),
         ];
         let table = breakdown_table(&sizes, 1000, 2);
         assert!(
@@ -1615,7 +1618,7 @@ cortex-protocol v0.0.0 (/repo/crates/cortex-protocol) (*)
 /// scope signals: the gap of the partial case, named.
 const PARTIAL_MARK: &str = "does not scope signals: the gap the status names";
 
-/// `cargo xtask partial-landlock`: `cortex-sandbox`'s tests, as the blocking
+/// `cargo xtask partial-landlock`: `cineris-sandbox`'s tests, as the blocking
 /// job runs them, on a kernel whose Landlock is older than 6 (the `nightly`
 /// workflow's Ubuntu 22.04 job, ABI 4). The confinement tests fail rather
 /// than skip on CI where the sandbox does not enforce; this fails too when
@@ -1623,7 +1626,7 @@ const PARTIAL_MARK: &str = "does not scope signals: the gap the status names";
 /// does not leave the case untested in silence.
 pub(crate) fn partial_landlock() -> Result<()> {
     crate::checks::require_nextest()?;
-    let mut run = crate::checks::ci_run(&["cortex-sandbox".to_owned()]);
+    let mut run = crate::checks::ci_run(&["cineris-sandbox".to_owned()]);
     run.extend(partial_arguments());
     println!("$ cargo {}", run.join(" "));
     let output = Command::new(workspace::cargo())
@@ -1642,13 +1645,13 @@ pub(crate) fn partial_landlock() -> Result<()> {
 }
 
 /// What the run adds to the blocking job's: the backends, which only a
-/// build with `cortex-core` in it turns on, and without which the
+/// build with `cineris-core` in it turns on, and without which the
 /// confinement tests are not compiled at all; and the tests' own output,
 /// where the partial case is named.
 fn partial_arguments() -> [String; 4] {
     [
         "--features".to_owned(),
-        "cortex-sandbox/backends".to_owned(),
+        "cineris-sandbox/backends".to_owned(),
         "--success-output".to_owned(),
         "immediate".to_owned(),
     ]
@@ -1666,7 +1669,7 @@ fn partial_verdict(passed: bool, printed: &str) -> Result<()> {
         Err(format!(
             "the tests passed, but none said `{PARTIAL_MARK}`, so the partial case ran \
              nowhere: either the confinement tests were not built (they need \
-             cortex-sandbox's `backends` feature), or this kernel's Landlock scopes signals. In \
+             cineris-sandbox's `backends` feature), or this kernel's Landlock scopes signals. In \
              the second case move the job to a runner with Landlock 4 or 5, or say in \
              docs/testing-and-ci.md that it is no longer tested."
         ))
@@ -1679,17 +1682,17 @@ mod partial_tests {
 
     #[test]
     fn the_partial_case_must_be_seen_and_the_tests_must_pass() {
-        let shown = "    PASS [ 0.1s] cortex-sandbox::it confined::sys_a_signal_to_a_process_outside_the_sandbox_is_refused\n\
+        let shown = "    PASS [ 0.1s] cineris-sandbox::it confined::sys_a_signal_to_a_process_outside_the_sandbox_is_refused\n\
                      Landlock 4 does not scope signals: the gap the status names\n";
         assert_eq!(partial_verdict(true, shown), Ok(()));
-        let error =
-            partial_verdict(true, "    PASS [ 0.1s] cortex-sandbox::it confined::x\n").unwrap_err();
+        let error = partial_verdict(true, "    PASS [ 0.1s] cineris-sandbox::it confined::x\n")
+            .unwrap_err();
         assert!(error.contains("the partial case ran nowhere"), "{error}");
         // The confinement tests are built only with the backends.
         assert!(
             super::partial_arguments()
                 .windows(2)
-                .any(|pair| pair == ["--features", "cortex-sandbox/backends"])
+                .any(|pair| pair == ["--features", "cineris-sandbox/backends"])
         );
         let error = partial_verdict(false, shown).unwrap_err();
         assert!(error.contains("tests failed"), "{error}");

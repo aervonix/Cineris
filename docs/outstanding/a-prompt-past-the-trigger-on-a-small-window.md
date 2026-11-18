@@ -1,6 +1,6 @@
 On a small-window model the first estimate exceeds `context.compact_at`, so every turn ends `compaction_failed` unsent.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: a later step on local models, or step 33
 
 | Item | Who | When |

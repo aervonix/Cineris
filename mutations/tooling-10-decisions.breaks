@@ -5,17 +5,17 @@
 
 [break] managed-ask-is-not-marked
 rule: A finding an `ask` rule of the managed configuration makes says so, and the question carries it.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Finding::asked_by
 find: managed: matches!(hit.by, By::Rule(rule) if rule.source == RuleSource::Managed)
 replace: managed: false
-packages: cortex-policy, cortex-core
+packages: cineris-policy, cineris-core
 caught-by:
-    cortex-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
+    cineris-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
 
 [break] managed-ask-lets-the-users-line-run
 rule: The verifier holds back the user's own line where a managed `ask` rule is among what asks.
-file: crates/cortex-core/src/verify.rs
+file: crates/cineris-core/src/verify.rs
 find: Decision::Ask if managed =>
 replace: Decision::Ask if managed && false =>
 caught-by:
@@ -23,17 +23,17 @@ caught-by:
 
 [break] any-ask-holds-the-users-line-back
 rule: A user's own `ask` rule does not hold back the user's own line: only the managed configuration's does.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Finding::asked_by
 find: matches!(hit.by, By::Rule(rule) if rule.source == RuleSource::Managed)
 replace: matches!(hit.by, By::Rule(_))
-packages: cortex-policy, cortex-core
+packages: cineris-policy, cineris-core
 caught-by:
-    cortex-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
+    cineris-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
 
 [break] managed-ask-loses-a-tie
 rule: Of rules of one strength the managed configuration's is the hit, so a managed `ask` beside another layer's `ask` on the same call is still marked.
-file: crates/cortex-policy/src/rules.rs
+file: crates/cineris-policy/src/rules.rs
 in: RuleSet::strongest
 find: compiled.rule.source == RuleSource::Managed
 replace: false
@@ -42,7 +42,7 @@ caught-by:
 
 [break] managed-ask-on-a-named-path-is-not-marked
 rule: A managed rule's `ask` on a path a command only names is marked.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_named_path
 find: By::Rule(_) => Finding::asked_by(reason, &hit)
 replace: By::Rule(_) => Finding::ask(reason)
@@ -51,7 +51,7 @@ caught-by:
 
 [break] managed-ask-on-a-path-is-not-marked
 rule: A managed rule's `ask` on a path a call reads or writes is marked.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::judge_path
 find: Finding::asked_by(format!("{what} is asked about by {}.", hit.describe()), &hit)
 replace: Finding::ask(format!("{what} is asked about by {}.", hit.describe()))
@@ -60,7 +60,7 @@ caught-by:
 
 [break] managed-ask-is-forgotten-by-a-later-reason
 rule: A question is managed when any of its reasons is a managed rule's, whatever comes after it.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 find: managed |= by_managed;
 replace: managed = by_managed;
 caught-by:

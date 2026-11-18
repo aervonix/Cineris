@@ -61,8 +61,8 @@ this worktree are not touched.
   --format markdown   One table for each crate, for a report.
   --features LIST     Features to turn on when documenting, `CRATE/FEATURE`
                       separated by commas (a bare FEATURE when one crate is
-                      named): the items behind them, such as cortex-tui's
-                      `test-kit` or cortex-policy's `test-support`, are then
+                      named): the items behind them, such as cineris-tui's
+                      `test-kit` or cineris-policy's `test-support`, are then
                       in the API compared. A feature the ref does not have
                       is left off there, and said.";
 
@@ -200,10 +200,10 @@ type DocCall = (Vec<String>, Vec<String>);
 /// The calls of `cargo doc` that document `libraries` with the features
 /// asked for: one for each crate that has a feature asked for, given as
 /// its bare names, and one for the rest. A crate with a dev-dependency on
-/// itself that asks for the feature (as `cortex-tui` and `cortex-policy`
+/// itself that asks for the feature (as `cineris-tui` and `cineris-policy`
 /// have, for their tests) takes `--features CRATE/FEATURE` as the
 /// dev-dependency's, and documents its library without it: the tenth
-/// tooling step found `cortex-tui`'s kit missing so. The bare names of a
+/// tooling step found `cineris-tui`'s kit missing so. The bare names of a
 /// call of one crate are its own. Each call
 /// is its crates and its `--features` arguments. Also the features asked
 /// for of these crates that this tree's crate does not have, to be said:
@@ -401,7 +401,7 @@ fn doc_commands(
         .map(|(names, asked)| {
             let sandbox = libraries.iter().any(|library| {
                 names.contains(&library.package)
-                    && library.package == "cortex-sandbox"
+                    && library.package == "cineris-sandbox"
                     && library.features.iter().any(|feature| feature == "backends")
             });
             let mut arguments: Vec<String> = [

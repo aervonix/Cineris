@@ -1,6 +1,6 @@
 # After step 12: the permission engine
 
-Step 12 added `cortex-policy` (about 9,200 lines of source, 2,500 of unit tests and 4,700 of integration and system tests: 91 unit and 69 integration tests, one of them a measurement run by hand), the turn that ends as `denied` to `cortex-agent`, the project key in stored case to `cortex-base`, and the gate on what a base state keeps to `cortex-session`. It adds no package to the workspace. Measured on the step's pull request on 2026-11-13, rebased onto main with steps 9, 10 and 14 in it. "Main" is main's own run at that commit:
+Step 12 added `cineris-policy` (about 9,200 lines of source, 2,500 of unit tests and 4,700 of integration and system tests: 91 unit and 69 integration tests, one of them a measurement run by hand), the turn that ends as `denied` to `cineris-agent`, the project key in stored case to `cineris-base`, and the gate on what a base state keeps to `cineris-session`. It adds no package to the workspace. Measured on the step's pull request on 2026-11-13, rebased onto main with steps 9, 10 and 14 in it. "Main" is main's own run at that commit:
 
 | Job | Main | Step 12, first run | Step 12, second run | Step 12, third run |
 |---|---|---|---|---|
@@ -24,13 +24,13 @@ Step 12 added `cortex-policy` (about 9,200 lines of source, 2,500 of unit tests 
 - **The hosted Windows runner can make a case-sensitive directory.** `fsutil.exe file setCaseSensitiveInfo <dir> enable` works there, and the two tests that need it fail in CI if it does not, so they are not skipped unnoticed.
 - **The second run put the unit tier over its budget on Windows,** at 26.3 s of 20 s. About a third of it was this crate's properties of rules and leases, at three thousand cases each: every case compiles rule sets, in a build that does not optimise. They now run a few hundred cases on a pull request, and fifty times that in the nightly run. In CI's profile on the desktop the crate's unit tests went from 3.5 s to 0.9 s, and the third run has the tier at 14.4 s on Windows. Step 14's lesson held and was not applied widely enough: the properties had been timed in CI's profile before the push, one by one, and each was well under its own limit. **A tier's total is measured before the push as well as each test.**
 - **Windows varies from run to run by more than this step costs.** The integration tier was 29.7 s in the second run and 21.6 s in the third with almost the same tests, and Linux's unit tier 16.8 s and 7.9 s. Against main, the third run is 4 s more in the unit tier on Windows, 6 s in the integration tier and 8 s in the system tier, where the step's tests start PowerShell and make real directories. CI's log has no time for single tests under two seconds, so the step's share on Windows is an estimate from the desktop's proportions. A line for each tier's slowest tests in `xtask`'s budget report would settle such questions; it is outside this step.
-- **One test of the test kit is slow on Windows in every run** (`server::tests::it_can_hold_the_whole_response_back_and_is_let_go_when_dropped`, 2.0 s), and one of `cortex-llm`'s transport tests was in the first. Neither is this step's.
+- **One test of the test kit is slow on Windows in every run** (`server::tests::it_can_hold_the_whole_response_back_and_is_let_go_when_dropped`, 2.0 s), and one of `cineris-llm`'s transport tests was in the first. Neither is this step's.
 - **The tests were run two to four hundred times over on the desktop,** the engine's and the loop's. That found a test of this step that failed three runs in ten: the loop picks among ready events at random, and what a stopped turn did depended on which it saw first. The fix was in the loop ([architecture/03-agent-loop.md](../../architecture/03-agent-loop.md), "Tool rounds"): the turn now stops at the refused call in the model's order.
 - **Breaking the code fails the tests.** 158 rules of the step were each broken on purpose, one at a time, on a copy of the tree. On the first pass over the first version, 111 of 113 were caught. After the review's fixes 154 of 158 were, and the last four got tests with the order of events fixed; a fifth turned up when the properties were cut to fewer cases, and got a test that changes each field of a lease in turn. Every one of the 158 now fails at least one test.
 
 # The fixes to step 12
 
-The fixes changed `cortex-policy` (the command analysis, the engine, trust and approvals, leases), `cortex-agent` (the order of calls behind a question), and `cortex-session` (a base state's record). They also added `mutations/step-12-fixes.breaks`. The times below were measured on pull request 29 on 2026-11-13, rebased onto main at `e6c4ac3`. "Main" is main's own run at that commit.
+The fixes changed `cineris-policy` (the command analysis, the engine, trust and approvals, leases), `cineris-agent` (the order of calls behind a question), and `cineris-session` (a base state's record). They also added `mutations/step-12-fixes.breaks`. The times below were measured on pull request 29 on 2026-11-13, rebased onto main at `e6c4ac3`. "Main" is main's own run at that commit.
 
 | Job | Main, `e6c4ac3` | First run | Second run | Second run, Windows tests again |
 |---|---|---|---|---|
@@ -45,7 +45,7 @@ The fixes changed `cortex-policy` (the command analysis, the engine, trust and a
 | The same (second run; on Windows, run again) | 37.5 s (build tests 28.6 s, run 8.9 s) | 97.9 s (build tests 64.4 s, run 33.4 s) |
 | Test time against the tier budgets (main) | tier 1: 11.5 s of 20 s. Tier 2: 22.5 s of 40 s. Tier 3: 7.3 s of 60 s | tier 1: **21.9 s of 20 s, a warning.** Tier 2: 38.4 s of 40 s. Tier 3: 43.5 s of 90 s |
 | The same (second run; on Windows, run again) | tier 1: 9.5 s of 20 s. Tier 2: 16.6 s of 40 s. Tier 3: 6.3 s of 60 s | tier 1: **22.8 s of 20 s, a warning.** Tier 2: 39.7 s of 40 s. Tier 3: 45.7 s of 90 s |
-| Of which `cortex-policy` (main, then this) | 2.1 s, then 2.6 s | 5.8 s, then 11.9 s |
+| Of which `cineris-policy` (main, then this) | 2.1 s, then 2.6 s | 5.8 s, then 11.9 s |
 
 - **What the fixes add is 6 s on Windows, nearly all in starting PowerShell.**
   - The new argument test runs one script through `powershell`, `pwsh`, and `pwsh` in Legacy mode, and compares what a program receives with the analysis's words. It is 4.2 s of the system tier, about 1.4 s per start of PowerShell. Finding 2 of the review asked for it.
@@ -58,4 +58,4 @@ The fixes changed `cortex-policy` (the command analysis, the engine, trust and a
 - **The checks before the push, on the desktop:**
   - `cargo xtask ci` passed with 1,932 tests;
   - `cargo xtask mutate step-12 step-12-fixes` ran all 105 breaks, and each did what its list expects;
-  - `cargo xtask stress -p cortex-agent --count 50` passed every test under every seed.
+  - `cargo xtask stress -p cineris-agent --count 50` passed every test under every seed.

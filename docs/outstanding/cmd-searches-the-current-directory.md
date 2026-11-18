@@ -1,6 +1,6 @@
 `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`.
 
-- Area: cortex-tools
+- Area: cineris-tools
 - Owner: the owner
 
 | Item | Who | When |

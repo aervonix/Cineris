@@ -1147,7 +1147,7 @@ mod tests {
                 "--count",
                 "8",
                 "-p",
-                "cortex-base",
+                "cineris-base",
                 "--label",
                 "main",
                 "--",
@@ -1161,7 +1161,7 @@ mod tests {
                 rounds: 8,
                 top: 10,
                 keep_going: false,
-                packages: strings(&["cortex-base"]),
+                packages: strings(&["cineris-base"]),
                 rest: strings(&["-E", "test(/x/)"]),
             }
         );
@@ -1223,8 +1223,8 @@ mod tests {
     fn each_round_is_a_line_for_each_side() {
         let compared = Compared {
             numbers: vec![1, 3],
-            base: vec![vec![case("cortex-base", "t", 0.5)]; 2],
-            head: vec![vec![case("cortex-base", "t", 0.75)]; 2],
+            base: vec![vec![case("cineris-base", "t", 0.5)]; 2],
+            head: vec![vec![case("cineris-base", "t", 0.75)]; 2],
         };
         let table = rounds_table(&compared);
         let lines: Vec<&str> = table
@@ -1319,7 +1319,7 @@ mod tests {
     }
 
     fn finished(seconds: f64) -> Attempt {
-        Attempt::Finished(vec![case("cortex-base", "t", seconds)])
+        Attempt::Finished(vec![case("cineris-base", "t", seconds)])
     }
 
     /// A failed attempt of the old kind: a test failed in a run whose report
@@ -1348,7 +1348,7 @@ mod tests {
             },
             Round {
                 base: finished(0.5),
-                head: failed(&["cortex-base t"]),
+                head: failed(&["cineris-base t"]),
             },
             Round {
                 base: failed(&[]),
@@ -1379,7 +1379,7 @@ mod tests {
     fn the_rounds_that_failed_are_listed_with_their_tests_and_a_clean_run_has_no_list() {
         let text = failed_rounds(&rounds(), "main");
         assert!(
-            text.contains("round 2, head: cortex-base t failed"),
+            text.contains("round 2, head: cineris-base t failed"),
             "{text}"
         );
         assert!(
@@ -1441,11 +1441,11 @@ mod tests {
             failed,
             [
                 (
-                    "cortex-agent::it loop_::stops_at_the_refused_call",
+                    "cineris-agent::it loop_::stops_at_the_refused_call",
                     "assertion `left == right` failed"
                 ),
                 // A timeout has no text: its kind is what is left.
-                ("cortex-agent::it loop_::never_ends", "test timeout"),
+                ("cineris-agent::it loop_::never_ends", "test timeout"),
             ]
         );
         // A test that passed on its retry did not fail.

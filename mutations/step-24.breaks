@@ -6,100 +6,100 @@
 
 [break] taking-copies-nothing
 rule: A session's configuration in force takes the keys named from the newer configuration.
-file: crates/cortex-config/src/load.rs
+file: crates/cineris-config/src/load.rs
 in: taking
 find: Some(value) => merge::insert(&mut values, key, value.clone()),
 replace: Some(_) => {}
 caught-by:
-    cortex-config::it reloading::taking_some_keys_keeps_the_rest_as_they_were
+    cineris-config::it reloading::taking_some_keys_keeps_the_rest_as_they_were
 
 [break] taking-takes-everything
 rule: The keys not named keep the values in force: what waits does not come in with what applies at once.
-file: crates/cortex-config/src/load.rs
+file: crates/cineris-config/src/load.rs
 in: taking
 find: let mut values = self.values.clone();
 replace: let mut values = newer.values.clone();
 caught-by:
-    cortex-config::it reloading::taking_some_keys_keeps_the_rest_as_they_were
+    cineris-config::it reloading::taking_some_keys_keeps_the_rest_as_they_were
 
 [break] the-trust-store-is-not-watched
 rule: The trust store's file is looked at with the configuration's, so trust taken away outside is seen by the next look.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: judge
 find: .is_some_and(|watch| !watch.check().is_empty());
 replace: .is_some_and(|watch| watch.check().is_empty() && false);
 caught-by:
-    cortex-core::it reload::trust_taken_away_from_outside_is_seen_by_the_next_look
+    cineris-core::it reload::trust_taken_away_from_outside_is_seen_by_the_next_look
 
 [break] trust-is-not-judged-again
 rule: A reload judges the project's trust again and loads with what it judged. (A new allow rule is also stopped by the load's own check of the pins, so the tests that catch this are the ones where the store changed.)
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: judge
 find: rules: judged.rules.unwrap_or(in_force.rules)
 replace: rules: in_force.rules
 caught-by:
-    cortex-core::it reload::the_load_uses_the_trust_just_judged
-    cortex-core::it reload::trust_taken_away_with_a_broken_file_is_taken_away
+    cineris-core::it reload::the_load_uses_the_trust_just_judged
+    cineris-core::it reload::trust_taken_away_with_a_broken_file_is_taken_away
 
 [break] a-changed-rule-is-trusted
 rule: A trusted project whose rules changed since has its rules set aside, as at a start: one judgement, which the look-ahead and the load's check of what it loaded both make.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: judge_pins
 find: Ok(pins) if stored.project_rules_approved(&pins) => Judged {
 replace: Ok(_) => Judged {
 caught-by:
-    cortex-core::it reload::an_allow_rule_added_while_trusted_is_not_in_force
-    cortex-core::it reload::the_load_uses_the_trust_just_judged
+    cineris-core::it reload::an_allow_rule_added_while_trusted_is_not_in_force
+    cineris-core::it reload::the_load_uses_the_trust_just_judged
 
 [break] the-turn-start-takes-no-look
 rule: The start of a turn is one of the moments the files are looked at.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: crate::reload::at_turn_start(self, &live).await;
 replace: let _ = &live;
 caught-by:
-    cortex-core::it reload::a_turn_starts_with_the_files_looked_at
+    cineris-core::it reload::a_turn_starts_with_the_files_looked_at
 
 [break] a-broken-file-is-said-every-time
 rule: A broken file is said once by the looks, and again only when the person asks.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: load
 find: if said && !asked.explicit && trusted == in_force {
 replace: if said && asked.explicit && false {
 caught-by:
-    cortex-core::it reload::a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked
+    cineris-core::it reload::a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked
 
 [break] a-broken-file-is-not-said-when-asked
 rule: The person who asks (`/reload`) is told a standing error again.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: load
 find: if said && !asked.explicit && trusted == in_force {
 replace: if said && trusted == in_force {
 caught-by:
-    cortex-core::it reload::a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked
+    cineris-core::it reload::a_broken_project_file_is_said_once_by_the_looks_and_again_when_asked
 
 [break] a-choice-is-not-kept
 rule: What the person chose in the session outranks the files: it is kept as the session's own.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: choose
 find: self.choices.push(choice);
 replace: let _ = choice;
 caught-by:
-    cortex-core::it reload::a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session
-    cortex-core::it reload::a_profile_that_cannot_be_applied_keeps_the_sessions_choices
+    cineris-core::it reload::a_reload_never_undoes_a_model_or_a_level_chosen_in_the_session
+    cineris-core::it reload::a_profile_that_cannot_be_applied_keeps_the_sessions_choices
 
 [break] a-profile-from-anyone
 rule: Only a `user` client chooses a session's profile, which can raise its level.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: reload
 find: if role != Some(ClientRole::User) {
 replace: if role == Some(ClientRole::Observer) {
 caught-by:
-    cortex-core::it reload::a_profile_is_chosen_for_one_session_by_a_person
+    cineris-core::it reload::a_profile_is_chosen_for_one_session_by_a_person
 
 [break] nothing-waits-for-an-epoch
 rule: A key that takes effect at the next epoch waits for it, and is taken when a compaction begins one.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: give_epoch
 find:
     live.handle.at_next_epoch(Some(EpochChange {
@@ -110,220 +110,220 @@ find:
 replace:
     drop((models, context, taken));
 caught-by:
-    cortex-core::it reload::what_waits_for_the_next_epoch_comes_in_with_a_compaction
+    cineris-core::it reload::what_waits_for_the_next_epoch_comes_in_with_a_compaction
 
 [break] old-news-is-told-again
 rule: Only what is new is told to a session's clients; a reload that changed nothing says so to the person who asked.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: reload_session
 find: || waits != waited
 replace: || !waits.is_empty()
 caught-by:
-    cortex-core::it reload::a_reload_applies_what_takes_effect_at_once_and_lists_what_waits
+    cineris-core::it reload::a_reload_applies_what_takes_effect_at_once_and_lists_what_waits
 
 [break] the-slot-is-taken-at-a-turns-start
 rule: What waits for the next epoch is not taken at a turn's start.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: refresh_main
 find: let inbox = self.shared.lock();
 replace: self.take_epoch_models(); let inbox = self.shared.lock();
 caught-by:
-    cortex-agent::it reconfigure::what_waits_for_the_next_epoch_is_taken_by_a_compaction_and_not_before
+    cineris-agent::it reconfigure::what_waits_for_the_next_epoch_is_taken_by_a_compaction_and_not_before
 
 [break] the-slot-is-never-taken
 rule: A compaction takes what waited for the next epoch.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: finish_compaction
 find: self.take_epoch_models();
 replace: if false { self.take_epoch_models(); }
 caught-by:
-    cortex-agent::it reconfigure::what_waits_for_the_next_epoch_is_taken_by_a_compaction_and_not_before
+    cineris-agent::it reconfigure::what_waits_for_the_next_epoch_is_taken_by_a_compaction_and_not_before
 
 [break] reconfigure-is-not-taken
 rule: What a reload changed that applies at once is taken as the next request is prepared.
-file: crates/cortex-agent/src/turn.rs
+file: crates/cineris-agent/src/turn.rs
 find: self.take_reconfigured();
 replace: let _ = &self.manual;
 caught-by:
-    cortex-agent::it reconfigure::a_reload_turns_automatic_compaction_off_from_the_next_request
-    cortex-agent::it reconfigure::a_reload_changes_the_limits_and_keeps_what_was_spent
+    cineris-agent::it reconfigure::a_reload_turns_automatic_compaction_off_from_the_next_request
+    cineris-agent::it reconfigure::a_reload_changes_the_limits_and_keeps_what_was_spent
 
 [break] a-new-budget-forgets-what-was-spent
 rule: An account given another budget keeps what was spent.
-file: crates/cortex-agent/src/ledger.rs
+file: crates/cineris-agent/src/ledger.rs
 in: with_budget
 find: spent: Arc::clone(&inner.spent)
 replace: spent: Arc::new(Mutex::new(Spent::default()))
 caught-by:
-    cortex-agent::it reconfigure::a_reload_changes_the_limits_and_keeps_what_was_spent
+    cineris-agent::it reconfigure::a_reload_changes_the_limits_and_keeps_what_was_spent
 
 [break] an-epoch-without-variants-follows-the-model
 rule: An epoch read without variants is fixed to those in force when it was read.
-file: crates/cortex-agent/src/context/mod.rs
+file: crates/cineris-agent/src/context/mod.rs
 in: fix_variants
 find: epoch.variants = Some(variants.clone());
 replace: let _ = variants;
 caught-by:
-    cortex-agent::it context::an_epoch_read_without_variants_keeps_those_in_force_when_it_was_resumed
+    cineris-agent::it context::an_epoch_read_without_variants_keeps_those_in_force_when_it_was_resumed
 
 [break] a-skipped-item-is-not-restored
 rule: A skipped plan item can be restored, and the model is told as it is told of a skip.
-file: crates/cortex-tools/src/plan.rs
+file: crates/cineris-tools/src/plan.rs
 in: apply_one
 find: item.status = PlanStatus::Pending;
 replace: item.status = PlanStatus::Skipped;
 caught-by:
-    cortex-tools::it plan::the_user_can_restore_a_skipped_item_and_the_model_is_told
+    cineris-tools::it plan::the_user_can_restore_a_skipped_item_and_the_model_is_told
 
 [break] a-promote-during-a-turn
 rule: A promote is refused while a session of the project runs a turn.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: update
 find: if promoted && core.a_turn_runs_in(&key) {
 replace: if promoted && core.a_turn_runs_in(&key) && false {
 caught-by:
-    cortex-core::it knowledge::a_promote_waits_for_the_turn_to_end
+    cineris-core::it knowledge::a_promote_waits_for_the_turn_to_end
 
 [break] warm-reads-outside-the-workspace
 rule: Only a file inside the workspace that the agent could read unasked is read ahead.
-file: crates/cortex-core/src/reads.rs
+file: crates/cineris-core/src/reads.rs
 in: warm_files
 find: if !resolved.is_inside_workspace() || !gate.may_read(resolved.abs()) {
 replace: if !gate.may_read(resolved.abs()) {
 caught-by:
-    cortex-core reads::tests::only_a_file_inside_the_workspace_the_gate_lets_through_is_read_ahead
+    cineris-core reads::tests::only_a_file_inside_the_workspace_the_gate_lets_through_is_read_ahead
 
 [break] warm-ignores-the-gate
 rule: A file the gate refuses is not read ahead.
-file: crates/cortex-core/src/reads.rs
+file: crates/cineris-core/src/reads.rs
 in: warm_files
 find: if !resolved.is_inside_workspace() || !gate.may_read(resolved.abs()) {
 replace: if !resolved.is_inside_workspace() {
 caught-by:
-    cortex-core reads::tests::only_a_file_inside_the_workspace_the_gate_lets_through_is_read_ahead
+    cineris-core reads::tests::only_a_file_inside_the_workspace_the_gate_lets_through_is_read_ahead
 
 [break] an-artifact-is-said-whole-when-cut
 rule: An artifact past the limit says it was cut, and a character the cut split is left out.
-file: crates/cortex-core/src/reads.rs
+file: crates/cineris-core/src/reads.rs
 in: text_of
 find: Err(failure) if failure.error_len().is_none() => &bytes[..failure.valid_up_to()],
 replace: Err(failure) if failure.error_len().is_some() => &bytes[..failure.valid_up_to()],
 caught-by:
-    cortex-core reads::tests::a_cut_text_leaves_out_the_character_it_split
+    cineris-core reads::tests::a_cut_text_leaves_out_the_character_it_split
 
 [break] origins-are-not-said
 rule: `config/get` says where each value came from.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: origins.insert(key.clone(), origin);
 replace: let _ = origin;
 caught-by:
-    cortex-core::it reload::config_get_says_where_each_value_came_from
+    cineris-core::it reload::config_get_says_where_each_value_came_from
 
 [break] a-refresh-waits-in-the-lane
 rule: A refresh of the usage limits never waits in the lane, where it would hold a prompt behind it.
-file: crates/cortex-rpc/src/lane.rs
+file: crates/cineris-rpc/src/lane.rs
 in: route
 find: if matches!(op, Op::UsageRefresh(_) | Op::WorkspaceWarm(_)) {
 replace: if matches!(op, Op::WorkspaceWarm(_)) {
 caught-by:
-    cortex-rpc lane::tests::the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it
+    cineris-rpc lane::tests::the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it
 
 [break] the-project-list-waits-in-the-lane
 rule: The project's entries are a read: beside the lane when no write is under way.
-file: crates/cortex-rpc/src/lane.rs
+file: crates/cineris-rpc/src/lane.rs
 in: reads
 find: | Op::ProjectList(_)
 replace: | Op::ModelsList(_)
 caught-by:
-    cortex-rpc lane::tests::the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it
+    cineris-rpc lane::tests::the_panels_reads_run_beside_the_lane_and_a_refresh_never_waits_in_it
 
 [break] a-new-key-variable-reaches-the-commands
 rule: A variable a new `key_env` names is taken from the next command.
-file: crates/cortex-tools/src/shell/mod.rs
+file: crates/cineris-tools/src/shell/mod.rs
 in: removed
 find: removed.extend(live.key_variables());
 replace: let _ = live;
 caught-by:
-    cortex-tools shell::tests::a_reload_reaches_the_next_command
+    cineris-tools shell::tests::a_reload_reaches_the_next_command
 
 [break] the-detector-keeps-the-trust-it-was-made-with
 rule: Trust taken away reaches the shell's look at what a command changed: its detector is made again.
-file: crates/cortex-tools/src/shell/mod.rs
+file: crates/cineris-tools/src/shell/mod.rs
 in: detector
 find: Some((known, was, detector)) if known == root && *was == trusted => {
 replace: Some((known, _, detector)) if known == root => {
 caught-by:
-    cortex-tools shell::tests::a_reload_reaches_the_next_command
+    cineris-tools shell::tests::a_reload_reaches_the_next_command
 
 [break] the-verifier-keeps-what-it-was-opened-with
 rule: A reload of `[verify]` reaches the next round.
-file: crates/cortex-core/src/verify.rs
+file: crates/cineris-core/src/verify.rs
 in: set_live
 find: *lock(&self.live) = live;
 replace: let _ = live;
 caught-by:
-    cortex-core::it verify::a_reload_of_verify_reaches_the_next_round
+    cineris-core::it verify::a_reload_of_verify_reaches_the_next_round
 
 [break] the-load-judges-trust-again
 rule: The load uses the trust just judged: a change of the trust store between the judgement and the load is the next look's.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: load
 find: config.options_with(trusted.rules, asked.profile.as_deref(), keep_choices)
 replace: config.options_with(assemble::judge(inner, config.state.as_ref(), &config.root, &config.options_with(true, asked.profile.as_deref(), keep_choices), config.for_the_run.as_ref()).rules.unwrap_or(trusted.rules), asked.profile.as_deref(), keep_choices)
 caught-by:
-    cortex-core::it reload::the_load_uses_the_trust_just_judged
+    cineris-core::it reload::the_load_uses_the_trust_just_judged
 
 # Found by the review of step 24's first part.
 
 [break] two-reloads-interleave
 rule: One reload of a session at a time, from its look to its commit.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: reload_session
 find: let _one = live.reloading.lock().await;
 replace: let _one = ();
 caught-by:
-    cortex-core::it reload::two_reloads_of_a_session_never_interleave
+    cineris-core::it reload::two_reloads_of_a_session_never_interleave
 
 [break] a-trusted-load-is-not-checked-again
 rule: A load trusted is checked against the pins on what it loaded.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: load
 find: if again.rules != Some(true) {
 replace: if again.rules != Some(true) && false {
 caught-by:
-    cortex-core::it reload::a_rule_written_between_the_judgement_and_the_load_is_not_in_force
+    cineris-core::it reload::a_rule_written_between_the_judgement_and_the_load_is_not_in_force
 
 [break] the-files-are-not-watched-from-the-start
 rule: A session's files are stamped as it is put together, so trust taken away with a broken file is taken away from the first look.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: trust
-find: let made = |live: cortex_config::LiveConfig| ((*live.current()).clone(), Some(live));
-replace: let made = |live: cortex_config::LiveConfig| ((*live.current()).clone(), None::<cortex_config::LiveConfig>);
+find: let made = |live: cineris_config::LiveConfig| ((*live.current()).clone(), Some(live));
+replace: let made = |live: cineris_config::LiveConfig| ((*live.current()).clone(), None::<cineris_config::LiveConfig>);
 caught-by:
-    cortex-core::it reload::trust_taken_away_with_a_broken_file_is_taken_away
+    cineris-core::it reload::trust_taken_away_with_a_broken_file_is_taken_away
 
 [break] lowered-trust-waits-for-the-rest
 rule: Trust taken away is applied even when another part of the reload cannot be built.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: apply
 find: if !ready && lowered {
 replace: if !ready && lowered && false {
 caught-by:
-    cortex-core::it reload::trust_taken_away_holds_when_another_part_of_the_reload_fails
+    cineris-core::it reload::trust_taken_away_holds_when_another_part_of_the_reload_fails
 
 [break] the-accounts-are-not-kept
 rule: The accounts a reload changes are kept, so the next change of a limit starts from them.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: put
 find: lock(&live.accounts).clone_from(&accounts);
 replace: let _ = &live.accounts;
 caught-by:
-    cortex-core::it reload::a_limit_a_reload_added_stays_through_the_next
+    cineris-core::it reload::a_limit_a_reload_added_stays_through_the_next
 
 [break] a-chosen-key-is-applied-over
 rule: A key the person chose in the session is taken into the configuration and never applied over. A second guard holds it: a choice is taken into the configuration in force as it is made (`chosen`, broken by `a-choice-is-not-in-force`), and the files are loaded with the choices last, so a chosen key no longer differs; this one holds when that load failed.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: apply
 find: if chosen.contains(&change.key.to_string()) {
 replace: if chosen.contains(&change.key.to_string()) && false {
@@ -331,100 +331,100 @@ expect: survives
 
 [break] a-failed-profile-drops-the-choices
 rule: A profile's reload drops the session's own choices only once it is applied.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: load
 find: profile: latest.is_some().then(|| asked.profile.clone()).flatten()
 replace: profile: { if asked.profile.is_some() { config.choices.clear(); } latest.is_some().then(|| asked.profile.clone()).flatten() }
 caught-by:
-    cortex-core::it reload::a_profile_that_cannot_be_applied_keeps_the_sessions_choices
+    cineris-core::it reload::a_profile_that_cannot_be_applied_keeps_the_sessions_choices
 
 [break] an-emptied-table-stays
 rule: Removing a key removes the tables it leaves empty.
-file: crates/cortex-config/src/merge.rs
+file: crates/cineris-config/src/merge.rs
 in: remove
 find: if emptied {
 replace: if emptied && false {
 caught-by:
-    cortex-config::it reloading::taking_a_key_that_went_leaves_no_empty_table
+    cineris-config::it reloading::taking_a_key_that_went_leaves_no_empty_table
 
 [break] the-epoch-is-taken-as-a-compaction-begins
 rule: What waits for the next epoch is taken when the compaction's new epoch builds its prompt, not when a compaction begins.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: compacting
 find: self.manual = false;
 replace: self.manual = false; self.take_epoch_models();
 caught-by:
-    cortex-agent::it reconfigure::a_compaction_with_no_new_epoch_leaves_what_waits_waiting
-    cortex-agent::it reconfigure::a_change_withdrawn_after_a_compaction_with_no_epoch_is_never_taken
+    cineris-agent::it reconfigure::a_compaction_with_no_new_epoch_leaves_what_waits_waiting
+    cineris-agent::it reconfigure::a_change_withdrawn_after_a_compaction_with_no_epoch_is_never_taken
 
 # Found by the second review of step 24's first part.
 
 [break] a-withdrawn-epoch-change-stays
 rule: A change the core withdraws from what waits for the next epoch is withdrawn, even after a compaction that began no epoch.
-file: crates/cortex-agent/src/session.rs
+file: crates/cineris-agent/src/session.rs
 in: at_next_epoch
 find: self.shared.lock().next_epoch = change;
 replace: if change.is_some() { self.shared.lock().next_epoch = change; }
 caught-by:
-    cortex-agent::it reconfigure::a_change_withdrawn_after_a_compaction_with_no_epoch_is_never_taken
+    cineris-agent::it reconfigure::a_change_withdrawn_after_a_compaction_with_no_epoch_is_never_taken
 
 [break] a-choice-is-made-while-a-reload-builds
 rule: `session/set` holds the session's reload lock across its change and its record, so a reload never comes in between and puts the files' models over a choice.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: let _one = live.reloading.lock().await;
 replace: let _one = ();
 caught-by:
-    cortex-core::it reload::a_reload_never_comes_between_a_choice_and_its_record
+    cineris-core::it reload::a_reload_never_comes_between_a_choice_and_its_record
 
 [break] trust-for-the-run-asks-the-store
 rule: A yes the store could not keep holds for the session to the rules the person saw, and the store is not asked.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: judge_pins
 find: if let Some(given) = for_the_run {
 replace: if let Some(given) = for_the_run.filter(|_| false) {
 caught-by:
-    cortex-core::it trusting::trust_for_this_session_only_holds_through_a_look
+    cineris-core::it trusting::trust_for_this_session_only_holds_through_a_look
 
 [break] a-chosen-model-refuses-the-files-level
 rule: A model chosen in the session, built again by a reload, runs at its own default where the files' reasoning level is not one it has.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 in: models_lenient
 find: if lenient.contains(role)
 replace: if lenient.contains(role) && false
 caught-by:
-    cortex-core::it reload::a_chosen_model_without_the_files_reasoning_level_does_not_refuse_a_reload
+    cineris-core::it reload::a_chosen_model_without_the_files_reasoning_level_does_not_refuse_a_reload
 
 [break] trust-gone-is-said-as-changed-rules
 rule: Trust the store took away between the judgement and the load is said as untrusted, with the repository's trust lowered too.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: load
 find: if again.rules.is_some() {
 replace: if false {
 caught-by:
-    cortex-core::it reload::trust_taken_away_between_the_judgement_and_the_load_is_said_as_untrusted
+    cineris-core::it reload::trust_taken_away_between_the_judgement_and_the_load_is_said_as_untrusted
 
 [break] a-choice-is-not-in-force
 rule: A choice made in the session is taken into the configuration in force.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: chosen
 find: config.set_in_force(Arc::new(mix));
 replace: drop(mix);
 caught-by:
-    cortex-core::it reload::a_choice_is_in_the_configuration_config_get_answers_with
+    cineris-core::it reload::a_choice_is_in_the_configuration_config_get_answers_with
 
 [break] a-chosen-key-still-waits-for-the-epoch
 rule: A key chosen in the session is taken out of what waits for the next epoch, and its role out of the change the loop holds (both read the chosen keys here).
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: chosen
 find: let chosen = config.chosen_keys();
 replace: let chosen = BTreeSet::<String>::new();
 caught-by:
-    cortex-core::it reload::a_choice_takes_its_key_out_of_what_waits_for_the_next_epoch
+    cineris-core::it reload::a_choice_takes_its_key_out_of_what_waits_for_the_next_epoch
 
 [break] lowered-trust-drops-the-epoch
 rule: Trust taken away with a part that fails still gives the loop what waits for the next epoch and can be built.
-file: crates/cortex-core/src/reload.rs
+file: crates/cineris-core/src/reload.rs
 in: apply
 find:
                     epoch = prepared;
@@ -432,13 +432,13 @@ find:
 replace:
                     applied = safe;
 caught-by:
-    cortex-core::it reload::trust_taken_away_with_a_part_that_fails_still_gives_the_epoch_its_keys
+    cineris-core::it reload::trust_taken_away_with_a_part_that_fails_still_gives_the_epoch_its_keys
 
 [break] the-look-asks-the-loops-state
 rule: The look before a turn is made only when no turn holds the session, asked as a prompt decides: a turn a prompt started and the loop has not picked up yet holds it.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 in: handle
 find: if !live.handle.turn_running() {
-replace: if live.handle.turn_state() == cortex_agent::TurnState::Idle {
+replace: if live.handle.turn_state() == cineris_agent::TurnState::Idle {
 caught-by:
-    cortex-core::it reload::a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look
+    cineris-core::it reload::a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look

@@ -1,6 +1,6 @@
 # Reference notes: Pi and Opencode
 
-What two existing harnesses do about the problems Cortex-Harness faces, what is worth matching in capability, and where Cortex-Harness differs and why.
+What two existing harnesses do about the problems Cineris faces, what is worth matching in capability, and where Cineris differs and why.
 
 ## Ground rules for these notes
 
@@ -8,13 +8,13 @@ What two existing harnesses do about the problems Cortex-Harness faces, what is 
 - Everything here is in our own words. There is no code from either project in this repo, and no copied prompt text, UI wording, key bindings, colour values or configuration formats.
 - Citations give the project, version and a path inside that project's repository, or a public URL.
 - Design work was done from these notes, not with the source open. The architecture pages are the design. This page records what was learned and what was decided because of it.
-- No dependency of Cortex-Harness is a port or extract of either project's code. That rule also excludes the terminal UI library that Opencode is built on and Pi's own TUI package.
+- No dependency of Cineris is a port or extract of either project's code. That rule also excludes the terminal UI library that Opencode is built on and Pi's own TUI package.
 
 Both projects are moving quickly. These notes describe the two versions named above and nothing later.
 
 ## At a glance
 
-| Topic | Pi 1.5.2 | Opencode 1.19.5 | Cortex-Harness |
+| Topic | Pi 1.5.2 | Opencode 1.19.5 | Cineris |
 |---|---|---|---|
 | Language and runtime | TypeScript on Node | TypeScript on Bun, compiled to one executable | Rust, one native binary |
 | Core and UI | One process. Four modes over one session class. | UI on the main thread, server in a worker thread of the same process, talking through an emulated HTTP channel. | One process. Typed operations and events in-process; the same types as JSON-RPC outside. |
@@ -32,7 +32,7 @@ Both projects are moving quickly. These notes describe the two versions named ab
 
 **Worth matching.** One core that every front end drives through one contract. A library-and-application split.
 
-**Where Cortex-Harness differs.**
+**Where Cineris differs.**
 - The contract is defined once as Rust types. The in-process carrier is a typed channel, not an emulation of a network protocol, so the UI pays no serialisation cost. See [architecture/11-rpc-protocol.md](architecture/11-rpc-protocol.md).
 - The loop, the session store, the policy engine and the provider client are separate crates with narrow traits between them, so the central type cannot grow the way both references' did. See [architecture/01-workspace.md](architecture/01-workspace.md).
 - One runtime, one generation. Opencode's dual core shows what a mid-life rewrite costs, which is the reason this design step exists.
@@ -45,7 +45,7 @@ Both projects are moving quickly. These notes describe the two versions named ab
 
 **Worth matching.** Parallel tools with ordered results. Two delivery modes for input during a run. Failures as data. Visible retry state. Repair of unfinished tool calls. A budget check before sending.
 
-**Where Cortex-Harness differs.**
+**Where Cineris differs.**
 - Errors are classified from status codes, provider error codes and headers. Text matching is a last resort with a fixture. Both references show where the other approach leads.
 - The loop is an explicit state machine, and a completed turn means nothing automatic remains, so there is one event to wait for.
 - The scheduler is ours, with declared concurrency classes per tool.
@@ -60,7 +60,7 @@ See [architecture/03-agent-loop.md](architecture/03-agent-loop.md).
 
 **Worth matching.** The split between protocol and provider. Capability metadata that drives behaviour. Recording the producer of each message. Dropping, not translating, reasoning on a model switch. Usage split into fresh input, cache read, cache write, output and reasoning. A catalog with a built-in snapshot.
 
-**Where Cortex-Harness differs.**
+**Where Cineris differs.**
 - Quirks are data on catalog and provider entries, never branches on model names.
 - The raw provider block is stored beside the neutral view and replayed byte for byte, which also preserves block types the harness does not know yet.
 - History is append-only within an epoch as a core rule, not as a per-provider workaround.
@@ -77,7 +77,7 @@ See [architecture/04-providers.md](architecture/04-providers.md).
 
 **Worth matching.** Bounded output with the full text saved. Edits matched against the original file. Per-path serialisation. Process-tree termination. Preserved line endings. A default command timeout.
 
-**Where Cortex-Harness differs.**
+**Where Cineris differs.**
 - A staleness guard on write and edit: the file must have been read in the session and be unchanged since.
 - Two matching tiers for edits, not nine, and the result says when the tolerant tier was used.
 - Search and listing are in-process, so nothing external is needed, which matters most on Windows.
@@ -94,7 +94,7 @@ See [architecture/05-tools.md](architecture/05-tools.md).
 
 **Worth matching.** Pi's honesty about what prompts are worth, and its trust gate. Opencode's uniform rules, per-part checking of commands, and denial with a note back to the model.
 
-**Where Cortex-Harness differs.**
+**Where Cineris differs.**
 - It agrees with both that prompts are not a boundary, and draws the other conclusion: ship the boundary. A native binary can apply an OS sandbox to its children without a container.
 - The default follows the product vision: reads run, edits apply with a snapshot to undo them, and commands ask unless they are on a safe list that includes what the harness has learned about the project.
 - Deny beats ask beats allow, whatever the order, so a broad allow cannot hide a deny.
@@ -113,7 +113,7 @@ See [architecture/06-permissions-and-sandbox.md](architecture/06-permissions-and
 
 **Worth matching.** Append-only JSONL with a tree. Compaction that keeps the originals and never splits a tool exchange. File lists carried mechanically. Nested instruction files loaded on demand. The epoch idea.
 
-**Where Cortex-Harness differs.**
+**Where Cineris differs.**
 - Tool output is stored by reference from the start, so logs stay small.
 - There is a rebuildable index for listing, and no database.
 - Compaction starts a fresh epoch from a summary by default, because keeping recent turns verbatim with their reasoning is no longer valid on the providers that bind reasoning to history.
@@ -129,7 +129,7 @@ See [architecture/07-sessions-and-context.md](architecture/07-sessions-and-conte
 
 **Worth matching.** Layering with a managed top layer. User-only keys. Schema validation.
 
-**Where Cortex-Harness differs.** TOML. Fewer layers. No list-editing syntax. Provenance for every value, with a command that shows it. All terminal overrides in one section.
+**Where Cineris differs.** TOML. Fewer layers. No list-editing syntax. Provenance for every value, with a command that shows it. All terminal overrides in one section.
 See [architecture/08-configuration.md](architecture/08-configuration.md).
 
 ## Terminal UI
@@ -140,7 +140,7 @@ See [architecture/08-configuration.md](architecture/08-configuration.md).
 
 **Worth matching.** Atomic frame updates. Line-level diffing. Coalesced redraws with input given priority. Block-wise streaming markdown. A virtual terminal for tests. Detection with an override for every terminal capability.
 
-**Where Cortex-Harness differs.** The measured comparison of a Rust TUI with a TypeScript one is in [decision 0001](decisions/0001-tui-language.md). The choice between inline and full screen is in [decision 0002](decisions/0002-tui-rendering.md). The look, the commands and the key bindings are our own, described in [architecture/09-tui.md](architecture/09-tui.md).
+**Where Cineris differs.** The measured comparison of a Rust TUI with a TypeScript one is in [decision 0001](decisions/0001-tui-language.md). The choice between inline and full screen is in [decision 0002](decisions/0002-tui-rendering.md). The look, the commands and the key bindings are our own, described in [architecture/09-tui.md](architecture/09-tui.md).
 
 ## Headless and RPC
 
@@ -150,7 +150,7 @@ See [architecture/08-configuration.md](architecture/08-configuration.md).
 
 **Worth matching.** One event vocabulary for headless and RPC. Accepted versus completed. Standard output reserved for the protocol.
 
-**Where Cortex-Harness differs.** One exit-code table for every format. A single-object JSON result as well as a stream. A version and capability handshake from the first release. Local sockets restricted to the user, and no unauthenticated network mode.
+**Where Cineris differs.** One exit-code table for every format. A single-object JSON result as well as a stream. A version and capability handshake from the first release. Local sockets restricted to the user, and no unauthenticated network mode.
 See [architecture/10-headless.md](architecture/10-headless.md) and [architecture/11-rpc-protocol.md](architecture/11-rpc-protocol.md).
 
 ## Extensions
@@ -161,7 +161,7 @@ See [architecture/10-headless.md](architecture/10-headless.md) and [architecture
 
 **Worth matching.** Tools, commands and hooks as the three kinds of contribution. Hooks that can block or change a tool call. Commands as markdown files. Skills with progressive disclosure. Project trust before anything from a repository runs.
 
-**Where Cortex-Harness differs.** In both references an extension is code loaded into the agent with the user's full rights, which is the largest unaddressed risk in each. Extensions here run in an embedded script runtime that has no access of its own: every file, process and network action is a host function checked against a manifest the user approved and then against the permission rules. That holds on Windows as well as Linux, and it is what lets the harness write an extension for the user and load it on the spot. Hooks have deterministic ordering and deadlines. The event surface starts small. Tools that need a process are MCP servers. The measured comparison of mechanisms and languages is in [decision 0005](decisions/0005-extension-mechanism.md).
+**Where Cineris differs.** In both references an extension is code loaded into the agent with the user's full rights, which is the largest unaddressed risk in each. Extensions here run in an embedded script runtime that has no access of its own: every file, process and network action is a host function checked against a manifest the user approved and then against the permission rules. That holds on Windows as well as Linux, and it is what lets the harness write an extension for the user and load it on the spot. Hooks have deterministic ordering and deadlines. The event surface starts small. Tools that need a process are MCP servers. The measured comparison of mechanisms and languages is in [decision 0005](decisions/0005-extension-mechanism.md).
 
 ## MCP
 
@@ -171,7 +171,7 @@ See [architecture/10-headless.md](architecture/10-headless.md) and [architecture
 
 **Worth matching.** Pi's goal: MCP must not bloat or destabilise the prompt.
 
-**Where Cortex-Harness differs.** A fixed pair of tools, search and call, with no changes to the declared tool list. Existing MCP configurations are read so people can switch without rewriting them. See [architecture/13-mcp.md](architecture/13-mcp.md).
+**Where Cineris differs.** A fixed pair of tools, search and call, with no changes to the declared tool list. Existing MCP configurations are read so people can switch without rewriting them. See [architecture/13-mcp.md](architecture/13-mcp.md).
 
 ## Testing and CI
 
@@ -181,7 +181,7 @@ See [architecture/10-headless.md](architecture/10-headless.md) and [architecture
 
 **Worth matching.** All of it: scripted provider, wire-level replay, virtual terminal, hermetic environment, generated-artifact checks, both operating systems.
 
-**Where Cortex-Harness differs.** A time budget for the blocking checks from the first commit, and performance budgets checked automatically. See [testing-and-ci.md](testing-and-ci.md) and [performance-budgets.md](performance-budgets.md).
+**Where Cineris differs.** A time budget for the blocking checks from the first commit, and performance budgets checked automatically. See [testing-and-ci.md](testing-and-ci.md) and [performance-budgets.md](performance-budgets.md).
 
 ## Distribution and start-up
 
@@ -191,7 +191,7 @@ See [architecture/10-headless.md](architecture/10-headless.md) and [architecture
 
 Neither project publishes start-up or memory figures. Measured for this design on a laptop, with both tools installed from the npm registry into scratch space: Pi 1.5.2 answers `--version` in 175 ms and shows its first screen in about 280 ms, holding 124 MB; Opencode 1.19.5 takes 371 ms and about 540 ms, holding 614 MB, and its executable is 214 MB. Method and caveats are in [measurements/tui-language-spike.md](measurements/tui-language-spike.md).
 
-**Where Cortex-Harness differs.** A native binary with no runtime to embed, and budgets for start-up, memory and size that are checked in CI.
+**Where Cineris differs.** A native binary with no runtime to embed, and budgets for start-up, memory and size that are checked in CI.
 
 ## Lessons taken from both
 

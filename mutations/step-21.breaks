@@ -3,13 +3,13 @@
 #
 # One rule lives in Windows-only code, which this command cannot break where
 # it runs: the console handler answers Ctrl+C as handled while the interrupt
-# guard lives (`crates/cortex-term/src/sys/windows.rs`). The Windows run of
+# guard lives (`crates/cineris-term/src/sys/windows.rs`). The Windows run of
 # `external::sys_ctrl_c_ends_the_editor_and_not_the_application` is what
 # checks it.
 
 [break] right-splits-a-cluster
 rule: Moving right goes over a whole grapheme cluster, never into one.
-file: crates/cortex-tui/src/editor/cluster.rs
+file: crates/cineris-tui/src/editor/cluster.rs
 find: let end = start + offset + cluster.len();
 replace: let end = start + offset + cluster.chars().next().map_or(1, char::len_utf8);
 caught-by:
@@ -18,7 +18,7 @@ caught-by:
 
 [break] left-and-backspace-split-a-cluster
 rule: Moving left and deleting backwards take a whole grapheme cluster.
-file: crates/cortex-tui/src/editor/cluster.rs
+file: crates/cineris-tui/src/editor/cluster.rs
 in: prev
 find: if begin + cluster.len() >= at { return begin; }
 replace: if begin + cluster.len() >= at { return at - cluster.chars().last().map_or(1, char::len_utf8); }
@@ -28,7 +28,7 @@ caught-by:
 
 [break] a-chip-mark-joins-the-accent-after-it
 rule: A chip's mark is a cluster of its own, so an accent typed after it never takes the chip with it.
-file: crates/cortex-tui/src/editor/cluster.rs
+file: crates/cineris-tui/src/editor/cluster.rs
 in: Split::next
 find: Some(0) => CHIP.len_utf8(),
 replace: Some(0) => self.rest.len(),
@@ -38,7 +38,7 @@ caught-by:
 
 [break] an-edit-leaves-the-cursor-inside-a-cluster
 rule: An edit that joins two clusters leaves the cursor at a cluster boundary.
-file: crates/cortex-tui/src/editor/mod.rs
+file: crates/cineris-tui/src/editor/mod.rs
 in: Editor::change
 find: self.cursor = cluster::snap(self.buffer.text(), at + length);
 replace: self.cursor = at + length;
@@ -48,11 +48,11 @@ caught-by:
 
 [break] enter-tested-directly
 rule: No key is tested for in the interface's code: every key goes through the key map.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::key
 find: let contexts = self.contexts();
 replace:
-    if key == Key::plain(cortex_term::KeyCode::Enter) {
+    if key == Key::plain(cineris_term::KeyCode::Enter) {
         return self.act(Action::Submit);
     }
     let contexts = self.contexts();
@@ -62,7 +62,7 @@ caught-by:
 
 [break] ctrl-j-dropped-from-the-map
 rule: Every default binding of 09-tui is in the map: Ctrl+J makes a new line.
-file: crates/cortex-tui/src/keys/mod.rs
+file: crates/cineris-tui/src/keys/mod.rs
 find: &["shift+enter", "alt+enter", "ctrl+j"]
 replace: &["shift+enter", "alt+enter"]
 caught-by:
@@ -71,7 +71,7 @@ caught-by:
 
 [break] alt-z-dropped-from-the-map
 rule: Redo has a key that plain input sends as itself.
-file: crates/cortex-tui/src/keys/mod.rs
+file: crates/cineris-tui/src/keys/mod.rs
 find: &["ctrl+shift+z", "alt+z"]
 replace: &["ctrl+shift+z"]
 caught-by:
@@ -80,7 +80,7 @@ caught-by:
 
 [break] shifted-letters-not-normalised
 rule: Ctrl with an upper-case letter is Shift with the lower-case one, as some terminals report it.
-file: crates/cortex-tui/src/keys/mod.rs
+file: crates/cineris-tui/src/keys/mod.rs
 in: normalize
 find: Key::with(KeyCode::Char(c.to_ascii_lowercase()), key.mods | Mods::SHIFT)
 replace: key
@@ -89,16 +89,16 @@ caught-by:
 
 [break] a-paste-typed-as-keys
 rule: A paste is text, never keys: nothing in it is looked up in the key map.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::handle
 find: Event::Paste(text) => self.paste(text)
 replace:
     Event::Paste(text) => {
         for c in text.chars() {
             let code = if c == '\n' || c == '\r' {
-                cortex_term::KeyCode::Enter
+                cineris_term::KeyCode::Enter
             } else {
-                cortex_term::KeyCode::Char(c)
+                cineris_term::KeyCode::Char(c)
             };
             let _ = self.key(Key::plain(code));
         }
@@ -109,7 +109,7 @@ caught-by:
 
 [break] twelve-lines-made-a-chip
 rule: A paste of more than 12 lines is a chip, and one of 12 is text.
-file: crates/cortex-tui/src/paste.rs
+file: crates/cineris-tui/src/paste.rs
 in: fragment
 find: lines > CHIP_LINES
 replace: lines >= CHIP_LINES
@@ -119,7 +119,7 @@ caught-by:
 
 [break] two-thousand-characters-made-a-chip
 rule: A paste of more than 2,000 characters is a chip, and one of 2,000 is text.
-file: crates/cortex-tui/src/paste.rs
+file: crates/cineris-tui/src/paste.rs
 in: fragment
 find: chars > CHIP_CHARS
 replace: chars >= CHIP_CHARS
@@ -128,7 +128,7 @@ caught-by:
 
 [break] typing-undone-all-at-once
 rule: Typing is undone a word at a time.
-file: crates/cortex-tui/src/editor/mod.rs
+file: crates/cineris-tui/src/editor/mod.rs
 in: Editor::type_str
 find: Some(Open::Typing { word: last_word }) => !(word && !last_word)
 replace: Some(Open::Typing { .. }) => true
@@ -138,7 +138,7 @@ caught-by:
 
 [break] a-paste-joins-the-typing-before-it
 rule: A paste is a step of undo of its own.
-file: crates/cortex-tui/src/editor/mod.rs
+file: crates/cineris-tui/src/editor/mod.rs
 in: Editor::apply
 find:
     self.undo.close();
@@ -153,7 +153,7 @@ caught-by:
 
 [break] kills-do-not-join-in-the-slot
 rule: Kills one after another join in the one kill slot.
-file: crates/cortex-tui/src/editor/mod.rs
+file: crates/cineris-tui/src/editor/mod.rs
 in: Editor::kill
 find: let continuing = self.killing.is_some();
 replace: let continuing = false;
@@ -162,7 +162,7 @@ caught-by:
 
 [break] history-from-a-middle-row
 rule: Up steps into history only from the editor's first row.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::act
 find: if self.editor.up(width)
 replace: if self.editor.on_first_row(width) && self.editor.up(width)
@@ -172,7 +172,7 @@ caught-by:
 
 [break] history-down-from-a-middle-row
 rule: Down steps into history only from the editor's last row.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::act
 find: if self.editor.down(width)
 replace: if self.editor.on_last_row(width) && self.editor.down(width)
@@ -181,7 +181,7 @@ caught-by:
 
 [break] tab-accepts-in-the-effort-picker
 rule: In a picker with a toggle, Tab toggles and only Enter accepts.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::contexts
 find: vec![Context::Toggle, Context::Picker, Context::Menu]
 replace: vec![Context::Picker, Context::Menu]
@@ -190,7 +190,7 @@ caught-by:
 
 [break] a-wider-query-searches-only-the-narrower-ones-matches
 rule: Only a query that extends the last one is matched against the last one's matches.
-file: crates/cortex-tui/src/complete/fuzzy.rs
+file: crates/cineris-tui/src/complete/fuzzy.rs
 in: Filter::run
 find: query.starts_with(self.query.as_str())
 replace: true
@@ -200,7 +200,7 @@ caught-by:
 
 [break] the-editor-found-by-a-bare-name
 rule: The external editor is found in the absolute folders of PATH, never started by a bare name.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: locate
 find: Ok(program::find_outside(&env.path, name, env.windows, &env.avoid))
 replace: Ok(Some(PathBuf::from(name)))
@@ -209,7 +209,7 @@ caught-by:
 
 [break] a-relative-editor-taken
 rule: An editor given by a relative path is refused: it would be found in the workspace.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: locate
 find: return Err(EditorError::Relative(name.to_owned()));
 replace: return Ok(Some(PathBuf::from(name)));
@@ -218,9 +218,9 @@ caught-by:
 
 [break] the-prompts-file-readable-by-others
 rule: The prompt's file is created private to the user.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: write_private
-find: cortex_base::private::create_new(file)?
+find: cineris_base::private::create_new(file)?
 replace: std::fs::File::create(file)?
 caught-by:
     external::sys_an_edit_comes_back_and_the_terminal_is_handed_over_and_back
@@ -228,16 +228,16 @@ caught-by:
 
 [break] the-prompts-folder-open-to-others
 rule: The prompt's folder is private to the user, so a file an editor writes in its place is too.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: Folder::new
-find: cortex_base::private::create_dir_all(&path)?;
+find: cineris_base::private::create_dir_all(&path)?;
 replace: std::fs::create_dir_all(&path)?;
 caught-by:
     external::sys_an_edit_comes_back_and_the_terminal_is_handed_over_and_back
 
 [break] the-terminal-not-handed-over
 rule: The editor is given the terminal as the user's shell had it.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: edit
 find: let released = handoff.release();
 replace: let released: io::Result<()> = Ok(());
@@ -246,7 +246,7 @@ caught-by:
 
 [break] the-chips-labels-not-read-back
 rule: A chip goes to the editor as its label and comes back as the chip.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: edit
 find: Ok(Edited::Changed(from_file(&read, &labels)))
 replace: Ok(Edited::Changed(Fragment::text(read)))
@@ -255,7 +255,7 @@ caught-by:
 
 [break] the-editors-final-line-break-kept
 rule: The one line break an editor adds at the end is taken off.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: edit
 find: if read.ends_with('\n') && !text.ends_with('\n') { read.pop(); }
 replace:
@@ -264,7 +264,7 @@ caught-by:
 
 [break] an-empty-file-empties-the-prompt
 rule: A file left empty leaves the prompt as it was.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: edit
 find: if read.trim().is_empty() {
 replace: if read.trim().is_empty() && false {
@@ -273,28 +273,28 @@ caught-by:
 
 [break] interrupts-ignored-so-the-editor-inherits-it
 rule: The guard catches the interrupt signals rather than ignoring them, so that an editor started under it keeps its own Ctrl+C (exec keeps an ignored signal ignored).
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: ignore_interrupts
 find: let ignore = action(on_interrupt_passed_over);
 replace:
     let mut ignore = action(on_interrupt_passed_over);
     ignore.sa_sigaction = libc::SIG_IGN;
-packages: cortex-term, cortex-tui
+packages: cineris-term, cineris-tui
 caught-by:
     external::sys_ctrl_c_ends_the_editor_and_not_the_application
 
 [break] interrupts-not-ignored-while-the-editor-runs
 rule: A Ctrl+C for the editor does not end the interface, and with it the prompt.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: edit
-find: let ignored = cortex_term::ignore_interrupts();
+find: let ignored = cineris_term::ignore_interrupts();
 replace: let ignored = ();
 caught-by:
     external::sys_ctrl_c_ends_the_editor_and_not_the_application
 
 [break] the-interrupt-guard-does-not-put-back
 rule: Dropping the interrupt guard puts back what the signals did before, a panic's unwinding included.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: InterruptsIgnored::drop
 find: sys::restore_interrupts(&self.previous);
 replace:
@@ -304,7 +304,7 @@ caught-by:
 
 [break] the-terminal-not-taken-back-after-a-failing-editor
 rule: The terminal is taken back whatever the editor did.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: edit
 find: let reclaimed = handoff.reclaim();
 replace:
@@ -322,7 +322,7 @@ caught-by:
 
 [break] the-editor-started-in-the-workspace
 rule: The editor runs in the prompt's private folder, not where the interface was started.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: run
 find: command.args(&editor.args).arg(file).current_dir(folder);
 replace: command.args(&editor.args).arg(file);
@@ -331,7 +331,7 @@ caught-by:
 
 [break] a-killed-editors-modes-left-on
 rule: Taking the terminal back turns off what a killed full-screen editor left on.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: TerminalHandoff::reclaim
 find: terminal.write_frame(LEFT_ON)?;
 replace:
@@ -340,7 +340,7 @@ caught-by:
 
 [break] a-byte-order-mark-sent-as-text
 rule: A byte-order mark an editor writes is not part of the prompt.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: edit
 find: Some(rest) if !text.starts_with('\u{FEFF}') => rest,
 replace: Some(_) if false => &read,
@@ -349,7 +349,7 @@ caught-by:
 
 [break] a-file-that-is-not-utf8-deleted
 rule: A file that is not UTF-8 is kept, with what the user wrote in it.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: edit
 find: std::mem::forget(folder);
 replace: drop(folder);
@@ -358,7 +358,7 @@ caught-by:
 
 [break] windows-editor-looked-for-by-extension-across-path
 rule: On Windows a name is looked for folder by folder, as the command prompt does.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: locate
 find: for folder in &env.path {
 replace: for folder in env.path.iter().rev() {
@@ -367,7 +367,7 @@ caught-by:
 
 [break] a-row-wider-than-its-width-after-white-space
 rule: No row is wider than its width: what follows a break at white space breaks again when it still does not fit.
-file: crates/cortex-tui/src/editor/layout.rs
+file: crates/cineris-tui/src/editor/layout.rs
 in: wrap_line
 find: if col + w > width && col > 0 { rows.push(Row { range: row_start..at, ends_line: false, }); row_start = at; col = 0; }
 replace:
@@ -376,7 +376,7 @@ caught-by:
 
 [break] kills-the-other-way-start-the-slot-again
 rule: Kills one after another join in the slot whichever way each went.
-file: crates/cortex-tui/src/editor/mod.rs
+file: crates/cineris-tui/src/editor/mod.rs
 in: Editor::kill
 find: let continuing = self.killing.is_some();
 replace: let continuing = self.killing == Some(way);
@@ -385,7 +385,7 @@ caught-by:
 
 [break] a-global-key-left-in-the-editor
 rule: A key bound to a global action in [keys] is taken from every context.
-file: crates/cortex-tui/src/keys/mod.rs
+file: crates/cineris-tui/src/keys/mod.rs
 in: KeyMap::with_table
 find: if context == Context::Global { keymap.map.retain(|(_, key), _| !keys.contains(key)); }
 replace:
@@ -394,7 +394,7 @@ caught-by:
 
 [break] the-editor-taken-from-a-write-root
 rule: An editor found by its name is never taken from the session's write roots.
-file: crates/cortex-tui/src/external.rs
+file: crates/cineris-tui/src/external.rs
 in: locate
 find: Ok(program::find_outside(&env.path, name, env.windows, &env.avoid))
 replace: Ok(program::find(&env.path, name, env.windows))
@@ -403,7 +403,7 @@ caught-by:
 
 [break] a-picker-closed-without-a-word
 rule: Ctrl+C with a picker open closes it and tells the caller, and keeps the prompt.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::interrupt
 find: return Outcome::PickerClosed(name);
 replace: let _ = name;
@@ -412,7 +412,7 @@ caught-by:
 
 [break] a-paste-dropped-while-a-box-is-focused
 rule: A paste with a box or panel focused goes to the input.
-file: crates/cortex-tui/src/input.rs
+file: crates/cineris-tui/src/input.rs
 in: Input::paste
 find: if moved { self.focus.to_input(); }
 replace: if moved { return Outcome::Nothing; }
@@ -421,7 +421,7 @@ caught-by:
 
 [break] the-cursor-a-column-off-in-the-box
 rule: The cursor sits after the text in the input box, past the border, a space and the mark.
-file: crates/cortex-tui/src/view/input.rs
+file: crates/cineris-tui/src/view/input.rs
 in: input
 find: RoundedBox::TEXT_COLUMN + MARK_WIDTH + layout.cursor_col
 replace: RoundedBox::TEXT_COLUMN + layout.cursor_col
@@ -430,7 +430,7 @@ caught-by:
 
 [break] the-selected-row-not-marked
 rule: The selected row of a menu is marked with the accent's diamond.
-file: crates/cortex-tui/src/view/menu.rs
+file: crates/cineris-tui/src/view/menu.rs
 in: rows
 find: line.push(Span::new(look.glyphs.user, look.theme.style(Token::Accent)));
 replace: line.push(Span::plain(" "));
@@ -440,7 +440,7 @@ caught-by:
 
 [break] a-menu-shows-every-row
 rule: A menu shows at most eight rows.
-file: crates/cortex-tui/src/complete/mod.rs
+file: crates/cineris-tui/src/complete/mod.rs
 in: Menu::visible
 find: self.top..(self.top + ROWS).min(self.rows.len())
 replace: 0..self.rows.len()
@@ -450,7 +450,7 @@ caught-by:
 
 [break] the-input-box-never-scrolls
 rule: The input box grows to eight rows, then scrolls to keep the cursor in view.
-file: crates/cortex-tui/src/view/input.rs
+file: crates/cineris-tui/src/view/input.rs
 in: input
 find: let scroll = in_view(input.scroll(), layout.cursor_row, layout.rows.len());
 replace: let scroll = 0;
@@ -459,7 +459,7 @@ caught-by:
 
 [break] an-over-long-sequence-cut-at-the-limit
 rule: A sequence too long to keep is dropped to its end, however the reads split it: none of it becomes keys.
-file: crates/cortex-term/src/input.rs
+file: crates/cineris-term/src/input.rs
 in: escape
 find: Step::Skip(bytes.len(), skip)
 replace: Step::Done(LONGEST_SEQUENCE, None)
@@ -469,7 +469,7 @@ caught-by:
 
 [break] an-over-long-control-sequence-typed-after-a-bad-byte
 rule: An over-long control sequence ended by a byte no sequence holds is dropped, not typed as Alt+[ and keys.
-file: crates/cortex-term/src/input.rs
+file: crates/cineris-term/src/input.rs
 in: csi
 find: _ if 2 + index > LONGEST_SEQUENCE => return Some((2 + index, None)),
 replace:
@@ -478,7 +478,7 @@ caught-by:
 
 [break] a-string-skip-ended-by-any-escape
 rule: A string being dropped ends only at BEL or ESC backslash.
-file: crates/cortex-term/src/input.rs
+file: crates/cineris-term/src/input.rs
 in: skip_to_end
 find: if byte == 0x07 || (escape && byte == b'\\') {
 replace: if byte == 0x07 || escape {
@@ -487,7 +487,7 @@ caught-by:
 
 [break] a-paste-without-an-end-swallows-keys-for-good
 rule: A paste whose end never comes is given up on after a time with no input, and keys are keys again.
-file: crates/cortex-term/src/terminal.rs
+file: crates/cineris-term/src/terminal.rs
 in: Terminal::next
 find: if open == Some(Duration::ZERO) {
 replace: if open == Some(Duration::ZERO) && false {
@@ -496,7 +496,7 @@ caught-by:
 
 [break] a-paste-given-up-on-is-lost
 rule: What a paste given up on had received is kept, as a paste.
-file: crates/cortex-term/src/input.rs
+file: crates/cineris-term/src/input.rs
 in: Decoder::give_up
 find: events.push(Event::Paste(paste_text(&paste)));
 replace: drop(paste);
@@ -506,7 +506,7 @@ caught-by:
 
 [break] the-terminals-handler-ends-the-process-under-a-guard
 rule: The terminal's own handler passes the interrupts over while a guard lives.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: on_ending
 find: if is_interrupt(signal) && (GUARDING.load(Ordering::SeqCst) || guard_just_ended()) { return; }
 replace:
@@ -515,7 +515,7 @@ caught-by:
 
 [break] the-terminal-records-the-guards-handler
 rule: The terminal entered under a guard records what was there before the guard, not the guard's handler.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: install
 find: old = *before;
 replace:
@@ -524,7 +524,7 @@ caught-by:
 
 [break] leaving-the-terminal-drops-the-guard
 rule: Leaving the terminal under a guard keeps the guard's handler.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: leave
 find: if guarding && is_interrupt(signal) {
 replace: if false {

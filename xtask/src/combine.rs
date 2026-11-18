@@ -94,7 +94,7 @@ pub(crate) fn git(directory: &Path, arguments: &[&str]) -> Result<String> {
             "-c",
             "user.name=combine",
             "-c",
-            "user.email=combine@cortex-harness.invalid",
+            "user.email=combine@cineris.invalid",
             "-c",
             "advice.detachedHead=false",
             "-c",

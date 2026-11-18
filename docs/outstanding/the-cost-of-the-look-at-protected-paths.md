@@ -1,6 +1,6 @@
 Walking the workspace around each confined command for protected names costs about 47 ms in a large tree.
 
-- Area: cortex-sandbox
+- Area: cineris-sandbox
 - Owner: step 33
 
 | Item | Who | When |

@@ -210,12 +210,12 @@ pub(crate) struct CargoRunner {
 /// run without them: under seed 0, with the ordinary number of property
 /// cases, and writing no snapshot or generated file into the copy.
 const CALLERS_SETTINGS: [&str; 6] = [
-    "CORTEX_TEST_SEED",
-    "CORTEX_TEST_FIRST_SEED",
-    "CORTEX_PROPERTY_SEED",
-    "CORTEX_PROPERTY_SCALE",
-    "CORTEX_UPDATE_GENERATED",
-    "CORTEX_UPDATE_SNAPSHOTS",
+    "CINERIS_TEST_SEED",
+    "CINERIS_TEST_FIRST_SEED",
+    "CINERIS_PROPERTY_SEED",
+    "CINERIS_PROPERTY_SCALE",
+    "CINERIS_UPDATE_GENERATED",
+    "CINERIS_UPDATE_SNAPSHOTS",
 ];
 
 /// nextest's exit status when tests failed, and when the build did.
@@ -1460,8 +1460,10 @@ pub(crate) mod tests {
 
     /// A tree of the test's own, made new, outside any repository.
     pub(crate) fn tree(test: &str, files: &[(&str, &str)]) -> PathBuf {
-        let root =
-            std::env::temp_dir().join(format!("cortex-xtask-mutate-{test}-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!(
+            "cineris-xtask-mutate-{test}-{}",
+            std::process::id()
+        ));
         if root.exists() {
             fs::remove_dir_all(&root).unwrap();
         }
@@ -1882,10 +1884,10 @@ replace: \"inside\"
         );
         for removed in [
             "CARGO_BUILD_TARGET_DIR",
-            "CORTEX_TEST_SEED",
-            "CORTEX_PROPERTY_SCALE",
-            "CORTEX_UPDATE_GENERATED",
-            "CORTEX_UPDATE_SNAPSHOTS",
+            "CINERIS_TEST_SEED",
+            "CINERIS_PROPERTY_SCALE",
+            "CINERIS_UPDATE_GENERATED",
+            "CINERIS_UPDATE_SNAPSHOTS",
         ] {
             assert_eq!(variable(removed), Some(None), "{removed}");
         }

@@ -1,6 +1,6 @@
 The Linux Secret Service credential backend needs a non-blocking CI job against a real keyring daemon.
 
-- Area: cortex-config
+- Area: cineris-config
 - Owner: a step the owner places
 
 | Item | Who | When |

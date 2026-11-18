@@ -1,7 +1,7 @@
-# Step 17: the project profile and memory, in cortex-knowledge, and what it
-# added to cortex-policy (the exact rule of an accepted command, and a
-# running session's learned rules), cortex-agent (section 5 of the system
-# prompt, outside the epoch's base hash) and cortex-core (the epoch's
+# Step 17: the project profile and memory, in cineris-knowledge, and what it
+# added to cineris-policy (the exact rule of an accepted command, and a
+# running session's learned rules), cineris-agent (section 5 of the system
+# prompt, outside the epoch's base hash) and cineris-core (the epoch's
 # profile in the log).
 #
 # Each rule is broken here: what is in use and what runs without asking,
@@ -15,1147 +15,1147 @@
 
 [break] an-expired-entry-is-in-use
 rule: An entry past its expiry is not in use: it leaves the prompt and the safe list by the clock, before anything marks it.
-file: crates/cortex-knowledge/src/entry.rs
+file: crates/cineris-knowledge/src/entry.rs
 in: Entry::in_use
 find: self.status == Status::Active && !self.is_expired(now)
 replace: self.status == Status::Active
 caught-by:
-    cortex-knowledge entry::tests::an_entry_is_in_use_only_while_active_and_before_its_expiry
-    cortex-knowledge::it project::an_entry_past_its_expiry_drops_out_and_is_marked_once
-    cortex-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
+    cineris-knowledge entry::tests::an_entry_is_in_use_only_while_active_and_before_its_expiry
+    cineris-knowledge::it project::an_entry_past_its_expiry_drops_out_and_is_marked_once
+    cineris-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
 
 [break] a-proposal-is-in-use
 rule: A proposed entry is never in use: it reaches the prompt only after the user accepts it.
-file: crates/cortex-knowledge/src/entry.rs
+file: crates/cineris-knowledge/src/entry.rs
 in: Entry::in_use
 find: self.status == Status::Active
 replace: self.status != Status::Disabled
 caught-by:
-    cortex-knowledge entry::tests::an_entry_is_in_use_only_while_active_and_before_its_expiry
-    cortex-knowledge::it project::a_proposal_waits_for_the_user
-    cortex-knowledge::it project::a_shared_entry_is_a_proposal_until_this_user_accepts_it
-    cortex-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
+    cineris-knowledge entry::tests::an_entry_is_in_use_only_while_active_and_before_its_expiry
+    cineris-knowledge::it project::a_proposal_waits_for_the_user
+    cineris-knowledge::it project::a_shared_entry_is_a_proposal_until_this_user_accepts_it
+    cineris-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
 
 [break] an-active-command-runs-unasked-without-acceptance
 rule: A command that became active by itself is in the prompt and still asks: only one the user accepted, or wrote, runs without asking.
-file: crates/cortex-knowledge/src/entry.rs
+file: crates/cineris-knowledge/src/entry.rs
 in: Entry::runs_unasked
 find: self.in_use(now) && self.is_accepted()
 replace: self.in_use(now)
 caught-by:
-    cortex-knowledge entry::tests::only_an_accepted_command_in_use_runs_unasked
-    cortex-knowledge::it project::only_active_entries_are_in_use_and_only_accepted_commands_run_unasked
+    cineris-knowledge entry::tests::only_an_accepted_command_in_use_runs_unasked
+    cineris-knowledge::it project::only_active_entries_are_in_use_and_only_accepted_commands_run_unasked
 
 [break] a-shared-entry-is-accepted-for-having-been-written
 rule: An entry of the repository's file is never the user's word for having been written there.
-file: crates/cortex-knowledge/src/entry.rs
+file: crates/cineris-knowledge/src/entry.rs
 in: Entry::is_accepted
 find: (self.scope == Scope::Private && self.learned.is_none())
 replace: self.learned.is_none()
 caught-by:
-    cortex-knowledge entry::tests::a_shared_entry_is_not_accepted_for_having_been_written
+    cineris-knowledge entry::tests::a_shared_entry_is_not_accepted_for_having_been_written
 
 [break] a-shared-entry-is-active-until-decided
 rule: A shared entry the user has not decided about is a proposal, not an active entry.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: standing
 find: None => entry.status = Status::Proposed
 replace: None => entry.status = Status::Active
 caught-by:
-    cortex-knowledge::it project::a_shared_entry_is_a_proposal_until_this_user_accepts_it
-    cortex-knowledge::it project::a_shared_file_cannot_give_its_own_entries_a_standing
-    cortex-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
+    cineris-knowledge::it project::a_shared_entry_is_a_proposal_until_this_user_accepts_it
+    cineris-knowledge::it project::a_shared_file_cannot_give_its_own_entries_a_standing
+    cineris-knowledge::it render::nothing_that_is_not_in_use_is_in_the_section
 
 [break] an-acceptance-outlives-a-changed-command
 rule: A user's acceptance of a shared entry is of what it said: the command line is part of the hash, so a changed command is a proposal again.
-file: crates/cortex-knowledge/src/entry.rs
+file: crates/cineris-knowledge/src/entry.rs
 in: Entry::content_hash
 find: part(&command.run);
 replace: part("");
 caught-by:
-    cortex-knowledge entry::tests::the_content_hash_follows_what_the_entry_says_and_nothing_else
-    cortex-knowledge::it project::a_shared_entry_that_changes_is_a_proposal_again
+    cineris-knowledge entry::tests::the_content_hash_follows_what_the_entry_says_and_nothing_else
+    cineris-knowledge::it project::a_shared_entry_that_changes_is_a_proposal_again
 
 [break] a-degraded-store-feeds-the-safe-list
 rule: While the private store cannot be read as it is, the state in its place feeds the prompt and never the safe list.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Snapshot::runs_unasked
 find: !degraded && !(shared_stands_in && entry.scope == Scope::Shared)
 replace: (degraded || true) && !(shared_stands_in && entry.scope == Scope::Shared)
 caught-by:
-    cortex-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
-    cortex-knowledge::it store::a_session_keeps_what_it_had_when_an_edit_goes_wrong
+    cineris-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
+    cineris-knowledge::it store::a_session_keeps_what_it_had_when_an_edit_goes_wrong
 
 # ---------------------------------------------------------------- the files
 
 [break] an-unknown-key-of-the-store-is-passed-over
 rule: The private store is read strictly: a key this build does not know refuses the file.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 find: #[serde(deny_unknown_fields)] struct RawPrivate
 replace: struct RawPrivate
 caught-by:
-    cortex-knowledge file::tests::a_file_this_build_does_not_understand_in_full_is_refused_whole
+    cineris-knowledge file::tests::a_file_this_build_does_not_understand_in_full_is_refused_whole
 
 [break] a-shared-entry-may-carry-a-standing
 rule: An entry of the shared file has no status, date or acceptance of its own: one that claims any is left out.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 find: #[serde(deny_unknown_fields)] struct RawShared
 replace: struct RawShared
 caught-by:
-    cortex-knowledge file::tests::a_shared_entry_that_claims_a_standing_is_left_out
-    cortex-knowledge::it project::a_shared_file_cannot_give_its_own_entries_a_standing
+    cineris-knowledge file::tests::a_shared_entry_that_claims_a_standing_is_left_out
+    cineris-knowledge::it project::a_shared_file_cannot_give_its_own_entries_a_standing
 
 [break] a-newer-version-is-read
 rule: A file of a newer version is refused whole.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: check_version
 find: version == VERSION
 replace: version >= VERSION
 caught-by:
-    cortex-knowledge file::tests::a_file_this_build_does_not_understand_in_full_is_refused_whole
-    cortex-knowledge file::tests::a_shared_file_past_its_cap_or_of_a_later_version_is_refused
+    cineris-knowledge file::tests::a_file_this_build_does_not_understand_in_full_is_refused_whole
+    cineris-knowledge file::tests::a_shared_file_past_its_cap_or_of_a_later_version_is_refused
 
 [break] the-entry-cap-is-not-held
 rule: A private store past its cap on entries is invalid.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: parse_private
 find: read.entries.len() > MAX_PRIVATE_ENTRIES
 replace: false
 caught-by:
-    cortex-knowledge file::tests::a_store_past_its_cap_is_refused
+    cineris-knowledge file::tests::a_store_past_its_cap_is_refused
 
 [break] an-id-is-given-again
 rule: The id of a deleted entry is not given again, so a change sent from an old listing cannot land on an entry the user never saw.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: PrivateState::next_number
 find: self.next.max(largest_number(&self.entries) + 1)
 replace: largest_number(&self.entries) + 1
 caught-by:
-    cortex-knowledge file::tests::an_id_is_never_given_twice
-    cortex-knowledge::it project::an_id_from_an_old_listing_does_not_land_on_a_new_entry
+    cineris-knowledge file::tests::an_id_is_never_given_twice
+    cineris-knowledge::it project::an_id_from_an_old_listing_does_not_land_on_a_new_entry
 
 [break] a-shared-id-is-a-short-prefix
 rule: A shared entry's id is 128 bits of its hash, so a repository cannot make two entries share one.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: shared_id
 find: hex.get(..32)
 replace: hex.get(..12)
 caught-by:
-    cortex-knowledge file::tests::every_shared_entry_is_a_proposal_named_by_what_it_says
+    cineris-knowledge file::tests::every_shared_entry_is_a_proposal_named_by_what_it_says
 
 # ---------------------------------------------------------------- the store
 
 [break] a-change-writes-over-an-invalid-store
 rule: A store that cannot be read as it is, is never written over: a change is refused until a person puts the file right.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: Store::change
 find: self.read_strict().map_err(StoreError::Invalid)?
 replace: self.read_strict().unwrap_or_default()
 caught-by:
-    cortex-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
+    cineris-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
 
 [break] the-store-is-not-owner-only
 rule: The private store and its good copy are written owner-only.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: Store::change
 find: owner_only: true
 replace: owner_only: false
 os: linux
 caught-by:
-    cortex-knowledge::it store::a_change_is_written_owner_only_with_its_good_copy_beside_it
+    cineris-knowledge::it store::a_change_is_written_owner_only_with_its_good_copy_beside_it
 
 [break] a-change-takes-no-lock
 rule: A change holds the store's lock from before its read until after its write.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: Store::change
 find: let _lock = private::hold_lock(&self.file).map_err(io_error)?;
 replace: let _lock = private::hold_lock(&self.file).map_err(io_error).map(|_| None::<std::fs::File>)?;
 caught-by:
-    cortex-knowledge::it store::a_change_holds_the_lock_while_it_writes
+    cineris-knowledge::it store::a_change_holds_the_lock_while_it_writes
 
 [break] the-good-copy-does-not-follow-a-valid-load
 rule: A load that reads a valid store brings the good copy up to it, so that a later invalid edit falls back to the person's last valid one.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: Store::load
 find: self.keep_good_copy(&read);
 replace: let _ = &read;
 caught-by:
-    cortex-knowledge::it store::the_good_copy_follows_a_valid_hand_edit
-    cortex-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
+    cineris-knowledge::it store::the_good_copy_follows_a_valid_hand_edit
+    cineris-knowledge::it store::an_invalid_store_is_reported_and_never_written_over
 
 [break] a-removed-store-keeps-its-good-copy
 rule: A store that is not there has no good copy: a file made by hand afterwards cannot fall back to what was removed.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: Store::keep_good_copy
 find: let _ = std::fs::remove_file(&good);
 replace:
 caught-by:
-    cortex-knowledge::it store::a_store_that_is_removed_is_empty_and_its_good_copy_goes
+    cineris-knowledge::it store::a_store_that_is_removed_is_empty_and_its_good_copy_goes
 
 # -------------------------------------------------------------- the changes
 
 [break] a-proposal-is-stored-active
 rule: A model's proposal is stored as proposed: nothing a model does can make an entry active.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Project::propose
 find: entry.status = Status::Proposed;
 replace: entry.status = Status::Active;
 caught-by:
-    cortex-knowledge::it project::a_proposal_waits_for_the_user
+    cineris-knowledge::it project::a_proposal_waits_for_the_user
 
 [break] a-rejected-proposal-is-proposed-again
 rule: A proposal the user turned down is already known, and is not stored again.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Project::propose
 find: entry.kind == proposal.kind && one_spaced(&entry.text) == text
 replace: entry.status != Status::Disabled && entry.kind == proposal.kind && one_spaced(&entry.text) == text
 caught-by:
-    cortex-knowledge::it project::a_proposal_waits_for_the_user
+    cineris-knowledge::it project::a_proposal_waits_for_the_user
 
 [break] the-cap-on-waiting-proposals-is-not-held
 rule: A store full of a model's proposals takes no more until some are reviewed.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Project::propose
 find: waiting >= MAX_PENDING_PROPOSALS
 replace: false
 caught-by:
-    cortex-knowledge::it project::a_store_full_of_proposals_takes_no_more_until_some_are_reviewed
+    cineris-knowledge::it project::a_store_full_of_proposals_takes_no_more_until_some_are_reviewed
 
 [break] a-lapsed-entry-keeps-its-acceptance
 rule: An acceptance does not outlast the entry: a lapsed command must be accepted again before it runs without asking.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Project::lapse
 find: entry.accepted = None;
 replace:
 caught-by:
-    cortex-knowledge::it project::an_entry_past_its_expiry_drops_out_and_is_marked_once
+    cineris-knowledge::it project::an_entry_past_its_expiry_drops_out_and_is_marked_once
 
 [break] an-unaccepted-entry-is-promoted
 rule: Only an entry the user stands behind goes to the shared file.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Work::promote
 find: !entry.is_accepted()
 replace: false
 caught-by:
-    cortex-knowledge::it project::only_an_entry_the_user_stands_behind_is_promoted
-    cortex-knowledge::it project::an_update_is_all_or_nothing
+    cineris-knowledge::it project::only_an_entry_the_user_stands_behind_is_promoted
+    cineris-knowledge::it project::an_update_is_all_or_nothing
 
-[break] a-linked-cortex-directory-is-read-through
-rule: The shared file is read only from a `.cortex` that is a directory of the workspace itself.
-file: crates/cortex-knowledge/src/project.rs
+[break] a-linked-cineris-directory-is-read-through
+rule: The shared file is read only from a `.cineris` that is a directory of the workspace itself.
+file: crates/cineris-knowledge/src/project.rs
 in: Project::read_shared
 find: Ok(found) if found.file_type().is_symlink() =>
 replace: Ok(found) if false && found.file_type().is_symlink() =>
 caught-by:
-    cortex-knowledge::it project::a_shared_file_behind_a_link_is_not_read
+    cineris-knowledge::it project::a_shared_file_behind_a_link_is_not_read
 
 [break] an-edit-reaches-a-shared-entry
 rule: An entry of the shared file is edited and removed in that file, never through the user's store.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Work::not_private
 find: Ok(Some(_)) => ChangeError::SharedReadOnly(id.clone())
 replace: Ok(Some(_)) => ChangeError::UnknownEntry(id.clone())
 caught-by:
-    cortex-knowledge::it project::an_update_is_all_or_nothing
+    cineris-knowledge::it project::an_update_is_all_or_nothing
 
 # ---------------------------------------------------------------- section 5
 
 [break] an-entry-is-rendered-unescaped
 rule: Every piece of an entry goes through `visible`, so an entry is one list line and cannot begin a line of its own.
-file: crates/cortex-knowledge/src/render.rs
+file: crates/cineris-knowledge/src/render.rs
 in: line
 find: let text = visible(&entry.text);
 replace: let text = entry.text.as_str();
 caught-by:
-    cortex-knowledge::it render::no_entry_can_write_anything_but_its_own_line
+    cineris-knowledge::it render::no_entry_can_write_anything_but_its_own_line
 
 [break] a-commands-directory-is-rendered-unescaped
 rule: A command's directory is escaped as its text is.
-file: crates/cortex-knowledge/src/render.rs
+file: crates/cineris-knowledge/src/render.rs
 in: line
 find: visible(cwd)
 replace: cwd
 caught-by:
-    cortex-knowledge::it render::no_entry_can_write_anything_but_its_own_line
+    cineris-knowledge::it render::no_entry_can_write_anything_but_its_own_line
 
 [break] the-section-passes-its-budget
 rule: Section 5 stays inside its budget, and says how many entries it left out.
-file: crates/cortex-knowledge/src/render.rs
+file: crates/cineris-knowledge/src/render.rs
 in: render_with
 find: text.len() + cost(*kind, line, first) > room
 replace: false
 caught-by:
-    cortex-knowledge::it render::the_section_stays_inside_its_budget_and_says_what_it_left_out
+    cineris-knowledge::it render::the_section_stays_inside_its_budget_and_says_what_it_left_out
 
 [break] commands-are-not-first
 rule: The section lists commands first, so that a cut leaves them in.
-file: crates/cortex-knowledge/src/render.rs
+file: crates/cineris-knowledge/src/render.rs
 in: render_with
 find: for kind in Kind::ALL
 replace: for kind in [Kind::Fact, Kind::Flaky, Kind::Convention, Kind::Command]
 caught-by:
-    cortex-knowledge::it render::the_section_lists_what_is_in_use_commands_first_in_a_fixed_order
-    cortex-knowledge::it render::the_section_stays_inside_its_budget_and_says_what_it_left_out
+    cineris-knowledge::it render::the_section_lists_what_is_in_use_commands_first_in_a_fixed_order
+    cineris-knowledge::it render::the_section_stays_inside_its_budget_and_says_what_it_left_out
 
 [break] the-filter-is-not-asked
 rule: An entry whose line the caller's filter refuses is left out of the section.
-file: crates/cortex-knowledge/src/render.rs
+file: crates/cineris-knowledge/src/render.rs
 in: render_with
 find: if keep(&line) {
 replace: if keep(&line) || true {
 caught-by:
-    cortex-knowledge::it render::an_entry_the_filter_refuses_is_left_out_and_counted
+    cineris-knowledge::it render::an_entry_the_filter_refuses_is_left_out_and_counted
 
 [break] the-profile-is-in-the-base-hash
 rule: Section 5 is outside the epoch's base hash: a profile that changed between processes does not make a resume a new epoch.
-file: crates/cortex-agent/src/context/prompt.rs
+file: crates/cineris-agent/src/context/prompt.rs
 in: build
 find: profile.is_some() && index == profile_at
 replace: false
 caught-by:
-    cortex-agent context::prompt::tests::the_base_hash_leaves_the_project_profile_out
+    cineris-agent context::prompt::tests::the_base_hash_leaves_the_project_profile_out
 
 [break] the-epochs-profile-is-not-written
 rule: The `epoch` entry records the hash of the profile its prompt holds.
-file: crates/cortex-core/src/store.rs
+file: crates/cineris-core/src/store.rs
 in: epoch_body
 find: profile: epoch.profile
 replace: profile: None
 caught-by:
-    cortex-core store::tests::the_epochs_of_a_branch_are_placed_among_its_items
+    cineris-core store::tests::the_epochs_of_a_branch_are_placed_among_its_items
 
 # ------------------------------------------------------ the learned safe list
 
 [break] an-exact-rule-takes-a-wildcard
 rule: The rule of an accepted command is that line and no other: a word a pattern would read as a wildcard gives no rule.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: plain_word
 find: character.is_whitespace() || matches!(character, '*' | '?' | '[' | ']')
 replace: character.is_whitespace()
 caught-by:
-    cortex-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
+    cineris-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
 
 [break] an-exact-rule-takes-the-first-of-two-commands
 rule: A line of more than one command gives no rule.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: exact_command_rule
 find: let [part] = parts.as_slice() else
 replace: let Some(part) = parts.first() else
 caught-by:
-    cortex-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
+    cineris-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
 
 [break] an-exact-rule-takes-a-redirection
 rule: A command with a redirection gives no rule: the pattern would not say where it writes.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: exact_command_rule
 find: !part.redirects.is_empty()
 replace: false
 caught-by:
-    cortex-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
+    cineris-policy::it learned::an_exact_rule_is_the_line_word_for_word_or_no_rule_at_all
 
 [break] learned-rules-are-added-to-the-ones-before
 rule: A session's learned rules are replaced whole, so a command the user turned off asks again at once.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::set_learned
 find: held.configured.retain(|rule| rule.source != RuleSource::Learned);
 replace:
 caught-by:
-    cortex-policy::it learned::an_accepted_command_no_longer_asks_and_a_rejected_one_does
-    cortex-policy::it learned::learned_rules_change_nothing_else_about_the_engine
+    cineris-policy::it learned::an_accepted_command_no_longer_asks_and_a_rejected_one_does
+    cineris-policy::it learned::learned_rules_change_nothing_else_about_the_engine
 
 [break] a-learned-list-may-do-more-than-allow-a-command
 rule: A learned rule only ever allows a command: a list with anything else is refused whole.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::set_learned
 find: rule.rule.effect != Effect::Exec || rule.rule.action != RuleAction::Allow
 replace: false
 caught-by:
-    cortex-policy::it learned::a_learned_list_with_anything_but_an_exec_allow_leaves_none_in_force
+    cineris-policy::it learned::a_learned_list_with_anything_but_an_exec_allow_leaves_none_in_force
 
 [break] a-refused-learned-list-leaves-the-old-rules-in-force
 rule: When a learned list is refused, no learned rule is in force, the ones from before included.
-file: crates/cortex-policy/src/engine.rs
+file: crates/cineris-policy/src/engine.rs
 in: Engine::set_learned
 find: self.recompile(&mut held);
 replace: let _ = &mut held;
 caught-by:
-    cortex-policy::it learned::a_learned_list_with_anything_but_an_exec_allow_leaves_none_in_force
+    cineris-policy::it learned::a_learned_list_with_anything_but_an_exec_allow_leaves_none_in_force
 
 # ------------------------------------------- after the review of the store
 
 [break] a-change-passes-the-size-cap
 rule: The cap on the store's size is held when it is written: a change that would pass it is refused, and the store stays one every load reads.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: writable
 find: text.len() as u64 > MAX_FILE_BYTES
 replace: false
 caught-by:
-    cortex-knowledge::it store::a_change_that_would_pass_the_size_cap_is_refused_and_the_store_stays_readable
+    cineris-knowledge::it store::a_change_that_would_pass_the_size_cap_is_refused_and_the_store_stays_readable
 
 [break] the-shared-file-passes-its-size
 rule: The cap on the shared file's size is held when an entry is added to it.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: append_shared
 find: text.len() as u64 > MAX_FILE_BYTES
 replace: false
 caught-by:
-    cortex-knowledge file::tests::an_entry_that_would_take_the_shared_file_past_its_size_is_not_added
-    cortex-knowledge::it project::a_promote_that_would_pass_the_shared_files_size_is_refused
+    cineris-knowledge file::tests::an_entry_that_would_take_the_shared_file_past_its_size_is_not_added
+    cineris-knowledge::it project::a_promote_that_would_pass_the_shared_files_size_is_refused
 
 [break] a-snapshots-stamp-is-taken-after-the-lock
 rule: The snapshot a change gives back holds the store's stamp from while the lock was held, so another process's change right after it shows at the next look.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Project::after
 find: (false, shared_stands_in), private_stamp
 replace: (false, shared_stands_in), self.store.stamp()
 caught-by:
-    cortex-knowledge::it store::a_change_made_by_another_right_after_ours_is_seen
+    cineris-knowledge::it store::a_change_made_by_another_right_after_ours_is_seen
 
 [break] a-load-waits-for-the-lock
 rule: A load never waits for the store's lock: the good copy is brought up to date only when the lock can be had at once.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: Store::keep_good_copy
 find: let Some(_lock) = self.try_lock() else
 replace: let Ok(_lock) = private::hold_lock(&self.file) else
 caught-by:
-    cortex-knowledge::it store::a_load_does_not_wait_for_a_writer
+    cineris-knowledge::it store::a_load_does_not_wait_for_a_writer
 
 [break] a-problem-quotes-the-file-raw
 rule: A problem is shown to a person and sent to clients: what it quotes of the file is escaped.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: Problem::new
-find: cortex_base::visible(&message.into()).into_owned()
+find: cineris_base::visible(&message.into()).into_owned()
 replace: message.into()
 caught-by:
-    cortex-knowledge file::tests::a_problem_never_carries_what_acts_unseen
+    cineris-knowledge file::tests::a_problem_never_carries_what_acts_unseen
 
 [break] a-left-out-entry-is-quoted-raw
 rule: What is said of a shared entry that was left out is escaped too.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: parse_shared
-find: cortex_base::visible(&message)
+find: cineris_base::visible(&message)
 replace: message
 caught-by:
-    cortex-knowledge file::tests::a_problem_never_carries_what_acts_unseen
+    cineris-knowledge file::tests::a_problem_never_carries_what_acts_unseen
 
 [break] a-number-past-the-bound-is-read
 rule: A file whose id or counter holds a number past the bound is refused, so no arithmetic on it can wrap round to an id in use.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: parse_private
 find: largest > MAX_NUMBER || read.next.is_some_and(|next| next > MAX_NUMBER)
 replace: false
 caught-by:
-    cortex-knowledge file::tests::a_number_past_what_an_id_may_hold_refuses_the_file
+    cineris-knowledge file::tests::a_number_past_what_an_id_may_hold_refuses_the_file
 
 [break] a-private-id-takes-a-shared-entrys-name
 rule: A private entry cannot be given an id that begins `s_`: it would stand in front of a shared entry.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: parse_private
 find: Some(id) if id.starts_with("s_") =>
 replace: Some(id) if false && id.starts_with("s_") =>
 caught-by:
-    cortex-knowledge file::tests::a_private_id_cannot_take_a_shared_entrys_name
+    cineris-knowledge file::tests::a_private_id_cannot_take_a_shared_entrys_name
 
 [break] the-shared-file-is-written-through-a-link
 rule: The shared file is never written through a link, whatever the read before it found.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Project::write_shared
 find: follow_links: false
 replace: follow_links: true
 caught-by:
-    cortex-knowledge::it project::a_link_planted_between_the_read_and_the_write_is_not_written_through
+    cineris-knowledge::it project::a_link_planted_between_the_read_and_the_write_is_not_written_through
 
-[break] a-linked-cortex-directory-is-written-into
-rule: The shared file is written only into a `.cortex` that is a directory of the workspace itself.
-file: crates/cortex-knowledge/src/project.rs
+[break] a-linked-cineris-directory-is-written-into
+rule: The shared file is written only into a `.cineris` that is a directory of the workspace itself.
+file: crates/cineris-knowledge/src/project.rs
 in: Project::write_shared
 find: found.file_type().is_symlink() || !found.is_dir()
 replace: false
 caught-by:
-    cortex-knowledge::it project::a_link_planted_between_the_read_and_the_write_is_not_written_through
+    cineris-knowledge::it project::a_link_planted_between_the_read_and_the_write_is_not_written_through
 
 [break] an-entry-already-shared-is-added-again
 rule: A promote of an entry the shared file already holds finishes the move and adds nothing.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Work::promote
 find: if !there
 replace: if true
 caught-by:
-    cortex-knowledge::it project::a_promote_that_stopped_half_way_is_finished_by_the_next
+    cineris-knowledge::it project::a_promote_that_stopped_half_way_is_finished_by_the_next
 
 [break] a-rooted-directory-is-reread-as-relative
 rule: A directory that names a root, a drive or the home directory is refused as written, never read as a path below the workspace.
-file: crates/cortex-knowledge/src/entry.rs
+file: crates/cineris-knowledge/src/entry.rs
 in: checked_dir
 find: if rooted
 replace: if false
 caught-by:
-    cortex-knowledge entry::tests::a_directory_that_names_a_root_is_refused_as_written
-    cortex-knowledge::it project::a_rooted_directory_is_refused_not_reread_as_a_relative_one
+    cineris-knowledge entry::tests::a_directory_that_names_a_root_is_refused_as_written
+    cineris-knowledge::it project::a_rooted_directory_is_refused_not_reread_as_a_relative_one
 
 [break] the-hash-follows-how-a-text-is-spaced
 rule: An entry's hash is of its text with its blanks made one, so a checkout that changed the line endings has the same entry.
-file: crates/cortex-knowledge/src/entry.rs
+file: crates/cineris-knowledge/src/entry.rs
 in: Entry::content_hash
 find: part(&one_spaced(&self.text));
 replace: part(&self.text);
 caught-by:
-    cortex-knowledge entry::tests::the_content_hash_follows_what_the_entry_says_and_nothing_else
+    cineris-knowledge entry::tests::the_content_hash_follows_what_the_entry_says_and_nothing_else
 
 [break] a-check-may-hold-a-control-character
 rule: A check's command and pattern are one line, with no control character.
-file: crates/cortex-knowledge/src/entry.rs
+file: crates/cineris-knowledge/src/entry.rs
 in: one_line
 find: text.chars().any(char::is_control)
 replace: false
 caught-by:
-    cortex-knowledge entry::tests::an_entry_that_is_not_well_formed_is_refused_with_the_reason
+    cineris-knowledge entry::tests::an_entry_that_is_not_well_formed_is_refused_with_the_reason
 
 [break] a-new-entry-is-read-leniently
 rule: An entry the user writes is read strictly: a field this build does not know refuses the request.
-file: crates/cortex-protocol/src/project.rs
+file: crates/cineris-protocol/src/project.rs
 find: #[serde(deny_unknown_fields)] pub struct NewEntry
 replace: pub struct NewEntry
 caught-by:
-    cortex-protocol tests::the_golden_values_round_trip_exactly
+    cineris-protocol tests::the_golden_values_round_trip_exactly
 
 [break] a-new-entrys-command-is-read-leniently
 rule: The command of an entry the user writes is read strictly too.
-file: crates/cortex-protocol/src/project.rs
+file: crates/cineris-protocol/src/project.rs
 find: #[serde(deny_unknown_fields)] pub struct NewCommand
 replace: pub struct NewCommand
 caught-by:
-    cortex-protocol tests::the_golden_values_round_trip_exactly
+    cineris-protocol tests::the_golden_values_round_trip_exactly
 
 # ---------------------------------------- after the second read of the store
 
 [break] a-promote-writes-the-shared-file-before-the-store-is-known-to-fit
 rule: A promote is all or nothing: a store that could not take the change refuses it before the repository's file is written.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Project::update
 find: Err(Unwritable::Full(message)) => return Err(ChangeError::Full(message))
 replace: Err(Unwritable::Full(_)) => {}
 caught-by:
-    cortex-knowledge::it project::a_promote_the_store_cannot_take_writes_nothing_to_the_shared_file
+    cineris-knowledge::it project::a_promote_the_store_cannot_take_writes_nothing_to_the_shared_file
 
 [break] a-change-is-written-without-being-read-back
 rule: Nothing is written that this build would not read back.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: writable
 find: parse_private(&text, STORE_NAME).map_err(Unwritable::Unreadable)?;
 replace:
 caught-by:
-    cortex-knowledge::it store::a_change_that_could_not_be_read_back_is_not_written
+    cineris-knowledge::it store::a_change_that_could_not_be_read_back_is_not_written
 
 [break] a-changes-stamp-is-taken-after-its-good-copy
 rule: A change's stamp is taken the moment the store is written, so a person's edit saved after it shows at the next look.
-file: crates/cortex-knowledge/src/store.rs
+file: crates/cineris-knowledge/src/store.rs
 in: Store::change
 find: Ok((answer, state, stamp))
 replace: Ok((answer, state, self.stamp()))
 caught-by:
-    cortex-knowledge::it store::an_edit_saved_while_a_change_is_written_is_seen
+    cineris-knowledge::it store::an_edit_saved_while_a_change_is_written_is_seen
 
 [break] a-new-entry-takes-the-room-kept-for-narrowing
 rule: A new entry is refused within the reserve of the store's size, so that a full store can still be told to use less.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: room
 find: bytes + RESERVED_BYTES > MAX_FILE_BYTES
 replace: false
 caught-by:
-    cortex-knowledge::it store::a_store_near_its_cap_takes_no_new_entry_and_can_still_be_told_to_use_less
+    cineris-knowledge::it store::a_store_near_its_cap_takes_no_new_entry_and_can_still_be_told_to_use_less
 
 [break] a-counter-past-the-bound-is-read
 rule: A store whose counter is past the bound once its ids are given is refused: no change to it could be written back.
-file: crates/cortex-knowledge/src/file.rs
+file: crates/cineris-knowledge/src/file.rs
 in: parse_private
 find: if next > MAX_NUMBER
 replace: if false
 caught-by:
-    cortex-knowledge file::tests::a_number_past_what_an_id_may_hold_refuses_the_file
+    cineris-knowledge file::tests::a_number_past_what_an_id_may_hold_refuses_the_file
 
 # ------------------------------------------------------------- the observer
 
 [break] a-line-with-a-quote-or-an-operator-is-observed
 rule: Only a line of plain words is observed: an observed line reaches the system prompt without a review, so it must not be able to carry a sentence.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: normal_line
 find: !word.chars().all(plain)
 replace: false
 caught-by:
-    cortex-knowledge observe::tests::a_line_is_observed_only_as_plain_words
-    cortex-knowledge observe::tests::a_success_of_a_classed_line_is_seen_and_nothing_else_is
+    cineris-knowledge observe::tests::a_line_is_observed_only_as_plain_words
+    cineris-knowledge observe::tests::a_success_of_a_classed_line_is_seen_and_nothing_else_is
 
 [break] a-change-between-two-runs-is-still-a-flip
 rule: A flip is a failure and then a success of one test command with no change the harness saw between them, under the same confinement.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: Watch::see
 find: before == Some((self.changes, run.confined)) && !run.changed
 replace: before.is_some()
 caught-by:
-    cortex-knowledge observe::tests::a_change_between_the_two_runs_is_not_a_flip
-    cortex-knowledge observe::tests::the_two_runs_of_a_flip_ran_under_the_same_confinement
+    cineris-knowledge observe::tests::a_change_between_the_two_runs_is_not_a_flip
+    cineris-knowledge observe::tests::the_two_runs_of_a_flip_ran_under_the_same_confinement
 
 [break] a-build-that-fails-then-passes-is-a-flaky-test
 rule: Only a test command can flip: a build that fails and then passes was fixed.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: Watch::see
 find: purpose == Purpose::Test && !run.changed
 replace: !run.changed
 caught-by:
-    cortex-knowledge observe::tests::a_test_that_fails_then_passes_with_nothing_changed_is_a_flip
+    cineris-knowledge observe::tests::a_test_that_fails_then_passes_with_nothing_changed_is_a_flip
 
 [break] an-entry-seen-once-is-active
 rule: A command seen once is a proposal: it becomes active at the second consistent observation.
-file: crates/cortex-knowledge/src/learn.rs
+file: crates/cineris-knowledge/src/learn.rs
 in: Project::learn
 find: entry.status = Status::Proposed;
 replace: entry.status = Status::Active;
 caught-by:
-    cortex-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
+    cineris-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
 
 [break] becoming-active-is-being-accepted
 rule: An entry that became active by itself is not accepted: it is in the prompt, and it still asks.
-file: crates/cortex-knowledge/src/learn.rs
+file: crates/cineris-knowledge/src/learn.rs
 in: Project::learn
 find: entry.status = Status::Active; entry.expires = now.checked_add(lifetime); Outcome::Activated
 replace: entry.status = Status::Active; entry.accepted = Some(now); entry.expires = now.checked_add(lifetime); Outcome::Activated
 caught-by:
-    cortex-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
+    cineris-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
 
 [break] an-entry-the-user-disabled-is-learned-again
 rule: An entry the user turned off is not learned again, however often it is seen.
-file: crates/cortex-knowledge/src/learn.rs
+file: crates/cineris-knowledge/src/learn.rs
 in: Project::learn
 find: Status::Disabled => Outcome::Nothing
 replace: Status::Disabled => { follow(entry); entry.status = Status::Active; Outcome::Revived }
 caught-by:
-    cortex-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
+    cineris-knowledge::it learn::a_command_seen_to_succeed_twice_becomes_active_and_can_be_undone
 
 [break] an-expired-entry-comes-back-accepted
 rule: An entry that lapsed comes back unaccepted when it is seen again, whether or not the clock's pass had marked it.
-file: crates/cortex-knowledge/src/learn.rs
+file: crates/cineris-knowledge/src/learn.rs
 in: Project::learn
 find: follow(entry); entry.accepted = None; entry.expires = now.checked_add(lifetime); Outcome::Revived
 replace: follow(entry); entry.expires = now.checked_add(lifetime); Outcome::Revived
 caught-by:
-    cortex-knowledge::it learn::an_entry_that_lapsed_comes_back_unaccepted_when_it_is_seen_again
+    cineris-knowledge::it learn::an_entry_that_lapsed_comes_back_unaccepted_when_it_is_seen_again
 
 [break] an-active-entry-is-written-at-every-run
 rule: A later success confirms an active entry at most once a day: one write a day a command, not one a run.
-file: crates/cortex-knowledge/src/learn.rs
+file: crates/cineris-knowledge/src/learn.rs
 in: confirm_due
 find: since >= DAY
 replace: true
 caught-by:
-    cortex-knowledge::it learn::an_active_entry_is_confirmed_at_most_once_a_day
+    cineris-knowledge::it learn::an_active_entry_is_confirmed_at_most_once_a_day
 
 [break] entries-seen-once-fill-the-store
 rule: At most 40 entries seen once are kept: the one seen longest ago goes when a new one comes.
-file: crates/cortex-knowledge/src/learn.rs
+file: crates/cineris-knowledge/src/learn.rs
 in: make_room
 find: >= MAX_SEEN_ONCE
 replace: >= usize::MAX
 caught-by:
-    cortex-knowledge::it learn::entries_seen_once_are_bounded_and_do_not_wait_for_ever
+    cineris-knowledge::it learn::entries_seen_once_are_bounded_and_do_not_wait_for_ever
 
 # ------------------------------------------------------ the profile's epoch
 
 [break] the-epochs-prompt-is-built-without-the-profile
 rule: The profile is section 5 of the prompt an epoch is built with.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: Session::build_prompt
 find: profile: Some(&profile)
 replace: profile: None
 caught-by:
-    cortex-agent::it profile::the_profile_is_section_five_of_the_epochs_prompt_and_its_hash_is_recorded
+    cineris-agent::it profile::the_profile_is_section_five_of_the_epochs_prompt_and_its_hash_is_recorded
 
 [break] a-changed-profile-is-not-told
 rule: A profile that is not the one the model has is told as a notice at the turn's start.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: Session::profile_changes
 find: now == self.context.given_profile
 replace: true
 caught-by:
-    cortex-agent::it profile::the_prompt_is_fixed_for_the_epoch_and_a_change_follows_as_a_notice
-    cortex-agent::it profile::a_resume_after_the_profile_changed_goes_on_in_its_epoch_and_is_told
+    cineris-agent::it profile::the_prompt_is_fixed_for_the_epoch_and_a_change_follows_as_a_notice
+    cineris-agent::it profile::a_resume_after_the_profile_changed_goes_on_in_its_epoch_and_is_told
 
 [break] the-profile-is-told-at-every-turn
 rule: Nothing is told when the profile is the one the model has.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 in: Session::profile_changes
 find: now == self.context.given_profile
 replace: false
 caught-by:
-    cortex-agent::it profile::the_prompt_is_fixed_for_the_epoch_and_a_change_follows_as_a_notice
+    cineris-agent::it profile::the_prompt_is_fixed_for_the_epoch_and_a_change_follows_as_a_notice
 
 [break] a-summary-replays-an-older-profile
 rule: After a summary the old epoch's profile notices are not replayed: the new prompt holds the profile as it is then.
-file: crates/cortex-agent/src/context/history.rs
+file: crates/cineris-agent/src/context/history.rs
 in: History::extend_projected
 find: if meta.map || meta.profile {
 replace: if meta.map {
 caught-by:
-    cortex-agent::it profile::a_compaction_builds_the_prompt_with_the_profile_as_it_is_and_replays_no_older_one
+    cineris-agent::it profile::a_compaction_builds_the_prompt_with_the_profile_as_it_is_and_replays_no_older_one
 
 [break] a-reload-replays-an-older-profile
 rule: A history read again from the log leaves the old epoch's profile notices out after a summary, as the live session did.
-file: crates/cortex-agent/src/context/mod.rs
+file: crates/cineris-agent/src/context/mod.rs
 in: Context::load
 find: NoticeSource::Map | NoticeSource::Profile
 replace: NoticeSource::Map
 caught-by:
-    cortex-agent::it profile::a_compaction_builds_the_prompt_with_the_profile_as_it_is_and_replays_no_older_one
+    cineris-agent::it profile::a_compaction_builds_the_prompt_with_the_profile_as_it_is_and_replays_no_older_one
 
 [break] a-session-read-again-forgets-what-it-was-told
 rule: What the model has of the profile is the epoch's hash, then the last profile notice on the branch: a session read again tells nothing twice.
-file: crates/cortex-agent/src/context/mod.rs
+file: crates/cineris-agent/src/context/mod.rs
 in: Context::load
 find: self.given_profile = profile::told(&notice.text);
 replace:
 caught-by:
-    cortex-agent::it profile::a_resume_after_the_profile_changed_goes_on_in_its_epoch_and_is_told
+    cineris-agent::it profile::a_resume_after_the_profile_changed_goes_on_in_its_epoch_and_is_told
 
 # ---------------------------------------------------------------- the core
 
 [break] an-active-command-is-given-to-the-engine-unaccepted
 rule: The engine is given a rule only for a command the user accepted: one that became active by itself still asks.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::give_rules
 find: .runs_unasked(now)
 replace: .in_use(now)
 caught-by:
-    cortex-core::it knowledge::sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_accepted
+    cineris-core::it knowledge::sys_a_command_seen_to_succeed_twice_is_learned_told_and_runs_unasked_once_accepted
 
 [break] a-new-engine-is-not-given-the-learned-rules
 rule: A change of level makes a new engine, which is given the learned rules from the one place that holds them.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::put_in_force
 find: self.policy.replace_with(engine, rules)
 replace: self.policy.replace_with(engine, { let _ = rules; Vec::new() })
 caught-by:
-    cortex-core::it knowledge::sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
+    cineris-core::it knowledge::sys_a_change_of_level_keeps_what_was_accepted_and_nothing_that_was_turned_off
 
 [break] the-files-are-not-looked-at-before-a-command
 rule: Before a command is decided a session looks at its project's files, and makes its learned rules again from them when either changed.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::before_command
 find: if current && !expired {
 replace: if true {
 caught-by:
-    cortex-core::it knowledge::sys_a_command_another_process_turned_off_asks_at_its_next_run
+    cineris-core::it knowledge::sys_a_command_another_process_turned_off_asks_at_its_next_run
 
 [break] an-update-does-not-reach-the-running-sessions
 rule: Every session of the project in the process takes an update at once: an accepted command stops asking, and one turned off asks.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: update
 find: knowledge.took(&snapshot);
 replace:
 caught-by:
-    cortex-core::it knowledge::sys_a_command_accepted_while_a_turn_runs_stops_asking_at_once
+    cineris-core::it knowledge::sys_a_command_accepted_while_a_turn_runs_stops_asking_at_once
 
 [break] a-proposal-with-a-credential-is-stored
 rule: A proposal that holds what looks like a credential is refused.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 find: self.finds_secret(&proposal.text) || self.finds_secret(&proposal.evidence)
 replace: false
 caught-by:
-    cortex-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
+    cineris-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
 
 [break] a-command-with-a-credential-is-observed
 rule: A command line that holds what looks like a credential is not observed.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::observe
 find: || self.finds_secret(&run.command)
 replace:
 caught-by:
-    cortex-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
+    cineris-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
 
 [break] learning-is-on-when-the-setting-is-off
 rule: With `project.learn` off nothing is observed.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::observe
 find: !self.learn ||
 replace:
 caught-by:
-    cortex-core::it knowledge::sys_learning_can_be_turned_off_and_the_sections_budget_set
+    cineris-core::it knowledge::sys_learning_can_be_turned_off_and_the_sections_budget_set
 
 [break] an-observer-names-a-project-by-its-path
 rule: Only a `user` client may name a project by its workspace.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: target
 find: if !is_user(core, client) {
 replace: if false {
 caught-by:
-    cortex-core::it knowledge::a_session_cannot_read_another_projects_store
+    cineris-core::it knowledge::a_session_cannot_read_another_projects_store
 
 [break] an-observer-changes-the-profile
 rule: `project/update` is a `user` client's alone.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: update
 find: if !is_user(core, client) {
 replace: if false {
 caught-by:
-    cortex-core::it knowledge::a_session_cannot_read_another_projects_store
+    cineris-core::it knowledge::a_session_cannot_read_another_projects_store
 
 [break] the-knowledge-is-read-when-a-session-is-made
 rule: Nothing of the project's knowledge is read until the session is open: the first read is at the first turn's start.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 find: let before = Arc::downgrade(knowledge);
-replace: let before = Arc::downgrade(knowledge); let _ = cortex_agent::ProfileSource::section(&**knowledge);
+replace: let before = Arc::downgrade(knowledge); let _ = cineris_agent::ProfileSource::section(&**knowledge);
 caught-by:
-    cortex-core::it knowledge::the_knowledge_is_not_touched_until_the_session_is_open
+    cineris-core::it knowledge::the_knowledge_is_not_touched_until_the_session_is_open
 
 [break] a-command-that-could-not-say-what-it-changed-changed-nothing
 rule: No account of a command's changes is an account that it may have changed something.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: observed_run
 find: changes.is_none_or(
 replace: changes.is_some_and(
 caught-by:
-    cortex-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
+    cineris-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
 
 [break] a-command-that-was-stopped-is-a-result
 rule: A command that timed out, was interrupted or left something running is neither a success nor a failure.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: observed_run
-find: _ if cut_short => cortex_knowledge::Ending::Other
-replace: _ if false => cortex_knowledge::Ending::Other
+find: _ if cut_short => cineris_knowledge::Ending::Other
+replace: _ if false => cineris_knowledge::Ending::Other
 caught-by:
-    cortex-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
+    cineris-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
 
 [break] a-project-turns-learning-on
 rule: `project.learn` is the user's alone.
-file: crates/cortex-config/src/schema/sections.rs
+file: crates/cineris-config/src/schema/sections.rs
 find: [UserOnly, Restart] pub learn
 replace: [Preference, Restart] pub learn
 caught-by:
-    cortex-config::it trust::every_key_has_a_trust_class
+    cineris-config::it trust::every_key_has_a_trust_class
 
 # ------------------------------------ after the read of the trust path
 
 [break] the-look-before-a-command-asks-the-shared-snapshot
 rule: Before a command is decided the files are compared with the snapshot this session's rules were made from, not the one the project's sessions share.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::before_command
 find: from.as_ref().is_some_and(|from| self.project.is_current(from))
 replace: self.peek().is_some_and(|shared| self.project.is_current(&shared))
 caught-by:
-    cortex-core::it knowledge::sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files_first
+    cineris-core::it knowledge::sys_a_command_turned_off_elsewhere_asks_though_another_session_read_the_files_first
 
 [break] an-expired-rule-stays-until-the-next-turn
 rule: An accepted command whose entry expires while a turn runs asks at its next run.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::before_command
 find: .is_some_and(|until| until <= self.project.now())
 replace: .is_some_and(|_| false)
 caught-by:
-    cortex-core::it knowledge::sys_an_accepted_command_that_expires_while_a_turn_runs_asks
+    cineris-core::it knowledge::sys_an_accepted_command_that_expires_while_a_turn_runs_asks
 
 [break] the-rules-are-handed-over-outside-their-lock
 rule: A new engine is given the learned rules while they are held, so a change that comes at the same moment cannot be overtaken by the older list.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: regive
 find: let rules = given.rules.clone();
 replace: let rules = given.rules.clone(); drop(given); let mut given = Given::default();
 caught-by:
-    cortex-core knowledge::tests::the_rules_are_handed_to_a_new_engine_while_they_are_held
+    cineris-core knowledge::tests::the_rules_are_handed_to_a_new_engine_while_they_are_held
 
 [break] a-refused-list-leaves-the-rules-held
 rule: A list of learned rules the engine refuses leaves none held: none is in force.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: regive
 find: given.rules.clear();
 replace:
 caught-by:
-    cortex-core knowledge::tests::the_rules_are_handed_to_a_new_engine_while_they_are_held
+    cineris-core knowledge::tests::the_rules_are_handed_to_a_new_engine_while_they_are_held
 
 [break] a-credential-in-a-proposals-check-is-stored
 rule: A proposal's check is looked at for a credential as its text is: it is kept in the store, and promoted with the entry.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 find: || check.as_ref().is_some_and(|check| check_holds(check, &|text| self.finds_secret(text)))
 replace:
 caught-by:
-    cortex-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
+    cineris-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
 
 [break] a-credential-in-evidence-is-promoted
 rule: Everything of an entry that the repository's file would hold is looked at for a credential before a promote.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: apply
 find: && entry_holds(entry, &finds)
 replace: && finds(&entry.text)
 caught-by:
-    cortex-core::it knowledge::an_entry_with_a_credential_in_its_evidence_is_not_promoted
+    cineris-core::it knowledge::an_entry_with_a_credential_in_its_evidence_is_not_promoted
 
 [break] a-checks-command-is-not-looked-at
 rule: Every text of a check is looked at for a credential.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: check_holds
 find: Check::Command { command } => finds(command)
 replace: Check::Command { .. } => false
 caught-by:
-    cortex-core knowledge::tests::every_text_of_an_entry_that_a_file_keeps_is_looked_at_for_a_credential
-    cortex-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
+    cineris-core knowledge::tests::every_text_of_an_entry_that_a_file_keeps_is_looked_at_for_a_credential
+    cineris-core::it knowledge::sys_a_credential_is_not_learned_and_not_remembered
 
 [break] a-new-prompt-is-followed-by-an-older-profile
 rule: A resume that begins an epoch over a history holding a notice of an older profile says the profile again, so that the older one is not the last word.
-file: crates/cortex-agent/src/turn/epochs.rs
+file: crates/cineris-agent/src/turn/epochs.rs
 find: if self.context.history.tells_a_profile() {
 replace: if false {
 caught-by:
-    cortex-agent::it profile::a_resume_into_a_new_epoch_says_the_profile_again_after_an_older_notice
+    cineris-agent::it profile::a_resume_into_a_new_epoch_says_the_profile_again_after_an_older_notice
 
 # ------------------------------------------------ after the full review
 
 [break] a-directory-that-is-not-plain-words-is-observed
 rule: A run is observed only in a directory of plain characters: the directory is shown beside the line in the system prompt, and a folder can be named anything.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: Watch::see
 find: if !plain_directory {
 replace: if false {
 caught-by:
-    cortex-knowledge observe::tests::a_run_in_a_directory_that_is_not_plain_words_is_not_observed
+    cineris-knowledge observe::tests::a_run_in_a_directory_that_is_not_plain_words_is_not_observed
 
 [break] a-run-outside-the-workspace-teaches
 rule: A command run outside the workspace counts for what it changed, and nothing is learned from it.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: Watch::see
 find: if run.outside {
 replace: if false {
 caught-by:
-    cortex-knowledge observe::tests::a_run_outside_the_workspace_counts_as_a_change_and_teaches_nothing
+    cineris-knowledge observe::tests::a_run_outside_the_workspace_counts_as_a_change_and_teaches_nothing
 
 [break] two-targets-of-two-classes-are-the-first-ones
 rule: Where a program takes several targets or goals, every one must class the same.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: all_of
 find: if found.is_some_and(|found| found != purpose) { return None; }
 replace:
 caught-by:
-    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+    cineris-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 
 [break] a-name-that-begins-like-a-test-is-a-test
 rule: A script or a target is classed by its whole name, or by the word before a colon and one of a few variants after it: `test:publish` is not a test.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: script
 find: if !parts.all(|part| VARIANTS.contains(&part)) { return None; }
 replace:
 caught-by:
-    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+    cineris-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 
 [break] an-options-argument-is-read-as-the-sub-command
 rule: A program's sub-command is the first word after it, so that an option's argument is never read as one.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: classify
 find: rest.first().copied().filter(|word| !word.starts_with('-'))
 replace: rest.iter().copied().find(|word| !word.starts_with('-'))
 caught-by:
-    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+    cineris-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 
 [break] a-program-on-a-drive-gets-a-check-the-store-refuses
 rule: A learned command whose program is on a drive gets no check: the store refuses such a path, and the command would never be learned.
-file: crates/cortex-knowledge/src/learn.rs
+file: crates/cineris-knowledge/src/learn.rs
 in: check_of
 find: || program.contains(':')
 replace:
 caught-by:
-    cortex-knowledge::it learn::a_program_in_the_workspace_gets_a_check_that_it_exists
+    cineris-knowledge::it learn::a_program_in_the_workspace_gets_a_check_that_it_exists
 
 [break] the-policy-holds-the-knowledge-that-holds-it
 rule: The callbacks a session's policy and checkpoints hold to its knowledge are weak, so a closed session is let go.
-file: crates/cortex-core/src/assemble.rs
+file: crates/cineris-core/src/assemble.rs
 find: let before = Arc::downgrade(knowledge); policy.on_command(Arc::new(move || { if let Some(knowledge) = before.upgrade() { knowledge.before_command(); } }));
 replace: let before = Arc::clone(knowledge); policy.on_command(Arc::new(move || before.before_command()));
 caught-by:
-    cortex-core::it knowledge::a_closed_session_lets_its_knowledge_go
+    cineris-core::it knowledge::a_closed_session_lets_its_knowledge_go
 
 [break] a-write-by-another-takes-the-safe-list-away
 rule: When a file changed, the look before a command reads the files again and gives the engine the rules that follow: the commands still accepted go on running unasked.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::before_command
 find: self.took(&snapshot);
 replace: let _ = snapshot; let _ = regive(&self.learned, |_| Err::<(), ()>(())); let _ = self.policy.engine().set_learned(Vec::new());
 caught-by:
-    cortex-core::it knowledge::sys_a_write_to_the_store_by_another_process_does_not_take_the_safe_list_away
+    cineris-core::it knowledge::sys_a_write_to_the_store_by_another_process_does_not_take_the_safe_list_away
 
 [break] files-a-rewind-put-back-are-not-a-change
 rule: Files a rewind puts back are files changed: a test that failed before it and passes after it has not flipped.
-file: crates/cortex-core/src/core.rs
+file: crates/cineris-core/src/core.rs
 find: if restore_files && let Some(knowledge) = &live.knowledge { knowledge.file_changed(); }
 replace:
 caught-by:
-    cortex-core::it knowledge::sys_a_test_that_passes_after_an_undo_put_a_file_back_has_not_flipped
+    cineris-core::it knowledge::sys_a_test_that_passes_after_an_undo_put_a_file_back_has_not_flipped
 
 [break] a-command-that-left-something-running-is-a-result
 rule: A command that left a process running is neither a success nor a failure.
-file: crates/cortex-core/src/checkpoints.rs
+file: crates/cineris-core/src/checkpoints.rs
 in: observed_run
 find: "outlived"
 replace: "never"
 caught-by:
-    cortex-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
+    cineris-core checkpoints::tests::a_finished_command_is_read_for_the_observer_from_its_payload
 
 [break] an-assignment-or-a-makefile-is-passed-over
 rule: A make-like line with an assignment, another makefile or any option outside a short list is not classed: each can make any target do anything.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: targets
 find: _ if word.starts_with('-') || assignment(word) => return None
 replace: _ if word.starts_with('-') || assignment(word) => {}
 caught-by:
-    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+    cineris-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 
 [break] an-option-that-names-a-program-is-passed-over
 rule: A line with an option that names something to run is not classed.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: classify
 find: if rest.iter().any(|word| runs_something_else(word)) { return None; }
 replace:
 caught-by:
-    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+    cineris-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 
 [break] a-module-flag-after-a-file-is-the-interpreters
 rule: `python -m` is classed only when `-m` is the first word: after a file's name it is the file's own argument.
-file: crates/cortex-knowledge/src/observe.rs
+file: crates/cineris-knowledge/src/observe.rs
 in: classify
 find: match (*rest.first()?, *rest.get(1)?) {
 replace: match ("-m", *rest.get(rest.iter().position(|word| *word == "-m")? + 1)?) {
 caught-by:
-    cortex-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
+    cineris-knowledge observe::tests::the_table_classes_the_common_builds_tests_and_checks
 
 # ---------------------------------------------------- the command line
 
 [break] an-id-that-begins-others-is-not-itself
 rule: An id given whole names its entry, before any start is looked for.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: resolve
 find: if let Some(entry) = entries.iter().find(|entry| entry.id.as_str() == given) { return Ok(entry.id.clone()); }
 replace:
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
+    cineris-cli::bin/cineris project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
 
 [break] a-start-several-ids-share-names-the-first
 rule: A start that several of the repository's ids share names none of them.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: resolve
 find: [entry] => Ok(entry.id.clone())
 replace: [entry, ..] => Ok(entry.id.clone())
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
+    cineris-cli::bin/cineris project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
 
 [break] a-command-that-only-became-active-is-listed-as-accepted
 rule: The listing says of a command whether it asks: one that became active by itself is not accepted.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: standing
 find: EntryStatus::Active if accepted(entry) =>
 replace: EntryStatus::Active if true =>
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::the_listing_says_what_each_entry_is_and_where_it_came_from
+    cineris-cli::bin/cineris project_view::tests::the_listing_says_what_each_entry_is_and_where_it_came_from
 
 [break] a-shared-entry-is-accepted-because-someone-wrote-it
 rule: An entry of the repository's file is this user's only once accepted, whoever wrote it.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: accepted
 find: entry.scope == EntryScope::Private && entry.source.kind == EntrySourceKind::User
 replace: entry.source.kind == EntrySourceKind::User
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::a_command_the_user_wrote_is_accepted
+    cineris-cli::bin/cineris project_view::tests::a_command_the_user_wrote_is_accepted
 
 [break] accept-shared-accepts-the-models-proposals-too
 rule: `accept --shared` accepts the repository's entries that wait, and not a proposal of the user's own store or an entry the user turned off.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: waiting_shared
 find: entry.scope == EntryScope::Shared && entry.status == EntryStatus::Proposed
 replace: entry.status != EntryStatus::Active
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::accepting_the_shared_entries_takes_the_repositorys_proposals_and_nothing_else
+    cineris-cli::bin/cineris project_view::tests::accepting_the_shared_entries_takes_the_repositorys_proposals_and_nothing_else
 
 [break] the-command-line-skips-the-operations-check
 rule: The command line makes its changes with the operation's own function: a text that holds what looks like a credential is refused there too.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: apply
 find: if change.text.as_deref().is_some_and(finds) { return Err(credential("An entry's new text")); }
 replace:
 caught-by:
-    cortex-core::it knowledge::the_command_line_lists_and_changes_a_projects_entries
+    cineris-core::it knowledge::the_command_line_lists_and_changes_a_projects_entries
 
 [break] the-command-line-lists-an-expired-entry-as-in-use
 rule: The command line's listing marks an entry past its expiry first.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: listing
 find: snapshot = lapsed.snapshot;
 replace: let _ = lapsed;
 caught-by:
-    cortex-core::it knowledge::the_command_line_lists_and_changes_a_projects_entries
+    cineris-core::it knowledge::the_command_line_lists_and_changes_a_projects_entries
 
 [break] a-snapshot-another-change-overtook-gives-its-rules
 rule: The learned rules are made only from a reading of the files that is still the files' while the rules are held: one that another change overtook is read again.
-file: crates/cortex-core/src/knowledge.rs
+file: crates/cineris-core/src/knowledge.rs
 in: Knowledge::give_rules
 find: let mut current = self.project.is_current(&snapshot);
 replace: let mut current = true;
 caught-by:
-    cortex-core::it knowledge::sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back
+    cineris-core::it knowledge::sys_a_snapshot_another_change_overtook_does_not_put_a_rule_back
 
 [break] a-start-names-an-entry-of-the-users-own-store
 rule: An id of the user's own store is given whole: its start would name a later entry once its own is gone.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: resolve
 find: if !given.starts_with("s_") || given.len() < 4 { return Err(none()); }
 replace:
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
+    cineris-cli::bin/cineris project_view::tests::an_id_of_the_users_store_is_whole_and_a_shared_one_may_be_cut_short
 
 [break] a-line-break-in-a-text-begins-a-line-of-the-listing
 rule: An entry is two lines of the listing, whatever its text holds: a line break in it is shown, and begins no line.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: said
 find: let _ = write!(said, " {}", visible(&entry.text));
 replace: let _ = write!(said, " {}", entry.text);
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::a_text_cannot_begin_a_line_of_the_listing
+    cineris-cli::bin/cineris project_view::tests::a_text_cannot_begin_a_line_of_the_listing
 
 [break] the-json-line-passes-what-acts-unseen
 rule: `--json` prints one line of JSON with nothing in it that acts unseen at a terminal.
-file: crates/cortex-cli/src/json.rs
+file: crates/cineris-cli/src/json.rs
 in: line
-find: if cortex_base::acts_unseen(character) {
+find: if cineris_base::acts_unseen(character) {
 replace: if false {
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::the_json_line_is_json_and_shows_what_acts_unseen
+    cineris-cli::bin/cineris project_view::tests::the_json_line_is_json_and_shows_what_acts_unseen
 
 [break] an-accepted-command-in-a-project-not-trusted-says-nothing
 rule: The listing says that an accepted command still asks while the project is not trusted.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: listing
 find: if !trusted && shown.iter().any(|entry| runs_once_trusted(entry, now)) {
 replace: if false {
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::an_accepted_command_that_still_asks_is_said_to
+    cineris-cli::bin/cineris project_view::tests::an_accepted_command_that_still_asks_is_said_to
 
 [break] an-entry-past-its-expiry-is-listed-as-accepted
 rule: An entry past its expiry is out of use whether or not it was marked, and the listing says so.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: standing
 find: EntryStatus::Active if expired(entry, now) => "expired".to_owned(),
 replace:
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::an_accepted_command_that_still_asks_is_said_to
+    cineris-cli::bin/cineris project_view::tests::an_accepted_command_that_still_asks_is_said_to
 
 [break] the-same-id-twice-is-two-changes
 rule: An id given twice is one change.
-file: crates/cortex-cli/src/project_view.rs
+file: crates/cineris-cli/src/project_view.rs
 in: each_once
 find: if !once.contains(&id) {
 replace: if true {
 caught-by:
-    cortex-cli::bin/cortex project_view::tests::ids_given_twice_are_one_change
+    cineris-cli::bin/cineris project_view::tests::ids_given_twice_are_one_change
 
 [break] a-shared-file-that-cannot-be-read-keeps-its-commands-on-the-safe-list
 rule: While the shared file cannot be read, what an earlier reading held of it feeds the prompt and none of the safe list.
-file: crates/cortex-knowledge/src/project.rs
+file: crates/cineris-knowledge/src/project.rs
 in: Snapshot::runs_unasked
 find: && !(shared_stands_in && entry.scope == Scope::Shared)
 replace:
 caught-by:
-    cortex-knowledge::it project::a_shared_file_that_cannot_be_read_puts_none_of_its_commands_on_the_safe_list
+    cineris-knowledge::it project::a_shared_file_that_cannot_be_read_puts_none_of_its_commands_on_the_safe_list
 

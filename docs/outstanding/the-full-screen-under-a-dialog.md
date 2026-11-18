@@ -1,6 +1,6 @@
 In the full screen, the transcript cannot be scrolled by its keys while a dialog is up.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 33
 
 | Item | Who | When |

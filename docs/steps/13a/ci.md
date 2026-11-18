@@ -1,6 +1,6 @@
 # After step 13a: the core
 
-Step 13a built `cortex-core` (about 7,000 lines of source with their unit tests, and 5,100 of integration and system tests: 29 unit and 66 integration and system tests), and added to four other crates what it needed: the logging subscriber, the secret filter, the `Timer` trait and git's flags to `cortex-base`; the second "kill now" token and the shell command's environment to `cortex-tools` and `cortex-agent`; the mark on an altered entry and the `plan` entry to `cortex-session`; one method to `cortex-policy`. It adds two direct dependencies, `tracing` and `tracing-core`, which every build already had, and no package to the workspace.
+Step 13a built `cineris-core` (about 7,000 lines of source with their unit tests, and 5,100 of integration and system tests: 29 unit and 66 integration and system tests), and added to four other crates what it needed: the logging subscriber, the secret filter, the `Timer` trait and git's flags to `cineris-base`; the second "kill now" token and the shell command's environment to `cineris-tools` and `cineris-agent`; the mark on an altered entry and the `plan` entry to `cineris-session`; one method to `cineris-policy`. It adds two direct dependencies, `tracing` and `tracing-core`, which every build already had, and no package to the workspace.
 
 ## On the pull request
 
@@ -23,7 +23,7 @@ Measured on pull request 30 on 2026-11-13, on main at `10ae61a` (steps 12 with i
 | The same (first run) | tier 1: 11.9 s. Tier 2: 20.3 s. Tier 3: 5.5 s | tier 1: 19.3 s of 20 s. Tier 2: 35.0 s of 40 s. Tier 3: 48.8 s of 90 s |
 | The same (second run) | tier 1: 10.7 s. Tier 2: 26.7 s. Tier 3: 9.4 s | tier 1: **25.7 s of 20 s, a warning.** Tier 2: **47.5 s of 40 s, a warning.** Tier 3: 63.8 s of 90 s |
 | The same (third run) | tier 1: 10.8 s. Tier 2: 23.2 s. Tier 3: 10.0 s | tier 1: **25.8 s of 20 s, a warning.** Tier 2: **49.1 s of 40 s, a warning.** Tier 3: 65.4 s of 90 s |
-| Of which `cortex-core` (second run) | tier 1: 0.4 s. Tier 2: 1.4 s. Tier 3: 0.6 s | tier 1: 1.9 s. Tier 2: 6.1 s. Tier 3: 17.9 s |
+| Of which `cineris-core` (second run) | tier 1: 0.4 s. Tier 2: 1.4 s. Tier 3: 0.6 s | tier 1: 1.9 s. Tier 2: 6.1 s. Tier 3: 17.9 s |
 
 - **The blocking checks stay under five minutes on both OSes:** 70 s on Linux and 166 s on Windows in the third run.
 - **On Windows two tiers are over their budgets in three runs of four, as warnings.** A tier fails at one and a half times its budget, which is 30 s and 60 s. The worst of the three runs is 25.8 s and 49.1 s, and a fourth run, of the commit that added this record, gave 28.2 s and 52.0 s: **the unit tier is within two seconds of failing the job on Windows.**
@@ -56,7 +56,7 @@ None of the core's tests is among the twelve slowest of a tier. One run of the s
 
 ## That the tests bite
 
-- **The tests were run many times over first.** `cargo xtask stress -p cortex-agent -p cortex-core --count 50`: 277 tests, seeds 0 to 49, every test passed every time. Before the rig was seeded the core's tests were run 200 times over twice, with no failure.
+- **The tests were run many times over first.** `cargo xtask stress -p cineris-agent -p cineris-core --count 50`: 277 tests, seeds 0 to 49, every test passed every time. Before the rig was seeded the core's tests were run 200 times over twice, with no failure.
 - **98 rules were each broken on purpose,** one at a time ([`mutations/step-13a.breaks`](../../../mutations/step-13a.breaks)): each seam between the core and the crate whose trait it fills, and each finding of the review. The first pass over the first 58 caught 53. Four were not caught, and showed four tests that could not fail:
   - a walk of a tree was never shown to the engine as a read of a tree, and no test asked for one outside the workspace;
   - an untrusted project told to the engine as trusted changed nothing a test saw, because configuration had already held the project's rules back;
@@ -97,9 +97,9 @@ Measured on pull request 39, at `3d23664`, against `main`'s own run at `f24c001`
 - **Every test the review wrote failed on `main`, and passes here,** moved to the file where it belongs under a name that says what it checks.
 - **`cargo xtask mutate step-13a-fixes`:** 33 breaks. 31 are caught by the tests they name, and 2 survive as their list says, each with its reason in its `rule`: git started by its bare name (a test cannot change its own `PATH`; the search itself is tested, and its break caught) and a drive-relative shell name (its test is Windows-only, and a run of the breaks is at a Linux desk). Three breaks of earlier lists (`step-13a/observer-rewinds`, `step-13a/turn-starts-under-a-rewind`, `step-10/size-limit-is-exclusive`) were moved to the code as it now is, and are caught.
 - **Three breaks first showed tests that could not fail,** and each was put right: the test that a relative program has no stamp in the shell cache used a path that did not exist from the test's directory; and two rules are checked twice in the code (the program search checks the directory and the path it makes; the configuration file is closed as named and where it leads), so their breaks take both checks out.
-- **`cargo xtask stress -p cortex-core -p cortex-agent --count 50`:** 296 tests, seeds 0 to 49, every test passed every time, before and after the review's fixes.
+- **`cargo xtask stress -p cineris-core -p cineris-agent --count 50`:** 296 tests, seeds 0 to 49, every test passed every time, before and after the review's fixes.
 
 ### On Windows
 
-- **A `windows-try` run of `cortex-base`, `cortex-tools`, `cortex-core` and `cortex-session`** (2 min 6 s, 879 tests) ran R4's search and R7's layout there before the pull request: the relative-entry, `PATHEXT`, `%ComSpec%`, drive-relative and resolved-stamp tests of the shell and git search, and the stored keys and the configuration file closed in each system's layout.
+- **A `windows-try` run of `cineris-base`, `cineris-tools`, `cineris-core` and `cineris-session`** (2 min 6 s, 879 tests) ran R4's search and R7's layout there before the pull request: the relative-entry, `PATHEXT`, `%ComSpec%`, drive-relative and resolved-stamp tests of the shell and git search, and the stored keys and the configuration file closed in each system's layout.
 - **Not tested on Windows:** a configuration file that is a link (it makes a symbolic link, which needs a privilege on Windows), and anything that orders two threads (the order of `disconnect` and the table, which holds by the order of two locks, has no test on one thread on either system).

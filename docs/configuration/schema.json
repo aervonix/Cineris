@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": true,
-  "description": "A Cortex-Harness configuration file: the user's `config.toml`, a project's `.cortex/config.toml` or `.cortex/config.local.toml`, or the managed file. Generated from the settings in `crates/cortex-config`; not edited by hand. `x-cortex-trust` says what a project's file may set, and `x-cortex-effect` when a change takes effect.",
+  "description": "A Cineris configuration file: the user's `config.toml`, a project's `.cineris/config.toml` or `.cineris/config.local.toml`, or the managed file. Generated from the settings in `crates/cineris-config`; not edited by hand. `x-cineris-trust` says what a project's file may set, and `x-cineris-effect` when a change takes effect.",
   "properties": {
     "adapt": {
       "additionalProperties": true,
@@ -14,26 +14,26 @@
               "edit_format": {
                 "description": "The edit format: `replace`.",
                 "type": "string",
-                "x-cortex-effect": "next epoch",
-                "x-cortex-trust": "user only"
+                "x-cineris-effect": "next epoch",
+                "x-cineris-trust": "user only"
               },
               "effort": {
                 "description": "The reasoning level the model runs at unless a role sets its own: one of its levels, or an alias. `model.effort` and a role's `effort` win over it.",
                 "type": "string",
-                "x-cortex-effect": "next epoch",
-                "x-cortex-trust": "user only"
+                "x-cineris-effect": "next epoch",
+                "x-cineris-trust": "user only"
               },
               "prompt_style": {
                 "description": "The prompt style: `concise`, or `guided` for more guidance on the tools.",
                 "type": "string",
-                "x-cortex-effect": "next epoch",
-                "x-cortex-trust": "user only"
+                "x-cineris-effect": "next epoch",
+                "x-cineris-trust": "user only"
               },
               "tool_schema": {
                 "description": "How tools are declared: `strict` (the provider checks the arguments, where the model can) or `loose` (the harness alone).",
                 "type": "string",
-                "x-cortex-effect": "next epoch",
-                "x-cortex-trust": "user only"
+                "x-cineris-effect": "next epoch",
+                "x-cineris-trust": "user only"
               }
             },
             "type": "object"
@@ -52,22 +52,22 @@
           "default": true,
           "description": "Instruction files under the names other tools use, `AGENTS.md` and `CLAUDE.md`, in the workspace. Off, only the names in `context.instruction_names` are read there; the user's own files in the configuration directory are read either way.",
           "type": "boolean",
-          "x-cortex-effect": "next session",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "next session",
+          "x-cineris-trust": "user only"
         },
         "mcp": {
           "default": true,
           "description": "MCP server definitions of other clients, offered for import.",
           "type": "boolean",
-          "x-cortex-effect": "next session",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "next session",
+          "x-cineris-trust": "user only"
         },
         "skills": {
           "default": true,
           "description": "Agent Skills folders: `.agents/skills` and `.claude/skills`.",
           "type": "boolean",
-          "x-cortex-effect": "next session",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "next session",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -78,8 +78,8 @@
       "maximum": 1000000,
       "minimum": 1,
       "type": "integer",
-      "x-cortex-effect": "restart",
-      "x-cortex-trust": "preference"
+      "x-cineris-effect": "restart",
+      "x-cineris-trust": "preference"
     },
     "context": {
       "additionalProperties": true,
@@ -89,15 +89,15 @@
           "default": true,
           "description": "Whether the conversation is compacted by itself when a request would pass `compact_at`, or the provider says a request does not fit. Off, the turn stops there and asks for a compaction (`session/compact`) or a new session.",
           "type": "boolean",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "preference"
         },
         "background": {
           "default": true,
           "description": "Whether a summary is prepared in the background from `prepare_at`, on the `fast` role's model (the main model when there is none), so that the compaction need not wait for it. The user's alone: off, every compaction waits at the trigger for its summary, and a repository's file must not make the sessions in it wait.",
           "type": "boolean",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "compact_at": {
           "default": 0.85,
@@ -105,8 +105,8 @@
           "maximum": 1,
           "minimum": 0,
           "type": "number",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "raises cost"
         },
         "instruction_names": {
           "default": [],
@@ -115,8 +115,8 @@
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "raises cost"
         },
         "instructions_cap": {
           "default": 49152,
@@ -124,8 +124,8 @@
           "maximum": 100000000,
           "minimum": 0,
           "type": "integer",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "raises cost"
         },
         "keep_recent_tokens": {
           "default": 0,
@@ -133,8 +133,8 @@
           "maximum": 10000000,
           "minimum": 0,
           "type": "integer",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "raises cost"
         },
         "prepare_at": {
           "default": 0.7,
@@ -142,8 +142,8 @@
           "maximum": 1,
           "minimum": 0,
           "type": "number",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "raises cost"
         }
       },
       "type": "object"
@@ -154,14 +154,14 @@
       "properties": {
         "store": {
           "default": "auto",
-          "description": "The store for API keys saved with `cortex auth login`.",
+          "description": "The store for API keys saved with `cineris auth login`.",
           "enum": [
             "auto",
             "file",
             "keychain"
           ],
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -169,20 +169,20 @@
     "extensions": {
       "description": "Extensions by name.",
       "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "runs code"
+      "x-cineris-reserved": true,
+      "x-cineris-trust": "runs code"
     },
     "hooks": {
       "description": "Hooks by name.",
       "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "runs code"
+      "x-cineris-reserved": true,
+      "x-cineris-trust": "runs code"
     },
     "http": {
       "description": "The HTTP client: the connect timeout, a proxy, and extra certificate authorities.",
       "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "x-cineris-reserved": true,
+      "x-cineris-trust": "user only"
     },
     "index": {
       "additionalProperties": true,
@@ -192,8 +192,8 @@
           "default": true,
           "description": "Whether each context epoch is given the repository map: the workspace's directories and its most relevant files with their main definitions. The `outline` tool works either way.",
           "type": "boolean",
-          "x-cortex-effect": "next session",
-          "x-cortex-trust": "preference"
+          "x-cineris-effect": "next session",
+          "x-cineris-trust": "preference"
         },
         "map_tokens": {
           "default": 1500,
@@ -201,19 +201,19 @@
           "maximum": 50000,
           "minimum": 0,
           "type": "integer",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "map_wait": {
           "description": "How long the first request of an epoch waits for the map when it is not ready yet; past it, the map follows as a notice at the next boundary where it is. Unset, 150 ms in the interactive app and none in a headless run, whose start it would otherwise slow. At most one second. The user's alone: the wait is paid by every epoch's first request, and a repository's file must not make the sessions in it wait (found by the independent review of step 18).",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "next session",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "next session",
+          "x-cineris-milliseconds": {
             "maximum": 1000,
             "minimum": 0
           },
-          "x-cortex-trust": "user only"
+          "x-cineris-trust": "user only"
         },
         "max_file_bytes": {
           "default": 1048576,
@@ -221,8 +221,8 @@
           "maximum": 1073741824,
           "minimum": 1,
           "type": "integer",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "max_files": {
           "default": 20000,
@@ -230,16 +230,16 @@
           "maximum": 10000000,
           "minimum": 1,
           "type": "integer",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "pass_time": {
           "default": "2s",
           "description": "The most time one pass of the index spends reading files, after its listing (which its cap on entries bounds). One that runs out carries on when the session is next idle. At least 250 ms is used, whatever is set: less would make an idle session pass over the workspace again for every few files.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
@@ -257,8 +257,8 @@
           },
           "description": "A dialog's: the answers to an approval, a question or trust.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "editor": {
           "additionalProperties": {
@@ -269,8 +269,8 @@
           },
           "description": "The editor's actions: `submit`, `new_line`, `undo`, and the rest.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "focus": {
           "additionalProperties": {
@@ -281,8 +281,8 @@
           },
           "description": "A focused tool box's or panel's.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "global": {
           "additionalProperties": {
@@ -293,8 +293,8 @@
           },
           "description": "Those looked up last, whatever has the keyboard: `interrupt`, `redraw`, `suspend`, and the rest.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "menu": {
           "additionalProperties": {
@@ -305,8 +305,8 @@
           },
           "description": "A completion menu's.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "picker": {
           "additionalProperties": {
@@ -317,8 +317,8 @@
           },
           "description": "A picker's.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "screen": {
           "additionalProperties": {
@@ -329,8 +329,8 @@
           },
           "description": "The full-screen presenter's: scrolling, searching, and the mouse's `click`, `wheel_up` and `wheel_down`.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "search": {
           "additionalProperties": {
@@ -341,8 +341,8 @@
           },
           "description": "The history search's.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "toggle": {
           "additionalProperties": {
@@ -353,8 +353,8 @@
           },
           "description": "The `/effort` picker's fast-mode toggle.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "viewer": {
           "additionalProperties": {
@@ -365,8 +365,8 @@
           },
           "description": "The viewer's (`Ctrl+O`): moving between boxes, opening one, scrolling, searching, and the mouse's `click`, `wheel_up` and `wheel_down`.",
           "type": "object",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -384,31 +384,31 @@
               "maximum": 1000000000,
               "minimum": 0,
               "type": "number",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "requests": {
               "description": "Requests to a model.",
               "maximum": 1000000000,
               "minimum": 1,
               "type": "integer",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "time": {
               "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "tokens": {
               "description": "Tokens, input and output together.",
               "maximum": 1000000000000000,
               "minimum": 1,
               "type": "integer",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             }
           },
           "type": "object"
@@ -422,31 +422,31 @@
               "maximum": 1000000000,
               "minimum": 0,
               "type": "number",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "requests": {
               "description": "Requests to a model.",
               "maximum": 1000000000,
               "minimum": 1,
               "type": "integer",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "time": {
               "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "tokens": {
               "description": "Tokens, input and output together.",
               "maximum": 1000000000000000,
               "minimum": 1,
               "type": "integer",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             }
           },
           "type": "object"
@@ -460,31 +460,31 @@
               "maximum": 1000000000,
               "minimum": 0,
               "type": "number",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "requests": {
               "description": "Requests to a model.",
               "maximum": 1000000000,
               "minimum": 1,
               "type": "integer",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "time": {
               "description": "Wall-clock time. Held for a turn and a session; a day's is accepted and not held yet (`docs/outstanding/a-days-time-limit.md`).",
               "pattern": "^([0-9]+(ms|s|m|h|d))+$",
               "type": "string",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             },
             "tokens": {
               "description": "Tokens, input and output together.",
               "maximum": 1000000000000000,
               "minimum": 1,
               "type": "integer",
-              "x-cortex-effect": "at once",
-              "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+              "x-cineris-effect": "at once",
+              "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
             }
           },
           "type": "object"
@@ -497,10 +497,10 @@
       "description": "What is logged.",
       "properties": {
         "level": {
-          "description": "The level (`error`, `warn`, `info`, `debug` or `trace`), optionally followed by levels for target prefixes: `\"info,cortex_llm=debug\"`. The `CORTEX_LOG` variable and `--log-level` override it.",
+          "description": "The level (`error`, `warn`, `info`, `debug` or `trace`), optionally followed by levels for target prefixes: `\"info,cineris_llm=debug\"`. The `CINERIS_LOG` variable and `--log-level` override it.",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -516,8 +516,8 @@
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -525,8 +525,8 @@
     "mcp": {
       "description": "MCP servers by name, and MCP settings.",
       "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "runs code"
+      "x-cineris-reserved": true,
+      "x-cineris-trust": "runs code"
     },
     "model": {
       "additionalProperties": true,
@@ -535,34 +535,34 @@
         "effort": {
           "description": "The reasoning level of the main role: one of the model's own levels, or `minimal`, `low`, `medium`, `high` or `max`. From a project, after trust: more reasoning is more output.",
           "type": "string",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "raises cost"
         },
         "fast": {
           "description": "The model for utility calls: summaries, titles. Without one, the main model is used. From a project, after trust.",
           "type": "string",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "raises cost"
         },
         "judge": {
           "description": "The model for model-graded comparisons. Without one, the main model is used. From a project, after trust.",
           "type": "string",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "raises cost"
         },
         "main": {
           "description": "The model for the agent's own turns. Needed to run a turn. A project's file may choose one once the project is trusted: a model can cost more than the user's.",
           "type": "string",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "raises cost"
         },
         "max_output": {
           "description": "The most output tokens one response may have. Without it, the model's own limit applies. From a project, after trust.",
           "maximum": 10000000,
           "minimum": 1,
           "type": "integer",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "raises cost"
         },
         "reasoning": {
           "default": "summary",
@@ -571,8 +571,8 @@
             "summary",
             "none"
           ],
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "preference"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "preference"
         },
         "roles": {
           "additionalProperties": {
@@ -581,20 +581,20 @@
               "effort": {
                 "description": "The role's reasoning level. For `main` it overrides `model.effort`. From a project, after trust.",
                 "type": "string",
-                "x-cortex-effect": "next epoch",
-                "x-cortex-trust": "raises cost"
+                "x-cineris-effect": "next epoch",
+                "x-cineris-trust": "raises cost"
               },
               "provider": {
                 "description": "The provider that serves the role's model. Needed only when two providers have a model with the same name. From a project, after trust: it chooses the model as much as the name does.",
                 "type": "string",
-                "x-cortex-effect": "next epoch",
-                "x-cortex-trust": "raises cost"
+                "x-cineris-effect": "next epoch",
+                "x-cineris-trust": "raises cost"
               },
               "speed": {
                 "description": "The role's speed tier. For `main` it overrides `model.speed`. From a project's file, a tier other than `standard` waits for trust.",
                 "type": "string",
-                "x-cortex-effect": "at once",
-                "x-cortex-trust": "by value: `standard` is a preference, any other tier raises cost"
+                "x-cineris-effect": "at once",
+                "x-cineris-trust": "by value: `standard` is a preference, any other tier raises cost"
               }
             },
             "type": "object"
@@ -606,51 +606,51 @@
           "default": "standard",
           "description": "The session's speed tier, which the main role runs at: `standard`, `fast` where the model offers it, or a provider's own tier name. The utility roles do not follow it: they run at `standard` unless `model.roles.<role>.speed` says otherwise. A project's file may set `standard`; any other tier costs more, and waits for the user to trust the project.",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "by value: `standard` is a preference, any other tier raises cost"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "by value: `standard` is a preference, any other tier raises cost"
         },
         "speed_cooldown": {
           "default": "10m",
           "description": "How long requests stay at `standard` after a fallback, when the provider does not say when the tier is available again. From one minute, the window a provider counts its limits in, so that a session does not change speed (and perhaps write its cache again) every few requests; to an hour, past which a tier that keeps refusing is better turned off with `model.speed`.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 3600000,
             "minimum": 60000
           },
-          "x-cortex-trust": "preference"
+          "x-cineris-trust": "preference"
         },
         "speed_cooldown_min": {
           "default": "1m",
           "description": "The least time requests stay at `standard` after a fallback when the provider does say when the tier is available again: its time, or this long, whichever is later. `\"0s\"` takes the provider's time as given. At most an hour, as `speed_cooldown` is.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 3600000,
             "minimum": 0
           },
-          "x-cortex-trust": "preference"
+          "x-cineris-trust": "preference"
         },
         "speed_fallback": {
           "default": true,
           "description": "Whether a request that a speed tier refuses is sent again at `standard`. When off, such a refusal is an ordinary rate limit.",
           "type": "boolean",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "preference"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "preference"
         },
         "speed_wait": {
           "default": "20s",
           "description": "The longest one request waits in place for a speed tier before it falls back to `standard`. `\"0s\"` never waits. At most two minutes: past that, `standard` answers sooner than the tier would, whatever keeping it saves. A project's file may lower it and may not raise it: every wait is the session's.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 120000,
             "minimum": 0
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
@@ -658,8 +658,8 @@
     "models": {
       "description": "Catalog overrides and additions: limits, prices, reasoning control, capability flags. Each `[models.<name>]` table is one whole catalog entry, with the keys of a `[[model]]` table of the built-in catalog, and replaces the built-in entry for the same provider and model. The entries are read by the model catalog itself when the program starts, which refuses one it does not understand: nothing is started then, and the error names the file, the entry and what is wrong.",
       "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "x-cineris-reserved": true,
+      "x-cineris-trust": "user only"
     },
     "permissions": {
       "additionalProperties": false,
@@ -675,8 +675,8 @@
             "autonomous",
             "unrestricted"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "by level: not above the mode in effect is a preference, up to `supervised` widens access, above it user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "by level: not above the mode in effect is a preference, up to `supervised` widens access, above it user only"
         },
         "rules": {
           "default": [],
@@ -712,9 +712,9 @@
             "type": "object"
           },
           "type": "array",
-          "x-cortex-effect": "at once",
-          "x-cortex-joined": true,
-          "x-cortex-trust": "by action: `deny` and `ask` are preferences, `allow` widens access"
+          "x-cineris-effect": "at once",
+          "x-cineris-joined": true,
+          "x-cineris-trust": "by action: `deny` and `ask` are preferences, `allow` widens access"
         }
       },
       "type": "object"
@@ -722,8 +722,8 @@
     "profile": {
       "description": "The profile to apply: the name of a `[profiles.<name>]` table. The `--profile` flag overrides it. A project's file may define profiles and may not select one: a profile the user wrote is applied with the user's rights, so a repository that could pick it could switch on whatever the user's loosest profile allows.",
       "type": "string",
-      "x-cortex-effect": "next epoch",
-      "x-cortex-trust": "user only"
+      "x-cineris-effect": "next epoch",
+      "x-cineris-trust": "user only"
     },
     "profiles": {
       "additionalProperties": {
@@ -740,8 +740,8 @@
           "default": true,
           "description": "Whether the harness learns from the commands a session runs: a build, test or check command that succeeds twice becomes an entry of the project profile, and a test command seen to fail and then pass with nothing changed a flaky one. Off, nothing is observed; what is already known is used as before, and `remember` and the user's own entries work. The user's alone: a repository's file does not decide what is kept about it.",
           "type": "boolean",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "profile_tokens": {
           "default": 1500,
@@ -749,8 +749,8 @@
           "maximum": 8000,
           "minimum": 0,
           "type": "integer",
-          "x-cortex-effect": "next epoch",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-effect": "next epoch",
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
@@ -762,32 +762,32 @@
           "base_url": {
             "description": "The endpoint's base URL.",
             "type": "string",
-            "x-cortex-effect": "next epoch",
-            "x-cortex-trust": "user only"
+            "x-cineris-effect": "next epoch",
+            "x-cineris-trust": "user only"
           },
           "capabilities": {
             "description": "Capability flags of the endpoint, as the provider's protocol names them. For `anthropic-messages`: `replay_reasoning` (`\"all\"` for a server that leaves out the reasoning a model cannot read, as Anthropic's own does), `eager_tool_streaming`, `api_version` and `beta`. Each value is text, a whole number or `true`/`false`.",
             "type": "object",
-            "x-cortex-reserved": true,
-            "x-cortex-trust": "user only"
+            "x-cineris-reserved": true,
+            "x-cineris-trust": "user only"
           },
           "enabled": {
             "default": true,
             "description": "Whether the provider is available. `false` removes an entry that a lower layer or the built-in table defines.",
             "type": "boolean",
-            "x-cortex-effect": "next epoch",
-            "x-cortex-trust": "user only"
+            "x-cineris-effect": "next epoch",
+            "x-cineris-trust": "user only"
           },
           "first_event_timeout": {
             "description": "How long to wait for the first event of a response. Overrides `retry.first_event_timeout` for this provider, within the same range: 30 seconds to an hour.",
             "pattern": "^([0-9]+(ms|s|m|h|d))+$",
             "type": "string",
-            "x-cortex-effect": "at once",
-            "x-cortex-milliseconds": {
+            "x-cineris-effect": "at once",
+            "x-cineris-milliseconds": {
               "maximum": 3600000,
               "minimum": 30000
             },
-            "x-cortex-trust": "user only"
+            "x-cineris-trust": "user only"
           },
           "headers": {
             "additionalProperties": {
@@ -810,33 +810,33 @@
                 }
               ]
             },
-            "description": "Extra headers for every request. A value is text, or `{ env = \"NAME\" }` to read an environment variable when used. Text may be a key (some gateways take one in a header), so it is held as a secret and `cortex config show` prints it as `[redacted]`; a variable's name is shown.",
+            "description": "Extra headers for every request. A value is text, or `{ env = \"NAME\" }` to read an environment variable when used. Text may be a key (some gateways take one in a header), so it is held as a secret and `cineris config show` prints it as `[redacted]`; a variable's name is shown.",
             "type": "object",
-            "x-cortex-effect": "at once",
-            "x-cortex-trust": "user only"
+            "x-cineris-effect": "at once",
+            "x-cineris-trust": "user only"
           },
           "idle_timeout": {
             "description": "How long a response stream may be silent before the request fails. Overrides `retry.idle_timeout` for this provider, within the same range: 30 seconds to an hour.",
             "pattern": "^([0-9]+(ms|s|m|h|d))+$",
             "type": "string",
-            "x-cortex-effect": "at once",
-            "x-cortex-milliseconds": {
+            "x-cineris-effect": "at once",
+            "x-cineris-milliseconds": {
               "maximum": 3600000,
               "minimum": 30000
             },
-            "x-cortex-trust": "user only"
+            "x-cineris-trust": "user only"
           },
           "key_env": {
             "description": "The environment variable that holds the provider's API key. It is looked at before the credential store. A built-in provider that takes a key has one already (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and so on). A provider with a key variable and no key anywhere is refused before anything is sent. One with none, as the built-in local servers have none, is asked without a key unless one is stored for it.",
             "type": "string",
-            "x-cortex-effect": "at once",
-            "x-cortex-trust": "user only"
+            "x-cineris-effect": "at once",
+            "x-cineris-trust": "user only"
           },
           "protocol": {
             "description": "The wire protocol the endpoint speaks.",
             "type": "string",
-            "x-cortex-effect": "next epoch",
-            "x-cortex-trust": "user only"
+            "x-cineris-effect": "next epoch",
+            "x-cineris-trust": "user only"
           }
         },
         "type": "object"
@@ -854,32 +854,32 @@
           "maximum": 20,
           "minimum": 1,
           "type": "integer",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "raises cost"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "raises cost"
         },
         "backoff_base": {
           "default": "1s",
           "description": "The wait before the second attempt. Each later wait is this multiplied by `backoff_factor` again, up to `backoff_cap`. From 100 ms, below which the attempts are spent before a brief outage can pass, to a minute. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 60000,
             "minimum": 100
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "backoff_cap": {
           "default": "30s",
           "description": "The longest wait between two attempts. From a second, so that the attempts span more than a moment, to five minutes, past which a provider is down rather than busy. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 300000,
             "minimum": 1000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "backoff_factor": {
           "default": 2.0,
@@ -887,75 +887,75 @@
           "maximum": 10,
           "minimum": 1,
           "type": "number",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "first_event_timeout": {
           "default": "1m",
           "description": "How long to wait for the first event of a response. From 30 seconds, below which a long prompt would fail every time, to an hour, past the ten minutes the built-in entries give a local server. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 3600000,
             "minimum": 30000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "idle_timeout": {
           "default": "1m30s",
           "description": "How long a response stream may be silent before the request fails. From 30 seconds, within which a hosted provider that is still working sends a token or a ping, to an hour, past the five minutes the built-in entries give a local server. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 3600000,
             "minimum": 30000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "max_wait": {
           "default": "2m",
           "description": "The longest wait a provider may ask for. A longer one ends the turn with the error and the provider's hint. From a minute, the window a provider counts its limits in, so that no file can make an ordinary rate limit end a turn, to an hour, past which the wait is a quota and not a rate limit. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 3600000,
             "minimum": 60000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
     },
     "rpc": {
       "additionalProperties": true,
-      "description": "The RPC server (`cortex serve`): how long it waits for its clients.",
+      "description": "The RPC server (`cineris serve`): how long it waits for its clients.",
       "properties": {
         "approval_timeout": {
           "default": "10m",
           "description": "How long an approval waits for a client's answer before it is a denial (`\"0s\"`: for as long as it takes). The terminal UI is not a server and sets none.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "restart",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "restart",
+          "x-cineris-milliseconds": {
             "maximum": 86400000,
             "minimum": 0
           },
-          "x-cortex-trust": "user only"
+          "x-cineris-trust": "user only"
         },
         "stalled_client": {
           "default": "30s",
           "description": "How long a client may take nothing the server sends while whole events wait for it past its queue, before its connection is closed. The session goes on.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "restart",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "restart",
+          "x-cineris-milliseconds": {
             "maximum": 3600000,
             "minimum": 1000
           },
-          "x-cortex-trust": "user only"
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -963,8 +963,8 @@
     "runs": {
       "description": "The run engine: concurrency, workspaces, budgets.",
       "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "x-cineris-reserved": true,
+      "x-cineris-trust": "user only"
     },
     "sandbox": {
       "additionalProperties": false,
@@ -974,8 +974,8 @@
           "default": true,
           "description": "Whether commands are confined by the OS sandbox where there is one.",
           "type": "boolean",
-          "x-cortex-effect": "next session",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "next session",
+          "x-cineris-trust": "user only"
         },
         "network": {
           "default": "off",
@@ -984,8 +984,8 @@
             "off",
             "full"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "by value: `off` is a preference, `full` widens access"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "by value: `off` is a preference, `full` widens access"
         },
         "protect": {
           "default": [],
@@ -994,9 +994,9 @@
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "next session",
-          "x-cortex-joined": true,
-          "x-cortex-trust": "preference"
+          "x-cineris-effect": "next session",
+          "x-cineris-joined": true,
+          "x-cineris-trust": "preference"
         },
         "write": {
           "default": [],
@@ -1005,9 +1005,9 @@
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "at once",
-          "x-cortex-joined": true,
-          "x-cortex-trust": "widens access"
+          "x-cineris-effect": "at once",
+          "x-cineris-joined": true,
+          "x-cineris-trust": "widens access"
         }
       },
       "type": "object"
@@ -1019,8 +1019,8 @@
         "data_dir": {
           "description": "The data directory. A leading `~` is the home directory. Without it the platform's usual place is used.",
           "type": "string",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "durability": {
           "default": "item",
@@ -1030,8 +1030,8 @@
             "turn",
             "never"
           ],
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -1046,8 +1046,8 @@
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "next session",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "next session",
+          "x-cineris-trust": "user only"
         },
         "env_remove": {
           "default": [],
@@ -1056,39 +1056,39 @@
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "next session",
-          "x-cortex-joined": true,
-          "x-cortex-trust": "stops commands"
+          "x-cineris-effect": "next session",
+          "x-cineris-joined": true,
+          "x-cineris-trust": "stops commands"
         },
         "max_timeout": {
           "default": "30m",
           "description": "The longest time limit a command may ask for. From ten seconds, below which a build or a test run could never finish, to a day. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "next session",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "next session",
+          "x-cineris-milliseconds": {
             "maximum": 86400000,
             "minimum": 10000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "program": {
           "description": "The shell: a program's name on `PATH`, or its path. How it is spoken to follows its name: `bash`, `pwsh`, `powershell` and `cmd` each by their own rules, and any other as a POSIX shell. Unset, it is bash and then sh on Linux, and on Windows PowerShell 7, then Windows PowerShell, then cmd.exe. A project's file may not choose the program that runs every command.",
           "type": "string",
-          "x-cortex-effect": "next session",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "next session",
+          "x-cineris-trust": "user only"
         },
         "timeout": {
           "default": "2m",
           "description": "The time limit of a command that asks for none, held to `max_timeout`. From a second, below which every command would fail, to half an hour, past which a command that hangs holds up its turn too long. A project's file may lower it and may not raise it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "next session",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "next session",
+          "x-cineris-milliseconds": {
             "maximum": 1800000,
             "minimum": 1000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
@@ -1096,8 +1096,8 @@
     "skills": {
       "description": "Where skills are looked for.",
       "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "x-cineris-reserved": true,
+      "x-cineris-trust": "user only"
     },
     "stats": {
       "additionalProperties": true,
@@ -1107,8 +1107,8 @@
           "default": true,
           "description": "Whether events are recorded. Off, nothing is written, every adaptive feature uses its default, and the usage view has the open session's figures alone.",
           "type": "boolean",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "retention": {
           "default": 3,
@@ -1116,8 +1116,8 @@
           "maximum": 1200,
           "minimum": 1,
           "type": "integer",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -1134,38 +1134,38 @@
             "256",
             "truecolor"
           ],
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "hyperlinks": {
           "description": "Links in text.",
           "type": "boolean",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "keyboard": {
           "description": "The enhanced keyboard protocol, which tells `Shift+Enter` from `Enter`.",
           "type": "boolean",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "mouse": {
           "description": "The mouse in the viewer and the full-screen presenter: a click opens or closes a box, and the wheel scrolls; `shift` and a drag still select text. Never in the inline screen. On unless set to `false`.",
           "type": "boolean",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "sync": {
           "description": "Synchronized updates: each frame shown at once.",
           "type": "boolean",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "unicode": {
           "description": "Unicode, or ASCII only.",
           "type": "boolean",
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -1173,8 +1173,8 @@
     "tools": {
       "description": "Enabled tools, output limits and per-tool settings.",
       "type": "object",
-      "x-cortex-reserved": true,
-      "x-cortex-trust": "user only"
+      "x-cineris-reserved": true,
+      "x-cineris-trust": "user only"
     },
     "tui": {
       "additionalProperties": true,
@@ -1187,8 +1187,8 @@
             "comfortable",
             "compact"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "glyphs": {
           "default": "auto",
@@ -1198,8 +1198,8 @@
             "unicode",
             "ascii"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "presenter": {
           "default": "inline",
@@ -1208,8 +1208,8 @@
             "inline",
             "fullscreen"
           ],
-          "x-cortex-effect": "restart",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "restart",
+          "x-cineris-trust": "user only"
         },
         "prose_width": {
           "default": 80,
@@ -1217,8 +1217,8 @@
           "maximum": 1000,
           "minimum": 20,
           "type": "integer",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "reasoning": {
           "default": "summary",
@@ -1227,22 +1227,22 @@
             "summary",
             "duration"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "reduced_motion": {
           "default": false,
           "description": "A still mark in place of the spinner.",
           "type": "boolean",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "theme": {
           "default": "auto",
           "description": "The theme: `auto` (dark or light, from the terminal's background), `dark` or `light`. A name the interface does not know is said, and `auto` is used.",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "tool_detail": {
           "default": 12,
@@ -1250,8 +1250,8 @@
           "maximum": 1000,
           "minimum": 1,
           "type": "integer",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "tool_output": {
           "default": "auto",
@@ -1261,15 +1261,15 @@
             "always",
             "never"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "turn_summary": {
           "default": false,
           "description": "A dim line after each turn with its time, tokens and cost.",
           "type": "boolean",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -1285,18 +1285,18 @@
             "calendar",
             "rolling"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "refresh": {
           "default": [],
-          "description": "The providers whose documented usage endpoint `cortex usage --refresh` may ask, with that provider's own key: `[\"openrouter\"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on.",
+          "description": "The providers whose documented usage endpoint `cineris usage --refresh` may ask, with that provider's own key: `[\"openrouter\"]`. Empty, nothing is ever asked. Only when the user asks, never on its own. The user's alone: a project's file cannot turn it on.",
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         },
         "week_start": {
           "default": "monday",
@@ -1310,8 +1310,8 @@
             "saturday",
             "sunday"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "user only"
         }
       },
       "type": "object"
@@ -1322,14 +1322,14 @@
       "properties": {
         "commands": {
           "default": [],
-          "description": "The user's own checks, each a command line run in the workspace root, before the accepted test and check commands of the project profile. Every one of the user's layers adds to the list. The user's alone: a repository proposes its checks as command entries of `.cortex/profile.toml`, which each user accepts.",
+          "description": "The user's own checks, each a command line run in the workspace root, before the accepted test and check commands of the project profile. Every one of the user's layers adds to the list. The user's alone: a repository proposes its checks as command entries of `.cineris/profile.toml`, which each user accepts.",
           "items": {
             "type": "string"
           },
           "type": "array",
-          "x-cortex-effect": "at once",
-          "x-cortex-joined": true,
-          "x-cortex-trust": "user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-joined": true,
+          "x-cineris-trust": "user only"
         },
         "mode": {
           "default": "auto",
@@ -1339,20 +1339,20 @@
             "ask",
             "off"
           ],
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "lower only: at or below the mode in effect (`off` < `ask` < `auto`) is a preference, a higher one is user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "lower only: at or below the mode in effect (`off` < `ask` < `auto`) is a preference, a higher one is user only"
         },
         "round_time": {
           "default": "2m",
           "description": "The time one round's checks may take together. From ten seconds to an hour. A project's file may lower it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 3600000,
             "minimum": 10000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "rounds": {
           "default": 2,
@@ -1360,25 +1360,25 @@
           "maximum": 5,
           "minimum": 1,
           "type": "integer",
-          "x-cortex-effect": "at once",
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-effect": "at once",
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         },
         "turn_time": {
           "default": "4m",
           "description": "The time one turn's checks may take, every round together. From ten seconds to four hours. A project's file may lower it.",
           "pattern": "^([0-9]+(ms|s|m|h|d))+$",
           "type": "string",
-          "x-cortex-effect": "at once",
-          "x-cortex-milliseconds": {
+          "x-cineris-effect": "at once",
+          "x-cineris-milliseconds": {
             "maximum": 14400000,
             "minimum": 10000
           },
-          "x-cortex-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
+          "x-cineris-trust": "tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only"
         }
       },
       "type": "object"
     }
   },
-  "title": "Cortex-Harness configuration",
+  "title": "Cineris configuration",
   "type": "object"
 }

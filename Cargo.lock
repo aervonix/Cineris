@@ -114,6 +114,290 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4e7648175b45a9a48536d676f68d918270699102aa8dab5496df06904c914600"
 
 [[package]]
+name = "cineris-agent"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-llm",
+ "cineris-protocol",
+ "cineris-testkit",
+ "cineris-tools",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "cineris-base"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "libc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tracing",
+ "tracing-core",
+ "unicode-segmentation",
+ "unicode-width",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "cineris-cli"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-config",
+ "cineris-core",
+ "cineris-protocol",
+ "cineris-rpc",
+ "cineris-sandbox",
+ "cineris-testkit",
+ "cineris-tui",
+ "lexopt",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "cineris-config"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "cineris-testkit",
+ "keyring-core",
+ "serde_json",
+ "thiserror",
+ "toml",
+ "windows-native-keyring-store",
+]
+
+[[package]]
+name = "cineris-core"
+version = "0.0.0"
+dependencies = [
+ "cineris-agent",
+ "cineris-base",
+ "cineris-config",
+ "cineris-ext",
+ "cineris-index",
+ "cineris-knowledge",
+ "cineris-llm",
+ "cineris-mcp",
+ "cineris-policy",
+ "cineris-protocol",
+ "cineris-sandbox",
+ "cineris-session",
+ "cineris-stats",
+ "cineris-testkit",
+ "cineris-tools",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "cineris-ext"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-policy",
+ "cineris-protocol",
+ "cineris-sandbox",
+ "cineris-tools",
+]
+
+[[package]]
+name = "cineris-index"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-testkit",
+ "ignore",
+ "thiserror",
+]
+
+[[package]]
+name = "cineris-knowledge"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "cineris-testkit",
+ "serde",
+ "thiserror",
+ "toml",
+ "tracing",
+]
+
+[[package]]
+name = "cineris-llm"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "cineris-testkit",
+ "futures-core",
+ "idna_adapter",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "toml",
+]
+
+[[package]]
+name = "cineris-mcp"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "cineris-sandbox",
+ "cineris-tools",
+]
+
+[[package]]
+name = "cineris-policy"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-policy",
+ "cineris-protocol",
+ "cineris-testkit",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "toml",
+]
+
+[[package]]
+name = "cineris-protocol"
+version = "0.0.0"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "cineris-rpc"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-config",
+ "cineris-core",
+ "cineris-protocol",
+ "cineris-rpc",
+ "cineris-testkit",
+ "cineris-tools",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "cineris-sandbox"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-testkit",
+ "landlock",
+ "libc",
+ "seccompiler",
+ "thiserror",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "cineris-session"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "cineris-testkit",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "cineris-stats"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "cineris-testkit",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
+name = "cineris-term"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-testkit",
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "cineris-testkit"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-llm",
+ "cineris-protocol",
+ "cineris-term",
+ "serde_json",
+]
+
+[[package]]
+name = "cineris-tools"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "cineris-sandbox",
+ "cineris-testkit",
+ "globset",
+ "grep-matcher",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "serde",
+ "serde_json",
+ "similar",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
+name = "cineris-tui"
+version = "0.0.0"
+dependencies = [
+ "cineris-base",
+ "cineris-protocol",
+ "cineris-term",
+ "cineris-testkit",
+ "cineris-tui",
+ "serde_json",
+ "syntect",
+]
+
+[[package]]
 name = "combine"
 version = "4.6.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -144,290 +428,6 @@ name = "core_detect"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
-
-[[package]]
-name = "cortex-agent"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-llm",
- "cortex-protocol",
- "cortex-testkit",
- "cortex-tools",
- "serde_json",
- "thiserror",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "cortex-base"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "libc",
- "serde",
- "serde_json",
- "sha2",
- "thiserror",
- "tracing",
- "tracing-core",
- "unicode-segmentation",
- "unicode-width",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "cortex-cli"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-config",
- "cortex-core",
- "cortex-protocol",
- "cortex-rpc",
- "cortex-sandbox",
- "cortex-testkit",
- "cortex-tui",
- "lexopt",
- "serde_json",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "cortex-config"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "cortex-testkit",
- "keyring-core",
- "serde_json",
- "thiserror",
- "toml",
- "windows-native-keyring-store",
-]
-
-[[package]]
-name = "cortex-core"
-version = "0.0.0"
-dependencies = [
- "cortex-agent",
- "cortex-base",
- "cortex-config",
- "cortex-ext",
- "cortex-index",
- "cortex-knowledge",
- "cortex-llm",
- "cortex-mcp",
- "cortex-policy",
- "cortex-protocol",
- "cortex-sandbox",
- "cortex-session",
- "cortex-stats",
- "cortex-testkit",
- "cortex-tools",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "cortex-ext"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-policy",
- "cortex-protocol",
- "cortex-sandbox",
- "cortex-tools",
-]
-
-[[package]]
-name = "cortex-index"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-testkit",
- "ignore",
- "thiserror",
-]
-
-[[package]]
-name = "cortex-knowledge"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "cortex-testkit",
- "serde",
- "thiserror",
- "toml",
- "tracing",
-]
-
-[[package]]
-name = "cortex-llm"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "cortex-testkit",
- "futures-core",
- "idna_adapter",
- "reqwest",
- "rustls",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "toml",
-]
-
-[[package]]
-name = "cortex-mcp"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "cortex-sandbox",
- "cortex-tools",
-]
-
-[[package]]
-name = "cortex-policy"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-policy",
- "cortex-protocol",
- "cortex-testkit",
- "serde",
- "serde_json",
- "thiserror",
- "toml",
-]
-
-[[package]]
-name = "cortex-protocol"
-version = "0.0.0"
-dependencies = [
- "schemars",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "cortex-rpc"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-config",
- "cortex-core",
- "cortex-protocol",
- "cortex-rpc",
- "cortex-testkit",
- "cortex-tools",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "cortex-sandbox"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-testkit",
- "landlock",
- "libc",
- "seccompiler",
- "thiserror",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "cortex-session"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "cortex-testkit",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "cortex-stats"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "cortex-testkit",
- "serde",
- "serde_json",
- "tracing",
-]
-
-[[package]]
-name = "cortex-term"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-testkit",
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "cortex-testkit"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-llm",
- "cortex-protocol",
- "cortex-term",
- "serde_json",
-]
-
-[[package]]
-name = "cortex-tools"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "cortex-sandbox",
- "cortex-testkit",
- "globset",
- "grep-matcher",
- "grep-regex",
- "grep-searcher",
- "ignore",
- "serde",
- "serde_json",
- "similar",
- "thiserror",
- "tokio",
-]
-
-[[package]]
-name = "cortex-tui"
-version = "0.0.0"
-dependencies = [
- "cortex-base",
- "cortex-protocol",
- "cortex-term",
- "cortex-testkit",
- "cortex-tui",
- "serde_json",
- "syntect",
-]
 
 [[package]]
 name = "cpufeatures"
@@ -1971,8 +1971,8 @@ checksum = "8c3b93199df0ab874cdf0c6a94f0a0dc3423fe41f1cafb62b8bd7b1deb277aef"
 name = "xtask"
 version = "0.0.0"
 dependencies = [
- "cortex-protocol",
- "cortex-testkit",
+ "cineris-protocol",
+ "cineris-testkit",
  "serde_json",
 ]
 

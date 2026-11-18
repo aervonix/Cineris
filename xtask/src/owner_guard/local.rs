@@ -7,9 +7,9 @@
 //! rewritten. This one runs before the push leaves the desk.
 //!
 //! - **The terms** are in a file outside the repository, which the owner
-//!   keeps: `~/.config/cortex-harness/owner-terms` on every OS (the home
+//!   keeps: `~/.config/cineris-dev/owner-terms` on every OS (the home
 //!   directory is `HOME`, or `USERPROFILE` on Windows), or the file that
-//!   `CORTEX_OWNER_TERMS_FILE` names. They are matched as CI matches
+//!   `CINERIS_OWNER_TERMS_FILE` names. They are matched as CI matches
 //!   `OWNER_TERMS`.
 //! - **What a push adds** is every commit it sends that the remote's
 //!   branches, as this repository last saw them, do not have: each one's
@@ -22,7 +22,7 @@
 //!   the terms.
 //! - **Without the file it passes, with a warning,** as CI does without
 //!   the secret, so that a contributor who does not have it is not
-//!   blocked. A file that `CORTEX_OWNER_TERMS_FILE` names and that is not
+//!   blocked. A file that `CINERIS_OWNER_TERMS_FILE` names and that is not
 //!   there is a refusal: someone asked for it. **When the file is there and
 //!   the check cannot run** (the file cannot be read, holds no term, is
 //!   inside the repository, or git fails), the push is refused, with the
@@ -37,10 +37,10 @@ use super::{Finding, LOG_FORMAT, Terms, git, scan_commits, scan_diff, scan_paths
 use crate::Result;
 
 /// The variable that names a terms file in place of the default.
-pub(crate) const TERMS_FILE: &str = "CORTEX_OWNER_TERMS_FILE";
+pub(crate) const TERMS_FILE: &str = "CINERIS_OWNER_TERMS_FILE";
 
 /// The default file, under the home directory, as it is printed.
-const DEFAULT_SHOWN: &str = "~/.config/cortex-harness/owner-terms";
+const DEFAULT_SHOWN: &str = "~/.config/cineris-dev/owner-terms";
 
 /// What git writes for an object that is not there: a new branch's remote
 /// side, a deleted branch's local side.
@@ -51,7 +51,7 @@ fn is_zero(object: &str) -> bool {
 /// Where the terms are looked for.
 #[derive(Debug, PartialEq)]
 pub(crate) enum TermsFile {
-    /// The file `CORTEX_OWNER_TERMS_FILE` names: it must be there.
+    /// The file `CINERIS_OWNER_TERMS_FILE` names: it must be there.
     Named(PathBuf),
     /// The default file: when it is not there, nothing is checked.
     Default(PathBuf),
@@ -72,7 +72,7 @@ impl TermsFile {
             Some(home) => Self::Default(
                 PathBuf::from(home)
                     .join(".config")
-                    .join("cortex-harness")
+                    .join("cineris-dev")
                     .join("owner-terms"),
             ),
             None => Self::Nowhere,
@@ -542,7 +542,7 @@ pub(crate) fn verdict(
 /// terms file must be there: the owner sets it when installing the hook,
 /// so that a push from a process with another home folder, or with the
 /// file moved, is refused and not waved through.
-pub(crate) const REQUIRED: &str = "cortex.ownerTermsRequired";
+pub(crate) const REQUIRED: &str = "cineris.ownerTermsRequired";
 
 /// Whether the repository at `dir` requires the terms file.
 ///

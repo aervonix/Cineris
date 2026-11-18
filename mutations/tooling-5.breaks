@@ -82,28 +82,28 @@ caught-by:
 
 [break] an-unexpected-approval-waits
 rule: The core rig's Front fails a test at once on an approval it did not expect and nobody answers.
-file: crates/cortex-core/tests/it/main.rs
+file: crates/cineris-core/tests/it/main.rs
 in: Front::open_approval
 find: !answered.contains(id) && !resolved.contains(&id)
 replace: false
-packages: cortex-core
+packages: cineris-core
 caught-by:
     approvals::an_approval_the_test_did_not_expect_fails_it_at_once_naming_the_call
     approvals::a_front_answers_by_its_policy_what_the_test_did_not_take_up
 
 [break] an-unscripted-question-is-allowed
 rule: The agent rig fails a test on a question it scripted no answer for.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::drop
 find: if !asked.is_empty() && !std::thread::panicking() {
 replace: if false {
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
     denials::a_question_with_no_scripted_answer_fails_the_test_naming_the_call
 
 [break] a-fake-timers-wait-is-not-named
 rule: A manual fake timer's wait is named for the timeout report while it runs.
-file: crates/cortex-testkit/src/timer.rs
+file: crates/cineris-testkit/src/timer.rs
 in: FakeTimer::sleep
 find: doing: Some(doing)
 replace: doing: { drop(doing); None }
@@ -112,7 +112,7 @@ caught-by:
 
 [break] a-finished-wait-stays-named
 rule: A wait that has ended is not named any more, though its future is held.
-file: crates/cortex-testkit/src/timer.rs
+file: crates/cineris-testkit/src/timer.rs
 in: ManualSleep::poll
 find: this.doing = None;
 replace:
@@ -123,17 +123,17 @@ caught-by:
 
 [break] the-style-comparison-passes-a-changed-colour
 rule: The golden screens compare a cell's style as well as its text.
-file: crates/cortex-tui/tests/it/screens/mod.rs
+file: crates/cineris-tui/tests/it/screens/mod.rs
 in: same
 find: a == b
 replace: a.text == b.text && a.tail == b.tail
-packages: cortex-tui
+packages: cineris-tui
 caught-by:
     screens::a_changed_colour_weight_or_background_is_found_and_an_unseen_one_is_not
 
 [break] red-green-and-yellow-are-not-bold-on-light
 rule: On a light background, status text in red, green or yellow is bold.
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: Palette::light
 find: warm_bold: true
 replace: warm_bold: false
@@ -142,7 +142,7 @@ caught-by:
 
 [break] keywords-are-magenta-on-dark
 rule: On a dark background, and when none is reported, keywords in code are bright blue.
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: Palette::dark
 find: syntax_keyword: Color::Ansi(12)
 replace: syntax_keyword: Color::Ansi(13)
@@ -151,7 +151,7 @@ caught-by:
 
 [break] code-goes-bold-on-light
 rule: By the owner's choice, highlighted code and whole changed lines keep their weight on a light background.
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: resolve
 find: let reached = !wide || palette.warm_bold_code_and_lines;
 replace: let reached = true;
@@ -187,17 +187,17 @@ caught-by:
 
 [break] a-shell-says-restored-whatever-the-modes
 rule: The shell says the terminal was put back only when its modes after the child are the ones before.
-file: crates/cortex-testkit/src/role.rs
+file: crates/cineris-testkit/src/role.rs
 in: ModeShell::run
 find: if before == after {
 replace: if true {
-packages: cortex-term
+packages: cineris-term
 caught-by:
     system::sys_the_shell_says_when_the_terminal_was_not_put_back
 
 [break] the-guard-does-not-drain-a-pending-interrupt
 rule: An interrupt still pending as the guard ends is taken, not left to end the process.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: restore_interrupts
 find: let taken = libc::sigtimedwait(set.as_ptr(), std::ptr::null_mut(), &raw const now);
 replace: let taken = 0;
@@ -206,7 +206,7 @@ caught-by:
 
 [break] no-grace-after-the-guard
 rule: For a second after a guard ends, the terminal's own handler passes an interrupt over.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: guard_just_ended
 find: ended != 0 && monotonic().saturating_sub(ended) < GUARD_GRACE_NANOS
 replace: false
@@ -215,7 +215,7 @@ caught-by:
 
 [break] an-interrupt-while-the-guard-lives-ends-the-process
 rule: While a guard lives, the terminal's own handler passes an interrupt over.
-file: crates/cortex-term/src/sys/unix.rs
+file: crates/cineris-term/src/sys/unix.rs
 in: on_ending
 find: (GUARDING.load(Ordering::SeqCst) || guard_just_ended())
 replace: guard_just_ended()
@@ -309,11 +309,11 @@ caught-by:
 
 [break] a-resolved-request-is-unexpected
 rule: The core rig's Front does not take a request that was resolved for one it must answer.
-file: crates/cortex-core/tests/it/main.rs
+file: crates/cineris-core/tests/it/main.rs
 in: Front::open_approval
 find: && !resolved.contains(&id)
 replace:
-packages: cortex-core
+packages: cineris-core
 caught-by:
     approvals::a_request_another_client_answered_is_not_unexpected
 

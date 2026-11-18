@@ -1,6 +1,6 @@
 # 0034: A notice is a message in the user's role, saying it is the harness's
 
-- **Status:** Accepted by the owner on 2026-11-14, in step 15: no new role in `cortex-protocol`.
+- **Status:** Accepted by the owner on 2026-11-14, in step 15: no new role in `cineris-protocol`.
 - **Date:** 2026-11-14
 
 ## Context
@@ -26,15 +26,15 @@ Anthropic now documents a system message inside the conversation for its current
 
 | Option | Assessment |
 |---|---|
-| **A `system` role in the neutral model**, sent as the provider's system message where the model has it and the place allows, and as user text elsewhere | Notices get operator authority on Anthropic's current models. But whether a message may be a system message depends on the message **after** it, and an append-only log cannot promise that: a request that is interrupted, or fails before any content, leaves its notice unanswered, and the next prompt then follows it directly, which is a 400. The way out is to send that notice differently on the next request, which changes bytes already sent, or to put an answer in the model's mouth. A notice after an assistant message (a malformed tool call, a failed check) cannot be one at all. Every model without it (Sonnet 5, every `openai-chat` server we use) needs the user form anyway. And it is a change to `cortex-protocol`. |
+| **A `system` role in the neutral model**, sent as the provider's system message where the model has it and the place allows, and as user text elsewhere | Notices get operator authority on Anthropic's current models. But whether a message may be a system message depends on the message **after** it, and an append-only log cannot promise that: a request that is interrupted, or fails before any content, leaves its notice unanswered, and the next prompt then follows it directly, which is a 400. The way out is to send that notice differently on the next request, which changes bytes already sent, or to put an answer in the model's mouth. A notice after an assistant message (a malformed tool call, a failed check) cannot be one at all. Every model without it (Sonnet 5, every `openai-chat` server we use) needs the user form anyway. And it is a change to `cineris-protocol`. |
 | **No new role: a notice stays a user message, and says it is the harness's** | Works on every provider and every model, in every position, without knowing which. It keeps the cache and every reasoning block valid: it is appended and never edited, which Anthropic's page gives the same profile. What it gives up is operator authority: the model reads a notice as the user's channel, told in words that the harness wrote it. |
 
 ## Decision
 
-**No new role in `cortex-protocol`.** A notice is sent as a message in the user's role, on every protocol: a user turn holding its text on `anthropic-messages`, a `user` message on `openai-chat`.
+**No new role in `cineris-protocol`.** A notice is sent as a message in the user's role, on every protocol: a user turn holding its text on `anthropic-messages`, a `user` message on `openai-chat`.
 
-- **Every notice says plainly that it comes from the harness.** Its text begins with one fixed lead-in, `Notice from the harness (Cortex-Harness), not from the user.` and a blank line (`cortex_agent::NOTICE_LEAD`), and so does a compaction's summary. The core instructions tell the model what such a message is. The lead-in is part of the cached prefix and never changes; the prefix tests cover it.
-- **The lead-in is added when the message is built, not stored.** The log keeps the notice's own text and its source (`notice` items), never a role: the role is chosen in one place, when the context folds an item into the conversation (`cortex_agent::context::append`). So a later change of mind needs no migration of the log.
+- **Every notice says plainly that it comes from the harness.** Its text begins with one fixed lead-in, `Notice from the harness (Cineris), not from the user.` and a blank line (`cineris_agent::NOTICE_LEAD`), and so does a compaction's summary. The core instructions tell the model what such a message is. The lead-in is part of the cached prefix and never changes; the prefix tests cover it.
+- **The lead-in is added when the message is built, not stored.** The log keeps the notice's own text and its source (`notice` items), never a role: the role is chosen in one place, when the context folds an item into the conversation (`cineris_agent::context::append`). So a later change of mind needs no migration of the log.
 - **The repository map is a notice too** (`NoticeSource::Map`, since step 18), and not a part of the epoch's first user message, which an earlier draft of the context page had it as. It is text the harness made from the repository's own file names and definitions, which a repository can word as it likes: in a notice it says it is the harness's.
 - **What instruction-file text carries.** Text from an instruction file sent as a notice (a changed file, a nested file) has the authority of a user message. That is the same as the system prompt's project section, which holds the same text at the start of an epoch: both are text the model reads, and neither grants anything ([../security.md](../security.md), section 2).
 

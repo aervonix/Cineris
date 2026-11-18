@@ -27,8 +27,8 @@ nextest-version = "0.9.100"
 # `system-windows` and `system-windows-shells` are the same job's on Windows:
 # two lanes of one test each (since the ninth tooling step; two at a time in
 # one group since the sixth). The system tests of the crates that start
-# PowerShell for most of their tests (`cortex-core`, `cortex-tools`,
-# `cortex-policy`) run one at a time in one lane, beside one of the rest in
+# PowerShell for most of their tests (`cineris-core`, `cineris-tools`,
+# `cineris-policy`) run one at a time in one lane, beside one of the rest in
 # the other, so that two PowerShell starts meet less often: a start costs
 # half as much again with another beside it. On one runner the tier read 10%
 # less, for the same wall time (docs/testing-and-ci.md, "Each tier is measured
@@ -76,11 +76,11 @@ retries = 1
 [profile.fast]
 default-filter = 'not test(/(^|::)sys_/)'
 
-# The nightly `properties` job: tiers 1 and 2 with CORTEX_PROPERTY_SCALE=50,
+# The nightly `properties` job: tiers 1 and 2 with CINERIS_PROPERTY_SCALE=50,
 # so every property runs fifty times its cases. A test's limits are scaled
 # for that run: reported as slow at 60 s, stopped at 300 s. A property that
 # does real file work per case needs it: the rewind property of
-# `cortex-session` takes 0.75 s at a scale of 1 and 32 s at 50 on the
+# `cineris-session` takes 0.75 s at a scale of 1 and 32 s at 50 on the
 # desktop. The limits above, which pull requests run with, are not changed.
 [profile.properties]
 default-filter = 'not test(/(^|::)sys_/)'
@@ -104,7 +104,7 @@ path = "junit.xml"
 # one of every other system test.
 [[profile.ci.overrides]]
 platform = 'cfg(windows)'
-filter = 'test(/(^|::)sys_/) & (package(cortex-core) | package(cortex-tools) | package(cortex-policy))'
+filter = 'test(/(^|::)sys_/) & (package(cineris-core) | package(cineris-tools) | package(cineris-policy))'
 test-group = 'system-windows-shells'
 
 [[profile.ci.overrides]]

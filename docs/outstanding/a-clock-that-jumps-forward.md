@@ -1,6 +1,6 @@
 A clock set months ahead prunes the raw monthly files early, and one set 400 days ahead folds the day buckets for good.
 
-- Area: cortex-stats
+- Area: cineris-stats
 - Owner: step 33
 
 | Item | Who | When |

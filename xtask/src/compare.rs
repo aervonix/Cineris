@@ -398,7 +398,7 @@ mod shared_start_tests {
             label: label.to_owned(),
             cases: (0..600)
                 .map(|n| TestCase {
-                    binary: "cortex-base".to_owned(),
+                    binary: "cineris-base".to_owned(),
                     name: format!("t{n}"),
                     seconds: start + if n % 2 == 0 { work } else { 0.0 },
                     failed: false,
@@ -449,9 +449,9 @@ mod tests {
         };
         let whole = |failed: bool| {
             vec![
-                case("cortex-base", "t::unit", 0.010, false),
-                case("cortex-base::it", "t::integration", 0.020, failed),
-                case("cortex-cli::system", "sys_run", 0.300, false),
+                case("cineris-base", "t::unit", 0.010, false),
+                case("cineris-base::it", "t::integration", 0.020, failed),
+                case("cineris-cli::system", "sys_run", 0.300, false),
             ]
         };
         let side = |label: &str, cases: Vec<TestCase>| Side {
@@ -465,7 +465,7 @@ mod tests {
         let failed = problems(&side("new", whole(true)), &side("old", whole(false)));
         assert_eq!(failed.len(), 1, "{failed:?}");
         assert!(
-            failed[0].starts_with("new: 1 test(s) failed (cortex-base::it t::integration)"),
+            failed[0].starts_with("new: 1 test(s) failed (cineris-base::it t::integration)"),
             "{failed:?}"
         );
         // The system run of the new side never happened.
@@ -516,16 +516,16 @@ start, and its time above the start too low.
   3, system              2.0 s (   1)        2.0 s (   1)     +0.0 s    60 s
 
   change by crate, above start      unit  integration  system
-    cortex-llm                      +0.0         +2.0    +0.0
-    cortex-base                     +0.2         +0.0    +0.0
-    cortex-cli                      +0.0         +0.0    +0.0
+    cineris-llm                      +0.0         +2.0    +0.0
+    cineris-base                     +0.2         +0.0    +0.0
+    cineris-cli                      +0.0         +0.0    +0.0
 
   moved most in tier 1, unit (time above start, old -> new)
-      +0.600 s  cortex-base  text::tests::new_one  (new test)
-      -0.400 s  cortex-base  text::tests::old_one  (gone)
+      +0.600 s  cineris-base  text::tests::new_one  (new test)
+      -0.400 s  cineris-base  text::tests::old_one  (gone)
 
   moved most in tier 2, integration (time above start, old -> new)
-      +2.000 s  cortex-llm::it  replay::every_cut  (1.000 -> 3.000 s)
+      +2.000 s  cineris-llm::it  replay::every_cut  (1.000 -> 3.000 s)
 "
         );
     }
@@ -538,24 +538,24 @@ start, and its time above the start too low.
             "
   tier 1, unit (time above start)
     crates that moved, in seconds (main -> PR, and the change)
-    cortex-base                    1.00 s ->    1.25 s    +0.25 s
+    cineris-base                    1.00 s ->    1.25 s    +0.25 s
     tests that moved most, in seconds (main -> PR)
-      +0.610 s  cortex-base  text::tests::new_one  (new test)
-      -0.400 s  cortex-base  text::tests::old_one  (gone)
-      +0.010 s  cortex-base  text::tests::b  (0.200 -> 0.210 s)
-      +0.010 s  cortex-base  text::tests::c  (0.400 -> 0.410 s)
-      +0.010 s  cortex-base  text::tests::a  (0.000 -> 0.010 s)
+      +0.610 s  cineris-base  text::tests::new_one  (new test)
+      -0.400 s  cineris-base  text::tests::old_one  (gone)
+      +0.010 s  cineris-base  text::tests::b  (0.200 -> 0.210 s)
+      +0.010 s  cineris-base  text::tests::c  (0.400 -> 0.410 s)
+      +0.010 s  cineris-base  text::tests::a  (0.000 -> 0.010 s)
 
   tier 2, integration (time above start)
     crates that moved, in seconds (main -> PR, and the change)
-    cortex-llm                     1.50 s ->    3.52 s    +2.02 s
+    cineris-llm                     1.50 s ->    3.52 s    +2.02 s
     tests that moved most, in seconds (main -> PR)
-      +2.010 s  cortex-llm::it  replay::every_cut  (1.000 -> 3.010 s)
-      +0.010 s  cortex-llm::it  replay::quick  (0.500 -> 0.510 s)
+      +2.010 s  cineris-llm::it  replay::every_cut  (1.000 -> 3.010 s)
+      +0.010 s  cineris-llm::it  replay::quick  (0.500 -> 0.510 s)
 
   tier 3, system (time above start)
     tests that moved most, in seconds (main -> PR)
-      +0.010 s  cortex-cli::system  sys_version  (2.000 -> 2.010 s)
+      +0.010 s  cineris-cli::system  sys_version  (2.000 -> 2.010 s)
 "
         );
         // Only the largest tests are listed, and none at all with 0.
@@ -633,7 +633,7 @@ start, and its time above the start too low.
         } = &integration[0];
         assert_eq!(
             (binary.as_str(), name.as_str()),
-            ("cortex-llm::it", "replay::every_cut")
+            ("cineris-llm::it", "replay::every_cut")
         );
         assert!((old.unwrap() - 1.0).abs() < 1e-9 && (new.unwrap() - 3.0).abs() < 1e-9);
         assert!((delta - 2.0).abs() < 1e-9);

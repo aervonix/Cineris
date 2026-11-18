@@ -4,7 +4,7 @@ What the owner or a later step still has to settle: one file per item. Together 
 
 **This page is written by `cargo xtask outstanding`** from the items' files (since the tenth tooling step): edit an item's file, never this page. `cargo xtask rules` fails when the page is not what the command writes.
 
-- **Leaving something open:** add a file, named for the item in lowercase words joined by hyphens, and run `cargo xtask outstanding`. The file is the item in a sentence on its first line, which is its line in the index below; a blank line; the fields, a list: `- Area:` the crate it is about (`cortex-tui`) or `tooling`, `windows` or `other`, `- Owner:` who settles it, in a few words, and `- Flaky:` for each test the item is about that fails now and then, its binary and name as nextest gives them (`` - Flaky: `cortex-core::it trust::sys_…` ``), which `stress`, `ci` at the desk and `mutate`'s baseline run again once when it fails ("Known flakes" in [testing-and-ci.md](../testing-and-ci.md)); a blank line; and a table of one row, under the header `| Item | Who | When |`: the item in full, who settles it, and when.
+- **Leaving something open:** add a file, named for the item in lowercase words joined by hyphens, and run `cargo xtask outstanding`. The file is the item in a sentence on its first line, which is its line in the index below; a blank line; the fields, a list: `- Area:` the crate it is about (`cineris-tui`) or `tooling`, `windows` or `other`, `- Owner:` who settles it, in a few words, and `- Flaky:` for each test the item is about that fails now and then, its binary and name as nextest gives them (`` - Flaky: `cineris-core::it trust::sys_…` ``), which `stress`, `ci` at the desk and `mutate`'s baseline run again once when it fails ("Known flakes" in [testing-and-ci.md](../testing-and-ci.md)); a blank line; and a table of one row, under the header `| Item | Who | When |`: the item in full, who settles it, and when.
 - **Settling an item:** delete its file, run `cargo xtask outstanding`, and record the answer in the settling step's `steps/<step>/answered.md`.
 - **Changing an item:** edit its file, and run the command if its first line or a field changed.
 - **An item several steps share** stays one file, and each step that does its part leaves the file alone and records that part in its own `steps/<step>/answered.md`. Only the step that finishes the item deletes its file, so parallel steps never edit it.
@@ -16,7 +16,7 @@ One file per item, and not one per step, because a step settles items that other
 
 One line an item: what it covers and who settles it. It is the place to look first when a review asks whether a finding is already known.
 
-### cortex-agent
+### cineris-agent
 
 - [a-background-summary-past-its-turn-cannot-be-interrupted](a-background-summary-past-its-turn-cannot-be-interrupted.md): `interrupt` on an idle session does not stop a background summary request, which runs on and goes uncounted. Owner: step 32.
 - [a-kept-run-adopted-after-its-call-moved](a-kept-run-adopted-after-its-call-moved.md): A read kept from a response sent again is used for its call even when the call was planned again onto another path: a stale result. Owner: step 28, or the next change to the round's cache.
@@ -33,25 +33,25 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-maps-share-of-the-context-record](the-maps-share-of-the-context-record.md): The repository map is counted among the notices in the context record, so the profiler cannot say what it costs. Owner: step 44, or step 16.
 - [the-token-counting-endpoint-near-the-limit](the-token-counting-endpoint-near-the-limit.md): The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call. Owner: a later step that touches the budget, or step 33.
 
-### cortex-base
+### cineris-base
 
 - [log-crate-bridge](log-crate-bridge.md): The logging subscriber has no bridge for dependencies that log through the `log` crate at `warn` and above. Owner: step 32, or the first step whose dependency needs it.
 
-### cortex-cli
+### cineris-cli
 
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
-- [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cortex auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 25.
+- [reading-a-key-at-a-terminal](reading-a-key-at-a-terminal.md): `cineris auth login` refuses a terminal because reading a key without echo needs the terminal layer. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
 - [the-binary-near-its-size-budget](the-binary-near-its-size-budget.md): After step 33's size fix the binary has about 5 MB left on each system (Windows 13.19 of 18 MiB, Linux 11.33 of 16), with extensions and MCP to come; each pull request shows its size. Open until a step-34 build passes on both. Owner: step 34.
 
-### cortex-config
+### cineris-config
 
 - [a-projects-shortest-cooldown](a-projects-shortest-cooldown.md): A project's `model.speed_cooldown_min = "0s"` can make a fast tier the user chose change speed every half minute, each change a possible rewrite of the prompt cache. Owner: the owner.
 - [a-setting-that-restricts-reads](a-setting-that-restricts-reads.md): No setting fills the launcher's read-restricting policy (`Reach::Only`), so every sandboxed session can read everything. Owner: the owner, then step 32 unless sooner.
 - [secret-service-backend](secret-service-backend.md): The Linux Secret Service credential backend needs a non-blocking CI job against a real keyring daemon. Owner: a step the owner places.
 - [settings-a-later-step-declares](settings-a-later-step-declares.md): Reserved configuration sections, including `[models]` and `[http]`, still need their keys declared and their project rules set. Owner: steps 5, 13, 15, 16 and others, each for its own section.
 
-### cortex-core
+### cineris-core
 
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is accepted and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
@@ -68,18 +68,18 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 
-### cortex-index
+### cineris-index
 
-- [a-memory-peak-test-near-its-limit](a-memory-peak-test-near-its-limit.md): `outlines::outlining_a_name_of_a_megabyte_takes_little_memory` went 84 KiB over its 4 MiB peak once on a hosted Linux runner, in a pull request that did not touch `cortex-index`. Owner: `cortex-index`'s next change, or a tooling step.
+- [a-memory-peak-test-near-its-limit](a-memory-peak-test-near-its-limit.md): `outlines::outlining_a_name_of_a_megabyte_takes_little_memory` went 84 KiB over its 4 MiB peak once on a hosted Linux runner, in a pull request that did not touch `cineris-index`. Owner: `cineris-index`'s next change, or a tooling step.
 
-### cortex-knowledge
+### cineris-knowledge
 
 - [a-promote-while-a-confined-command-runs](a-promote-while-a-confined-command-runs.md): A promote made from another process while a confined command of the same project runs is taken for a change from outside, and stops that command's turn. Owner: a fix session that changes the continuity check.
-- [a-same-size-rewrite-within-a-clock-tick-on-windows](a-same-size-rewrite-within-a-clock-tick-on-windows.md): On Windows a file's stamp is its time and size, so a same-size rewrite within the clock's tick is not seen by the look for a changed profile. Owner: a step that changes `cortex-base`'s `watch`, or step 32.
+- [a-same-size-rewrite-within-a-clock-tick-on-windows](a-same-size-rewrite-within-a-clock-tick-on-windows.md): On Windows a file's stamp is its time and size, so a same-size rewrite within the clock's tick is not seen by the look for a changed profile. Owner: a step that changes `cineris-base`'s `watch`, or step 32.
 - [the-item-an-entry-was-learned-from](the-item-an-entry-was-learned-from.md): An entry's source has the session and the date and not the item: the tools' contract gives a tool no call id. Owner: a step that changes the tools' contract, or step 24.
 - [which-test-of-a-flaky-command-flipped](which-test-of-a-flaky-command-flipped.md): A flaky entry names a command, not the test that flipped, so a check's retry runs the whole command and may call a real failure flaky. Owner: step 52, with its per-ecosystem test selection.
 
-### cortex-llm
+### cineris-llm
 
 - [a-price-that-depends-on-the-time-of-day](a-price-that-depends-on-the-time-of-day.md): The catalog's single rate card records DeepSeek's off-peak requests at the peak price, an upper bound. Owner: the owner, with step 16.
 - [account-in-the-replay-rule](account-in-the-replay-rule.md): Whether a request carries its account, so a provider tying reasoning to an account never gets another's. Owner: the first step that adds such a provider, or step 53.
@@ -87,7 +87,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-message-for-a-host-outside-ascii](the-message-for-a-host-outside-ascii.md): A refused host outside ASCII is told the `xn--` form by an example, not its own; a percent-encoded one gets the URL library's message. Owner: a later step on providers, or step 33.
 - [the-prefix-check-and-image-references](the-prefix-check-and-image-references.md): The debug prefix check skips requests holding a stored image reference; a protocol should write a placeholder. Owner: step 33, or the step that next touches images.
 
-### cortex-policy
+### cineris-policy
 
 - [cd-readings-the-analysis-does-not-share](cd-readings-the-analysis-does-not-share.md): The command analysis reads `cd` differently from bash (mode-000 directories) and probably from Git for Windows. Owner: step 32, with a Windows run.
 - [false-asks-from-the-pattern-and-word-checks](false-asks-from-the-pattern-and-word-checks.md): The pattern and word checks ask or refuse needlessly for several link, quoting, set and heredoc forms. Owner: step 32.
@@ -98,11 +98,11 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [rust-toolchain-is-not-a-protected-path](rust-toolchain-is-not-a-protected-path.md): `rust-toolchain.toml` can be written by a confined command and chooses the compiler the user's next `cargo` runs. Owner: the owner, then step 32.
 - [words-of-unmodelled-lines-the-check-misreads](words-of-unmodelled-lines-the-check-misreads.md): The word check misreads split command words, program text, tricky `cd` targets and over-bound lines, at `autonomous`. Owner: step 32.
 
-### cortex-protocol
+### cineris-protocol
 
 - [the-files-a-command-changed](the-files-a-command-changed.md): The review panel lists the files the file tools changed; which files a shell command changed is in the checkpoints, not in any event. Owner: none yet.
 
-### cortex-sandbox
+### cineris-sandbox
 
 - [a-launcher-refusal-read-from-the-commands-output](a-launcher-refusal-read-from-the-commands-output.md): The launcher's refusal is read from the command's own output, so a check can pass for blocked and not be fed back. Owner: step 32.
 - [a-refused-socket-the-result-does-not-name](a-refused-socket-the-result-does-not-name.md): A Unix socket refused by the filter, network on, gives a bare `EPERM` and no sandbox explanation. Owner: step 32.
@@ -115,22 +115,22 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-cost-of-the-look-at-protected-paths](the-cost-of-the-look-at-protected-paths.md): Walking the workspace around each confined command for protected names costs about 47 ms in a large tree. Owner: step 33.
 - [the-last-writes-of-a-killed-command](the-last-writes-of-a-killed-command.md): The session sweep that ends a command's tree can lose a race with a fast-forking process. Owner: step 32.
 
-### cortex-session
+### cineris-session
 
 - [an-undo-after-an-incomplete-look](an-undo-after-an-incomplete-look.md): An undo after an incomplete change look does not say what it missed; the checkpoint lacks the flag. Owner: a later step, else step 32.
 - [hashing-large-files-at-a-rounds-end](hashing-large-files-at-a-rounds-end.md): A changed file is hashed whole at round end and on rewind, uncapped, at 0.4 s a gibibyte. Owner: step 33.
 - [private-keys-in-text-artifacts](private-keys-in-text-artifacts.md): Text artifacts are redacted line by line, so a PEM private key is masked on one line only. Owner: step 32.
 - [the-first-lease-flush-before-the-first-request](the-first-lease-flush-before-the-first-request.md): A session's first lease record is flushed to disk before its first request, whatever the durability. Owner: the next step that changes leases, or step 32.
 
-### cortex-stats
+### cineris-stats
 
 - [a-clock-that-jumps-forward](a-clock-that-jumps-forward.md): A clock set months ahead prunes the raw monthly files early, and one set 400 days ahead folds the day buckets for good. Owner: step 33.
-- [a-reset-during-a-writers-settle](a-reset-during-a-writers-settle.md): A writer that loaded the aggregates just before `cortex stats reset` saves their part back. Owner: the step that next changes the reset, or step 33.
+- [a-reset-during-a-writers-settle](a-reset-during-a-writers-settle.md): A writer that loaded the aggregates just before `cineris stats reset` saves their part back. Owner: the step that next changes the reset, or step 33.
 - [tests-the-step-16-fixes-left-thin](tests-the-step-16-fixes-left-thin.md): The limits lock held through an update, the flushed save, two races of moving a file aside, the reader thread's end and the 64-bit index on Windows are seen only by reading. Owner: step 33.
 - [the-usage-panels-year-on-windows](the-usage-panels-year-on-windows.md): On a hosted Windows runner, the usage panel's report of a year misses its 16 ms budget even with the aggregates kept between reports. Owner: the owner.
 - [waits-on-the-statistics-without-a-limit](waits-on-the-statistics-without-a-limit.md): A day's purse's first read at session open, and the refresh behind `limits.json`'s lock, wait with no time limit of their own. Owner: step 27.
 
-### cortex-term
+### cineris-term
 
 - [a-paste-that-stalls](a-paste-that-stalls.md): A bracketed paste with no end marker for 2 seconds is split, and the remainder arrives as keys. Owner: step 25.
 - [backspace-sent-as-ctrl-h](backspace-sent-as-ctrl-h.md): The decoder reads byte 0x08 as `Ctrl+Backspace`, so a terminal whose Backspace sends `^H` deletes a word. Owner: step 25.
@@ -141,17 +141,17 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [terminal-test-gaps](terminal-test-gaps.md): Terminal-layer tests lack styled, emoji and zero-width scripts, resize re-wrap, per-signal handlers, real SIGTSTP and nested-child cleanup. Owner: steps 22 and 23.
 - [the-mouse-under-windows-terminal](the-mouse-under-windows-terminal.md): Under Windows Terminal, and wherever the win32 input mode is on, the viewer and the full screen have no mouse: through a pseudo-console the terminal's mouse reports reach the program as typed keys, however they were asked for. Owner: step 33.
 
-### cortex-testkit
+### cineris-testkit
 
 - [timeout-report-timing-on-windows](timeout-report-timing-on-windows.md): The `watch` timeout report counts from the first wait off Linux; Windows takes the process tree from PowerShell. Owner: a later tooling step.
 
-### cortex-tools
+### cineris-tools
 
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
 - [cmd-searches-the-current-directory](cmd-searches-the-current-directory.md): `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`. Owner: the owner.
-- [names-that-escape-to-the-same-text](names-that-escape-to-the-same-text.md): Two names that are one text once escaped are counted twice and shown once by `list`, and share their matches in `search`. Owner: a later `cortex-tools` step, or step 32.
+- [names-that-escape-to-the-same-text](names-that-escape-to-the-same-text.md): Two names that are one text once escaped are counted twice and shown once by `list`, and share their matches in `search`. Owner: a later `cineris-tools` step, or step 32.
 
-### cortex-tui
+### cineris-tui
 
 - [a-full-screen-frame-copies-the-open-answer](a-full-screen-frame-copies-the-open-answer.md): Each full-screen frame copies the rows an answer still streaming has committed, so a very long open answer costs more per frame. Owner: step 33.
 - [a-kept-box-holds-only-the-end-of-its-output](a-kept-box-holds-only-the-end-of-its-output.md): The viewer and the full screen open a finished command's box on the last 64 KiB of its output, not the whole of it. Owner: step 25.

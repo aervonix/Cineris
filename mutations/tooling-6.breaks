@@ -198,7 +198,7 @@ caught-by:
     try_run::tests::perf_with_a_crate_is_that_crates_ignored_perf_tests_in_release_and_nothing_else
 
 # The sixth tooling step: the generator of a made-up month of statistics
-# (`crates/cortex-stats/src/synthetic.rs`, docs/testing-and-ci.md, "A month
+# (`crates/cineris-stats/src/synthetic.rs`, docs/testing-and-ci.md, "A month
 # of statistics, made up").
 #
 # Each rule the generator promises is broken here, one at a time: that one
@@ -209,96 +209,96 @@ caught-by:
 
 [break] the-seed-is-ignored
 rule: The seed decides the month: another seed gives other figures.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: write
 find: SeededRng::new(spec.seed)
 replace: SeededRng::new(0)
 caught-by:
-    cortex-stats synthetic::tests::another_seed_gives_another_month
+    cineris-stats synthetic::tests::another_seed_gives_another_month
 
 [break] something-besides-the-seed-decides
 rule: The seed is the whole of the randomness: one seed gives the same bytes every time.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: write
 find: SeededRng::new(spec.seed)
-replace: SeededRng::new(spec.seed ^ cortex_base::SystemRng::new().next_u64())
+replace: SeededRng::new(spec.seed ^ cineris_base::SystemRng::new().next_u64())
 caught-by:
-    cortex-stats synthetic::tests::one_seed_gives_the_same_bytes
+    cineris-stats synthetic::tests::one_seed_gives_the_same_bytes
 
 [break] the-summary-misses-the-tool-calls
 rule: The summary counts every kind of event it was made of.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: Summary::count
 find: self.tool_calls += 1;
 replace: self.tool_calls += 0;
 caught-by:
-    cortex-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
-    cortex-stats synthetic::tests::each_month_is_a_file_of_its_own
+    cineris-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
+    cineris-stats synthetic::tests::each_month_is_a_file_of_its_own
 
 [break] the-summary-forgets-the-unpriced
 rule: A failed request has no price, and the summary counts it as unpriced as the aggregates do.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: Summary::count
 find: None => sum.unpriced += 1,
 replace: None => {}
 caught-by:
-    cortex-stats synthetic::tests::a_mixed_month_has_its_kinds_and_each_request_is_priced
-    cortex-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
+    cineris-stats synthetic::tests::a_mixed_month_has_its_kinds_and_each_request_is_priced
+    cineris-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
 
 [break] the-lines-are-not-counted
 rule: The summary says how many lines the files hold.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: Summary::count
 find: self.lines += 1;
 replace: self.lines += 0;
 caught-by:
-    cortex-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
-    cortex-stats synthetic::tests::each_month_is_a_file_of_its_own
+    cineris-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
+    cineris-stats synthetic::tests::each_month_is_a_file_of_its_own
 
 [break] no-day-is-off
 rule: A month has days off, as often as its scale says.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: Generator::make_day
 find: if !chance(&mut self.rng, percent) {
 replace: if false {
 caught-by:
-    cortex-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
+    cineris-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
 
 [break] the-cache-is-never-read
 rule: A request after the first of an epoch reads the cache, most of them.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: Generator::main_request
 find: tokens.cache_read = before;
 replace: tokens.cache_read = 0;
 caught-by:
-    cortex-stats synthetic::tests::a_mixed_month_has_its_kinds_and_each_request_is_priced
+    cineris-stats synthetic::tests::a_mixed_month_has_its_kinds_and_each_request_is_priced
 
 [break] a-fast-request-is-priced-as-standard
 rule: A cost is the catalog's price at the speed the request ran at.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: price
 find: (Speed::Fast, Some(fast)) => fast,
 replace: (Speed::Fast, Some(_)) => standard,
 caught-by:
-    cortex-stats synthetic::tests::a_mixed_month_has_its_kinds_and_each_request_is_priced
+    cineris-stats synthetic::tests::a_mixed_month_has_its_kinds_and_each_request_is_priced
 
 [break] a-price-drifts-from-the-catalog
 rule: The generator's prices are the catalog's.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 find: card: card(20_000, 100_000, 1_000, 25_000)
 replace: card: card(20_000, 200_000, 1_000, 25_000)
 caught-by:
-    cortex-stats synthetic::tests::the_models_and_prices_are_the_catalogs
+    cineris-stats synthetic::tests::the_models_and_prices_are_the_catalogs
 
 [break] the-queue-is-too-small-for-the-events-between-waits
 rule: The queue holds more than the generator makes between two waits for the writer, so no event is dropped.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: write
 find: options.queue = QUEUE;
 replace: options.queue = 4;
 caught-by:
-    cortex-stats synthetic::tests::one_seed_gives_the_same_bytes
-    cortex-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
+    cineris-stats synthetic::tests::one_seed_gives_the_same_bytes
+    cineris-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
 
 # The breaks of the sixth tooling step's `mutate --check`: the names of the
 # tests a `caught-by` names are looked for, and an `in:` that no longer holds
@@ -562,7 +562,7 @@ caught-by:
 rule: Every writing mode a test reads is run by `regen` or named as left to another command.
 file: xtask/src/regen.rs
 in: WRITERS
-find: modes: &["CORTEX_UPDATE_SCREENS"]
+find: modes: &["CINERIS_UPDATE_SCREENS"]
 replace: modes: &[]
 caught-by:
     regen::tests::every_writing_mode_in_the_code_is_run_by_regen_or_left_to_another_command
@@ -571,8 +571,8 @@ caught-by:
 rule: The snapshots are written under the variable the tests read.
 file: xtask/src/regen.rs
 in: snapshots
-find: &[("CORTEX_UPDATE_SNAPSHOTS", "1")]
-replace: &[("CORTEX_UPDATE_SNAPSHOT", "1")]
+find: &[("CINERIS_UPDATE_SNAPSHOTS", "1")]
+replace: &[("CINERIS_UPDATE_SNAPSHOT", "1")]
 caught-by:
     regen::tests::every_writing_mode_in_the_code_is_run_by_regen_or_left_to_another_command
 
@@ -639,239 +639,239 @@ caught-by:
 
 [break] an-answer-past-max-output-is-passed-uncut
 rule: A scripted answer longer than the request's maximum output is cut where the limit falls, as a real provider cuts it.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: OutputLimit::admit
 find: if text.len() as u64 <= self.left {
 replace: if true {
-packages: cortex-testkit,cortex-agent
+packages: cineris-testkit,cineris-agent
 caught-by:
-    cortex-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
-    cortex-agent::it streaming::an_answer_longer_than_the_model_may_write_reaches_the_loop_cut
+    cineris-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
+    cineris-agent::it streaming::an_answer_longer_than_the_model_may_write_reaches_the_loop_cut
 
 [break] the-requests-own-limit-is-ignored
 rule: The limit is the request's maximum output, held to the model's own most; one the request does not set is the model's.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: ScriptedProvider::stream
 find: request.max_output.map_or(max_output, |asked| asked.min(max_output))
 replace: max_output
 caught-by:
-    cortex-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
+    cineris-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
 
 [break] the-models-most-does-not-hold-a-larger-request
 rule: A request that asks for more than the model may write is held to what the model may write.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: ScriptedProvider::stream
 find: asked.min(max_output)
 replace: asked
 caught-by:
-    cortex-testkit provider::tests::a_request_with_no_limit_is_held_to_the_models_most_and_never_past_it
+    cineris-testkit provider::tests::a_request_with_no_limit_is_held_to_the_models_most_and_never_past_it
 
 [break] output-is-counted-at-another-ratio-than-the-loops
 rule: The provider counts output at the ratio of bytes to tokens the loop uses before a provider has counted.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 find: pub const BYTES_PER_OUTPUT_TOKEN: u64 = 3;
 replace: pub const BYTES_PER_OUTPUT_TOKEN: u64 = 4;
-packages: cortex-testkit,cortex-agent
+packages: cineris-testkit,cineris-agent
 caught-by:
-    cortex-agent::it streaming::the_scripted_provider_counts_output_as_the_loop_counts_a_request
-    cortex-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
+    cineris-agent::it streaming::the_scripted_provider_counts_output_as_the_loop_counts_a_request
+    cineris-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
 
 [break] a-cut-leaves-its-blocks-open
 rule: A block that was open when the limit fell is closed with what had arrived of it, as the real decoders close it.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: OutputLimit::cut
 find: for (index, open) in std::mem::take(&mut self.open) {
 replace: for (index, open) in std::mem::take(&mut self.open).into_iter().take(0) {
 caught-by:
-    cortex-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
-    cortex-testkit provider::tests::text_reasoning_and_arguments_all_count_and_the_cut_closes_the_open_block
+    cineris-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
+    cineris-testkit provider::tests::text_reasoning_and_arguments_all_count_and_the_cut_closes_the_open_block
 
 [break] a-cut-tool-call-keeps-its-whole-arguments
 rule: A tool call cut in its arguments is closed with the part that arrived, which is not JSON.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: OutputLimit::cut
 find: "type": "tool_call", "id": open.id, "name": open.name, "arguments": open.said
 replace: "type": "tool_call", "id": open.id, "name": open.name, "arguments": "{}"
 caught-by:
-    cortex-testkit provider::tests::text_reasoning_and_arguments_all_count_and_the_cut_closes_the_open_block
+    cineris-testkit provider::tests::text_reasoning_and_arguments_all_count_and_the_cut_closes_the_open_block
 
 [break] a-cut-reports-the-scripts-usage
 rule: A response cut at the limit reports that limit as its output.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: ScriptedProvider::stream
 find: tokens.output = limit.tokens;
 replace:
 caught-by:
-    cortex-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
+    cineris-testkit provider::tests::an_answer_past_the_requests_limit_is_cut_and_ends_at_the_limit
 
 [break] a-cut-ends-as-the-script-says
 rule: A response cut at the limit ends with the stop reason of the output limit, whatever the script ended with.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: ScriptedProvider::stream
 find: stop: StopReason::MaxOutput
 replace: stop: StopReason::End
-packages: cortex-testkit,cortex-agent
+packages: cineris-testkit,cineris-agent
 caught-by:
-    cortex-testkit provider::tests::text_reasoning_and_arguments_all_count_and_the_cut_closes_the_open_block
-    cortex-agent::it streaming::an_answer_longer_than_the_model_may_write_reaches_the_loop_cut
+    cineris-testkit provider::tests::text_reasoning_and_arguments_all_count_and_the_cut_closes_the_open_block
+    cineris-agent::it streaming::an_answer_longer_than_the_model_may_write_reaches_the_loop_cut
 
 [break] a-cut-splits-a-character
 rule: A cut falls on a character boundary.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: OutputLimit::cut
 find: .find(|at| text.is_char_boundary(*at))
 replace: .find(|_| true)
 caught-by:
-    cortex-testkit provider::tests::a_cut_never_splits_a_character
+    cineris-testkit provider::tests::a_cut_never_splits_a_character
 
 [break] the-output-limit-cannot-be-turned-off
 rule: A test that means its script to be played whole can turn the cut off.
-file: crates/cortex-testkit/src/provider.rs
+file: crates/cineris-testkit/src/provider.rs
 in: ScriptedProvider::set_output_limit
 find: self.lock().unlimited = !on;
 replace: self.lock().unlimited = false;
 caught-by:
-    cortex-testkit provider::tests::a_provider_without_the_output_limit_plays_every_answer_whole
+    cineris-testkit provider::tests::a_provider_without_the_output_limit_plays_every_answer_whole
 
 # ------------------------------------- the pressure helper after the first request
 
 [break] fill-next-sizes-without-the-history
 rule: The twin of a session that has history is resumed from that history, so that the request is sized with what it carries.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::measure
 find: setup.memory = self.history_so_far();
 replace:
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
-    cortex-agent::it pressure::the_first_request_of_a_later_turn_is_sized_with_the_history_it_carries
+    cineris-agent::it pressure::the_first_request_of_a_later_turn_is_sized_with_the_history_it_carries
 
 [break] fill-after-sizes-the-first-request
 rule: Rig::fill_after sizes the request that follows the earlier responses of the turn, not the first one.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::measure
 find: .get(before)
 replace: .get(0)
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
-    cortex-agent::it pressure::a_request_after_a_tool_round_is_sized_and_the_bulk_given_in_the_turn
+    cineris-agent::it pressure::a_request_after_a_tool_round_is_sized_and_the_bulk_given_in_the_turn
 
 [break] fill-after-sizes-a-request-the-turn-does-not-make
 rule: A request the twin's turn never makes is refused, with how many it made.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::measure
 find: let before = earlier.len();
 replace: let before = 0;
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
-    cortex-agent::it pressure::a_request_the_turn_never_makes_is_refused
+    cineris-agent::it pressure::a_request_the_turn_never_makes_is_refused
 
 [break] fill-next-does-not-give-the-bulk
 rule: Rig::fill_next gives the next turn the bulk it measured.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::fill_next
 find: self.bulk(filled.bulk);
 replace:
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
-    cortex-agent::it pressure::the_first_request_of_a_later_turn_is_sized_with_the_history_it_carries
-    cortex-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
+    cineris-agent::it pressure::the_first_request_of_a_later_turn_is_sized_with_the_history_it_carries
+    cineris-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
 
 [break] fill-after-gives-the-bulk-at-the-start
 rule: Rig::fill_after gives the session nothing: its bulk is given in the turn, where the test chooses.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::fill_after
 find: self.size(fill, prompt, earlier.into_iter().collect())
 replace: { let filled = self.size(fill, prompt, earlier.into_iter().collect()); self.bulk(filled.bulk); filled }
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
-    cortex-agent::it pressure::a_request_after_a_tool_round_is_sized_and_the_bulk_given_in_the_turn
+    cineris-agent::it pressure::a_request_after_a_tool_round_is_sized_and_the_bulk_given_in_the_turn
 
 [break] a-counted-session-is-sized-by-the-twin-anyway
 rule: A session whose provider counted a request is not sized by pressure: the loop estimates from the count, which the twin has not.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::measure
 find: counted == 0
 replace: true
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
-    cortex-agent::it pressure::a_session_whose_requests_were_counted_cannot_be_sized_by_pressure
+    cineris-agent::it pressure::a_session_whose_requests_were_counted_cannot_be_sized_by_pressure
 
 [break] fill-next-takes-a-session-with-no-history
 rule: Rig::fill_next refuses a session that has no history: Rig::fill sizes its first request.
-file: crates/cortex-agent/tests/it/main.rs
+file: crates/cineris-agent/tests/it/main.rs
 in: Rig::fill_next
 find: self.handle.has_history()
 replace: true
-packages: cortex-agent
+packages: cineris-agent
 caught-by:
-    cortex-agent::it pressure::fill_next_refuses_a_session_with_no_history
+    cineris-agent::it pressure::fill_next_refuses_a_session_with_no_history
 
 # -------------------------------------------------------- the phase breakdown
 
 [break] a-phases-share-is-of-the-phases-not-the-whole
 rule: A phase's share is of the whole test's time, so the phases and what is outside them add up to all of it.
-file: crates/cortex-testkit/src/phases.rs
+file: crates/cineris-testkit/src/phases.rs
 in: Phases::render
 find: took.as_secs_f64() / total.as_secs_f64() * 100.0
 replace: took.as_secs_f64() / spent.as_secs_f64() * 100.0
 caught-by:
-    cortex-testkit phases::tests::each_phase_takes_what_the_clock_moved_and_the_rest_is_outside_every_phase
-    cortex-testkit phases::tests::the_phases_and_what_is_outside_them_add_up_to_the_total
+    cineris-testkit phases::tests::each_phase_takes_what_the_clock_moved_and_the_rest_is_outside_every_phase
+    cineris-testkit phases::tests::the_phases_and_what_is_outside_them_add_up_to_the_total
 
 [break] phases-of-one-name-replace-each-other
 rule: Phases of one name are added up.
-file: crates/cortex-testkit/src/phases.rs
+file: crates/cineris-testkit/src/phases.rs
 in: Phases::record
 find: *total += took;
 replace: *total = took;
 caught-by:
-    cortex-testkit phases::tests::phases_of_one_name_add_up_in_the_order_the_names_first_appeared
+    cineris-testkit phases::tests::phases_of_one_name_add_up_in_the_order_the_names_first_appeared
 
 [break] a-mark-does-not-end-the-one-before
 rule: A mark ends the phase the last mark began.
-file: crates/cortex-testkit/src/phases.rs
+file: crates/cineris-testkit/src/phases.rs
 in: Phases::mark
 find: Self::close(&mut book, now);
 replace:
 caught-by:
-    cortex-testkit phases::tests::a_mark_lasts_until_the_next_mark_the_end_or_the_report
+    cineris-testkit phases::tests::a_mark_lasts_until_the_next_mark_the_end_or_the_report
 
 [break] time-outside-every-phase-is-not-counted
 rule: The time between phases is shown, so a stretch nobody named is not lost.
-file: crates/cortex-testkit/src/phases.rs
+file: crates/cineris-testkit/src/phases.rs
 in: Phases::render
 find: let outside = total.saturating_sub(spent);
 replace: let outside = Duration::ZERO;
 caught-by:
-    cortex-testkit phases::tests::each_phase_takes_what_the_clock_moved_and_the_rest_is_outside_every_phase
-    cortex-testkit phases::tests::the_phases_and_what_is_outside_them_add_up_to_the_total
+    cineris-testkit phases::tests::each_phase_takes_what_the_clock_moved_and_the_rest_is_outside_every_phase
+    cineris-testkit phases::tests::the_phases_and_what_is_outside_them_add_up_to_the_total
 
 [break] a-report-is-printed-again-on-drop
 rule: A breakdown that was reported is not printed a second time when the phases are dropped.
-file: crates/cortex-testkit/src/phases.rs
+file: crates/cineris-testkit/src/phases.rs
 in: Phases::report
 find: book.printed = true;
 replace:
 caught-by:
-    cortex-testkit phases::tests::a_report_is_printed_once_and_the_drop_does_not_repeat_it
+    cineris-testkit phases::tests::a_report_is_printed_once_and_the_drop_does_not_repeat_it
 
 [break] a-whole-of-nothing-has-a-share
 rule: A test with no time at all has no shares to divide by.
-file: crates/cortex-testkit/src/phases.rs
+file: crates/cineris-testkit/src/phases.rs
 in: Phases::render
 find: if total.is_zero() {
 replace: if false {
 caught-by:
-    cortex-testkit phases::tests::a_whole_with_nothing_in_it_has_no_share
+    cineris-testkit phases::tests::a_whole_with_nothing_in_it_has_no_share
 
 [break] thousands-are-not-grouped
 rule: A time of a thousand milliseconds or more is written with its thousands grouped, to be read at a glance.
-file: crates/cortex-testkit/src/phases.rs
+file: crates/cineris-testkit/src/phases.rs
 in: ms
 find: if at > 0 && (whole.len() - at).is_multiple_of(3) {
 replace: if false {
 caught-by:
-    cortex-testkit phases::tests::times_are_written_with_thousands_grouped
+    cineris-testkit phases::tests::times_are_written_with_thousands_grouped
 
 # ------------------------------------------------ the stall check (item 2)
 
@@ -1026,31 +1026,31 @@ caught-by:
 
 [break] a-single-quote-is-not-escaped-for-a-posix-shell
 rule: A text is quoted for bash and sh with each single quote written as '\'' (the hostile texts, now one command with every text, on each shell).
-file: crates/cortex-tools/src/shell/kind.rs
+file: crates/cineris-tools/src/shell/kind.rs
 in: Shell::quote
 find: ShellKind::Bash | ShellKind::Posix => Ok(format!("'{}'", text.replace('\'', "'\\''"))),
 replace: ShellKind::Bash | ShellKind::Posix => Ok(format!("'{}'", text)),
 caught-by:
-    cortex-tools::it shell::bash::sys_hostile_arguments_arrive_unchanged
-    cortex-tools::it shell::sh::sys_hostile_arguments_arrive_unchanged
+    cineris-tools::it shell::bash::sys_hostile_arguments_arrive_unchanged
+    cineris-tools::it shell::sh::sys_hostile_arguments_arrive_unchanged
 
 [break] the-terminal-is-not-dumb
 rule: A command is told its terminal can do nothing (TERM=dumb): the environment, the listing and the input are read in one start.
-file: crates/cortex-tools/src/shell/env.rs
+file: crates/cineris-tools/src/shell/env.rs
 find: ("TERM", "dumb")
 replace: ("TERM", "xterm")
 caught-by:
-    cortex-tools::it shell::bash::sys_the_environment_the_directory_and_the_input
-    cortex-tools::it shell::sh::sys_the_environment_the_directory_and_the_input
+    cineris-tools::it shell::bash::sys_the_environment_the_directory_and_the_input
+    cineris-tools::it shell::sh::sys_the_environment_the_directory_and_the_input
 
 [break] the-command-runs-where-the-harness-does
 rule: A command runs in the workspace root, or in `cwd`: read in the same start as its environment and input.
-file: crates/cortex-tools/src/process/mod.rs
+file: crates/cineris-tools/src/process/mod.rs
 find: command.current_dir(&start.cwd).env_clear()
 replace: command.env_clear()
 caught-by:
-    cortex-tools::it shell::bash::sys_the_environment_the_directory_and_the_input
-    cortex-tools::it shell::sh::sys_the_environment_the_directory_and_the_input
+    cineris-tools::it shell::bash::sys_the_environment_the_directory_and_the_input
+    cineris-tools::it shell::sh::sys_the_environment_the_directory_and_the_input
 
 # ------------------------------------- the fixes of the full review
 
@@ -1105,9 +1105,9 @@ caught-by:
 
 [break] the-generator-does-not-wait-for-the-writer
 rule: The generator waits for the writer before the queue is full, so no event is dropped.
-file: crates/cortex-stats/src/synthetic.rs
+file: crates/cineris-stats/src/synthetic.rs
 in: Generator::emit
 find: if self.pending >= QUEUE / 2 {
 replace: if self.pending >= QUEUE * 4 {
 caught-by:
-    cortex-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back
+    cineris-stats synthetic::tests::a_small_month_is_what_the_crate_reads_back

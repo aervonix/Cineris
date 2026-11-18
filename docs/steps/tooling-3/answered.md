@@ -17,7 +17,7 @@ This step is not a numbered step of the build plan: it built the third round of 
 - **combine works in a `git clone --shared`, not a `git worktree add`.** A worktree writes into the repository: an entry under its worktrees, a branch or a detached `HEAD` of its own. A clone writes nothing there. The pull requests are fetched into the clone.
 - **The A/B base is beside the head's checkout,** so that the head's `.cargo/config.toml` does not reach its build.
 - **The partial-Landlock check fails unless the run named the gap.** A runner image whose kernel moves to Landlock 6 would otherwise turn the job into a copy of the blocking one, in silence.
-- **The rerun helper is in the test kit.** `cortex-base`'s own test of the program search cannot use it (the test kit depends on `cortex-base`) and keeps its path made relative by hand.
+- **The rerun helper is in the test kit.** `cineris-base`'s own test of the program search cannot use it (the test kit depends on `cineris-base`) and keeps its path made relative by hand.
 - **The release start-up on Windows,** which tooling 2's `try` run measured, is recorded in [performance-budgets.md](../../performance-budgets.md), "Start-up". Its outstanding item asked about the start overhead of step 11 "in a release build", which on reading is the overhead of starting a shell command (the row "Starting a shell command"), not of starting the binary. That row still says a release build on Windows is not measured, so the item is kept, with a line saying what is measured and how `try` could measure the rest (the coordinator's answer).
 
 ## The independent reviews
@@ -52,4 +52,4 @@ A second review, of the changes since, found:
 
 - **The breaks showed two tests that did not bite:** the pre-flight's nesting case (`in: Default::default` never met an `impl` that answers to the name), and the working directory of a rerun (a relative `ComSpec` is refused wherever the child runs). Both tests now check what they claim.
 - **The dispatched nightly found the step's own workflow edit unreadable:** `run: … --ignored combine::` ends in a colon, a mapping to YAML, and GitHub read the file as no workflow. A workflow rule now refuses an unquoted value that holds `: ` or ends with `:`.
-- **The partial-Landlock job built no confinement test:** they need `cortex-sandbox`'s `backends` feature, which a build of that crate alone does not turn on. The job's own check failed it; its message now names that cause beside the kernel.
+- **The partial-Landlock job built no confinement test:** they need `cineris-sandbox`'s `backends` feature, which a build of that crate alone does not turn on. The job's own check failed it; its message now names that cause beside the kernel.

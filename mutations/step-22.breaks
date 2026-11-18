@@ -4,7 +4,7 @@
 
 [break] the-16-colour-accent-from-the-reduction
 rule: At 16 colours the accent is the one the theme names (magenta), never the automatic reduction, which is bright blue.
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: resolve_colour
 find: ColorDepth::Ansi16 => palette.accent_16,
 replace: ColorDepth::Ansi16 => palette.accent.for_depth(depth),
@@ -13,7 +13,7 @@ caught-by:
 
 [break] accent-text-under-its-target
 rule: Text in the accent reaches 4.5 to 1 against the background, in true colour and in 256 colours.
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: tint_for
 find: contrast(color, background) >= target
 replace: contrast(color, background) >= target - 1.5
@@ -23,7 +23,7 @@ caught-by:
 
 [break] accent-text-in-magenta-on-a-dark-16-colour-terminal
 rule: On a dark background at 16 colours no magenta reaches the target, so accent-coloured text is bold in the default colour.
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: resolve_colour
 find: (ColorDepth::Mono, _) | (ColorDepth::Ansi16, Background::Dark) => plain.bold(),
 replace:
@@ -34,7 +34,7 @@ caught-by:
 
 [break] muted-is-not-dim-without-colour
 rule: Without colour, a token that was only a colour gets an attribute, so meaning is never carried by colour alone.
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: resolve_colour
 find: let muted = if mono { plain.dim() } else { fg(palette.muted) };
 replace: let muted = if mono { plain } else { fg(palette.muted) };
@@ -43,7 +43,7 @@ caught-by:
 
 [break] a-cut-splits-a-cluster
 rule: Cutting with an ellipsis is between grapheme clusters, and the result is never wider than its room.
-file: crates/cortex-tui/src/layout.rs
+file: crates/cineris-tui/src/layout.rs
 in: prefix
 find: for (offset, _, columns) in graphemes(text) {
 replace: for (offset, columns) in text.char_indices().map(|(offset, _)| (offset, 1)) {
@@ -52,7 +52,7 @@ caught-by:
 
 [break] wrapping-splits-a-cluster
 rule: Wrapping breaks lines between grapheme clusters, never inside one.
-file: crates/cortex-tui/src/layout.rs
+file: crates/cineris-tui/src/layout.rs
 in: wrap
 find: wrap_ranges(&text, width)
 replace: text.char_indices().map(|(at, c)| at..at + c.len_utf8()).collect::<Vec<_>>()
@@ -62,7 +62,7 @@ caught-by:
 
 [break] a-box-row-reaches-past-its-width
 rule: A box is exactly as wide as it is told, so a box drawn at a view's width leaves the terminal's last column empty.
-file: crates/cortex-tui/src/rounded.rs
+file: crates/cineris-tui/src/rounded.rs
 in: RoundedBox::inner
 find: self.width.saturating_sub(4)
 replace: self.width.saturating_sub(3)
@@ -72,7 +72,7 @@ caught-by:
 
 [break] a-labelled-bottom-border-a-column-short
 rule: A bottom border with a label is as wide as the box, its corner under the right border (the reference screens had it one column short).
-file: crates/cortex-tui/src/rounded.rs
+file: crates/cineris-tui/src/rounded.rs
 in: RoundedBox::bottom
 find: let rule = self.width - 5 - label.width();
 replace: let rule = self.width - 6 - label.width();
@@ -82,7 +82,7 @@ caught-by:
 
 [break] the-256-colour-accent-text-loses-its-hue
 rule: At 256 colours the accent's text is the nearest colour that reaches the target and keeps the accent's hue, not the nearest that reaches it (which is blue on a light background).
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: nearest_indexed_reaching
 find: saturation >= 0.4 && turn.min(360.0 - turn) <= 15.0 && keeps_hue.is_none_or(|(least, _)| gap < least)
 replace: keeps_hue.is_none_or(|(least, _)| gap < least)
@@ -92,7 +92,7 @@ caught-by:
 
 [break] a-tint-mixed-into-a-background-nobody-reported
 rule: The diff tints are mixed into the background the terminal reported, and there is none when it reported none.
-file: crates/cortex-tui/src/theme.rs
+file: crates/cineris-tui/src/theme.rs
 in: resolve_colour
 find: (depth == ColorDepth::TrueColor && reported).then(
 replace: (depth == ColorDepth::TrueColor).then(
@@ -104,7 +104,7 @@ caught-by:
 
 [break] a-committed-paragraph-parsed-again
 rule: A paragraph's committed rows are dropped from its text where nothing spans the break: finished text is never parsed again.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::decide
 find: let (split, rows) = cut;
 replace:
@@ -115,7 +115,7 @@ caught-by:
 
 [break] a-row-committed-while-a-mark-is-open
 rule: A paragraph's row is committed only when no mark that text still to come could close is open before the end of the next row's first word, or after it has been held for two more rows.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::decide
 find: .is_some_and(|at| at < first_word_end);
 replace: .is_some_and(|_| false);
@@ -125,7 +125,7 @@ caught-by:
 
 [break] a-mark-open-across-a-closed-construct-taken-as-final
 rule: A matched construct with an open mark inside it may yet be undone (a later code span or link can take in its closing mark), so the rows from its start are not final.
-file: crates/cortex-tui/src/markdown/inline.rs
+file: crates/cineris-tui/src/markdown/inline.rs
 in: finish
 find: if opens.get(inside).is_some_and(|&open| open < span.end) {
 replace: if false {
@@ -134,7 +134,7 @@ caught-by:
 
 [break] model-text-skips-sanitize
 rule: Text from a model passes through sanitize before it is laid out.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::read
 find: let line = sanitize(raw).into_owned();
 occurrence: 1
@@ -144,7 +144,7 @@ caught-by:
 
 [break] a-file-name-skips-sanitize
 rule: A tool call's target (a path from the model) passes through sanitize.
-file: crates/cortex-tui/src/view/round.rs
+file: crates/cineris-tui/src/view/round.rs
 in: call_line
 find: title.push_str(&one_line(file_name(path)));
 replace: title.push_str(file_name(path));
@@ -153,7 +153,7 @@ caught-by:
 
 [break] a-block-row-reaches-past-its-width
 rule: No row a view draws is wider than the width it is given: a row led by a glyph is cut to it.
-file: crates/cortex-tui/src/view/blocks.rs
+file: crates/cineris-tui/src/view/blocks.rs
 in: led
 find: cut(&line, width, look.glyphs.ellipsis)
 replace: line
@@ -162,7 +162,7 @@ caught-by:
 
 [break] a-box-commits-before-its-last-call-ends
 rule: A round's box stays live while any of its calls runs, and is committed when its last call ends.
-file: crates/cortex-tui/src/transcript.rs
+file: crates/cineris-tui/src/transcript.rs
 in: Block::is_open
 find: Self::Round(round) => round.is_running(),
 replace: Self::Round(_) => false,
@@ -171,7 +171,7 @@ caught-by:
 
 [break] tool-detail-ignored-by-an-open-live-box
 rule: An open box in the live region shows at most tui.tool_detail rows of detail.
-file: crates/cortex-tui/src/view/round.rs
+file: crates/cineris-tui/src/view/round.rs
 in: round
 find: clip_detail(&mut rows, look);
 replace:
@@ -180,10 +180,10 @@ caught-by:
 
 [break] highlighting-on-the-callers-thread
 rule: Highlighting runs on a worker thread of its own, never on the thread that draws.
-file: crates/cortex-tui/src/highlight.rs
+file: crates/cineris-tui/src/highlight.rs
 find:
     std::thread::Builder::new()
-        .name("cortex-highlight".to_owned())
+        .name("cineris-highlight".to_owned())
         .spawn(move || engine::run(&shared))
         .is_ok()
 replace:
@@ -196,7 +196,7 @@ caught-by:
 
 [break] a-code-line-waits-without-end
 rule: A code line waits for its colours for at most WAIT, then commits plain: a stuck worker never holds the transcript.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::flush
 find: if self.scratch || self.now.saturating_sub(*since) >= WAIT
 replace: if self.scratch
@@ -205,7 +205,7 @@ caught-by:
 
 [break] a-pathological-line-highlighted
 rule: A line over LONGEST bytes is never given to the highlighter: it is drawn plain at once.
-file: crates/cortex-tui/src/highlight.rs
+file: crates/cineris-tui/src/highlight.rs
 in: Highlighter::line
 find: if text.len() > LONGEST {
 replace: if false {
@@ -214,7 +214,7 @@ caught-by:
 
 [break] a-wide-table-not-stacked
 rule: A table too wide for the room falls back to stacked rows.
-file: crates/cortex-tui/src/markdown/table.rs
+file: crates/cineris-tui/src/markdown/table.rs
 in: Table::draw
 find: if total <= room {
 replace: if true {
@@ -223,16 +223,16 @@ caught-by:
 
 [break] a-links-address-hidden-without-hyperlinks
 rule: Where the terminal has no hyperlinks, a link's text is followed by its address.
-file: crates/cortex-tui/src/markdown/rows.rs
+file: crates/cineris-tui/src/markdown/rows.rs
 in: Laid::new
-find: && !(frame.look.hyperlinks && cortex_term::line::linkable(&url))
+find: && !(frame.look.hyperlinks && cineris_term::line::linkable(&url))
 replace: && false
 caught-by:
     markdown::tests::blocks_are_drawn_as_09_says
 
 [break] live-reasoning-shows-its-first-words
 rule: Reasoning while it streams shows its latest words.
-file: crates/cortex-tui/src/view/blocks.rs
+file: crates/cineris-tui/src/view/blocks.rs
 in: reasoning_live
 find: Keep::End
 replace: Keep::Start
@@ -241,7 +241,7 @@ caught-by:
 
 [break] notices-set-apart-from-each-other
 rule: A blank row sets each block apart, except one notice from the next.
-file: crates/cortex-tui/src/transcript.rs
+file: crates/cineris-tui/src/transcript.rs
 in: gap
 find: (last == Kind::Notice && kind == Kind::Notice)
 replace: false
@@ -250,18 +250,18 @@ caught-by:
 
 [break] tui-screens-passes-a-row-it-skipped
 rule: The golden screens compare every cell of every row they count as compared.
-file: crates/cortex-tui/tests/it/screens/mod.rs
+file: crates/cineris-tui/tests/it/screens/mod.rs
 in: compare_screen
 find: outcome.compared += 1;
 replace:
     outcome.compared += 1;
     continue;
 caught-by:
-    cortex-tui::it screens::a_changed_cell_is_found_and_a_row_not_built_is_not_compared
+    cineris-tui::it screens::a_changed_cell_is_found_and_a_row_not_built_is_not_compared
 
 [break] tui-screens-compares-a-row-not-built
 rule: A row another step draws is counted as not built and never compared.
-file: crates/cortex-tui/tests/it/screens/mod.rs
+file: crates/cineris-tui/tests/it/screens/mod.rs
 in: compare_screen
 find:
     if let Row::NotBuilt(what) = row {
@@ -270,13 +270,13 @@ replace:
         && false
     {
 caught-by:
-    cortex-tui::it screens::the_views_draw_the_reference_screens
+    cineris-tui::it screens::the_views_draw_the_reference_screens
 
 # The review's findings: each rule it found unkept, now kept, broken again.
 
 [break] a-long-word-decided-only-at-its-end
 rule: A run of text with no white space is decided inside, every LONG_RUN bytes, so a very long word does not keep its rows live.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::evaluate
 find: at >= paragraph.due && settled_inside_word(&paragraph.src, at, &paragraph.frozen)
 replace: false
@@ -285,7 +285,7 @@ caught-by:
 
 [break] a-long-words-first-word-runs-past-its-row
 rule: The first word of a row ends at the row's end when the word goes on past it, so a mark later in a long word does not hold the rows before it.
-file: crates/cortex-tui/src/markdown/rows.rs
+file: crates/cineris-tui/src/markdown/rows.rs
 in: Laid::first_word_end
 find: self.source_after(end.min(row_end))
 replace: self.source_after(end)
@@ -294,7 +294,7 @@ caught-by:
 
 [break] kept-text-without-a-bound
 rule: A paragraph keeps at most LIMIT bytes of committed text: past it a break is forced where any row starts, so its rows starting inside constructs cost no more than their length.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::decide
 find: .filter(|&split| kept(split) > limit && settled(split))
 replace: .filter(|_| false)
@@ -303,7 +303,7 @@ caught-by:
 
 [break] a-resize-forgets-the-committed-rows
 rule: A paragraph's rows committed at another width keep the breaks they were drawn with, and what follows is wrapped at the width now: no text is lost or shown twice.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::rewidth
 find: paragraph.fixed = Some((laid.rows[..committed].to_vec(), laid.row_start(committed)));
 replace: let _ = (laid, committed);
@@ -312,7 +312,7 @@ caught-by:
 
 [break] a-forced-row-leaves-the-marks-inside-what-it-holds
 rule: A row committed with a mark still open freezes that mark, and every open mark inside a construct that starts before the row's point, so no later text undoes what was committed.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::decide
 find: paragraph.frozen.extend(parsed.settling(first_word_end));
 replace: paragraph.frozen.extend(parsed.opens.iter().copied().filter(|&open| open < first_word_end));
@@ -321,7 +321,7 @@ caught-by:
 
 [break] a-frame-takes-the-colours
 rule: The live region only looks at a code line's colours: the commit after it still has them.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::flush
 find: self.highlighter.peek(*block, *index)
 replace: self.highlighter.take(*block, *index)
@@ -330,7 +330,7 @@ caught-by:
 
 [break] partial-text-skips-sanitize
 rule: Text from a model passes through sanitize before it is laid out, when a line's text reaches its paragraph before the line ends too.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::partial
 find: let text = sanitize_after(before, &self.pending[start..usable]).into_owned();
 replace: let text = { let _ = before; self.pending[start..usable].to_owned() };
@@ -339,7 +339,7 @@ caught-by:
 
 [break] a-queued-code-line-wider-than-the-window
 rule: A code line that waited for its colours while the window shrank is no wider than the window when it commits.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::flush
 find: let width = width.min(frame.width);
 replace: let width = width.max(frame.width);
@@ -348,7 +348,7 @@ caught-by:
 
 [break] a-header-only-table-dropped
 rule: A table too wide for the room with only a header shows the header: what it says is never dropped.
-file: crates/cortex-tui/src/markdown/table.rs
+file: crates/cineris-tui/src/markdown/table.rs
 in: Table::draw
 find: if first && rows.is_empty() {
 replace: if false {
@@ -357,7 +357,7 @@ caught-by:
 
 [break] reasoning-without-a-summary-holds-what-follows
 rule: Reasoning is open until it has finished, with a summary or without one.
-file: crates/cortex-tui/src/transcript.rs
+file: crates/cineris-tui/src/transcript.rs
 in: Block::is_open
 find: Self::Reasoning(reasoning) => !reasoning.finished,
 replace: Self::Reasoning(reasoning) => reasoning.summary.is_none(),
@@ -366,7 +366,7 @@ caught-by:
 
 [break] a-block-reached-by-its-place
 rule: A block is reached by its id while it is open, wherever it is in the queue.
-file: crates/cortex-tui/src/transcript.rs
+file: crates/cineris-tui/src/transcript.rs
 in: Transcript::get_mut
 find: .find(|entry| entry.id == id)
 replace: .rfind(|_| true)
@@ -375,17 +375,17 @@ caught-by:
 
 [break] a-one-row-field-keeps-its-line-break
 rule: A field a view draws on one row shows a tab or a line break as a space.
-file: crates/cortex-tui/src/view/mod.rs
+file: crates/cineris-tui/src/view/mod.rs
 in: one_line
-find: cortex_term::sanitize(text).replace(['\n', '\t'], " ")
-replace: cortex_term::sanitize(text).into_owned()
+find: cineris_term::sanitize(text).replace(['\n', '\t'], " ")
+replace: cineris_term::sanitize(text).into_owned()
 caught-by:
     view::hint::tests::a_tab_or_a_line_break_in_a_one_row_field_reaches_no_line
     view::menu::tests::the_menus_in_every_variant
 
 [break] the-armed-quit-unsaid
 rule: The hint row says when Ctrl+C has armed quitting.
-file: crates/cortex-tui/src/view/hint.rs
+file: crates/cineris-tui/src/view/hint.rs
 in: left_side
 find: Hint::QuitArmed => Line::styled("ctrl+c again quits", hint)
 replace: Hint::QuitArmed => Line::new()
@@ -396,7 +396,7 @@ caught-by:
 
 [break] a-mark-stretch-decided-before-it-is-text
 rule: Inside a stretch of `*`, `_` and backticks, a decision waits until the stretch is longer than marks can be.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: settled_inside_word
 find: > inline::MARK_RUN + 1
 replace: > 0
@@ -405,7 +405,7 @@ caught-by:
 
 [break] a-long-stretch-of-marks-read-as-marks
 rule: A stretch of more than MARK_RUN marks with nothing between them is text.
-file: crates/cortex-tui/src/markdown/inline.rs
+file: crates/cineris-tui/src/markdown/inline.rs
 in: Parser::scan
 find: if end - at > MARK_RUN {
 replace: if false {
@@ -414,7 +414,7 @@ caught-by:
 
 [break] the-line-in-progress-kept-whole
 rule: Text of the line in progress given to the paragraph is not kept: a frame's live rows parse no more than the text kept, whatever the line's length.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::partial
 find: self.pending.drain(..taken);
 replace: let _ = taken;
@@ -423,7 +423,7 @@ caught-by:
 
 [break] a-wrapped-queued-row-loses-its-indent
 rule: A row queued behind a code line and wrapped to a smaller window keeps its marks' indent on its later lines.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: fitted
 find: Line::plain(" ".repeat(indent))
 replace: Line::new()
@@ -432,7 +432,7 @@ caught-by:
 
 [break] an-entity-cut-by-white-space-held-open
 rule: At a word's end, where white space follows, `&` and `<` running to the end hold nothing.
-file: crates/cortex-tui/src/markdown/inline.rs
+file: crates/cineris-tui/src/markdown/inline.rs
 in: parse_cut
 find:
     if !continues {
@@ -444,7 +444,7 @@ caught-by:
 
 [break] a-second-resize-forgets-the-rows-of-the-first
 rule: A resize keeps the rows committed at every width before it, those kept by an earlier resize included.
-file: crates/cortex-tui/src/markdown/mod.rs
+file: crates/cineris-tui/src/markdown/mod.rs
 in: Markdown::rewidth
 find: let laid = paragraph.lay_out(parsed.pieces, old, frame);
 replace: let laid = Laid::new(parsed.pieces, old, frame);

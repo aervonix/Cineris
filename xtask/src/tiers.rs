@@ -482,8 +482,8 @@ fn markdown(cases: &[TestCase], os: Os) -> String {
 /// line. The job summary lists them all.
 const CRATES_SHOWN: usize = 12;
 
-/// The crate a test binary belongs to: `cortex-agent` for
-/// `cortex-agent::it`, `cortex-cli` for `cortex-cli::bin/cortex`.
+/// The crate a test binary belongs to: `cineris-agent` for
+/// `cineris-agent::it`, `cineris-cli` for `cineris-cli::bin/cineris`.
 pub(crate) fn crate_of(binary: &str) -> &str {
     binary.split("::").next().unwrap_or(binary)
 }
@@ -697,28 +697,28 @@ mod tests {
 
     #[test]
     fn where_a_test_lives_and_its_name_decide_its_tier() {
-        assert_eq!(Tier::of("cortex-base", "text::tests::wraps"), Tier::Unit);
+        assert_eq!(Tier::of("cineris-base", "text::tests::wraps"), Tier::Unit);
         assert_eq!(
-            Tier::of("cortex-cli::bin/cortex", "tests::help"),
+            Tier::of("cineris-cli::bin/cineris", "tests::help"),
             Tier::Unit
         );
         assert_eq!(
-            Tier::of("cortex-agent::it", "loop_::retries"),
+            Tier::of("cineris-agent::it", "loop_::retries"),
             Tier::Integration
         );
-        assert_eq!(Tier::of("cortex-cli::system", "sys_version"), Tier::System);
+        assert_eq!(Tier::of("cineris-cli::system", "sys_version"), Tier::System);
         // A test that starts a process is a system test wherever it lives.
         assert_eq!(
             Tier::of("xtask::bin/xtask", "rules::tests::sys_repository"),
             Tier::System
         );
         assert_eq!(
-            Tier::of("cortex-agent::it", "tools::sys_shell_is_cancelled"),
+            Tier::of("cineris-agent::it", "tools::sys_shell_is_cancelled"),
             Tier::System
         );
         // The prefix counts only at the start of a path segment.
         assert_eq!(
-            Tier::of("cortex-base", "tests::parses_sys_calls"),
+            Tier::of("cineris-base", "tests::parses_sys_calls"),
             Tier::Unit
         );
     }
@@ -744,18 +744,18 @@ mod tests {
   3, system            4   15.0 s       14.2 s    60 s   24%
 
   slowest in tier 1, unit (3 tests, 92% of the tier's time)
-      3.000 s  cortex-policy  rules::tests::a_deny_beats_an_allow_in_any_order
-      1.500 s  cortex-base  framing::tests::every_split_into_three
-      1.000 s  cortex-base  text::tests::wraps_at_the_width
+      3.000 s  cineris-policy  rules::tests::a_deny_beats_an_allow_in_any_order
+      1.500 s  cineris-base  framing::tests::every_split_into_three
+      1.000 s  cineris-base  text::tests::wraps_at_the_width
 
   slowest in tier 2, integration (3 tests, 98% of the tier's time)
-      6.250 s  cortex-llm::it  anthropic::replay::every_fixture_cut_in_two
-      2.500 s  cortex-agent::it  denials::a_refused_call_stops_the_turn
-      1.050 s  cortex-agent::it  rounds::two_reads_run_together
+      6.250 s  cineris-llm::it  anthropic::replay::every_fixture_cut_in_two
+      2.500 s  cineris-agent::it  denials::a_refused_call_stops_the_turn
+      1.050 s  cineris-agent::it  rounds::two_reads_run_together
 
   slowest in tier 3, system (3 tests, 97% of the tier's time)
-     10.000 s  cortex-policy::it  differential::sys_bash_agrees
-      2.500 s  cortex-tools::it  shell::sys_the_exit_status_is_the_commands
+     10.000 s  cineris-policy::it  differential::sys_bash_agrees
+      2.500 s  cineris-tools::it  shell::sys_the_exit_status_is_the_commands
       2.000 s  xtask::bin/xtask  rules::tests::sys_the_repository_follows_its_own_rules
 "
         );
@@ -786,18 +786,18 @@ mod tests {
 
 | Tier | Seconds | Test |
 |---|---:|---|
-| 1, unit | 3.000 | `cortex-policy` `rules::tests::a_deny_beats_an_allow_in_any_order` |
-| 2, integration | 6.250 | `cortex-llm::it` `anthropic::replay::every_fixture_cut_in_two` |
-| 3, system | 10.000 | `cortex-policy::it` `differential::sys_bash_agrees` |
+| 1, unit | 3.000 | `cineris-policy` `rules::tests::a_deny_beats_an_allow_in_any_order` |
+| 2, integration | 6.250 | `cineris-llm::it` `anthropic::replay::every_fixture_cut_in_two` |
+| 3, system | 10.000 | `cineris-policy::it` `differential::sys_bash_agrees` |
 "
         );
     }
 
     #[test]
     fn a_tier_is_split_by_crate_above_the_start() {
-        assert_eq!(crate_of("cortex-agent::it"), "cortex-agent");
-        assert_eq!(crate_of("cortex-cli::bin/cortex"), "cortex-cli");
-        assert_eq!(crate_of("cortex-base"), "cortex-base");
+        assert_eq!(crate_of("cineris-agent::it"), "cineris-agent");
+        assert_eq!(crate_of("cineris-cli::bin/cineris"), "cineris-cli");
+        assert_eq!(crate_of("cineris-base"), "cineris-base");
 
         let cases = junit::parse(REPORT);
         // The start cost of the fixed report is 0.2 s.
@@ -814,11 +814,11 @@ mod tests {
         assert_eq!(
             rounded,
             [
-                ("cortex-policy", [280, 0, 980]),
-                ("cortex-llm", [0, 605, 0]),
-                ("cortex-agent", [0, 315, 0]),
-                ("cortex-tools", [0, 0, 260]),
-                ("cortex-base", [220, 0, 0]),
+                ("cineris-policy", [280, 0, 980]),
+                ("cineris-llm", [0, 605, 0]),
+                ("cineris-agent", [0, 315, 0]),
+                ("cineris-tools", [0, 0, 260]),
+                ("cineris-base", [220, 0, 0]),
                 ("xtask", [0, 0, 180]),
             ]
         );
@@ -839,9 +839,9 @@ mod tests {
     fn the_crates_past_the_first_few_are_one_line() {
         let cases = junit::parse(REPORT);
         let text = crates_text(&cases, 2);
-        assert!(text.contains("cortex-policy"), "{text}");
-        assert!(text.contains("cortex-llm"), "{text}");
-        assert!(!text.contains("cortex-agent"), "{text}");
+        assert!(text.contains("cineris-policy"), "{text}");
+        assert!(text.contains("cineris-llm"), "{text}");
+        assert!(!text.contains("cineris-agent"), "{text}");
         // agent 3.15, tools 2.6, base 2.2, xtask 1.8.
         assert!(text.contains("4 more crates"), "{text}");
         let rest = text
@@ -862,15 +862,15 @@ mod tests {
     #[test]
     fn tests_that_took_the_same_time_are_listed_in_name_order() {
         let cases = [
-            case("cortex-base", "tests::b", 0.5),
-            case("cortex-base", "tests::a", 0.5),
-            case("cortex-agent", "tests::z", 0.5),
+            case("cineris-base", "tests::b", 0.5),
+            case("cineris-base", "tests::a", 0.5),
+            case("cineris-agent", "tests::z", 0.5),
         ];
 
         let lines = slowest_tests(&cases, 2);
 
-        let z = lines.find("cortex-agent  tests::z").unwrap();
-        let a = lines.find("cortex-base  tests::a").unwrap();
+        let z = lines.find("cineris-agent  tests::z").unwrap();
+        let a = lines.find("cineris-base  tests::a").unwrap();
         assert!(z < a, "{lines}");
         assert!(!lines.contains("tests::b"), "{lines}");
     }
@@ -886,9 +886,9 @@ mod tests {
     /// Five unit tests of `seconds` each, and one quick integration test.
     fn unit_tests_taking(seconds: f64) -> Vec<TestCase> {
         let mut cases: Vec<TestCase> = (0..5)
-            .map(|i| case("cortex-base", &format!("tests::slow_{i}"), seconds))
+            .map(|i| case("cineris-base", &format!("tests::slow_{i}"), seconds))
             .collect();
-        cases.push(case("cortex-agent::it", "loop_::quick", 0.1));
+        cases.push(case("cineris-agent::it", "loop_::quick", 0.1));
         cases
     }
 
@@ -915,7 +915,7 @@ mod tests {
     fn the_system_tier_has_more_room_on_windows() {
         // 75 s of system tests: over 60 s, inside 90 s.
         let cases: Vec<TestCase> = (0..5)
-            .map(|i| case("cortex-cli::system", &format!("sys_slow_{i}"), 15.0))
+            .map(|i| case("cineris-cli::system", &format!("sys_slow_{i}"), 15.0))
             .collect();
 
         assert_eq!(
@@ -932,7 +932,7 @@ mod tests {
         let mut cases: Vec<TestCase> = (0..200)
             .map(|i| {
                 case(
-                    "cortex-base",
+                    "cineris-base",
                     &format!("tests::t{i}"),
                     0.010 + 0.001 * f64::from(i),
                 )
@@ -941,16 +941,16 @@ mod tests {
         assert!((start_cost(&cases) - 0.012).abs() < 1e-9);
         // A system test is not looked at, however quick: it starts other
         // processes, and is no measure of starting one.
-        cases.push(case("cortex-tools::it", "shell::sys_quick", 0.001));
+        cases.push(case("cineris-tools::it", "shell::sys_quick", 0.001));
         assert!((start_cost(&cases) - 0.012).abs() < 1e-9);
         // With fewer than a hundred, the quickest.
         let few = [
-            case("cortex-base", "tests::a", 0.030),
-            case("cortex-agent::it", "rounds::b", 0.020),
+            case("cineris-base", "tests::a", 0.030),
+            case("cineris-agent::it", "rounds::b", 0.020),
         ];
         assert!((start_cost(&few) - 0.020).abs() < 1e-9);
         // With none to measure, nothing is taken off.
-        let system_only = [case("cortex-cli::system", "sys_version", 0.5)];
+        let system_only = [case("cineris-cli::system", "sys_version", 0.5)];
         assert_eq!(start_cost(&system_only), 0.0);
         assert_eq!(start_cost(&[]), 0.0);
     }
@@ -958,9 +958,9 @@ mod tests {
     #[test]
     fn a_test_quicker_than_the_start_cost_counts_as_nothing() {
         let cases = [
-            case("cortex-base", "tests::a", 0.010),
-            case("cortex-base", "tests::b", 0.008),
-            case("cortex-base", "tests::c", 0.510),
+            case("cineris-base", "tests::a", 0.010),
+            case("cineris-base", "tests::b", 0.008),
+            case("cineris-base", "tests::c", 0.510),
         ];
         let totals = total(&cases, Tier::Unit, 0.010);
         assert_eq!(totals.count, 3);
@@ -974,7 +974,7 @@ mod tests {
         // a process on a slow runner: 24 s, over the budget of 20 s as a
         // raw total, and nothing above the start.
         let cases: Vec<TestCase> = (0..2000)
-            .map(|i| case("cortex-base", &format!("tests::t{i}"), 0.012))
+            .map(|i| case("cineris-base", &format!("tests::t{i}"), 0.012))
             .collect();
         let (table, over) = summarise(&cases, Os::Windows);
         assert_eq!(over, [], "{table}");
@@ -983,7 +983,7 @@ mod tests {
         assert!(!table.contains("fewer than"), "{table}");
         // One test that takes 21 s puts it over, as it should.
         let mut slow = cases;
-        slow.push(case("cortex-base", "tests::slow", 21.0));
+        slow.push(case("cineris-base", "tests::slow", 21.0));
         assert_eq!(
             summarise(&slow, Os::Windows).1,
             [(Tier::Unit, Verdict::OverBudget)]

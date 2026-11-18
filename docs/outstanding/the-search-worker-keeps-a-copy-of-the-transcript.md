@@ -1,6 +1,6 @@
 The full screen's search keeps a lower-cased copy of the whole kept transcript for as long as the program runs, and builds it on the interface's thread the first time.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 33
 
 | Item | Who | When |

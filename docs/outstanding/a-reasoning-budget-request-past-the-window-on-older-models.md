@@ -1,6 +1,6 @@
 A main request with a reasoning budget can pass the window with its `max_tokens` on Anthropic's models before Claude 4.5, failing every turn alike.
 
-- Area: cortex-agent
+- Area: cineris-agent
 - Owner: the step that adds a budget model to the catalog
 
 | Item | Who | When |

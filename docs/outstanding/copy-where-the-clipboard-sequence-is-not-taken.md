@@ -1,6 +1,6 @@
 `/copy` cannot tell whether the terminal took OSC 52, and shows no text for copying by hand where it is known not to.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 25
 
 | Item | Who | When |

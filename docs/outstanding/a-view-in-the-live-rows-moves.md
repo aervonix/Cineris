@@ -1,6 +1,6 @@
 A full-screen view scrolled up into the live rows moves when a block above it is kept.
 
-- Area: cortex-tui
+- Area: cineris-tui
 - Owner: step 33
 
 | Item | Who | When |

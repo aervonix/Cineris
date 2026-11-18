@@ -29,7 +29,7 @@ What the 43 lines showed of `brush-parser`, the only serious parser candidate:
 
 ## Decision
 
-**Command lines are analysed by tokenizers of our own that accept a small listed subset and refuse everything else.** They are in `cortex-policy` (`command::posix`, `command::powershell`).
+**Command lines are analysed by tokenizers of our own that accept a small listed subset and refuse everything else.** They are in `cineris-policy` (`command::posix`, `command::powershell`).
 
 - **POSIX shells** (bash, sh, dash, zsh, ksh): simple commands joined by `|`, `&&`, `||`, `;` and line breaks; words of letters, digits and `_ - . / : = + , @ %`; single quotes; double quotes with no `$` and no back-tick; `~` for the home directory; globs, kept and flagged; redirections `<`, `>`, `>>` to a plain word, and `2>&1`. Everything else is "not modelled": `$`, back-ticks, `( )`, `{ }` anywhere in a word, a backslash outside quotes, `&`, `|&`, here-documents, `<<<`, `>|`, `#`, `!`, `^`, a word that begins with `=`, `~user`, an assignment, a shell keyword, a builtin that runs text as code or changes what later commands mean, a quote left open.
 - **PowerShell:** one command with literal arguments. No `;`, `|`, `&`, `$`, back-tick, bracket, `@`, `,`, `%`, `#`, `<`, `>`; a quote only around a whole word; no character outside ASCII outside quotes, and no typographic quote anywhere, because PowerShell reads several dashes as `-` and several quotes as `'` or `"`; no nested `powershell`, `pwsh`, `cmd` or `Invoke-Expression`, which is where an encoded command would be.

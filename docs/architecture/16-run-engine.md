@@ -15,7 +15,7 @@ None of this is in the first usable release. It is the first milestone after it.
 | **Judges** | Score an outcome: the project's checks, cost and time, diff measures, and optionally a model. | All three. |
 | **Results** | Stores outcomes and scores in the local statistics. | All three. |
 
-**A supervised session is an ordinary session.** It is reached through a handle with the same operations and events as any client uses ([11-rpc-protocol.md](11-rpc-protocol.md)). The handle hides whether the session runs in this process or in another one. That is what leaves room for sessions on another machine later, for example a `cortex serve --stdio` process started over SSH.
+**A supervised session is an ordinary session.** It is reached through a handle with the same operations and events as any client uses ([11-rpc-protocol.md](11-rpc-protocol.md)). The handle hides whether the session runs in this process or in another one. That is what leaves room for sessions on another machine later, for example a `cineris serve --stdio` process started over SSH.
 
 **Parallel attempts are the simplest use of the layer:** N sessions given the same task, judged, with the user picking one. The Coordinator is the general use: sessions given different tasks by a Manager session that reviews and integrates their work.
 
@@ -105,7 +105,7 @@ If the real workspace changed while attempts ran, the pick is applied as a patch
 
 **Replaying one session.** The engine builds a task from the recorded prompts and a base from the recorded state, runs it with the chosen variant, and judges it. Follow-up prompts that depended on the first run's exact output are not blindly replayed: by default a replay covers the first prompt up to the end of its turn, which is the unit that can be compared fairly.
 
-**Evaluating a set-up.** `cortex eval` takes a selection of recorded tasks (by project, date, or tag) and a set of variants, runs the matrix under a budget the user sets, and reports per variant: pass rate on checks, cost, time, and failure kinds. Results go to the statistics, where the measured choice of variants reads them.
+**Evaluating a set-up.** `cineris eval` takes a selection of recorded tasks (by project, date, or tag) and a set of variants, runs the matrix under a budget the user sets, and reports per variant: pass rate on checks, cost, time, and failure kinds. Results go to the statistics, where the measured choice of variants reads them.
 
 **Budget.** Every evaluation has a hard cap on money and on wall-clock time, shown before it starts. It never runs on its own.
 
@@ -131,9 +131,9 @@ Adopted by the owner on 2026-11-12 ([../ideas.md](../ideas.md)). Replay needs ca
 2. Agreement with the accepted outcome: the same files changed, and the changes are close by a diff measure.
 3. A model judge, on the `judge` role, given the task, the accepted outcome and the replay's outcome.
 
-**Use.** `cortex eval --cases corrections` runs variants (a model, a prompt style, an edit format) against the user's own corrections and reports how often each would have been right the first time. The measured choice of per-model variants ([14-adaptation.md](14-adaptation.md)) reads these results, which is what makes it trustworthy: variants are compared on real corrections, offline, not by experimenting on the user.
+**Use.** `cineris eval --cases corrections` runs variants (a model, a prompt style, an edit format) against the user's own corrections and reports how often each would have been right the first time. The measured choice of per-model variants ([14-adaptation.md](14-adaptation.md)) reads these results, which is what makes it trustworthy: variants are compared on real corrections, offline, not by experimenting on the user.
 
-**Limits.** Capture is bookkeeping and costs nothing noticeable. Replaying costs tokens, so it runs only when asked, under a budget. Cases contain the user's code and never leave the machine. A noisy signal (an undo that was a change of mind, not a mistake) is expected: cases can be listed, tagged and deleted with `cortex eval cases`.
+**Limits.** Capture is bookkeeping and costs nothing noticeable. Replaying costs tokens, so it runs only when asked, under a budget. Cases contain the user's code and never leave the machine. A noisy signal (an undo that was a change of mind, not a mistake) is expected: cases can be listed, tagged and deleted with `cineris eval cases`.
 
 ## Unattended runs and safety
 
@@ -146,8 +146,8 @@ A run has nobody to ask.
 
 ## Where it lives
 
-- A crate `cortex-runs` holds the orchestration layer, parallel attempts and replay. It depends on `cortex-core`, `cortex-session`, `cortex-stats` and `cortex-knowledge`, and drives sessions through the ordinary operations. The Coordinator is a second crate on top of it.
-- Protocol additions under `run/*`: start a batch, list runs, watch a run's events (a run is a session, so the existing events apply), stop, pick, discard. The TUI's attempts panel and the `cortex attempts` and `cortex eval` commands are clients of these.
+- A crate `cineris-runs` holds the orchestration layer, parallel attempts and replay. It depends on `cineris-core`, `cineris-session`, `cineris-stats` and `cineris-knowledge`, and drives sessions through the ordinary operations. The Coordinator is a second crate on top of it.
+- Protocol additions under `run/*`: start a batch, list runs, watch a run's events (a run is a session, so the existing events apply), stop, pick, discard. The TUI's attempts panel and the `cineris attempts` and `cineris eval` commands are clients of these.
 - Git is used through the `git` program, not a library, for worktrees and patches. Where `git` is absent, the directory-copy path is used.
 
 ## Limits of the layer

@@ -550,7 +550,7 @@ See [the plan](build-plan.md), [step 10](build-plan.md#step-10-editing-tools-and
                 ("docs/page.md", page),
                 ("docs/build-plan.md", PLAN),
                 ("docs/steps/07/ci.md", "# After step 7\n"),
-                ("README.md", "# Cortex-Harness\n"),
+                ("README.md", "# Cineris\n"),
                 ("assets/logo.png", ""),
             ]),
             [] as [&str; 0]
@@ -712,7 +712,7 @@ A link is written `[text](missing.md)`, or with more marks ``[a](`b`.md)``.
                 "After a lockfile change: `rust-cache` alone, or with `sccache`",
                 "after-a-lockfile-change-rust-cache-alone-or-with-sccache",
             ),
-            ("`cortex_tools::run_blocking`", "cortex_toolsrun_blocking"),
+            ("`cineris_tools::run_blocking`", "cineris_toolsrun_blocking"),
             ("A [link](other.md#x) in a heading", "a-link-in-a-heading"),
             (
                 "Tiers 1 & 2 (unit, integration)",

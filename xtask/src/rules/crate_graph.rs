@@ -10,29 +10,29 @@ use std::collections::BTreeSet;
 use super::Violation;
 use crate::workspace::{DepKind, Package};
 
-const AGENT: &str = "cortex-agent";
-const BASE: &str = "cortex-base";
-const CLI: &str = "cortex-cli";
-const CONFIG: &str = "cortex-config";
-const COORDINATOR: &str = "cortex-coordinator";
-const CORE: &str = "cortex-core";
-const EXT: &str = "cortex-ext";
-const INDEX: &str = "cortex-index";
-const KNOWLEDGE: &str = "cortex-knowledge";
-const LLM: &str = "cortex-llm";
-const MCP: &str = "cortex-mcp";
-const POLICY: &str = "cortex-policy";
-const PROTOCOL: &str = "cortex-protocol";
-const RPC: &str = "cortex-rpc";
-const RUNS: &str = "cortex-runs";
-const SANDBOX: &str = "cortex-sandbox";
-const SESSION: &str = "cortex-session";
-const STATS: &str = "cortex-stats";
-const TERM: &str = "cortex-term";
-const TESTKIT: &str = "cortex-testkit";
-const TOOLS: &str = "cortex-tools";
-const TUI: &str = "cortex-tui";
-const USAGE: &str = "cortex-usage";
+const AGENT: &str = "cineris-agent";
+const BASE: &str = "cineris-base";
+const CLI: &str = "cineris-cli";
+const CONFIG: &str = "cineris-config";
+const COORDINATOR: &str = "cineris-coordinator";
+const CORE: &str = "cineris-core";
+const EXT: &str = "cineris-ext";
+const INDEX: &str = "cineris-index";
+const KNOWLEDGE: &str = "cineris-knowledge";
+const LLM: &str = "cineris-llm";
+const MCP: &str = "cineris-mcp";
+const POLICY: &str = "cineris-policy";
+const PROTOCOL: &str = "cineris-protocol";
+const RPC: &str = "cineris-rpc";
+const RUNS: &str = "cineris-runs";
+const SANDBOX: &str = "cineris-sandbox";
+const SESSION: &str = "cineris-session";
+const STATS: &str = "cineris-stats";
+const TERM: &str = "cineris-term";
+const TESTKIT: &str = "cineris-testkit";
+const TOOLS: &str = "cineris-tools";
+const TUI: &str = "cineris-tui";
+const USAGE: &str = "cineris-usage";
 /// The developer commands. It may depend on anything; nothing depends on it.
 const XTASK: &str = "xtask";
 
@@ -78,7 +78,7 @@ const CRATES: &[(&str, &[&str])] = &[
 ];
 
 /// Workspace crates a crate's tests may use beside the ones it may depend
-/// on: a dev-dependency only. `cortex-rpc`'s tests make a core as the binary
+/// on: a dev-dependency only. `cineris-rpc`'s tests make a core as the binary
 /// makes one, which takes the configuration's environment, and the shell
 /// and the process runner on the fake timer (step 27).
 const DEV_ONLY: &[(&str, &[&str])] = &[(RPC, &[CONFIG, TOOLS])];
@@ -115,7 +115,7 @@ const CONFINED: &[(&[&str], &[&str], &str)] = &[
     ),
 ];
 
-/// The feature of `cortex-sandbox` that holds its backends, and the one
+/// The feature of `cineris-sandbox` that holds its backends, and the one
 /// crate that may turn it on (rule 8 of `docs/architecture/01-workspace.md`).
 const BACKENDS: &str = "backends";
 
@@ -145,11 +145,11 @@ pub(crate) fn check(packages: &[Package], manifests: &[(String, String)]) -> Vec
 
 /// The features that hold code for tests only: `test-hooks`, where a crate
 /// puts its test-only switches (a seeded order of events), `test-support`,
-/// where it puts constructors for other crates' tests (`cortex-policy`'s
+/// where it puts constructors for other crates' tests (`cineris-policy`'s
 /// `TestParts`), `pty`, the operating system's half of the test kit's
-/// pseudo-terminal driver in `cortex-term`, and `test-kit`, `cortex-tui`'s
+/// pseudo-terminal driver in `cineris-term`, and `test-kit`, `cineris-tui`'s
 /// kit for driving its application (a scripted link in the core's place),
-/// which the test kit cannot hold because it may not depend on `cortex-tui`.
+/// which the test kit cannot hold because it may not depend on `cineris-tui`.
 const TEST_ONLY: &[&str] = &["test-hooks", "test-support", "pty", "test-kit"];
 
 /// A test-only feature is turned on by dev-dependencies, and by the test kit,
@@ -161,7 +161,7 @@ const TEST_ONLY: &[&str] = &["test-hooks", "test-support", "pty", "test-kit"];
 /// - a normal or build dependency that asks for it;
 /// - the crate that has it listing it in another of its features, `default`
 ///   above all;
-/// - a feature of another crate that passes it on (`cortex-tools/test-hooks`).
+/// - a feature of another crate that passes it on (`cineris-tools/test-hooks`).
 fn check_test_hooks(package: &Package, violations: &mut Vec<Violation>) {
     const WHY: &str = "Why: the feature holds code for tests (a seeded order of events, \
                        docs/testing-and-ci.md; constructors for tests; pseudo-terminals; or \
@@ -214,13 +214,13 @@ fn check_test_hooks(package: &Package, violations: &mut Vec<Violation>) {
     }
 }
 
-/// `cortex-sandbox`'s backends are turned on by `cortex-core`'s `sandbox`
+/// `cineris-sandbox`'s backends are turned on by `cineris-core`'s `sandbox`
 /// feature and by nothing else: by a normal dependency that asks for
-/// `backends`, or a feature that passes `cortex-sandbox/backends` on, in any
+/// `backends`, or a feature that passes `cineris-sandbox/backends` on, in any
 /// other crate. A test of a crate may ask for it in its dev-dependencies.
 fn check_sandbox_backends(package: &Package, violations: &mut Vec<Violation>) {
-    const WHY: &str = "Why: Landlock and seccomp are linked by the core alone. `cortex-tools` \
-                       depends on `cortex-sandbox` for process trees and must not link them \
+    const WHY: &str = "Why: Landlock and seccomp are linked by the core alone. `cineris-tools` \
+                       depends on `cineris-sandbox` for process trees and must not link them \
                        (docs/architecture/01-workspace.md, rule 8).";
     if package.name == CORE {
         return;
@@ -295,7 +295,7 @@ fn check_edges(package: &Package, violations: &mut Vec<Violation>) {
             continue;
         }
         // A crate's own tests ask for its test-only feature by a
-        // dev-dependency on the crate itself (`cortex-base` cannot depend
+        // dev-dependency on the crate itself (`cineris-base` cannot depend
         // on the test kit, which depends on it). That adds no edge: it
         // turns a feature on, for tests only, which `check_test_hooks`
         // holds to dev-dependencies.
@@ -325,14 +325,14 @@ fn check_edges(package: &Package, violations: &mut Vec<Violation>) {
                 None,
                 format!(
                     "`{name}` must not depend on `{to}`{kind}.\n    Allowed for {name}: \
-                     {allowed_list}; and cortex-testkit as a dev-dependency.\n    Why: {}\n    \
+                     {allowed_list}; and cineris-testkit as a dev-dependency.\n    Why: {}\n    \
                      {HOW_TO_CHANGE}",
                     reason(name, to)
                 ),
             ));
         }
         // Rule 2: the loop is generic over the provider. It gets the types
-        // and traits of cortex-llm, never its HTTP transport.
+        // and traits of cineris-llm, never its HTTP transport.
         if name == AGENT
             && to == LLM
             && (dependency.default_features || dependency.features.iter().any(|f| f == "http"))
@@ -361,17 +361,17 @@ fn reason(from: &str, to: &str) -> String {
         )
     } else if to == TESTKIT {
         format!(
-            "rule 6 in {PAGE}. Test support lives in cortex-testkit and is a dev-dependency \
+            "rule 6 in {PAGE}. Test support lives in cineris-testkit and is a dev-dependency \
              only, so it is never part of a shipped build."
         )
     } else if from == PROTOCOL {
         format!(
-            "rule 1 in {PAGE}. cortex-protocol is the contract. It depends on no workspace \
+            "rule 1 in {PAGE}. cineris-protocol is the contract. It depends on no workspace \
              crate, so it stays small and stable."
         )
     } else if ui.contains(&from) && engine.contains(&to) {
         format!(
-            "rule 3 in {PAGE}. The TUI and the terminal layer see only cortex-protocol types, \
+            "rule 3 in {PAGE}. The TUI and the terminal layer see only cineris-protocol types, \
              so a UI edit never rebuilds the core and the UI cannot reach around the protocol."
         )
     } else if [CORE, RPC].contains(&from) && ui.contains(&to) {
@@ -381,8 +381,8 @@ fn reason(from: &str, to: &str) -> String {
         )
     } else if from == USAGE {
         format!(
-            "rule 7 in {PAGE}. cortex-usage reads other tools' files. It depends only on \
-             cortex-base and cortex-stats, apart from everything that can send."
+            "rule 7 in {PAGE}. cineris-usage reads other tools' files. It depends only on \
+             cineris-base and cineris-stats, apart from everything that can send."
         )
     } else {
         format!("`{to}` is not in the \"Depends on (workspace)\" column for `{from}` in {PAGE}.")
@@ -413,7 +413,7 @@ fn check_confined(package: &Package, violations: &mut Vec<Violation>) {
     }
 }
 
-/// What `cortex-protocol` links in a normal build, and the one more thing
+/// What `cineris-protocol` links in a normal build, and the one more thing
 /// it may link behind a feature.
 const PROTOCOL_ALWAYS: [&str; 2] = ["serde", "serde_json"];
 const PROTOCOL_BEHIND_A_FEATURE: [&str; 1] = ["schemars"];
@@ -465,9 +465,9 @@ fn check_conventions(package: &Package, manifest: &str, violations: &mut Vec<Vio
 
     if name != XTASK {
         let expected = format!("crates/{name}/Cargo.toml");
-        if !name.starts_with("cortex-") || package.manifest != expected {
+        if !name.starts_with("cineris-") || package.manifest != expected {
             problem(format!(
-                "a crate is named `cortex-<part>` and lives in `crates/cortex-<part>/` ({PAGE})."
+                "a crate is named `cineris-<part>` and lives in `crates/cineris-<part>/` ({PAGE})."
             ));
         }
     }
@@ -509,7 +509,7 @@ fn check_conventions(package: &Package, manifest: &str, violations: &mut Vec<Vio
         .collect();
     if test_targets.contains("system") && ![CLI, TESTKIT].contains(&name) {
         problem(
-            "system tests (`tests/system/`) belong to cortex-cli and cortex-testkit \
+            "system tests (`tests/system/`) belong to cineris-cli and cineris-testkit \
              (docs/testing-and-ci.md)."
                 .to_owned(),
         );
@@ -555,7 +555,7 @@ mod tests {
         Dependency {
             name: name.to_owned(),
             kind: DepKind::Normal,
-            in_workspace: name.starts_with("cortex-") || name == "xtask",
+            in_workspace: name.starts_with("cineris-") || name == "xtask",
             default_features: true,
             features: Vec::new(),
             optional: false,
@@ -593,12 +593,12 @@ mod tests {
     fn every_edge_the_table_allows_passes() {
         for (name, allowed) in CRATES {
             let mut dependencies: Vec<Dependency> = allowed.iter().map(|to| dep(to)).collect();
-            if *name == "cortex-agent" {
+            if *name == "cineris-agent" {
                 for dependency in &mut dependencies {
-                    dependency.default_features = dependency.name != "cortex-llm";
+                    dependency.default_features = dependency.name != "cineris-llm";
                 }
             }
-            dependencies.push(dev("cortex-testkit"));
+            dependencies.push(dev("cineris-testkit"));
             assert_eq!(
                 messages(&krate(name, dependencies)),
                 Vec::<String>::new(),
@@ -632,14 +632,14 @@ mod tests {
     #[test]
     fn the_tui_must_not_depend_on_the_core() {
         let found = messages(&krate(
-            "cortex-tui",
-            vec![dep("cortex-protocol"), dep("cortex-core")],
+            "cineris-tui",
+            vec![dep("cineris-protocol"), dep("cineris-core")],
         ));
         assert_one(
             &found,
             &[
-                "crates/cortex-tui/Cargo.toml: `cortex-tui` must not depend on `cortex-core`",
-                "Allowed for cortex-tui: cortex-protocol, cortex-base, cortex-term",
+                "crates/cineris-tui/Cargo.toml: `cineris-tui` must not depend on `cineris-core`",
+                "Allowed for cineris-tui: cineris-protocol, cineris-base, cineris-term",
                 "rule 3",
             ],
         );
@@ -647,9 +647,14 @@ mod tests {
 
     #[test]
     fn the_terminal_layer_must_not_depend_on_the_agent_llm_or_tools() {
-        for engine in ["cortex-agent", "cortex-llm", "cortex-tools", "cortex-core"] {
+        for engine in [
+            "cineris-agent",
+            "cineris-llm",
+            "cineris-tools",
+            "cineris-core",
+        ] {
             assert_one(
-                &messages(&krate("cortex-term", vec![dep(engine)])),
+                &messages(&krate("cineris-term", vec![dep(engine)])),
                 &["rule 3"],
             );
         }
@@ -657,8 +662,8 @@ mod tests {
 
     #[test]
     fn the_core_and_rpc_must_not_depend_on_the_ui() {
-        for from in ["cortex-core", "cortex-rpc"] {
-            for ui in ["cortex-tui", "cortex-term"] {
+        for from in ["cineris-core", "cineris-rpc"] {
+            for ui in ["cineris-tui", "cineris-term"] {
                 assert_one(&messages(&krate(from, vec![dep(ui)])), &["rule 4"]);
             }
         }
@@ -666,20 +671,20 @@ mod tests {
 
     #[test]
     fn the_protocol_depends_on_no_workspace_crate() {
-        let found = messages(&krate("cortex-protocol", vec![dep("cortex-base")]));
+        let found = messages(&krate("cineris-protocol", vec![dep("cineris-base")]));
         assert_one(
             &found,
-            &["rule 1", "Allowed for cortex-protocol: no workspace crate"],
+            &["rule 1", "Allowed for cineris-protocol: no workspace crate"],
         );
     }
 
     #[test]
     fn a_forbidden_dev_dependency_is_still_forbidden() {
-        let found = messages(&krate("cortex-tui", vec![dev("cortex-core")]));
+        let found = messages(&krate("cineris-tui", vec![dev("cineris-core")]));
         assert_one(
             &found,
             &[
-                "must not depend on `cortex-core` (a dev-dependency)",
+                "must not depend on `cineris-core` (a dev-dependency)",
                 "rule 3",
             ],
         );
@@ -687,9 +692,9 @@ mod tests {
 
     #[test]
     fn the_test_kit_is_a_dev_dependency_only() {
-        assert!(messages(&krate("cortex-agent", vec![dev("cortex-testkit")])).is_empty());
+        assert!(messages(&krate("cineris-agent", vec![dev("cineris-testkit")])).is_empty());
         assert_one(
-            &messages(&krate("cortex-agent", vec![dep("cortex-testkit")])),
+            &messages(&krate("cineris-agent", vec![dep("cineris-testkit")])),
             &["rule 6"],
         );
     }
@@ -706,13 +711,13 @@ mod tests {
             third_party("serde_json", false),
             third_party("schemars", true),
         ];
-        assert!(messages(&krate("cortex-protocol", as_built.clone())).is_empty());
+        assert!(messages(&krate("cineris-protocol", as_built.clone())).is_empty());
 
         // Schema generation in every build.
         let mut always = as_built.clone();
         always[2].optional = false;
         assert_one(
-            &messages(&krate("cortex-protocol", always)),
+            &messages(&krate("cineris-protocol", always)),
             &["must not depend on `schemars` this way", "rule 1"],
         );
 
@@ -720,7 +725,7 @@ mod tests {
         let mut more = as_built.clone();
         more.push(third_party("thiserror", false));
         assert_one(
-            &messages(&krate("cortex-protocol", more)),
+            &messages(&krate("cineris-protocol", more)),
             &["must not depend on `thiserror` this way"],
         );
         let mut build_script = as_built;
@@ -729,25 +734,31 @@ mod tests {
             ..third_party("cc", false)
         });
         assert_one(
-            &messages(&krate("cortex-protocol", build_script)),
+            &messages(&krate("cineris-protocol", build_script)),
             &["must not depend on `cc` this way"],
         );
 
         // The rule is about the protocol crate only.
-        assert!(messages(&krate("cortex-base", vec![third_party("thiserror", false)])).is_empty());
+        assert!(
+            messages(&krate(
+                "cineris-base",
+                vec![third_party("thiserror", false)]
+            ))
+            .is_empty()
+        );
     }
 
     #[test]
     fn the_agent_takes_the_llm_crate_without_its_http_transport() {
         let traits_only = Dependency {
             default_features: false,
-            ..dep("cortex-llm")
+            ..dep("cineris-llm")
         };
-        assert!(messages(&krate("cortex-agent", vec![traits_only.clone()])).is_empty());
+        assert!(messages(&krate("cineris-agent", vec![traits_only.clone()])).is_empty());
 
-        let with_defaults = dep("cortex-llm");
+        let with_defaults = dep("cineris-llm");
         assert_one(
-            &messages(&krate("cortex-agent", vec![with_defaults])),
+            &messages(&krate("cineris-agent", vec![with_defaults])),
             &["rule 2"],
         );
 
@@ -756,7 +767,7 @@ mod tests {
             ..traits_only
         };
         assert_one(
-            &messages(&krate("cortex-agent", vec![with_http])),
+            &messages(&krate("cineris-agent", vec![with_http])),
             &["rule 2"],
         );
     }
@@ -769,25 +780,25 @@ mod tests {
         };
         // As the loop's tests do: the crate itself without, its tests with.
         let in_tests = krate(
-            "cortex-agent",
-            vec![dep("cortex-tools"), hooks(dev("cortex-tools"))],
+            "cineris-agent",
+            vec![dep("cineris-tools"), hooks(dev("cineris-tools"))],
         );
         assert!(messages(&in_tests).is_empty(), "{:#?}", messages(&in_tests));
 
-        let in_the_product = krate("cortex-core", vec![hooks(dep("cortex-tools"))]);
+        let in_the_product = krate("cineris-core", vec![hooks(dep("cineris-tools"))]);
         assert_one(
             &messages(&in_the_product),
             &[
-                "`cortex-core` turns on the `test-hooks` feature of `cortex-tools`",
+                "`cineris-core` turns on the `test-hooks` feature of `cineris-tools`",
                 "[dev-dependencies]",
             ],
         );
 
         let in_a_build_script = krate(
-            "cortex-core",
+            "cineris-core",
             vec![Dependency {
                 kind: DepKind::Build,
-                ..hooks(dep("cortex-tools"))
+                ..hooks(dep("cineris-tools"))
             }],
         );
         assert_one(&messages(&in_a_build_script), &["`test-hooks`"]);
@@ -803,22 +814,22 @@ mod tests {
         // with, and the crate's own tests through a dev-dependency on
         // itself.
         let in_tests = krate(
-            "cortex-core",
-            vec![dep("cortex-policy"), support(dev("cortex-policy"))],
+            "cineris-core",
+            vec![dep("cineris-policy"), support(dev("cineris-policy"))],
         );
         assert!(messages(&in_tests).is_empty(), "{:#?}", messages(&in_tests));
-        let own_tests = krate("cortex-policy", vec![support(dev("cortex-policy"))]);
+        let own_tests = krate("cineris-policy", vec![support(dev("cineris-policy"))]);
         assert!(
             messages(&own_tests).is_empty(),
             "{:#?}",
             messages(&own_tests)
         );
 
-        let in_the_product = krate("cortex-core", vec![support(dep("cortex-policy"))]);
+        let in_the_product = krate("cineris-core", vec![support(dep("cineris-policy"))]);
         assert_one(
             &messages(&in_the_product),
             &[
-                "`cortex-core` turns on the `test-support` feature of `cortex-policy`",
+                "`cineris-core` turns on the `test-support` feature of `cineris-policy`",
                 "[dev-dependencies]",
             ],
         );
@@ -830,10 +841,10 @@ mod tests {
             features: vec!["test-hooks".to_owned()],
             ..dependency
         };
-        // `cortex-base` cannot depend on the test kit, which depends on it:
-        // its tests ask for `cortex_base::hook`'s points by a
+        // `cineris-base` cannot depend on the test kit, which depends on it:
+        // its tests ask for `cineris_base::hook`'s points by a
         // dev-dependency on itself.
-        let own_tests = krate("cortex-base", vec![hooks(dev("cortex-base"))]);
+        let own_tests = krate("cineris-base", vec![hooks(dev("cineris-base"))]);
         assert!(
             messages(&own_tests).is_empty(),
             "{:#?}",
@@ -841,38 +852,38 @@ mod tests {
         );
 
         // The same, as a normal dependency, would be in the product.
-        let in_the_product = messages(&krate("cortex-base", vec![hooks(dep("cortex-base"))]));
+        let in_the_product = messages(&krate("cineris-base", vec![hooks(dep("cineris-base"))]));
         assert!(
             in_the_product.iter().any(|message| message
-                .contains("`cortex-base` turns on the `test-hooks` feature of `cortex-base`")),
+                .contains("`cineris-base` turns on the `test-hooks` feature of `cineris-base`")),
             "{in_the_product:#?}"
         );
         assert!(
             in_the_product
                 .iter()
-                .any(|message| message.contains("must not depend on `cortex-base`")),
+                .any(|message| message.contains("must not depend on `cineris-base`")),
             "{in_the_product:#?}"
         );
         // A dev-dependency on another crate is judged as any other.
-        let on_another = krate("cortex-base", vec![dev("cortex-llm")]);
+        let on_another = krate("cineris-base", vec![dev("cineris-llm")]);
         assert_one(
             &messages(&on_another),
-            &["`cortex-base` must not depend on `cortex-llm`"],
+            &["`cineris-base` must not depend on `cineris-llm`"],
         );
 
-        // The test kit turns the points of `cortex-base` on for every crate
+        // The test kit turns the points of `cineris-base` on for every crate
         // that has it as a dev-dependency; any other crate that did so
         // would put them in the product.
-        let in_the_kit = krate("cortex-testkit", vec![hooks(dep("cortex-base"))]);
+        let in_the_kit = krate("cineris-testkit", vec![hooks(dep("cineris-base"))]);
         assert!(
             messages(&in_the_kit).is_empty(),
             "{:#?}",
             messages(&in_the_kit)
         );
-        let elsewhere = krate("cortex-llm", vec![hooks(dep("cortex-base"))]);
+        let elsewhere = krate("cineris-llm", vec![hooks(dep("cineris-base"))]);
         assert_one(
             &messages(&elsewhere),
-            &["`cortex-llm` turns on the `test-hooks` feature of `cortex-base`"],
+            &["`cineris-llm` turns on the `test-hooks` feature of `cineris-base`"],
         );
     }
 
@@ -883,20 +894,20 @@ mod tests {
             ..dependency
         };
         let in_tests = krate(
-            "cortex-tui",
-            vec![dep("cortex-term"), pty(dev("cortex-term"))],
+            "cineris-tui",
+            vec![dep("cineris-term"), pty(dev("cineris-term"))],
         );
         assert!(messages(&in_tests).is_empty(), "{:#?}", messages(&in_tests));
-        let in_the_kit = krate("cortex-testkit", vec![pty(dep("cortex-term"))]);
+        let in_the_kit = krate("cineris-testkit", vec![pty(dep("cineris-term"))]);
         assert!(
             messages(&in_the_kit).is_empty(),
             "{:#?}",
             messages(&in_the_kit)
         );
-        let in_the_product = krate("cortex-tui", vec![pty(dep("cortex-term"))]);
+        let in_the_product = krate("cineris-tui", vec![pty(dep("cineris-term"))]);
         assert_one(
             &messages(&in_the_product),
-            &["`cortex-tui` turns on the `pty` feature of `cortex-term`"],
+            &["`cineris-tui` turns on the `pty` feature of `cineris-term`"],
         );
     }
 
@@ -906,43 +917,43 @@ mod tests {
             features: vec!["test-kit".to_owned()],
             ..dependency
         };
-        // As `cortex-tui`'s own tests do, and as another crate's would.
-        let own_tests = krate("cortex-tui", vec![kit(dev("cortex-tui"))]);
+        // As `cineris-tui`'s own tests do, and as another crate's would.
+        let own_tests = krate("cineris-tui", vec![kit(dev("cineris-tui"))]);
         assert!(
             messages(&own_tests).is_empty(),
             "{:#?}",
             messages(&own_tests)
         );
         let in_tests = krate(
-            "cortex-cli",
-            vec![dep("cortex-tui"), kit(dev("cortex-tui"))],
+            "cineris-cli",
+            vec![dep("cineris-tui"), kit(dev("cineris-tui"))],
         );
         assert!(messages(&in_tests).is_empty(), "{:#?}", messages(&in_tests));
 
         // In the product: by a normal dependency, by default, or passed on.
-        let in_the_product = krate("cortex-cli", vec![kit(dep("cortex-tui"))]);
+        let in_the_product = krate("cineris-cli", vec![kit(dep("cineris-tui"))]);
         assert_one(
             &messages(&in_the_product),
-            &["`cortex-cli` turns on the `test-kit` feature of `cortex-tui`"],
+            &["`cineris-cli` turns on the `test-kit` feature of `cineris-tui`"],
         );
         let by_default = Package {
             features: vec![
                 ("default".to_owned(), vec!["test-kit".to_owned()]),
                 ("test-kit".to_owned(), Vec::new()),
             ],
-            ..krate("cortex-tui", Vec::new())
+            ..krate("cineris-tui", Vec::new())
         };
         assert_one(
             &messages(&by_default),
-            &["the feature `default` of `cortex-tui` turns on `test-kit`"],
+            &["the feature `default` of `cineris-tui` turns on `test-kit`"],
         );
         let passed_on = Package {
-            features: vec![("ui".to_owned(), vec!["cortex-tui/test-kit".to_owned()])],
-            ..krate("cortex-cli", vec![dep("cortex-tui")])
+            features: vec![("ui".to_owned(), vec!["cineris-tui/test-kit".to_owned()])],
+            ..krate("cineris-cli", vec![dep("cineris-tui")])
         };
         assert_one(
             &messages(&passed_on),
-            &["the feature `ui` of `cortex-cli` turns on `cortex-tui/test-kit`"],
+            &["the feature `ui` of `cineris-cli` turns on `cineris-tui/test-kit`"],
         );
     }
 
@@ -956,30 +967,33 @@ mod tests {
         let core = Package {
             features: vec![(
                 "sandbox".to_owned(),
-                vec!["cortex-sandbox/backends".to_owned()],
+                vec!["cineris-sandbox/backends".to_owned()],
             )],
-            ..krate("cortex-core", vec![dep("cortex-sandbox")])
+            ..krate("cineris-core", vec![dep("cineris-sandbox")])
         };
         assert!(messages(&core).is_empty(), "{:#?}", messages(&core));
         // The tools may not, by their dependency or by a feature.
-        let tools = krate("cortex-tools", vec![backends(dep("cortex-sandbox"))]);
+        let tools = krate("cineris-tools", vec![backends(dep("cineris-sandbox"))]);
         assert_one(
             &messages(&tools),
-            &["`cortex-tools` turns on the `backends` feature of `cortex-sandbox`"],
+            &["`cineris-tools` turns on the `backends` feature of `cineris-sandbox`"],
         );
         let forwards = Package {
             features: vec![(
                 "confine".to_owned(),
-                vec!["cortex-sandbox?/backends".to_owned()],
+                vec!["cineris-sandbox?/backends".to_owned()],
             )],
-            ..krate("cortex-tools", vec![dep("cortex-sandbox")])
+            ..krate("cineris-tools", vec![dep("cineris-sandbox")])
         };
         assert_one(
             &messages(&forwards),
-            &["the feature `confine` of `cortex-tools` turns on `cortex-sandbox?/backends`"],
+            &["the feature `confine` of `cineris-tools` turns on `cineris-sandbox?/backends`"],
         );
-        // Only `cortex-sandbox` names the backends themselves.
-        let direct = krate("cortex-tools", vec![dep("cortex-sandbox"), dep("landlock")]);
+        // Only `cineris-sandbox` names the backends themselves.
+        let direct = krate(
+            "cineris-tools",
+            vec![dep("cineris-sandbox"), dep("landlock")],
+        );
         assert_one(&messages(&direct), &["`landlock`"]);
     }
 
@@ -995,37 +1009,37 @@ mod tests {
                     )
                 })
                 .collect(),
-            ..krate(name, vec![dep("cortex-tools")])
+            ..krate(name, vec![dep("cineris-tools")])
         };
 
         // Having the feature is not turning it on.
-        let has_it = with_features("cortex-agent", &[("test-hooks", &[]), ("default", &[])]);
+        let has_it = with_features("cineris-agent", &[("test-hooks", &[]), ("default", &[])]);
         assert!(messages(&has_it).is_empty(), "{:#?}", messages(&has_it));
 
         // On by default, in the crate that has it.
         let by_default = with_features(
-            "cortex-agent",
+            "cineris-agent",
             &[("default", &["test-hooks"]), ("test-hooks", &[])],
         );
         assert_one(
             &messages(&by_default),
-            &["the feature `default` of `cortex-agent` turns on `test-hooks`"],
+            &["the feature `default` of `cineris-agent` turns on `test-hooks`"],
         );
 
         // Passed on by a feature of a crate that depends on it, with or
         // without the mark for an optional dependency.
-        for passed_on in ["cortex-tools/test-hooks", "cortex-tools?/test-hooks"] {
-            let forwards = with_features("cortex-agent", &[("seeded", &[passed_on])]);
+        for passed_on in ["cineris-tools/test-hooks", "cineris-tools?/test-hooks"] {
+            let forwards = with_features("cineris-agent", &[("seeded", &[passed_on])]);
             assert_one(
                 &messages(&forwards),
                 &[&format!(
-                    "the feature `seeded` of `cortex-agent` turns on `{passed_on}`"
+                    "the feature `seeded` of `cineris-agent` turns on `{passed_on}`"
                 )],
             );
         }
 
         // Another feature with a name that only ends the same way.
-        let other = with_features("cortex-agent", &[("x", &["cortex-tools/no-test-hooks"])]);
+        let other = with_features("cineris-agent", &[("x", &["cineris-tools/no-test-hooks"])]);
         assert!(messages(&other).is_empty(), "{:#?}", messages(&other));
     }
 
@@ -1033,13 +1047,13 @@ mod tests {
     fn the_usage_crate_stays_apart_from_everything_that_can_send() {
         assert!(
             messages(&krate(
-                "cortex-usage",
-                vec![dep("cortex-base"), dep("cortex-stats")]
+                "cineris-usage",
+                vec![dep("cineris-base"), dep("cineris-stats")]
             ))
             .is_empty()
         );
         assert_one(
-            &messages(&krate("cortex-usage", vec![dep("cortex-llm")])),
+            &messages(&krate("cineris-usage", vec![dep("cineris-llm")])),
             &["rule 7"],
         );
     }
@@ -1047,74 +1061,77 @@ mod tests {
     #[test]
     fn nothing_depends_on_xtask_and_xtask_may_depend_on_anything() {
         assert_one(
-            &messages(&krate("cortex-base", vec![dep("xtask")])),
+            &messages(&krate("cineris-base", vec![dep("xtask")])),
             &["not shipped"],
         );
 
-        let mut xtask = krate("xtask", vec![dep("cortex-protocol"), dep("cortex-core")]);
+        let mut xtask = krate("xtask", vec![dep("cineris-protocol"), dep("cineris-core")]);
         xtask.manifest = "xtask/Cargo.toml".to_owned();
         assert!(messages(&xtask).is_empty());
     }
 
     #[test]
     fn an_edge_outside_the_named_rules_points_at_the_table() {
-        let found = messages(&krate("cortex-session", vec![dep("cortex-tools")]));
+        let found = messages(&krate("cineris-session", vec![dep("cineris-tools")]));
         assert_one(
             &found,
-            &["is not in the \"Depends on (workspace)\" column for `cortex-session`"],
+            &["is not in the \"Depends on (workspace)\" column for `cineris-session`"],
         );
     }
 
     #[test]
     fn a_crate_the_design_does_not_know_is_reported() {
         assert_one(
-            &messages(&krate("cortex-extra", vec![])),
+            &messages(&krate("cineris-extra", vec![])),
             &["is not a crate the design knows"],
         );
     }
 
     #[test]
     fn heavy_third_party_crates_have_one_owner() {
-        assert!(messages(&krate("cortex-llm", vec![dep("reqwest")])).is_empty());
-        assert!(messages(&krate("cortex-mcp", vec![dep("rmcp")])).is_empty());
-        assert!(messages(&krate("cortex-index", vec![dep("ignore")])).is_empty());
+        assert!(messages(&krate("cineris-llm", vec![dep("reqwest")])).is_empty());
+        assert!(messages(&krate("cineris-mcp", vec![dep("rmcp")])).is_empty());
+        assert!(messages(&krate("cineris-index", vec![dep("ignore")])).is_empty());
 
         assert_one(
-            &messages(&krate("cortex-agent", vec![dep("reqwest")])),
+            &messages(&krate("cineris-agent", vec![dep("reqwest")])),
             &["rule 5", "HTTP and TLS"],
         );
         assert_one(
-            &messages(&krate("cortex-core", vec![dep("rmcp")])),
+            &messages(&krate("cineris-core", vec![dep("rmcp")])),
             &["rule 5", "the MCP SDK"],
         );
         assert_one(
-            &messages(&krate("cortex-policy", vec![dep("globset")])),
+            &messages(&krate("cineris-policy", vec![dep("globset")])),
             &["rule 5"],
         );
         assert_one(
-            &messages(&krate("cortex-tui", vec![dep("rquickjs")])),
+            &messages(&krate("cineris-tui", vec![dep("rquickjs")])),
             &["rule 5"],
         );
     }
 
     #[test]
     fn manifest_conventions_are_checked() {
-        let mut publishable = krate("cortex-base", vec![]);
+        let mut publishable = krate("cineris-base", vec![]);
         publishable.publish_disabled = false;
         assert_one(&messages(&publishable), &["publish.workspace = true"]);
 
-        let mut doctests = krate("cortex-base", vec![]);
+        let mut doctests = krate("cineris-base", vec![]);
         doctests.targets[0].doctest = true;
         assert_one(&messages(&doctests), &["doctest = false"]);
 
-        let mut misplaced = krate("cortex-base", vec![]);
-        misplaced.manifest = "cortex-base/Cargo.toml".to_owned();
-        assert_one(&messages(&misplaced), &["lives in `crates/cortex-<part>/`"]);
+        let mut misplaced = krate("cineris-base", vec![]);
+        misplaced.manifest = "cineris-base/Cargo.toml".to_owned();
+        assert_one(
+            &messages(&misplaced),
+            &["lives in `crates/cineris-<part>/`"],
+        );
 
-        let no_lints = krate("cortex-base", vec![]);
+        let no_lints = krate("cineris-base", vec![]);
         let manifests = [(
             no_lints.manifest.clone(),
-            "[package]\nname = \"cortex-base\"\n".to_owned(),
+            "[package]\nname = \"cineris-base\"\n".to_owned(),
         )];
         let found = check(&[no_lints], &manifests);
         assert_eq!(found.len(), 1);
@@ -1129,11 +1146,11 @@ mod tests {
             doctest: false,
         };
 
-        let mut good = krate("cortex-agent", vec![]);
+        let mut good = krate("cineris-agent", vec![]);
         good.targets.push(test_target("it"));
         assert!(messages(&good).is_empty());
 
-        let mut extra = krate("cortex-agent", vec![]);
+        let mut extra = krate("cineris-agent", vec![]);
         extra.targets.push(test_target("it"));
         extra.targets.push(test_target("more"));
         assert_one(
@@ -1141,15 +1158,15 @@ mod tests {
             &["test target `more`", "one integration-test binary"],
         );
 
-        let mut cli = krate("cortex-cli", vec![]);
+        let mut cli = krate("cineris-cli", vec![]);
         cli.targets.push(test_target("system"));
         assert!(messages(&cli).is_empty());
 
-        let mut elsewhere = krate("cortex-session", vec![]);
+        let mut elsewhere = krate("cineris-session", vec![]);
         elsewhere.targets.push(test_target("system"));
         assert_one(
             &messages(&elsewhere),
-            &["belong to cortex-cli and cortex-testkit"],
+            &["belong to cineris-cli and cineris-testkit"],
         );
     }
 }

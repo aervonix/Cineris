@@ -1,6 +1,6 @@
 # Product vision
 
-What Cortex-Harness is for. The architecture, the decision records and the build plan are designed to serve this page, and each of them points back to it.
+What Cineris is for. The architecture, the decision records and the build plan are designed to serve this page, and each of them points back to it.
 
 ## In one sentence
 
@@ -42,7 +42,7 @@ Full-featured, and efficient in every dimension that costs the user something.
 
 - **Parallel attempts.** Run several approaches or models at once in isolated worktrees, judge them with the project's tests, and let the user pick the winner.
 - **Replay and evaluation.** Record real sessions and replay them against other models, prompts or settings, to measure which set-up works best on the user's own tasks.
-- **One engine for both.** Running the agent several times and judging the results is the same machinery in both cases. This is the feature most likely to set Cortex-Harness apart: it measures how well a set-up works and improves it, where other tools only let the user configure it.
+- **One engine for both.** Running the agent several times and judging the results is the same machinery in both cases. This is the feature most likely to set Cineris apart: it measures how well a set-up works and improves it, where other tools only let the user configure it.
 - **The Coordinator.** One session, the Manager, runs a team of sessions, the Employees. The user gives the Manager a task and an explicit grant of permissions. The Manager plans the work, creates a git worktree for each piece, starts an Employee in each on a model the user allowed, writes their prompts, answers their questions, and reviews and merges their work.
   - Three autonomy levels (supervised, guided, autonomous), all inside hard limits the user sets: a budget cap, no force-pushes, nothing outside the project.
   - Employees never get more permission than the Manager was given. Their approval prompts go to the Manager, which passes them to the user according to its level.
@@ -62,7 +62,7 @@ Full-featured, and efficient in every dimension that costs the user something.
 |---|---|
 | **Autonomy** | A smart default the user can change. Reads run automatically. Edits inside the project apply automatically, with a snapshot so they can be undone. Shell commands ask first, unless they are on a learned or approved safe list. |
 | **Interface** | A clean chat-style flow by default. Panels for the plan, parallel attempts and diffs open when there is something to show and close again. The look is original. The accent colour is the logo's purple, `#7A3CFB`. |
-| **Compatibility** | The harness reads `AGENTS.md`, `CLAUDE.md`, existing MCP server configurations and Agent Skills folders, so people can switch without rewriting their set-up. Everything else uses Cortex-Harness's own formats. MCP client support is included. |
+| **Compatibility** | The harness reads `AGENTS.md`, `CLAUDE.md`, existing MCP server configurations and Agent Skills folders, so people can switch without rewriting their set-up. Everything else uses Cineris's own formats. MCP client support is included. |
 | **Privacy** | Usage statistics stay on the user's machine and feed only the adaptive features. Nothing is sent anywhere. There is no telemetry. |
 | **Sign-in** | API keys, and sign-in flows that providers officially offer to third-party tools. The sign-in layer is designed so subscription logins can be added later, after each provider's terms are checked. They are not in the first release. |
 
@@ -73,7 +73,7 @@ Full-featured, and efficient in every dimension that costs the user something.
 
 ## Brand
 
-- The name is Cortex-Harness.
+- The name is Cineris.
 - The logo is a near-white hexagonal "C" around a `>_` prompt with two purple sparkles, on a transparent background. It disappears on light backgrounds, so the README and docs need a dark-on-light version. Step 2 of the build plan adds both.
 - The logo's purple is the accent colour of the TUI ([architecture/09-tui.md](architecture/09-tui.md)).
 
