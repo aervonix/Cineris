@@ -44,6 +44,7 @@ mod json;
 mod project_view;
 mod report;
 mod serve;
+mod setup;
 mod signals;
 mod usage_view;
 mod workspace;

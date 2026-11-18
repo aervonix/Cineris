@@ -71,6 +71,9 @@ pub(super) struct FirstRun {
     skipped: bool,
     /// The configuration was read again: the session may open.
     released: bool,
+    /// A frame has drawn the step's keys, which it shows once it is ready,
+    /// as a dialog shows its answers: it takes keys only then.
+    keys_drawn: bool,
 }
 
 #[derive(Debug)]
@@ -168,12 +171,26 @@ impl FirstRun {
             written: None,
             skipped: false,
             released: false,
+            keys_drawn: false,
         })
     }
 
     /// Whether the session waits for the steps before it.
     pub(super) fn holds_open(&self) -> bool {
         !self.released
+    }
+
+    /// Input the step did not take: it is ready a quiet second after, and
+    /// its keys are hidden until then.
+    fn typed(&mut self, at: Instant) {
+        self.ready.typed(at);
+        self.keys_drawn = false;
+    }
+
+    /// Whether the step takes a key at `at`: it is ready, and a frame has
+    /// drawn its keys.
+    fn takes_keys(&self, at: Instant) -> bool {
+        self.keys_drawn && self.ready.ready(at)
     }
 
     /// Whether a step is shown, in the input box's place.
@@ -192,6 +209,7 @@ impl FirstRun {
     /// A new step, ready only after its grace and a key's repeat window.
     fn to(&mut self, step: Step) {
         self.step = step;
+        self.keys_drawn = false;
         self.ready = Readiness::default();
         if let Some(taken) = self.taken {
             self.ready.not_before(taken + REPEAT);
@@ -268,8 +286,18 @@ impl App {
     /// Input the first run did not take: its step waits a quiet second.
     pub(super) fn first_run_typed(&mut self, at: Instant) {
         if let Some(run) = self.first_run.as_mut() {
-            run.ready.typed(at);
+            run.typed(at);
         }
+    }
+
+    /// When the step shown is to be drawn with its keys: the end of its
+    /// grace, until a frame has drawn them.
+    pub(super) fn first_run_deadline(&self) -> Option<Instant> {
+        let run = self.first_run.as_ref()?;
+        if !run.shows() || run.keys_drawn {
+            return None;
+        }
+        run.ready.ready_at()
     }
 
     /// The terminal's waker, for the worker.
@@ -279,12 +307,17 @@ impl App {
         }
     }
 
-    /// What the worker answered, taken, before a frame.
-    pub(super) fn first_run_answers(&mut self) {
+    /// What the worker answered, taken: when the loop is woken, and before
+    /// a frame.
+    /// Says whether one came, which is a change to draw.
+    pub(super) fn first_run_answers(&mut self) -> bool {
+        let mut any = false;
         while let Some(answer) = self.first_run.as_ref().and_then(|run| run.worker.answer()) {
             self.first_run_answer(answer);
+            any = true;
         }
         self.first_run_next();
+        any
     }
 
     /// Waits at most `limit` for the worker's next answer and takes it, for
@@ -588,8 +621,24 @@ impl App {
                 let Some(run) = self.first_run.as_mut() else {
                     return Some(true);
                 };
-                if !run.ready.ready(at) {
-                    run.ready.typed(at);
+                // Typing into the key's input is typing, not an answer: it
+                // goes in whenever the step is shown. `Enter` and `Esc`
+                // answer it, and wait for its keys.
+                if let Step::Key {
+                    input,
+                    storing,
+                    error,
+                    ..
+                } = &mut run.step
+                    && !matches!(key.code, KeyCode::Enter | KeyCode::Esc)
+                {
+                    if !*storing && input.key(*key) == KeyEdit::Changed {
+                        *error = None;
+                    }
+                    return Some(true);
+                }
+                if !run.takes_keys(at) {
+                    run.typed(at);
                     return Some(true);
                 }
                 self.first_run_key(*key, at);
@@ -597,18 +646,23 @@ impl App {
             }
             // A key held down never answers a step.
             TermEvent::Repeat(_) => {
-                run.ready.typed(at);
+                run.typed(at);
                 Some(true)
             }
+            // A paste is the key's, or nobody's: it never answers a step.
             TermEvent::Paste(text) => {
-                let ready = run.ready.ready(at);
                 match &mut run.step {
-                    Step::Key { input, storing, .. } if ready && !*storing => {
-                        input.paste(text);
+                    Step::Key {
+                        input,
+                        storing,
+                        error,
+                        ..
+                    } if !*storing => {
+                        if input.paste(text) == KeyEdit::Changed {
+                            *error = None;
+                        }
                     }
-                    _ => {
-                        run.ready.typed(at);
-                    }
+                    _ => run.typed(at),
                 }
                 Some(true)
             }
@@ -903,11 +957,15 @@ impl App {
     /// The first run's rows in the input box's place, with the set-up card
     /// above them until the session opens, and its keys under them. `None`
     /// when it shows no step.
-    pub(super) fn first_run_bottom(&self, now: Instant, width: usize) -> Option<Vec<Line>> {
-        let run = self.first_run.as_ref()?;
+    pub(super) fn first_run_bottom(&mut self, now: Instant, width: usize) -> Option<Vec<Line>> {
+        let run = self.first_run.as_mut()?;
         if !run.shows() {
             return None;
         }
+        // Its keys once it is ready, as a dialog's answers.
+        let ready = run.ready.ready(now);
+        run.keys_drawn = ready;
+        let run = self.first_run.as_ref()?;
         let look = &self.look;
         let mut lines = Vec::new();
         if !self.kept.is_empty() {
@@ -941,8 +999,10 @@ impl App {
         }
         let hint = if self.input.quit_armed() {
             Hint::QuitArmed
-        } else {
+        } else if ready {
             Hint::Keys(keys)
+        } else {
+            Hint::Empty
         };
         lines.push(self.hint_row(hint, now));
         Some(lines)

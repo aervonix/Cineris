@@ -39,7 +39,7 @@ const GLYPHS: GlyphSets<'static, Glyphs> = GlyphSets::new(&[Glyphs::UNICODE, Gly
 pub const SHELL: Role = Role::new("cincli-tui=");
 
 /// A bound on every wait, which only a broken test reaches.
-const LIMIT: Duration = Duration::from_secs(30);
+pub(crate) const LIMIT: Duration = Duration::from_secs(30);
 
 /// The coarse check on the first frame, from the shell's start of the
 /// binary: five times the runner's budget for the interface's first frame
@@ -195,7 +195,7 @@ fn first_frame(session: &mut Session, phases: &Phases) {
 
 /// Quits with `Ctrl+D` on the empty prompt, and checks that the terminal's
 /// modes are as they were.
-fn quit(session: &mut Session, phases: &Phases) {
+pub(crate) fn quit(session: &mut Session, phases: &Phases) {
     phases.mark("the binary ends");
     session.send(b"\x04");
     session.wait_for(LIMIT, "the shell's verdict", |t| {
@@ -262,7 +262,7 @@ fn wait_shows(session: &mut Session, what: &str) {
 }
 
 /// Whether the screen or its scrollback holds `what`.
-fn shows_ever(t: &VTerm, what: &str) -> bool {
+pub(crate) fn shows_ever(t: &VTerm, what: &str) -> bool {
     t.history().iter().any(|row| row.contains(what))
 }
 
