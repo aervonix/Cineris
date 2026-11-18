@@ -28,6 +28,7 @@ The third of step 25's pull requests, in the part that builds the first run and 
 - **The instructions' and skills' rows are shown always,** whatever discovery found in this workspace: each is a setting for every project.
 - **`auth login` at a terminal reads `[terminal]`'s overrides as their defaults:** the command does not load the user's configuration of its own (its core does, inside). Esc or Ctrl+C there stores nothing and exits 2, saying so.
 - **A server's header is taken from a variable named for the server and the header** (`TRACKER_AUTHORIZATION`): the draft's `TRACKER_AUTH` named the header's short form, which no rule gives.
+- **The crash report is not tested with a key held:** no code formats the key's text (the buffer's only reads are its count, its trimmed `Secret` for the store and the ASCII check), and the report holds the panic's message through the log's filter and the backtrace (step 23's test). A test would have to panic the interface on purpose with a key in the input; it is left, said here.
 - **One edit outside this part's files that is not made:** closing `reading-a-key-at-a-terminal` leaves two links to its file in [answered.md](../answered.md) (point 5's `auth login` bullet and the owed items' table), which only the coordinator edits. `cargo xtask links` reports them until they become plain text (`` `reading-a-key-at-a-terminal` ``, as `the-export-command-has-no-step`'s row is).
 
 ## The tests, by part
@@ -38,13 +39,38 @@ The third of step 25's pull requests, in the part that builds the first run and 
 - **Imports:** `nothing_unpicked_is_imported` (a file read is not a pick; instructions and skills off), `an_mcp_command_is_shown_whole_and_its_credential_masked`; `cineris-config import::tests` (values dropped, a credential masked and refused, a user part masked, a direction mark refused, Codex's TOML); `cineris-config write::tests` (strict read-back, comments for skips, a hostile server name stays one key, a refused server never written, never over a file); `cineris-cli setup::tests` (discovery apart from the project's files, only a server shown and importable written, where the key is kept, when the first run is due).
 - **Hostile text:** `every_listing_holds_hostile_text` (each of `TRICKY`, with a direction override, as a provider's name and variable, a file's path and tool, a project's MCP file, a server's name, command, environment and header, and a command found, its name, line, script and file, and typed into `e`'s field: every row of every frame through `testing::problems`); `view::setup::tests`.
 - **Detection:** `cineris-knowledge detect::tests`; `cineris-core reads::tests::detection_reads_only_what_the_gate_lets_through_inside_the_workspace`; `cineris-rpc lane::tests::detecting_a_projects_commands_is_a_read`; the protocol's golden transcript.
-- **End to end, under a pseudo-terminal** (`cineris-cli` system tier): `sys_the_first_run_in_an_empty_home_reaches_a_working_session` (no configuration file; a key typed into the second row's input; the imports and the mode kept; the file written; the session answers a prompt from the scripted model; no eight characters of the key in any byte the binary wrote, read raw, nor in the screen and scrollback; the key in the test's file store; the terminal put back) and `sys_auth_login_at_a_terminal_reads_the_key_without_echo`. About 4.6 s and 0.1 s at the desk: most of the first's is the steps' graces and repeat windows, which it waits out as a person would.
+- **End to end, under a pseudo-terminal** (`cineris-cli` system tier): `sys_the_first_run_in_an_empty_home_reaches_a_working_session` (no configuration file; a key typed into the second row's input; the imports and the mode kept; the file written; the session answers a prompt from the scripted model; no eight characters of the key in any byte the binary wrote, read raw, nor in the screen and scrollback, nor in any file under the test's home and workspace but the store once the program has ended (its log, its history, the session, the configuration file); the key in the test's file store; the terminal put back) and `sys_auth_login_at_a_terminal_reads_the_key_without_echo`. About 4.6 s and 0.1 s at the desk: most of the first's is the steps' graces and repeat windows, which it waits out as a person would.
 - **Golden screens:** F1a to F4 (`f1a` … `f4` in `tui-look/`), drawn by the application, 143 rows compared on each background; `COMPARED` went from 19 screens and 508 rows to 25 screens and 651 rows.
 - `cargo xtask stress -p cineris-tui --count 40` on the first run's and the screens' tests, and again 30 times with `--cores 2 --load 6`: every test passed every time. The first stress found a race of the tests' own (a frame took the worker's answer before the test waited for it), fixed by counting what the worker owes.
 
 ## The breaks
 
-`mutations/step-25-firstrun.breaks`, 22 breaks. Verdicts: see the report of this part (run by hand after the list was written; each break's verdict is listed there).
+`mutations/step-25-firstrun.breaks`, 22 breaks, run with `cargo xtask mutate step-25-firstrun --minutes 0` at the desk: **every one caught.** Two needed their lists put right after the first run: the address's user part was caught by its one test and not by a second the list had named, and a script's name that is not plain words was not caught at all, because the observer's table classes only plain names, so the `normal_line` check behind it is a second guard (kept, and said here). That break was replaced by the one-word rule for a script's name (`check me`), which its test catches.
+
+| Break | Caught by |
+|---|---|
+| `a-key-emptied-is-not-written-over` | `cineris-base secret_buf::tests::what_is_taken_away_or_emptied_is_zero` |
+| `a-key-takes-a-line-break` | `cineris-base secret_buf::tests::a_line_break_or_too_much_is_refused_whole`, and two of `cineris-tui` |
+| `a-key-taken-is-left-in-its-buffer` | `cineris-tui secret::tests`, two |
+| `the-key-input-types-control-keys` | `cineris-tui secret::tests::typing_backspace_and_ctrl_u_change_what_it_holds_and_nothing_else_does` |
+| `a-step-takes-keys-before-it-is-ready` | `a_prompt_typed_at_the_first_frame_chooses_nothing`, `a_steps_keys_are_drawn_at_the_end_of_its_grace_and_taken_only_then` |
+| `a-steps-keys-shown-before-it-is-ready` | `a_steps_keys_are_drawn_at_the_end_of_its_grace_and_taken_only_then` |
+| `the-session-opens-before-the-file-is-written` | seven of `app::tests::first_run` |
+| `the-instructions-start-picked` | `nothing_unpicked_is_imported`, `the_first_run_reaches_a_session_made_with_what_was_chosen` |
+| `a-server-holding-a-credential-can-be-picked` | `the_first_run_reaches_a_session_made_with_what_was_chosen` |
+| `autonomous-offered-without-a-sandbox` | `autonomous_is_offered_only_where_the_sandbox_enforces` |
+| `the-commands-start-picked` | `the_first_run_reaches_a_session_made_with_what_was_chosen`, and the golden screens (F4) |
+| `a-workers-answer-wakes-no-frame` | `cineris-cli::system first_run::sys_the_first_run_in_an_empty_home_reaches_a_working_session` (the app's tests take answers themselves) |
+| `an-mcp-argument-is-not-masked` | `cineris-config import::tests`, two |
+| `an-mcp-address-keeps-its-user-part` | `cineris-config import::tests::a_credential_in_a_command_or_an_address_is_masked_and_refused` |
+| `the-writer-writes-over-a-file` | `cineris-config write::tests::the_file_is_made_new_and_never_over_one_that_is_there` |
+| `a-refused-server-is-written` | `cineris-config write::tests::a_server_that_cannot_be_imported_is_never_written` |
+| `a-script-name-with-a-space-is-offered` | `cineris-knowledge detect::tests::scripts_are_offered_by_their_names_with_what_they_run` |
+| `detection-reads-past-the-read-rules` | `cineris-core reads::tests::detection_reads_only_what_the_gate_lets_through_inside_the_workspace` |
+| `detection-waits-in-the-lane` | `cineris-rpc lane::tests::detecting_a_projects_commands_is_a_read` |
+| `auth-login-refuses-a-terminal` | `cineris-cli::system first_run::sys_auth_login_at_a_terminal_reads_the_key_without_echo` |
+| `the-first-run-over-a-file-that-is-there` | `cineris-cli setup::tests::the_first_run_is_due_only_where_no_file_is`, and 17 system tests whose machines have a file |
+| `the-program-writes-a-refused-server` | `cineris-cli setup::tests::only_a_server_shown_and_importable_is_written` |
 
 ## Open
 
