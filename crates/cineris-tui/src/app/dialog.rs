@@ -457,9 +457,10 @@ impl Dialog {
         // The rewind's question (since step 25): its two answers by their
         // digits, and `Esc` cancels, sending nothing. `Enter` is nothing.
         if let Asks::Rewind { .. } = &self.asks {
-            if let Some(digit) = typed(key).and_then(|c| c.to_digit(10))
-                && let Some(place) = (digit as usize).checked_sub(1)
-                && drawn(Pick::Choice(place))
+            if let Some(place) = typed(key)
+                .and_then(|c| c.to_digit(10))
+                .and_then(|digit| digit.checked_sub(1))
+                && drawn(Pick::Choice(place as usize))
             {
                 return Keyed::Rewound(Some(place == 0));
             }

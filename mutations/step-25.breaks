@@ -156,8 +156,8 @@ caught-by:
 rule: Every block the transcript finishes is kept, for the viewer and the full screen.
 file: crates/cineris-tui/src/app/state.rs
 in: App::prepare
-find: self.kept.extend(self.transcript.take_finished());
-replace: let _ = self.transcript.take_finished();
+find: self.kept.extend(finished);
+replace: let _ = finished;
 caught-by:
     cineris-tui app::tests::screen::the_same_rows_are_drawn_under_both_presenters_frame_by_frame
     cineris-tui app::tests::screen::the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box
@@ -826,7 +826,7 @@ caught-by:
 [break] the-viewer-skips-the-compaction
 rule: A compaction is one of the viewer's stops, as a box is.
 file: crates/cineris-tui/src/transcript/kept.rs
-in: Kept::extend
+in: Kept::push
 find: Piece::Block(Block::Round(_) | Block::Compaction { .. }) => true
 replace: Piece::Block(Block::Round(_)) => true
 caught-by:

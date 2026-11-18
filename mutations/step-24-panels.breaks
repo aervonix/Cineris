@@ -122,7 +122,7 @@ expect: survives
 [break] a-dialog-leaves-the-focus-on-a-panel
 rule: While a dialog is up no panel is drawn and none keeps the focus: a key meant for the dialog never acts on a panel.
 file: crates/cineris-tui/src/app/state.rs
-in: App::request
+in: App::show_dialog
 find:
     if matches!(self.input.focus().focused(), Target::Panel(_)) {
         self.input.focus_mut().to_input();

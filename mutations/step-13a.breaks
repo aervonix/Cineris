@@ -587,8 +587,13 @@ rule: An observer may not rewind a session.
 file: crates/cineris-core/src/core.rs
 find:
     self.may_drive(client)?;
-    self.rewind(&live, Back::To(params.to), params.restore_files)
-replace: self.rewind(&live, Back::To(params.to), params.restore_files)
+    self.rewind(
+        &live,
+        Back::To(params.to)
+replace:
+    self.rewind(
+        &live,
+        Back::To(params.to)
 caught-by:
     cineris-core::it approvals::an_observer_starts_nothing_changes_no_history_and_ends_nothing
 

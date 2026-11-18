@@ -368,6 +368,31 @@ mod tests {
         assert_eq!(routes.route(&warm()), Route::Beside, "a warm waited");
     }
 
+    /// A rewind's plan is a read (since step 25): beside the lane, or after
+    /// the writes sent before it; the rewind itself is a write.
+    #[test]
+    fn a_rewinds_plan_is_a_read_and_the_rewind_a_write() {
+        use cineris_protocol::ItemId;
+        use cineris_protocol::methods::{SessionRewindParams, SessionRewindPlanParams};
+        let session = SessionId::from("s_1");
+        let routes = Routes::default();
+        let plan = || {
+            Op::SessionRewindPlan(SessionRewindPlanParams {
+                session_id: session.clone(),
+                to: ItemId::from("i_1"),
+            })
+        };
+        assert_eq!(routes.route(&plan()), Route::Beside);
+        let rewind = Op::SessionRewind(SessionRewindParams {
+            session_id: session.clone(),
+            to: ItemId::from("i_1"),
+            restore_files: true,
+            plan: None,
+        });
+        assert_eq!(routes.route(&rewind), Route::Lane { write: true });
+        assert_eq!(routes.route(&plan()), Route::Lane { write: false });
+    }
+
     /// An operation that panics in the lane is answered as failed, and the
     /// ones queued behind it are run and answered in order; its write is
     /// done, so a read after it runs beside the lane again (the review of

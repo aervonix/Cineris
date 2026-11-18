@@ -255,11 +255,20 @@ fn rewind_while_a_turn_runs_says_to_wait_and_reads_nothing() {
     assert!(notices(&mut app, now).contains("wait for it to end, or stop it"));
 }
 
+/// Going back before the first prompt is `/new`, whatever the harness
+/// put before it.
 #[test]
 fn a_session_with_only_one_prompt_has_no_point() {
     let now = Instant::now();
     let (mut app, link) = with_history(now);
-    rewind_picker(&mut app, &link, history()[..2].to_vec(), now);
+    let mut items = vec![Item::Notice(cineris_protocol::item::NoticeItem {
+        id: ItemId::from("i_0"),
+        source: cineris_protocol::item::NoticeSource::Map,
+        text: "The repository's map.".to_owned(),
+        created_at: None,
+    })];
+    items.extend(history()[..2].to_vec());
+    rewind_picker(&mut app, &link, items, now);
     assert!(app.input().menu().is_none());
     assert!(notices(&mut app, now).contains("no earlier prompt to go back to"));
 }

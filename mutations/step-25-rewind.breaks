@@ -1,0 +1,270 @@
+# Step 25, its second pull request: rewind and fork in the interface
+# (docs/steps/25/answered.md, point 4; docs/steps/25/parts/pr2-rewind.md).
+# Its rules, broken one at a time, with the tests that must fail.
+
+[break] a-rewind-ignores-the-plan-it-was-given
+rule: A rewind given a plan's mark is refused, changing nothing, when the plan made again is not that one.
+file: crates/cineris-core/src/core.rs
+in: Core::rewind
+find: && !crate::rewind::still(&plan, mark, restore_files)
+replace: && false
+caught-by:
+    cineris-core::it rewind_plan::a_rewind_plan_changes_nothing_and_says_what_the_rewind_then_does
+    cineris-core::it rewind_plan::a_conversation_only_rewind_is_held_to_the_plans_turns_alone
+
+[break] a-conversation-only-rewind-is-held-to-the-files
+rule: A rewind of the conversation alone depends on the plan's turns, not on its files.
+file: crates/cineris-core/src/rewind.rs
+in: still
+find: (!restore_files || files == files_part(plan))
+replace: files == files_part(plan)
+caught-by:
+    cineris-core::it rewind_plan::a_conversation_only_rewind_is_held_to_the_plans_turns_alone
+
+[break] the-mark-leaves-out-whether-a-file-can-go-back
+rule: A file edited since the plan was shown changes the plan's mark.
+file: crates/cineris-core/src/rewind.rs
+in: files_part
+find: shown.status.as_str()
+replace: ""
+caught-by:
+    cineris-core::it rewind_plan::a_rewind_plan_changes_nothing_and_says_what_the_rewind_then_does
+
+[break] the-mark-leaves-out-the-turns
+rule: A turn run since the plan was shown changes the plan's mark.
+file: crates/cineris-core/src/rewind.rs
+in: turns_part
+find: text.push_str(turn.as_str());
+replace: let _ = turn;
+caught-by:
+    cineris-core::it rewind_plan::a_conversation_only_rewind_is_held_to_the_plans_turns_alone
+
+[break] a-plan-shows-a-file-it-removes-as-content
+rule: A file the undone turns made is shown as removed.
+file: crates/cineris-core/src/rewind.rs
+in: file
+find: Before::Absent => RewindTarget::Removed,
+replace: Before::Absent => RewindTarget::Content,
+caught-by:
+    cineris-core::it rewind_plan::a_rewind_plan_changes_nothing_and_says_what_the_rewind_then_does
+
+[break] a-rewinds-plan-waits-in-the-lane
+rule: A rewind's plan is a read, beside the lane.
+file: crates/cineris-rpc/src/lane.rs
+in: reads
+find: | Op::SessionRewindPlan(_)
+replace: | Op::McpStatus(_)
+caught-by:
+    cineris-rpc lane::tests::a_rewinds_plan_is_a_read_and_the_rewind_a_write
+
+[break] the-first-prompt-is-a-point
+rule: The first prompt is not a point to rewind to: going back before it is /new.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::points_read
+find: if reading.turns > 1
+replace: if reading.turns > 0
+caught-by:
+    cineris-tui app::tests::rewind::a_session_with_only_one_prompt_has_no_point
+
+[break] a-steering-message-begins-a-turn
+rule: Only a prompt that began a turn is a point; a steering message is not.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::points_read
+find: message.delivery.as_ref() != Some(&ItemDelivery::Steer)
+replace: message.delivery.as_ref() != Some(&ItemDelivery::Queue)
+caught-by:
+    cineris-tui app::tests::rewind::the_points_are_read_page_by_page_and_steering_is_no_point
+
+[break] the-points-are-oldest-first
+rule: The picker lists the points newest first.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::points_read
+find: points.reverse();
+replace: let _ = &points;
+caught-by:
+    cineris-tui app::tests::rewind::rewind_lists_the_earlier_prompts_newest_first_and_not_the_first
+
+[break] rewind-while-a-turn-runs
+rule: While a turn runs, /rewind says to wait for it or stop it, and reads nothing.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::rewind_command
+find: if self.running.is_some() {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::rewind::rewind_while_a_turn_runs_says_to_wait_and_reads_nothing
+
+[break] the-plan-is-asked-for-the-prompt-itself
+rule: The plan is of a rewind to the item before the prompt chosen.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::rewind_to
+find: to: point.before.clone()
+replace: to: point.item.clone()
+caught-by:
+    cineris-tui app::tests::rewind::one_rewinds_and_puts_the_files_back_by_the_plan_shown
+
+[break] the-rewind-sends-no-mark
+rule: A rewind sends the mark of the plan shown, so that a plan that moved is refused.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::rewind_answered
+find: plan: rewinding.mark.clone()
+replace: plan: None
+caught-by:
+    cineris-tui app::tests::rewind::one_rewinds_and_puts_the_files_back_by_the_plan_shown
+    cineris-tui app::tests::rewind::two_rewinds_the_conversation_only
+    cineris-tui app::tests::rewind::a_plan_the_core_refuses_as_moved_is_said
+
+[break] two-puts-the-files-back
+rule: 2 rewinds the conversation only.
+file: crates/cineris-tui/src/app/dialog.rs
+in: Dialog::key
+find: return Keyed::Rewound(Some(place == 0));
+replace: return Keyed::Rewound(Some(true));
+caught-by:
+    cineris-tui app::tests::rewind::two_rewinds_the_conversation_only
+
+[break] esc-rewinds-the-conversation
+rule: Esc cancels the rewind's question and sends nothing.
+file: crates/cineris-tui/src/app/dialog.rs
+in: Dialog::key
+find: Some(Action::Deny) => Keyed::Rewound(None),
+replace: Some(Action::Deny) => Keyed::Rewound(Some(false)),
+caught-by:
+    cineris-tui app::tests::rewind::esc_cancels_and_sends_nothing
+
+[break] enter-rewinds
+rule: No answer is preselected: Enter chooses nothing.
+file: crates/cineris-tui/src/app/dialog.rs
+in: Dialog::key
+find: Some(Action::ShowWhole) => Keyed::ShowWhole, _ => unused(key), }; }
+replace: Some(Action::ShowWhole) => Keyed::ShowWhole, _ => Keyed::Rewound(Some(true)), }; }
+caught-by:
+    cineris-tui app::tests::rewind::enter_chooses_nothing
+
+[break] one-is-offered-for-a-plan-not-seen-whole
+rule: 1 puts files back, and is offered only once every file of the plan was drawn whole.
+file: crates/cineris-tui/src/app/dialog.rs
+in: Dialog::answers
+find: if !clipped || self.seen_whole {
+replace: if true {
+caught-by:
+    cineris-tui app::tests::rewind::one_is_refused_until_every_file_of_the_plan_was_drawn_whole
+
+[break] the-viewer-never-sees-the-plan-whole
+rule: A plan whose every row the viewer drew was seen whole, and 1 is offered after it.
+file: crates/cineris-tui/src/app/state/viewer.rs
+in: App::viewer_frame
+find: dialog.seen_whole();
+replace: let _ = dialog;
+caught-by:
+    cineris-tui app::tests::rewind::one_is_refused_until_every_file_of_the_plan_was_drawn_whole
+
+[break] the-plans-file-names-are-not-sanitised
+rule: A file name from the plan is drawn through sanitize.
+file: crates/cineris-tui/src/view/dialog.rs
+in: rewind
+find: let name = sanitize(&file.path).replace(['\n', '\t'], " ");
+replace: let name = file.path.replace(['\n', '\t'], " ");
+caught-by:
+    cineris-tui app::tests::rewind::hostile_text_in_the_rows_the_plan_and_a_forks_note_is_made_safe
+
+[break] the-prompt-is-not-given-back
+rule: After a rewind, its prompt goes back into the editor, after the draft.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::rewound
+find: Some(prompt) => self.give_back(prompt),
+replace: Some(_) => {}
+caught-by:
+    cineris-tui app::tests::rewind::after_a_rewind_the_prompt_comes_back_and_the_viewer_draws_the_branch_again
+
+[break] a-rewind-does-not-read-the-transcript-again
+rule: After a rewind the transcript the viewer and the full screen draw is read again from the active branch.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::rewound
+find: self.read_again(session.clone());
+replace: let _ = session;
+caught-by:
+    cineris-tui app::tests::rewind::after_a_rewind_the_prompt_comes_back_and_the_viewer_draws_the_branch_again
+    cineris-tui app::tests::rewind::the_full_screen_draws_the_branch_read_again_after_a_rewind
+
+[break] an-undo-does-not-read-the-transcript-again
+rule: An undo's result is drawn as a rewind's: the transcript read again.
+file: crates/cineris-tui/src/app/state.rs
+in: App::done
+find: self.read_again(session);
+replace: let _ = session;
+caught-by:
+    cineris-tui app::tests::rewind::a_prompt_sent_while_the_branch_is_read_again_waits_for_it
+
+[break] the-read-again-keeps-the-turns-undone
+rule: What is read again replaces the kept blocks from before the rewind; what was kept after it stays.
+file: crates/cineris-tui/src/transcript/kept.rs
+in: Kept::replace_before
+find: let tail = self.blocks.split_off(from.min(self.blocks.len()));
+replace: let tail = std::mem::take(&mut self.blocks);
+caught-by:
+    cineris-tui app::tests::rewind::after_a_rewind_the_prompt_comes_back_and_the_viewer_draws_the_branch_again
+    cineris-tui app::tests::rewind::the_full_screen_draws_the_branch_read_again_after_a_rewind
+
+[break] a-prompt-does-not-wait-for-the-read-again
+rule: A prompt sent while the transcript is read again waits for the read, so that its turn is not read twice.
+file: crates/cineris-tui/src/app/state.rs
+in: App::submit
+find: if self.held_sent.is_some() || self.rereading.is_some() {
+replace: if self.held_sent.is_some() {
+caught-by:
+    cineris-tui app::tests::rewind::a_prompt_sent_while_the_branch_is_read_again_waits_for_it
+
+[break] the-inline-notice-is-kept-in-its-own-words
+rule: The viewer keeps the rewind's notice in words that hold there, not the scrollback's "above this line".
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::kept_words
+find: text.clone_from(kept);
+replace: let _ = kept;
+caught-by:
+    cineris-tui app::tests::rewind::after_a_rewind_the_prompt_comes_back_and_the_viewer_draws_the_branch_again
+
+[break] a-fork-ends-after-the-prompt
+rule: Tab in the /rewind picker forks from before the point: the item before its prompt.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::forked
+find: Some(point.before.clone())
+replace: Some(point.item.clone())
+caught-by:
+    cineris-tui app::tests::rewind::tab_in_the_rewind_picker_forks_from_before_the_point
+
+[break] a-failed-fork-loses-the-session
+rule: A fork that fails leaves the session forked open here, as it was.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::fork_failed
+find: self.session = Some(forking.from);
+replace: let _ = forking;
+caught-by:
+    cineris-tui app::tests::rewind::a_fork_that_fails_keeps_the_session
+
+[break] a-fork-is-not-noted
+rule: /sessions notes whose fork a session is.
+file: crates/cineris-tui/src/app/state/commands.rs
+in: App::sessions_listed
+find: if let Some(parent) = &summary.parent {
+replace: if let Some(parent) = summary.parent.as_ref().filter(|_| false) {
+caught-by:
+    cineris-tui app::tests::rewind::the_sessions_list_says_whose_fork_a_session_is
+
+[break] a-forking-picker-has-no-fork-context
+rule: In a picker that forks, Tab forks; Enter alone accepts.
+file: crates/cineris-tui/src/input.rs
+in: Input::contexts
+find: contexts.push(Context::Fork);
+replace: let _ = Context::Fork;
+caught-by:
+    cineris-tui::it bindings::every_default_binding_does_its_action
+    cineris-tui app::tests::rewind::tab_in_the_rewind_picker_forks_from_before_the_point
+
+[break] a-moved-plan-says-no-way-on
+rule: A rewind refused because its plan moved says how to go on.
+file: crates/cineris-tui/src/app/wording.rs
+in: error
+find: code::PLAN_CHANGED => Some("/rewind shows the plan as it is now."),
+replace: code::PLAN_CHANGED => None,
+caught-by:
+    cineris-tui app::tests::rewind::a_plan_the_core_refuses_as_moved_is_said
