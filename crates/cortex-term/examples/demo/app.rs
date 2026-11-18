@@ -19,6 +19,7 @@
 //! | Option | Meaning |
 //! |---|---|
 //! | `rate=N` | Tokens a second while streaming (400). |
+//! | `mouse` | The alternate screen with the mouse reported; the status line names the last mouse event. |
 //! | `turn-ms=N` | How long a turn streams (12000). |
 //! | `live-rows=N` | Keep the last N lines of the text in the live region instead of committing them at once: the heavy case (1). |
 //! | `auto` | Start a turn at once, without waiting for Enter. |
@@ -108,6 +109,9 @@ pub struct Options {
     pub terminate_on: Option<char>,
     /// Where to write the timings.
     pub stats: Option<String>,
+    /// Draw on the alternate screen with the mouse reported, and name the
+    /// last mouse event as the last key (since step 25).
+    pub mouse: bool,
 }
 
 impl Default for Options {
@@ -123,6 +127,7 @@ impl Default for Options {
             abort_on: None,
             terminate_on: None,
             stats: None,
+            mouse: false,
         }
     }
 }
@@ -157,6 +162,7 @@ impl Options {
                 "abort-on" => options.abort_on = Some(key()?),
                 "terminate-on" => options.terminate_on = Some(key()?),
                 "stats" => options.stats = Some(value.to_owned()),
+                "mouse" => options.mouse = true,
                 "" => {}
                 _ => return Err(format!("unknown option `{name}`")),
             }
@@ -298,6 +304,22 @@ fn start_turn(stream: &Arc<Stream>, options: &Options, waker: cortex_term::Waker
 }
 
 /// A key as the status line names it: `Ctrl+Shift+a`, `Alt+Enter`.
+/// A mouse event's name, as the status line shows it.
+#[must_use]
+pub fn mouse_name(mouse: cortex_term::Mouse) -> String {
+    use cortex_term::{MouseKind, Wheel};
+    match mouse.kind {
+        MouseKind::Wheel(Wheel::Up) => "Wheel up".to_owned(),
+        MouseKind::Wheel(Wheel::Down) => "Wheel down".to_owned(),
+        MouseKind::Wheel(other) => format!("Wheel {other:?}"),
+        MouseKind::Press(button) => format!("Press {button:?}"),
+        MouseKind::Release(Some(button)) => format!("Release {button:?}"),
+        MouseKind::Release(None) => "Release".to_owned(),
+        MouseKind::Drag(button) => format!("Drag {button:?}"),
+        MouseKind::Moved => "Moved".to_owned(),
+    }
+}
+
 pub fn key_name(key: Key) -> String {
     let mut name = String::new();
     for (modifier, word) in [
@@ -377,6 +399,10 @@ pub fn run(options: &Options) -> io::Result<()> {
     let began = Instant::now();
     let mut key_read: Option<Instant> = None;
     let mut last_key = String::from("none");
+    if options.mouse {
+        terminal.set_mouse(true)?;
+        terminal.alternate(true)?;
+    }
 
     if options.auto {
         streaming = true;
@@ -519,9 +545,16 @@ pub fn run(options: &Options) -> io::Result<()> {
                 presenter.restart();
                 scheduler.input();
             }
+            Event::Mouse(mouse) => {
+                last_key = mouse_name(mouse);
+                scheduler.input();
+            }
             // Made a key above.
-            Event::Focus(_) | Event::Reply(_) | Event::Repeat(_) | Event::Mouse(_) => {}
+            Event::Focus(_) | Event::Reply(_) | Event::Repeat(_) => {}
         }
+    }
+    if options.mouse {
+        terminal.alternate(false)?;
     }
     let caps = *terminal.caps();
     presenter.finish(&caps, &mut terminal)?;

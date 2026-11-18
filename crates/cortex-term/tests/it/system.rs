@@ -292,6 +292,24 @@ fn sys_keys_arrive_with_their_modifiers() {
     session.wait_exit(LIMIT);
 }
 
+/// The mouse, on with the alternate screen, reaches the program as a
+/// terminal reports it (SGR, mode 1006): the wheel and a click, and on
+/// Windows through ConPTY, which is what this measures there (step 25: the
+/// console's mouse input is on with the alternate screen).
+#[test]
+fn sys_the_mouse_reaches_the_program_on_the_alternate_screen() {
+    let mut session = Session::start(&this_binary(), &DEMO.arguments("mouse"), 100, 30).answering();
+    session.wait_for(LIMIT, "the first frame", |t| t.shows(STATUS_MARK));
+    session.send(b"\x1b[<64;10;5M");
+    last_key(&mut session, "Wheel up");
+    session.send(b"\x1b[<0;4;3M");
+    last_key(&mut session, "Press Left");
+    session.send(b"\x1b[<0;4;3m");
+    last_key(&mut session, "Release Left");
+    session.send(b"\x03");
+    session.wait_exit(LIMIT);
+}
+
 /// Whether `haystack` holds `needle`.
 #[cfg(unix)]
 fn holds(haystack: &[u8], needle: &[u8]) -> bool {
