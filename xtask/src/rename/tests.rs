@@ -823,3 +823,22 @@ fn the_tools_kept_code_names_no_crate_of_the_workspace() {
         }
     }
 }
+
+/// The repo rules, which the lint job runs, hold every file to the check: a
+/// name planted in a page, a crate's path or the alias in a command fails
+/// them, and the same text in a kept line does not.
+#[test]
+fn the_repo_rules_find_a_planted_old_name() {
+    let rules = crate::rules::file_rules;
+    let found = rules(
+        "docs/page.md",
+        b"# Cineris\n\nSet CORTEX_LOG, then run `cx --version`.\n",
+    );
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].line, Some(3));
+    assert_eq!(rules("crates/cortex-x/src/lib.rs", b"").len(), 1);
+    assert!(rules("docs/page.md", b"# Cineris\n\nRun `cin --version`.\n").is_empty());
+    let row = b"| **The name clash step 2 found.** Snowflake's CLI installs `cortex`. |\n";
+    assert!(rules("docs/build-plan.md", row).is_empty());
+    assert_eq!(rules("docs/other.md", row).len(), 1);
+}
