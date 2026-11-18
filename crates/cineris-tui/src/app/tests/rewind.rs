@@ -4,8 +4,8 @@
 
 use cineris_protocol::item::Delivery as ItemDelivery;
 use cineris_protocol::methods::{
-    RewindFile, RewindFileStatus, RewindTarget, RewindWhyNot, SessionListResult, SessionReadResult,
-    SessionRewindParams, SessionRewindPlanResult,
+    RewindFile, RewindFileStatus, RewindTarget, RewindWhyNot, SessionForkResult, SessionListResult,
+    SessionReadResult, SessionRewindParams, SessionRewindPlanResult,
 };
 
 use super::*;
@@ -815,8 +815,9 @@ fn tab_in_the_rewind_picker_forks_from_before_the_point() {
     give(
         &link,
         ticket,
-        Ok(OpResult::SessionFork(SessionResult {
+        Ok(OpResult::SessionFork(SessionForkResult {
             session: session().id("s_fork").build(),
+            before: Some(ItemId::from("i_3")),
         })),
     );
     drain(&mut app, now);
@@ -839,6 +840,40 @@ fn tab_in_the_rewind_picker_forks_from_before_the_point() {
         Some("s_fork".to_owned())
     );
     assert!(notices(&mut app, now).contains("Forked from before turn 2"));
+}
+
+/// A fork from before a point whose result does not give `before` back
+/// holds all of the session: a core that does not know the field forks it
+/// all. What is said says so, and not that it forked from before the turn
+/// (the review of the fixes of step 25's second pull request).
+#[test]
+fn a_fork_whose_result_does_not_say_where_it_ended_holds_all_of_the_session() {
+    let now = Instant::now();
+    for given in [None, Some("i_5")] {
+        let (mut app, link) = with_history(now);
+        rewind_picker(&mut app, &link, history(), now);
+        key(&mut app, "down", now);
+        key(&mut app, "tab", now);
+        let (ticket, _) = sent_one(&link, |op| matches!(op, Op::SessionFork(_)).then_some(()));
+        give(
+            &link,
+            ticket,
+            Ok(OpResult::SessionFork(SessionForkResult {
+                session: session().id("s_fork").build(),
+                before: given.map(ItemId::from),
+            })),
+        );
+        drain(&mut app, now);
+        let said = notices(&mut app, now);
+        assert!(
+            !said.contains("Forked from before turn 2"),
+            "{given:?}: {said}"
+        );
+        assert!(
+            said.contains("Forked with all of the session's history"),
+            "{given:?}: {said}"
+        );
+    }
 }
 
 /// A fork that fails leaves the session as it was, open here.

@@ -299,10 +299,30 @@ pub struct SessionForkParams {
     pub at: Option<ItemId>,
     /// The item the new session ends just before (since step 25): it keeps
     /// what the session's log holds before that item's entry, and nothing
-    /// of the item or after it. A prompt's id forks from before its turn,
-    /// with whatever the log holds between the turn before and it (that
-    /// turn's last checkpoint, a plan the person edited). A core from
-    /// before step 25 ignores it, and forks all of the session.
+    /// of the item or after it. The id of a prompt that began a turn forks
+    /// from before the turn's first entry: what the turn recorded before
+    /// its prompt (the notices that waited for it, the epoch's map) is left
+    /// out with it, and whatever the log holds between the turn before and
+    /// the turn (that turn's last checkpoint, a plan the person edited) is
+    /// kept. A core from before step 25 ignores it, and forks all of the
+    /// session: its result's `before` is then absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before: Option<ItemId>,
+}
+
+/// The result of `session/fork`: the new session's state, and where it
+/// ends when it was asked to end before an item (since the review of the
+/// fixes of step 25's second pull request).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct SessionForkResult {
+    /// The new session's state.
+    pub session: SessionState,
+    /// The `before` of the request, given back when the new session ends
+    /// just before that item. A client that asked for `before` takes a
+    /// result without it for a fork of all of the session: a core that
+    /// does not know the field ignores it, and forks all of the session,
+    /// as `session/read`'s `redacted` is given back for the same reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<ItemId>,
 }
@@ -330,12 +350,15 @@ pub struct SessionRewindParams {
     pub to: Option<ItemId>,
     /// The item of the active branch to go back to just before (since step
     /// 25): the active position becomes the entry the item's own follows,
-    /// and everything from the item on is undone, nothing before it. A
-    /// prompt's id undoes its turn and every later one, and keeps what the
-    /// log holds between the turn before and it (that turn's last
-    /// checkpoint, a plan the person edited), as `session/undo` does. A core
-    /// from before step 25 refuses a rewind with `before` alone, for want of
-    /// `to`.
+    /// and everything from the item on is undone, nothing before it. The id
+    /// of a prompt that began a turn goes back to before the turn's first
+    /// entry, where `session/undo` goes back to when that turn is the last:
+    /// the turn and every later one are undone, what the turn recorded
+    /// before its prompt (the notices that waited for it, the epoch's map)
+    /// with them, and what the log holds between the turn before and the
+    /// turn (that turn's last checkpoint, a plan the person edited) is kept.
+    /// A core from before step 25 refuses a rewind with `before` alone, for
+    /// want of `to`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<ItemId>,
     /// Whether to put files back as they were at that point, from the
@@ -1482,7 +1505,7 @@ methods! {
     /// catches up after a gap in `seq` or an `item.resync`.
     SessionRead(SessionReadParams) -> SessionReadResult => "session/read",
     /// Makes a new session from a point in this one.
-    SessionFork(SessionForkParams) -> SessionResult => "session/fork",
+    SessionFork(SessionForkParams) -> SessionForkResult => "session/fork",
     /// Moves the active branch back to an earlier item.
     SessionRewind(SessionRewindParams) -> SessionResult => "session/rewind",
     /// What `session/rewind` to an item would do now, changing nothing.

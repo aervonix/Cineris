@@ -728,9 +728,8 @@ async fn session(
         }
     };
     match core.handle(client, op).await? {
-        OpResult::SessionNew(result)
-        | OpResult::SessionOpen(result)
-        | OpResult::SessionFork(result) => Ok(result.session),
+        OpResult::SessionNew(result) | OpResult::SessionOpen(result) => Ok(result.session),
+        OpResult::SessionFork(result) => Ok(result.session),
         _ => Err(Box::new(ErrorData::new(
             ErrorKind::Internal,
             "unexpected_result",

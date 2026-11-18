@@ -9,10 +9,11 @@ use cineris_core::{ClientInfo, OpError};
 use cineris_protocol::error::code;
 use cineris_protocol::event::Event;
 use cineris_protocol::item::{Delivery, PlanStatus};
+use cineris_protocol::message::Part;
 use cineris_protocol::methods::{
-    Op, OpResult, PlanUpdateParams, RewindFileStatus, RewindTarget, RewindWhyNot,
+    ApprovalChoice, Op, OpResult, PlanUpdateParams, RewindFileStatus, RewindTarget, RewindWhyNot,
     SessionForkParams, SessionNewParams, SessionRef, SessionRewindParams, SessionRewindPlanParams,
-    SessionRewindPlanResult,
+    SessionRewindPlanResult, SessionUndoParams, TurnStartParams,
 };
 use cineris_protocol::project::{PlanAdd, PlanEdit};
 use cineris_protocol::{Item, ItemId, TurnId};
@@ -300,18 +301,22 @@ async fn rewind_to(
 }
 
 /// A fork of the session at `point`, as a front end of its own on the
-/// same client.
+/// same client. Its result gives back the `before` it was asked (the review
+/// of the fixes of step 25's second pull request: a client cannot tell
+/// otherwise a fork from before an item from one of all of the session by
+/// a core that does not know the field).
 async fn fork_at(front: &Front, (at, before): Named) -> Result<Front, OpError> {
     let OpResult::SessionFork(forked) = front
         .op(Op::SessionFork(SessionForkParams {
             session_id: front.session.clone(),
             at,
-            before,
+            before: before.clone(),
         }))
         .await?
     else {
         panic!("not a fork");
     };
+    assert_eq!(forked.before, before, "the fork says where it ends");
     Ok(Front {
         session: forked.session.session_id.clone(),
         state: forked.session,
@@ -418,11 +423,14 @@ fn undone(front: &Front, world: &World) -> Vec<String> {
         .collect()
 }
 
-/// "Before this prompt" is the state before the prompt's entry: a plan the
+/// "Before this prompt" is the state before the prompt's turn: a plan the
 /// person edited between the turn before and the prompt is kept by a fork
 /// and by a rewind from there, and the plan undoes the prompt's turn alone
 /// (the review of step 25's second pull request: a rewind to the item
-/// before the prompt took the edit with it, unseen).
+/// before the prompt took the edit with it, unseen). The edit's notice to
+/// the model is the prompt's turn's, written as it began, and goes with
+/// it, as an undo of that turn takes it (the review of that review's
+/// fixes).
 #[test]
 fn a_fork_and_a_rewind_before_a_prompt_keep_the_plan_edited_before_it() {
     let world = World::new("rewind_before_plan", [says("One."), says("Two.")]);
@@ -457,8 +465,8 @@ fn a_fork_and_a_rewind_before_a_prompt_keep_the_plan_edited_before_it() {
         assert!(!kept.contains(&second), "the prompt is kept: {kept:?}");
         assert_eq!(
             kept.len(),
-            3,
-            "the first turn and the edit's notice: {kept:?}"
+            2,
+            "the first turn, without the second's notice of the edit: {kept:?}"
         );
         // The prompt is on another branch now: a rewind is not planned to
         // before it, as one to after it is not (a fork may still be).
@@ -466,6 +474,111 @@ fn a_fork_and_a_rewind_before_a_prompt_keep_the_plan_edited_before_it() {
             .await
             .expect_err("a point off the active branch");
         assert_eq!(refused.code, "invalid_entry");
+        front.close().await;
+    });
+}
+
+/// After a rewind to before a prompt whose turn began with entries of its
+/// own (here the notice of a plan the person edited), `/undo` undoes the
+/// turn before, and leaves nothing of the turn rewound behind (the review
+/// of the fixes of step 25's second pull request: the notice stayed on the
+/// branch, under a turn recorded as rewound, and the undo took it for the
+/// last turn and undid it alone).
+#[test]
+fn an_undo_after_a_rewind_before_a_prompt_undoes_the_turn_before() {
+    let world = World::new("rewind_before_undo", [says("One."), says("Two.")]);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("one").await;
+        edit_plan(&front, "Keep the tests green").await;
+        front.turn("two").await;
+        let [first, second] = &prompts(&front)[..] else {
+            panic!("two prompts: {:?}", front.items());
+        };
+        let (one, two) = (turn_of(&front, first), turn_of(&front, second));
+        rewind_to(&front, before(second), false, None)
+            .await
+            .expect("the rewind");
+        let kept = branch(&front).await;
+        assert_eq!(kept.len(), 2, "the first turn alone: {kept:?}");
+        let undone_now = front
+            .op(Op::SessionUndo(SessionUndoParams {
+                session_id: front.session.clone(),
+                restore_files: false,
+            }))
+            .await
+            .expect("the undo");
+        assert!(matches!(undone_now, OpResult::SessionUndo(_)));
+        assert_eq!(
+            branch(&front).await,
+            Vec::<ItemId>::new(),
+            "the first turn is undone"
+        );
+        assert_eq!(undone(&front, &world), [two.as_str(), one.as_str()]);
+        front.close().await;
+    });
+}
+
+/// `before` an item that began no turn is just before its own entry, as
+/// before: a steering message keeps the prompt and the round that came
+/// before it in its turn (the review of the fixes of step 25's second pull
+/// request moved `before` a prompt that began a turn to before the turn,
+/// and only that). The command asks, and is refused, so that the turn is
+/// held while the steering is sent, and no shell starts.
+#[test]
+fn before_a_steering_message_is_just_before_it() {
+    let world = World::new(
+        "rewind_before_steer",
+        [
+            calls(&[("c1", "shell", json!({"command": "ninja"}))]),
+            says("Steered."),
+        ],
+    );
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("build it").await;
+        let (id, _) = front.approval().await;
+        front
+            .op(Op::TurnStart(TurnStartParams {
+                session_id: front.session.clone(),
+                input: vec![Part::text("and test it")],
+                delivery: Some(Delivery::Steer),
+            }))
+            .await
+            .expect("the steering is taken");
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        let steer = front
+            .items()
+            .into_iter()
+            .find_map(|item| match item {
+                Item::UserMessage(message) if message.delivery == Some(Delivery::Steer) => {
+                    Some(message.id)
+                }
+                _ => None,
+            })
+            .expect("the steering was delivered");
+        let kept: Vec<ItemId> = branch(&front)
+            .await
+            .into_iter()
+            .take_while(|item| *item != steer)
+            .collect();
+        assert_eq!(
+            kept.len(),
+            3,
+            "the prompt, the call and its result: {kept:?}"
+        );
+        let shown = plan_of(&front, before(&steer)).await.expect("the plan");
+        rewind_to(&front, before(&steer), false, Some(shown.mark))
+            .await
+            .expect("the rewind");
+        assert_eq!(
+            branch(&front).await,
+            kept,
+            "all before the steering is kept"
+        );
         front.close().await;
     });
 }

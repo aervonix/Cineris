@@ -6,11 +6,18 @@
 //! **The point** is an item: after it (`to`, a fork's `at`), or just before
 //! it (`before`, since step 25), which is the entry the item's own follows
 //! in the session's tree. "Before this prompt" is then the state before
-//! the prompt's entry, as `/undo` has it, and not everything after the item
+//! the prompt's turn, as `/undo` has it, and not everything after the item
 //! before it: the log can hold entries between the two (the turn before's
 //! last checkpoint, a plan the person edited), which a rewind to that item
 //! would take with it (settled by the coordinator, with the reviewer's
-//! agreement, after the review of step 25's second pull request).
+//! agreement, after the review of step 25's second pull request). A prompt
+//! that began a turn goes back to before the turn's first entry: what the
+//! turn recorded before its prompt (the notices that waited for it, the
+//! date and the instruction files' changes, the epoch's map) is the turn's,
+//! and goes with it, as `/undo` takes it. Left on the branch, it kept a
+//! turn the log records as rewound, which the next `/undo` took for the
+//! last turn (the review of that review's fixes). Any other item goes back
+//! to just before its own entry.
 //!
 //! **The mark** is two short hashes: one of the history (the entry the
 //! rewind goes back to, the active position it goes back from, and the
@@ -27,12 +34,14 @@
 //! edited, and the core asks about it before it is put back.
 
 use cineris_base::ContentHash;
+use cineris_protocol::item::Delivery;
 use cineris_protocol::methods::{
     RewindFile, RewindFileStatus, RewindTarget, RewindWhyNot, SessionRewindPlanResult,
 };
 use cineris_protocol::{ErrorKind, ItemId};
 use cineris_session::{
-    Before, CannotRestore, EntryId, FileRestore, FileStatus, Log, RewindPlan, SessionError,
+    Before, Body, CannotRestore, EntryId, FileRestore, FileStatus, Kind, Log, RewindPlan,
+    SessionError,
 };
 
 use crate::core::{OpError, error};
@@ -46,7 +55,8 @@ pub(crate) enum Point {
     /// After the item: its own entry is the last kept (`to`, `at`).
     After(ItemId),
     /// Just before the item: the entry its own follows is the last kept,
-    /// and the item and all after it are not (`before`).
+    /// and the item and all after it are not (`before`). For a prompt that
+    /// began a turn, the entry the turn's first follows.
     Before(ItemId),
 }
 
@@ -86,7 +96,8 @@ impl Point {
     /// The entry of `log` the point is: `unknown_item` for an item the log
     /// does not hold. With `on_branch` (a rewind, its plan), an item named
     /// by `before` must be on the active branch, as one named by `to` must
-    /// (`invalid_entry`).
+    /// (`invalid_entry`). `before` a prompt that began a turn is before
+    /// the turn's first entry.
     pub(crate) fn entry(&self, log: &Log, on_branch: bool) -> Result<EntryId, OpError> {
         let (Self::After(item) | Self::Before(item)) = self;
         let own = log.entry_of_item(item).ok_or_else(|| {
@@ -102,12 +113,41 @@ impl Point {
                 if on_branch && !log.branch().contains(own) {
                     return Err(not_there(format!("`{item}` is not on the active branch")));
                 }
-                log.parent_of(own)
+                log.parent_of(turn_start(log, own)?)
                     .cloned()
                     .ok_or_else(|| not_there(format!("nothing comes before `{item}`")))
             }
         }
     }
+}
+
+/// Where going back to just before the entry `own` starts: the first entry
+/// of its turn when `own` is the prompt that began the turn, `own` itself
+/// otherwise. A prompt is a user message that is not steering (a queued
+/// one begins a turn of its own); what comes before it in its turn is what
+/// the turn recorded as it began.
+fn turn_start<'log>(log: &'log Log, own: &'log EntryId) -> Result<&'log EntryId, OpError> {
+    let Some(turn) = log.turn_of(own) else {
+        return Ok(own);
+    };
+    if log.kind_of(own) != Some(&Kind::User) {
+        return Ok(own);
+    }
+    let entry = log
+        .read(own)
+        .map_err(|problem| Box::new(cineris_base::Classified::to_error_data(&problem)))?;
+    // Steering came into a turn under way: just before it is just before
+    // its own entry.
+    if matches!(&entry.body, Body::User(message) if message.delivery == Some(Delivery::Steer)) {
+        return Ok(own);
+    }
+    let mut first = own;
+    while let Some(parent) = log.parent_of(first)
+        && log.turn_of(parent) == Some(turn)
+    {
+        first = parent;
+    }
+    Ok(first)
 }
 
 /// A point the session's tree does not have, refused as the session's own

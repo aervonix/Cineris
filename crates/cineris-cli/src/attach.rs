@@ -569,14 +569,12 @@ async fn take_in(
                     shared.queue.unfence(session);
                 }
                 (Ok(_), Some(session)) => shared.queue.unfence(session),
-                (
-                    Ok(
-                        OpResult::SessionNew(opened)
-                        | OpResult::SessionOpen(opened)
-                        | OpResult::SessionFork(opened),
-                    ),
-                    None,
-                ) => shared.queue.unfence(&opened.session.session_id),
+                (Ok(OpResult::SessionNew(opened) | OpResult::SessionOpen(opened)), None) => {
+                    shared.queue.unfence(&opened.session.session_id);
+                }
+                (Ok(OpResult::SessionFork(forked)), None) => {
+                    shared.queue.unfence(&forked.session.session_id);
+                }
                 _ => {}
             }
             interactive::push(&shared.done, Inbound::Done(asked.ticket, result));

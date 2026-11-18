@@ -1810,8 +1810,8 @@ caught-by:
 rule: A rewind, a plan or a fork `before` an item goes to the entry the item's own follows, leaving the item out.
 file: crates/cineris-core/src/rewind.rs
 in: Point::entry
-find: log.parent_of(own)
-replace: Some(own)
+find: log.parent_of(turn_start(log, own)?)
+replace: turn_start(log, own).ok().map(|_| own)
 caught-by:
     cineris-core::it rewind_plan::a_fork_and_a_rewind_before_a_prompt_keep_the_plan_edited_before_it
 
@@ -1958,9 +1958,9 @@ file: crates/cineris-tui/src/app/state/rewind.rs
 in: App::fork_here
 find:
     at: None,
-    before
+    before: before.clone()
 replace:
-    at: before,
+    at: before.clone(),
     before: None
 caught-by:
     cineris-tui app::tests::rewind::tab_in_the_rewind_picker_forks_from_before_the_point
@@ -2108,3 +2108,53 @@ find: self.points = None;
 replace: let _ = 0;
 caught-by:
     cineris-tui app::tests::rewind::a_points_read_that_fails_is_said_and_holds_nothing_up
+
+# ------------- the review of the fixes made after the second pull request's
+# full review (docs/steps/25/parts/pr2-rewind.md and pr2-session.md, "The
+# review of the fixes")
+
+[break] before-a-prompt-leaves-its-turns-first-entries
+rule: `before` a prompt that began a turn goes back to before the turn's first entry, as /undo does: what the turn recorded before its prompt goes with it, and the next /undo undoes the turn before.
+file: crates/cineris-core/src/rewind.rs
+in: Point::entry
+find: log.parent_of(turn_start(log, own)?)
+replace: log.parent_of(turn_start(log, own).map(|_| own)?)
+caught-by:
+    cineris-core::it rewind_plan::an_undo_after_a_rewind_before_a_prompt_undoes_the_turn_before
+    cineris-core::it rewind_plan::a_fork_and_a_rewind_before_a_prompt_keep_the_plan_edited_before_it
+
+[break] before-a-steering-message-goes-before-its-turn
+rule: `before` a steering message is just before its own entry: only a prompt that began a turn goes back before the turn.
+file: crates/cineris-core/src/rewind.rs
+in: turn_start
+find: if matches!(&entry.body, Body::User(message) if message.delivery == Some(Delivery::Steer)) {
+replace: if false && matches!(&entry.body, Body::User(message) if message.delivery == Some(Delivery::Steer)) {
+caught-by:
+    cineris-core::it rewind_plan::before_a_steering_message_is_just_before_it
+
+[break] a-fork-does-not-say-where-it-ends
+rule: A fork's result gives back the `before` it was asked, so that a client can tell it from a fork of all of the session by a core that does not know the field.
+file: crates/cineris-core/src/core.rs
+find:
+    Ok(OpResult::SessionFork(SessionForkResult {
+        session: forked.handle.state(),
+        before,
+    }))
+replace:
+    Ok(OpResult::SessionFork(SessionForkResult {
+        session: forked.handle.state(),
+        before: before.filter(|_| false),
+    }))
+packages: cineris-core, cineris-rpc
+caught-by:
+    cineris-core::it rewind_plan::a_fork_and_a_rewind_before_a_prompt_keep_the_plan_edited_before_it
+    cineris-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
+
+[break] a-fork-of-all-of-the-session-is-said-to-be-from-before-the-turn
+rule: A fork from before a point whose result does not give `before` back holds all of the session, and what is said says so.
+file: crates/cineris-tui/src/app/state/rewind.rs
+in: App::fork_opened
+find: if forking.before.is_some() && forked.before != forking.before {
+replace: if false && forked.before != forking.before {
+caught-by:
+    cineris-tui app::tests::rewind::a_fork_whose_result_does_not_say_where_it_ended_holds_all_of_the_session

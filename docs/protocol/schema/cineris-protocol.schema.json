@@ -5861,7 +5861,7 @@
               "type": "null"
             }
           ],
-          "description": "The item the new session ends just before (since step 25): it keeps\nwhat the session's log holds before that item's entry, and nothing\nof the item or after it. A prompt's id forks from before its turn,\nwith whatever the log holds between the turn before and it (that\nturn's last checkpoint, a plan the person edited). A core from\nbefore step 25 ignores it, and forks all of the session."
+          "description": "The item the new session ends just before (since step 25): it keeps\nwhat the session's log holds before that item's entry, and nothing\nof the item or after it. The id of a prompt that began a turn forks\nfrom before the turn's first entry: what the turn recorded before\nits prompt (the notices that waited for it, the epoch's map) is left\nout with it, and whatever the log holds between the turn before and\nthe turn (that turn's last checkpoint, a plan the person edited) is\nkept. A core from before step 25 ignores it, and forks all of the\nsession: its result's `before` is then absent."
         },
         "session_id": {
           "$ref": "#/$defs/SessionId",
@@ -5870,6 +5870,30 @@
       },
       "required": [
         "session_id"
+      ],
+      "type": "object"
+    },
+    "SessionForkResult": {
+      "description": "The result of `session/fork`: the new session's state, and where it\nends when it was asked to end before an item (since the review of the\nfixes of step 25's second pull request).",
+      "properties": {
+        "before": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ItemId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The `before` of the request, given back when the new session ends\njust before that item. A client that asked for `before` takes a\nresult without it for a fork of all of the session: a core that\ndoes not know the field ignores it, and forks all of the session,\nas `session/read`'s `redacted` is given back for the same reason."
+        },
+        "session": {
+          "$ref": "#/$defs/SessionState",
+          "description": "The new session's state."
+        }
+      },
+      "required": [
+        "session"
       ],
       "type": "object"
     },
@@ -6104,7 +6128,7 @@
               "type": "null"
             }
           ],
-          "description": "The item of the active branch to go back to just before (since step\n25): the active position becomes the entry the item's own follows,\nand everything from the item on is undone, nothing before it. A\nprompt's id undoes its turn and every later one, and keeps what the\nlog holds between the turn before and it (that turn's last\ncheckpoint, a plan the person edited), as `session/undo` does. A core\nfrom before step 25 refuses a rewind with `before` alone, for want of\n`to`."
+          "description": "The item of the active branch to go back to just before (since step\n25): the active position becomes the entry the item's own follows,\nand everything from the item on is undone, nothing before it. The id\nof a prompt that began a turn goes back to before the turn's first\nentry, where `session/undo` goes back to when that turn is the last:\nthe turn and every later one are undone, what the turn recorded\nbefore its prompt (the notices that waited for it, the epoch's map)\nwith them, and what the log holds between the turn before and the\nturn (that turn's last checkpoint, a plan the person edited) is kept.\nA core from before step 25 refuses a rewind with `before` alone, for\nwant of `to`."
         },
         "plan": {
           "description": "The `mark` of the plan `session/rewind_plan` gave, which the person\nwas shown (since step 25). The plan is made again, and the rewind is\nrefused (`plan_changed`), changing nothing, when it is not that one:\nwhen the point it goes back to, the active position it goes back\nfrom or its turns differ, and with `restore_files` also when what it\nwould do to any file does. Absent: no plan is checked.",
@@ -8505,7 +8529,7 @@
           "$ref": "#/$defs/SessionForkParams"
         },
         "result": {
-          "$ref": "#/$defs/SessionResult"
+          "$ref": "#/$defs/SessionForkResult"
         }
       },
       "session/list": {
