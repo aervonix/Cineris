@@ -53,6 +53,7 @@ fn page(items: Vec<Item>, masked: u32, next: Option<&str>) -> SessionReadResult 
         next_cursor: next.map(str::to_owned),
         seq: 4,
         masked,
+        redacted: true,
     }
 }
 

@@ -480,6 +480,7 @@ fn an_export_read_of(ephemeral: bool) {
         // memory was never masked.
         assert_eq!(plain_text.contains(KEY), ephemeral);
         assert_eq!(plain.masked, 0);
+        assert!(!plain.redacted, "a plain read does not say it masked");
 
         let export = read_items(&front, true).await;
         let text = serde_json::to_string(&export.items).unwrap();
@@ -491,6 +492,8 @@ fn an_export_read_of(ephemeral: bool) {
         assert_eq!(export.items.len(), plain.items.len());
         // The key, the private key and the token.
         assert_eq!(export.masked, 3);
+        // It says it masked them: a client writes nothing without that.
+        assert!(export.redacted);
         front.close().await;
     });
 }

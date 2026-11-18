@@ -1072,6 +1072,7 @@ mod tests {
                     next_cursor: None,
                     seq: 9,
                     masked: 0,
+                    redacted: false,
                 },
             )),
         )

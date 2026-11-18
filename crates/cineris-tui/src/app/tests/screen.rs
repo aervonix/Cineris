@@ -830,6 +830,7 @@ fn the_viewer_shows_a_reasoning_and_a_compactions_summary_whole() {
                 next_cursor: None,
                 seq: 9,
                 masked: 0,
+                redacted: false,
             },
         )),
     ));

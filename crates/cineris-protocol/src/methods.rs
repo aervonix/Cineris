@@ -254,7 +254,7 @@ pub struct SessionReadParams {
     /// core's own secret filter, as the session log's writer masks it, the
     /// provider's blocks (`raw`) left out, and the items still in progress
     /// left out (named in `incomplete`). A session kept only in memory is
-    /// masked the same.
+    /// masked the same. The result says it was masked (its `redacted`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub redacted: bool,
 }
@@ -278,6 +278,12 @@ pub struct SessionReadResult {
     /// as it was written or as they were read (since step 25).
     #[serde(default, skip_serializing_if = "masked_none")]
     pub masked: u32,
+    /// The items were masked for an export, as `redacted` asked (since
+    /// step 25). A client that asked for `redacted` writes nothing without
+    /// it: a server that does not know the field reads the items unmasked,
+    /// and its result reads `false` here.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub redacted: bool,
 }
 
 /// `session/fork`
