@@ -186,6 +186,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### Windows
 
 - [key-latency-over-conpty](key-latency-over-conpty.md): A key through ConPTY on a hosted Windows runner takes 16 ms at the median, against 2 ms. Owner: the owner; before step 23.
+- [the-windows-terminal-check-of-step-25](the-windows-terminal-check-of-step-25.md): The checklist for the real interface on Windows Terminal, step 25's `pr3-wt-checklist.md`, has not been run. Owner: the owner (Windows Terminal check).
 - [windows-start-overhead-in-release](windows-start-overhead-in-release.md): The release-build overhead of starting a shell command on Windows is unmeasured, though `try` can measure it. Owner: step 33, or sooner on any Windows machine.
 
 ### Other
