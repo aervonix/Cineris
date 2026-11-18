@@ -40,6 +40,9 @@ pub enum ViewerKeys {
     Summary {
         /// `reasoning` or `summary`.
         label: &'static str,
+        /// Where the read of a compaction's summary is, once `Enter` asked
+        /// for it (since the review of step 25's second pull request).
+        read: Option<SummaryRead>,
     },
     /// No tool box: the view only scrolls.
     Lines,
@@ -50,6 +53,16 @@ pub enum ViewerKeys {
         /// Whether the last search found nothing.
         missed: bool,
     },
+}
+
+/// Where the read of a compaction's summary is (since the review of step
+/// 25's second pull request).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SummaryRead {
+    /// Asked for, its answer not come.
+    Reading,
+    /// It failed, or the session had no such summary.
+    Failed,
 }
 
 /// The title row and the rule under it, `width` columns.
@@ -106,13 +119,26 @@ pub fn keys(keys: &ViewerKeys, width: usize, look: &Look) -> Vec<Line> {
             ]),
             format!("box {selected} of {count} "),
         ),
-        ViewerKeys::Summary { label } => (
-            join(&[
-                "up/down moves between boxes",
-                "enter shows it whole",
-                "/ searches",
-                "esc returns",
-            ]),
+        // The read's state first, where a narrow row keeps it.
+        ViewerKeys::Summary { label, read } => (
+            match read {
+                None => join(&[
+                    "up/down moves between boxes",
+                    "enter shows it whole",
+                    "/ searches",
+                    "esc returns",
+                ]),
+                Some(SummaryRead::Reading) => join(&[
+                    &format!("reading the {label}{}", look.glyphs.ellipsis),
+                    "up/down moves between boxes",
+                    "esc returns",
+                ]),
+                Some(SummaryRead::Failed) => join(&[
+                    &format!("the {label} could not be read"),
+                    "enter tries again",
+                    "esc returns",
+                ]),
+            },
             format!("{label} "),
         ),
         ViewerKeys::Lines => (

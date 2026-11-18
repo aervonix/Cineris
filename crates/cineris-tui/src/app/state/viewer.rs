@@ -18,11 +18,12 @@ use cineris_base::{UtcTime, Zone};
 use cineris_term::{Button, Key, KeyCode, Line, Mods, Mouse, MouseKind, Wheel};
 
 use super::App;
+use crate::app::Ticket;
 use crate::app::scroll::{Anchor, Place, Scroll, Source};
 use crate::keys::{Action, Context, Gesture};
 use crate::transcript::kept::Summary;
 use crate::view::Placement;
-use crate::view::viewer::{self, ViewerKeys, ViewerTitle};
+use crate::view::viewer::{self, SummaryRead, ViewerKeys, ViewerTitle};
 
 /// The rows the frame takes beside the transcript: the title and its rule,
 /// the rule and the keys.
@@ -77,20 +78,42 @@ pub(super) struct Viewer {
     behind: Option<Box<Viewer>>,
     /// A compaction's summary item to read and show (since step 25).
     wants: Option<String>,
+    /// The summary asked for, by the stop it was asked at: its read's
+    /// ticket, or that it failed. An answer is shown only on this view and
+    /// at that stop (since the review of step 25's second pull request).
+    asked: Option<(usize, Asked)>,
     /// The request shown whole: the width its rows were counted at, and
     /// which of them a frame has shown (since step 25).
     whole_seen: (usize, Vec<bool>),
 }
 
+/// Where a compaction's summary asked for is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Asked {
+    /// Its read went with this ticket.
+    Reading(Ticket),
+    /// The read failed, or found no summary.
+    Failed,
+}
+
 impl Viewer {
-    /// Forgets the rows made: the look changed.
+    /// Forgets the rows made: the look changed. The transcript's view
+    /// behind a summary forgets its own too (since the review of step 25's
+    /// second pull request).
     pub(super) fn forget_rows(&mut self) {
         self.scroll.rows.clear();
+        if let Some(behind) = self.behind.as_mut() {
+            behind.forget_rows();
+        }
     }
 
-    /// Forgets one kept block's rows: it is to be drawn again.
+    /// Forgets one kept block's rows: it is to be drawn again, here and in
+    /// the view behind a summary.
     pub(super) fn forget_block(&mut self, block: usize) {
         self.scroll.rows.forget(block);
+        if let Some(behind) = self.behind.as_mut() {
+            behind.forget_block(block);
+        }
     }
 
     /// Whether a search is being typed.
@@ -432,6 +455,12 @@ impl App {
                                 Some(Summary::Compaction(_)) => "summary",
                                 _ => "reasoning",
                             },
+                            read: state.asked.filter(|(stop, _)| *stop == selected).map(
+                                |(_, asked)| match asked {
+                                    Asked::Reading(_) => SummaryRead::Reading,
+                                    Asked::Failed => SummaryRead::Failed,
+                                },
+                            ),
                         },
                     }
                 }
@@ -563,7 +592,7 @@ impl App {
     /// Shows `text` in the viewer under `label`, the transcript's view kept
     /// behind it for `Esc` (since step 25).
     fn show_summary(state: &mut Viewer, label: &str, text: &str) {
-        let lines = crate::view::round::output_lines(text);
+        let lines = crate::view::round::whole_lines(text);
         let behind = std::mem::take(state);
         let mut scroll = Scroll::default();
         scroll.go_to_start();
@@ -576,12 +605,17 @@ impl App {
     }
 
     /// Asks for the compaction's summary the viewer wants, through the link
-    /// (`session/read` with the item's id, since step 25).
+    /// (`session/read` with the item's id, since step 25); the keys row
+    /// says it is being read.
     fn read_summary(&mut self, state: &mut Viewer) {
         let Some(item) = state.wants.take() else {
             return;
         };
+        let Some(stop) = state.selected else {
+            return;
+        };
         let Some(session) = self.session.as_ref().map(|state| state.session_id.clone()) else {
+            state.asked = Some((stop, Asked::Failed));
             return;
         };
         let ticket = self.link.send(cineris_protocol::methods::Op::SessionRead(
@@ -595,19 +629,56 @@ impl App {
         ));
         self.pending
             .insert(ticket, super::Pending::Summary(session));
+        state.asked = Some((stop, Asked::Reading(ticket)));
     }
 
-    /// A compaction's summary read: shown in the viewer, the transcript's
-    /// view behind it, while the viewer is open on the session.
-    pub(super) fn summary_read(&mut self, page: &cineris_protocol::methods::SessionReadResult) {
+    /// A compaction's summary read, with `ticket`: shown in the viewer, the
+    /// transcript's view behind it, only on the view that asked and while
+    /// it is still at the stop it asked at. The viewer closed and opened
+    /// again on something else (a request whole, `/copy`'s text, another
+    /// summary), or moved to another stop, drops it (since the review of
+    /// step 25's second pull request). A read that holds no summary is said
+    /// in the keys row.
+    pub(super) fn summary_read(
+        &mut self,
+        ticket: Ticket,
+        page: &cineris_protocol::methods::SessionReadResult,
+    ) {
+        let Some(state) = self.viewer.as_mut() else {
+            return;
+        };
+        let Some((stop, Asked::Reading(asked))) = state.asked else {
+            return;
+        };
+        if asked != ticket {
+            return;
+        }
+        state.asked = None;
+        if state.selected != Some(stop) || state.text.is_some() || state.whole.is_some() {
+            return;
+        }
         let text = page.items.iter().find_map(|item| match item {
             cineris_protocol::Item::Summary(summary) => Some(summary.text.clone()),
             _ => None,
         });
-        let (Some(text), Some(state)) = (text, self.viewer.as_mut()) else {
-            return;
-        };
-        Self::show_summary(state, "The summary the conversation goes on from", &text);
+        match text {
+            Some(text) => {
+                Self::show_summary(state, "The summary the conversation goes on from", &text);
+            }
+            None => state.asked = Some((stop, Asked::Failed)),
+        }
+    }
+
+    /// A compaction's summary could not be read, with `ticket`: the keys
+    /// row of the view that asked says so (since the review of step 25's
+    /// second pull request).
+    pub(super) fn summary_unread(&mut self, ticket: Ticket) {
+        if let Some(state) = self.viewer.as_mut()
+            && let Some((stop, Asked::Reading(asked))) = state.asked
+            && asked == ticket
+        {
+            state.asked = Some((stop, Asked::Failed));
+        }
     }
 
     /// Does `action` in the viewer; says whether it closes it.

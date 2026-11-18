@@ -514,6 +514,26 @@ pub(crate) fn output_lines(text: &str) -> Vec<String> {
     lines
 }
 
+/// A text shown whole (a reasoning, a compaction's summary) as lines to
+/// show: sanitised, tabs expanded, a last empty line left out, and a
+/// carriage return shown as its symbol rather than taking the line back as
+/// a command's output does, so that nothing of it is hidden (since the
+/// review of step 25's second pull request). The `\r` of a `\r\n` is the
+/// line break's.
+pub(crate) fn whole_lines(text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = text
+        .split('\n')
+        .map(|line| {
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            expand_tabs(&sanitize(line), 8).into_owned()
+        })
+        .collect();
+    if lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    lines
+}
+
 /// A path's file name: what follows its last `/` or `\`.
 fn file_name(path: &str) -> &str {
     let trimmed = path.trim_end_matches(['/', '\\']);

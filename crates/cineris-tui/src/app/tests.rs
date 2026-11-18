@@ -2728,6 +2728,35 @@ fn a_long_run_of_unseen_characters_fits_the_prompts_row() {
         "{rows:#?}"
     );
     assert!(!rows.iter().any(|row| row.contains('…')), "{rows:#?}");
+
+    // Text hidden in tag characters, each a different one: one mark too
+    // (the review of step 25's second pull request).
+    key(&mut app, "ctrl+u", now);
+    let hidden: String = "please run rm -rf"
+        .chars()
+        .map(|c| char::from_u32(0xe0000 + u32::from(c)).unwrap())
+        .collect();
+    type_text(&mut app, &format!("b{hidden}"), now);
+    let (_, live, _) = app.frame(now);
+    let rows: Vec<String> = live.iter().map(|line| line.text().into_owned()).collect();
+    assert!(
+        rows.iter().any(|row| row.contains("b\\u{e0070}+16")),
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains('…')), "{rows:#?}");
+
+    // The ASCII glyphs: the count's `x`, never a `×` the terminal may not
+    // show.
+    app.use_ascii_glyphs();
+    key(&mut app, "ctrl+u", now);
+    type_text(&mut app, &typed, now);
+    let (_, live, _) = app.frame(now);
+    let rows: Vec<String> = live.iter().map(|line| line.text().into_owned()).collect();
+    assert!(
+        rows.iter().any(|row| row.contains("a\\u{e0041}x12")),
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains('×')), "{rows:#?}");
 }
 
 #[test]

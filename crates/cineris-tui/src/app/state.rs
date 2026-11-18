@@ -1020,24 +1020,31 @@ impl App {
             let id = dialog.id.clone();
             let ready = dialog.takes_keys(at);
             let note = dialog.writing_note();
+            let unreadable = dialog.unreadable();
             let reading = self.reading_transcript.as_ref() == Some(&id);
             let back = self.back_from_reading.as_ref() == Some(&id) && !ready;
             if self.back_from_reading.is_some() && !back {
                 self.back_from_reading = None;
             }
+            // Just back, `Ctrl+C`, `Ctrl+L` and the suspension act as they
+            // do anywhere, and hold nothing (the review of the second pull
+            // request).
+            if back
+                && let TermEvent::Key(key) | TermEvent::Repeat(key) = event
+                && self.reading_global(*key, at)
+            {
+                return true;
+            }
             match event {
                 TermEvent::Key(key) if reading => return self.reading_key(*key, at, false),
                 TermEvent::Repeat(key) if reading => return self.reading_key(*key, at, true),
-                TermEvent::Key(_) | TermEvent::Repeat(_) | TermEvent::Paste(_)
-                    if back || (reading && matches!(event, TermEvent::Paste(_))) =>
-                {
-                    self.not_taken(at);
-                    return true;
-                }
                 // Into reading: a press, not a repeat, once the dialog takes
-                // keys; before, the key goes where it was going.
+                // keys; before, the key goes where it was going. Just back
+                // at a dialog the window has grown too small for, which
+                // takes no key until it grows, reading again is the way
+                // on (the review of the second pull request).
                 TermEvent::Key(key)
-                    if ready
+                    if (ready || (back && unreadable))
                         && !note
                         && self
                             .input
@@ -1045,7 +1052,14 @@ impl App {
                             .lookup(&[crate::keys::Context::Dialog], *key)
                             == Some(crate::keys::Action::DialogTranscript) =>
                 {
+                    self.back_from_reading = None;
                     self.reading_transcript = Some(id);
+                    return true;
+                }
+                TermEvent::Key(_) | TermEvent::Repeat(_) | TermEvent::Paste(_)
+                    if back || (reading && matches!(event, TermEvent::Paste(_))) =>
+                {
+                    self.not_taken(at);
                     return true;
                 }
                 _ => {}
@@ -1259,6 +1273,7 @@ impl App {
     /// to send it does not send it as a prompt (the review of step 23).
     fn closed_from_outside(&mut self, closed: Vec<Dialog>, now: Instant) {
         for mut dialog in closed {
+            self.dialog_gone(&dialog.id);
             if let Asks::Rewind { .. } = dialog.asks {
                 self.rewind_question_closed();
                 continue;
@@ -1272,6 +1287,19 @@ impl App {
             );
             self.give_back(&note);
             self.note_cut = Some(now);
+        }
+    }
+
+    /// A dialog left the queue, however it went: reading the transcript
+    /// from under it, and being just back from that, end with it, so that
+    /// the next dialog follows the end as any does (the review of step 25's
+    /// second pull request).
+    fn dialog_gone(&mut self, id: &DialogId) {
+        if self.reading_transcript.as_ref() == Some(id) {
+            self.reading_transcript = None;
+        }
+        if self.back_from_reading.as_ref() == Some(id) {
+            self.back_from_reading = None;
         }
     }
 
@@ -1453,6 +1481,7 @@ impl App {
         let Some(dialog) = self.dialogs.pop_front() else {
             return;
         };
+        self.dialog_gone(&dialog.id);
         if let Some(call) = dialog.call() {
             self.mapper.answered(&mut self.transcript, call);
         }
@@ -1766,7 +1795,12 @@ impl App {
                 self.history_read(id, page, now);
             }
             (Pending::Summary(id), Ok(OpResult::SessionRead(page))) if self.is_open(&id) => {
-                self.summary_read(&page);
+                self.summary_read(ticket, &page);
+            }
+            // Said where it was asked for, and as any failure is.
+            (Pending::Summary(_), Err(error)) => {
+                self.summary_unread(ticket);
+                self.error(&error);
             }
             (Pending::Export(id), Ok(OpResult::SessionRead(page))) => {
                 self.export_read(&id, page);
@@ -2504,6 +2538,11 @@ impl App {
                     (vec![line], reading_keys(keymap))
                 }
                 Some(dialog) => {
+                    // Drawn first: the frame that draws the answers offers
+                    // what they make pressable, and a dialog with nothing
+                    // moving gets no frame after it (the review of the
+                    // second pull request).
+                    let lines = dialog.view(keymap, rows, width, &self.look, now);
                     let mut keys = dialog.hint_keys(keymap);
                     // Offered once it can be pressed, after the key that
                     // refuses, so that a narrow row still shows it.
@@ -2517,7 +2556,7 @@ impl App {
                         let at = keys.len().min(1);
                         keys.insert(at, format!("{} reads above", crate::keys::name(*key)));
                     }
-                    (dialog.view(keymap, rows, width, &self.look, now), keys)
+                    (lines, keys)
                 }
                 None => (Vec::new(), Vec::new()),
             };

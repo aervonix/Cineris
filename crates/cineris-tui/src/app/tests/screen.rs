@@ -703,6 +703,21 @@ fn the_query_is_bounded_and_the_more_below_row_follows_the_glyphs() {
 
 /// A turn that reasons, in three lines, then answers; then a compaction.
 fn reasoned_and_compacted(app: &mut super::App, link: &Scripted, now: Instant) {
+    reasoned_and_compacted_with(
+        app,
+        link,
+        "First, the scanner.\nThen the \u{202e}parser.\nLast, the tests.",
+        now,
+    );
+}
+
+/// A turn that reasons `reasoning`, then answers; then a compaction.
+fn reasoned_and_compacted_with(
+    app: &mut super::App,
+    link: &Scripted,
+    reasoning: &str,
+    now: Instant,
+) {
     let answer = ItemId::from("a1");
     let steps = [
         event(Event::TurnStarted(TurnStarted {})),
@@ -715,7 +730,7 @@ fn reasoned_and_compacted(app: &mut super::App, link: &Scripted, now: Instant) {
         event(Event::ItemDelta(ItemDelta {
             item_id: answer.clone(),
             delta: Delta::Reasoning(TextDelta {
-                text: "First, the scanner.\nThen the \u{202e}parser.\nLast, the tests.".to_owned(),
+                text: reasoning.to_owned(),
             }),
         })),
         event(Event::ItemDelta(ItemDelta {
@@ -889,6 +904,244 @@ fn the_viewer_reveals_the_selected_stop_after_a_reasoning_and_a_compaction() {
     );
 }
 
+/// The summary read the viewer sent: its ticket.
+fn summary_read(link: &Scripted) -> crate::app::Ticket {
+    link.take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| match op {
+            cineris_protocol::methods::Op::SessionRead(params)
+                if params.item_id == Some(ItemId::from("sum1")) =>
+            {
+                Some(ticket)
+            }
+            _ => None,
+        })
+        .expect("the summary read")
+}
+
+/// A page that holds the summary `text`, or none.
+fn summary_page(text: Option<&str>) -> cineris_protocol::methods::OpResult {
+    cineris_protocol::methods::OpResult::SessionRead(cineris_protocol::methods::SessionReadResult {
+        items: text
+            .map(|text| {
+                Item::Summary(cineris_protocol::item::SummaryItem {
+                    id: ItemId::from("sum1"),
+                    text: text.to_owned(),
+                    covers_through: None,
+                    usage: None,
+                    created_at: None,
+                })
+            })
+            .into_iter()
+            .collect(),
+        incomplete: Vec::new(),
+        next_cursor: None,
+        seq: 9,
+        masked: 0,
+        redacted: false,
+    })
+}
+
+/// A compaction's summary read lands only on the view that asked, at the
+/// stop it asked at: the viewer closed and opened again on `/copy`'s text
+/// keeps that text, and the mouse off over it, when the late answer comes.
+/// While the read is under way the keys row says so, and a read that finds
+/// no summary, or fails, says that (the review of step 25's second pull
+/// request).
+#[test]
+fn a_late_summary_lands_only_where_it_was_asked_for() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 30, now);
+    reasoned_and_compacted(&mut app, &link, now);
+    link.take_sent();
+    key(&mut app, "ctrl+o", now);
+    key(&mut app, "enter", now);
+    let late = summary_read(&link);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(rows[29].contains("reading the summary…"), "{rows:#?}");
+    key(&mut app, "esc", now);
+    assert!(!app.viewing());
+    let mut caps = crate::testkit::caps();
+    caps.clipboard = false;
+    app.set_caps(&caps);
+    super::run_command(&mut app, "/copy", now);
+    assert!(app.viewing() && !app.mouse(), "the answer shown to copy");
+    link.give(Inbound::Done(
+        late,
+        Ok(summary_page(Some("The late summary."))),
+    ));
+    drain(&mut app, now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        !rows.iter().any(|row| row.contains("The late summary.")),
+        "the late answer was put over the text to copy: {rows:#?}"
+    );
+    assert!(!app.mouse(), "the mouse came back over the text to copy");
+    key(&mut app, "esc", now);
+
+    // A read that finds no summary, and one that fails: said.
+    key(&mut app, "ctrl+o", now);
+    key(&mut app, "enter", now);
+    let empty = summary_read(&link);
+    link.give(Inbound::Done(empty, Ok(summary_page(None))));
+    drain(&mut app, now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows[29].contains("the summary could not be read"),
+        "{rows:#?}"
+    );
+    key(&mut app, "enter", now);
+    let failed = summary_read(&link);
+    link.give(Inbound::Done(
+        failed,
+        Err(cineris_protocol::ErrorData::new(
+            cineris_protocol::ErrorKind::Internal,
+            "store_failed",
+            "the log could not be read",
+        )),
+    ));
+    drain(&mut app, now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows[29].contains("the summary could not be read"),
+        "{rows:#?}"
+    );
+    // Moved to the reasoning before the answer came: not shown there.
+    key(&mut app, "enter", now);
+    let moved = summary_read(&link);
+    key(&mut app, "up", now);
+    link.give(Inbound::Done(
+        moved,
+        Ok(summary_page(Some("The late summary."))),
+    ));
+    drain(&mut app, now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        !rows.iter().any(|row| row.contains("The late summary.")),
+        "{rows:#?}"
+    );
+    assert!(rows[29].trim_end().ends_with("reasoning"), "{rows:#?}");
+}
+
+/// The look changed while a summary is shown: the transcript's view behind
+/// it draws its rows again too, so that `Esc` shows it in the new look (the
+/// review of step 25's second pull request).
+#[test]
+fn a_look_changed_under_a_summary_reaches_the_transcript_behind_it() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 30, now);
+    reasoned_and_compacted(&mut app, &link, now);
+    key(&mut app, "ctrl+o", now);
+    key(&mut app, "up", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows.iter().any(|row| row.contains("∴ Reasoned for")),
+        "{rows:#?}"
+    );
+    key(&mut app, "enter", now);
+    let _ = app.viewer_frame(30, 99, now);
+    app.use_ascii_glyphs();
+    key(&mut app, "esc", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows.iter().any(|row| row.contains("~ Reasoned for")),
+        "{rows:#?}"
+    );
+    assert!(!rows.iter().any(|row| row.contains('∴')), "{rows:#?}");
+}
+
+/// A reasoning and a compaction's summary shown whole hide nothing behind a
+/// bare carriage return: it is shown as its symbol, where a command's
+/// output takes the line back to its start (the review of step 25's second
+/// pull request).
+#[test]
+fn a_summary_shown_whole_shows_a_carriage_return() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 30, now);
+    reasoned_and_compacted_with(&mut app, &link, "Plan: do X\rdo nothing.\r\nDone.", now);
+    link.take_sent();
+    key(&mut app, "ctrl+o", now);
+    key(&mut app, "up", now);
+    key(&mut app, "enter", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Plan: do X␍do nothing.")),
+        "{rows:#?}"
+    );
+    assert!(rows.iter().any(|row| row == "Done."), "{rows:#?}");
+    key(&mut app, "esc", now);
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    let read = summary_read(&link);
+    link.give(Inbound::Done(
+        read,
+        Ok(summary_page(Some("Go on with X\rfrom here."))),
+    ));
+    drain(&mut app, now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("Go on with X␍from here.")),
+        "{rows:#?}"
+    );
+}
+
+/// A click on a reasoning's row selects it and shows it whole, as `Enter`
+/// does; on a compaction's, it reads its summary (the review of step 25's
+/// second pull request).
+#[test]
+fn a_click_on_a_reasoning_or_a_compaction_shows_it_whole() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 30, now);
+    reasoned_and_compacted(&mut app, &link, now);
+    link.take_sent();
+    key(&mut app, "ctrl+o", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    let reasoning = rows
+        .iter()
+        .position(|row| row.contains("∴ Reasoned for"))
+        .unwrap_or_else(|| panic!("no reasoning: {rows:#?}"));
+    click(&mut app, 2, u16::try_from(reasoning).unwrap(), now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows.iter().any(|row| row.contains("Last, the tests.")),
+        "{rows:#?}"
+    );
+    key(&mut app, "esc", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    let compaction = rows
+        .iter()
+        .position(|row| row.contains("The conversation was summarised"))
+        .unwrap_or_else(|| panic!("no compaction: {rows:#?}"));
+    click(&mut app, 2, u16::try_from(compaction).unwrap(), now);
+    let _ = summary_read(&link);
+}
+
+/// `/view n` opens box n, counted among the boxes, with a reasoning and a
+/// compaction before it: that box, open, not the stop of that number (the
+/// review of step 25's second pull request).
+#[test]
+fn view_n_opens_the_nth_box_after_a_reasoning_and_a_compaction() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 40, now);
+    reasoned_and_compacted(&mut app, &link, now);
+    for n in 2..=3 {
+        for step in turn(n, &format!("Turn {n}."), ANSWER, OUTPUT) {
+            for inbound in step {
+                link.give(inbound);
+            }
+            drain(&mut app, now);
+            let _ = app.frame(now);
+        }
+    }
+    super::run_command(&mut app, "/view 1", now);
+    let rows = text(&app.viewer_frame(40, 99, now));
+    let keys = rows[39].trim_end();
+    assert!(keys.ends_with("box 1 of 2"), "{rows:#?}");
+    assert!(keys.contains("enter collapses"), "opened: {rows:#?}");
+}
+
 /// The approvals' answers sent so far.
 fn approvals(link: &Scripted) -> usize {
     std::mem::take(&mut link.script().answers).len()
@@ -1056,6 +1309,220 @@ fn reading_keeps_its_way_back_shown_and_takes_only_the_scrolling_keys() {
     drain(&mut app, at(600));
     let _ = app.screen_frame(at(600));
     assert!(!app.screen_follows(), "a request moved the reader's place");
+}
+
+/// The interrupt the turn has, as sent: how many.
+fn interrupts(link: &Scripted) -> usize {
+    link.take_sent()
+        .iter()
+        .filter(|(_, op)| matches!(op, cineris_protocol::methods::Op::TurnInterrupt(_)))
+        .count()
+}
+
+/// `Ctrl+C` and `Ctrl+L` keep their meaning while reading and just back
+/// from it, and hold nothing: just back, before the dialog is ready again,
+/// `Ctrl+C` interrupts the turn, and the dialog's moment stays where going
+/// back put it (the review of step 25's second pull request).
+#[test]
+fn ctrl_c_and_ctrl_l_act_while_reading_and_just_back() {
+    use crate::app::Effect;
+    use crate::app::dialog::QUIET;
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 3, now);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    drain(&mut app, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    let at = |ms: u64| ready + Duration::from_millis(ms);
+    key(&mut app, "tab", at(100));
+    app.take_effects();
+    key(&mut app, "ctrl+l", at(150));
+    assert_eq!(app.take_effects(), [Effect::Redraw], "Ctrl+L while reading");
+    let _ = interrupts(&link);
+    key(&mut app, "tab", at(200));
+    let due = app.deadline();
+    assert_eq!(due, Some(at(200) + QUIET));
+    key(&mut app, "ctrl+l", at(300));
+    assert_eq!(app.take_effects(), [Effect::Redraw], "Ctrl+L just back");
+    key(&mut app, "ctrl+c", at(400));
+    assert_eq!(interrupts(&link), 1, "Ctrl+C just back was swallowed");
+    assert_eq!(
+        app.deadline(),
+        due,
+        "a global key just back held the dialog"
+    );
+    assert_eq!(approvals(&link), 0);
+}
+
+/// A window that shrank while reading leaves the dialog too small to take
+/// keys once back: the keyboard is not caught there. `Tab` reads the
+/// transcript again, and once the window grows the dialog takes its keys
+/// (the review of step 25's second pull request).
+#[test]
+fn back_at_a_dialog_the_window_is_too_small_for_tab_reads_again() {
+    use crate::app::dialog::QUIET;
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 3, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    let at = |ms: u64| ready + Duration::from_millis(ms);
+    key(&mut app, "tab", at(100));
+    app.resize(79, 3);
+    let _ = app.screen_frame(at(100));
+    key(&mut app, "esc", at(200));
+    // Its moment, in a window too small for its answers.
+    let later = at(200) + QUIET * 2;
+    let _ = app.screen_frame(later);
+    app.drawn(later);
+    assert_eq!(app.deadline(), None, "no moment: the window is too small");
+    key(&mut app, "tab", later + Duration::from_millis(50));
+    let rows = text(&app.screen_frame(later + Duration::from_millis(50)).0);
+    assert!(
+        rows.iter().any(|row| row.contains("goes back")),
+        "Tab was swallowed: {rows:#?}"
+    );
+    // Grown again, back, and its quiet: then its keys are its own.
+    app.resize(79, 20);
+    let back = later + Duration::from_millis(100);
+    key(&mut app, "tab", back);
+    let again = dialog_wake(&mut app);
+    assert!(again >= back + QUIET, "{:?}", again.duration_since(back));
+    key(&mut app, "y", again + Duration::from_millis(50));
+    assert_eq!(approvals(&link), 1);
+}
+
+/// Reading ends with its dialog however it goes: resolved elsewhere, or
+/// withdrawn by the turn's end. The next dialog then follows the end, as
+/// any does, wherever the reader had scrolled to (the review of step 25's
+/// second pull request).
+#[test]
+fn a_dialog_read_under_that_ends_elsewhere_leaves_the_next_following_the_end() {
+    use std::time::Duration;
+
+    for resolved in [true, false] {
+        let now = Instant::now();
+        let (mut app, link) = long_session(Presenter::Fullscreen, 3, now);
+        link.give(event(Event::TurnStarted(TurnStarted {})));
+        drain(&mut app, now);
+        let asked = now + Duration::from_secs(5);
+        crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+        let ready = dialog_wake(&mut app);
+        let at = |ms: u64| ready + Duration::from_millis(ms);
+        key(&mut app, "tab", at(100));
+        key(&mut app, "pageup", at(200));
+        let _ = app.screen_frame(at(200));
+        assert!(!app.screen_follows());
+        if resolved {
+            link.give(event(Event::RequestResolved(
+                cineris_protocol::event::RequestResolved {
+                    request_id: cineris_protocol::jsonrpc::RequestId::Number(7),
+                    resolution: cineris_protocol::event::Resolution::Answered,
+                },
+            )));
+        } else {
+            link.give(event(Event::TurnCompleted(TurnCompleted {
+                outcome: TurnOutcome::Interrupted,
+                stop_reason: None,
+                error: None,
+                usage: Default::default(),
+                verification: None,
+                duration_ms: Some(900),
+            })));
+            link.give(event(Event::TurnStarted(TurnStarted {})));
+        }
+        drain(&mut app, at(300));
+        let _ = app.screen_frame(at(300));
+        crate::testkit::ask(&mut app, &link, 8, crate::testkit::approval("c_8"), at(400));
+        assert!(
+            app.screen_follows(),
+            "resolved elsewhere {resolved}: the next dialog left the reader's place"
+        );
+    }
+}
+
+/// `tab reads above` is offered in the frame that first draws the answers:
+/// a dialog with nothing moving gets no frame after it (the review of step
+/// 25's second pull request).
+#[test]
+fn tab_reads_above_is_offered_in_the_frame_that_draws_the_answers() {
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 2, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let due = app.deadline().expect("the dialog's moment");
+    let rows = text(&app.screen_frame(due).0);
+    assert!(
+        rows.iter().any(|row| row.contains("Allow once")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.last()
+            .is_some_and(|row| row.contains("tab reads above")),
+        "{rows:#?}"
+    );
+}
+
+/// The wheel while reading scrolls the transcript and answers nothing;
+/// `Tab` while a note is being written is not reading, and is not offered
+/// then (the review of step 25's second pull request).
+#[test]
+fn the_wheel_scrolls_while_reading_and_a_note_being_written_keeps_tab() {
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 3, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    let at = |ms: u64| ready + Duration::from_millis(ms);
+    key(&mut app, "tab", at(100));
+    let _ = app.screen_frame(at(100));
+    assert!(app.screen_follows());
+    app.terminal(
+        &TermEvent::Mouse(Mouse {
+            kind: MouseKind::Wheel(Wheel::Up),
+            col: 5,
+            row: 5,
+            mods: Mods::NONE,
+        }),
+        at(200),
+    );
+    let rows = text(&app.screen_frame(at(200)).0);
+    assert!(!app.screen_follows(), "the wheel did not scroll");
+    assert!(
+        rows.iter().any(|row| row.contains("goes back")),
+        "{rows:#?}"
+    );
+    assert_eq!(approvals(&link), 0);
+
+    // A note: `Tab` is not reading, and the row does not offer it.
+    let (mut app, link) = long_session(Presenter::Fullscreen, 2, now);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    let at = |ms: u64| ready + Duration::from_millis(ms);
+    key(&mut app, "e", at(100));
+    let rows = text(&app.screen_frame(at(100)).0);
+    assert!(
+        !rows.iter().any(|row| row.contains("reads above")),
+        "{rows:#?}"
+    );
+    key(&mut app, "tab", at(200));
+    let rows = text(&app.screen_frame(at(200)).0);
+    assert!(
+        !rows.iter().any(|row| row.contains("tab goes back")),
+        "Tab started reading over a note: {rows:#?}"
+    );
+    super::type_text(&mut app, "no", at(300));
+    key(&mut app, "enter", at(400));
+    assert_eq!(approvals(&link), 1, "the note was not sent");
 }
 
 /// Inline, `Tab` under a dialog starts no reading: the dialog answers as
