@@ -149,6 +149,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cineris-tools
 
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
+- [an-empty-path-runs-the-workspaces-files](an-empty-path-runs-the-workspaces-files.md): When no inherited `PATH` entry is absolute, the shell tool gives a command an empty `PATH`, and an empty `PATH` makes Unix shells look in the current directory. Owner: the coordinator.
 - [cmd-searches-the-current-directory](cmd-searches-the-current-directory.md): `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`. Owner: the owner.
 - [names-that-escape-to-the-same-text](names-that-escape-to-the-same-text.md): Two names that are one text once escaped are counted twice and shown once by `list`, and share their matches in `search`. Owner: a later `cineris-tools` step, or step 32.
 
