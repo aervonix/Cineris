@@ -23,6 +23,7 @@
 //! Only a dev-dependency turns the feature on (`cargo xtask rules` checks
 //! that), and nothing but a test makes an [`InlineBlocking`].
 
+use std::any::Any;
 use std::future::{Future, poll_fn};
 use std::pin::pin;
 use std::task::Poll;
@@ -66,18 +67,23 @@ where
         return inline::run(cancel, work, turns).await;
     }
     let token = cancel.clone();
-    let mut task = pin!(tokio::task::spawn_blocking(move || work(&token)));
+    let mut task = pin!(spawn_erased(Box::new(move || {
+        Box::new(work(&token)) as Box<dyn Any + Send>
+    })));
     let mut cancelled = pin!(cancel.cancelled());
     poll_fn(|cx| {
         if let Poll::Ready(joined) = task.as_mut().poll(cx) {
-            return Poll::Ready(joined.map_err(|error| {
-                if error.is_panic() {
-                    BlockingError::Panicked(panic_message(error.into_panic().as_ref()))
-                } else {
-                    // The runtime is shutting down and dropped the task.
-                    BlockingError::Cancelled
-                }
-            }));
+            return Poll::Ready(match joined {
+                Ok(done) => done.downcast::<T>().map(|done| *done).map_err(|_| {
+                    // Never: the work above boxed a `T`.
+                    BlockingError::Panicked("the work's result was not of its type".to_owned())
+                }),
+                Err(error) if error.is_panic() => Err(BlockingError::Panicked(panic_message(
+                    error.into_panic().as_ref(),
+                ))),
+                // The runtime is shutting down and dropped the task.
+                Err(_) => Err(BlockingError::Cancelled),
+            });
         }
         if cancelled.as_mut().poll(cx).is_ready() {
             return Poll::Ready(Err(BlockingError::Cancelled));
@@ -87,7 +93,24 @@ where
     .await
 }
 
-fn panic_message(panic: &(dyn std::any::Any + Send)) -> String {
+/// The work of [`run_blocking`], with its type taken away.
+///
+/// The runtime's task code (its poll, its join handle, its cancelling and
+/// freeing) is built for each type of work it is given. Every kind of work
+/// handed to [`run_blocking`] had its own copy, fifty-three of them in the
+/// shipped binary. Boxed, they are one type, and the code is built once
+/// (`docs/measurements/binary-size.md`, "The size step"). It costs a box
+/// for the work and one for its result, beside handing it to another thread.
+type Erased = Box<dyn FnOnce() -> Box<dyn Any + Send> + Send>;
+
+/// Hands erased work to the blocking pool. Not generic, so that the
+/// runtime's task code is built here once, whichever crate calls
+/// [`run_blocking`].
+fn spawn_erased(work: Erased) -> tokio::task::JoinHandle<Box<dyn Any + Send>> {
+    tokio::task::spawn_blocking(work)
+}
+
+fn panic_message(panic: &(dyn Any + Send)) -> String {
     if let Some(text) = panic.downcast_ref::<&str>() {
         (*text).to_owned()
     } else if let Some(text) = panic.downcast_ref::<String>() {
