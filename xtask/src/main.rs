@@ -75,7 +75,12 @@ type Result<T> = std::result::Result<T, String>;
 const USAGE: &str = "\
 Developer commands for the Cineris repository.
 
-Usage: cargo xtask <command> [arguments]        (or: ./x <command> [arguments])
+Usage: cargo xtask [--root DIR] <command> [arguments]   (or: ./x <command> [arguments])
+
+Every command works on the checkout the current directory is in (the
+nearest folder above it with the workspace's Cargo.toml and xtask/), or on
+the one --root DIR names; never on the checkout xtask happened to be built
+in, which differs when checkouts share a target folder.
 
 Checks and tests
   check [STEP...]   Static checks (tier 0): fmt, rules, breaks, generated, clippy,
@@ -358,7 +363,18 @@ Not built yet
 ";
 
 fn main() -> ExitCode {
-    let mut arguments = std::env::args().skip(1);
+    main_of(std::env::args().skip(1).collect())
+}
+
+/// What `main` does with its arguments: a test runs it as the binary would
+/// (`workspace::tests::as_xtask`).
+fn main_of(mut arguments: Vec<String>) -> ExitCode {
+    // The repository to work on, before anything asks for it.
+    if let Err(message) = choose_root(&mut arguments) {
+        eprintln!("xtask: {message}");
+        return ExitCode::FAILURE;
+    }
+    let mut arguments = arguments.into_iter();
     let command = arguments.next();
     let rest: Vec<String> = arguments.collect();
 
@@ -398,6 +414,18 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Takes `--root DIR` off the front of the arguments and chooses the
+/// repository from it or from the current directory (`workspace::root`).
+fn choose_root(arguments: &mut Vec<String>) -> Result<()> {
+    let given = workspace::take_root_option(arguments)?;
+    let here = std::env::current_dir()
+        .map_err(|error| format!("could not read the current directory: {error}"))?;
+    if let Some(note) = workspace::choose_root(given.as_deref(), &here, &workspace::built_in())? {
+        eprintln!("{note}");
+    }
+    Ok(())
 }
 
 /// Runs one command. `try` comes back here with the command it chose.

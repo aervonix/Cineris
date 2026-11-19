@@ -499,7 +499,7 @@ pub(crate) fn starts_dir(tree: &Path) -> PathBuf {
 /// of the workspace, outside this one (inside it, this tree's
 /// `.cargo/config.toml` would apply to its build too).
 pub(crate) fn base_tree(base: &Path) -> Result<PathBuf> {
-    let base = crate::ab::normalised(
+    let base = crate::workspace::normalised(
         &std::path::absolute(base).map_err(|error| format!("{}: {error}", base.display()))?,
     );
     if !base.join("Cargo.toml").is_file() {

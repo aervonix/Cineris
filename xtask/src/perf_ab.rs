@@ -522,7 +522,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let request = Request::parse(arguments)?;
     crate::checks::require_nextest()?;
     let head = workspace::root();
-    let base = ab::normalised(
+    let base = workspace::normalised(
         &std::path::absolute(&request.base)
             .map_err(|error| format!("{}: {error}", request.base.display()))?,
     );

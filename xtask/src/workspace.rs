@@ -10,11 +10,145 @@ use serde_json::Value;
 
 use crate::Result;
 
-/// The repository root: the directory that holds the workspace `Cargo.toml`.
+/// The repository the command works on: the directory that holds the
+/// workspace `Cargo.toml`.
+///
+/// It is the one `--root DIR` named, or else the checkout the current
+/// directory is in ([`find_root`]), chosen once by [`choose_root`] before the
+/// command runs. It is not where this binary was built ([`built_in`]): with
+/// one target folder shared by several checkouts, cargo runs one checkout's
+/// build of xtask from all of them, and a binary built in one tree and run in
+/// a copy of it would otherwise check, and write to, the first tree. A test
+/// that never went through `main` gets the checkout its process runs in,
+/// which is the crate's own.
 pub(crate) fn root() -> PathBuf {
-    // xtask's own manifest is at <root>/xtask/Cargo.toml.
+    ROOT.get_or_init(|| {
+        std::env::current_dir()
+            .ok()
+            .and_then(|here| find_root(&here))
+            .unwrap_or_else(built_in)
+    })
+    .clone()
+}
+
+/// The root [`root`] gives, once chosen.
+static ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// The checkout this binary was built from: the parent of xtask's own
+/// manifest folder, as it was when it was compiled. It may be another
+/// checkout than [`root`], or one that is gone.
+pub(crate) fn built_in() -> PathBuf {
     let xtask = Path::new(env!("CARGO_MANIFEST_DIR"));
     xtask.parent().unwrap_or(xtask).to_path_buf()
+}
+
+/// Whether `dir` is a checkout of this workspace: a `Cargo.toml` with a
+/// `[workspace]` table, beside the `xtask` crate. A plain folder, a crate of
+/// the workspace, or another project's workspace (the fuzz targets', a test's
+/// fixture) is not.
+pub(crate) fn is_checkout(dir: &Path) -> bool {
+    dir.join("xtask").join("Cargo.toml").is_file()
+        && fs::read_to_string(dir.join("Cargo.toml"))
+            .is_ok_and(|text| text.lines().any(|line| line.trim() == "[workspace]"))
+}
+
+/// The checkout `here` is in: `here` itself or the nearest folder above it
+/// that [`is_checkout`]. This is git's top level in a checkout, and it needs
+/// no `.git`: a copy of the tree (`rx`'s, a `mutate` copy) has none.
+pub(crate) fn find_root(here: &Path) -> Option<PathBuf> {
+    here.ancestors()
+        .find(|dir| is_checkout(dir))
+        .map(Path::to_path_buf)
+}
+
+/// Chooses the root for this run, from `--root DIR` (`given`) or the current
+/// directory (`here`), and keeps it for [`root`]. Returns a note to print
+/// when it is not the checkout this binary was built from (`built`).
+pub(crate) fn choose_root(
+    given: Option<&Path>,
+    here: &Path,
+    built: &Path,
+) -> Result<Option<String>> {
+    let chosen = pick_root(given, here)?;
+    let note = (normalised(&chosen) != normalised(built)).then(|| {
+        format!(
+            "xtask: working on {}; this xtask was built from the source in {}",
+            chosen.display(),
+            built.display()
+        )
+    });
+    // Chosen once, before any command asks.
+    if ROOT.set(chosen.clone()).is_err() && ROOT.get() != Some(&chosen) {
+        return Err("the repository's root was chosen twice".to_owned());
+    }
+    Ok(note)
+}
+
+/// What [`choose_root`] chooses, without keeping it.
+pub(crate) fn pick_root(given: Option<&Path>, here: &Path) -> Result<PathBuf> {
+    match given {
+        Some(dir) => {
+            // Absolute, and not canonical: a canonical path on Windows is
+            // `\\?\C:\…`, which compares unequal to every plain path.
+            let dir = normalised(&here.join(dir));
+            if is_checkout(&dir) {
+                Ok(dir)
+            } else {
+                Err(format!(
+                    "--root {}: not a checkout of the workspace (no Cargo.toml with [workspace] \
+                     beside xtask/)",
+                    dir.display()
+                ))
+            }
+        }
+        None => find_root(here).ok_or_else(|| {
+            format!(
+                "{} is not inside a checkout of the workspace (no Cargo.toml with [workspace] \
+                 beside xtask/ in it or above it): run xtask from inside one, or name one with \
+                 --root DIR",
+                here.display()
+            )
+        }),
+    }
+}
+
+/// `path` with its `.` and `..` taken out by reading it, not the file
+/// system: on Linux `std::path::absolute` keeps them, so `../ab-base` from
+/// a checkout would otherwise read as inside it.
+pub(crate) fn normalised(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Takes a leading `--root DIR` (or `--root=DIR`) off the arguments, before
+/// the command's name: the option belongs to xtask, not to any command.
+pub(crate) fn take_root_option(arguments: &mut Vec<String>) -> Result<Option<PathBuf>> {
+    let Some(first) = arguments.first() else {
+        return Ok(None);
+    };
+    if let Some(dir) = first.strip_prefix("--root=") {
+        let dir = PathBuf::from(dir);
+        arguments.remove(0);
+        return Ok(Some(dir));
+    }
+    if first != "--root" {
+        return Ok(None);
+    }
+    if arguments.len() < 2 {
+        return Err("--root needs a directory: cargo xtask --root DIR <command>".to_owned());
+    }
+    let dir = PathBuf::from(arguments.remove(1));
+    arguments.remove(0);
+    Ok(Some(dir))
 }
 
 /// The features a build of `packages` alone must turn on, or it builds a
@@ -581,5 +715,182 @@ mod tests {
         });
 
         assert!(!parse_metadata(&json).unwrap().packages[0].publish_disabled);
+    }
+
+    /// A checkout of the workspace, as small as `is_checkout` takes, at
+    /// `dir`.
+    fn checkout(dir: &std::path::Path) {
+        std::fs::create_dir_all(dir.join("xtask")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"xtask\"]\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("xtask/Cargo.toml"),
+            "[package]\nname = \"xtask\"\n",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_leading_root_option_is_taken_and_nothing_else() {
+        let words = |text: &str| -> Vec<String> { text.split(' ').map(str::to_owned).collect() };
+        let mut arguments = words("--root ../other links");
+        let taken = super::take_root_option(&mut arguments).unwrap();
+        assert_eq!(taken.as_deref(), Some(std::path::Path::new("../other")));
+        assert_eq!(arguments, words("links"));
+
+        let mut arguments = words("--root=there outstanding --check");
+        let taken = super::take_root_option(&mut arguments).unwrap();
+        assert_eq!(taken.as_deref(), Some(std::path::Path::new("there")));
+        assert_eq!(arguments, words("outstanding --check"));
+
+        // After the command's name it is the command's own argument.
+        let mut arguments = words("try --root x");
+        assert_eq!(super::take_root_option(&mut arguments).unwrap(), None);
+        assert_eq!(arguments, words("try --root x"));
+
+        let mut arguments = words("--root");
+        let error = super::take_root_option(&mut arguments).unwrap_err();
+        assert!(error.contains("needs a directory"), "{error}");
+        assert_eq!(super::take_root_option(&mut Vec::new()).unwrap(), None);
+    }
+
+    #[test]
+    fn the_root_is_the_nearest_checkout_at_or_above_the_current_directory() {
+        let scratch = crate::testkit::Scratch::outside("xtask-root", "nearest");
+        let outer = scratch.join("outer");
+        checkout(&outer);
+        let deep = scratch.dir("outer/crates/some/src");
+        assert_eq!(super::find_root(&deep), Some(outer.clone()));
+        assert_eq!(super::find_root(&outer), Some(outer.clone()));
+
+        // A copy of the tree inside it (a second checkout under `target/`,
+        // a `mutate` copy) is a checkout of its own.
+        let copy = outer.join("target/copy");
+        checkout(&copy);
+        let in_copy = scratch.dir("outer/target/copy/docs");
+        assert_eq!(super::find_root(&in_copy), Some(copy));
+
+        // Another project's workspace, with no xtask beside it, is not one:
+        // the root is the checkout around it.
+        let fuzz = scratch.dir("outer/fuzz");
+        std::fs::write(fuzz.join("Cargo.toml"), "[workspace]\n").unwrap();
+        assert_eq!(super::find_root(&fuzz), Some(outer.clone()));
+        // Nor is a crate of the workspace, with an xtask/ beside it by chance.
+        let member = scratch.dir("outer/crates/member");
+        std::fs::write(member.join("Cargo.toml"), "[package]\nname = \"member\"\n").unwrap();
+        scratch.file("outer/crates/member/xtask/Cargo.toml", "[package]\n");
+        assert_eq!(super::find_root(&member), Some(outer));
+
+        // Outside every checkout there is none, and the root must be named.
+        assert_eq!(super::find_root(scratch.path()), None);
+        let error = super::pick_root(None, scratch.path()).unwrap_err();
+        assert!(error.contains("--root DIR"), "{error}");
+    }
+
+    #[test]
+    fn a_root_that_is_named_is_taken_from_where_xtask_runs_and_must_be_a_checkout() {
+        let scratch = crate::testkit::Scratch::outside("xtask-root", "named");
+        let one = scratch.join("one");
+        let two = scratch.join("two");
+        checkout(&one);
+        checkout(&two);
+        // Named, it wins over the checkout the current directory is in.
+        let picked = super::pick_root(Some(std::path::Path::new("../two")), &one).unwrap();
+        assert_eq!(picked, two);
+        let picked = super::pick_root(Some(&two), scratch.path()).unwrap();
+        assert_eq!(picked, two);
+        let plain = scratch.dir("plain");
+        let error = super::pick_root(Some(&plain), &one).unwrap_err();
+        assert!(error.contains("not a checkout"), "{error}");
+    }
+
+    /// The xtask binary, as it runs when it was built in one checkout and is
+    /// started in another: this test binary, built in this checkout, runs
+    /// [`as_xtask`] (`main` with the arguments given) with its current
+    /// directory in a checkout of its own. A command that works from the
+    /// root (`outstanding` here, which writes the open items' index) works on
+    /// that checkout, and says whose source the binary was built from; this
+    /// checkout's index is left as it was.
+    #[test]
+    fn sys_a_build_from_one_checkout_works_on_the_checkout_it_runs_in() {
+        let scratch = crate::testkit::Scratch::outside("xtask-root", "elsewhere");
+        let other = scratch.join("other");
+        checkout(&other);
+        scratch.dir("other/crates");
+        scratch.file(
+            "other/docs/outstanding/an-item-of-the-other-checkout.md",
+            "An item only the other checkout has.\n\n- Area: tooling\n- Owner: nobody\n\n\
+             | Item | Who | When |\n|---|---|---|\n| **An item.** | Nobody | Never |\n",
+        );
+        let own_index = super::built_in().join("docs/outstanding/README.md");
+        let own_before = std::fs::read(&own_index).unwrap();
+
+        let run = |here: &std::path::Path, arguments: &[&str]| {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "workspace::tests::as_xtask", "--ignored"])
+                .args(["--nocapture", "--test-threads=1", "--quiet"])
+                .env("XTASK_AS_XTASK", arguments.join("\n"))
+                .current_dir(here)
+                .output()
+                .unwrap();
+            let said = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            (output.status.success(), said)
+        };
+
+        // From a folder inside the other checkout: its index is written.
+        let (passed, said) = run(&other.join("docs"), &["outstanding"]);
+        assert!(passed, "{said}");
+        let index = std::fs::read_to_string(other.join("docs/outstanding/README.md")).unwrap();
+        assert!(
+            index.contains("An item only the other checkout has."),
+            "{index}"
+        );
+        assert!(
+            said.contains("this xtask was built from the source in"),
+            "{said}"
+        );
+        assert_eq!(
+            std::fs::read(&own_index).unwrap(),
+            own_before,
+            "this checkout's index changed"
+        );
+
+        // From outside every checkout: refused, unless --root names one.
+        let (passed, said) = run(scratch.path(), &["outstanding", "--check"]);
+        assert!(!passed, "{said}");
+        assert!(said.contains("--root DIR"), "{said}");
+        let (passed, said) = run(
+            scratch.path(),
+            &["--root", "other", "outstanding", "--check"],
+        );
+        assert!(passed, "{said}");
+        assert!(said.contains("is up to date"), "{said}");
+    }
+
+    /// `main`, with the arguments in `XTASK_AS_XTASK` (one a line), as the
+    /// system test above starts it. Outside that test it does nothing.
+    #[test]
+    #[ignore = "run by sys_a_build_from_one_checkout_works_on_the_checkout_it_runs_in"]
+    fn as_xtask() {
+        let Some(arguments) = std::env::var_os("XTASK_AS_XTASK") else {
+            return;
+        };
+        let arguments = arguments
+            .to_string_lossy()
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        // A failure of the command is this test's, and so the process's.
+        assert!(
+            crate::main_of(arguments) == std::process::ExitCode::SUCCESS,
+            "xtask failed"
+        );
     }
 }
