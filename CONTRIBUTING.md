@@ -15,6 +15,8 @@ You need [rustup](https://rustup.rs) and git. The toolchain is pinned in `rust-t
 
 Everything goes through the `xtask` crate: `cargo xtask <command>`, or `./x <command>` from a shell. CI runs these same commands.
 
+A command works on the checkout it is run in: the nearest folder at or above the current directory that holds the workspace's `Cargo.toml` and `xtask/` (git's top level, and the same in a copy with no `.git`). `cargo xtask --root DIR <command>` names another. It never works on the checkout the binary happens to have been built in, which differs when several checkouts share one target folder (`CARGO_TARGET_DIR`): cargo then runs the first checkout's build of `xtask` from all of them, and `xtask` says so (`working on …; this xtask was built from the source in …`). The code it runs is still that build's, so a change to `xtask` itself is tried with a target folder of the checkout's own. Outside every checkout it refuses and asks for `--root`.
+
 | Command | What it does |
 |---|---|
 | `cargo xtask check` | The static checks (tier 0): `fmt`, `rules`, `breaks`, `generated`, `clippy`, `deny`. `cargo xtask check clippy` runs one of them. Every step runs even if an earlier one fails, and the timings are printed at the end. |

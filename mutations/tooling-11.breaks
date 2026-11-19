@@ -1,0 +1,40 @@
+# The eleventh tooling step's breaks.
+
+# xtask works on the checkout it runs in, not the one it was built in.
+
+[break] root-is-where-xtask-was-built
+rule: Every command works on the checkout the current directory is in, not on the checkout the binary was built from.
+file: xtask/src/workspace.rs
+in: pick_root
+find: None => find_root(here).ok_or_else(
+replace: None => find_root(&built_in()).ok_or_else(
+caught-by:
+    workspace::tests::sys_a_build_from_one_checkout_works_on_the_checkout_it_runs_in
+
+[break] root-is-any-workspace-above
+rule: A checkout is a workspace with xtask beside it: another project's workspace inside it (the fuzz targets') is not the root.
+file: xtask/src/workspace.rs
+in: is_checkout
+find: dir.join("xtask").join("Cargo.toml").is_file()
+replace: true
+caught-by:
+    workspace::tests::the_root_is_the_nearest_checkout_at_or_above_the_current_directory
+
+[break] root-option-is-ignored
+rule: `--root DIR` names the checkout to work on, wherever xtask runs.
+file: xtask/src/workspace.rs
+in: pick_root
+find: match given {
+replace: match None::<&Path> {
+caught-by:
+    workspace::tests::a_root_that_is_named_is_taken_from_where_xtask_runs_and_must_be_a_checkout
+    workspace::tests::sys_a_build_from_one_checkout_works_on_the_checkout_it_runs_in
+
+[break] root-outside-every-checkout-falls-back
+rule: Outside every checkout xtask refuses, and asks for `--root`, rather than work on the checkout it was built in.
+file: xtask/src/main.rs
+in: choose_root
+find: if let Some(note) = workspace::choose_root(given.as_deref(), &here, &workspace::built_in())? {
+replace: if let Some(note) = workspace::choose_root(given.as_deref(), &workspace::find_root(&here).unwrap_or_else(workspace::built_in), &workspace::built_in())? {
+caught-by:
+    workspace::tests::sys_a_build_from_one_checkout_works_on_the_checkout_it_runs_in

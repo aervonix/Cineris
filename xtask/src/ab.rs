@@ -798,27 +798,10 @@ pub(crate) fn rounds_table(compared: &Compared) -> String {
     text
 }
 
-/// `path` with its `.` and `..` taken out by reading it, not the file
-/// system: on Linux `std::path::absolute` keeps them, so `../ab-base` from
-/// the head would otherwise read as inside it.
-pub(crate) fn normalised(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for part in path.components() {
-        match part {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// Refuses a base that is the head, or inside it, where the head's
 /// `.cargo/config.toml` would apply to its build too. Both absolute.
 pub(crate) fn refuse_base(head: &Path, base: &Path) -> Result<()> {
-    let (head, base) = (normalised(head), normalised(base));
+    let (head, base) = (workspace::normalised(head), workspace::normalised(base));
     if base == head {
         return Err("the base is this tree: give another checkout".to_owned());
     }
@@ -922,7 +905,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     // compiled into the tests (`CARGO_TARGET_TMPDIR`), where a Unix socket
     // under `…/repo/../ab-base/target/tmp/…` ran past the 108 bytes of its
     // address on a hosted runner.
-    let base = normalised(
+    let base = workspace::normalised(
         &std::path::absolute(&request.base)
             .map_err(|error| format!("{}: {error}", request.base.display()))?,
     );
