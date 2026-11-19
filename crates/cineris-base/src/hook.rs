@@ -1544,6 +1544,10 @@ mod refusal_tests {
         eprintln!("the start went on");
     }
 
+    #[allow(
+        clippy::unwrap_used,
+        reason = "a test's helper: a failure is the test's"
+    )]
     fn run_as(test: &str) -> (bool, String) {
         let output = Command::new(std::env::current_exe().unwrap())
             .args([

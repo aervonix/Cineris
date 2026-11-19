@@ -105,8 +105,6 @@ in: csi_is_key
 find: .is_some_and(|byte| matches!(byte, b'?' | b'<' | b'>' | b'='))
 replace: .is_some_and(|byte| matches!(byte, b'?' | b'>' | b'='))
 expect: survives
-caught-by:
-    rules::pty_keys::tests::what_is_not_a_key_and_a_marked_line_pass
 
 [break] pty-keys-paste-is-a-key
 rule: Bracketed paste's marks are not keys, and pass.

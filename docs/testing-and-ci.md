@@ -1511,6 +1511,16 @@ The docs, the step records and the workflows are public text: anyone reads them,
 - **It is not the owner guard** ([The owner guard](#the-owner-guard)), which looks for the owner's own details from a file outside the repository. These words are not secret, only not the product's.
 - **What it costs:** it is part of `links` and `rules`, reading the Markdown those already read: a few milliseconds in the blocking lint job.
 
+### Adding a repo rule
+
+What the rules of the twelfth tooling step and the rename's label check ran into, for the next rule:
+
+- **Where it goes.** A module of `xtask/src/rules/`, a function from texts to `Violation`s, so that its tests need no repository. It is called from `rules/mod.rs`: from `file_rules` for a rule of one file alone, from `check_repository` for one that reads the Rust sources together, or from `check_docs` for one that reads only text, so that `cargo xtask links` runs it too and asks cargo nothing.
+- **It must not match its own docs.** The page that describes a rule is read by the rules. Say what it looks for without writing a match: name the data file that lists the words, or describe them ("the second machine as a kind"), and give a failure's example with a placeholder. A rule that reads Rust is scoped so that its own module, whose tests hold the very text it fails on, is outside what it reads (`crates/`, not `xtask/`), or names the file it skips.
+- **It must allow its record.** The step's record describes the rule, and is read by it when the rule reads records. Word the record so that it passes, as above, or use the rule's own way out (an `allow` line, a marked line) with its reason. Run `cargo xtask links` after writing the record, not only after the code.
+- **Its breaks.** A list of its own, `mutations/<step>.breaks`, whose name passes the rename's check (`cargo xtask rename --check`: a name with a word from before the rename is refused like any other path). `cargo xtask mutate --check` says whether each break applies: a `find` that ends in a comma does not (rustfmt moves it), and an `in:` that names two items must name the module too (`children::reaped`). Then `cargo xtask mutate <step>`. A break that survives because a second guard holds what it breaks is `expect: survives`, with the second guard named in its `rule`.
+- **What it costs** the lint job is measured and written down: only files that can match are read or lexed (a cheap text test first), and the rule says so in its section.
+
 ### Rebuilding the generated files
 
 `cargo xtask regen` (since the sixth tooling step) is for after a rebase that met another branch's changes to a generated file, where a merge of the text is not the file the merged sources produce (step 18 settled such conflicts by hand in the snapshots, the screens and the schema). Settle the sources, take either side of each generated file, run it. One step for each generator, all of them run even when one fails, each timed:
