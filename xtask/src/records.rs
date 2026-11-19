@@ -14,7 +14,9 @@
 //!
 //! A section the file already has is replaced, up to the next heading of
 //! its level; one it has not is added at the end. Nothing else in the file
-//! is touched.
+//! is touched. A file that is not there yet, or is empty, is made with the
+//! heading its place in `docs/steps/` gives it ([`new_page_heading`]), so
+//! that the first write of a step's times needs no page made by hand.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -684,11 +686,67 @@ pub(crate) struct Section {
     pub(crate) body: String,
 }
 
+/// The step a folder of `docs/steps/` is the record of, as its headings
+/// name it: `07` is `step 7`, `13a` is `step 13a`; a folder named in words
+/// (`tooling-12`) is named by its name.
+fn step_named(folder: &str) -> String {
+    let numbered = folder.len() >= 2
+        && folder.len() <= 3
+        && folder.is_ascii()
+        && folder[..2].chars().all(|c| c.is_ascii_digit())
+        && folder[2..].chars().all(|c| c.is_ascii_lowercase());
+    if numbered && let Ok(number) = folder[..2].parse::<u32>() {
+        format!("step {number}{}", &folder[2..])
+    } else {
+        folder.to_owned()
+    }
+}
+
+/// The heading a page `--write` makes starts with, from where it is, in the
+/// form the step records' rule asks of it: `# After step 24: its CI times`
+/// for a step's `ci.md`, `# Step 24, after review: its CI times` for a part's
+/// record (`docs/steps/24/<group>/after-review.md`), and `# CI times` for
+/// any other page. Its words after the colon are for the step to make its
+/// own.
+pub(crate) fn new_page_heading(file: &Path) -> String {
+    let parts: Vec<String> = file
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    let steps = parts
+        .windows(2)
+        .rposition(|pair| pair[0] == "docs" && pair[1] == "steps");
+    let rest = steps.map_or(&[][..], |at| &parts[at + 2..]);
+    match rest {
+        [folder, page] if page == "ci.md" => {
+            format!("# After {}: its CI times", step_named(folder))
+        }
+        [folder, _, part] if part.ends_with(".md") => {
+            let who = step_named(folder);
+            let mut letters = who.chars();
+            let who: String = letters
+                .next()
+                .map(|first| first.to_uppercase().chain(letters).collect())
+                .unwrap_or_default();
+            let words = part.trim_end_matches(".md").replace('-', " ");
+            format!("# {who}, {words}: its CI times")
+        }
+        _ => "# CI times".to_owned(),
+    }
+}
+
 /// Writes each section into `file`, all of them or, when one is refused,
-/// none.
+/// none. A file that is not there is made, its folder with it, and a file
+/// that is empty is given its heading ([`new_page_heading`]) first.
 fn write_sections(file: &Path, sections: &[Section]) -> Result<()> {
-    let mut text = std::fs::read_to_string(file)
-        .map_err(|error| format!("could not read {}: {error}", file.display()))?;
+    let (mut text, made) = match std::fs::read_to_string(file) {
+        Ok(text) if text.trim().is_empty() => (format!("{}\n", new_page_heading(file)), true),
+        Ok(text) => (text, false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            (format!("{}\n", new_page_heading(file)), true)
+        }
+        Err(error) => return Err(format!("could not read {}: {error}", file.display())),
+    };
     for section in sections {
         text = match &section.name {
             None => with_section(&text, &section.heading, &section.body),
@@ -696,8 +754,22 @@ fn write_sections(file: &Path, sections: &[Section]) -> Result<()> {
         }
         .map_err(|error| format!("{}: {error}. Nothing was written.", file.display()))?;
     }
+    if let Some(folder) = file
+        .parent()
+        .filter(|folder| !folder.as_os_str().is_empty())
+    {
+        std::fs::create_dir_all(folder)
+            .map_err(|error| format!("could not make {}: {error}", folder.display()))?;
+    }
     std::fs::write(file, text)
         .map_err(|error| format!("could not write {}: {error}", file.display()))?;
+    if made {
+        println!(
+            "made {} with the heading `{}`: make its words after the colon the step's own",
+            file.display(),
+            new_page_heading(file)
+        );
+    }
     for section in sections {
         println!(
             "wrote the section \"{}\" of {}",
@@ -1433,6 +1505,76 @@ mod tests {
                 .check()
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn a_new_pages_heading_is_the_one_its_place_asks_for() {
+        for (path, heading) in [
+            ("docs/steps/24/ci.md", "# After step 24: its CI times"),
+            ("docs/steps/13a/ci.md", "# After step 13a: its CI times"),
+            (
+                "docs/steps/tooling-12/ci.md",
+                "# After tooling-12: its CI times",
+            ),
+            (
+                "docs/steps/24/after-review/pr2-trust.md",
+                "# Step 24, pr2 trust: its CI times",
+            ),
+            (
+                "docs/steps/tooling-12/parts/b-rebase-and-git.md",
+                "# Tooling-12, b rebase and git: its CI times",
+            ),
+            ("notes/times.md", "# CI times"),
+            ("docs/steps/24/answered.md", "# CI times"),
+        ] {
+            let mut file = std::path::PathBuf::new();
+            for part in path.split('/') {
+                file.push(part);
+            }
+            assert_eq!(new_page_heading(&file), heading, "{path}");
+        }
+    }
+
+    /// A step's first write of its times: the page and its folder are not
+    /// there, and are made, with a heading the records' rule takes and the
+    /// section. An empty page gets its heading too; a page with no such
+    /// section gets the section, and keeps what it had.
+    #[test]
+    fn a_write_makes_a_missing_page_and_adds_a_missing_section() {
+        let root = std::env::temp_dir().join(format!("xtask-ci-times-new-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = root.join("docs").join("steps").join("31").join("ci.md");
+        let plain = |body: &str| Section {
+            name: None,
+            heading: PR_SECTION.to_owned(),
+            body: body.to_owned(),
+        };
+        write_sections(&file, &[plain("The tables.")]).unwrap();
+        let made = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            made.starts_with("# After step 31: its CI times\n\n## On the pull request\n\n"),
+            "{made}"
+        );
+        assert!(made.contains("The tables."), "{made}");
+
+        std::fs::write(&file, "\n").unwrap();
+        write_sections(&file, &[plain("Again.")]).unwrap();
+        let titled = std::fs::read_to_string(&file).unwrap();
+        assert!(
+            titled.starts_with("# After step 31: its CI times\n"),
+            "{titled}"
+        );
+
+        let page = "# After step 31: the thing\n\nWhat it built.\n";
+        std::fs::write(&file, page).unwrap();
+        write_sections(&file, &[plain("Third.")]).unwrap();
+        let added = std::fs::read_to_string(&file).unwrap();
+        assert!(added.starts_with(page.trim_end()), "{added}");
+        assert!(
+            added.contains("## On the pull request\n\n<!-- written by cargo xtask ci-times"),
+            "{added}"
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

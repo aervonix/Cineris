@@ -1,0 +1,28 @@
+pub struct CoreOptions {
+    /// Whether an answer to a question the core puts may stop the turn:
+    /// the interactive application's, whose interrupt key stops it from a
+    /// dialog (`docs/architecture/03-agent-loop.md`, "Approve"). With it,
+    /// no call with side effects that the model wrote after an asked call
+    /// starts while the question is open.
+    pub answers_may_stop: bool,
+    /// Whether a session may be at `unrestricted`: started there (by its
+    /// settings, or by a configuration override however it is spelled, as
+    /// the configuration reads it) or raised there by `session/set`. On by
+    /// default, so every front end behaves as it did: a person at the
+    /// terminal or a headless run chooses its own level. A server turns it
+    /// off unless its own command line or configuration is at
+    /// `unrestricted`, so that a client is never more than the user at the
+    /// terminal (`docs/security.md`, section 5): a session that would be
+    /// there is refused `unrestricted_not_allowed`.
+    pub allow_unrestricted: bool,
+}
+
+impl std::fmt::Debug for CoreOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CoreOptions")
+            .field("env", &self.env)
+            .field("approval_timeout", &self.approval_timeout)
+            .field("allow_unrestricted", &self.allow_unrestricted)
+            .finish_non_exhaustive()
+    }
+}

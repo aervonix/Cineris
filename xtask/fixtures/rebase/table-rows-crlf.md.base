@@ -1,0 +1,8 @@
+## Working here
+
+| To | Run |
+|---|---|
+| Start a decision record: the next number, the template, and its row in the index | `cargo xtask decision new "<title>" [--status TEXT] [--dry-run]` |
+| Edit while `xtask` itself does not build (in the middle of a change to it) | `./x replace …` or `./x links`: it builds `xtask` first and, when that fails, runs the last binary that ran a command to its end, kept in `target/xtask-last-good/` (`xtask.exe` on Windows, run by its path). It says how old it is and which commit it came from, and offers only `replace` and `links` |
+
+`./x <command>` is the same as `cargo xtask <command>`.

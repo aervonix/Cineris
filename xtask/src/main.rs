@@ -33,6 +33,7 @@ mod decide;
 mod decision;
 mod dependents;
 mod flaky;
+mod git_read;
 mod junit;
 mod last_good;
 mod like_runner;
@@ -45,6 +46,7 @@ mod owner_guard;
 mod pattern;
 mod perf;
 mod perf_ab;
+mod rebase;
 mod records;
 mod regen;
 mod rename;
@@ -112,7 +114,8 @@ Checks and tests
                     A run's job times and tier times, as tables for a step's
                     ci.md, read through gh; --write puts them in its section
                     `On the pull request`, or in the one --section names (its
-                    own marks) or --heading adds (for an older page).
+                    own marks) or --heading adds (for an older page). A page
+                    not there yet is made, with its heading.
   ci-times --ab TRY-RUN [--against REF] [--write FILE] [--section NAME]
            [--heading TEXT] [--top N]
                     A try A/B run's tiers on both sides, for each OS's section
@@ -232,6 +235,26 @@ Before a push
                     its tip: the current branch alone, from COMMIT on, made
                     without touching the working tree, its old tip kept as
                     refs/xtask-backup/BRANCH/TIME. `branch --help` has the rest.
+  rebase [--onto REF] [--no-fetch] [--no-regen] | --continue | --abort
+                    Fetch, then rebase the current branch onto REF
+                    (origin/main), settling each conflict that has a
+                    mechanical answer: a generated file takes the side
+                    rebased onto and is written again at the end (regen);
+                    the open items' index too (outstanding); both sides'
+                    additions at one place in a .rs or .md file are both
+                    kept, when every line of both survives and the result
+                    checks (rustfmt and balanced brackets; a table's row
+                    shape). Anything else stops the rebase, named, for a
+                    person; --continue goes on after. `rebase --help` has the
+                    rest.
+  git changed [--against REF]
+  git commits PATH... [--since REF] [--max N]
+  git added --grep RE [--against REF] [PATH...]
+                    Questions for git in one command, each read alike on
+                    every system: the files that differ from where HEAD left
+                    REF (origin/main), committed or not, new ones included;
+                    the commits that touched a path; the lines added since
+                    REF that match RE, as PATH:LINE: TEXT.
 
 Not blocking (the `main` and `nightly` workflows run these)
   size [--check] [--target TRIPLE] [--against-main] [--profile release|dist]
@@ -464,6 +487,8 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "api-diff" => api_diff::run(rest),
         "combine" => combine::run(rest),
         "branch" => branch::run(rest),
+        "rebase" => rebase::run(rest),
+        "git" => git_read::run(rest),
         "scratch-test" => scratch_test::run(rest),
         "owner-guard" => owner_guard::run(rest),
         "fuzz" => outside::fuzz(rest),
