@@ -1428,7 +1428,7 @@
           "description": "What it is for."
         },
         "runs": {
-          "description": "For a script: what the script itself runs, as its file has it, cut\nat 1,000 characters. The command line runs it.",
+          "description": "For a script: what the script itself runs, whole, as its file has\nit: a script longer than 1,000 characters, or with a character that\nacts unseen, is not given. The command line runs it.",
           "type": [
             "string",
             "null"

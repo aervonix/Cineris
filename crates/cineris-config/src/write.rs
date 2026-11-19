@@ -697,7 +697,32 @@ mod tests {
             .flatten()
             .map(|entry| entry.path())
             .collect();
-        assert_eq!(left, [path.clone()], "only the file is left");
+        assert_eq!(left, std::slice::from_ref(&path), "only the file is left");
+    }
+
+    /// A file that appears at the name while the text is being written is
+    /// left as it is: the hard link refuses a name that is taken, where a
+    /// rename would replace it (the full review of the third pull request).
+    #[test]
+    fn a_file_that_appears_meanwhile_is_left_as_it_is() {
+        let scratch = cineris_testkit::Scratch::outside("cineris-config-unit", "write_meanwhile");
+        let path = scratch.join("cineris/config.toml");
+        let hold = cineris_base::hook::Hold::new(BEFORE_THE_NAME);
+        let writing = {
+            let path = path.clone();
+            std::thread::spawn(move || write_user_config(&path, &chosen()))
+        };
+        assert!(hold.wait_reached(std::time::Duration::from_secs(10)));
+        std::fs::write(&path, "# the person's own\n").unwrap();
+        hold.release();
+        let written = writing.join().unwrap();
+        assert!(matches!(written, Err(WriteError::Exists(_))), "{written:?}");
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            "# the person's own\n"
+        );
+        let left = std::fs::read_dir(path.parent().unwrap()).unwrap().count();
+        assert_eq!(left, 1, "nothing of the first run's is left beside it");
     }
 
     #[test]

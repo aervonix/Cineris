@@ -2409,13 +2409,13 @@ caught-by:
     cineris-config import::tests::a_credential_in_a_command_or_an_address_is_masked_and_refused
 
 [break] the-writer-writes-over-a-file
-rule: The first run's writer makes only a file that does not exist.
+rule: The first run's writer makes only a file that does not exist: the hard link that gives it its name refuses a name that is taken, where a rename would replace what is there. (Since the full review of the third pull request the name is looked at first too; that check is a second guard, so a break of it alone changes nothing a test sees.)
 file: crates/cineris-config/src/write.rs
 in: write_user_config
-find: let mut file = match cineris_base::private::create_new(path) {
-replace: let mut file = match std::fs::File::create(path) {
+find: let named = std::fs::hard_link(&new, path);
+replace: let named = std::fs::rename(&new, path);
 caught-by:
-    cineris-config write::tests::the_file_is_made_new_and_never_over_one_that_is_there
+    cineris-config write::tests::a_file_that_appears_meanwhile_is_left_as_it_is
 
 [break] a-refused-server-is-written
 rule: A server that cannot be imported is never written to the user's file.
@@ -2635,3 +2635,686 @@ find: + usize::from(from > 0)
 replace:
 caught-by:
     cineris-tui view::setup::tests::a_step_taller_than_its_room_is_a_window_around_its_selected_row
+
+# ------------- the full review of the third pull request: what is written,
+# what opens, and the rest (docs/steps/25/parts/pr3-first-run.md, "The full
+# review of the third pull request"); the key's input and detection are in
+# the two lists merged below this one.
+
+[break] a-file-not-written-leaves-the-session-on-the-defaults
+rule: A file that could not be written leaves the choices in force for the run: its sessions carry them as their own.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_answer
+find: self.first_run_open(true);
+replace: self.first_run_open(false);
+caught-by:
+    cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
+
+[break] a-reload-that-failed-leaves-the-session-on-the-defaults
+rule: A configuration that could not be read again leaves the choices in force for the run: its sessions carry them as their own.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_done
+find: self.first_run_open(failed.is_some());
+replace: self.first_run_open(false);
+caught-by:
+    cineris-tui app::tests::first_run::a_configuration_that_could_not_be_read_again_opens_the_session_with_what_was_chosen
+
+[break] the-runs-configuration-is-not-sent
+rule: Every session the run opens carries the run's own configuration.
+file: crates/cineris-tui/src/app/state.rs
+in: App::send_open
+find: self.run_config.clone()
+replace: serde_json::Map::new()
+caught-by:
+    cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
+    cineris-tui app::tests::first_run::a_first_run_that_cannot_start_is_said
+
+[break] the-instructions-chosen-are-not-carried
+rule: The instructions and the skills, as picked, are among what a session carries when the file is not in force.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: chosen_config
+find: json!({ "instructions": imports.instructions, "skills": imports.skills })
+replace: json!({})
+caught-by:
+    cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
+    cineris-tui app::tests::first_run::a_configuration_that_could_not_be_read_again_opens_the_session_with_what_was_chosen
+
+[break] no-model-written
+rule: The chosen provider's model is written as model.main (High 2, the coordinator's decision on the reviewer's recommendation).
+file: crates/cineris-config/src/write.rs
+in: table
+find: model.insert("main".to_owned(), Value::String(main.clone()));
+replace:
+caught-by:
+    cineris-config write::tests::the_choices_are_written_as_settings_that_read_back_strictly
+
+[break] the-program-writes-no-model
+rule: The program writes the model chosen with the provider.
+file: crates/cineris-cli/src/setup.rs
+in: choices
+find: model: chosen.model.clone()
+replace: model: None
+caught-by:
+    cineris-cli::bin/cineris setup::tests::only_a_server_shown_and_importable_is_written
+
+[break] the-provider-chosen-comes-without-its-model
+rule: Choosing a provider chooses its model, the first the catalog lists for it.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: FirstRun::choose
+find: .and_then(|known| known.model.clone())
+replace: .and(None)
+caught-by:
+    cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
+    cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
+
+[break] the-provider-is-not-the-main-roles
+rule: The chosen provider is written as the main role's.
+file: crates/cineris-config/src/write.rs
+in: table
+find: model.insert("roles".to_owned(), Value::Table(roles));
+replace:
+caught-by:
+    cineris-config write::tests::the_choices_are_written_as_settings_that_read_back_strictly
+    cineris-config write::tests::a_provider_with_no_model_known_is_written_and_said
+
+[break] the-model-written-is-not-the-catalogs-first
+rule: The model written for a provider is the first the catalog lists for it.
+file: crates/cineris-core/src/manage.rs
+in: Core::default_model
+find: .find(|entry| entry.info.provider.as_str() == provider)
+replace: .filter(|entry| entry.info.provider.as_str() == provider).last()
+caught-by:
+    cineris-core::it start::the_first_runs_model_for_a_provider_is_the_first_the_catalog_lists
+
+[break] the-last-line-names-no-model
+rule: The first run's last line says the model the session runs with.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_end
+in-string: The model is
+replace: The model was
+caught-by:
+    cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
+    cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
+
+[break] a-session-that-does-not-open-leaves-the-first-run-waiting
+rule: A session that does not open ends the first run, with a line that says what was saved.
+file: crates/cineris-tui/src/app/state.rs
+in: App::open_failed
+find: self.first_run_open_failed();
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::a_session_that_does_not_open_ends_the_first_run_truthfully
+
+[break] a-value-named-as-a-credential-is-shown
+rule: A value whose name says it is a credential is shown masked in NAME=value.
+file: crates/cineris-config/src/import.rs
+in: ImportedServer::view
+find: format!("{name}={mask}")
+replace: arg.clone()
+caught-by:
+    cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
+
+[break] a-value-after-a-credential-flag-is-shown
+rule: The value after a flag whose name says it is a credential is shown masked.
+file: crates/cineris-config/src/import.rs
+in: ImportedServer::view
+find: after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
+replace: after_flag = false;
+caught-by:
+    cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
+
+[break] an-addresss-query-credential-is-shown
+rule: A query field of an address whose name says it is a credential is shown masked.
+file: crates/cineris-config/src/import.rs
+in: masked_query
+find: Some((name, value)) if names_a_secret(name) && value != mask =>
+replace: Some((name, value)) if false && names_a_secret(name) && value != mask =>
+caught-by:
+    cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
+
+[break] what-is-imported-unseen-is-not-told
+rule: A server whose shown command masks a part imported as it is says so.
+file: crates/cineris-config/src/import.rs
+in: ImportedServer::view
+find: hidden |= shown != *arg;
+replace:
+caught-by:
+    cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
+
+[break] the-row-does-not-say-a-value-is-unseen
+rule: The imports' row of a server whose command shows a part masked that is imported as it is says so.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_view
+find: if server.hidden && server.refused.is_none() {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::first_run::a_server_imported_with_a_value_unseen_says_so
+
+[break] argument-bounds-are-not-shown
+rule: Where each argument begins and ends shows: one that is empty, or holds a space or a quote, is quoted.
+file: crates/cineris-config/src/import.rs
+in: quoted
+find: if !part.is_empty() && !part.chars().any(|c| c.is_whitespace() || c == '"') {
+replace: if true {
+caught-by:
+    cineris-config import::tests::every_arguments_bounds_show
+
+[break] x-at-the-mode-forgets-the-imports
+rule: x keeps what the steps before it answered: the imports answered stay.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_skip_all
+find: if unsaid {
+replace: run.chosen.imports = None; if unsaid {
+caught-by:
+    cineris-tui app::tests::first_run::x_at_the_mode_keeps_the_imports_answered
+
+[break] a-server-name-that-cannot-be-set-is-written
+rule: A server's name written must be a settable name.
+file: crates/cineris-config/src/write.rs
+in: table
+find: if !settable_name(&server.name) {
+replace: if false {
+caught-by:
+    cineris-config write::tests::the_mcp_table_is_checked_as_the_loader_does_not
+
+[break] two-servers-of-one-name-are-written
+rule: Two servers picked are never written under one name.
+file: crates/cineris-config/src/write.rs
+in: table
+find: if servers.contains_key(&server.name) {
+replace: if false {
+caught-by:
+    cineris-config write::tests::the_mcp_table_is_checked_as_the_loader_does_not
+
+[break] too-many-servers-are-written
+rule: At most MAX_SERVERS servers are written.
+file: crates/cineris-config/src/write.rs
+in: table
+find: if imports.servers.len() > MAX_SERVERS {
+replace: if false {
+caught-by:
+    cineris-config write::tests::the_mcp_table_is_checked_as_the_loader_does_not
+
+[break] the-mcp-table-read-back-takes-any-key
+rule: The [mcp] table read back holds only what 13-mcp's form has.
+file: crates/cineris-config/src/write.rs
+in: check_mcp
+find: _ => false
+replace: _ => true
+caught-by:
+    cineris-config write::tests::the_mcp_table_is_checked_as_the_loader_does_not
+
+[break] the-mcp-table-read-back-takes-neither-or-both
+rule: A server read back is a command or an address, not neither and not both.
+file: crates/cineris-config/src/write.rs
+in: check_mcp
+find: if server.contains_key("command") == server.contains_key("url") {
+replace: if false {
+caught-by:
+    cineris-config write::tests::the_mcp_table_is_checked_as_the_loader_does_not
+
+[break] the-file-is-named-before-it-is-whole
+rule: The user's file takes its name only once its text is whole and flushed.
+file: crates/cineris-config/src/write.rs
+in: write_user_config
+find: let (new, mut file) = beside(path).map_err(failed)?;
+replace: let (new, mut file) = (path.to_path_buf(), cineris_base::private::create_new(path).map_err(failed)?);
+caught-by:
+    cineris-config write::tests::the_file_takes_its_name_only_once_it_is_whole
+
+[break] a-second-server-of-a-name-is-picked
+rule: A second server of a name already picked is not picked.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: if let Some((name, path)) = taken_by {
+replace: if let Some((name, path)) = taken_by.filter(|_| false) {
+caught-by:
+    cineris-tui app::tests::first_run::a_second_server_of_a_name_picked_is_not_picked
+
+[break] the-edit-field-drops-typing
+rule: Typing into a command's edit field goes in whenever the step is shown: a repeat and a paste too.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_event
+find: edit_text(text, *key);
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::typing_into_a_commands_edit_is_typing
+
+[break] a-paste-with-a-control-character-goes-into-the-edit
+rule: A paste into a command's edit with a character that cannot be shown is refused whole.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: paste_text
+find: if pasted.chars().any(cineris_base::acts_unseen) {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::first_run::typing_into_a_commands_edit_is_typing
+
+[break] a-panicking-call-leaves-its-step-waiting
+rule: A call of the program's that panics answers as a failure: no step waits for good.
+file: crates/cineris-tui/src/app/setup.rs
+in: guarded
+find: std::panic::catch_unwind(std::panic::AssertUnwindSafe(call))
+replace: Ok::<_, Box<dyn std::any::Any + Send>>(call())
+caught-by:
+    cineris-tui app::tests::first_run::a_store_that_panics_ends_storing
+
+[break] a-first-run-that-cannot-start-is-not-said
+rule: A first run whose worker cannot start says so, and the run's sessions read nothing of other tools'.
+file: crates/cineris-tui/src/app/state.rs
+in: App::new
+find: app.first_run_unstarted(&error);
+replace: let _ = error;
+caught-by:
+    cineris-tui app::tests::first_run::a_first_run_that_cannot_start_is_said
+
+# ------------- the early review (Opus) of the fixes to findings 3 to 6
+
+[break] fg-leaves-a-step-ready
+rule: Continued after a stop, a step starts its grace again.
+file: crates/cineris-tui/src/app/state.rs
+in: App::terminal
+find: self.first_run_resumed();
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::a_step_starts_its_grace_again_after_fg
+
+[break] the-imports-space-takes-a-row-not-drawn-whole
+rule: space on a row of the imports is taken only once the row was drawn whole.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: } else if space && whole {
+occurrence: 1
+replace: } else if space {
+caught-by:
+    cineris-tui app::tests::first_run::a_row_the_window_cannot_show_whole_is_not_accepted
+
+[break] the-commands-space-takes-a-row-not-drawn-whole
+rule: space on a command is taken only once its row was drawn whole.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: } else if space && whole {
+occurrence: 2
+replace: } else if space {
+caught-by:
+    cineris-tui app::tests::first_run::no_accepting_key_takes_a_row_not_drawn_whole
+
+[break] the-edits-enter-takes-a-row-not-drawn-whole
+rule: The edit's enter is taken only once its row was drawn whole.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: KeyCode::Enter if key.mods.is_empty() && whole =>
+replace: KeyCode::Enter if key.mods.is_empty() =>
+caught-by:
+    cineris-tui app::tests::first_run::no_accepting_key_takes_a_row_not_drawn_whole
+
+[break] the-providers-enter-takes-a-row-not-drawn-whole
+rule: enter on a provider is taken only once its row was drawn whole.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: } else if enter && whole && let Some((provider, how)) = rows.get(*selected).cloned() {
+replace: } else if enter && let Some((provider, how)) = rows.get(*selected).cloned() {
+caught-by:
+    cineris-tui app::tests::first_run::no_accepting_key_takes_a_row_not_drawn_whole
+
+[break] the-modes-enter-takes-a-row-not-drawn-whole
+rule: enter on a mode is taken only once its row was drawn whole.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: } else if (enter && whole) || letter == Some('s') {
+replace: } else if enter || letter == Some('s') {
+caught-by:
+    cineris-tui app::tests::first_run::no_accepting_key_takes_a_row_not_drawn_whole
+
+[break] an-unchanged-edit-picks
+rule: An edit kept picks its command only when it changed it.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: && edited != row.command
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::an_edit_kept_picks_only_a_change_and_holds_the_next_enter
+
+[break] a-second-enter-after-an-edit-keeps-the-commands
+rule: After an edit is kept, the step waits a key's repeat window before its next key.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: run.ready.not_before(at + REPEAT);
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::an_edit_kept_picks_only_a_change_and_holds_the_next_enter
+
+[break] keys-before-the-last-step-is-ready-are-dropped
+rule: Keys the last step does not take yet go to the input box, as a dialog's do.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_event
+find: if matches!(run.step, Step::Commands(_)) { return None; }
+occurrence: 1
+replace: if false { return None; }
+caught-by:
+    cineris-tui app::tests::first_run::keys_before_the_last_step_is_ready_go_to_the_input_box
+
+[break] an-edit-cut-by-a-turn-sends-its-enter
+rule: An edit cut off by a turn or a dialog holds the input box's Enter until the typing pauses.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_edit_cut
+find: self.note_cut = Some(at);
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::an_edit_cut_by_a_turn_sends_nothing
+
+[break] whole-outlives-a-move
+rule: A move of the selection makes the next accepting key wait for a frame.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: if up || down {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::first_run::a_key_after_a_move_and_before_a_frame_accepts_nothing
+
+[break] a-narrow-row-is-said-whole
+rule: A row wider than the window is cut, and is not whole.
+file: crates/cineris-tui/src/view/setup.rs
+in: fitted
+find: .map(|lines| lines.iter().all(|line| line.width() <= width))
+replace: .map(|_| true)
+caught-by:
+    cineris-tui view::setup::tests::a_window_too_narrow_for_a_rows_detail_is_not_whole
+
+[break] the-search-is-forgotten-while-a-frame-has-it
+rule: The full screen's search holds the last step back while a frame has its view out.
+file: crates/cineris-tui/src/app/state/screen.rs
+in: App::screen_frame
+find: self.search_aside = view.search.is_some();
+replace: self.search_aside = false;
+caught-by:
+    cineris-tui app::tests::first_run::the_last_step_waits_for_the_full_screens_search
+
+[break] a-key-after-one-ctrl-c-is-taken
+rule: A step takes no key while the hint row says what a second Ctrl+C does in place of its keys.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_bottom
+find: run.keys_drawn = ready && !quit_armed;
+replace: run.keys_drawn = ready;
+caught-by:
+    cineris-tui app::tests::first_run::a_key_after_one_ctrl_c_answers_nothing
+
+[break] typing-into-an-edit-holds-no-dialog
+rule: Input a step does not take holds the dialog after it a quiet second.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_untaken
+find: self.untaken = Some(at);
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::typing_into_an_edit_holds_the_dialog_after_it
+
+[break] a-hidden-step-keeps-its-readiness
+rule: A step not drawn starts again as if new when it is shown again.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_drawn
+find: run.hidden();
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::the_commands_step_takes_no_key_while_a_turn_or_a_dialog_is_shown
+
+[break] the-history-search-lets-the-last-step-in
+rule: The last step waits while the history search is open.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_idle
+find: && self.input.search().is_none()
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::the_last_step_waits_for_the_history_search_and_a_prompt_on_its_way
+
+[break] a-prompt-on-its-way-lets-the-last-step-in
+rule: The last step waits while a prompt held at the open is on its way.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_idle
+find: && self.held_sent.is_none()
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::the_last_step_waits_for_the_history_search_and_a_prompt_on_its_way
+
+# From mutations/step-25-detect.breaks (part `detect`).
+# Step 25's third pull request, the fixes of its full review in one group:
+# detecting a project's commands (`project/detect`), which the first run's
+# last step offers, every row unpicked. Their rules broken one at a time,
+# with the tests that must fail. Written with the code.
+
+# ------------------------------------------------------- reading the files
+
+[break] detection-waits-on-a-fifo
+rule: A manifest is read only when the open itself finds a regular file: a FIFO at its name is passed over without waiting for a writer, on the blocking pool. (The test is Unix's: on Windows nothing at a file's name makes an open wait.)
+file: crates/cineris-core/src/reads.rs
+in: detect_in
+find: let (file, _) = cineris_base::open_regular(&resolved.to_fs_path()).ok()?;
+replace:
+    let file = std::fs::File::open(resolved.to_fs_path()).ok()?;
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return None;
+    }
+os: linux
+caught-by:
+    cineris-core reads::tests::sys_detection_passes_over_a_fifo_without_waiting
+
+[break] a-manifest-past-the-cap-is-read
+rule: A manifest larger than `MAX_FILE` is not read for its commands.
+file: crates/cineris-core/src/reads.rs
+in: detect_in
+find: (text.len() as u64 <= cineris_knowledge::detect::MAX_FILE).then_some(text)
+replace: Some(text)
+caught-by:
+    cineris-core reads::tests::a_manifest_past_the_cap_is_not_read
+
+[break] a-manifest-past-the-cap-is-read-to-the-cap
+rule: A manifest larger than `MAX_FILE` is not read at all, not read to the cap and parsed as if that were the whole of it.
+file: crates/cineris-core/src/reads.rs
+in: detect_in
+find: file.take(cineris_knowledge::detect::MAX_FILE + 1)
+replace: file.take(cineris_knowledge::detect::MAX_FILE)
+caught-by:
+    cineris-core reads::tests::a_manifest_past_the_cap_is_not_read
+
+# ------------------------------------------------ what a script runs, whole
+
+[break] a-script-too-long-to-read-whole-is-offered
+rule: A script whose text is longer than `MAX_RUNS` characters is not offered: what is offered is given whole, never cut.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: runs.chars().count() <= MAX_RUNS && !runs.chars().any(cineris_base::acts_unseen)
+replace: !runs.chars().any(cineris_base::acts_unseen)
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_only_when_its_text_can_be_read_whole
+
+[break] a-script-at-the-cap-is-not-offered
+rule: A script whose text is exactly `MAX_RUNS` characters is offered.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: runs.chars().count() <= MAX_RUNS
+replace: runs.chars().count() < MAX_RUNS
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_only_when_its_text_can_be_read_whole
+
+[break] the-script-cap-counts-bytes
+rule: The cap on what a script runs counts characters, not bytes: a text of `MAX_RUNS` characters outside ASCII is offered.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: runs.chars().count() <= MAX_RUNS
+replace: runs.len() <= MAX_RUNS
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_only_when_its_text_can_be_read_whole
+
+[break] the-scripts-of-a-package-json-are-not-bounded
+rule: At most `MAX_SCRIPTS` scripts of one `package.json` are offered.
+file: crates/cineris-knowledge/src/detect.rs
+in: npm
+find: >= MAX_SCRIPTS
+replace: >= MAX_SCRIPTS * 2
+caught-by:
+    cineris-knowledge detect::tests::the_scripts_of_one_package_json_are_bounded
+
+# --------------------------------------------- nothing that acts unseen
+
+[break] a-script-whose-text-acts-unseen-is-offered
+rule: A script whose text holds a control character or a character that acts unseen is not offered: the person could not read the row as it is written.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: && !runs.chars().any(cineris_base::acts_unseen)
+replace:
+caught-by:
+    cineris-knowledge detect::tests::nothing_that_acts_unseen_is_offered
+
+[break] a-script-with-a-direction-override-is-offered
+rule: Not only a control character keeps a script from being offered: a direction override or a line separator in its text does too.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: any(cineris_base::acts_unseen)
+replace: any(char::is_control)
+caught-by:
+    cineris-knowledge detect::tests::nothing_that_acts_unseen_is_offered
+
+[break] a-makefile-target-is-named-by-a-longer-name
+rule: A `Makefile` names a target only by that name and a colon: `test` followed by a direction override, a character of no width or a control character before its colon is another target, and `make test` is not offered for it.
+file: crates/cineris-knowledge/src/detect.rs
+in: make
+find: rest.starts_with(':') && !rest.starts_with(":=")
+replace: rest.contains(':') && !rest.starts_with(":=")
+caught-by:
+    cineris-knowledge detect::tests::nothing_that_acts_unseen_is_offered
+
+[break] a-command-that-is-not-plain-words-is-offered
+rule: A command is offered only as plain words, whatever made it: a line the observer's table classes that holds a character that acts unseen is not offered. (A script's name is held by the table too, which classes only plain names: this check is what holds a command not made from a name.)
+file: crates/cineris-knowledge/src/detect.rs
+in: Found::offer
+find: normal_line(command).filter(|line| line == command)
+replace: Some(command.to_owned())
+caught-by:
+    cineris-knowledge detect::tests::a_command_that_is_not_plain_words_is_not_offered
+
+# From mutations/step-25-secret.breaks (part `secret`).
+# Step 25, its third pull request, the fixes of the full review: the key's
+# input, the hidden row a provider's key is typed or pasted into in the
+# first run and in `cineris auth login` at a terminal
+# (docs/architecture/08-configuration.md, "Credentials";
+# docs/architecture/09-tui.md, "The first run"). The breaks show that a
+# typed character leaves no copy of its own, that a paste with a control
+# character is refused whole on every system, that a pasted line loses its
+# one line break at the end and no more, that the drop writes zeros over
+# the buffer, that the buffer holds a key's 64 KiB and no more, and that
+# `auth login` stores nothing on `Esc` or `Ctrl+C`, empties on `Ctrl+U`,
+# says why a paste was refused and draws its rows again after a resume.
+
+[break] a-typed-key-character-is-copied-to-a-string
+rule: A typed character goes into the key's buffer with no copy of its own. A `String` made of it is heap memory freed without being written over, which no test can see without counting allocations; that needs a global allocator, which is `unsafe`, and the workspace denies it. Kept so that nobody tries it again.
+file: crates/cineris-tui/src/secret.rs
+in: KeyInput::key
+find: self.buffer.push(character)
+replace: self.buffer.push_str(&character.to_string())
+expect: survives
+
+[break] a-pasted-control-character-is-kept
+rule: Text with a control character in it (a tab, an escape, a delete, a C1 control, NUL) is refused whole by the key's buffer, on every system.
+file: crates/cineris-base/src/secret_buf.rs
+in: SecretBuf::push_str
+find: if text.contains(char::is_control) {
+replace: if false {
+packages: cineris-base,cineris-tui
+caught-by:
+    cineris-base secret_buf::tests::a_control_character_is_refused_whole
+    cineris-tui secret::tests::a_paste_with_a_control_character_is_refused_whole
+    cineris-tui secret::tests::auth_login_at_a_terminal_empties_on_ctrl_u_and_keeps_nothing_of_a_refused_paste
+
+[break] a-pasted-line-is-refused-for-its-end
+rule: One line break at the very end of a paste, which a line copied with its end brings, is dropped rather than refusing the paste.
+file: crates/cineris-tui/src/secret.rs
+in: KeyInput::paste
+find: self.buffer.push_str(without_line_end(text))
+replace: self.buffer.push_str(text)
+caught-by:
+    cineris-tui secret::tests::a_pasted_line_loses_its_one_line_break_at_the_end
+    cineris-tui secret::tests::a_paste_with_a_control_character_is_refused_whole
+    cineris-tui secret::tests::auth_login_at_a_terminal_empties_on_ctrl_u_and_keeps_nothing_of_a_refused_paste
+
+[break] a-paste-loses-every-line-break-at-its-end
+rule: Only one line break at the very end of a paste is dropped: a paste that ends in two is two lines, and is refused whole.
+file: crates/cineris-tui/src/secret.rs
+in: without_line_end
+find: .unwrap_or(text)
+replace: .unwrap_or(text).trim_end_matches(['\n', '\r'])
+caught-by:
+    cineris-tui secret::tests::a_pasted_line_loses_its_one_line_break_at_the_end
+
+[break] a-pasted-crlf-leaves-its-carriage-return
+rule: A paste that ends in `\r\n` loses both: a line copied on Windows ends in one line break of two characters.
+file: crates/cineris-tui/src/secret.rs
+in: without_line_end
+find: text.strip_suffix("\r\n")
+replace: text.strip_suffix("\n\r")
+caught-by:
+    cineris-tui secret::tests::a_pasted_line_loses_its_one_line_break_at_the_end
+
+[break] a-dropped-key-buffer-is-not-written-over
+rule: Dropping the key's buffer writes zeros over every byte of it.
+file: crates/cineris-base/src/secret_buf.rs
+in: SecretBuf::drop
+find: wipe(&mut self.bytes);
+replace: let _ = &mut self.bytes;
+caught-by:
+    cineris-base secret_buf::tests::a_dropped_buffer_leaves_every_byte_zero
+
+[break] a-keys-buffer-holds-more-than-64-kib
+rule: The key's buffer holds 64 KiB, a key's limit, and no more: a paste past it is refused whole.
+file: crates/cineris-base/src/secret_buf.rs
+in: SecretBuf::new
+find: Self::with_capacity(Self::CAPACITY)
+replace: Self::with_capacity(Self::CAPACITY + 1)
+packages: cineris-base,cineris-tui
+caught-by:
+    cineris-base secret_buf::tests::it_holds_a_key_and_says_only_how_long_it_is
+    cineris-tui secret::tests::a_paste_past_a_keys_64_kib_is_refused_whole
+
+[break] auth-login-ignores-ctrl-c
+rule: `Ctrl+C` at `auth login`'s key stores nothing and ends the read.
+file: crates/cineris-tui/src/secret.rs
+in: read_key_on
+find: key.code == KeyCode::Char('c') && key.mods == Mods::CTRL
+replace: key.code == KeyCode::Char('c') && key.mods == Mods::CTRL && false
+caught-by:
+    cineris-tui secret::tests::auth_login_at_a_terminal_stores_nothing_on_esc_or_ctrl_c
+
+[break] auth-login-goes-on-after-a-cancel
+rule: `Esc` or `Ctrl+C` at `auth login`'s key ends the read with no key.
+file: crates/cineris-tui/src/secret.rs
+in: read_key_on
+find: KeyEdit::Cancel => break None,
+replace: KeyEdit::Cancel => {}
+caught-by:
+    cineris-tui secret::tests::auth_login_at_a_terminal_stores_nothing_on_esc_or_ctrl_c
+    cineris-tui secret::tests::auth_login_at_a_terminal_draws_its_rows_again_after_a_resume
+
+[break] the-key-is-not-emptied-by-ctrl-u
+rule: `Ctrl+U` empties the key, writing zeros over it, in the first run and at `auth login`.
+file: crates/cineris-tui/src/secret.rs
+in: KeyInput::key
+find: self.buffer.clear();
+replace: let _ = &self.buffer;
+caught-by:
+    cineris-tui secret::tests::typing_backspace_and_ctrl_u_change_what_it_holds_and_nothing_else_does
+    cineris-tui secret::tests::auth_login_at_a_terminal_empties_on_ctrl_u_and_keeps_nothing_of_a_refused_paste
+
+[break] auth-login-hides-why-a-paste-was-refused
+rule: `auth login` says, under the key's row, why a paste was refused.
+file: crates/cineris-tui/src/secret.rs
+in: frame
+find: if let Some(why) = input.refusal() {
+replace: if let Some(why) = input.refusal().filter(|_| false) {
+caught-by:
+    cineris-tui secret::tests::auth_login_at_a_terminal_empties_on_ctrl_u_and_keeps_nothing_of_a_refused_paste
+
+[break] auth-login-is-not-drawn-again-after-a-resume
+rule: Stopped and continued, `auth login` draws its rows again where the cursor is: the stop erased them, and the shell wrote below where they were.
+file: crates/cineris-tui/src/secret.rs
+in: read_key_on
+find: presenter.restart();
+replace: let _ = &presenter;
+caught-by:
+    cineris-tui secret::tests::auth_login_at_a_terminal_draws_its_rows_again_after_a_resume

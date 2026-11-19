@@ -463,7 +463,7 @@ export interface DetectedCommand {
   name: string;
   /** What it is for. */
   purpose: CommandPurpose;
-  /** For a script: what the script itself runs, as its file has it, cut at 1,000 characters. The command line runs it. */
+  /** For a script: what the script itself runs, whole, as its file has it: a script longer than 1,000 characters, or with a character that acts unseen, is not given. The command line runs it. */
   runs?: string | null;
   /** The file it was found in, relative to the workspace root. */
   source: string;
