@@ -42,23 +42,27 @@ Fetches REF's remote (origin/main when not given) and rebases the current
 branch onto REF. Each time git stops on a conflict, each conflicted file is
 settled by its class:
 
-  generated     what `cargo xtask regen` writes (docs/protocol/,
-                docs/configuration/, the snapshots, the reference screens;
-                not the recorded provider fixtures): the side rebased onto
-                is taken, and the generator runs at the end.
+  generated     the files `cargo xtask regen` writes (the protocol's schema
+                and declarations, the configuration's schema and reference,
+                the snapshots, the reference screens' .ans and .txt files;
+                not the pages written by hand beside them, nor the recorded
+                provider fixtures): the side rebased onto is taken, and the
+                generator runs at the end.
   index         docs/outstanding/README.md: the side rebased onto, and
                 `cargo xtask outstanding` at the end (which runs after every
                 rebase, as git merges the index line by line).
   additions     a .rs or .md file where both sides only added lines at the
                 same place (both kept, the side rebased onto first), or one
-                side added lines just before or after lines the other
-                changed (the addition beside the change, kept whole): when
+                side added lines just after lines the other replaced with as
+                many or more (the addition after the change, kept whole): when
                 every line of both sides is in the result, as many times as
                 their changes come to and in order, and it checks: brackets
                 balance and rustfmt leaves it as it is (Rust); every line
                 put side by side is a table's row with the shape of its
                 table (Markdown).
-  anything else left conflicted, for a person.
+  anything else left conflicted, for a person: two changes of one line,
+                an addition before a change or beside a deletion, a change
+                both sides made alike beside a union.
 
 When every file is settled the rebase goes on. When one is left, it stops
 there and names it, with the reason; settle it, `git add` it, and run
@@ -165,6 +169,8 @@ pub(crate) struct Report {
     pub(crate) finished: bool,
     /// What was done at the end: the index and the generators.
     pub(crate) after: Vec<String>,
+    /// Whether the end (the index, a generator) failed.
+    pub(crate) end_failed: bool,
 }
 
 /// What a run keeps between a stop and `--continue`, in the git directory:
@@ -363,7 +369,7 @@ pub(crate) fn rebase(
     while in_progress(dir) {
         let files = unmerged(&git.raw(&["ls-files", "-u", "-z"], &Call::default())?)?;
         if files.is_empty() {
-            go_on(git, dir, &mut report)?;
+            go_on(git, dir, &mut report, false)?;
             continue;
         }
         let stop = settle(git, top, &files, &mut state, hooks)?;
@@ -376,12 +382,21 @@ pub(crate) fn rebase(
         if left {
             return Ok(report);
         }
-        go_on(git, dir, &mut report)?;
+        go_on(git, dir, &mut report, true)?;
     }
 
     report.finished = true;
-    let after = (hooks.finish)(&state.generators)?;
-    report.after.extend(after);
+    // The report is kept whatever the end does: the tip before, and the
+    // way back to it, are the part of it a failed generator must not lose.
+    match (hooks.finish)(&state.generators) {
+        Ok(after) => report.after.extend(after),
+        Err(error) => {
+            report.end_failed = true;
+            report
+                .after
+                .push(format!("The rebase is done, and the end failed: {error}"));
+        }
+    }
     forget_state(dir)?;
     Ok(report)
 }
@@ -401,29 +416,47 @@ fn fetch(git: &Git, onto: &str, report: &mut Report) -> Result<()> {
     Ok(())
 }
 
-/// `git rebase --continue` once no file is conflicted: it goes on to the
-/// next commit, which may stop again. A commit left with no change once its
-/// conflicts were settled is dropped (`--skip`), and named.
-fn go_on(git: &Git, dir: &Path, report: &mut Report) -> Result<()> {
+/// Goes on once no file is conflicted. When this run settled the stop
+/// (`settled`) and nothing is left of the commit, it is skipped
+/// (`--skip`), and named: git's own `--continue` would drop it without a
+/// word. Otherwise `git rebase --continue`, which goes on to the next
+/// commit, and may stop there. When it does not go on (`HEAD` and the list
+/// of what is left to do are the same after as before, [`step`]: a file git
+/// does not track is in the way of a commit, say), it is an error with git's
+/// own words, which name the files; nothing is skipped.
+fn go_on(git: &Git, dir: &Path, report: &mut Report, settled: bool) -> Result<()> {
+    if settled && git.yes(&["diff", "--cached", "--quiet", "HEAD"])? {
+        let commit = stopped_commit(git).unwrap_or_else(|| "(a commit)".to_owned());
+        let skipped = git.output(&["rebase", "--skip"], &quiet())?;
+        if !skipped.status.success() {
+            return Err(format!(
+                "`git rebase --skip` of {commit}, which nothing was left of, failed: {}",
+                String::from_utf8_lossy(&skipped.stderr).trim()
+            ));
+        }
+        report.dropped.push(commit);
+        return Ok(());
+    }
+    let before = step(dir);
     let went = git.output(&["rebase", "--continue"], &quiet())?;
-    if went.status.success() || !in_progress(dir) {
-        return Ok(());
-    }
-    let still = unmerged(&git.raw(&["ls-files", "-u", "-z"], &Call::default())?)?;
-    if !still.is_empty() {
-        // It went on, and the next commit stopped.
-        return Ok(());
-    }
-    if git.yes(&["diff", "--cached", "--quiet"])? {
-        let commit = stopped_commit(git);
-        git.output(&["rebase", "--skip"], &quiet())?;
-        report.dropped.push(commit.unwrap_or_default());
+    if went.status.success() || !in_progress(dir) || step(dir) != before {
         return Ok(());
     }
     Err(format!(
-        "`git rebase --continue` failed: {}",
+        "`git rebase --continue` did not go on, and nothing was skipped. git said: {}\n\
+         Put right what it names, then `cargo xtask rebase --continue` (or `--abort`)",
         String::from_utf8_lossy(&went.stderr).trim()
     ))
+}
+
+/// Where a rebase is: the commit it has made last (`HEAD`, detached) and
+/// what it has still to do (`rebase-merge/git-rebase-todo`). git counts a
+/// pick it could not make, and put back, as a step (`msgnum` goes up), so
+/// the count is not progress; a new `HEAD` or a shorter list is.
+fn step(dir: &Path) -> Option<String> {
+    let read = |file: &str| std::fs::read_to_string(dir.join(file)).ok();
+    let todo = read("rebase-merge/git-rebase-todo").or_else(|| read("rebase-apply/next"));
+    Some(format!("{}\n{}", read("HEAD")?.trim(), todo?))
 }
 
 /// The commit git stopped on: `<short hash> <subject>`.
@@ -479,16 +512,21 @@ fn settle(
         };
         stop.files.push((path.clone(), how));
     }
+    // The names are paths, never patterns: `[v].json` is that file alone.
+    let literal = || Call {
+        env: vec![("GIT_LITERAL_PATHSPECS", "1".to_owned())],
+        ..Call::default()
+    };
     if !taken.is_empty() {
         let mut checkout = vec!["checkout", "--ours", "--"];
         checkout.extend(&taken);
-        git.run(&checkout)?;
+        git.run_with(&checkout, &literal())?;
     }
     settled.extend(taken);
     if !settled.is_empty() {
         let mut add = vec!["add", "--"];
         add.extend(&settled);
-        git.run(&add)?;
+        git.run_with(&add, &literal())?;
     }
     Ok(stop)
 }
@@ -669,9 +707,11 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         },
     )?;
     print!("{}", describe(&report));
-    if report.finished {
-        Ok(())
-    } else {
+    if !report.finished {
         Err("the rebase stopped on files left for a person".to_owned())
+    } else if report.end_failed {
+        Err("the rebase is done, and its end failed: see above".to_owned())
+    } else {
+        Ok(())
     }
 }

@@ -1,0 +1,6 @@
+fn keep() {}
+
+#[cfg(windows)]
+fn old() {}
+
+fn b() {}
