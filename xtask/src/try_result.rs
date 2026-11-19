@@ -359,6 +359,42 @@ pub(crate) struct JobResult {
     pub(crate) text: String,
     /// What failed, one line each, for the error the command ends with.
     pub(crate) problems: Vec<String>,
+    /// The command the job ran, as its log says (`$ cargo xtask …`).
+    pub(crate) command: Option<String>,
+}
+
+/// The command a `try` job ran, from its log: `try` prints `$ cargo xtask
+/// …` before it runs it (a dispatch's own line is not in a job's log).
+pub(crate) fn command_of(lines: &[String]) -> Option<String> {
+    lines.iter().find_map(|line| {
+        line.trim()
+            .strip_prefix("$ cargo xtask ")
+            .map(|command| command.trim().to_owned())
+    })
+}
+
+/// One line for each job a run had: its name, how it ended, and the
+/// command it ran; what the run came to, read together, below each job's
+/// own sections.
+pub(crate) fn summary_text(run: u64, jobs: &[(String, String, Option<String>)]) -> String {
+    let width = jobs.iter().map(|(name, ..)| name.len()).max().unwrap_or(0);
+    let ended_width = jobs
+        .iter()
+        .map(|(_, ended, _)| ended.len())
+        .max()
+        .unwrap_or(0);
+    let mut text = format!("==== run {run}, its {} jobs together ====\n\n", jobs.len());
+    for (name, ended, command) in jobs {
+        let _ = writeln!(
+            text,
+            "{name:<width$}  {ended:<ended_width$}  {}",
+            command.as_deref().map_or_else(
+                || "(the command is not in a log)".to_owned(),
+                |command| format!("cargo xtask {command}")
+            )
+        );
+    }
+    text
 }
 
 /// Which of a `try` artifact's files is which.
@@ -372,6 +408,8 @@ struct Kept {
     ab: Vec<PathBuf>,
     /// An A/B's wall time of each side in each round (`ab/wall-times.json`).
     walls: Option<PathBuf>,
+    /// A job A/B's record of each phase (`ab/job-ab.json`).
+    job_ab: Option<PathBuf>,
 }
 
 fn sort_files(files: &[PathBuf]) -> Kept {
@@ -408,6 +446,10 @@ fn sort_files(files: &[PathBuf]) -> Kept {
         walls: files
             .iter()
             .find(|file| runs::ends_with_names(file, &["ab", crate::ab::WALL_TIMES_FILE]))
+            .cloned(),
+        job_ab: files
+            .iter()
+            .find(|file| runs::ends_with_names(file, &["ab", crate::job_ab::RECORD_FILE]))
             .cloned(),
     }
 }
@@ -447,6 +489,7 @@ pub(crate) fn job_result(
         None => None,
     };
     let log_text = log_lines.as_deref().map(|lines| lines.join("\n"));
+    result.command = log_lines.as_deref().and_then(command_of);
     if directory.is_none() {
         let _ = writeln!(
             result.text,
@@ -518,6 +561,21 @@ pub(crate) fn job_result(
         in_rounds.retain(|one| !skipped.contains(&one.id));
         failed.extend(in_rounds);
     }
+    if let Some(path) = &kept.job_ab {
+        reported = true;
+        let _ = writeln!(
+            result.text,
+            "{}",
+            crate::job_ab::render(&crate::job_ab::from_json(&read_text(path)?)?)
+        );
+        for ((round, side), path) in crate::job_ab::kept_reports(&files) {
+            failures_in(
+                &read_text(&path)?,
+                &format!("{side} job round {round}"),
+                &mut failed,
+            );
+        }
+    }
     if let Some(path) = &kept.ci {
         reported = true;
         let cases = junit::read(path)?;
@@ -580,6 +638,18 @@ pub(crate) fn job_result(
             "The artifact holds no JUnit report: the command did not run tests, or the job ended \
              before it wrote one.\n"
         );
+        // What a command that runs no tests found (a `size` check, a
+        // start-up measurement) is at the end of its log. A job that failed
+        // has its log's end below already.
+        if ended == "success"
+            && let Some(lines) = log_lines.as_deref()
+        {
+            let _ = writeln!(
+                result.text,
+                "The log's last lines:\n\n{}",
+                tail_text(lines, request.tail)
+            );
+        }
     }
 
     if !failed.is_empty() {
@@ -670,6 +740,8 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
     );
     let ended = conclusion_read(&status, &jobs, request.os.is_some());
     let mut problems = Vec::new();
+    let mut together = Vec::new();
+    let several = jobs.len() > 1;
     for job in jobs {
         let directory = runs::artifact_dir(run, &job.name)?;
         let job_id = job.id;
@@ -689,6 +761,17 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         )?;
         print!("{}", result.text);
         problems.extend(result.problems);
+        together.push((
+            job.name.clone(),
+            job.conclusion
+                .clone()
+                .unwrap_or_else(|| "not ended".to_owned()),
+            result.command,
+        ));
+    }
+    if several {
+        print!("{}", summary_text(run, &together));
+        println!();
     }
     if problems.is_empty() && ended.is_none() {
         println!("run {run}: nothing failed");
@@ -1238,6 +1321,141 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("GitHub's could not be read: 404"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_job_that_ran_no_tests_and_passed_shows_the_end_of_its_log_and_its_command() {
+        let dir = scratch("size");
+        let mut log = String::from("$ cargo xtask size --check --against-main\n");
+        log.extend((1..=40).map(|n| format!("size line {n}\n")));
+        keep(&dir, "tmp/try-output.log", &log);
+        let result = job_result(
+            5,
+            &job("try-linux", "success"),
+            Os::Linux,
+            Some(&dir),
+            &|| Err("not asked".to_owned()),
+            &Request::parse(&strings(&["5", "--tail", "2"])).unwrap(),
+        )
+        .unwrap();
+        assert!(
+            result
+                .text
+                .contains("The log's last lines:\n\n(… 39 earlier lines left out)\nsize line 39\nsize line 40\n"),
+            "{}",
+            result.text
+        );
+        assert!(result.problems.is_empty(), "{:?}", result.problems);
+        assert_eq!(
+            result.command.as_deref(),
+            Some("size --check --against-main")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_run_of_several_jobs_ends_with_each_jobs_end_and_command_together() {
+        let lines = super::summary_text(
+            9,
+            &[
+                (
+                    "try-windows".to_owned(),
+                    "success".to_owned(),
+                    Some("ab --base ../ab-base --label main".to_owned()),
+                ),
+                (
+                    "try-linux-22.04".to_owned(),
+                    "failure".to_owned(),
+                    Some("ci --tiers --top 20".to_owned()),
+                ),
+                ("try-linux".to_owned(), "cancelled".to_owned(), None),
+            ],
+        );
+        assert_eq!(
+            lines,
+            "==== run 9, its 3 jobs together ====\n\n\
+             try-windows      success    cargo xtask ab --base ../ab-base --label main\n\
+             try-linux-22.04  failure    cargo xtask ci --tiers --top 20\n\
+             try-linux        cancelled  (the command is not in a log)\n"
+        );
+        assert_eq!(
+            super::command_of(&strings(&[
+                "against main is 0123 (resolved at dispatch)",
+                "  $ cargo xtask test -p x  ",
+                "$ cargo xtask later",
+            ])),
+            Some("test -p x".to_owned()),
+            "the first, trimmed"
+        );
+        assert_eq!(super::command_of(&strings(&["$ cargo nextest run"])), None);
+    }
+
+    #[test]
+    fn a_job_ab_prints_each_phases_medians_and_the_tests_that_failed() {
+        use crate::ab::Which;
+        use crate::job_ab::{Phase, Record, SideRound, to_json};
+        let dir = scratch("job-ab");
+        let side = |round, which, build: f64, passed: bool| SideRound {
+            round,
+            which,
+            phases: vec![
+                Phase {
+                    name: "build".to_owned(),
+                    seconds: build,
+                    passed: true,
+                },
+                Phase {
+                    name: "tests".to_owned(),
+                    seconds: 20.0,
+                    passed,
+                },
+            ],
+            error: (!passed).then(|| "tests failed".to_owned()),
+        };
+        let record = Record {
+            label: "main".to_owned(),
+            rounds: 2,
+            sides: vec![
+                side(1, Which::Base, 100.0, true),
+                side(1, Which::Head, 80.0, false),
+            ],
+            stopped: None,
+        };
+        keep(&dir, "work/repo/target/ab/job-ab.json", &to_json(&record));
+        let failing = BRANCH.replace(
+            "<testcase name=\"replay::quick\" classname=\"cineris-llm::it\" time=\"0.520\"/>",
+            "<testcase name=\"replay::quick\" classname=\"cineris-llm::it\" time=\"0.510\"><failure message=\"boom\" type=\"test failure with exit code 101\">assertion failed</failure></testcase>",
+        );
+        assert_ne!(failing, BRANCH, "the fixture changed under the test");
+        keep(&dir, "work/repo/target/ab/head-job-1.xml", &failing);
+        let result = job_result(
+            5,
+            &job("try-windows", "failure"),
+            Os::Windows,
+            Some(&dir),
+            &|| Err("not asked".to_owned()),
+            &request(),
+        )
+        .unwrap();
+        assert!(
+            result
+                .text
+                .contains("A whole job two ways, the head against main"),
+            "{}",
+            result.text
+        );
+        assert!(result.text.contains("-20.0"), "{}", result.text);
+        assert!(
+            result.text.contains("(head job round 1)"),
+            "{}",
+            result.text
+        );
+        assert!(
+            !result.text.contains("The artifact holds no JUnit report"),
+            "{}",
+            result.text
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

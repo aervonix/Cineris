@@ -18,6 +18,12 @@ usage: cargo xtask try --command 'COMMAND [ARGUMENTS]' [--profile ci|release|dis
                        [--count N] [--load N] [--cores K] [--filter 'EXPR; EXPR']
                        [--against REF] [--label NAME] [--commit SHA] [--dry-run]
                        [--os OS] [--testkit none|profile|starts] [--capture yes|no]
+       cargo xtask try --final [--against REF] [--count N] [--commit SHA]
+                       [--dry-run | --dispatch BRANCH]
+                       the checks before a pull request, in one run: the
+                       Windows A/B against REF (main when not given), the
+                       tests on Linux 22.04, and the binary's size against
+                       main's; `try-result RUN` reads the three jobs
        cargo xtask try --dispatch BRANCH --command '...' [the same inputs]
                        [--queued-warn MIN]
                        checks the inputs as a dry run does, resolves --against
@@ -31,6 +37,14 @@ COMMAND is one of:
   test [-p CRATE]... [FILTER]...   the tests, as the blocking job builds and runs
                                    them, with the tier report; with --count,
                                    `stress` with that many repeats
+  test --job [--setup-base FILE] [--setup-head FILE] [--keep-build] [-p CRATE]...
+                                   with --against: `ab --job`, the whole job
+                                   (build, then the tests) of both trees,
+                                   --count rounds (3 when not given), each
+                                   side with its own setup script, and the
+                                   median of each phase
+  final                            what --final runs (each job is told its
+                                   part with --part ab|tests|size)
   stress -p CRATE... [ARGS]...     the tests many times over (--count repeats)
   startup                          start-up of `cineris` built in the profile
                                    (release or dist), --count runs
@@ -82,6 +96,19 @@ base, --against's value when not given. It runs with --keep-going: a round in wh
 and left out, the run goes on, and it ends as a failure after the comparison of
 the rounds that finished.
 
+`test --job` with --against REF is `ab --job`: each round builds each tree's
+tests from its own clean build directory and runs them, and each phase (the
+setup, the build, each run of the tests, and each tier's summed test time) is
+timed; the medians are compared. A round that fails is recorded and the run
+goes on. `try` gives it --minutes, so that it starts no round it would not
+finish within the job's limit.
+
+--final (or --command final) is one dispatch of three jobs, each told its part
+by the workflow: `ab` on Windows (`test` against REF, main when not given,
+--count rounds), `tests` on Linux 22.04 (`test`, on the partial Landlock's
+kernel) and `size` on Linux (`size --check --against-main`). It takes
+--against, --label, --count and --commit, and refuses the other inputs.
+
 --against REF with `perf -p CRATE...` makes it a performance A/B run: `cargo xtask
 perf-ab` builds the crates' ignored `perf_` tests of both trees once, runs them
 in turn, --count rounds (3 when not given), on one runner, and compares the
@@ -104,8 +131,9 @@ the workflow's other inputs, which it checks too.
 An empty value is the same as leaving the flag out.";
 
 /// The commands a `try` run may run.
-const COMMANDS: [&str; 10] = [
+const COMMANDS: [&str; 11] = [
     "test",
+    "final",
     "stress",
     "startup",
     "size",
@@ -126,7 +154,7 @@ const NIGHTLY_JOBS: [&str; 3] = ["partial-landlock", "advisories", "unused"];
 pub(crate) const PERF_TESTS: &str = "test(/(^|::)perf_/)";
 
 /// The workflow's inputs.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct Inputs {
     words: Vec<String>,
     profile: String,
@@ -158,7 +186,53 @@ struct Inputs {
     /// What an A/B's report calls the base: the ref as typed, when
     /// `against` is the hash a dispatch resolved it to.
     label: Option<String>,
+    /// Which part of a final run this job is ([`FINAL_PARTS`]): the
+    /// workflow gives it from the job's matrix entry.
+    part: Option<String>,
 }
+
+/// One job of a final run (`try --final`): its part, which the workflow
+/// passes as `--part`, the name of its matrix entry in `try.yml` (the job is
+/// `try-<job>`, as any `try` job is, so that `try-result` reads it as it
+/// reads the others), the runner it runs on, and what it is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct FinalPart {
+    part: &'static str,
+    job: &'static str,
+    runs_on: &'static str,
+    what: &'static str,
+}
+
+/// The jobs of a final run. `try.yml`'s matrix for `command=final` must be
+/// these, in this order: a test reads the workflow and holds it to them.
+const FINAL_PARTS: [FinalPart; 3] = [
+    FinalPart {
+        part: "ab",
+        job: "windows",
+        runs_on: "windows-latest",
+        what: "the Windows A/B, both trees' tests on one runner",
+    },
+    FinalPart {
+        part: "tests",
+        job: "linux-22.04",
+        runs_on: "ubuntu-22.04",
+        what: "the tests on Linux 22.04, the kernel with Landlock ABI 4",
+    },
+    FinalPart {
+        part: "size",
+        job: "linux",
+        runs_on: "ubuntu-latest",
+        what: "the binary's size, against its budget and main's",
+    },
+];
+
+/// The ref a final run's A/B compares with when `--against` does not say.
+const FINAL_AGAINST: &str = "main";
+
+/// What a final run with no part to run is told.
+const NO_PART: &str = "a final run is three jobs, each given its part by the workflow (`--part \
+                       ab|tests|size`): `--dry-run` shows what each runs, and `--dispatch` \
+                       starts them";
 
 /// The `os` inputs of the workflow.
 const OSES: [&str; 4] = ["both", "linux", "windows", "linux-22.04"];
@@ -229,6 +303,10 @@ impl Inputs {
             }
             if flag == "--dry-run" {
                 inputs.dry_run = true;
+                continue;
+            }
+            if flag == "--final" {
+                inputs.words = vec!["final".to_owned()];
                 continue;
             }
             let value = rest
@@ -322,6 +400,16 @@ impl Inputs {
                         inputs.label = Some(label.to_owned());
                     }
                 }
+                "--part" => {
+                    let part = value.trim();
+                    if !FINAL_PARTS.iter().any(|each| each.part == part) {
+                        return Err(format!(
+                            "`--part {part}`: {}, the part of a final run a job is",
+                            FINAL_PARTS.map(|each| each.part).join(", ")
+                        ));
+                    }
+                    inputs.part = Some(part.to_owned());
+                }
                 "--capture" => match value.trim() {
                     "" | "yes" => inputs.show_output = false,
                     "no" => inputs.show_output = true,
@@ -334,6 +422,16 @@ impl Inputs {
                 },
                 other => return Err(format!("unknown flag `{other}`\n\n{USAGE}")),
             }
+        }
+        if inputs.is_final() {
+            inputs.check_final()?;
+            inputs
+                .against
+                .get_or_insert_with(|| FINAL_AGAINST.to_owned());
+        } else if inputs.part.is_some() {
+            return Err(
+                "`--part` is the part of a final run a job is: it goes with `--final`".to_owned(),
+            );
         }
         if inputs.label.is_some() && inputs.against.is_none() {
             return Err(
@@ -381,6 +479,12 @@ impl Inputs {
             return Err(format!(
                 "`{verb}` is not a command a try run runs\n\n{USAGE}"
             ));
+        }
+        if verb == "final" {
+            let Some(part) = &self.part else {
+                return Err(NO_PART.to_owned());
+            };
+            return self.for_part(part)?.command();
         }
         if !self.filters.is_empty() && !matches!(verb.as_str(), "test" | "stress") {
             return Err("`--filter` chooses tests: it goes with `test` or `stress`".to_owned());
@@ -504,7 +608,23 @@ impl Inputs {
 /// command, and why: they are options of another command, or something a
 /// `try` input says. Passed on, each would reach nextest after the build and
 /// fail the job with no test run.
-const NOT_FOR_NEXTEST: [(&str, &str); 23] = [
+const NOT_FOR_NEXTEST: [(&str, &str); 27] = [
+    (
+        "--job",
+        "it makes an A/B a job A/B (`ab --job`): it goes with the `against` input",
+    ),
+    (
+        "--setup-base",
+        "it is an option of a job A/B (`ab --job`): it goes with `--job` and the `against` input",
+    ),
+    (
+        "--setup-head",
+        "it is an option of a job A/B (`ab --job`): it goes with `--job` and the `against` input",
+    ),
+    (
+        "--keep-build",
+        "it is an option of a job A/B (`ab --job`): it goes with `--job` and the `against` input",
+    ),
     (
         "--tiers",
         "it is an option of `cargo xtask ci`, and a `test` run already ends with the tier \
@@ -690,6 +810,99 @@ fn check_startup(arguments: &[String]) -> Result<()> {
 }
 
 impl Inputs {
+    /// Whether this is a final run (`--final`, or `--command final`).
+    fn is_final(&self) -> bool {
+        self.words.first().is_some_and(|verb| verb == "final")
+    }
+
+    /// Refuses what a final run does not take: its parts are fixed, so the
+    /// inputs that would change one are an error and not something it
+    /// quietly drops.
+    fn check_final(&self) -> Result<()> {
+        if self.words.len() > 1 {
+            return Err(format!(
+                "`{}`: a final run takes no words; its three parts are fixed",
+                self.words.join(" ")
+            ));
+        }
+        for (given, input) in [
+            (!self.filters.is_empty(), "--filter"),
+            (self.load.is_some(), "--load"),
+            (self.cores.is_some(), "--cores"),
+            (self.show_output, "--capture no"),
+            (
+                self.testkit.as_deref().is_some_and(|kit| kit != "none"),
+                "--testkit",
+            ),
+            (
+                self.os.is_some(),
+                "--os (each part has its own runner: Windows, Linux 22.04 and Linux)",
+            ),
+            (
+                self.profile != "ci",
+                "--profile (the tests run in the ci profile, and the size is of the dist build)",
+            ),
+        ] {
+            if given {
+                return Err(format!(
+                    "`{input}` does not go with a final run: it takes --against, --label, \
+                     --count and --commit"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// The inputs of the part `part` of a final run: the A/B against
+    /// `against` with the count, the tests, or the size, each with the
+    /// commit, and nothing else.
+    fn for_part(&self, part: &str) -> Result<Inputs> {
+        let mut inputs = Inputs {
+            profile: "ci".to_owned(),
+            commit: self.commit.clone(),
+            part: None,
+            ..Inputs::default()
+        };
+        match part {
+            "ab" => {
+                inputs.words = vec!["test".to_owned()];
+                inputs.against = Some(
+                    self.against
+                        .clone()
+                        .ok_or("a final run's A/B needs `--against`")?,
+                );
+                inputs.label = self.label.clone();
+                inputs.count = self.count;
+            }
+            "tests" => inputs.words = vec!["test".to_owned()],
+            "size" => {
+                inputs.words = ["size", "--check", "--against-main"]
+                    .map(str::to_owned)
+                    .to_vec();
+            }
+            other => return Err(format!("`{other}` is not a part of a final run")),
+        }
+        Ok(inputs)
+    }
+
+    /// What each job of a final run runs, a line each: the job, what it
+    /// is, and its command.
+    fn final_lines(&self) -> Result<Vec<String>> {
+        FINAL_PARTS
+            .iter()
+            .map(|part| {
+                let command = self.for_part(part.part)?.command()?;
+                Ok(format!(
+                    "try-{} ({}, part {}): $ cargo xtask {}",
+                    part.job,
+                    part.what,
+                    part.part,
+                    command.join(" ")
+                ))
+            })
+            .collect()
+    }
+
     /// Refuses a word the command's words hold that nextest would not take
     /// ([`refuse_foreign_words`]).
     fn refuse_words(&self) -> Result<()> {
@@ -706,7 +919,13 @@ impl Inputs {
         }
         let into_stress =
             verb == "stress" || verb == "test" && self.count.is_some() && self.against.is_none();
-        refuse_foreign_words(rest, into_stress)
+        // A job A/B's own options are `ab --job`'s, not nextest's.
+        let rest = if verb == "test" && self.against.is_some() {
+            job_words(rest)?.1
+        } else {
+            rest.to_vec()
+        };
+        refuse_foreign_words(&rest, into_stress)
     }
 
     /// `--dependents` in the command's words resolved into `-p` for each
@@ -999,6 +1218,10 @@ impl Inputs {
         if self.load.is_some() || self.cores.is_some() {
             return Err("`--load` and `--cores` go with a stress run, not an A/B run".to_owned());
         }
+        let (job, rest) = job_words(rest)?;
+        if let Some(job) = job {
+            return self.job_ab(job, &rest, against);
+        }
         let mut command: Vec<String> = [
             "ab",
             "--base",
@@ -1014,6 +1237,51 @@ impl Inputs {
         if let Some(count) = self.count {
             command.extend(["--count".to_owned(), count.max(2).to_string()]);
         }
+        let (packages, others) = packages_and_others(&rest)?;
+        for package in packages {
+            command.extend(["-p".to_owned(), package]);
+        }
+        let others = self.with_filters(others);
+        if !others.is_empty() {
+            command.push("--".to_owned());
+            command.extend(others);
+        }
+        Ok(command)
+    }
+
+    /// `test --job` with `against`: `ab --job`, the whole job of both trees
+    /// round by round, with the setups `job` names, and `--minutes` so that
+    /// it starts no round it would not finish within the job's limit.
+    fn job_ab(&self, job: JobWords, rest: &[String], against: &str) -> Result<Vec<String>> {
+        if self.show_output {
+            return Err("`--capture no` does not go with a job A/B".to_owned());
+        }
+        let mut command: Vec<String> = [
+            "ab",
+            "--job",
+            "--base",
+            AB_BASE,
+            "--label",
+            &self.label_of(against),
+            "--minutes",
+            &JOB_AB_MINUTES.to_string(),
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        if let Some(count) = self.count {
+            command.extend(["--count".to_owned(), count.to_string()]);
+        }
+        for (flag, file) in [
+            ("--setup-base", job.setup_base),
+            ("--setup-head", job.setup_head),
+        ] {
+            if let Some(file) = file {
+                command.extend([flag.to_owned(), file]);
+            }
+        }
+        if job.keep_build {
+            command.push("--keep-build".to_owned());
+        }
         let (packages, others) = packages_and_others(rest)?;
         for package in packages {
             command.extend(["-p".to_owned(), package]);
@@ -1025,6 +1293,68 @@ impl Inputs {
         }
         Ok(command)
     }
+}
+
+/// The minutes a job A/B on a runner may start rounds within: the job's
+/// limit for it in `try.yml` (240) less a round's worth of room for the
+/// last round, the summary and the upload.
+const JOB_AB_MINUTES: u32 = 200;
+
+/// The words of `test` that make an A/B a job A/B (`ab --job`), taken out
+/// of the words that go to nextest.
+#[derive(Debug, Default, PartialEq)]
+struct JobWords {
+    setup_base: Option<String>,
+    setup_head: Option<String>,
+    keep_build: bool,
+}
+
+/// `--job` and the options that go with it, out of `words` (before a `--` of
+/// their own): `Some` when `--job` is there. An option of a job A/B without
+/// `--job` is refused, and so is one given twice.
+fn job_words(words: &[String]) -> Result<(Option<JobWords>, Vec<String>)> {
+    let mut job = JobWords::default();
+    let mut asked = false;
+    let mut options = Vec::new();
+    let mut rest = Vec::new();
+    let mut iter = words.iter();
+    while let Some(word) = iter.next() {
+        match word.as_str() {
+            "--" => {
+                rest.push(word.clone());
+                rest.extend(iter.by_ref().cloned());
+            }
+            "--job" => asked = true,
+            "--keep-build" => {
+                options.push(word.clone());
+                job.keep_build = true;
+            }
+            "--setup-base" | "--setup-head" => {
+                let file = iter
+                    .next()
+                    .ok_or_else(|| format!("`{word}` needs a script's path in the tree"))?;
+                options.push(word.clone());
+                let slot = if word == "--setup-base" {
+                    &mut job.setup_base
+                } else {
+                    &mut job.setup_head
+                };
+                if slot.replace(file.clone()).is_some() {
+                    return Err(format!("`{word}` is given twice"));
+                }
+            }
+            _ => rest.push(word.clone()),
+        }
+    }
+    if !asked {
+        if let Some(option) = options.first() {
+            return Err(format!(
+                "`{option}` is an option of a job A/B: it goes with `--job` (and `--against`)"
+            ));
+        }
+        return Ok((None, rest));
+    }
+    Ok((Some(job), rest))
 }
 
 /// What an A/B run calls the other side in its report when no label says:
@@ -1159,7 +1489,17 @@ fn plan(arguments: &[String], packages: impl FnOnce() -> Result<Vec<Package>>) -
     if let Some(expanded) = inputs.resolve_dependents(packages)? {
         notes.push(expanded.said());
     }
-    let command = inputs.command()?;
+    let command = if inputs.is_final() && inputs.part.is_none() {
+        // A dry run or a dispatch of a final run: what each of its jobs
+        // will run, each checked as that job will check it.
+        notes.extend(inputs.final_lines()?);
+        if !inputs.dry_run {
+            return Err(NO_PART.to_owned());
+        }
+        Vec::new()
+    } else {
+        inputs.command()?
+    };
     if let Some(commit) = &inputs.commit {
         notes.push(format!(
             "commit {commit}: the branch's side of the run is that commit, whose own `xtask` \
@@ -1201,6 +1541,28 @@ fn plan(arguments: &[String], packages: impl FnOnce() -> Result<Vec<Package>>) -
         command,
         notes,
     })
+}
+
+/// Whether a final run's part `part` may run here: its A/B is Windows', and
+/// the others are Linux's. A job given another runner's part is a matrix
+/// that went wrong, and must not measure the wrong system.
+fn check_runner(part: &str, on_windows: bool) -> Result<()> {
+    let wanted = FINAL_PARTS
+        .iter()
+        .find(|each| each.part == part)
+        .ok_or_else(|| format!("`{part}` is not a part of a final run"))?;
+    let windows = wanted.job == "windows";
+    if windows == on_windows {
+        Ok(())
+    } else {
+        Err(format!(
+            "part {part} of a final run is {}, which runs on {}, and this runner is {}: \
+             nothing was built",
+            wanted.what,
+            wanted.runs_on,
+            if on_windows { "Windows" } else { "Linux" }
+        ))
+    }
 }
 
 /// Whether the checked-out tree is the commit asked for: `head` is what
@@ -1448,13 +1810,21 @@ fn run(arguments: &[String]) -> Result<ExitCode> {
         if let Some(said) = said {
             println!("{said}");
         }
-        println!("$ cargo xtask {}", inputs.command()?.join(" "));
+        // A final run's jobs and their commands are in the notes above.
+        if !inputs.is_final() {
+            println!("$ cargo xtask {}", inputs.command()?.join(" "));
+        }
         return dispatch(&branch, &inputs).map(|()| ExitCode::SUCCESS);
     }
-    println!("$ cargo xtask {}", plan.command.join(" "));
+    if !plan.command.is_empty() {
+        println!("$ cargo xtask {}", plan.command.join(" "));
+    }
     if plan.inputs.dry_run {
         println!("(a dry run: nothing was built or run)");
         return Ok(ExitCode::SUCCESS);
+    }
+    if let Some(part) = &plan.inputs.part {
+        check_runner(part, cfg!(windows))?;
     }
     if let Some(commit) = &plan.inputs.commit {
         check_checkout(commit, &head_commit()?)?;
@@ -1495,8 +1865,8 @@ fn reads_the_corpus(command: &[String]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        Inputs, check_checkout, dispatch_arguments, for_dispatch, label_of, new_runs, plan,
-        resolve_against, url_path, waiting_too_long,
+        FINAL_PARTS, Inputs, check_checkout, check_runner, dispatch_arguments, for_dispatch,
+        job_words, label_of, new_runs, plan, resolve_against, url_path, waiting_too_long,
     };
     use crate::workspace::{DepKind, Dependency, Package};
 
@@ -2984,5 +3354,262 @@ mod tests {
             ["ci", "--tiers", "--top", "20", "-p", "cineris-base"]
         );
         assert!(planned.notes[0].contains(HASH), "{:?}", planned.notes);
+    }
+
+    #[test]
+    fn a_final_dry_run_shows_each_of_its_three_jobs_and_what_it_runs() {
+        let (command, notes) = planned(&["--final", "--dry-run"]).unwrap();
+        assert_eq!(command, "", "the jobs' commands are the notes");
+        let jobs: Vec<&String> = notes
+            .iter()
+            .filter(|note| note.starts_with("try-"))
+            .collect();
+        assert_eq!(jobs.len(), 3, "{notes:?}");
+        assert!(
+            jobs[0].starts_with("try-windows (the Windows A/B")
+                && jobs[0].ends_with(
+                    "part ab): $ cargo xtask ab --base ../ab-base --label main --top 20 \
+                     --keep-going"
+                ),
+            "{}",
+            jobs[0]
+        );
+        assert!(
+            jobs[1].starts_with("try-linux-22.04 (the tests on Linux 22.04")
+                && jobs[1].ends_with("part tests): $ cargo xtask ci --tiers --top 20"),
+            "{}",
+            jobs[1]
+        );
+        assert!(
+            jobs[2].starts_with("try-linux (the binary's size")
+                && jobs[2].ends_with(&format!(
+                    "part size): $ cargo xtask size --check --against-main{}",
+                    size_target()
+                )),
+            "{}",
+            jobs[2]
+        );
+        assert!(
+            notes
+                .iter()
+                .any(|note| note.contains("would resolve it to its commit")),
+            "main is resolved at a dispatch: {notes:?}"
+        );
+        // `--command final` is the same run; a count and an against reach
+        // the A/B alone.
+        let (_, notes) = planned(&[
+            "--command",
+            "final",
+            "--dry-run",
+            "--count",
+            "3",
+            "--against",
+            "my-base",
+        ])
+        .unwrap();
+        assert!(
+            notes[0].ends_with("--label my-base --top 20 --keep-going --count 3"),
+            "{notes:?}"
+        );
+        assert!(notes[1].ends_with("ci --tiers --top 20"), "{notes:?}");
+        assert!(!notes[2].contains("--count"), "{notes:?}");
+    }
+
+    #[test]
+    fn a_final_runs_job_runs_the_part_it_is_given_and_nothing_else() {
+        let part = |name: &str| {
+            planned(&[
+                "--command",
+                "final",
+                "--part",
+                name,
+                "--against",
+                HASH,
+                "--label",
+                "main",
+                "--count",
+                "4",
+                "--commit",
+                HASH,
+            ])
+            .map(|(command, _)| command)
+        };
+        assert_eq!(
+            part("ab").unwrap(),
+            "ab --base ../ab-base --label main --top 20 --keep-going --count 4"
+        );
+        assert_eq!(part("tests").unwrap(), "ci --tiers --top 20");
+        assert_eq!(
+            part("size").unwrap(),
+            format!("size --check --against-main{}", size_target())
+        );
+        let error = planned(&["--final"]).unwrap_err();
+        assert!(
+            error.contains("each given its part by the workflow"),
+            "{error}"
+        );
+        let error = planned(&["--final", "--part", "all"]).unwrap_err();
+        assert!(error.contains("ab, tests, size"), "{error}");
+    }
+
+    #[test]
+    fn a_final_run_refuses_the_inputs_that_would_change_a_part() {
+        for (arguments, said) in [
+            (&["--final", "--os", "windows"][..], "`--os"),
+            (&["--final", "--filter", "test(=a)"], "`--filter`"),
+            (&["--final", "--load", "2"], "`--load`"),
+            (&["--final", "--cores", "2"], "`--cores`"),
+            (&["--final", "--capture", "no"], "`--capture no`"),
+            (&["--final", "--testkit", "profile"], "`--testkit`"),
+            (&["--final", "--profile", "dist"], "`--profile"),
+            (&["--command", "final -p x"], "takes no words"),
+            (
+                &["--command", "test", "--part", "ab"],
+                "goes with `--final`",
+            ),
+        ] {
+            let error = Inputs::parse(&strings(arguments)).unwrap_err();
+            assert!(error.contains(said), "{arguments:?}: {error}");
+        }
+        // `--testkit none` is the default, and no change.
+        assert!(Inputs::parse(&strings(&["--final", "--testkit", "none"])).is_ok());
+    }
+
+    #[test]
+    fn a_final_dispatch_sends_final_and_main_resolved_and_no_os() {
+        let inputs =
+            Inputs::parse(&strings(&["--final", "--count", "3", "--dispatch", "b"])).unwrap();
+        let (inputs, said) = for_dispatch(inputs, |_| Ok(HASH.to_owned())).unwrap();
+        assert!(
+            said.unwrap()
+                .ends_with("(resolved at dispatch); the report calls it main")
+        );
+        assert_eq!(
+            dispatch_arguments("b", &inputs).join(" "),
+            format!(
+                "workflow run try --ref b -f command=final -f count=3 -f against={HASH} \
+                 -f label=main"
+            )
+        );
+    }
+
+    #[test]
+    fn a_final_part_runs_only_on_its_own_system() {
+        assert!(check_runner("ab", true).is_ok());
+        assert!(check_runner("tests", false).is_ok());
+        assert!(check_runner("size", false).is_ok());
+        let error = check_runner("ab", false).unwrap_err();
+        assert!(error.contains("windows-latest"), "{error}");
+        assert!(check_runner("size", true).is_err());
+        assert!(check_runner("other", true).is_err());
+    }
+
+    /// The JSON of the final run's matrix in `try.yml`: what follows
+    /// `inputs.command == 'final' && '`, up to the next quote.
+    fn final_matrix(workflow: &str) -> serde_json::Value {
+        let start = workflow
+            .find("inputs.command == 'final' && '")
+            .expect("try.yml chooses a matrix for a final run")
+            + "inputs.command == 'final' && '".len();
+        let end = start + workflow[start..].find('\'').expect("the JSON ends");
+        serde_json::from_str(&workflow[start..end]).expect("the matrix is JSON")
+    }
+
+    #[test]
+    fn the_workflows_final_matrix_is_the_final_runs_parts() {
+        let workflow = include_str!("../../.github/workflows/try.yml");
+        let matrix = final_matrix(workflow);
+        let entries = matrix.as_array().expect("a list of jobs");
+        assert_eq!(entries.len(), FINAL_PARTS.len());
+        for (entry, part) in entries.iter().zip(FINAL_PARTS) {
+            assert_eq!(entry["name"], part.job, "{entry}");
+            assert_eq!(entry["os"], part.runs_on, "{entry}");
+            assert_eq!(entry["part"], part.part, "{entry}");
+        }
+        // Each job is told its part, and only a final run's job.
+        assert!(
+            workflow.contains("TRY_PART: ${{ inputs.command == 'final' && matrix.part || '' }}"),
+            "the part reaches the job"
+        );
+        assert_eq!(
+            workflow.matches("added+=(--part \"$TRY_PART\")").count()
+                + workflow
+                    .matches("$added += @('--part', $env:TRY_PART)")
+                    .count(),
+            2,
+            "both runners pass it on"
+        );
+    }
+
+    #[test]
+    fn a_job_ab_is_test_job_with_against_and_its_options_go_to_ab_job() {
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "test --job --setup-head .github/x.sh --keep-build -p cineris-base",
+                "--against",
+                "main",
+                "--count",
+                "3",
+            ])
+            .unwrap(),
+            "ab --job --base ../ab-base --label main --minutes 200 --count 3 --setup-head \
+             .github/x.sh --keep-build -p cineris-base"
+        );
+        assert_eq!(
+            try_command(&[
+                "--command",
+                "test --job --setup-base a.sh --setup-head b.sh",
+                "--against",
+                HASH,
+                "--label",
+                "main",
+            ])
+            .unwrap(),
+            "ab --job --base ../ab-base --label main --minutes 200 --setup-base a.sh \
+             --setup-head b.sh"
+        );
+        for (arguments, said) in [
+            (
+                &["--command", "test --job"][..],
+                "it goes with the `against` input",
+            ),
+            (
+                &["--command", "test --setup-base a.sh", "--against", "main"],
+                "it goes with `--job`",
+            ),
+            (
+                &[
+                    "--command",
+                    "test --job --setup-base a --setup-base b",
+                    "--against",
+                    "main",
+                ],
+                "given twice",
+            ),
+            (
+                &[
+                    "--command",
+                    "test --job",
+                    "--against",
+                    "main",
+                    "--capture",
+                    "no",
+                ],
+                "`--capture no`",
+            ),
+        ] {
+            let error = try_command(arguments).unwrap_err();
+            assert!(error.contains(said), "{arguments:?}: {error}");
+        }
+        // After a `--` of the command's own, a word is the test binaries'.
+        assert_eq!(
+            job_words(&strings(&["-p", "x", "--", "--job"])).unwrap(),
+            (None, strings(&["-p", "x", "--", "--job"]))
+        );
+    }
+
+    fn strings(words: &[&str]) -> Vec<String> {
+        words.iter().map(|word| (*word).to_owned()).collect()
     }
 }

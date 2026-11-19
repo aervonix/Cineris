@@ -20,7 +20,15 @@
 #   gh workflow run try --ref <branch> -f os=windows -f command="test --dependents -p cineris-config"
 #   gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7 --jobs 2"
 #   gh workflow run try --ref <branch> -f commit=<40-digit commit hash> -f command="test -p cineris-base"
+#   gh workflow run try --ref <branch> -f command=final -f against=main
+#   gh workflow run try --ref <branch> -f os=windows -f command="test --job --setup-head x.sh" -f against=main -f count=3
 #   gh run watch <run id>                     (the id `try --dispatch` prints)
+#
+# `command=final` (`cargo xtask try --final --dispatch <branch>`) is three
+# jobs in one run, whatever `os` says: the Windows A/B against `against`, the
+# tests on Linux 22.04, and the binary's size against main's. Each job is
+# given its part from its matrix entry (`--part`), and `cargo xtask try`
+# makes the part's command; `try-result RUN` reads the three together.
 #
 # `commit` makes the branch's side of the run that commit (and not the
 # branch's head), so that a variant needs no branch of its own: commit each
@@ -48,7 +56,7 @@ on:
         options: [both, linux, windows, linux-22.04]
         default: both
       command:
-        description: "test [-p CRATE] [--dependents] [FILTER], stress -p CRATE [ARGS], startup, size [--check] [--against-main] [--breakdown] [--target T], perf [ARGS], perf -p CRATE (its ignored perf_ tests, in release), ci [ARGS], mutate BREAK... [--jobs N], or a nightly job: partial-landlock, advisories, unused."
+        description: "test [-p CRATE] [--dependents] [FILTER], test --job (with against), final (three jobs, os aside), stress -p CRATE [ARGS], startup, size [--check] [--against-main] [--breakdown] [--target T], perf [ARGS], perf -p CRATE (its ignored perf_ tests, in release), ci [ARGS], mutate BREAK... [--jobs N], or a nightly job: partial-landlock, advisories, unused."
         required: true
         default: "test"
       profile:
@@ -116,8 +124,11 @@ jobs:
     # Not a blocking check: a dist build from scratch takes most of this on
     # Windows. A mutate run builds copies of the tree from cold and runs to
     # its end. A comparison of two trees' performance tests builds both in
-    # release from scratch.
-    timeout-minutes: ${{ startsWith(inputs.command, 'mutate') && 90 || (startsWith(inputs.command, 'perf') && inputs.against != '' && 60 || 40) }}
+    # release from scratch. A final run's A/B builds the base without the
+    # cache. A job A/B builds both trees from cold every round: `try` gives
+    # it `--minutes 200`, so that it starts no round it would not finish
+    # within this.
+    timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 240 || (startsWith(inputs.command, 'mutate') && 90 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 60 || 40)) }}
     # `size --against-main` reads the main workflow's size record, which is
     # another run's artifact: `actions: read`, and the token below, which is
     # given to a `size` command only.
@@ -128,7 +139,9 @@ jobs:
       fail-fast: false
       matrix:
         # linux-22.04: Landlock ABI 4, the partial case no other runner has.
-        include: ${{ fromJSON(inputs.os == 'linux' && '[{"name":"linux","os":"ubuntu-latest"}]' || inputs.os == 'windows' && '[{"name":"windows","os":"windows-latest"}]' || inputs.os == 'linux-22.04' && '[{"name":"linux-22.04","os":"ubuntu-22.04"}]' || '[{"name":"linux","os":"ubuntu-latest"},{"name":"windows","os":"windows-latest"}]') }}
+        # A final run's three jobs, each with its part, whatever `os` says:
+        # `cargo xtask try`'s FINAL_PARTS, which a test holds this list to.
+        include: ${{ fromJSON(inputs.command == 'final' && '[{"name":"windows","os":"windows-latest","part":"ab"},{"name":"linux-22.04","os":"ubuntu-22.04","part":"tests"},{"name":"linux","os":"ubuntu-latest","part":"size"}]' || inputs.os == 'linux' && '[{"name":"linux","os":"ubuntu-latest"}]' || inputs.os == 'windows' && '[{"name":"windows","os":"windows-latest"}]' || inputs.os == 'linux-22.04' && '[{"name":"linux-22.04","os":"ubuntu-22.04"}]' || '[{"name":"linux","os":"ubuntu-latest"},{"name":"windows","os":"windows-latest"}]') }}
     steps:
       # A commit is checked before it is used, and before anything is
       # built: the shell reads it from the environment. `cargo xtask try`
@@ -165,7 +178,7 @@ jobs:
       # main workflow does: the target, and the musl C compiler that ring's C
       # code is built with. Fixed commands: nothing typed reaches them.
       - name: Install the static target and its C compiler (size, Linux)
-        if: runner.os == 'Linux' && startsWith(inputs.command, 'size')
+        if: runner.os == 'Linux' && (startsWith(inputs.command, 'size') || inputs.command == 'final' && matrix.part == 'size')
         run: |
           rustup target add x86_64-unknown-linux-musl
           sudo apt-get update
@@ -180,16 +193,16 @@ jobs:
       # An A/B run's other tree, built in a directory of its own (`cargo
       # xtask ab`). The checkout can only be made inside the workspace, so it
       # is moved beside it: inside, the branch's .cargo/config.toml would
-      # apply to its build too.
+      # apply to its build too. In a final run only the A/B's job has one.
       - name: Check out the ref to compare with
-        if: inputs.against != ''
+        if: inputs.against != '' && (inputs.command != 'final' || matrix.part == 'ab')
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.against }}
           path: ab-base
           persist-credentials: false
       - name: Put it beside the branch's checkout
-        if: inputs.against != ''
+        if: inputs.against != '' && (inputs.command != 'final' || matrix.part == 'ab')
         shell: bash
         run: mv ab-base ../ab-base
       - name: Install cargo-nextest
@@ -243,8 +256,11 @@ jobs:
           TRY_COMMIT: ${{ inputs.commit }}
           TRY_CAPTURE: ${{ inputs.capture }}
           TRY_LABEL: ${{ inputs.label }}
-          # Only a `size` command is given the token, to read `main`'s record.
-          GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
+          # A final run's job is told its part; any other job, nothing.
+          TRY_PART: ${{ inputs.command == 'final' && matrix.part || '' }}
+          # Only a `size` command is given the token, to read `main`'s record,
+          # and a final run's size job.
+          GH_TOKEN: ${{ (startsWith(inputs.command, 'size') || inputs.command == 'final' && matrix.part == 'size') && github.token || '' }}
           # The test kit's switches, from a list: each is set or left empty.
           CINERIS_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CINERIS_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}/target/testkit-profile', github.workspace) || '' }}
@@ -258,6 +274,7 @@ jobs:
           if [ -n "$TRY_COMMIT" ]; then added+=(--commit "$TRY_COMMIT"); fi
           if [ "$TRY_CAPTURE" = "no" ]; then added+=(--capture no); fi
           if [ -n "$TRY_LABEL" ]; then added+=(--label "$TRY_LABEL"); fi
+          if [ -n "$TRY_PART" ]; then added+=(--part "$TRY_PART"); fi
           cargo run --locked --quiet --package xtask -- try \
             --command "$TRY_COMMAND" --profile "$TRY_PROFILE" \
             --count "$TRY_COUNT" --load "$TRY_LOAD" --cores "$TRY_CORES" \
@@ -278,7 +295,8 @@ jobs:
           TRY_COMMIT: ${{ inputs.commit }}
           TRY_CAPTURE: ${{ inputs.capture }}
           TRY_LABEL: ${{ inputs.label }}
-          GH_TOKEN: ${{ startsWith(inputs.command, 'size') && github.token || '' }}
+          TRY_PART: ${{ inputs.command == 'final' && matrix.part || '' }}
+          GH_TOKEN: ${{ (startsWith(inputs.command, 'size') || inputs.command == 'final' && matrix.part == 'size') && github.token || '' }}
           CINERIS_TESTKIT_PROFILE: ${{ inputs.testkit == 'profile' && inputs.against == '' && '1' || '' }}
           CINERIS_TESTKIT_PROFILE_DIR: ${{ inputs.testkit == 'profile' && inputs.against == '' && format('{0}\target\testkit-profile', github.workspace) || '' }}
           CINERIS_TESTKIT_STARTS: ${{ inputs.testkit == 'starts' && inputs.against == '' && format('{0}\target\testkit-starts', github.workspace) || '' }}
@@ -291,6 +309,7 @@ jobs:
           if ($env:TRY_COMMIT -ne '') { $added += @('--commit', $env:TRY_COMMIT) }
           if ($env:TRY_CAPTURE -eq 'no') { $added += @('--capture', 'no') }
           if ($env:TRY_LABEL -ne '') { $added += @('--label', $env:TRY_LABEL) }
+          if ($env:TRY_PART -ne '') { $added += @('--part', $env:TRY_PART) }
           cargo run --locked --quiet --package xtask -- try `
             --command "$env:TRY_COMMAND" --profile "$env:TRY_PROFILE" `
             --count "$env:TRY_COUNT" --load "$env:TRY_LOAD" --cores "$env:TRY_CORES" `
@@ -323,6 +342,7 @@ jobs:
             target/nextest/perf/junit.xml
             target/ab/*.xml
             target/ab/wall-times.json
+            target/ab/job-ab.json
             target/perf-ab/results.json
             target/size/*.json
             target/testkit-profile/
