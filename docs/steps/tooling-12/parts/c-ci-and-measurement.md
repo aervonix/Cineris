@@ -105,6 +105,16 @@ The tip before was 55e08b54f07a: `git reset --keep 55e08b54f07a` takes the branc
 
 The one conflict was `xtask/src/main.rs`'s usage, both sides' lines added at one place; the command settled it and checked it. `docs/testing-and-ci.md` and `AGENTS.md` merged without a conflict. `cargo xtask outstanding` wrote the index again after the open item below was added.
 
+After the review's second round, the branch was rebased again, onto `main` at `bd3adf5d` (the second security fix), the same way, `main`'s own `xtask` built from its tree:
+
+```text
+Rebased tooling-12-c onto origin/main with no conflict.
+docs/outstanding/README.md is up to date.
+The tip before was 4ef24df97faf: `git reset --keep 4ef24df97faf` takes the branch back to it.
+```
+
+This part adds no process start to product code, which `rules`' `process_starts` would hold it to: its commands start processes in `xtask` alone.
+
 ## The pre-push review
 
 An independent review of the branch before its pull request found ten things. Findings 1 and 2 are the step's own bar: a measurement that compares unlike things.
