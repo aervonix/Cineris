@@ -395,6 +395,23 @@ fn changes_apart_merge_and_one_sides_change_is_taken_whole() {
     assert_eq!(merged.text, "z\na\nb\nc");
 }
 
+/// The merge takes a change both sides made alike once; the count of lines
+/// then comes short of the two sides' changes, and the file is left: the
+/// check is of the text, whatever made it, and errs towards a person.
+#[test]
+fn a_change_both_sides_made_alike_beside_a_union_is_left() {
+    let base = "a\nb\nend\n";
+    let ours = "A\nb\nx\nend\n";
+    let theirs = "A\nb\ny\nend\n";
+    let merged = merge(base, ours, theirs).unwrap();
+    assert_eq!(merged.text, "A\nb\nx\ny\nend\n");
+    let error = unite(Kind::Markdown, base, ours, theirs, &any_layout).unwrap_err();
+    assert!(
+        error.contains("the line `A` 1 time(s) where the two sides' changes come to 2"),
+        "{error}"
+    );
+}
+
 #[test]
 fn git_seeing_a_conflict_this_merge_does_not_is_left() {
     let error = unite(Kind::Rust, "a\n", "a\nb\n", "a\n", &any_layout).unwrap_err();

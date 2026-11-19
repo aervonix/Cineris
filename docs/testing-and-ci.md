@@ -1009,6 +1009,8 @@ prints the tier totals of that run against the Windows budgets, each tier split 
 - `--section` and `--heading` say where `--write` puts the tables, and mean nothing without it.
 - Without either, nothing changes: the sections `On the pull request` and `<OS>, both trees on one runner`, between the plain marks.
 
+**A page that is not there yet** (since the twelfth tooling step). `--write` makes a missing page, and its folder, rather than failing, and gives it the heading the step records' rule asks for, from where it is: `# After step 24: its CI times` for `docs/steps/24/ci.md`, `# After tooling-12: its CI times` for a folder named in words, `# Step 24, pr2 trust: its CI times` for a part's record (`docs/steps/24/<group>/pr2-trust.md`), and `# CI times` anywhere else. A page that is there but empty gets the heading too. It says so (`made docs/steps/24/ci.md with the heading …`): the words after the colon are for the step to make its own. A page that has no such section gets it at the end, as before.
+
 **A report is missing from a table only when the run made none** (its tests did not run), and the command says so; whether it did is read from the run's list of artifacts. An expired report, a download that fails and a question GitHub does not answer are errors that name the run, never a column left out (since the third tooling step). The upload is the one step these tools add to a blocking job. What they add in all (that step, three static checks and their own tests) is measured in [steps/tooling-w5/ci.md](steps/tooling-w5/ci.md).
 
 **A `try` run's result.** `cargo xtask try-result RUN [--os linux|windows|linux-22.04] [--top N] [--tail N]` (since the seventh tooling step) reads a finished run of the `try` workflow in one step: it lists the run's jobs through `gh run view`, downloads each `try-<os>` artifact once (into `target/xtask-runs/<run>/`, as the other commands do) and prints, for each OS the run had, what the run's command found:
@@ -1256,6 +1258,66 @@ cargo xtask branch to-end 1a2b3c4d        # that commit, moved to the tip
   The first commits records to a branch while the working tree has other changes, holds that every other ref, the index and the working tree are as they were, a second run with a section added, the refusal's advice followed (a file the branch has and `HEAD` has not, made from the branch's copy with a section added, committed), a file that dropped the branch's lines refused and then committed with `--replace`, and each refusal (the branch checked out here or in a linked working tree, or being rebased in another, a branch not there, a name that is no branch's, `@{-1}`, a file not there, a link to a file outside, a folder that is a link out and one that is a link inside the repository, nothing changed).
   The second moves a commit of four to the end (the tip's tree is the old one, the backup holds the old tip, the first commit and another branch are untouched, the author, date and message kept, the repository's identity as committer), folds the last commit and then staged changes in, refuses a staged deletion whose fold would not end at the staged tree, refuses the branch checked out twice, refuses what it must, and meets a conflict and a merge with every ref, the index and the working tree left as they were.
   Its breaks are in `mutations/tooling-10-runs.breaks`.
+
+### Rebasing onto main
+
+`cargo xtask rebase` (since the twelfth tooling step) fetches and rebases the current branch onto `origin/main`, and settles each conflict that has a mechanical answer, so that a rebase of a parallel wave's branch stops only where a person is needed.
+
+```text
+cargo xtask rebase                     # fetch origin, rebase onto origin/main
+cargo xtask rebase --onto main --no-fetch
+cargo xtask rebase --continue          # after settling what it left, and `git add`
+cargo xtask rebase --abort             # the branch as it was
+```
+
+Each time git stops, every conflicted file is put in a class and settled by it:
+
+| Class | Files | What is done |
+|---|---|---|
+| generated | what `cargo xtask regen` writes (`regen --list`): `docs/protocol/`, `docs/configuration/`, the snapshots, the reference screens; not the recorded provider fixtures, which sit beside the hand-written ones in `crates/cineris-llm/fixtures/` and are never rebuilt | the side rebased onto is taken (`git checkout --ours`: either side would do), and that generator runs at the end |
+| the open items' index | `docs/outstanding/README.md` | the same, and `cargo xtask outstanding` at the end, which runs after every rebase: git merges the index line by line and never stops on it |
+| additions | a `.rs` or `.md` file in which both sides only added lines at one place, or one side added lines just before or after lines the other changed | both sides' lines, the side rebased onto first (an addition beside a change goes beside it, the change kept whole), checked |
+| anything else | | left conflicted, as git left it, and named, with the reason |
+
+When every file of a stop is settled, it is added and the rebase goes on (a commit with nothing left of it is dropped, and named). When one is left, the rebase stops there: settle the file, `git add` it, and run `cargo xtask rebase --continue`, which carries on and settles the later stops the same way. What a run keeps between a stop and `--continue` (the tip before the rebase and the generators to run) is a file in the working tree's git directory, `xtask-rebase`, removed at the end. At the end it writes the open items' index, runs the generators of the files it took (`--no-regen` names the command instead), and says that what it wrote is not committed. It prints the tip before the rebase, with `git reset --keep <tip>` to go back.
+
+**It never drops a side silently.** The merge is the command's own (`xtask/src/rebase/merge.rs`: Myers' diff of lines, with each run of added lines pushed down past the lines it starts with, so that a test appended after a function's last `}` is read as the whole test after it and not as "`}`, the test, its body" before it), and a union is written only when three checks of the text that would be written pass, whatever made it (`xtask/src/rebase/classify.rs`, `keeps_both`):
+
+- each line is there as many times as the two sides' changes come to (ours' count and theirs', less the base's): a lost `}` is found though another `}` is still there to stand in for it. An earlier wave's union by hand kept one closing brace of two;
+- each side's added lines are there in their order;
+- the lines of the base that both sides kept are there in their order.
+
+Then a Rust file's brackets must balance outside comments, strings and character literals, and rustfmt (the workspace's edition and `rustfmt.toml`) must leave it as it is; every line a Markdown union put side by side must be a table's row with as many cell dividers as its table's header, and prose added on both sides is a person's. Two changes of one line, a change beside a change and an addition, a file one side added or deleted whole, a file that is not text, and a place where git saw a conflict and this merge does not, are all left, each with its reason.
+
+It refuses changes not committed, a second start while a rebase is stopped, and `--continue` or `--abort` with none in progress. Each step is one git with plain arguments, so the command is one call, with no loop or `$(git …)` for a shell to refuse.
+
+What a stop looks like, from this step's demonstration on a branch that added a row to a table that `main` had reworded the last row of and added rows after:
+
+```text
+Stopped at c3992548 Add a row to the table that main also adds rows to (a throwaway branch):
+  united    docs/steps/25/parts/pr3-first-run.md: both sides' additions at 1 place(s); every line of both kept, and checked
+Rebased tooling-12-b-demo onto origin/main: every conflict settled.
+docs/outstanding/README.md is up to date.
+The tip before was c3992548734d: `git reset --keep c3992548734d` takes the branch back to it.
+```
+
+**How it is tested** (`xtask/src/rebase/tests.rs`): the merge, the classes and the checks are pure functions of a path and three texts, tested with no process on the shapes the last wave met, kept in `xtask/fixtures/rebase/` (stored byte for byte, one of them with CRLF line ends): rows added at the end of one of AGENTS.md's tables on both sides, fields added to `CoreOptions` and its `Debug` in `crates/cineris-core/src/core.rs` on both sides, and tests appended to one module on both sides, each with the text the repository had; and the refusals (one line changed on both sides, prose, a row of another shape, rows with no table). A union that lost a brace is refused by the count and by the brackets, each alone. Three `sys_` tests run the command on repositories of a few commits made with one `git fast-import`: one, on both systems, settles a table, a Rust module and a generated file in one stop with rustfmt run on the union (about 17 gits and one rustfmt: 0.06 s on the reference machine, about a second on a hosted Windows runner); two, on Unix only, where what they add is git's own logic, stop on a line both sides changed, go on with `--continue` after a person settles it, abort, and refuse a second start and changes not committed.
+
+### Questions for git in one command
+
+`cargo xtask git` (since the twelfth tooling step) answers three questions that were asked of git with `$(git …)`, pipes into `grep` and line numbers worked out by hand, each in one call with plain arguments, read the same way on every system. They only read.
+
+```text
+cargo xtask git changed --against origin/main
+cargo xtask git commits docs/testing-and-ci.md --since origin/main --max 10
+cargo xtask git added --grep 'TODO|FIXME' --against origin/main xtask/
+```
+
+- **`changed [--against REF]`**: every file that differs from where the branch left `REF` (`origin/main` when not given; the merge base of `REF` and `HEAD`), committed, staged, changed in the working tree, or new and not ignored: its status (`A`, `M`, `D`, `T`, or `?` for a new file git does not track), its path, and `(not committed)` when the change is not all in `HEAD`.
+- **`commits PATH… [--since REF] [--max N]`**: the commits that touched any of the paths, newest first, as `hash date subject`; `--since REF` keeps those after `REF`; at most 30 unless `--max` says otherwise (0 is all).
+- **`added --grep RE [--against REF] [PATH…]`**: each line added since where the branch left `REF`, committed or not, the lines of new files included, that matches `RE` (the matcher of `ci-log --grep`, `xtask/src/pattern.rs`), as `PATH:LINE: TEXT`, the line being the file's as it is now, read from each hunk's start in `git diff -U0`.
+
+They are named for the question, under `git` because what they read is git's. A unit test reads a diff's added lines and their numbers (a deleted file, a new file, a line that starts `+++`), and one `sys_` test, on both systems, asks all three of a branch with a commit, a change not committed and a new file (about 16 gits: 0.02 s on the reference machine).
 
 ### The public API between two trees
 
