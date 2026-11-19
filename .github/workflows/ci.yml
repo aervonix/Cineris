@@ -137,7 +137,8 @@ jobs:
       # `cineris-*` crate or xtask, by its package's name (`.fingerprint`,
       # `build`) or its target's (`deps`: the libraries and test binaries,
       # `it` and `system` among them), in the `ci` profile the tests build in
-      # and the `dev` one `cargo run --package xtask` builds xtask in. A file
+      # and the `dev` one `cargo run --package xtask` builds xtask in, with
+      # the workspace crates xtask depends on (`cineris-protocol`). A file
       # these miss is not cached, and is built again: a miss costs time, never
       # a stale build.
       WORKSPACE_BUILD: |
@@ -152,7 +153,11 @@ jobs:
         target/ci/examples
         target/ci/cineris*
         target/ci/xtask*
+        target/debug/.fingerprint/cineris-*
         target/debug/.fingerprint/xtask-*
+        target/debug/build/cineris-*
+        target/debug/deps/cineris*
+        target/debug/deps/libcineris*
         target/debug/deps/xtask*
         target/debug/xtask*
     steps:
