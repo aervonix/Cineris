@@ -138,4 +138,4 @@ Run with `cargo xtask mutate` on the reference machine, beside other work: verdi
 - `step-13a/repository-trust-not-given-to-the-shell` and `step-13a/shell-given-rules-trust`: they break `ShellConfig::repository_trusted`, which `ShellLive`'s trust overrides since step 24.
 - `step-13a/engine-told-every-projects-rules-are-approved`: expected to survive, and caught.
 
-**Stress:** `cargo xtask stress -p cineris-base -p cineris-tools -p cineris-core --count 50` at the desk, on the side: 1,226 tests, 50 times each, seeds 0 to 49; every test passed every time.
+**Stress:** `cargo xtask stress -p cineris-base -p cineris-tools -p cineris-core --count 50` on the reference machine: 1,226 tests, 50 times each, seeds 0 to 49; every test passed every time.
