@@ -128,7 +128,113 @@ pub(crate) fn check(file: &str, text: &str) -> Vec<Violation> {
              permissions:\n      contents: read",
         ));
     }
+    violations.extend(cache_writes(file, text));
     violations
+}
+
+/// What a step that writes a cache must say: that only the main branch
+/// writes it. A build cache is code the next run executes, so a cache a
+/// pull request could write is a way for one pull request's build to reach
+/// another's, or the main branch's (`docs/testing-and-ci.md`, "The
+/// workspace's own build, cached"). Pull requests read caches; only the main
+/// branch writes them.
+const MAIN_ONLY: &str = "github.ref == 'refs/heads/main'";
+
+/// The steps that could write a cache from a run that is not the main
+/// branch's: `actions/cache/save` with no `if:` that holds to the main branch,
+/// `actions/cache` itself (which saves after every run that restored
+/// nothing), and rust-cache with a `save-if:` that is not `"false"` or the
+/// main branch.
+fn cache_writes(file: &str, text: &str) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for (line, step) in steps(text) {
+        let Some(action) = step.iter().find_map(|line| used_action(line)) else {
+            continue;
+        };
+        let value = |key: &str| {
+            step.iter().find_map(|line| {
+                let line = line.trim_start().trim_start_matches("- ").trim_start();
+                line.strip_prefix(key)
+                    .map(|rest| rest.split(" #").next().unwrap_or(rest).trim())
+            })
+        };
+        // To the main branch, and nothing else: no `||` that lets another
+        // in, and no `!` that turns the test round.
+        let holds_to_main = |condition: Option<&str>| {
+            condition.is_some_and(|condition| {
+                condition.contains(MAIN_ONLY)
+                    && !condition.contains("||")
+                    && !condition.contains('!')
+            })
+        };
+        let problem = if action.starts_with("actions/cache@") {
+            Some(
+                "`actions/cache` saves after any run that restored nothing, a pull request's \
+                 too: restore with `actions/cache/restore` and save with `actions/cache/save` \
+                 under `if: … && github.ref == 'refs/heads/main'`"
+                    .to_owned(),
+            )
+        } else if action.starts_with("actions/cache/save@") && !holds_to_main(value("if:")) {
+            Some(format!(
+                "a step that saves a cache runs only on the main branch: its `if:` holds \
+                 `{MAIN_ONLY}`, joined with `&&`"
+            ))
+        } else if action.starts_with("Swatinem/rust-cache@")
+            && !matches!(value("save-if:"), Some("\"false\"" | "'false'" | "false"))
+            && !holds_to_main(value("save-if:"))
+        {
+            Some(format!(
+                "rust-cache saves after every run unless told: give it `save-if: \"false\"` or \
+                 `save-if: ${{{{ {MAIN_ONLY} }}}}`"
+            ))
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            violations.push(Violation::new(
+                file,
+                Some(line),
+                format!(
+                    "{problem}. Only the main branch writes a cache: a pull request's build \
+                     could otherwise reach the next run's."
+                ),
+            ));
+        }
+    }
+    violations
+}
+
+/// The steps of a workflow, each with its first line's number: from a line
+/// `- …` under a `steps:` key to the next at the same indent, or to a line
+/// indented less.
+fn steps(text: &str) -> Vec<(usize, Vec<&str>)> {
+    let mut found: Vec<(usize, Vec<&str>)> = Vec::new();
+    // The indent of the `steps:` key whose list the lines are in, and of
+    // its items.
+    let mut list: Option<(usize, Option<usize>)> = None;
+    for (index, line) in text.lines().enumerate() {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        if let Some((key, items)) = list {
+            if indent <= key {
+                list = None;
+            } else if trimmed.starts_with("- ") && items.is_none_or(|items| indent == items) {
+                list = Some((key, Some(indent)));
+                found.push((index + 1, vec![line]));
+                continue;
+            } else if let Some(step) = found.last_mut() {
+                step.1.push(line);
+                continue;
+            }
+        }
+        if trimmed == "steps:" {
+            list = Some((indent, None));
+        }
+    }
+    found
 }
 
 /// The one secret a workflow that runs on pull requests may read: the
@@ -312,12 +418,82 @@ mod tests {
     #[test]
     fn an_action_pinned_by_hash_passes() {
         let text = workflow(&format!(
-            "      - uses: actions/checkout@{HASH} # v7.0.1\n      - name: Cache\n        uses: \"Swatinem/rust-cache@{HASH}\"\n      - uses: ./.github/actions/local\n"
+            "      - uses: actions/checkout@{HASH} # v7.0.1\n      - name: Cache\n        uses: \"Swatinem/rust-cache@{HASH}\"\n        with:\n          save-if: \"false\"\n      - uses: ./.github/actions/local\n"
         ));
 
         assert_eq!(
             messages(".github/workflows/ci.yml", &text),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn only_the_main_branch_writes_a_cache() {
+        let cache = |step: &str| {
+            let text = blocking(&format!(
+                "      - uses: actions/checkout@{HASH} # v7.0.1\n{step}      - name: After\n        run: cargo build\n"
+            ));
+            messages(".github/workflows/ci.yml", &text)
+        };
+        let main = "github.ref == 'refs/heads/main'";
+        // Held to the main branch, or saving nothing: passes.
+        for step in [
+            format!(
+                "      - uses: actions/cache/restore@{HASH} # v6.1.0\n        with:\n          key: k\n"
+            ),
+            format!(
+                "      - name: Save\n        if: success() && runner.os == 'Windows' && {main}\n        uses: actions/cache/save@{HASH} # v6.1.0\n        with:\n          key: k\n"
+            ),
+            format!(
+                "      - uses: Swatinem/rust-cache@{HASH} # v2.9.3\n        with:\n          save-if: ${{{{ {main} }}}}\n"
+            ),
+            format!(
+                "      - uses: Swatinem/rust-cache@{HASH} # v2.9.3\n        with:\n          shared-key: test\n          save-if: \"false\"\n"
+            ),
+        ] {
+            assert_eq!(cache(&step), Vec::<String>::new(), "{step}");
+        }
+        // Any run could write: refused, at the step's first line.
+        for step in [
+            format!(
+                "      - uses: actions/cache/save@{HASH} # v6.1.0\n        with:\n          key: k\n"
+            ),
+            format!(
+                "      - if: {main} || github.event_name == 'pull_request'\n        uses: actions/cache/save@{HASH} # v6.1.0\n"
+            ),
+            format!(
+                "      - if: \"!({main})\"\n        uses: actions/cache/save@{HASH} # v6.1.0\n"
+            ),
+            format!(
+                "      - name: Both\n        if: {main}\n        uses: actions/cache@{HASH} # v6.1.0\n"
+            ),
+            format!(
+                "      - uses: Swatinem/rust-cache@{HASH} # v2.9.3\n        with:\n          cache-bin: \"false\"\n"
+            ),
+            format!(
+                "      - uses: Swatinem/rust-cache@{HASH} # v2.9.3\n        with:\n          save-if: ${{{{ true }}}}\n"
+            ),
+        ] {
+            let found = cache(&step);
+            assert_eq!(found.len(), 1, "{step}: {found:#?}");
+            assert!(
+                found[0].starts_with(".github/workflows/ci.yml:12: "),
+                "{found:?}"
+            );
+            assert!(
+                found[0].contains("Only the main branch writes a cache"),
+                "{found:?}"
+            );
+        }
+        // A step of another job, after a job with no cache, is still read.
+        let text = blocking(&format!(
+            "      - run: cargo build\n  test:\n    steps:\n      - uses: actions/cache/save@{HASH} # v6.1.0\n"
+        ));
+        let found = messages(".github/workflows/ci.yml", &text);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(
+            found[0].starts_with(".github/workflows/ci.yml:14: "),
+            "{found:?}"
         );
     }
 

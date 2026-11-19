@@ -38,3 +38,51 @@ find: if let Some(note) = workspace::choose_root(given.as_deref(), &here, &works
 replace: if let Some(note) = workspace::choose_root(given.as_deref(), &workspace::find_root(&here).unwrap_or_else(workspace::built_in), &workspace::built_in())? {
 caught-by:
     workspace::tests::sys_a_build_from_one_checkout_works_on_the_checkout_it_runs_in
+
+# Only the main branch writes a cache: `rules` refuses a workflow step that
+# could write one from any other run.
+
+[break] cache-save-from-any-branch
+rule: A step that saves a cache with `actions/cache/save` runs only on the main branch.
+file: xtask/src/rules/workflows.rs
+in: cache_writes
+find: action.starts_with("actions/cache/save@") && !holds_to_main(value("if:"))
+replace: action.starts_with("actions/cache/save@") && value("if:").is_none()
+caught-by:
+    rules::workflows::tests::only_the_main_branch_writes_a_cache
+
+[break] cache-save-condition-turned-round
+rule: A save's condition cannot hold to the main branch and let others in, with `||` or `!`.
+file: xtask/src/rules/workflows.rs
+in: cache_writes
+find: && !condition.contains('!')
+replace:
+caught-by:
+    rules::workflows::tests::only_the_main_branch_writes_a_cache
+
+[break] cache-the-combined-action
+rule: `actions/cache`, which saves after any run, is refused.
+file: xtask/src/rules/workflows.rs
+in: cache_writes
+find: action.starts_with("actions/cache@")
+replace: action.starts_with("actions/cache-none@")
+caught-by:
+    rules::workflows::tests::only_the_main_branch_writes_a_cache
+
+[break] cache-rust-cache-saves-by-default
+rule: rust-cache is told when to save: `"false"` or the main branch.
+file: xtask/src/rules/workflows.rs
+in: cache_writes
+find: && !holds_to_main(value("save-if:"))
+replace: && value("save-if:").is_none()
+caught-by:
+    rules::workflows::tests::only_the_main_branch_writes_a_cache
+
+[break] cache-writes-not-checked
+rule: The cache rule runs on every workflow `rules` reads.
+file: xtask/src/rules/workflows.rs
+in: check
+find: violations.extend(cache_writes(file, text));
+replace:
+caught-by:
+    rules::workflows::tests::only_the_main_branch_writes_a_cache
