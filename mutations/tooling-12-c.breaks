@@ -304,3 +304,150 @@ find: .filter(|(_, reached)| !**reached)
 replace: .filter(|(_, reached)| **reached)
 caught-by:
     mutate::budget::tests::what_was_reached_is_counted_by_class_and_what_was_left_is_named
+
+# The pre-push review's findings, each fixed and broken here.
+
+[break] review-job-count-may-be-odd
+rule: A job A/B's rounds are even in number, so that each side goes first as often as the other.
+file: xtask/src/job_ab.rs
+in: parse
+find: (2..=MOST_ROUNDS).contains(rounds) && rounds.is_multiple_of(2)
+replace: (1..=MOST_ROUNDS).contains(rounds)
+caught-by:
+    job_ab::tests::a_request_is_read_and_what_makes_no_sense_is_refused
+
+[break] review-job-default-count-odd
+rule: A job A/B runs two rounds when not told: each side first once.
+file: xtask/src/job_ab.rs
+find: const ROUNDS: usize = 2;
+replace: const ROUNDS: usize = 3;
+caught-by:
+    job_ab::tests::a_request_is_read_and_what_makes_no_sense_is_refused
+
+[break] review-job-change-not-paired
+rule: A phase's change is head minus base within each round both sides passed.
+file: xtask/src/job_ab.rs
+in: paired
+find: changes.push(head - base);
+replace: changes.push(head);
+caught-by:
+    job_ab::tests::a_change_is_paired_by_round_and_says_which_side_went_first
+    job_ab::tests::each_phase_takes_its_median_over_the_rounds_it_passed_in
+
+[break] review-job-base-first-not-counted
+rule: A paired change says in how many of its rounds the base went first.
+file: xtask/src/job_ab.rs
+in: paired
+find: base_first += 1;
+replace: base_first += 2;
+caught-by:
+    job_ab::tests::a_change_is_paired_by_round_and_says_which_side_went_first
+    job_ab::tests::each_phase_takes_its_median_over_the_rounds_it_passed_in
+
+[break] review-job-uneven-order-not-marked
+rule: A change whose pairs are not half base-first is marked as partly the order's.
+file: xtask/src/job_ab.rs
+in: medians_table
+find: pair.pairs > 0 && pair.base_first * 2 != pair.pairs
+replace: false
+caught-by:
+    job_ab::tests::each_phase_takes_its_median_over_the_rounds_it_passed_in
+
+[break] review-job-keep-build-starts-warm
+rule: Both sides start cold in the first round, whatever --keep-build says.
+file: xtask/src/job_ab.rs
+in: cleans
+find: !keep_build || round == 1
+replace: !keep_build
+caught-by:
+    job_ab::tests::both_sides_start_cold_and_keep_build_keeps_only_later_rounds
+
+[break] review-job-failed-build-goes-on
+rule: A failed build ends the side's round: what would follow would measure something else.
+file: xtask/src/job_ab.rs
+in: drive_side
+find: if !phase(&mut side, "build", took, outcome) {
+replace: if !phase(&mut side, "build", took, outcome) && false {
+caught-by:
+    job_ab::tests::a_side_times_each_phase_and_a_failed_build_ends_its_round
+
+[break] review-job-failed-run-ends-the-round
+rule: A failed run of the tests does not end the side's round: the job's next run is still made.
+file: xtask/src/job_ab.rs
+in: drive_side
+find: runs_passed &= phase(&mut side, &run_name(index, runs), took, outcome);
+replace: runs_passed &= phase(&mut side, &run_name(index, runs), took, outcome); if !runs_passed { break; }
+caught-by:
+    job_ab::tests::a_failed_run_of_the_tests_does_not_end_the_round
+
+[break] review-job-rounds-stop-at-a-failure
+rule: A failed round is recorded and the rounds go on.
+file: xtask/src/job_ab.rs
+in: drive_rounds
+find: keep(record);
+replace: keep(record); if record.sides.iter().any(|side| side.error.is_some()) { return; }
+caught-by:
+    job_ab::tests::a_failed_round_is_recorded_and_the_rounds_go_on_in_turn
+
+[break] review-job-record-not-kept-each-side
+rule: The record is kept after every side, so that a run that is stopped keeps what it made.
+file: xtask/src/job_ab.rs
+in: drive_rounds
+find: keep(record);
+replace:
+caught-by:
+    job_ab::tests::a_failed_round_is_recorded_and_the_rounds_go_on_in_turn
+
+[break] review-try-budget-past-the-step
+rule: A try run refuses a mutate budget longer than its step allows.
+file: xtask/src/try_run.rs
+in: check_mutate_budget
+find: if budget > std::time::Duration::from_secs(most * 60) {
+replace: if false {
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
+
+[break] review-final-job-defaults-against
+rule: A final run's job given no against is refused, not given main without a base checked out.
+file: xtask/src/try_run.rs
+in: parse
+find: if inputs.part.is_none() {
+replace: if true {
+caught-by:
+    try_run::tests::a_final_runs_job_runs_the_part_it_is_given_and_nothing_else
+
+[break] review-rust-fixture-not-data
+rule: A .rs file a crate holds and does not build is read as data.
+file: xtask/src/mutate/changed.rs
+in: rust_as_data
+find: !["src", "tests", "benches", "examples"].contains(&first)
+replace: false
+caught-by:
+    mutate::changed::tests::rust_a_crate_holds_as_data_is_read_as_data
+
+[break] review-format-hole-no-path
+rule: A format string's literal is read by its text after its last hole.
+file: xtask/src/mutate/readers.rs
+in: format_tail
+find: Some(at) if text[..at].contains('{')
+replace: Some(at) if false
+caught-by:
+    mutate::readers::tests::a_format_strings_path_is_read_after_its_last_hole
+
+[break] review-budget-counts-the-other-system
+rule: A budget's order counts only the breaks run on this system.
+file: xtask/src/mutate/mod.rs
+in: budget_order
+find: .filter(|(one, _)| one.runs_here())
+replace:
+caught-by:
+    mutate::tests::a_budget_orders_the_breaks_and_counts_only_those_run_here
+
+[break] review-unread-main-passes
+rule: A size check against main that read no main is a problem of the run.
+file: xtask/src/try_result.rs
+in: unread_main
+find: .strip_prefix("not read:")
+replace: .strip_prefix("never read:")
+caught-by:
+    try_result::tests::a_size_against_main_that_read_no_main_is_a_problem_of_the_run
