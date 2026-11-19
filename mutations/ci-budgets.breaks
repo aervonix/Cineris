@@ -85,3 +85,12 @@ find: .filter(|name| !passed.contains(name))
 replace: .filter(|_| false)
 caught-by:
     xtask::bin/xtask nonblocking::git_tests_on_windows_tests::a_name_that_ran_nothing_fails_the_run_and_is_named
+
+[break] a-project-written-again-past-its-bytes
+rule: A file written again keeps each project's newest within `KEEP_BYTES`, however much more the file could hold.
+file: crates/cineris-cli/src/history.rs
+in: compact
+find: *held + entry.size <= limits.keep_bytes
+replace: *held + entry.size <= usize::MAX - 1
+caught-by:
+    cineris-cli::bin/cineris history::tests::a_file_of_one_project_is_written_again_within_its_bytes
