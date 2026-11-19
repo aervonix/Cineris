@@ -22,6 +22,8 @@
 //! [`Readiness::hide`] starts it again as if just shown: after the viewer,
 //! after the program was continued (`fg`), after the external editor, and
 //! whenever its owner says what it showed is no longer what it shows.
+//! [`Readiness::again`] starts only its grace again, keeping the quiet it
+//! owes: a first-run step whose rows the worker's answer changed.
 //!
 //! All of these are comparisons of times: the one wake they need is the
 //! moment it is ready, when its owner has something to draw then.
@@ -99,6 +101,16 @@ impl Readiness {
     pub(crate) fn hide(&mut self) -> bool {
         self.shown = None;
         self.typed = None;
+        self.hide_answers()
+    }
+
+    /// Its grace starts again with its next frame, and answers it showed
+    /// are hidden until then, but the quiet it owes input it did not take
+    /// is kept: what it shows changed under it (the first run's rows, when
+    /// the worker's answer comes; since the full review of step 25's third
+    /// pull request). Says whether answers were hidden.
+    pub(crate) fn again(&mut self) -> bool {
+        self.shown = None;
         self.hide_answers()
     }
 
@@ -181,5 +193,26 @@ mod tests {
             ready.ready(now + GRACE * 101),
             "its grace again, not its quiet"
         );
+    }
+
+    #[test]
+    fn again_starts_its_grace_again_and_keeps_its_quiet() {
+        let now = Instant::now();
+        let mut ready = Readiness::default();
+        ready.drawn(now);
+        ready.set_answers_drawn(true);
+        ready.typed(now + GRACE);
+        ready.set_answers_drawn(true);
+        assert!(ready.again(), "the answers were hidden");
+        assert_eq!(ready.shown(), None);
+        ready.drawn(now + GRACE * 2);
+        assert_eq!(
+            ready.ready_at(),
+            Some(now + GRACE + QUIET),
+            "the quiet is kept"
+        );
+        ready.again();
+        ready.drawn(now + GRACE * 10);
+        assert_eq!(ready.ready_at(), Some(now + GRACE * 11), "its grace again");
     }
 }

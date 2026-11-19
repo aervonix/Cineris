@@ -23,7 +23,7 @@
 //! | [`approval`] | A request to run `cargo build`, with three answers |
 //! | [`ask`] | A request given, and its dialog's first frame drawn |
 //! | [`shown_dialog`] | An approval given and drawn until it is ready: the time a key answers it |
-//! | [`FakeSetup`], [`app_first_run`] | The first run's program in a test: providers, what other tools left, servers, and what it was asked to store and write (since step 25) |
+//! | [`FakeSetup`], [`app_first_run`], [`app_first_run_prompted`], [`app_first_run_on`] | The first run's program in a test: providers, what other tools left, servers, and what it was asked to store and write (since step 25); a first run with a prompt on the command line, or on a program of the test's own |
 //!
 //! Time is the test's: every call that draws or reads input takes the
 //! [`Instant`] it happens at, and nothing waits.
@@ -426,6 +426,43 @@ pub fn app_first_run(
     columns: usize,
     rows: usize,
 ) -> (App, Scripted) {
+    first_run_app(now, Arc::new(setup.clone()), columns, rows, None)
+}
+
+/// As [`app_first_run`], the command line having given `prompt`, which
+/// is sent once the session opens (since the full review of step 25's
+/// third pull request).
+#[must_use]
+pub fn app_first_run_prompted(
+    now: Instant,
+    setup: &FakeSetup,
+    columns: usize,
+    rows: usize,
+    prompt: &str,
+) -> (App, Scripted) {
+    first_run_app(now, Arc::new(setup.clone()), columns, rows, Some(prompt))
+}
+
+/// As [`app_first_run`], on a program of the test's own: one that holds
+/// an answer until the test lets it go, say (since the full review of
+/// step 25's third pull request).
+#[must_use]
+pub fn app_first_run_on(
+    now: Instant,
+    setup: Arc<dyn crate::app::Setup>,
+    columns: usize,
+    rows: usize,
+) -> (App, Scripted) {
+    first_run_app(now, setup, columns, rows, None)
+}
+
+fn first_run_app(
+    now: Instant,
+    setup: Arc<dyn crate::app::Setup>,
+    columns: usize,
+    rows: usize,
+    prompt: Option<&str>,
+) -> (App, Scripted) {
     let link = Scripted::default();
     let start = Start {
         version: "0.1.0".to_owned(),
@@ -437,7 +474,7 @@ pub fn app_first_run(
             settings: SessionSettings::default(),
             ephemeral: false,
         },
-        prompt: None,
+        prompt: prompt.map(str::to_owned),
         settings: Settings::default(),
         keymap: KeyMap::defaults(),
         notices: Vec::new(),
@@ -445,7 +482,7 @@ pub fn app_first_run(
         highlighter: Highlighter::off(),
         restyle: None,
         export: None,
-        setup: Some(Arc::new(setup.clone())),
+        setup: Some(setup),
     };
     let app = App::new(
         Box::new(link.clone()),

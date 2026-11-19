@@ -247,6 +247,8 @@ pub(super) fn compose(spec: Spec, background: Rgb, opened: SessionState) -> Scre
     drive.key(KeyCode::Down);
     drive.key(KeyCode::Char(' '));
     drive.answer();
+    // Its servers came: the step's grace starts again.
+    let _ = drive.ready();
     drive.key(KeyCode::Down);
     drive.key(KeyCode::Char(' '));
     let live = drive.frame();
