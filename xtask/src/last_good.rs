@@ -440,7 +440,7 @@ pub(crate) fn keep_after_success() {
     // Only a checkout's own build is its last good copy: one built from
     // another checkout's source (a shared target folder) is not.
     let root = workspace::root();
-    if workspace::normalised(&root) != workspace::normalised(&workspace::built_in()) {
+    if !workspace::same_tree(&root, &workspace::built_in()) {
         return;
     }
     if let Err(message) = refresh(&root, &exe, now(), || describe_tree(&root)) {
