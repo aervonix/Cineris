@@ -440,6 +440,11 @@ fn the_check_finds_a_label_built_on_the_old_alias() {
         "let as_cx = help(topic, \"cin\");",
         "`CX_RERUN_SET`",
         "/tmp/cxs-{test}",
+        "let scratch = Scratch::new(\"cxpipe\");",
+        "const NAME: &str = \"cxstats\";",
+        "let h = Rerun::this_test().env(\"CXPIPE\", x);",
+        "let name = \"cxterm_handoff\";",
+        "/tmp/cxs/x and cxtui.log",
     ] {
         let page = format!("# Cineris\n\n{text}\n");
         let found = violations("crates/cineris-x/tests/it/main.rs", page.as_bytes());
@@ -474,7 +479,8 @@ fn words_that_only_look_like_a_label_are_not_one() {
         "poll_fn(|cx| waits.poll(cx)); let cx = Cx::new(); fn has_cx() {} as_cxs",
         "a CX of two, cx of three, the tcx",
         "Run `cin` as cintui-signals= or CINTUI_SCRATCH or CINERIS_LOG.",
-        "a CX=1 and cx=2",
+        "a CX=1 and cx=2 and cxScreen and SM_CXSCREEN and cx_that_is_a_variable",
+        "CXX and cxx_flags and cxxbridge",
     ] {
         let found = violations("crates/cineris-x/src/lib.rs", text.as_bytes());
         assert!(found.is_empty(), "{text}: {found:?}");

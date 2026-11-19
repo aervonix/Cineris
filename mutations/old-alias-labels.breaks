@@ -2,20 +2,20 @@
 # them out: `cargo xtask rename --check`.
 
 [break] an-upper-case-label-passes-the-check
-rule: A label of capitals and an underscore built on the old alias (an environment variable of a test) fails the check.
+rule: A label of capitals built on the old alias (an environment variable of a test, with or without an underscore) fails the check.
 file: xtask/src/rename.rs
 in: is_label
-find: !rest.starts_with('X') && rest.as_bytes().get(capitals) == Some(&b'_')
-replace: !rest.starts_with('X') && rest.as_bytes().get(capitals) == Some(&b'#')
+find: byte == b'_' || (byte.is_ascii_uppercase() && byte != b'X')
+replace: byte == b'_'
 caught-by:
     rename::tests::the_check_finds_a_label_built_on_the_old_alias
 
 [break] a-lower-case-label-passes-the-check
-rule: A mark or a name built on the old alias (a test kit role's mark, a name being made) fails the check.
+rule: A mark, a name or a scratch name built on the old alias (a test kit role's mark, a quoted name) fails the check.
 file: xtask/src/rename.rs
 in: is_label
-find: matches!(rest.as_bytes().get(letters), Some(b'-' | b'=' | b'{'))
-replace: matches!(rest.as_bytes().get(letters), Some(b'#'))
+find: byte.is_ascii_lowercase() && byte != b'x'
+replace: byte == b'#'
 caught-by:
     rename::tests::the_check_finds_a_label_built_on_the_old_alias
 
@@ -29,10 +29,19 @@ caught-by:
     rename::tests::the_check_finds_a_label_built_on_the_old_alias
 
 [break] cxx-is-a-label
-rule: The C++ extension and the compiler's variables are not labels of the old alias.
+rule: The C++ extension and its lower-case names are not labels of the old alias.
 file: xtask/src/rename.rs
 in: is_label
-find: && !rest.starts_with('x')
+find: && byte != b'x'
+replace: && true
+caught-by:
+    rename::tests::words_that_only_look_like_a_label_are_not_one
+
+[break] upper-case-cxx-is-a-label
+rule: The compiler's variables (the C++ compiler's name and its flags) are not labels of the old alias.
+file: xtask/src/rename.rs
+in: is_label
+find: && byte != b'X'
 replace: && true
 caught-by:
     rename::tests::words_that_only_look_like_a_label_are_not_one

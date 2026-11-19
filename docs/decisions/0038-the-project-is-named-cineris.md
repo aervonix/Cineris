@@ -50,7 +50,7 @@ The `-dev` folders are named so that none of the developer's files sits inside a
 
 - Nothing reads an old name after the rename: no old folder, environment variable, git key or credential entry is accepted, and none is moved. Formats keep their versions: a rename alone is not a format change.
 - Git history is not rewritten. Commits before the rename keep the old names and the old identity.
-- `cargo xtask rename` made the change ([CONTRIBUTING.md](../../CONTRIBUTING.md), "Renaming the project"). Its table is the one place the old and new names are listed side by side. `cargo xtask rename --check`, run by the repo rules in the lint job, fails on an old name outside a short list of kept files and lines, each kept with its reason: the tool itself, 0013, this record, the rename's own step record, 0013's row in the decisions index, and the build plan's row about the clash. `rename branch` brings a branch made before the rename across.
+- `cargo xtask rename` made the change ([CONTRIBUTING.md](../../CONTRIBUTING.md), "Renaming the project"). Its table is the one place the old and new names are listed side by side. `cargo xtask rename --check`, run by the repo rules in the lint job, fails on an old name outside a short list of kept files and lines, each kept with its reason: the tool itself, 0013, this record, the rename's own step record, the record of the labels renamed after it, 0013's row in the decisions index, and the build plan's row about the clash. `rename branch` brings a branch made before the rename across.
 
 ### How the alias ships
 
