@@ -98,6 +98,13 @@ The three rules run inside `rules` and `links`, in the lint job. Locally, `cargo
 - the `reaped` mark's test now marks the earlier of two children, which the break could not tell apart;
 - the mouse's exemption has a second guard (a key never ends in `M`), so its break is `expect: survives`.
 
+The run after the review's fixes had 38 breaks: 34 did what the list expects, and four were flagged.
+- Two named a sandbox test without its binary (`cineris-sandbox::it`). Once named rightly, both were caught.
+- The whole-word break is now caught by the plural test: the overlap merge hides it from its first test.
+- The tree-or-roll break was caught only when the roll kept the child after the tree did, which is a race. A unit test in `cineris-base` now keeps a child both ways round, and catches it every time.
+
+All 38 now do what the list expects.
+
 ## Open
 
 - Rust comments still hold the private words; a rule for them would need comments told apart from the product's own uses, and is left.

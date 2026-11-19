@@ -10,7 +10,7 @@ in: whole
 find: (!first || !before.is_some_and(word_char)) && (!last || ends)
 replace: true
 caught-by:
-    rules::public_words::tests::words_are_whole_and_a_cased_word_keeps_its_case
+    rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found
 
 [break] public-words-cased-word-in-any-case
 rule: A `cased` word matches only in its own case, so the product's Coordinator is not the maintainers'.
@@ -182,7 +182,7 @@ in: children::reaped
 find: .rposition(|record| open(record) && record.tracked)
 replace: .rposition(|record| open(record))
 caught-by:
-    cineris-sandbox tree::sys_a_command_runs_and_says_how_it_ended
+    cineris-base hook::children_tests::a_child_kept_twice_has_its_exit_marked_on_the_starters_record
 
 [break] children-tree-not-kept
 rule: The sandbox's tree keeps each command it starts for the timeout report, as one whose wait it marks.
@@ -191,7 +191,7 @@ in: Tree::spawn_limited
 find: cineris_base::hook::spawned_tracked(inner.id(), described);
 replace: let _ = described;
 caught-by:
-    cineris-sandbox tree::sys_a_command_runs_and_says_how_it_ended
+    cineris-sandbox::it tree::sys_a_command_runs_and_says_how_it_ended
 
 [break] children-tree-wait-not-marked
 rule: The tree marks its command's exit when its wait returns.
@@ -200,7 +200,7 @@ in: Tree::wait
 find: cineris_base::hook::reaped(self.inner.id());
 replace: let _ = self;
 caught-by:
-    cineris-sandbox tree::sys_a_command_runs_and_says_how_it_ended
+    cineris-sandbox::it tree::sys_a_command_runs_and_says_how_it_ended
 
 [break] children-git-not-kept
 rule: The harness's git is kept for the timeout report, with the command line that was started.

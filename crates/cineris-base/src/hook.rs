@@ -1619,7 +1619,28 @@ mod refusal_tests {
 
 #[cfg(all(test, feature = "test-hooks"))]
 mod children_tests {
-    use super::{describe_line, reaped, spawned, spawned_children};
+    use super::{describe_line, reaped, spawned, spawned_children, spawned_tracked};
+
+    /// A child kept twice, by the code that started it and marks its wait
+    /// and by a roll it reported to, in either order: its exit is marked on
+    /// the starter's record.
+    #[test]
+    fn a_child_kept_twice_has_its_exit_marked_on_the_starters_record() {
+        for (pid, roll_first) in [(4_000_101, true), (4_000_102, false)] {
+            let roll = || spawned(pid, describe_line("(the roll's child)", &[]));
+            if roll_first {
+                roll();
+            }
+            spawned_tracked(pid, describe_line("command", &[]));
+            if !roll_first {
+                roll();
+            }
+            reaped(pid);
+            let kept = spawned_children();
+            let tracked = kept.iter().find(|c| c.pid == pid && c.tracked).unwrap();
+            assert!(tracked.reaped_after.is_some(), "roll first: {roll_first}");
+        }
+    }
 
     /// A child is kept with its command, and its exit once the code that
     /// started it saw one; the latest of one id is the one reaped.
