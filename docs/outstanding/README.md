@@ -182,7 +182,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [timeout-report-for-tests-without-the-test-kit](timeout-report-for-tests-without-the-test-kit.md): A test using none of the test kit's waits gets no timeout report, since nextest lacks pre-timeout scripts. Owner: a later tooling step.
 - [typed-values-in-composite-actions](typed-values-in-composite-actions.md): The repo rule against event values in scripts reads `.github/workflows/` only, not composite actions under `.github/actions/`. Owner: a later tooling step.
 - [windows-tier-2-at-its-budget](windows-tier-2-at-its-budget.md): Windows' tier 2 is at its 40 s budget on the slower hosted runners: `main` alone reads 97% of it, and step 27's second pull request takes it past. Owner: the owner (the budget), then a tooling step.
-- [xtask-is-rooted-where-it-was-built](xtask-is-rooted-where-it-was-built.md): `cargo xtask` finds the repository from where its binary was built, not from the current directory, so a binary built in one checkout and run from another checks the first one's tree. Owner: the coordinator.
 
 ### Windows
 
