@@ -10,8 +10,9 @@
 # size job (docs/testing-and-ci.md, "Each pull request's binary size"). A
 # pull request whose every file is documentation (as above, the generated
 # files included: they are written from the code, not read by it), a list
-# of breaks (`mutations/**`), the developer commands (`xtask/**`) or a
-# workflow (`.github/workflows/**`) cannot. The files of `xtask` that build
+# of breaks (`mutations/**`), the developer commands (`xtask/**`), a
+# workflow (`.github/workflows/**`) or a workflow's script
+# (`.github/scripts/**`) cannot. The files of `xtask` that build
 # the shipped binary and judge it count: `shipped.rs` (how it is built),
 # `nonblocking.rs` (`size`, the budgets and the verdict), `steps.rs` (how
 # cargo is run), `workspace.rs` (the workspace and target folders) and
@@ -68,7 +69,7 @@ runs:
                 # its own pull request before it merges.
                 .github/workflows/ci.yml | .github/workflows/main.yml | \
                 .github/actions/changes/*) code=true; binary=true ;;
-                mutations/* | xtask/* | .github/workflows/*) code=true ;;
+                mutations/* | xtask/* | .github/workflows/* | .github/scripts/*) code=true ;;
                 *) code=true; binary=true ;;
               esac
             done <<< "$files"

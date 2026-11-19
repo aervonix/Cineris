@@ -130,7 +130,34 @@ jobs:
             os: ubuntu-latest
           - name: windows
             os: windows-latest
+    env:
+      # The build of the workspace's own crates, which the Windows job caches
+      # beside rust-cache's third-party crates (docs/testing-and-ci.md, "The
+      # workspace's own build, cached"): every file cargo made for a
+      # `cineris-*` crate or xtask, by its package's name (`.fingerprint`,
+      # `build`) or its target's (`deps`: the libraries and test binaries,
+      # `it` and `system` among them), in the `ci` profile the tests build in
+      # and the `dev` one `cargo run --package xtask` builds xtask in. A file
+      # these miss is not cached, and is built again: a miss costs time, never
+      # a stale build.
+      WORKSPACE_BUILD: |
+        target/ci/.fingerprint/cineris-*
+        target/ci/.fingerprint/xtask-*
+        target/ci/build/cineris-*
+        target/ci/deps/cineris*
+        target/ci/deps/libcineris*
+        target/ci/deps/xtask*
+        target/ci/deps/it-*
+        target/ci/deps/system-*
+        target/ci/examples
+        target/ci/cineris*
+        target/ci/xtask*
+        target/debug/.fingerprint/xtask-*
+        target/debug/deps/xtask*
+        target/debug/xtask*
     steps:
+      # Two commits deep, for .github/actions/changes; dating the files
+      # against a restored build fetches the one commit it needs.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 2
@@ -162,9 +189,45 @@ jobs:
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-nextest@0.9.151
+      # The build of the workspace's own crates that the main branch saved
+      # last (the last step below), on Windows, where building them is most
+      # of the job: a pull request then builds only the crates it changes and
+      # what depends on them. Every run but the main branch's reads it; the
+      # main branch builds every crate afresh and saves that, so a saved
+      # build is always one commit's whole build. Only the main branch
+      # writes it, as with rust-cache.
+      - name: Restore the main branch's build of the workspace's crates (Windows)
+        id: workspace-build
+        if: runner.os == 'Windows' && steps.changes.outputs.code == 'true' && github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.WORKSPACE_BUILD }}
+          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ github.sha }}
+          restore-keys: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+      # Cargo judges a workspace crate's build by its files' dates, and a
+      # checkout dates every file now: this dates them against the commit the
+      # restored build was made from, which its key ends in, so that what
+      # differs from it is rebuilt and nothing else. Anything it cannot work
+      # out leaves the dates alone, and everything is rebuilt.
+      - name: Date the checkout against that build (Windows)
+        if: steps.workspace-build.outcome == 'success'
+        shell: bash
+        env:
+          RESTORED: ${{ steps.workspace-build.outputs.cache-matched-key }}
+        run: bash .github/scripts/date-the-checkout.sh "$RESTORED"
       - name: Tests
         if: steps.changes.outputs.code == 'true'
         run: cargo run --locked --quiet --package xtask -- ci test
+      # Said before anything else runs, so that a job the time limit cuts off
+      # after this (while it uploads the report, say) is told apart from one
+      # whose tests failed: the notice is on the run's page and in its
+      # annotations.
+      - name: Say that every test passed
+        if: success() && steps.changes.outputs.code == 'true'
+        shell: bash
+        env:
+          JOB: test-${{ matrix.name }}
+        run: echo "::notice title=$JOB::Every test passed. A cancellation after this is the job's time limit, not a failure."
       # Every test's time, which the log does not show for a test under two
       # seconds. `cargo xtask ci --tiers --from junit.xml` reads it
       # (docs/testing-and-ci.md, "A CI run's test times"). It is kept when
@@ -177,6 +240,15 @@ jobs:
           path: target/nextest/ci/junit.xml
           if-no-files-found: ignore
           retention-days: 14
+      # The main branch's build of the workspace's crates, for the runs
+      # after it to restore (above), under a key that ends in its commit.
+      # Saved when the tests passed: the build is whole then.
+      - name: Save this build of the workspace's crates (Windows, main branch)
+        if: success() && runner.os == 'Windows' && steps.changes.outputs.code == 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.WORKSPACE_BUILD }}
+          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ github.sha }}
 
   # Not a required check, and not one of the blocking jobs: the shipped
   # binary's size on each system, against its budget and against the size
