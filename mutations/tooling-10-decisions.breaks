@@ -11,7 +11,7 @@ find: managed: matches!(hit.by, By::Rule(rule) if rule.source == RuleSource::Man
 replace: managed: false
 packages: cineris-policy, cineris-core
 caught-by:
-    cineris-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
+    cineris-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run
 
 [break] managed-ask-lets-the-users-line-run
 rule: The verifier holds back the user's own line where a managed `ask` rule is among what asks.
@@ -19,7 +19,7 @@ file: crates/cineris-core/src/verify.rs
 find: Decision::Ask if managed =>
 replace: Decision::Ask if managed && false =>
 caught-by:
-    verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
+    verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run
 
 [break] any-ask-holds-the-users-line-back
 rule: A user's own `ask` rule does not hold back the user's own line: only the managed configuration's does.
@@ -28,8 +28,9 @@ in: Finding::asked_by
 find: matches!(hit.by, By::Rule(rule) if rule.source == RuleSource::Managed)
 replace: matches!(hit.by, By::Rule(_))
 packages: cineris-policy, cineris-core
+os: linux
 caught-by:
-    cineris-core::it verify::a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does
+    cineris-core::it verify::sys_a_users_own_ask_rule_does_not_hold_back_their_check
 
 [break] managed-ask-loses-a-tie
 rule: Of rules of one strength the managed configuration's is the hit, so a managed `ask` beside another layer's `ask` on the same call is still marked.

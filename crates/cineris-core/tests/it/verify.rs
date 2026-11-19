@@ -267,47 +267,72 @@ fn a_users_check_that_a_rule_refuses_does_not_run() {
     });
 }
 
-/// The user's own line runs where the engine would ask, as the user's word:
-/// but not where the `ask` is the managed configuration's, an
-/// administrator's word that a person decides each time (the owner's
-/// decision of 2026-11-16). A user's own `ask` rule does not hold it back.
+/// An `ask` rule for the user's check line `./check`, in whichever file the
+/// test puts it.
+const ASK_ABOUT_THE_CHECK: &str =
+    "\n[[permissions.rules]]\neffect = \"exec\"\nmatch = \"./check\"\naction = \"ask\"\n";
+
+/// The user's own line does not run where the `ask` is the managed
+/// configuration's, an administrator's word that a person decides each time
+/// (the owner's decision of 2026-11-16). Held back, it starts nothing.
 #[test]
-fn a_users_check_a_managed_ask_rule_asks_about_does_not_run_and_a_users_own_ask_does() {
-    const ASK: &str = "\n[[permissions.rules]]\neffect = \"exec\"\nmatch = \
-                       \"./missing-check\"\naction = \"ask\"\n";
-    for (label, managed) in [("verify_managed_ask", true), ("verify_users_ask", false)] {
-        let world = World::new(label, [writes("c1", "a.txt"), says("Done.")]);
-        // The line names no program: run, it fails; held back, it is not run.
-        if managed {
-            user_checks(&world, &["./missing-check"], "");
-            let file = world.dirs().managed_config.unwrap();
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(&file, ASK).unwrap();
-        } else {
-            user_checks(&world, &["./missing-check"], ASK);
-        }
-        let core = world.core_with(|options| options.trust_project = true);
-        world.run(async {
-            let front = Front::start(&world, &core).await;
-            let _ = front.turn("change it").await;
-            let finished = told(&front).pop().expect("a finished round");
-            let check = &finished.checks[0];
-            if managed {
-                assert_eq!(check.outcome, Some(CheckOutcome::NotRun), "{finished:?}");
-                assert!(
-                    check
-                        .note
-                        .as_deref()
-                        .is_some_and(|note| note.contains("a rule of the managed configuration")),
-                    "{finished:?}"
-                );
-            } else {
-                assert_ne!(check.outcome, Some(CheckOutcome::NotRun), "{finished:?}");
-            }
-            assert!(front.approvals().is_empty(), "a check never asks");
-            front.close().await;
-        });
-    }
+fn a_users_check_a_managed_ask_rule_asks_about_does_not_run() {
+    let world = World::new("verify_managed_ask", [writes("c1", "a.txt"), says("Done.")]);
+    // No program is there by the line's name: run, it would fail.
+    user_checks(&world, &["./check"], "");
+    let file = world.dirs().managed_config.unwrap();
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, ASK_ABOUT_THE_CHECK).unwrap();
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let ended = front.turn("change it").await;
+        assert_eq!(ended.verification, Some(Verification::Skipped));
+        let finished = told(&front).pop().expect("a finished round");
+        let check = &finished.checks[0];
+        assert_eq!(check.outcome, Some(CheckOutcome::NotRun), "{finished:?}");
+        assert!(
+            check
+                .note
+                .as_deref()
+                .is_some_and(|note| note.contains("a rule of the managed configuration")),
+            "{finished:?}"
+        );
+        assert!(front.approvals().is_empty(), "a check never asks");
+        front.close().await;
+    });
+}
+
+/// The user's own line runs where the engine would ask, as the user's word,
+/// and a user's own `ask` rule does not hold it back. It runs, so it starts
+/// a shell: a system test, as this file's others are. Until the flaky-test
+/// fixes it was half of a test of the tier with a 10 s limit, and on a
+/// loaded Windows runner the shell did not end inside it
+/// (`docs/steps/flaky-test-fixes/answered.md`).
+#[cfg(unix)]
+#[test]
+fn sys_a_users_own_ask_rule_does_not_hold_back_their_check() {
+    let world = World::new("verify_users_ask", [writes("c1", "a.txt"), says("Done.")]);
+    let check = program(&world, "check", "exit 0", "exit /b 0");
+    user_checks(&world, &[&check], ASK_ABOUT_THE_CHECK);
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let ended = front.turn("change it").await;
+        assert_eq!(ended.verification, Some(Verification::Passed));
+        assert_eq!(
+            rounds(&front),
+            [
+                (VerificationPhase::Started, vec![(check.clone(), None)]),
+                (
+                    VerificationPhase::Finished,
+                    vec![(check.clone(), Some(CheckOutcome::Passed))]
+                ),
+            ]
+        );
+        assert!(front.approvals().is_empty(), "a check never asks");
+        front.close().await;
+    });
 }
 
 #[test]
