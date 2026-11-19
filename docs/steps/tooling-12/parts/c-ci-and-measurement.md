@@ -91,6 +91,20 @@ try-linux        success  cargo xtask size --check --against-main --target x86_6
 
 - The scratch branch of the job A/B (`tooling-12-c-try`), which held the two trial setups, is deleted.
 
+## The rebase onto main
+
+After the first and second parts were merged, this branch was rebased onto `main` at `d6f07ee9` with the second part's `cargo xtask rebase --no-regen`, its `xtask` built from `main`'s tree, the generators run after it on their own. Its output, but for its first line, which names the folders it ran from and was built in:
+
+```text
+Stopped at 04284ea7 Run the checks before a pull request as one try run, and time a whole job two ways:
+  united    xtask/src/main.rs: both sides' additions at 1 place(s); every line of both kept, and checked
+Rebased tooling-12-c onto origin/main: every conflict settled.
+docs/outstanding/README.md is up to date.
+The tip before was 55e08b54f07a: `git reset --keep 55e08b54f07a` takes the branch back to it.
+```
+
+The one conflict was `xtask/src/main.rs`'s usage, both sides' lines added at one place; the command settled it and checked it. `docs/testing-and-ci.md` and `AGENTS.md` merged without a conflict. `cargo xtask outstanding` wrote the index again after the open item below was added.
+
 ## The pre-push review
 
 An independent review of the branch before its pull request found ten things. Findings 1 and 2 are the step's own bar: a measurement that compares unlike things.
@@ -125,6 +139,6 @@ None: `ci.yml` is not changed. The new tests are pure functions in `xtask`'s uni
 
 ## Left open
 
-- The part record needs the step's `answered.md` to link `parts/` before `cargo xtask rules` passes on this branch alone.
+- [A commit settled to nothing by hand in `cargo xtask rebase`](../../../outstanding/a-commit-settled-to-nothing-by-hand-in-a-rebase.md) is dropped by git and not named in its report: an open item of its own, for the maintainers.
 - `cineris-tui`'s `clock` field, dead in a build without `test-kit` (above), is a product fix for another step.
 - `ab --job` cleans `target/ci` and `target/tmp`; a build in another profile or for another target triple would need its folder named too.
