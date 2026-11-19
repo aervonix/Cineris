@@ -40,7 +40,8 @@ COMMAND is one of:
   test --job [--setup-base FILE] [--setup-head FILE] [--keep-build] [-p CRATE]...
                                    with --against: `ab --job`, the whole job
                                    (build, then the tests) of both trees,
-                                   --count rounds (3 when not given), each
+                                   --count rounds (2 when not given; an even
+                                   number, each side first as often), each
                                    side with its own setup script, and the
                                    median of each phase
   final                            what --final runs (each job is told its
@@ -1319,7 +1320,7 @@ const MUTATE_STEP_MINUTES: u64 = 80;
 
 /// The room a `mutate --budget` leaves within its step: the baselines of
 /// the class it is in, and the breaks under way when the budget is spent.
-const MUTATE_BUDGET_ROOM: u64 = 20;
+const MUTATE_BUDGET_ROOM: u64 = 30;
 
 /// Refuses a `mutate --budget` longer than its step's limit allows: such a
 /// run would be stopped by the runner, and everything it found lost.
@@ -2732,12 +2733,12 @@ mod tests {
             Ok("mutate --minutes 0 step-12 --budget 30m".to_owned())
         );
         assert_eq!(
-            try_command(&["--command", "mutate step-12 --budget 1h"]),
-            Ok("mutate --minutes 0 step-12 --budget 1h".to_owned()),
+            try_command(&["--command", "mutate step-12 --budget 50m"]),
+            Ok("mutate --minutes 0 step-12 --budget 50m".to_owned()),
             "the most a try run's budget may be"
         );
-        let error = try_command(&["--command", "mutate step-12 --budget 61m"]).unwrap_err();
-        assert!(error.contains("60 minutes at most"), "{error}");
+        let error = try_command(&["--command", "mutate step-12 --budget 51m"]).unwrap_err();
+        assert!(error.contains("50 minutes at most"), "{error}");
         assert!(try_command(&["--command", "mutate step-12 --budget soon"]).is_err());
         for (arguments, expected) in [
             (
@@ -3664,12 +3665,12 @@ mod tests {
             2
         );
         assert!(workflow.contains(
-            "timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 240 || (startsWith(inputs.command, 'mutate') && 90 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 60 || 40)) }}"
+            "timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 240 || (startsWith(inputs.command, 'mutate') && 90 || ((inputs.command == 'final' || inputs.against != '') && 60 || 45)) }}"
         ));
         assert_eq!(
             workflow
                 .matches(
-                    "timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 50 || 30)) }}"
+                    "timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || inputs.against != '') && 50 || 35)) }}"
                 )
                 .count(),
             2,
