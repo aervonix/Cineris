@@ -2768,9 +2768,9 @@ caught-by:
 [break] an-addresss-query-credential-is-shown
 rule: A query field of an address whose name says it is a credential is shown masked.
 file: crates/cineris-config/src/import.rs
-in: masked_query
-find: Some((name, value)) if names_a_secret(name) && Masked::of(value) != Masked::No =>
-replace: Some((name, value)) if false && names_a_secret(name) && Masked::of(value) != Masked::No =>
+in: masked_fields
+find: if names_a_secret(name) && Masked::in_address(value) != Masked::No =>
+replace: if false && names_a_secret(name) && Masked::in_address(value) != Masked::No =>
 caught-by:
     cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
 
@@ -3113,7 +3113,7 @@ caught-by:
 rule: The run's own configuration names the provider beside its model only when another provider has a model of its id, as the file does (M-A).
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: chosen_config
-find: if chosen.model_shared && let Some(provider) = &chosen.provider
+find: if (chosen.model_shared || over_found) && let Some(provider) = &chosen.provider
 replace: if let Some(provider) = &chosen.provider
 caught-by:
     cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
@@ -3219,17 +3219,25 @@ rule: A value under a credential's name that is not one token refuses its server
 file: crates/cineris-config/src/import.rs
 packages: cineris-config, cineris-cli
 in: server
-find: } else if launch_view(&server.launch).1 == Masked::Loose {
+find: } else if launch_view(&server.launch, &server.places).1 == Masked::Loose {
 replace: } else if false {
 caught-by:
     cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
     cineris-cli::bin/cineris setup::tests::a_loose_value_under_a_credentials_name_says_to_move_it
 
 [break] a-place-name-hides-its-value
-rule: The value of a name that ends in url or dir names a place, and is shown (settled by the coordinator, after the review of the fixes).
+rule: The value of a name that ends in url names a place, and is shown (settled by the coordinator, after the review of the fixes); `dir` has a break of its own since the final review.
 file: crates/cineris-config/src/import.rs
-find: "file", "path", "url", "dir"
-replace: "file", "path"
+find: "path", "url", "dir"
+replace: "path", "dir"
+caught-by:
+    cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
+
+[break] a-dir-name-hides-its-value
+rule: The value of a name that ends in dir names a place, and is shown, a token too: `--secrets-dir secrets` (the final review).
+file: crates/cineris-config/src/import.rs
+find: "url", "dir", "uri"
+replace: "url", "uri"
 caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
@@ -3327,8 +3335,8 @@ caught-by:
 rule: A label longer than its column wraps in it, so that its row is drawn whole and can be accepted at 80 columns (settled by the coordinator, after the review of the fixes).
 file: crates/cineris-tui/src/view/setup.rs
 in: row_lines
-find: let label = wrap(&[Span::new(one_line(&row.label), label_style)], column);
-replace: let label = vec![cut(&Line::styled(one_line(&row.label), label_style), column, look.glyphs.ellipsis)];
+find: hard_wrap(&one_line(&row.label), column)
+replace: vec![cut(&Line::plain(one_line(&row.label)), column, look.glyphs.ellipsis).text().into_owned()]
 caught-by:
     cineris-tui view::setup::tests::a_label_longer_than_its_column_wraps_and_the_row_is_whole
     cineris-tui app::tests::first_run::a_long_label_wraps_and_is_accepted_at_80_columns
@@ -3342,8 +3350,8 @@ caught-by:
 rule: A token is ASCII letters and digits and `-._~+=:%@`: a `;` is a shell's, and its value refuses its server (Medium 1).
 file: crates/cineris-config/src/import.rs
 in: token_character
-find: '%' | '@'
-replace: '%' | '@' | ';'
+find: ':' | '@'
+replace: ':' | '@' | ';'
 caught-by:
     cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
     cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
@@ -3352,8 +3360,8 @@ caught-by:
 rule: A token is made of a token's characters only: a script with no white space is not one (Medium 1).
 file: crates/cineris-config/src/import.rs
 in: token_shaped
-find: value.chars().all(token_character)
-replace: !value.chars().any(char::is_whitespace)
+find: .all(|character| token_character(character, in_address))
+replace: .all(|character| !character.is_whitespace())
 caught-by:
     cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
 
@@ -3401,11 +3409,11 @@ caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
 [break] a-path-under-a-key-name-is-refused
-rule: A path under a key's name is a place, and is shown (the coordinator's answer).
+rule: A relative path under a key's name is a place, and is shown (the coordinator's answer).
 file: crates/cineris-config/src/import.rs
 in: Masked::of
-find: } else if path_shaped(value) {
-replace: } else if false {
+find: Some(PathForm::Relative) => true
+replace: Some(PathForm::Relative) => false
 caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
@@ -3465,6 +3473,127 @@ find: .is_some_and(|model| self.core.model_shared(model))
 replace: .is_some_and(|_| false)
 caught-by:
     cineris-cli::bin/cineris setup::tests::a_providers_model_is_shared_when_another_provider_has_its_id
+
+# ------------- the final review (Opus) of these fixes, and the coordinator's
+# rule for places (docs/steps/25/parts/pr3-first-run.md, "The review of the
+# fixes (Opus)", settled by the coordinator)
+
+[break] every-rooted-value-is-a-place
+rule: A rooted path under a credential's name is a place only where it names a file or directory that exists: a base64 secret begins with `/` one time in 64 (settled by the coordinator).
+file: crates/cineris-config/src/import.rs
+in: Masked::of
+find: Some(PathForm::Rooted) => places.iter().any(|place| place == value)
+replace: Some(PathForm::Rooted) => true
+caught-by:
+    cineris-config import::tests::a_rooted_path_is_a_place_only_where_it_exists
+
+[break] an-existing-path-is-not-found
+rule: The reader asks the disk, by metadata, whether a rooted path exists, `~` the home directory (settled by the coordinator).
+file: crates/cineris-config/src/import.rs
+in: server
+find: path_form(value) == Some(PathForm::Rooted) && places.exists(value)
+replace: path_form(value) == Some(PathForm::Rooted) && false
+caught-by:
+    cineris-config import::tests::a_rooted_path_is_a_place_only_where_it_exists
+
+[break] a-percent-is-a-tokens-in-an-argument
+rule: `%` is a token's only in an address's query or fragment: `cmd /c` expands `%NAME%` in an argument (the final review).
+file: crates/cineris-config/src/import.rs
+in: token_character
+find: (in_address && character == '%')
+replace: character == '%'
+caught-by:
+    cineris-config import::tests::a_percent_is_a_tokens_only_in_an_address
+
+[break] mysql-pwd-is-shown
+rule: `pwd` is a credential's word as the last of two or more: `MYSQL_PWD` (the final review).
+file: crates/cineris-config/src/import.rs
+in: names_a_secret
+find: (words.len() > 1 && last == "pwd") || words.iter()
+replace: words.iter()
+caught-by:
+    cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
+
+[break] pwd-alone-names-a-credential
+rule: `PWD` alone is the shell's working directory, not a password (the final review).
+file: crates/cineris-config/src/import.rs
+in: names_a_secret
+find: words.len() > 1 && last == "pwd"
+replace: last == "pwd"
+caught-by:
+    cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
+
+[break] a-fragments-credential-is-shown
+rule: A credential in an address's fragment is masked as one in its query: `#access_token=…` (the final review).
+file: crates/cineris-config/src/import.rs
+in: masked_query
+find: let (fields, masked) = masked_fields(part);
+replace: let (fields, masked) = if mark == '#' { (part.to_owned(), Masked::No) } else { masked_fields(part) };
+caught-by:
+    cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
+
+[break] an-addresss-first-field-is-taken-for-a-name
+rule: An address's first `=` is in its query or fragment, not after a credential's name: `https://h/cb#access_token=…&state=…` keeps its other fields (the final review).
+file: crates/cineris-config/src/import.rs
+in: launch_view
+find: && !name.contains("://")
+replace:
+caught-by:
+    cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
+
+[break] a-semicolon-does-not-separate-fields
+rule: A query's or a fragment's fields are separated by `&` or `;` (the final review).
+file: crates/cineris-config/src/import.rs
+in: masked_fields
+find: rest.find(['&', ';'])
+replace: rest.find('&')
+caught-by:
+    cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
+
+[break] a-wrapped-label-drops-its-white-space
+rule: A label longer than its column is cut a character at a time, its white space drawn at the break (the final review).
+file: crates/cineris-tui/src/view/setup.rs
+in: row_lines
+find: hard_wrap(&one_line(&row.label), column)
+replace: wrap(&[Span::plain(one_line(&row.label))], column).iter().map(|line| line.text().into_owned()).collect::<Vec<_>>()
+caught-by:
+    cineris-tui view::setup::tests::a_wrapped_labels_white_space_is_drawn_at_the_break
+
+[break] a-found-file-unread-is-said-written
+rule: A file found at the name that cannot be read is said not read, not written (the final review).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_done
+find: self.say(&if found {
+replace: self.say(&if false {
+caught-by:
+    cineris-tui app::tests::first_run::a_file_found_that_cannot_be_read_is_said_so
+
+[break] the-found-files-path-is-not-named
+rule: A file found at the name that cannot be read is named by its path (the final review).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_done
+find: Some(Ok(path) | Err(NotWritten::Found(path))) => one_line(&path)
+replace: Some(Ok(path)) => one_line(&path)
+caught-by:
+    cineris-tui app::tests::first_run::a_file_found_that_cannot_be_read_is_said_so
+
+[break] a-found-file-unread-is-said-in-force
+rule: The last line does not say a file found at the name is in force when it could not be read (the final review).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: saved
+find: Some(Err(NotWritten::Found(path))) if run.found_unread =>
+replace: Some(Err(NotWritten::Found(path))) if false =>
+caught-by:
+    cineris-tui app::tests::first_run::a_file_found_that_cannot_be_read_is_said_so
+
+[break] the-chosen-provider-is-not-named-over-a-found-file
+rule: Over a file found at the name, the run's own configuration names the chosen provider beside the chosen model (the final review).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_open
+find: self.run_config = chosen_config(&run.chosen, found);
+replace: self.run_config = chosen_config(&run.chosen, false);
+caught-by:
+    cineris-tui app::tests::first_run::a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it
 
 # From mutations/step-25-detect.breaks (part `detect`).
 # Step 25's third pull request, the fixes of its full review in one group:
