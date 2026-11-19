@@ -100,7 +100,52 @@ An independent review read the branch before its pull request. Each finding it c
 
 The real rebase's union (a row after a reworded row) is still kept: the reworded row is a replacement of one line by eight, and the branch's row is after it.
 
-REVIEW_RUNS
+Two more faults were found while the fixes were shown, and are fixed with them: `--abort`'s report began "Rebased HEAD onto origin/main with no conflict." (it now says only that the rebase was aborted; the abort `sys_` test holds the whole text), and prose's refusal named a blank line as two backticks (it now says "a blank line"; the prose test holds it).
+
+**The command run again after the fixes**, with the binary built from this branch, on three throwaway branches of this checkout, each deleted after:
+
+1. **Every fixture shape at once.** A commit put each fixture's base in `scratch-demo/fixtures/`, one branch on it each fixture's side rebased onto, another each one's other side; the second rebased onto the first. The four shapes the last wave met are united, the CRLF table among them; the four refusals are left, each with its reason (this run was before prose's wording was mended, so its blank line shows as two backticks):
+
+```text
+Stopped at 130ce411 Demo: the fixtures' side rebased:
+  LEFT      scratch-demo/fixtures/deletion-beside.rs: line 3: both sides change line(s) 3..4 of the base: not additions alone
+  LEFT      scratch-demo/fixtures/prose.md: line 4: both sides added text that is not a table's row: ``
+  LEFT      scratch-demo/fixtures/row-of-another-shape.md: line 8: a row of 2 cell dividers in a table whose header has 3
+  LEFT      scratch-demo/fixtures/same-line.rs: line 2: both sides change line(s) 2..2 of the base: not additions alone
+  united    scratch-demo/fixtures/struct-fields.rs: both sides' additions at 2 place(s); every line of both kept, and checked
+  united    scratch-demo/fixtures/table-rows-crlf.md: both sides' additions at 1 place(s); every line of both kept, and checked
+  united    scratch-demo/fixtures/table-rows.md: both sides' additions at 1 place(s); every line of both kept, and checked
+  united    scratch-demo/fixtures/tests-appended.rs: both sides' additions at 1 place(s); every line of both kept, and checked
+The rebase is stopped. Settle each file LEFT above, `git add` it, then run `cargo xtask rebase --continue` (or `--abort`).
+The tip before the rebase was 130ce4114f4e.
+xtask: the rebase stopped on files left for a person
+```
+
+2. **A deletion beside an addition, in a real file.** The side rebased onto deleted `paths_of` and its doc comment from `xtask/src/git_read.rs`; the branch put `#[inline]` between them. Before the fix this was united, and the attribute would have gone onto the next item:
+
+```text
+Stopped at 1aa0dae7 Demo: mark paths_of inline:
+  LEFT      xtask/src/git_read.rs: line 183: both sides change line(s) 183..187 of the base: not additions alone
+The rebase is stopped. Settle each file LEFT above, `git add` it, then run `cargo xtask rebase --continue` (or `--abort`).
+The tip before the rebase was 1aa0dae7cf0b.
+xtask: the rebase stopped on files left for a person
+```
+
+3. **The table row of the first demonstration**, again (a row after a row that main reworded and added rows after): still united, as before the fixes.
+
+```text
+Stopped at a260b8c9 Add a row to the table that main also adds rows to (a throwaway branch):
+  united    docs/steps/25/parts/pr3-first-run.md: both sides' additions at 1 place(s); every line of both kept, and checked
+Rebased b-demo3 onto origin/main: every conflict settled.
+docs/outstanding/README.md is up to date.
+The tip before was a260b8c90fb5: `git reset --keep a260b8c90fb5` takes the branch back to it.
+```
+
+**Breaks:** `cargo xtask mutate tooling-12-b --jobs 2`, on the reference machine, after the fixes: the first run flagged two of 43. `rebase-a-change-counts-as-an-addition` was not caught by any test: a change that starts at the place's end would end past it, so the guard it broke could never fail; the guard and the break are gone. `rebase-an-addition-before-a-change` was caught, by the reworded-row test and `changes_apart_merge_and_one_sides_change_is_taken_whole`, but not by the deletion test its list named (a deletion is refused before the place is looked at); its list now names those two. Run again: **42 breaks, 42 did what the list expects, 0 flagged** (824 tests pass with nothing broken). `rebase-a-rebase-that-does-not-go-on-loops` takes 62 s: its test runs to nextest's limit, as the loop the review found would.
+
+**`cargo xtask ci`** on the reference machine after the fixes: every step passed. The tiers were not judged, as the run itself said: the disk stalled (tasks waited on I/O for 49% of the test runs) while other sessions' runs shared the machine. This part's record is linked from the step's `answered.md`, which the step's session writes; the run had a stand-in for it in the working tree, never committed, so that `rules` saw the link it will have.
+
+**`try` run 44607742443** (`test -p xtask`, both systems, at d4c5c848, before the last two commits): every test passed but `rules::tests::sys_the_repository_follows_its_own_rules`, on both systems, for the one reason above (the record not yet linked). This part's tests: Linux 58 in 0.90 s; Windows 54 in 2.70 s, the cross-system rebase test 1.44 s and the questions for git 0.71 s. TRY_FINAL
 
 ## Open
 

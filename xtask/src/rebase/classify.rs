@@ -447,8 +447,13 @@ pub(crate) fn rows_keep_their_tables(merged: &Merged) -> Result<(), String> {
             let at = union.line - 1 + offset;
             let row = lines.get(at).copied().unwrap_or_default();
             if !is_row(row) {
+                let what = if row.trim().is_empty() {
+                    "a blank line".to_owned()
+                } else {
+                    format!("`{row}`")
+                };
                 return Err(format!(
-                    "line {}: both sides added text that is not a table's row: `{row}`",
+                    "line {}: both sides added text that is not a table's row: {what}",
                     at + 1
                 ));
             }

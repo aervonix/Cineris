@@ -280,7 +280,7 @@ fn a_line_both_sides_changed_is_left_for_a_person() {
 fn prose_added_at_one_place_on_both_sides_is_left_for_a_person() {
     let (base, ours, theirs) = sides("prose.md");
     let error = unite(Kind::Markdown, &base, &ours, &theirs, &any_layout).unwrap_err();
-    assert!(error.contains("not a table's row"), "{error}");
+    assert!(error.contains("not a table's row: a blank line"), "{error}");
 }
 
 #[test]
@@ -989,7 +989,13 @@ fn sys_abort_puts_the_branch_back_and_a_second_start_is_refused_while_one_is_sto
     let (again, _) = run(&repo, Mode::Start);
     assert!(again.unwrap_err().contains("a rebase is in progress"));
     let (aborted, _) = run(&repo, Mode::Abort);
-    assert!(aborted.unwrap().finished);
+    let aborted = aborted.unwrap();
+    assert!(aborted.finished);
+    assert_eq!(
+        describe(&aborted),
+        "The rebase was aborted: the branch is as it was.\n",
+        "an abort says that, and not that it rebased"
+    );
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before);
     assert_eq!(git(&repo, &["status", "--porcelain"]), "");
     let (none, _) = run(&repo, Mode::Abort);
