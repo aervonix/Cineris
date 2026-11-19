@@ -78,8 +78,9 @@ pub(super) struct FirstRun {
     taken: Option<Instant>,
     chosen: Chosen,
     providers: Option<Providers>,
-    /// The configuration file, as the person reads its path, once written.
-    written: Option<String>,
+    /// The configuration file, as the person reads its path, once written;
+    /// why it was not, when it could not be.
+    written: Option<Result<String, String>>,
     /// `x` was pressed: the steps left take their defaults.
     skipped: bool,
     /// The configuration was read again: the session may open.
@@ -132,6 +133,8 @@ struct Imports {
     instructions: bool,
     skills: bool,
     files: Vec<File>,
+    /// Why the last `space` picked nothing, until the next key.
+    said: Option<String>,
 }
 
 #[derive(Debug)]
@@ -158,7 +161,53 @@ struct Commands {
     rows: Vec<(DetectedCommand, bool)>,
     selected: usize,
     editing: Option<String>,
+    /// Why a paste into the edit, or the edit kept, was refused.
+    refusal: Option<String>,
     trusted: bool,
+}
+
+/// The most characters a command edited in the last step may have.
+const EDIT_MAX: usize = 1_000;
+
+/// A key typed into a command's edit field: `Backspace`, `Ctrl+U` and
+/// characters that can be shown; nothing else does anything there.
+fn edit_text(text: &mut String, key: Key) {
+    let plain = key.mods.is_empty() || key.mods == Mods::SHIFT;
+    match key.code {
+        KeyCode::Backspace => {
+            text.pop();
+        }
+        KeyCode::Char('u') if key.mods == Mods::CTRL => text.clear(),
+        KeyCode::Char(character)
+            if plain
+                && !cineris_base::acts_unseen(character)
+                && text.chars().count() < EDIT_MAX =>
+        {
+            text.push(character);
+        }
+        _ => {}
+    }
+}
+
+/// A paste into a command's edit field: kept whole, a line break at its
+/// end left off, or refused whole, with why.
+fn paste_text(text: &mut String, pasted: &str) -> Result<(), &'static str> {
+    let pasted = pasted
+        .strip_suffix("\r\n")
+        .or_else(|| pasted.strip_suffix('\n'))
+        .or_else(|| pasted.strip_suffix('\r'))
+        .unwrap_or(pasted);
+    if pasted.chars().any(cineris_base::acts_unseen) {
+        return Err(
+            "That paste holds a line break or a character that cannot be shown: nothing of it \
+             was kept.",
+        );
+    }
+    if text.chars().count() + pasted.chars().count() > EDIT_MAX {
+        return Err("That is longer than a command can be here: nothing of it was kept.");
+    }
+    text.push_str(pasted);
+    Ok(())
 }
 
 /// The levels the first run offers, in the ladder's order, each with what
@@ -182,11 +231,16 @@ const LEVELS: [(&str, &str); 3] = [
 ];
 
 impl FirstRun {
-    /// The first run on `setup`; `None` when its worker could not start.
-    pub(super) fn start(setup: Arc<dyn Setup>) -> Option<Self> {
+    /// The first run on `setup`.
+    ///
+    /// # Errors
+    ///
+    /// Why its worker could not start ([`App::first_run_unstarted`] says
+    /// it).
+    pub(super) fn start(setup: Arc<dyn Setup>) -> std::io::Result<Self> {
         let worker = Worker::start(setup)?;
         worker.ask(Job::Providers);
-        Some(Self {
+        Ok(Self {
             worker,
             step: Step::Provider { selected: 0 },
             ready: Readiness::default(),
@@ -257,6 +311,20 @@ impl FirstRun {
         if let Some(taken) = self.taken {
             self.ready.not_before(taken + REPEAT);
         }
+    }
+
+    /// `provider` is chosen, and with it its model: the first the catalog
+    /// lists for it, written as `model.main` (since the full review of the
+    /// third pull request).
+    fn choose(&mut self, provider: &str) {
+        self.chosen.provider = Some(provider.to_owned());
+        self.chosen.model = self.providers.as_ref().and_then(|found| {
+            found
+                .providers
+                .iter()
+                .find(|known| known.name == provider)
+                .and_then(|known| known.model.clone())
+        });
     }
 
     fn levels(&self) -> Vec<(&'static str, &'static str)> {
@@ -365,6 +433,9 @@ impl App {
     /// request).
     pub(super) fn first_run_drawn(&mut self, at: Instant) {
         let shown = self.first_run_shown();
+        if !shown {
+            self.first_run_edit_cut(at);
+        }
         let (untaken, taken) = (self.untaken, self.taken);
         let Some(run) = self.first_run.as_mut() else {
             return;
@@ -382,6 +453,16 @@ impl App {
             if let Some(taken) = taken {
                 run.ready.not_before(taken + REPEAT);
             }
+        }
+    }
+
+    /// The program was continued after a stop (`fg`): what was typed
+    /// meanwhile went to the shell, and the step starts again as if just
+    /// shown, as a dialog does (the early review of the third pull
+    /// request's fixes: the `Enter` that ended `fg` chose a mode).
+    pub(super) fn first_run_resumed(&mut self) {
+        if let Some(run) = self.first_run.as_mut() {
+            run.hidden();
         }
     }
 
@@ -494,7 +575,7 @@ impl App {
                     .providers
                     .as_ref()
                     .map_or_else(String::new, |found| found.store.kept());
-                run.chosen.provider = Some(provider.clone());
+                run.choose(&provider);
                 run.worker.ask(Job::Discover);
                 run.to(Step::Imports(Imports::default()));
                 self.say(&format!(
@@ -547,41 +628,99 @@ impl App {
                     .mode
                     .clone()
                     .unwrap_or_else(|| "supervised".to_owned());
-                let said = match &written {
-                    Ok(path) => format!("Mode: {mode}. Written to {}.", one_line(path)),
-                    Err(why) => format!(
-                        "Mode: {mode}, for this session. The settings were not written: {}",
-                        one_line(why)
-                    ),
-                };
-                run.written = Some(written.clone().unwrap_or_default());
-                self.say(&said);
-                // The core reads the file again, so that the session is made
-                // with what was chosen; it opens once that is done.
-                let ticket = self
-                    .link
-                    .send(Op::ConfigReload(ConfigReloadParams::default()));
-                self.pending.insert(ticket, Pending::FirstRun(Sent::Reload));
+                run.written = Some(written.clone());
+                match written {
+                    Ok(path) => {
+                        self.say(&format!("Mode: {mode}. Written to {}.", one_line(&path)));
+                        // The core reads the file again, so that the session
+                        // is made with what was chosen; it opens once that is
+                        // done.
+                        let ticket = self
+                            .link
+                            .send(Op::ConfigReload(ConfigReloadParams::default()));
+                        self.pending.insert(ticket, Pending::FirstRun(Sent::Reload));
+                    }
+                    // Nothing was saved: this run's sessions carry what was
+                    // chosen as their own settings, and the set-up runs again
+                    // next time (the full review of the third pull request:
+                    // the line said "for this session" of a mode the session
+                    // never had).
+                    Err(why) => {
+                        self.say(&format!(
+                            "Mode: {mode}, for this run. Nothing was saved: {}. This run's \
+                             sessions are opened with what was chosen, and the set-up runs \
+                             again at the next start.",
+                            one_line(&why)
+                        ));
+                        self.first_run_open(true);
+                    }
+                }
             }
         }
+    }
+
+    /// The session opens: made with what was chosen, from the file the core
+    /// read again, or, `own`, with the choices as the session's own settings
+    /// because the file was not written or not read again. Every session
+    /// this run opens carries them then (`/new`'s too).
+    fn first_run_open(&mut self, own: bool) {
+        let Some(run) = self.first_run.as_mut() else {
+            return;
+        };
+        run.step = Step::Opened;
+        run.released = true;
+        if own {
+            self.run_config = chosen_config(&run.chosen);
+        }
+        // The session made with what was chosen: its header is the one
+        // card from now on.
+        if let Some(open) = self.open.take() {
+            self.send_open(open);
+        }
+    }
+
+    /// The first run could not start, its worker refused: said, and this
+    /// run's sessions read nothing of other tools', as a skipped set-up
+    /// leaves them (the full review of the third pull request: it was
+    /// dropped without a word, and the defaults read `AGENTS.md`).
+    pub(super) fn first_run_unstarted(&mut self, error: &std::io::Error) {
+        self.run_config = chosen_config(&Chosen::default());
+        self.say(&format!(
+            "The set-up could not start ({}): this run's sessions read nothing of other tools', \
+             and the set-up runs again at the next start. `cineris auth login <provider>` stores \
+             a key meanwhile.",
+            one_line(&error.to_string())
+        ));
     }
 
     /// An operation the first run sent was answered.
     pub(super) fn first_run_done(&mut self, sent: Sent, result: Result<OpResult, ErrorData>) {
         match (sent, result) {
             (Sent::Reload, result) => {
-                if let Err(error) = result {
-                    self.error(&error);
-                }
-                if let Some(run) = self.first_run.as_mut() {
-                    run.step = Step::Opened;
-                    run.released = true;
-                    // The session made with what was chosen: its header is
-                    // the one card from now on.
-                    if let Some(open) = self.open.take() {
-                        self.send_open(open);
+                // A reload that failed, or found the files wrong, leaves the
+                // configuration in force as it was: the file written is not
+                // read, and the session carries what was chosen itself.
+                let failed = match &result {
+                    Err(error) => Some(error.message.clone()),
+                    Ok(OpResult::ConfigReload(reload)) if !reload.errors.is_empty() => {
+                        Some(reload.errors.join("; "))
                     }
+                    Ok(_) => None,
+                };
+                if let Some(why) = &failed {
+                    let file = self
+                        .first_run
+                        .as_ref()
+                        .and_then(|run| run.written.clone())
+                        .and_then(Result::ok)
+                        .map_or_else(|| "The settings".to_owned(), |path| one_line(&path));
+                    self.say(&format!(
+                        "{file} was written, but the configuration could not be read again: {}. \
+                         This run's sessions are opened with what was chosen.",
+                        one_line(why)
+                    ));
                 }
+                self.first_run_open(failed.is_some());
             }
             (Sent::Detect(session), Ok(OpResult::ProjectDetect(found))) => {
                 if self.session.as_ref().map(|state| &state.session_id) != Some(&session) {
@@ -608,6 +747,7 @@ impl App {
                             .collect(),
                         selected: 0,
                         editing: None,
+                        refusal: None,
                         trusted,
                     }));
                 }
@@ -671,24 +811,52 @@ impl App {
             .insert(ticket, Pending::FirstRun(Sent::Detect(session)));
     }
 
-    /// The first run ends: its last line names what does each step again.
+    /// The first run ends: its last line says the provider and the model
+    /// the session runs with, how to change them and do each step again,
+    /// by commands this version has, and whether the settings were saved
+    /// (the full review of the third pull request: no model was written,
+    /// and the line did not say so).
     fn first_run_end(&mut self) {
         let Some(run) = self.first_run.take() else {
             return;
         };
-        let file = run.written.filter(|path| !path.is_empty()).map_or_else(
-            || "the configuration file".to_owned(),
-            |path| one_line(&path),
-        );
+        let model = match (&run.chosen.provider, &run.chosen.model) {
+            (Some(provider), Some(model)) => format!(
+                "The model is {}'s {} (model.main).",
+                one_line(provider),
+                one_line(model)
+            ),
+            (Some(provider), None) => format!(
+                "No model of {} is known: model.main names one.",
+                one_line(provider)
+            ),
+            (None, _) => "No provider was chosen, so there is no model yet: model.main names one \
+                          once a key is stored."
+                .to_owned(),
+        };
         self.say(&format!(
-            "{} Each step can be done again: `cineris auth login <provider>` stores a key, \
-             `/mode` sets the mode, `/project` shows this project's commands, and {file} holds \
-             the settings.",
+            "{} {model} `/model` chooses another model for this session, `/mode` sets the mode, \
+             `/project` shows this project's commands, and `cineris auth login <provider>` \
+             stores a key. {}",
             if run.skipped {
                 "Set-up skipped."
             } else {
                 "Set-up done."
-            }
+            },
+            saved(&run)
+        ));
+    }
+
+    /// The session could not be opened: the first run ends there, saying
+    /// what was saved (the full review of the third pull request: it waited
+    /// for good, and its last line never came).
+    pub(super) fn first_run_open_failed(&mut self) {
+        let Some(run) = self.first_run.take() else {
+            return;
+        };
+        self.say(&format!(
+            "Set-up ended: the session could not be opened. {} /new tries again.",
+            saved(&run)
         ));
     }
 
@@ -706,8 +874,9 @@ impl App {
         }
         let unsaid = run.chosen.provider.is_none()
             && matches!(run.step, Step::Provider { .. } | Step::Key { .. });
-        run.chosen.imports = None;
-        run.chosen.mode = None;
+        // What the steps before answered stays answered: only the steps
+        // not reached take their defaults (the full review of the third
+        // pull request: `x` at the mode threw the imports away).
         if unsaid {
             self.say("Provider: skipped.");
         }
@@ -729,7 +898,38 @@ impl App {
     /// the third pull request).
     pub(super) fn first_run_event(&mut self, event: &TermEvent, at: Instant) -> Option<bool> {
         if !self.first_run_shown() {
+            self.first_run_edit_cut(at);
             return None;
+        }
+        let run = self.first_run.as_mut()?;
+        // Typing into a command's edit field is typing, as into the key's
+        // input: it goes in whenever the step is shown, and only `Enter` and
+        // `Esc` wait for the step's keys (the full review of the third pull
+        // request: a repeat or a paste was dropped, and hid the keys).
+        if let Step::Commands(commands) = &mut run.step
+            && let Some(text) = &mut commands.editing
+        {
+            // Taken by the field, and why a paste was refused.
+            let taken: Option<Option<&'static str>> = match event {
+                TermEvent::Key(key) | TermEvent::Repeat(key)
+                    if !matches!(key.code, KeyCode::Enter | KeyCode::Esc)
+                        && self
+                            .input
+                            .keymap()
+                            .lookup(&[Context::Global], *key)
+                            .is_none() =>
+                {
+                    edit_text(text, *key);
+                    Some(None)
+                }
+                TermEvent::Paste(pasted) => Some(paste_text(text, pasted).err()),
+                _ => None,
+            };
+            if let Some(refused) = taken {
+                commands.refusal = refused.map(str::to_owned);
+                self.first_run_untaken(at);
+                return Some(true);
+            }
         }
         let run = self.first_run.as_mut()?;
         match event {
@@ -773,6 +973,14 @@ impl App {
                 }
                 if !run.takes_keys(at) {
                     run.typed(at);
+                    // The last step's, before it takes keys, goes to the
+                    // input box, as a dialog's typing does: what it types
+                    // there hides the step until it is sent or emptied (the
+                    // early review of the third pull request's fixes: it
+                    // was dropped, as people began their next prompt).
+                    if matches!(run.step, Step::Commands(_)) {
+                        return None;
+                    }
                     self.first_run_untaken(at);
                     return Some(true);
                 }
@@ -783,13 +991,18 @@ impl App {
                 self.first_run_key(*key, at);
                 Some(true)
             }
-            // A key held down never answers a step.
+            // A key held down never answers a step; the last step's goes
+            // where its press went.
             TermEvent::Repeat(_) => {
                 run.typed(at);
+                if matches!(run.step, Step::Commands(_)) {
+                    return None;
+                }
                 self.first_run_untaken(at);
                 Some(true)
             }
             // A paste is the key's, or nobody's: it never answers a step.
+            // At the last step it is the input box's, as at a dialog.
             TermEvent::Paste(text) => {
                 match &mut run.step {
                     Step::Key {
@@ -802,12 +1015,34 @@ impl App {
                             *error = None;
                         }
                     }
+                    Step::Commands(_) => {
+                        run.typed(at);
+                        return None;
+                    }
                     _ => run.typed(at),
                 }
                 self.first_run_untaken(at);
                 Some(true)
             }
             _ => None,
+        }
+    }
+
+    /// The last step is not shown while a command is being edited in it
+    /// (a turn or a dialog came): the edit is dropped, said, and an `Enter`
+    /// that was to keep it does not send what the input box holds as a
+    /// prompt until the typing pauses (the early review of the third pull
+    /// request's fixes).
+    fn first_run_edit_cut(&mut self, at: Instant) {
+        if let Some(run) = self.first_run.as_mut()
+            && let Step::Commands(commands) = &mut run.step
+            && commands.editing.take().is_some()
+        {
+            self.note_cut = Some(at);
+            self.say(
+                "The commands' step gave way while a command was being edited: the edit was left, \
+                 and the step comes back once nothing else is going on.",
+            );
         }
     }
 
@@ -831,6 +1066,12 @@ impl App {
         // too small for it, `enter` on it and `space` on it do nothing (the
         // full review of the third pull request).
         let whole = run.whole;
+        // The selection moved: what the last frame drew whole was another
+        // row, and a key before the next frame accepts nothing (the early
+        // review of the third pull request's fixes).
+        if up || down {
+            run.whole = false;
+        }
         if letter == Some('x') && !typing_key && !editing {
             self.first_run_skip_all(at);
             return;
@@ -864,7 +1105,7 @@ impl App {
                             error: None,
                         }),
                         How::Variable(variable) => {
-                            run.chosen.provider = Some(provider.clone());
+                            run.choose(&provider);
                             run.worker.ask(Job::Discover);
                             run.to(Step::Imports(Imports::default()));
                             self.say(&format!(
@@ -874,7 +1115,7 @@ impl App {
                             ));
                         }
                         How::Stored => {
-                            run.chosen.provider = Some(provider.clone());
+                            run.choose(&provider);
                             run.worker.ask(Job::Discover);
                             run.to(Step::Imports(Imports::default()));
                             self.say(&format!(
@@ -920,6 +1161,7 @@ impl App {
                 }
             }
             Step::Imports(imports) => {
+                imports.said = None;
                 let picks = imports.picks();
                 // Where the selection is now: rows a file's answer inserted
                 // above it move it down, not onto them.
@@ -952,7 +1194,41 @@ impl App {
                             }
                         }
                         Some(Pick::Server(file, server)) => {
-                            if let Some(Some(Ok(servers))) =
+                            // One name is one server in the user's file: a
+                            // second of a name picked already is not picked
+                            // (the full review of the third pull request:
+                            // the writer kept one and dropped the other).
+                            let taken_by = imports.files.get(*file).and_then(|this| {
+                                let Some(Ok(servers)) = &this.servers else {
+                                    return None;
+                                };
+                                let (wanted, picked) = servers.get(*server)?;
+                                if *picked {
+                                    return None;
+                                }
+                                imports.files.iter().enumerate().find_map(|(index, other)| {
+                                    let Some(Ok(servers)) = &other.servers else {
+                                        return None;
+                                    };
+                                    servers
+                                        .iter()
+                                        .enumerate()
+                                        .any(|(number, (other, also))| {
+                                            *also
+                                                && other.name == wanted.name
+                                                && (index, number) != (*file, *server)
+                                        })
+                                        .then(|| (wanted.name.clone(), other.path.clone()))
+                                })
+                            });
+                            if let Some((name, path)) = taken_by {
+                                imports.said = Some(format!(
+                                    "A server named {} is picked already, from {}: one name is \
+                                     one server.",
+                                    one_line(&name),
+                                    one_line(&path)
+                                ));
+                            } else if let Some(Some(Ok(servers))) =
                                 imports.files.get_mut(*file).map(|file| &mut file.servers)
                                 && let Some((server, picked)) = servers.get_mut(*server)
                                 && server.refused.is_none()
@@ -1007,25 +1283,34 @@ impl App {
                 }
             }
             Step::Commands(commands) => {
+                // Typing into the edit is taken when the step is shown
+                // (`first_run_event`); its `Enter` and `Esc` wait for the
+                // step's keys.
                 if let Some(text) = &mut commands.editing {
                     match key.code {
                         KeyCode::Enter if key.mods.is_empty() && whole => {
                             let edited = text.trim().to_owned();
+                            // An edit kept is a pick; one that changed
+                            // nothing is not (the early review of the third
+                            // pull request's fixes).
                             if let Some((row, picked)) = commands.rows.get_mut(commands.selected)
                                 && !edited.is_empty()
+                                && edited != row.command
                             {
                                 row.command = edited;
                                 *picked = true;
                             }
                             commands.editing = None;
+                            commands.refusal = None;
+                            // A held `Enter`, or a second one, does not keep
+                            // the commands at once: the step waits a key's
+                            // repeat window, as a new step does.
+                            run.ready.not_before(at + REPEAT);
+                            run.keys_drawn = false;
                         }
-                        KeyCode::Esc => commands.editing = None,
-                        KeyCode::Backspace => {
-                            text.pop();
-                        }
-                        KeyCode::Char('u') if key.mods == Mods::CTRL => text.clear(),
-                        KeyCode::Char(character) if plain && !character.is_control() => {
-                            text.push(character);
+                        KeyCode::Esc => {
+                            commands.editing = None;
+                            commands.refusal = None;
                         }
                         _ => {}
                     }
@@ -1120,10 +1405,13 @@ impl App {
         if !self.first_run_shown() {
             return None;
         }
+        let quit_armed = self.input.quit_armed();
         let run = self.first_run.as_mut()?;
-        // Its keys once it is ready, as a dialog's answers.
+        // Its keys once it is ready, as a dialog's answers; not while the
+        // hint row says what a second `Ctrl+C` does in their place (the
+        // early review of the third pull request's fixes).
         let ready = run.ready.ready(now);
-        run.keys_drawn = ready;
+        run.keys_drawn = ready && !quit_armed;
         let run = self.first_run.as_ref()?;
         let look = &self.look;
         let (view, mut keys) = self.first_run_view(run);
@@ -1181,9 +1469,9 @@ impl App {
         };
         lines.extend(under);
         if !whole {
-            keys.insert(0, "a taller window shows this row whole".to_owned());
+            keys.insert(0, "a larger window shows this row whole".to_owned());
         }
-        let hint = if self.input.quit_armed() {
+        let hint = if quit_armed {
             Hint::QuitArmed
         } else if ready {
             Hint::Keys(keys)
@@ -1385,6 +1673,16 @@ impl App {
                                     }
                                     None => Mark::Picked(*picked),
                                 };
+                                // What the person accepts is not all on the
+                                // screen: said (the full review of the third
+                                // pull request).
+                                if server.hidden && server.refused.is_none() {
+                                    detail.push(format!(
+                                        "a value shown {} is imported as it is in that file, \
+                                         unseen here",
+                                        cineris_base::redact::MASK
+                                    ));
+                                }
                                 rows.push(Row::new(1, mark, server.name.clone(), detail));
                             }
                         }
@@ -1418,6 +1716,7 @@ impl App {
                     ));
                 }
                 view.rows = rows;
+                view.note = imports.said.clone();
                 let keys = match selected {
                     Some(Pick::File(_)) => "space reads or folds it",
                     _ => "space picks",
@@ -1511,7 +1810,7 @@ impl App {
                         sentence,
                         rows,
                         selected: Some(commands.selected),
-                        note: None,
+                        note: commands.refusal.clone(),
                     },
                     keys,
                 )
@@ -1519,6 +1818,49 @@ impl App {
             Step::Waiting | Step::Opened => (StepView::default(), Vec::new()),
         }
     }
+}
+
+/// Whether the settings chosen were saved, as a sentence.
+fn saved(run: &FirstRun) -> String {
+    match &run.written {
+        Some(Ok(path)) if !path.is_empty() => format!(
+            "{} holds the settings, and a change there is kept.",
+            one_line(path)
+        ),
+        _ => "Nothing was saved, so the set-up runs again at the next start.".to_owned(),
+    }
+}
+
+/// What was chosen as a session's own configuration (`session/new`'s
+/// `config`, which ranks as the command line does), for when the file
+/// written is not in force: the instructions and the skills as picked, off
+/// unless picked; the mode; the model and its provider. The servers picked
+/// are not among them: this version runs no MCP server.
+fn chosen_config(chosen: &Chosen) -> serde_json::Map<String, serde_json::Value> {
+    use serde_json::{Value, json};
+    let imports = chosen.imports.clone().unwrap_or_default();
+    let mut config = serde_json::Map::new();
+    config.insert(
+        "compat".to_owned(),
+        json!({ "instructions": imports.instructions, "skills": imports.skills }),
+    );
+    if let Some(mode) = &chosen.mode {
+        config.insert("permissions".to_owned(), json!({ "mode": mode }));
+    }
+    let mut model = serde_json::Map::new();
+    if let Some(main) = &chosen.model {
+        model.insert("main".to_owned(), Value::String(main.clone()));
+    }
+    if let Some(provider) = &chosen.provider {
+        model.insert(
+            "roles".to_owned(),
+            json!({ "main": { "provider": provider } }),
+        );
+    }
+    if !model.is_empty() {
+        config.insert("model".to_owned(), Value::Object(model));
+    }
+    config
 }
 
 /// What the imports' line says was brought in.

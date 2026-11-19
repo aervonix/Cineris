@@ -370,6 +370,10 @@ pub struct App {
     /// The full-screen presenter's view, when the application draws with
     /// it (`tui.presenter`, `--fullscreen`; since step 25).
     screen: Option<screen::ScreenView>,
+    /// Whether the full screen's search is open, while a frame has its view
+    /// out of `screen` (since the early review of step 25's third pull
+    /// request's fixes).
+    search_aside: bool,
     /// The kept answers' code blocks handed to the highlighter again, their
     /// colours having been late (since step 25).
     recolouring: Vec<recolour::Recolouring>,
@@ -443,6 +447,11 @@ pub struct App {
     back_from_reading: Option<DialogId>,
     /// The first run, while it runs (since step 25).
     first_run: Option<first_run::FirstRun>,
+    /// Configuration every session this run opens carries as its own
+    /// (`session/new`'s `config`): what the first run chose, when the file
+    /// it wrote is not in force, and nothing of other tools' when it could
+    /// not start (since the full review of step 25's third pull request).
+    run_config: serde_json::Map<String, serde_json::Value>,
     /// A look at the configuration's files is due after this frame.
     look_due: bool,
     /// When the last look was asked for.
@@ -562,6 +571,13 @@ impl App {
         for notice in start.notices {
             transcript.push(Block::Notice(notice));
         }
+        // The first run (since step 25), and why its worker could not start
+        // when it could not.
+        let (first_run, unstarted) = match start.setup.map(first_run::FirstRun::start) {
+            Some(Ok(run)) => (Some(run), None),
+            Some(Err(error)) => (None, Some(error)),
+            None => (None, None),
+        };
         let mut app = Self {
             link,
             settings: start.settings,
@@ -591,6 +607,7 @@ impl App {
             picker: None,
             kept: Kept::new(),
             screen: full_screen.then(screen::ScreenView::default),
+            search_aside: false,
             recolouring: Vec::new(),
             redraw_blocks: Vec::new(),
             zone: None,
@@ -628,7 +645,8 @@ impl App {
             exporting: None,
             reading_transcript: None,
             back_from_reading: None,
-            first_run: start.setup.and_then(first_run::FirstRun::start),
+            first_run,
+            run_config: serde_json::Map::new(),
             look_due: false,
             last_look: None,
             theme_picked: None,
@@ -660,6 +678,9 @@ impl App {
             app.held_prompts.push_back(prompt);
             app.running = Some(now);
             app.input.set_running(true);
+        }
+        if let Some(error) = unstarted {
+            app.first_run_unstarted(&error);
         }
         app
     }
@@ -1247,6 +1268,9 @@ impl App {
                 if let Some(dialog) = self.dialogs.front_mut() {
                     dialog.hide();
                 }
+                // And a step of the first run (the early review of the
+                // third pull request's fixes: the `Enter` of `fg` chose).
+                self.first_run_resumed();
                 self.panels.restart();
                 false
             }
@@ -1554,7 +1578,13 @@ impl App {
                 settings,
                 ephemeral,
             } => (
-                new_session(workspace, self.cwd.clone(), settings, ephemeral),
+                new_session(
+                    workspace,
+                    self.cwd.clone(),
+                    settings,
+                    ephemeral,
+                    self.run_config.clone(),
+                ),
                 Pending::Open,
             ),
             Open::Resume(id) => (
@@ -1724,7 +1754,13 @@ impl App {
                     }),
                     None => {
                         self.say("There is no session to continue here, so this is a new one.");
-                        new_session(workspace, self.cwd.clone(), settings, ephemeral)
+                        new_session(
+                            workspace,
+                            self.cwd.clone(),
+                            settings,
+                            ephemeral,
+                            self.run_config.clone(),
+                        )
                     }
                 };
                 let ticket = self.link.send(op);
@@ -1936,6 +1972,9 @@ impl App {
         if let Some(error) = error {
             self.error(error);
         }
+        // The first run's session did not open: it ends here, said (since
+        // the full review of step 25's third pull request).
+        self.first_run_open_failed();
     }
 
     /// The prompts held for a session that will not open come back into
@@ -2904,13 +2943,14 @@ fn new_session(
     cwd: Option<String>,
     settings: SessionSettings,
     ephemeral: bool,
+    config: serde_json::Map<String, serde_json::Value>,
 ) -> Op {
     Op::SessionNew(SessionNewParams {
         cwd,
         workspace,
         settings,
         title: None,
-        config: serde_json::Map::new(),
+        config,
         ephemeral,
     })
 }

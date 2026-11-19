@@ -48,6 +48,10 @@ pub struct Provider {
     pub variable: Option<String>,
     /// Whether the credential store holds a key for it already.
     pub stored: bool,
+    /// The model written as `model.main` when it is chosen: the first the
+    /// model catalog lists for it. `None` when it lists none (since the
+    /// full review of step 25's third pull request).
+    pub model: Option<String>,
 }
 
 /// Where a key typed at the first run is kept: the credential store
@@ -116,9 +120,14 @@ pub struct McpFile {
 pub struct McpServer {
     /// Its name in that file.
     pub name: String,
-    /// Its command line, arguments and all, or its address: whole, with
-    /// every part that looked like a credential masked.
+    /// Its command line, arguments and all, or its address: whole, each
+    /// argument's bounds shown, with every part that looked like a
+    /// credential masked.
     pub shown: String,
+    /// Whether `shown` masks a part that is imported as it is in its file
+    /// (a value whose name says it is a credential): the row says so (since
+    /// the full review of step 25's third pull request).
+    pub hidden: bool,
     /// The names of the environment variables it is given, each taken from
     /// the variable of the same name once imported.
     pub env: Vec<String>,
@@ -135,6 +144,8 @@ pub struct McpServer {
 pub struct Chosen {
     /// The provider whose key was stored or found; `None`, skipped.
     pub provider: Option<String>,
+    /// Its model, written as `model.main` ([`Provider::model`]).
+    pub model: Option<String>,
     /// What the imports picked; `None`, the step was skipped.
     pub imports: Option<Imported>,
     /// `permissions.mode`; `None`, skipped (supervised holds).
@@ -227,10 +238,37 @@ impl std::fmt::Debug for Worker {
     }
 }
 
+/// What a call of [`Setup`]'s that panicked answers: the step that waits
+/// for it goes on, and says so (since the full review of step 25's third
+/// pull request: `storing…` stayed for good).
+pub(crate) const PANICKED: &str = "it failed inside the program; the log says how";
+
+/// `call`, or [`PANICKED`] when it panics: a panic on the worker is the
+/// program's to report (its hook logs it), not a reason for a step to wait
+/// for good.
+fn guarded<T>(call: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)).map_err(|_| PANICKED.to_owned())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// The worker's thread is refused on this thread: for the test of a
+    /// first run whose worker cannot start.
+    pub(crate) static REFUSE_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 impl Worker {
-    /// Starts the worker on `setup`. `None` when the thread could not be
-    /// started: the first run is then skipped, said.
-    pub(crate) fn start(setup: Arc<dyn Setup>) -> Option<Self> {
+    /// Starts the worker on `setup`.
+    ///
+    /// # Errors
+    ///
+    /// Why the thread could not be started: the first run is then not run,
+    /// said.
+    pub(crate) fn start(setup: Arc<dyn Setup>) -> std::io::Result<Self> {
+        #[cfg(test)]
+        if REFUSE_THREAD.with(std::cell::Cell::get) {
+            return Err(std::io::Error::other("no thread could be made"));
+        }
         let (jobs, inbox) = mpsc::channel::<Job>();
         let (outbox, answers) = mpsc::channel();
         let waker: Arc<Mutex<Option<cineris_term::Waker>>> = Arc::default();
@@ -240,17 +278,25 @@ impl Worker {
             .spawn(move || {
                 while let Ok(job) = inbox.recv() {
                     let answer = match job {
-                        Job::Providers => Answer::Providers(setup.providers()),
+                        Job::Providers => {
+                            Answer::Providers(guarded(|| setup.providers()).and_then(|got| got))
+                        }
                         Job::StoreKey(provider, key) => {
-                            let stored = setup.store_key(&provider, key);
+                            let stored =
+                                guarded(|| setup.store_key(&provider, key)).and_then(|got| got);
                             Answer::Stored(provider, stored)
                         }
-                        Job::Discover => Answer::Found(setup.discover()),
+                        // Discovery that failed found nothing.
+                        Job::Discover => {
+                            Answer::Found(guarded(|| setup.discover()).unwrap_or_default())
+                        }
                         Job::Read(path) => {
-                            let read = setup.read_servers(&path);
+                            let read = guarded(|| setup.read_servers(&path)).and_then(|got| got);
                             Answer::Servers(path, read)
                         }
-                        Job::Write(chosen) => Answer::Written(setup.write_config(&chosen)),
+                        Job::Write(chosen) => Answer::Written(
+                            guarded(|| setup.write_config(&chosen)).and_then(|got| got),
+                        ),
                     };
                     if outbox.send(answer).is_err() {
                         return;
@@ -261,9 +307,8 @@ impl Worker {
                         waker.wake();
                     }
                 }
-            })
-            .ok()?;
-        Some(Self {
+            })?;
+        Ok(Self {
             jobs,
             answers,
             waker,
