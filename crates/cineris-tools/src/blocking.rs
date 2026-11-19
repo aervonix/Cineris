@@ -265,6 +265,32 @@ mod tests {
     }
 
     #[test]
+    fn work_handed_to_a_runtime_that_has_ended_is_cancelled() {
+        // The runtime drops a task it can no longer run (here, one given
+        // after its end), and the caller is told the work was cancelled,
+        // not that it panicked. Polled by hand, once: the task is dropped
+        // as it is handed over, so nothing waits.
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("a runtime");
+        let handle = runtime.handle().clone();
+        runtime.shutdown_background();
+        let _inside = handle.enter();
+        let cancel = CancelToken::new();
+        let ran = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&ran);
+        let mut call = Box::pin(run_blocking(&cancel, move |_| {
+            flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert_eq!(
+            call.as_mut().poll(&mut context),
+            Poll::Ready(Err(BlockingError::Cancelled))
+        );
+        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
     fn a_token_that_has_fired_stops_the_work_before_it_starts() {
         let cancel = CancelToken::new();
         cancel.cancel();
