@@ -62,16 +62,28 @@ The builder passes `Path` on empty when the harness's had entries but none absol
   - `shell_search::a_shell_in_an_avoided_directory_is_not_chosen` (both systems' rules): a `bash` or `pwsh.exe` in an avoided `.venv/bin` is passed over, by the default search and by a configured name.
 - `cineris-core`
   - `harness_git::sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace`: with the sandbox off, a filter named by a bare name is in an activated `.venv/bin` and in a directory outside further down `PATH`; the outside one runs.
+  - `shell::sys_the_shell_a_session_finds_is_not_in_the_workspace_and_its_probe_has_no_key` (Unix): what the core hands the shell's search and probe, end to end. With no sandbox, the session finds its own shell on the `PATH` of the environment its processes inherit: a `bash` planted first, in the workspace's `.venv/bin`, is never started; the one found, outside, is asked its version with no key and no workspace directory on its `PATH`. Asked for by the maintainers before the merge, so that a change to the core cannot drop the hand-over with every piece's test still passing. For it the core's search reads the options' environment for commands when one is given, as git and the probe already did (`ShellSearch::from_vars`).
   - `shell::sys_a_reload_withholds_a_variable_a_new_header_reads`: a reload that gives a provider a header read from a variable withholds it from the next command.
   - `harness_git::sys_a_reload_withholds_the_keys_from_a_filter_the_harness_git_runs`: a session at `unrestricted` whose command plants a filter; after a reload moves the provider's key from one variable to another, the filter the after-look's git runs sees neither, and sees the environment's other variables.
   - `sandbox::tests::the_harness_git_withholds_what_a_reload_sets_and_what_the_start_had`, `sandbox::tests::the_harness_git_is_never_one_inside_the_workspace`, `assemble::tests::the_workspace_is_avoided_with_or_without_a_sandbox`, `assemble::tests::the_write_roots_kept_out_of_are_placed_as_the_grant_places_them`, and `assemble::tests::a_shell_inside_a_write_root_is_passed_over` as changed.
 - `xtask`: `rules::rust_source::tests::every_process_start_is_in_the_table`, for the rule below.
 
-**What is left untested:** what the core hands the shell's search and probe (`find_shell`'s `avoid` and `removed`). The core's tests give their sessions a shell, so none searches for one or probes it. The search and the probe themselves are tested in `cineris-tools`, the composition of the avoided roots in `assemble::tests`, and the same roots' hand-over to git by the core's system test above.
+**What is tested on Linux only:** the core's hand-over to the shell's search and probe, end to end (the test above plants scripts). The pieces it hands them to run on both systems, and the code that hands them over is the same on both.
 
 ## The table, kept by a rule
 
 [security.md](../../security.md), section 12, lists every place the product starts a process. `cargo xtask rules` now checks it (`process_starts`, beside the rule against a program started by its bare name): a product file that calls `Command::new`, `brief::run` or `CreateProcessW` outside its tests must be named in the table, and every file the table names must still start one. The test kit and `xtask` are left out, as the other rule leaves them.
+
+## The rebases onto main
+
+- **Onto `d0486fd3`** (step tooling 12's first part), by hand: two conflicts. In `assemble.rs`, main had added a test hook before the probe that runs inline; it was kept, beside the call of this fix's `probe`. In `xtask/src/rules/mod.rs`, main's `pty_keys` rule and this fix's `process_starts` were both kept. `git::start`'s new test hooks merged without a conflict and stay after the environment is built.
+- **Onto `d6f07ee9`** (its second part, which brings `cargo xtask rebase`): the branch did not hold the command yet, and it rebases the tree its binary was built from, so the rebase was git's own, with no conflict. Then `cargo xtask rebase` from the rebased branch said:
+
+```
+Rebased worktree-step-security-fix-2 onto origin/main with no conflict.
+docs/outstanding/README.md is up to date.
+The tip before was 796287f8e110: `git reset --keep 796287f8e110` takes the branch back to it.
+```
 
 ## The flake `a-git-cap-of-zero-that-git-can-still-beat`
 
@@ -102,7 +114,7 @@ The whole diff, against this record's design and [security.md](../../security.md
 | Finding | Fix |
 |---|---|
 | **Medium, confirmed:** the break `a-link-only-followed-to-its-end` could not bite: the root's own directory is a place on the way before any link inside it. | Dropped. The rule is held by `a-link-in-a-root-that-leads-out-taken`. |
-| Low, confirmed: calls A and B at the core's call sites were pinned only by unit tests. The core's tests run where the sandbox enforces, and there the write roots hold the workspace already, so handing git the write roots in place of the avoided roots passed. | `harness_git::sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace` turns the sandbox off; the break `git-given-only-the-write-roots-to-avoid`. The shell's call site is left untested (above). |
+| Low, confirmed: calls A and B at the core's call sites were pinned only by unit tests. The core's tests run where the sandbox enforces, and there the write roots hold the workspace already, so handing git the write roots in place of the avoided roots passed. | `harness_git::sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace` turns the sandbox off; the break `git-given-only-the-write-roots-to-avoid`. The shell's call site, at first left untested, is pinned by `shell::sys_the_shell_a_session_finds_is_not_in_the_workspace_and_its_probe_has_no_key` and three breaks. |
 | Low, confirmed: a `PATH` that is not Unicode, every directory of which is avoided, was left empty on Unix, which a shell reads as the directory it runs in. | It is `/usr/bin:/bin` there too, as in the Unicode case. |
 | Low, plausible: the probe's `PATH` kept the workspace's directories, where a shell that is a wrapper (a version manager's shim) looks up its real program, unconfined. | The probe's `PATH` leaves out the avoided roots too (`child_env::keep_out_of`); the probe's test has an avoided `.venv/bin` in it, and the break `probe-searches-the-workspace`. |
 | Low, docs: section 12 said the shell is never a program inside the workspace, where a configured absolute `shell.program`, `%ComSpec%` and the shells under `%SystemRoot%` are taken as named. | Said so. |
@@ -112,7 +124,7 @@ The whole diff, against this record's design and [security.md](../../security.md
 
 ### The narrow check of the review's fixes (Opus, 2026-11-19)
 
-The same reviewer, on the commit that fixed its findings. Each is fixed; the shell's call site in the core stays untested, as this record says.
+The same reviewer, on the commit that fixed its findings. Each is fixed.
 
 | Finding | Fix |
 |---|---|
@@ -127,7 +139,7 @@ Run with `cargo xtask mutate` on the reference machine, beside other work: verdi
 
 | What | Breaks | Verdict |
 |---|---|---|
-| `mutations/harness-process-fixes.breaks` | 21: git's environment cleared, built, told the withheld list, the reload's and the start's keys, the roots avoided, the call site's roots (6); its `PATH` without relative entries, without avoided ones, and told the avoided roots; Windows' variable; the known keys (5); the probe's environment cleared, built, and its `PATH` (3); the search's relative entries, a shell in a root, a configured one in a write root, a link in a root that leads out, a git in the workspace, the workspace avoided without a sandbox (6); a reload's look at any provider (1) | 21 caught |
+| `mutations/harness-process-fixes.breaks` | 24: git's environment cleared, built, told the withheld list, the reload's and the start's keys, the roots avoided, the call site's roots (6); its `PATH` without relative entries, without avoided ones, and told the avoided roots; Windows' variable; the known keys (5); the probe's environment cleared, built, and its `PATH` (3); the search's relative entries, a shell in a root, a configured one in a write root, a link in a root that leads out, a git in the workspace, the workspace avoided without a sandbox (6); a reload's look at any provider (1); the core's hand-over to the shell's search of the roots to avoid, and to its probe of the removal list and the roots (3) | 24 caught |
 | Moved, in the shell environment's fixes' lists (11), `step-13a.breaks` (3), `step-13a-fixes.breaks` (1), `step-25-pathfix.breaks` (4) and `step-26-fixes.breaks` (3) | The code they break moved into `cineris_base::child_env` and `program`; each names the tests of `cineris-base` that catch it there too | Every one caught by the tests it names |
 | `step-13a-fixes/program-search-looks-in-relative-entries` | The shell's search is `find_outside` now, so the shell's test no longer reaches `find`: the line is taken out, and `program-search-outside-looks-in-relative-entries` breaks the same rule in `find_outside` | Caught by `cineris-base`'s test |
 | `step-13a-fixes/harness-starts-git-by-name` | Git's `PATH` holds no relative entry now, so in the session store's test a bare `git` finds what the search found. In a session that confines, though, the program started is the sandbox's launcher, and a bare `git` in its place runs outside the sandbox | Caught by the core's `harness_git::sys_a_filter_a_confined_command_plants_runs_inside_the_sandbox`, which it names now (the narrow check found that `expect: survives` was wrong) |

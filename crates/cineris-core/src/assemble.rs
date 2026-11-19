@@ -1765,8 +1765,14 @@ fn find_shell(
     // the harness's own processes' fixes). The search goes on down `PATH`,
     // so a system shell behind a project's `.venv/bin` is still found; the
     // shell tool is unavailable only when nothing outside is left.
+    // Looked for in the environment the harness's processes inherit from:
+    // this process's own, or a test's.
+    let search = match &inner.options.shell_env {
+        Some(inherited) => ShellSearch::from_vars(inherited.iter().cloned()),
+        None => ShellSearch::from_env(),
+    };
     let (shell, passed) = shell_outside_roots(
-        ShellSearch::from_env(),
+        search,
         key.0.as_deref(),
         key.1.as_deref(),
         avoid,
