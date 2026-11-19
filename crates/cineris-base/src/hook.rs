@@ -147,6 +147,74 @@ pub const fn launched(_launcher: &std::ffi::OsStr, _program: &std::ffi::OsStr) {
 /// What a line of [`launched`] starts with, before the program's name.
 pub const LAUNCHED: &str = "launcher>";
 
+/// A command line kept for [`spawned`], taken before the command is
+/// handed over to be started. Without the `test-hooks` feature it holds
+/// nothing, and no text is made.
+#[cfg(not(feature = "test-hooks"))]
+#[derive(Debug, Clone, Copy)]
+pub struct Described;
+
+/// The command line of `command`, for [`spawned`]. Without the
+/// `test-hooks` feature this is nothing at all.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+#[must_use]
+pub fn describe(_command: &std::process::Command) -> Described {
+    Described
+}
+
+/// [`describe`], for a program and its arguments given apart.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+#[must_use]
+pub fn describe_line(_program: &str, _arguments: &[String]) -> Described {
+    Described
+}
+
+/// Marks a process just started, by its id and its command line, for the
+/// test kit's timeout report: each child the test started, how long ago,
+/// and whether it has exited (`docs/testing-and-ci.md`, "When a test runs
+/// out of time", since the twelfth tooling step). Without the `test-hooks`
+/// feature this is nothing at all.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn spawned(_pid: u32, _command: Described) {}
+
+/// Marks that the code which started process `pid` saw it exit (its wait
+/// returned). Without the `test-hooks` feature this is nothing at all.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn reaped(_pid: u32) {}
+
+/// Called by the process runner before it starts a command: with the
+/// `test-hooks` feature, under nextest, a test whose name does not start
+/// with `sys_` or `perf_` is stopped there, with a message that says what
+/// to do (`docs/testing-and-ci.md`, "Test tiers", since the twelfth tooling
+/// step). Without the feature this is nothing at all.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn command_from_a_test(_program: &std::ffi::OsStr) {}
+
+/// Whether a test of this name may start a process: its last segment
+/// starts with `sys_` or `perf_` (`commands::sys_trust`).
+#[must_use]
+pub fn may_start_a_process(test: &str) -> bool {
+    let last = test.rsplit("::").next().unwrap_or(test);
+    last.starts_with("sys_") || last.starts_with("perf_")
+}
+
+/// The message [`command_from_a_test`] stops a test with.
+#[must_use]
+pub fn refusal(test: &str, program: &str) -> String {
+    format!(
+        "cineris test hooks: the test `{test}` had the process runner start `{program}`, and only \
+         a test named `sys_…` or `perf_…` may start a process (CONTRIBUTING.md, \"Test tiers\"; \
+         docs/testing-and-ci.md). Rename the test `sys_…`, which puts it in the system tier with \
+         that tier's 60 s limit, or give its run a launcher or a script that starts nothing. The \
+         test was stopped here so that it does not pass by luck under tier 2's 10 s limit."
+    )
+}
+
 /// Marks a start of `program` to ask it its version (`--version`), apart
 /// from the starts that run a command: on Linux the harness asks bash its
 /// version on the side, where on Windows the tests' shell is asked nothing,
@@ -165,6 +233,142 @@ pub const STARTS: &str = "CINERIS_TESTKIT_STARTS";
 
 #[cfg(feature = "test-hooks")]
 pub use starts::{launched, probed, program_name, started};
+
+#[cfg(feature = "test-hooks")]
+pub use children::{
+    Described, Spawned, command_from_a_test, describe, describe_line, reaped, spawned,
+    spawned_children,
+};
+
+/// The children a test's process started, for its timeout report, and the
+/// runner's refusal of a test that may not start one.
+#[cfg(feature = "test-hooks")]
+mod children {
+    use std::ffi::OsStr;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    use crate::sync::lock;
+
+    /// The most kept: a test that starts more keeps its latest.
+    const KEPT: usize = 200;
+
+    struct Record {
+        pid: u32,
+        command: String,
+        at: Instant,
+        reaped: Option<Instant>,
+    }
+
+    static CHILDREN: Mutex<Vec<Record>> = Mutex::new(Vec::new());
+
+    /// One child, as the report shows it.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct Spawned {
+        /// Its process id.
+        pub pid: u32,
+        /// Its command line, as the code that started it gave it.
+        pub command: String,
+        /// How long ago it started.
+        pub ago: Duration,
+        /// How long after its start the code that started it saw it exit,
+        /// if it did.
+        pub reaped_after: Option<Duration>,
+    }
+
+    /// A command line kept for [`spawned`].
+    #[derive(Debug, Clone)]
+    pub struct Described(String);
+
+    /// The most of a command line kept.
+    const LINE: usize = 300;
+
+    /// The program and its arguments of `command`, as one line.
+    #[must_use]
+    pub fn describe(command: &std::process::Command) -> Described {
+        let arguments: Vec<String> = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
+        describe_line(&command.get_program().to_string_lossy(), &arguments)
+    }
+
+    /// [`describe`], for a program and its arguments given apart.
+    #[must_use]
+    pub fn describe_line(program: &str, arguments: &[String]) -> Described {
+        let mut line = program.to_owned();
+        for argument in arguments {
+            line.push(' ');
+            line.push_str(argument);
+        }
+        let line = line.replace(['\n', '\r'], " ");
+        Described(line.chars().take(LINE).collect())
+    }
+
+    /// See [`super`]'s description without the feature.
+    pub fn spawned(pid: u32, command: Described) {
+        let mut children = lock(&CHILDREN);
+        if children.len() == KEPT {
+            children.remove(0);
+        }
+        children.push(Record {
+            pid,
+            command: command.0,
+            at: Instant::now(),
+            reaped: None,
+        });
+    }
+
+    /// See [`super`]'s description without the feature.
+    pub fn reaped(pid: u32) {
+        let mut children = lock(&CHILDREN);
+        if let Some(record) = children
+            .iter_mut()
+            .rev()
+            .find(|record| record.pid == pid && record.reaped.is_none())
+        {
+            record.reaped = Some(Instant::now());
+        }
+    }
+
+    /// The children marked so far, oldest first.
+    #[must_use]
+    pub fn spawned_children() -> Vec<Spawned> {
+        let now = Instant::now();
+        lock(&CHILDREN)
+            .iter()
+            .map(|record| Spawned {
+                pid: record.pid,
+                command: record.command.clone(),
+                ago: now.saturating_duration_since(record.at),
+                reaped_after: record
+                    .reaped
+                    .map(|at| at.saturating_duration_since(record.at)),
+            })
+            .collect()
+    }
+
+    /// See [`super`]'s description without the feature. The test's name is
+    /// nextest's (`NEXTEST_TEST_NAME`), which a test's children inherit:
+    /// outside nextest nothing is refused, as `cargo test` runs many tests
+    /// in one process and cannot say whose start this is.
+    #[allow(
+        clippy::print_stderr,
+        reason = "the refusal must reach the test's output before the process stops"
+    )]
+    pub fn command_from_a_test(program: &OsStr) {
+        let Ok(test) = std::env::var("NEXTEST_TEST_NAME") else {
+            return;
+        };
+        if super::may_start_a_process(&test) {
+            return;
+        }
+        eprintln!("\n{}\n", super::refusal(&test, &program.to_string_lossy()));
+        // A panic here would be the runner's error, which a test of a turn
+        // can take for a failed command and pass on; an abort cannot be.
+        std::process::abort();
+    }
+}
 
 /// Process starts, written down for the test that made them.
 #[cfg(feature = "test-hooks")]
@@ -1292,5 +1496,55 @@ mod enabled {
             thread.join().unwrap();
             assert_eq!(hold.timed_out(), 0);
         }
+    }
+}
+
+#[cfg(test)]
+mod start_rule_tests {
+    use super::{may_start_a_process, refusal};
+
+    /// The last segment of nextest's name decides: `sys_` and `perf_` may
+    /// start a process; a module named `sys_…` above a test does not count.
+    #[test]
+    fn only_a_sys_or_perf_test_may_start_a_process() {
+        assert!(may_start_a_process("commands::sys_trust"));
+        assert!(may_start_a_process("perf_a_tree"));
+        assert!(may_start_a_process("a::b::perf_walk"));
+        assert!(!may_start_a_process("verify::a_users_own_ask_rule"));
+        assert!(!may_start_a_process("sys_things::a_test"));
+        assert!(!may_start_a_process("a::system_test"));
+    }
+
+    /// The message names the test and the program and says what to do.
+    #[test]
+    fn the_refusal_says_what_to_do() {
+        let text = refusal("verify::x", "powershell");
+        assert!(text.contains("`verify::x`"), "{text}");
+        assert!(text.contains("`powershell`"), "{text}");
+        assert!(text.contains("Rename the test `sys_…`"), "{text}");
+    }
+}
+
+#[cfg(all(test, feature = "test-hooks"))]
+mod children_tests {
+    use super::{describe_line, reaped, spawned, spawned_children};
+
+    /// A child is kept with its command, and its exit once the code that
+    /// started it saw one; the latest of one id is the one reaped.
+    #[test]
+    fn a_child_is_kept_and_its_exit_is_marked() {
+        spawned(4_000_001, describe_line("git", &["status".to_owned()]));
+        spawned(
+            4_000_002,
+            describe_line("sh", &["-c".to_owned(), "true\n".to_owned()]),
+        );
+        reaped(4_000_002);
+        let children = spawned_children();
+        let git = children.iter().find(|c| c.pid == 4_000_001).unwrap();
+        assert_eq!(git.command, "git status");
+        assert!(git.reaped_after.is_none());
+        let sh = children.iter().find(|c| c.pid == 4_000_002).unwrap();
+        assert_eq!(sh.command, "sh -c true ", "a line break is a space");
+        assert!(sh.reaped_after.is_some());
     }
 }

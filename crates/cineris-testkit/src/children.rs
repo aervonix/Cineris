@@ -409,6 +409,14 @@ impl Roll {
                         return;
                     };
                     let Ok(pid) = pid.parse() else { return };
+                    // For the timeout report: a child of the test's own.
+                    cineris_base::hook::spawned(
+                        pid,
+                        cineris_base::hook::describe_line(
+                            &format!("(the roll's child `{name}`)"),
+                            &[],
+                        ),
+                    );
                     // Heard: the child goes on only now.
                     if (&stream).write_all(b"k").is_err() {
                         return;

@@ -162,7 +162,9 @@ impl Tree {
         limits: Limits,
     ) -> io::Result<Self> {
         cineris_base::hook::started(command.get_program());
+        let described = cineris_base::hook::describe(&command);
         let inner = imp::Inner::spawn(command, guard, limits)?;
+        cineris_base::hook::spawned(inner.id(), described);
         Ok(Self {
             inner: Arc::new(inner),
         })
@@ -211,7 +213,11 @@ impl Tree {
     /// It may be called from several threads, and again after it has
     /// returned.
     pub fn wait(&self) -> io::Result<Exit> {
-        self.inner.wait()
+        let exit = self.inner.wait();
+        if exit.is_ok() {
+            cineris_base::hook::reaped(self.inner.id());
+        }
+        exit
     }
 
     /// How many processes of the tree are running, not counting the

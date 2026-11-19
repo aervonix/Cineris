@@ -180,7 +180,10 @@ impl Session {
     /// Windows Terminal sends a pseudo-console, which asks for that mode and
     /// misreads a plain sequence after an escape (`docs/conpty.md`);
     /// elsewhere, the xterm sequence. Names: `f1` to `f12`, `up`, `down`,
-    /// `left`, `right`, `pageup`, `pagedown`.
+    /// `left`, `right`, `pageup`, `pagedown` and `escape`, each with any of
+    /// `shift+`, `ctrl+` and `alt+` before it ([`key_bytes`]). A pty test
+    /// sends every key through here: `cargo xtask rules` fails on a raw
+    /// escape sequence for a key.
     ///
     /// # Panics
     ///
@@ -387,42 +390,95 @@ impl Drop for Session {
 
 /// The bytes of the key named `name` as a terminal sends it: with `win32`,
 /// a press and a release as Windows Terminal's win32 input records
-/// (`CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`: the virtual key, the scan code, no
-/// character, down or up, the control keys' state, one repeat), the arrows
-/// and the page keys marked as the enhanced keys they are; otherwise the
-/// xterm sequence. `None` for a name it does not know.
+/// (`CSI Vk ; Sc ; Uc ; Kd ; Cs ; Rc _`: the virtual key, the scan code, the
+/// character (Escape's own, none for the others), down or up, the control
+/// keys' state, one repeat), the arrows and the page keys marked as the
+/// enhanced keys they are; otherwise the xterm sequence. `None` for a name
+/// it does not know.
+///
+/// A name may start with modifiers, each followed by `+`, in any order:
+/// `shift`, `ctrl` and `alt` (since the twelfth tooling step: `ctrl+up`,
+/// `shift+f5`). In an xterm sequence they are its modifier parameter
+/// (`CSI 1 ; 5 A`), and Escape takes only `alt` (`ESC ESC`); in the win32
+/// records they are the control keys' state (the left Ctrl and Alt).
 #[must_use]
 pub fn key_bytes(name: &str, win32: bool) -> Option<Vec<u8>> {
-    // The name, its virtual key, its scan code, whether it is an enhanced
-    // key, and its xterm sequence.
-    const KEYS: [(&str, u16, u16, bool, &str); 18] = [
-        ("f1", 0x70, 0x3b, false, "\x1bOP"),
-        ("f2", 0x71, 0x3c, false, "\x1bOQ"),
-        ("f3", 0x72, 0x3d, false, "\x1bOR"),
-        ("f4", 0x73, 0x3e, false, "\x1bOS"),
-        ("f5", 0x74, 0x3f, false, "\x1b[15~"),
-        ("f6", 0x75, 0x40, false, "\x1b[17~"),
-        ("f7", 0x76, 0x41, false, "\x1b[18~"),
-        ("f8", 0x77, 0x42, false, "\x1b[19~"),
-        ("f9", 0x78, 0x43, false, "\x1b[20~"),
-        ("f10", 0x79, 0x44, false, "\x1b[21~"),
-        ("f11", 0x7a, 0x57, false, "\x1b[23~"),
-        ("f12", 0x7b, 0x58, false, "\x1b[24~"),
-        ("left", 0x25, 0x4b, true, "\x1b[D"),
-        ("up", 0x26, 0x48, true, "\x1b[A"),
-        ("right", 0x27, 0x4d, true, "\x1b[C"),
-        ("down", 0x28, 0x50, true, "\x1b[B"),
-        ("pageup", 0x21, 0x49, true, "\x1b[5~"),
-        ("pagedown", 0x22, 0x51, true, "\x1b[6~"),
+    // The name, its virtual key, its scan code, its character, whether it
+    // is an enhanced key, and its xterm sequence.
+    const KEYS: [(&str, u16, u16, u16, bool, &str); 19] = [
+        ("f1", 0x70, 0x3b, 0, false, "\x1bOP"),
+        ("f2", 0x71, 0x3c, 0, false, "\x1bOQ"),
+        ("f3", 0x72, 0x3d, 0, false, "\x1bOR"),
+        ("f4", 0x73, 0x3e, 0, false, "\x1bOS"),
+        ("f5", 0x74, 0x3f, 0, false, "\x1b[15~"),
+        ("f6", 0x75, 0x40, 0, false, "\x1b[17~"),
+        ("f7", 0x76, 0x41, 0, false, "\x1b[18~"),
+        ("f8", 0x77, 0x42, 0, false, "\x1b[19~"),
+        ("f9", 0x78, 0x43, 0, false, "\x1b[20~"),
+        ("f10", 0x79, 0x44, 0, false, "\x1b[21~"),
+        ("f11", 0x7a, 0x57, 0, false, "\x1b[23~"),
+        ("f12", 0x7b, 0x58, 0, false, "\x1b[24~"),
+        ("left", 0x25, 0x4b, 0, true, "\x1b[D"),
+        ("up", 0x26, 0x48, 0, true, "\x1b[A"),
+        ("right", 0x27, 0x4d, 0, true, "\x1b[C"),
+        ("down", 0x28, 0x50, 0, true, "\x1b[B"),
+        ("pageup", 0x21, 0x49, 0, true, "\x1b[5~"),
+        ("pagedown", 0x22, 0x51, 0, true, "\x1b[6~"),
+        ("escape", 0x1b, 0x01, 27, false, "\x1b"),
     ];
-    /// The control keys' state of an enhanced key (`ENHANCED_KEY`).
+    /// The control keys' states: an enhanced key (`ENHANCED_KEY`), Shift,
+    /// the left Ctrl and the left Alt.
     const ENHANCED: u32 = 0x100;
-    let &(_, vk, scan, enhanced, sequence) = KEYS.iter().find(|key| key.0 == name)?;
-    if !win32 {
-        return Some(sequence.as_bytes().to_vec());
+    const SHIFT: u32 = 0x10;
+    const LEFT_CTRL: u32 = 0x08;
+    const LEFT_ALT: u32 = 0x02;
+
+    let mut key = name;
+    let (mut shift, mut ctrl, mut alt) = (false, false, false);
+    while let Some((modifier, rest)) = key.split_once('+') {
+        let held = match modifier {
+            "shift" => &mut shift,
+            "ctrl" => &mut ctrl,
+            "alt" => &mut alt,
+            _ => return None,
+        };
+        if *held {
+            return None;
+        }
+        *held = true;
+        key = rest;
     }
-    let state = if enhanced { ENHANCED } else { 0 };
-    let record = |down: u8| format!("\x1b[{vk};{scan};0;{down};{state};1_");
+    let &(_, vk, scan, character, enhanced, sequence) = KEYS.iter().find(|row| row.0 == key)?;
+    if !win32 {
+        // xterm's modifier parameter: 1, and 1 more for Shift, 2 for Alt,
+        // 4 for Ctrl.
+        let modifier = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
+        if modifier == 1 {
+            return Some(sequence.as_bytes().to_vec());
+        }
+        let body = sequence.strip_prefix('\x1b')?;
+        let modified = if body.is_empty() {
+            // Escape: Alt alone, as an Escape before it.
+            (modifier == 3).then(|| "\x1b\x1b".to_owned())?
+        } else if let Some(number) = body.strip_prefix('[').and_then(|b| b.strip_suffix('~')) {
+            format!("\x1b[{number};{modifier}~")
+        } else {
+            // `SS3 X` or `CSI X`: the final letter after `CSI 1 ; m`.
+            let last = body.chars().next_back()?;
+            format!("\x1b[1;{modifier}{last}")
+        };
+        return Some(modified.into_bytes());
+    }
+    let state = [
+        (enhanced, ENHANCED),
+        (shift, SHIFT),
+        (ctrl, LEFT_CTRL),
+        (alt, LEFT_ALT),
+    ]
+    .iter()
+    .filter(|(on, _)| *on)
+    .fold(0, |state, (_, bit)| state | bit);
+    let record = |down: u8| format!("\x1b[{vk};{scan};{character};{down};{state};1_");
     Some(format!("{}{}", record(1), record(0)).into_bytes())
 }
 
@@ -444,6 +500,36 @@ mod tests {
         assert_eq!(super::key_bytes("pageup", false).unwrap(), b"\x1b[5~");
         assert_eq!(super::key_bytes("f1", false).unwrap(), b"\x1bOP");
         assert!(super::key_bytes("f13", true).is_none());
+    }
+
+    /// Escape and the modifiers (since the twelfth tooling step): Escape
+    /// carries its character in a record; a modifier is xterm's parameter
+    /// or a record's control keys' state; a name it cannot send is none.
+    #[test]
+    fn escape_and_the_modifiers_are_sent_as_a_terminal_sends_them() {
+        let key = |name, win32| super::key_bytes(name, win32);
+        assert_eq!(key("escape", false).unwrap(), b"\x1b");
+        assert_eq!(
+            key("escape", true).unwrap(),
+            b"\x1b[27;1;27;1;0;1_\x1b[27;1;27;0;0;1_"
+        );
+        assert_eq!(key("alt+escape", false).unwrap(), b"\x1b\x1b");
+        assert!(key("ctrl+escape", false).is_none());
+        assert_eq!(key("ctrl+up", false).unwrap(), b"\x1b[1;5A");
+        assert_eq!(key("shift+f1", false).unwrap(), b"\x1b[1;2P");
+        assert_eq!(key("ctrl+shift+f5", false).unwrap(), b"\x1b[15;6~");
+        assert_eq!(key("alt+pagedown", false).unwrap(), b"\x1b[6;3~");
+        assert_eq!(
+            key("ctrl+up", true).unwrap(),
+            b"\x1b[38;72;0;1;264;1_\x1b[38;72;0;0;264;1_"
+        );
+        assert_eq!(
+            key("shift+alt+f5", true).unwrap(),
+            b"\x1b[116;63;0;1;18;1_\x1b[116;63;0;0;18;1_"
+        );
+        assert!(key("ctrl+ctrl+up", false).is_none());
+        assert!(key("meta+up", false).is_none());
+        assert!(key("ctrl+", false).is_none());
     }
 
     use super::*;

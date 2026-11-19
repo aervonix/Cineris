@@ -1125,8 +1125,8 @@ caught-by:
 rule: The test kit sends an arrow as Windows Terminal does, marked as an enhanced key in its win32 record.
 file: crates/cineris-testkit/src/pty.rs
 in: key_bytes
-find: let state = if enhanced { ENHANCED } else { 0 };
-replace: let state = 0;
+find: (enhanced, ENHANCED)
+replace: (false, ENHANCED)
 caught-by:
     cineris-testkit pty::tests::a_named_key_is_sent_as_its_win32_records_or_its_sequence
 
