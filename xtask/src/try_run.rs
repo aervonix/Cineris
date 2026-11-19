@@ -426,9 +426,15 @@ impl Inputs {
         }
         if inputs.is_final() {
             inputs.check_final()?;
-            inputs
-                .against
-                .get_or_insert_with(|| FINAL_AGAINST.to_owned());
+            // A dispatch or a dry run compares with main when not told. A
+            // job, told its part, is given `against` by the workflow, which
+            // checks out only what it names: a job that defaulted it would
+            // look for a base that is not there.
+            if inputs.part.is_none() {
+                inputs
+                    .against
+                    .get_or_insert_with(|| FINAL_AGAINST.to_owned());
+            }
         } else if inputs.part.is_some() {
             return Err(
                 "`--part` is the part of a final run a job is: it goes with `--final`".to_owned(),
@@ -867,11 +873,11 @@ impl Inputs {
         match part {
             "ab" => {
                 inputs.words = vec!["test".to_owned()];
-                inputs.against = Some(
-                    self.against
-                        .clone()
-                        .ok_or("a final run's A/B needs `--against`")?,
-                );
+                inputs.against = Some(self.against.clone().ok_or(
+                    "a final run's A/B job was given no `against`: `cargo xtask try \
+                             --final --dispatch BRANCH` sends main, resolved to its commit; a \
+                             dispatch by hand needs `-f against=main`. Nothing was built",
+                )?);
                 inputs.label = self.label.clone();
                 inputs.count = self.count;
             }
@@ -999,7 +1005,14 @@ impl Inputs {
                             .to_owned(),
                     );
                 }
-                "--jobs" | "-j" | "--file" | "--budget" => {
+                "--budget" => {
+                    let text = words
+                        .next()
+                        .ok_or_else(|| format!("`{word}` needs a value"))?;
+                    check_mutate_budget(text)?;
+                    command.extend([word.clone(), text.clone()]);
+                }
+                "--jobs" | "-j" | "--file" => {
                     command.push(word.clone());
                     command.push(
                         words
@@ -1297,10 +1310,39 @@ impl Inputs {
     }
 }
 
+/// The minutes a `mutate` run's step may take on a runner: its job's limit
+/// in `try.yml` (90) less the room the steps before it take. The step has
+/// this as its own limit, so that a run that overruns it fails and the
+/// steps after it still upload what it found, which a job cancelled at its
+/// limit does not.
+const MUTATE_STEP_MINUTES: u64 = 80;
+
+/// The room a `mutate --budget` leaves within its step: the baselines of
+/// the class it is in, and the breaks under way when the budget is spent.
+const MUTATE_BUDGET_ROOM: u64 = 20;
+
+/// Refuses a `mutate --budget` longer than its step's limit allows: such a
+/// run would be stopped by the runner, and everything it found lost.
+fn check_mutate_budget(text: &str) -> Result<()> {
+    let budget = crate::mutate::budget::parse_time(text)?;
+    let most = MUTATE_STEP_MINUTES - MUTATE_BUDGET_ROOM;
+    if budget > std::time::Duration::from_secs(most * 60) {
+        return Err(format!(
+            "`--budget {text}` is longer than a try run's `mutate` may take: {most} minutes at \
+             most, within the step's {MUTATE_STEP_MINUTES}, so that the breaks under way finish \
+             and the results are uploaded"
+        ));
+    }
+    Ok(())
+}
+
 /// The minutes a job A/B on a runner may start rounds within: the job's
 /// limit for it in `try.yml` (240) less a round's worth of room for the
 /// last round, the summary and the upload.
 const JOB_AB_MINUTES: u32 = 200;
+
+// The rounds start within the run step's own limit for a job A/B (230).
+const _: () = assert!(JOB_AB_MINUTES < 230);
 
 /// The words of `test` that make an A/B a job A/B (`ab --job`), taken out
 /// of the words that go to nextest.
@@ -2689,6 +2731,14 @@ mod tests {
             try_command(&["--command", "mutate step-12 --budget 30m"]),
             Ok("mutate --minutes 0 step-12 --budget 30m".to_owned())
         );
+        assert_eq!(
+            try_command(&["--command", "mutate step-12 --budget 1h"]),
+            Ok("mutate --minutes 0 step-12 --budget 1h".to_owned()),
+            "the most a try run's budget may be"
+        );
+        let error = try_command(&["--command", "mutate step-12 --budget 61m"]).unwrap_err();
+        assert!(error.contains("60 minutes at most"), "{error}");
+        assert!(try_command(&["--command", "mutate step-12 --budget soon"]).is_err());
         for (arguments, expected) in [
             (
                 &["--command", "mutate step-12", "--against", "main"][..],
@@ -3491,6 +3541,17 @@ mod tests {
         );
         let error = planned(&["--final", "--part", "all"]).unwrap_err();
         assert!(error.contains("ab, tests, size"), "{error}");
+        // A job given no `against` (a dispatch by hand) is told so before
+        // anything is built, and does not look for a base that is not there.
+        let error = planned(&["--command", "final", "--part", "ab"]).unwrap_err();
+        assert!(error.contains("needs `-f against=main`"), "{error}");
+        assert_eq!(
+            planned(&["--command", "final", "--part", "tests"])
+                .unwrap()
+                .0,
+            "ci --tiers --top 20",
+            "the other parts need none"
+        );
     }
 
     #[test]
@@ -3582,6 +3643,43 @@ mod tests {
             workflow.contains("TRY_PART: ${{ inputs.command == 'final' && matrix.part || '' }}"),
             "the part reaches the job"
         );
+        // Only the A/B's job checks out a base; only the size job has the
+        // token; each run step stops under its job's limit, so that the
+        // upload after it runs.
+        assert_eq!(
+            workflow
+                .matches(
+                    "if: inputs.against != '' && (inputs.command != 'final' || matrix.part == 'ab')"
+                )
+                .count(),
+            2,
+            "the base's checkout and its move"
+        );
+        assert_eq!(
+            workflow
+                .matches(
+                    "GH_TOKEN: ${{ (startsWith(inputs.command, 'size') || inputs.command == 'final' && matrix.part == 'size') && github.token || '' }}"
+                )
+                .count(),
+            2
+        );
+        assert!(workflow.contains(
+            "timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 240 || (startsWith(inputs.command, 'mutate') && 90 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 60 || 40)) }}"
+        ));
+        assert_eq!(
+            workflow
+                .matches(
+                    "timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 50 || 30)) }}"
+                )
+                .count(),
+            2,
+            "each run step, ten minutes under its job"
+        );
+        assert_eq!(
+            super::MUTATE_STEP_MINUTES,
+            80,
+            "the run step's limit for mutate"
+        );
         assert_eq!(
             workflow.matches("added+=(--part \"$TRY_PART\")").count()
                 + workflow
@@ -3601,12 +3699,23 @@ mod tests {
                 "--against",
                 "main",
                 "--count",
-                "3",
+                "4",
             ])
             .unwrap(),
-            "ab --job --base ../ab-base --label main --minutes 200 --count 3 --setup-head \
+            "ab --job --base ../ab-base --label main --minutes 200 --count 4 --setup-head \
              .github/x.sh --keep-build -p cineris-base"
         );
+        // An odd count gives one side the first place more often.
+        let error = try_command(&[
+            "--command",
+            "test --job",
+            "--against",
+            "main",
+            "--count",
+            "3",
+        ])
+        .unwrap_err();
+        assert!(error.contains("an even number of rounds"), "{error}");
         assert_eq!(
             try_command(&[
                 "--command",
