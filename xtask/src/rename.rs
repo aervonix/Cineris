@@ -72,8 +72,9 @@ apply       Rewrites the working tree (the files git tracks, and new files it
 --check     Fails on any old name left in a tracked file's text or path,
             outside the kept lines, and in a file that is not text. `cargo
             xtask rules` runs the same check, so the lint job does too. It
-            knows the alias in the forms `apply` renames, not every word
-            built on it.
+            finds the alias in the forms `apply` renames, and the labels built
+            on it with no separator (`cxterm-demo=`, `CX_PIPE`, `as_cx`),
+            which `apply` leaves: write those by hand, `cx` as `cin`.
 
 What it refuses: a symbolic link (neither `apply` nor `branch` renames
 one), a machine where rustfmt does not run (the text would differ from
@@ -459,6 +460,58 @@ pub(crate) fn is_alias(text: &str, at: usize) -> bool {
         && !after.is_some_and(is_word_byte)
 }
 
+/// Whether the `cx` (or `CX`) at `at` in `text` starts a label built on the
+/// old alias with no separator: `cxterm-demo=`, `cxpipe{:08x}`, `CX_PIPE`,
+/// `CXTUI_SCRATCH`, or the variable `as_cx`. The rename does not change these
+/// (they are a test's own words, and no rule could tell every one from other
+/// words), so `--check` finds them and they are renamed by hand, `cx` to
+/// `cin` as step 25 did (`cintui-signals=`, `CINTUI_SIGNALS_REPORT`).
+///
+/// A label starts a word. In lower case it is `cx` and letters, then `-`, `=`
+/// or `{` (a name or a mark being made); in upper case it is `CX`, capitals
+/// and an underscore. `cxx` (C++), a `CX` inside a longer word
+/// (`s_01JCX4T9Q2`), a path (`cx::it`) and `cx-z` in a character class (a
+/// single letter and a range) are not labels.
+pub(crate) fn is_label(text: &str, at: usize) -> bool {
+    let bytes = text.as_bytes();
+    let rest = &text[at + 2..];
+    if text[..at].ends_with("as_") {
+        // The variable `as_cx`, not `has_cx` or `as_cxs`.
+        let word_start = at == 3 || !is_word_byte(bytes[at - 4]);
+        return bytes.get(at..at + 2) == Some(b"cx")
+            && word_start
+            && !rest.bytes().next().is_some_and(is_word_byte);
+    }
+    // A word goes on before it.
+    if at
+        .checked_sub(1)
+        .is_some_and(|before| is_word_byte(bytes[before]))
+    {
+        return false;
+    }
+    match bytes.get(at..at + 2) {
+        Some(b"cx") => {
+            let letters = rest.bytes().take_while(u8::is_ascii_lowercase).count();
+            letters > 0
+                && !rest.starts_with('x')
+                && matches!(rest.as_bytes().get(letters), Some(b'-' | b'=' | b'{'))
+        }
+        Some(b"CX") => {
+            let capitals = rest.bytes().take_while(u8::is_ascii_uppercase).count();
+            !rest.starts_with('X') && rest.as_bytes().get(capitals) == Some(&b'_')
+        }
+        _ => false,
+    }
+}
+
+fn label_positions(text: &str) -> Vec<usize> {
+    text.to_ascii_lowercase()
+        .match_indices("cx")
+        .map(|(at, _)| at)
+        .filter(|&at| is_label(text, at))
+        .collect()
+}
+
 /// The alias, `cx`, as `cin` wherever [`is_alias`] says it is the alias.
 fn rename_alias(text: &str) -> Cow<'_, str> {
     let positions = alias_positions(text);
@@ -716,17 +769,28 @@ pub(crate) fn violations(file: &str, bytes: &[u8]) -> Vec<Violation> {
     for (at, _) in lower.match_indices("cortex") {
         hits.insert(line_of(at), "an old name of the project");
     }
+    for at in label_positions(text) {
+        hits.entry(line_of(at))
+            .or_insert("a label built on the old alias (`cxterm-demo=`, `CX_PIPE`, `as_cx`)");
+    }
     for (index, what) in hits {
         let end = starts.get(index + 1).copied().unwrap_or(text.len());
         if kept_line(file, &text[starts[index]..end]) {
             continue;
         }
+        let how = if what.starts_with("a label") {
+            // `apply` leaves these: a test's own words are renamed by hand.
+            "Write it with `cin` for `cx`, as step 25 did (`cintui-signals=`, \
+             `CINTUI_SIGNALS_REPORT`), here and wherever it is read"
+        } else {
+            "`cargo xtask rename apply` renames it"
+        };
         found.push(Violation {
             file: file.to_owned(),
             line: Some(index + 1),
             message: format!(
-                "{what}. `cargo xtask rename apply` renames it; a line that must keep it \
-                 goes in KEPT in xtask/src/rename.rs, with its reason \
+                "{what}. {how}; a line that must keep it goes in KEPT in \
+                 xtask/src/rename.rs, with its reason \
                  (docs/decisions/0038-the-project-is-named-cineris.md)."
             ),
         });

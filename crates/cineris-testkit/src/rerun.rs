@@ -244,10 +244,10 @@ mod tests {
         if is_child() {
             say("path", &std::env::var("PATH").unwrap_or_default());
             say("cwd", &std::env::current_dir().unwrap().to_string_lossy());
-            say("set", &std::env::var("CX_RERUN_SET").unwrap_or_default());
+            say("set", &std::env::var("CIN_RERUN_SET").unwrap_or_default());
             say(
                 "removed",
-                &format!("{:?}", std::env::var_os("CX_RERUN_REMOVED")),
+                &format!("{:?}", std::env::var_os("CIN_RERUN_REMOVED")),
             );
             say("lines", "one\ntwo");
             return;
@@ -256,8 +256,8 @@ mod tests {
         let ran = Rerun::this_test()
             .path(["relative/bin", "/usr/bin"])
             .cwd(&dir)
-            .env("CX_RERUN_SET", "yes")
-            .env_remove("CX_RERUN_REMOVED")
+            .env("CIN_RERUN_SET", "yes")
+            .env_remove("CIN_RERUN_REMOVED")
             .run();
         let joined = std::env::join_paths(["relative/bin", "/usr/bin"]).unwrap();
         assert_eq!(ran.said("path").as_deref(), joined.to_str());

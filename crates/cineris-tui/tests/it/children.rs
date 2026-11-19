@@ -25,9 +25,9 @@ use cineris_tui::editor::{Chip, Fragment};
 use cineris_tui::external::{self, Edited, Env, TerminalHandoff};
 
 /// This binary as the shell: `scenario|scratch`.
-pub(crate) const SHELL: Role = Role::new("cxtui-shell=");
-const APP: Role = Role::new("cxtui-app=");
-const EDITOR: Role = Role::new("cxtui-editor=");
+pub(crate) const SHELL: Role = Role::new("cintui-shell=");
+const APP: Role = Role::new("cintui-app=");
+const EDITOR: Role = Role::new("cintui-editor=");
 /// What the application draws while it waits for a key.
 pub(crate) const WAITING: &str = "waiting for a key";
 /// What the application prints when it has no terminal after the editor.
@@ -38,7 +38,7 @@ pub(crate) const RESIZED: &str = "the application was resized";
 pub(crate) const EDITOR_WAITING: &str = "editor waiting for a line";
 /// The variable the shell gives the application, and through it the
 /// editor: the test's scratch directory, where the report is.
-const SCRATCH: &str = "CXTUI_SCRATCH";
+const SCRATCH: &str = "CINTUI_SCRATCH";
 
 /// Becomes the child the arguments name, if they name one.
 pub(crate) fn enter() {

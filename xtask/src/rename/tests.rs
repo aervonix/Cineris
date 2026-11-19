@@ -425,6 +425,62 @@ fn the_whole_tree_renamed_once_is_renamed() {
     assert!(problems.is_empty(), "{problems:#?}");
 }
 
+/// A label built on the old alias, with no separator (`CX_FOO`, `cxterm-demo=`),
+/// fails the check, which `apply` leaves alone; the words that only look like
+/// one, and the kept files, do not.
+#[test]
+fn the_check_finds_a_label_built_on_the_old_alias() {
+    for text in [
+        "std::env::var(\"CX_FOO\")",
+        "const DEMO: Role = Role::new(\"cxterm-demo=\");",
+        "const S: &str = \"CXTUI_SCRATCH\";",
+        "const R: &str = \"CXTERM_HANDOFF_REPORT\";",
+        "let name = format!(\"cxpipe{:08x}\", n);",
+        "Role::new(\"cxstats-writer=\")",
+        "let as_cx = help(topic, \"cin\");",
+        "`CX_RERUN_SET`",
+        "/tmp/cxs-{test}",
+    ] {
+        let page = format!("# Cineris\n\n{text}\n");
+        let found = violations("crates/cineris-x/tests/it/main.rs", page.as_bytes());
+        assert_eq!(found.len(), 1, "{text}");
+        assert_eq!(found[0].line, Some(3), "{text}");
+        assert!(found[0].message.contains("a label"), "{}", found[0].message);
+        assert!(
+            found[0].message.contains("`cin` for `cx`"),
+            "{}",
+            found[0].message
+        );
+        // `apply` does not rename it: only the check finds it.
+        assert_eq!(renamed(text), text, "{text}");
+    }
+    // The tool's own tests and the rename's records keep theirs.
+    let planted = "CX_PIPE and cxterm-demo= and as_cx\n";
+    assert!(violations("xtask/src/rename/tests.rs", planted.as_bytes()).is_empty());
+    assert!(violations("docs/steps/rename-cineris/answered.md", planted.as_bytes()).is_empty());
+    assert!(violations("docs/decisions/0013-naming.md", planted.as_bytes()).is_empty());
+    assert_eq!(violations("docs/other.md", planted.as_bytes()).len(), 1);
+}
+
+#[test]
+fn words_that_only_look_like_a_label_are_not_one() {
+    for text in [
+        "The build uses CXX_FLAGS and CXXFLAGS and cxx-lib.",
+        "extension \"cxx\" | \"hxx\"",
+        "session s_01JCX4T9Q2 and JCX_X",
+        "(\"/[a-cx-z]\", \"/y\", true)",
+        "binary: \"cx::it\".to_owned(),",
+        "cx.paths.root and self.cx and --cx-flag",
+        "poll_fn(|cx| waits.poll(cx)); let cx = Cx::new(); fn has_cx() {} as_cxs",
+        "a CX of two, cx of three, the tcx",
+        "Run `cin` as cintui-signals= or CINTUI_SCRATCH or CINERIS_LOG.",
+        "a CX=1 and cx=2",
+    ] {
+        let found = violations("crates/cineris-x/src/lib.rs", text.as_bytes());
+        assert!(found.is_empty(), "{text}: {found:?}");
+    }
+}
+
 #[test]
 fn a_lock_is_put_in_cargos_order() {
     let lock = "# head\nversion = 4\n\n\

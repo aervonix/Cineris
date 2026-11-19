@@ -37,20 +37,20 @@ mod system;
 use cineris_testkit::role::{ModeShell, NOT_RESTORED, RESTORED, Role, this_binary};
 
 /// This binary as the demo, with the demo's options, separated by commas.
-const DEMO: Role = Role::new("cxterm-demo=");
+const DEMO: Role = Role::new("cinterm-demo=");
 /// This binary as a shell that runs the demo with the options given, and
 /// reports whether the terminal was put back. On Windows it first turns
 /// virtual-terminal processing off, as the old console host has it, so the
 /// demo must turn it on itself.
-const SHELL: Role = Role::new("cxterm-shell=");
+const SHELL: Role = Role::new("cinterm-shell=");
 /// What the shell prints just before it starts the demo.
 const STARTING: &str = "starting the demo";
 /// This binary as a shell that runs [`LEAVES_RAW`], the check that the
 /// shell says when the modes were not put back.
-const SHELL_OVER_RAW: Role = Role::new("cxterm-shell-over-raw=");
+const SHELL_OVER_RAW: Role = Role::new("cinterm-shell-over-raw=");
 /// This binary as a program that enters the terminal and ends without
 /// leaving it: raw mode left on.
-const LEAVES_RAW: Role = Role::new("cxterm-leaves-raw=");
+const LEAVES_RAW: Role = Role::new("cinterm-leaves-raw=");
 
 #[test]
 fn child_entry() {

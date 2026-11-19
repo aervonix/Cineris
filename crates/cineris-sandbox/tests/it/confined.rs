@@ -57,7 +57,7 @@ struct ShortFolder(PathBuf);
 
 impl ShortFolder {
     fn new(test: &str) -> Self {
-        let path = PathBuf::from(format!("/tmp/cxs-{test}-{}", std::process::id()));
+        let path = PathBuf::from(format!("/tmp/cins-{test}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).expect("a short folder under /tmp");
         Self(path)

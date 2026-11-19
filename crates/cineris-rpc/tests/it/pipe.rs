@@ -875,7 +875,7 @@ impl Drop for OtherUser {
 /// it cannot (no administrator's rights).
 fn other_user() -> Result<(OtherUser, OwnedHandle), String> {
     let random = std::collections::hash_map::RandomState::new();
-    let name = format!("cxpipe{:08x}", random.hash_one("name") & 0xffff_ffff);
+    let name = format!("cinpipe{:08x}", random.hash_one("name") & 0xffff_ffff);
     // Fourteen characters at most: `net user` asks before it takes a longer
     // one. Upper case, lower case, a sign and digits, for any policy.
     let password = format!("Cx!{:010x}a", random.hash_one("password") & 0xff_ffff_ffff);
@@ -928,7 +928,7 @@ fn other_user() -> Result<(OtherUser, OwnedHandle), String> {
 #[test]
 fn sys_one_of_the_servers_own_commands_is_refused() {
     if rerun::is_child() {
-        let name = std::env::var("CX_PIPE").unwrap();
+        let name = std::env::var("CIN_PIPE").unwrap();
         let mut pipe = OpenOptions::new()
             .read(true)
             .write(true)
@@ -948,7 +948,7 @@ fn sys_one_of_the_servers_own_commands_is_refused() {
     let place = pipe_of("own-command");
     let listener = bind(&place).unwrap();
     let (stop, done) = serve(&core, listener, world.serve_options());
-    let ran = Rerun::this_test().env("CX_PIPE", name(&place)).run();
+    let ran = Rerun::this_test().env("CIN_PIPE", name(&place)).run();
     assert_eq!(
         ran.said("read").as_deref(),
         Some("closed"),
