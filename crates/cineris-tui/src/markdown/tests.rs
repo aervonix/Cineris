@@ -440,7 +440,7 @@ fn commits_what_the_whole_shows(document: &str, widths: std::ops::Range<usize>) 
             "all at once, at {width}: {document:?}"
         );
         assert_eq!(all, expected, "styles differ, at {width}: {document:?}");
-        if (width - first) % step != 0 {
+        if !(width - first).is_multiple_of(step) {
             continue;
         }
         for split in (0..=document.len()).filter(|&at| document.is_char_boundary(at)) {
