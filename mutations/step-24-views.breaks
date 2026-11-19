@@ -260,7 +260,7 @@ caught-by:
 [break] an-untrusted-projects-profiles-are-offered
 rule: config/get offers a project's profiles only once the project is trusted.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find:
                 if trusted {
                     profiles.extend(loaded.project_profiles.iter().cloned());

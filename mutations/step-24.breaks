@@ -54,7 +54,7 @@ caught-by:
 [break] the-turn-start-takes-no-look
 rule: The start of a turn is one of the moments the files are looked at.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: crate::reload::at_turn_start(self, &live).await;
 replace: let _ = &live;
 caught-by:
@@ -214,7 +214,7 @@ caught-by:
 [break] origins-are-not-said
 rule: `config/get` says where each value came from.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: origins.insert(key.clone(), origin);
 replace: let _ = origin;
 caught-by:
@@ -371,7 +371,7 @@ caught-by:
 [break] a-choice-is-made-while-a-reload-builds
 rule: `session/set` holds the session's reload lock across its change and its record, so a reload never comes in between and puts the files' models over a choice.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: let _one = live.reloading.lock().await;
 replace: let _one = ();
 caught-by:
@@ -437,7 +437,7 @@ caught-by:
 [break] the-look-asks-the-loops-state
 rule: The look before a turn is made only when no turn holds the session, asked as a prompt decides: a turn a prompt started and the loop has not picked up yet holds it.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: if !live.handle.turn_running() {
 replace: if live.handle.turn_state() == cineris_agent::TurnState::Idle {
 caught-by:

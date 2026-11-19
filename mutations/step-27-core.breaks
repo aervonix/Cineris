@@ -8,7 +8,7 @@
 [break] a-kept-session-ends-with-its-client
 rule: With `keep_sessions`, a disconnect ends no session: it goes on with no client.
 file: crates/cineris-core/src/core.rs
-in: disconnect
+in: disconnect_now
 find: if live.sink.unsubscribe(client.0) && !keep && live.sink.subscribers().is_empty() {
 replace: if live.sink.unsubscribe(client.0) && live.sink.subscribers().is_empty() {
 caught-by:
@@ -163,7 +163,7 @@ caught-by:
 [break] a-second-supervisor-joins
 rule: A session has at most one supervisor: a second one's `session/open` is refused `supervisor_present`.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: supervisor && clients.is_supervisor(other)
 replace: supervisor && clients.is_supervisor(other) && other == u64::MAX
 caught-by:
@@ -172,7 +172,7 @@ caught-by:
 [break] a-user-is-refused-beside-a-supervisor
 rule: Only a second supervisor is refused: a user may join a supervised session.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: supervisor && clients.is_supervisor(other)
 replace: clients.is_supervisor(other)
 caught-by:
@@ -220,7 +220,7 @@ caught-by:
 [break] an-observers-close-ends-a-session
 rule: Only a client that may drive a session ends it by closing it: an observer's close never does.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: if self.may_drive(client).is_ok() && live.sink.subscribers().is_empty() {
 replace: if live.sink.subscribers().is_empty() {
 caught-by:
@@ -229,7 +229,7 @@ caught-by:
 [break] an-observers-disconnect-ends-a-session
 rule: An observer's disconnect never ends a session.
 file: crates/cineris-core/src/core.rs
-in: disconnect
+in: disconnect_now
 find: let keep = self.inner.options.keep_sessions || !drives;
 replace: let keep = self.inner.options.keep_sessions;
 caught-by:
@@ -238,7 +238,7 @@ caught-by:
 [break] a-closed-view-keeps-its-questions
 rule: A client that closes its view of a session leaves the session's open questions: its answer is refused.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: self.inner.clients.leave(&params.session_id, client);
 replace: let _ = &params.session_id;
 caught-by:
@@ -259,7 +259,7 @@ caught-by:
 [break] the-list-cursor-is-ignored
 rule: A page of `session/list` holds what comes after the last summary of the page before, in the list's order.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: .is_none_or(|after| after.is_before(summary))
 replace: .is_none_or(|after| after.is_before(summary) || !after.session.as_str().is_empty())
 caught-by:
@@ -277,7 +277,7 @@ caught-by:
 [break] the-list-says-there-is-no-more
 rule: A page that has sessions after it gives the cursor to them.
 file: crates/cineris-core/src/core.rs
-in: handle
+in: handle_op
 find: sessions.iter().any(|summary| at.is_before(summary))
 replace: sessions.iter().any(|summary| at.is_before(summary) && summary.turns == u64::MAX)
 caught-by:
