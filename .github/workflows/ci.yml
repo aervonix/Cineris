@@ -4,7 +4,7 @@
 # TypeScript client of the RPC protocol (`ts-client`), at the end.
 #
 # What a job runs is defined in the xtask crate, so `cargo xtask ci` runs the
-# same thing at a desk. The layout, the reasons and the measured times are in
+# same thing locally. The layout, the reasons and the measured times are in
 # docs/testing-and-ci.md. `cargo xtask rules` checks this file: actions pinned
 # by commit hash, a read-only token, and no secret but the owner's protected
 # terms, which the owner guard reads.
