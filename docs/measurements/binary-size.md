@@ -1,6 +1,6 @@
 # The shipped binary's size
 
-What the shipped binary (`cineris`, the `dist` profile) is made of, what each way of making it smaller saves and costs, and what step 33's size fix did ([decision 0036](../decisions/0036-the-shipped-binary-is-optimised-for-size.md)). Measured on 2026-11-16: the size study (read-only, at `main` `c225d64`, after step 23), then the fix, before and after, on the reference machine and on both hosted runners.
+What the shipped binary (`cineris`, the `dist` profile) is made of, what each way of making it smaller saves and costs, what step 33's size fix did ([decision 0036](../decisions/0036-the-shipped-binary-is-optimised-for-size.md)), and what the size step cut, measured and projected to step 34 (2026-11-19). Measured on 2026-11-16: the size study (read-only, at `main` `c225d64`, after step 23), then the fix, before and after, on the reference machine and on both hosted runners.
 
 ## Method
 
@@ -134,3 +134,144 @@ The perf tools build in `release` (`cargo xtask perf`, the `perf_` tests, `try -
 ## The outlook (the study)
 
 At `opt-level = 3` with unwinding, steps 24 to 34 were expected to add about 4.5 to 6 MB on Linux (to 20.5 to 22 MB) and about 1.3 times that on Windows (25 to 27 MB): steps 24 and 25 about 0.45 MB each, 27 0.3 to 0.5, 28 (QuickJS and `cineris-ext`) 1.3 to 1.6, 29 0.2 to 0.3, 30 (`rmcp` and `cineris-mcp`) 1.3 to 2.5, 32 to 34 0.2. At "s", our own code shrinks by about a quarter: step 34 near 14.5 to 16.3 MB on Linux and 17 to 19 MB on Windows. `panic = "abort"` stays in reserve for Windows.
+
+## The size step (2026-11-19)
+
+A step outside the numbered plan, to make room for step 28 ([steps/size-step/answered.md](../steps/size-step/answered.md)). After step 25 the Windows binary was 96.5% of its budget, and step 28 adds a script engine. The step made the cuts that leave behaviour as it is, measured those that cost speed or change behaviour, projected the size to step 34, and proposed budgets for the owner to decide.
+
+### Method
+
+- **Sizes** are `cargo xtask size` on the hosted runners: the `main` workflow's for `main`, and `try` runs (`-f command=size`) for each commit of the step and for each option, built on a branch of its own that is never merged. The reference machine's musl build, the same code through the same command, differed from the runner's by 8 bytes.
+- **What the binary is made of** was read from the symbols of an unstripped build (`size --breakdown`, and `nm` on its binary). Generic code was put to the crate that instantiated it by the symbol's mangled name (Rust's v0 mangling ends with that crate), so that one function built in two crates shows as two.
+- **Speed** was measured with `cargo xtask perf-ab` (the `perf_` tests, `release`, five rounds alternating, on the reference machine, otherwise idle), and with the hand-run measurements of the redaction filter and the permission engine, in each tree in turn.
+
+### Where it stood
+
+| | Bytes | Of the budget | Left |
+|---|---:|---:|---:|
+| Windows | 18,210,816 (17.37 MiB, 150 crates) | 96.5% of 18 MiB | 663,552 |
+| Linux musl | 15,006,120 (14.31 MiB, 153 crates) | 89.4% of 16 MiB | 1,771,096 |
+
+`main` at `6806291f`, run 44466604331: step 25's final head.
+
+### What grew since step 33's size fix
+
+From 13,828,096 bytes on Windows and 11,875,688 on Linux (`a05c675`), by the `main` workflow's record of each push. The steps' merges interleave, so a range can hold more than one.
+
+| What merged | Linux musl | Windows | Windows ÷ Linux |
+|---|---:|---:|---:|
+| Step 17's project knowledge wired into a session, and its fixes | +426,048 | +559,104 | 1.31 |
+| Step 23's review fixes and follow-ups | +180,224 | +253,440 | 1.41 |
+| Step 19's verification | +94,208 | +138,240 | 1.47 |
+| Step 24 (reload, panels, live views) | +594,048 | +797,696 | 1.34 |
+| Steps 26, 27 and 31 (the sandbox, the RPC server and `attach`, the OpenAI-compatible protocol) | +1,245,984 | +1,847,808 | 1.48 |
+| Step 25 (full screen, rewind, the first run) | +557,152 | +760,320 | 1.36 |
+| Small changes between them | +32,768 | +26,112 | |
+| **In all** | **+3,130,432** | **+4,382,720** | **1.40** |
+
+Two things follow for the outlook. **A large step costs 0.4 to 0.6 MB on Linux at "s"**, about twice what the study expected of steps 24 and 25 (0.45 MB each at `opt-level = 3`, a quarter less at "s"). **New code costs 1.4 times as much on Windows as on Linux**, measured over 4.4 MB of it, not the 1.15 to 1.2 of the whole binary: much of what our code adds is the unwinding Windows records for every function.
+
+### The cuts made
+
+Each is its own commit, named by its title; the bytes are each commit's difference from the one before, on the runners.
+
+| Cut | Linux musl | Windows | Speed |
+|---|---:|---:|---|
+| **The core's handler built once.** The future of an `async fn` that only other crates await is built in each crate that awaits it, and `Core::handle`, with all it calls, was built twice: for the binary's own front ends and for `cineris-rpc`'s server. Its future (and `disconnect`'s and `shutdown`'s) is now boxed inside `cineris-core`. | −266,240 | −433,152 | A request's round trip through the server, +1.2 to 1.5%, within noise |
+| **The configuration's TOML tables collected through one helper.** A `BTreeMap`'s `FromIterator` sorts with a closure that names the iterator's type, so each kind of iterator collected into a table built the standard library's stable sort again: twelve of them in `cineris-config`. | −53,248 | −2,560 | None measurable: no hot path |
+| **Blocking work handed to the pool as one type.** The runtime builds its task code for each type of work given to `spawn_blocking`, and `run_blocking` passed each caller's closure through: 53 copies. The work is now boxed, with its result boxed as `Any`, through one function that is not generic. | −180,224 | −296,960 | The hop to the blocking pool, 21.24 µs against 21.25 |
+| **In all** | **−499,712** | **−732,672** | |
+
+After them: **Windows 17,478,144 bytes** (16.67 MiB, 1,396,224 left) and **Linux musl 14,506,408** (13.83 MiB, 2,270,808 left).
+
+**Windows already folds identical functions** (rustc asks MSVC's linker for `/OPT:ICF` in an optimised build), which is why the second cut saved almost nothing there: the twelve sorts were the same code, and Windows had kept one. The other two cuts removed code that differed, and saved 1.6 times as much on Windows as on Linux.
+
+**The speed of the three, together,** against `main` (`perf-ab`, the `perf_` tests of `cineris-rpc`, `cineris-core` and `cineris-tools`): every figure within noise, the request's round trip, search, diffing and the blocking hop among them, except one: choosing a round's checks from a profile, 6.24 µs against 5.77 (+8%), whose ranges were apart. Ten rounds of that test alone gave the same, 6.23 µs against 5.74 (+0.48 µs). What it times is two `stat` calls and a pure choice over the profile, in `cineris-core`'s verifier and `cineris-knowledge`, and none of the cuts changes a function it runs: it is taken for where the build placed the code (`release` links over 16 units with thin LTO, and changing a crate moves its neighbours). It is 0.48 µs of a 50 µs budget.
+
+### Found and not made
+
+Ranked by bytes against risk. Each figure is Linux musl; Windows is about the same or more, except where its folding already removes the duplicate.
+
+| What | Linux musl | Risk, and why it was not made |
+|---|---:|---|
+| The statistics' monthly line: `#[serde(flatten)]` over an internally tagged enum, so every line is buffered and read twice over (`FlatMapDeserializer`, `ContentDeserializer`) | about 50 KB | Medium: a reader written by hand must read every line on disk, damaged ones included, as the derive does |
+| The model catalog read through one deserializer: the built-in catalog is JSON and a user's entries are TOML, so every catalog type is built for both | about 45 KB | A design change: `cineris-llm` would need `toml` at run time (decision 0017 embeds JSON so that it does not), or a user's error messages would change |
+| The other 15 kinds of blocking work (the core's own `spawn_blocking` calls and the session log's) | 20 to 30 KB, a guess | Low, but each site handles a failed task its own way |
+| The task code of each spawned future (36 kinds, about 650 bytes each beyond the future's own code) | about 25 KB | Low; a box per spawn |
+| The standard library's code built again in each crate that uses it (sorts of `String` and `&str`, an `Event`'s drop, an `Option`'s clone): about 100 KB in pieces of 1 to 6 KB | up to 100 KB, in pieces | Low each, but each piece is small; Windows folds most of them already |
+| The setup worker's two channels as one | about 2 KB | Low; too small to be worth it |
+| **Identical-code folding on Linux** (`rust-lld` with `--icf=all`) | 102,944 against `rust-lld` without folding (94,760 against today's link, whose binary `rust-lld` makes 8,184 bytes larger) | **Not recommended.** `--icf=safe` saves nothing (rustc writes no table of which addresses are taken); `all` would give `cineris-term`'s two empty signal handlers one address, and the interrupt guard tells its handler by its address (a comment there says so now); it needs `rust-lld` in the shipped build and the release workflow; and Windows gains nothing. |
+
+**Where the returns diminish:** after the three cuts the largest neutral item left is about 50 KB, with a risk to how files on disk are read, and the rest are 30 KB or less each. The three made were 266, 180 and 53 KB on Linux.
+
+### What costs speed: "z" for ten crates
+
+`opt-level = "z"` for ten library crates of ours that no hot path runs through (`cineris-agent`, `-base`, `-config`, `-core`, `-knowledge`, `-policy`, `-rpc`, `-sandbox`, `-session`, `-stats`), set on `release` so that the perf tools measure it: **Linux −315,392, Windows −503,808.** It is the step's last commit but one, and can be dropped.
+
+- **The binary's own crate must stay at "s":** `cineris-cli` alone at "z" made the binary **3.5 MB larger** (18,031,472 against 14,506,416 on the reference machine): its level is what the fat-LTO link is made at.
+- `cineris-config` alone at "z" saved 8,192 bytes; the cold third-party crates (TOML, TLS, HTTP) added to the ten saved 69,600 more.
+
+Its speed, against the tree without it:
+
+| Measure (release build, medians of each side's rounds) | Without | With "z" | Change |
+|---|---:|---:|---:|
+| Choosing a round's checks from a typical profile (`perf_` test, `cineris-core`, `cineris-knowledge`) | 6.20 µs | 11.38 µs | **+84%** |
+| Listing 1,000 sessions (`cineris-session`) | 0.79 ms | 1.09 ms | **+37%** |
+| Opening a session of 10,000 entries (12.1 MB) | 11.1 ms | 15.0 ms | **+36%** |
+| The same, reading the active branch's items | 32.3 ms | 35.4 ms | +9% |
+| The session log: one entry appended, no flush | 2.38 µs | 2.54 µs | +7% |
+| The session log: one entry appended with its flush | 4.39 ms | 4.35 ms | none: the flush is the disk's |
+| The project's knowledge: one change, written and flushed (`cineris-knowledge`) | 9.53 ms | 8.81 ms | none: the disk's |
+| The project's knowledge: every entry rendered, a typical store | 44.3 µs | 35.9 µs | 19% less time |
+| A year's usage report, the 99th percentile, aggregates kept (`cineris-stats`) | 7.71 ms | 8.96 ms | **+16%** |
+| A permission decision, `cargo test --workspace` against an allow rule (`cineris-policy`, by hand) | 8.11 µs | 11.28 µs | **+39%** |
+| A permission decision, a line of five commands | 14.50 µs | 19.99 µs | **+38%** |
+| Making the permission engine (20 rules) | 18.75 µs | 25.22 µs | **+35%** |
+| The redaction filter on a 64 MiB build log (`cineris-base`, by hand) | 469 MiB/s | 541 MiB/s | 15% more throughput |
+| A request's round trip through the server (`cineris-rpc`) | 153.9 µs | 153.6 µs | within noise |
+| The loop's verification stage when no check runs (`cineris-agent`) | 0.47 µs | 0.57 µs | within noise |
+| Start-up of the `dist` binary (`cargo xtask startup --profile dist`): `cineris --version`, median / 95th | 0.53 / 0.66 ms | 0.53 / 0.57 ms | none |
+| The same: headless `cineris -p` to its request, median / 95th | 13.99 / 14.77 ms | 13.84 / 14.71 ms | none |
+
+Five rounds of each `perf_` test and three of each hand-run measurement, the two trees in turn, on the reference machine, otherwise idle. **The session log's, the knowledge store's and the usage report's rows were measured again**, with both trees' tests writing to one directory (`CINERIS_TEST_TMPDIR`): the first run let each tree's tests write under its own target directory, on different storage, and showed an append with its flush 85% slower, which was the disk and not the code (the review of the step found it). Every figure is still inside its budget on the reference machine, but several of these paths are the ones with little room elsewhere: a year's usage report is already over its 16 ms on a Windows runner ([outstanding/the-usage-panels-year-on-windows.md](../outstanding/the-usage-panels-year-on-windows.md)), and choosing the checks is most of the verification stage's 50 µs on Windows (34.6 µs there before "z").
+
+**The saving comes from the crates that slow down.** "z" for the five of the ten whose paths did not slow (`cineris-agent`, `-base`, `-config`, `-rpc`, `-sandbox`) saves 32,768 bytes on Linux; the other 282,624 are `cineris-core`, `-knowledge`, `-policy`, `-session` and `-stats`.
+
+**Not recommended:** it saves 0.3 MB on Linux and 0.5 MB on Windows at a cost of a third to five-sixths on listing and opening sessions, the permission engine and the verifier's choice of checks, each run on every turn or every start. Whole-profile "z" takes the same costs and the study's on rendering and highlighting with it.
+
+### What changes behaviour: the owner's options
+
+Measured on the runners against the cuts above, on branches that are never merged.
+
+| Option | Linux musl | Windows | What is given up |
+|---|---:|---:|---|
+| **`panic = "abort"`** | **−2,039,808** | **−6,384,640** | A panic anywhere ends the process: a tool's, a script's or an MCP server's data that trips a bug ends the session ([decision 0012](../decisions/0012-release-profile.md)) |
+| **`opt-level = "z"` for the whole profile** | −1,142,752 | −1,724,416 | The study's speed costs against "s": the views' frame, highlighting and the map slower again (above) |
+| `reqwest` without HTTP/2 | −465,216 (the study's) | −553,472 (the study's) | HTTP/2 to the providers ([decision 0004](../decisions/0004-http-and-tls.md)) |
+| Highlighting off; a trimmed grammar set | −626,784; −183,227 (the study's) | −647,680; −183,227 | Highlighting ([decision 0015](../decisions/0015-syntax-highlighting.md)); the languages left out |
+| Debug-level logging compiled out (`release_max_level_info`) | about −105,000 (the study's, gnu) | | The log's `debug` lines in a shipped build |
+| Search without the byte-order-mark sniffing (`encoding_rs`'s tables, 142,395 bytes of symbols) | up to −142,000, a guess | | Searching files in UTF-16 |
+| A position-dependent Linux binary | about −440,000 (the study's, gnu) | | Address-space randomisation. Not recommended |
+| **Step 28 in Lua, the fallback, in place of QuickJS** | about −0.5 MB of step 28, a guess from the recorded 1,165 KB against 427 KB | | JavaScript as the extension language ([decision 0005](../decisions/0005-extension-mechanism.md)) |
+| **Step 30 with an MCP client of our own in place of `rmcp`** | about −0.8 to −1.5 MB of step 30, a guess | | The SDK's tracking of both protocol eras ([architecture/13-mcp.md](../architecture/13-mcp.md)) |
+
+### The engine step 28 adds, measured
+
+QuickJS through `rquickjs` 0.14, linked into today's binary with a full context (every built-in object) and one script evaluated, on a branch that is never merged: **Linux +823,600, Windows +762,880.** Smaller than the 1,165 KB the dependency survey measured at `opt-level = 3`, and smaller on Windows than on Linux: it is C, and has none of the unwinding Rust code records. The host functions and the bindings that step 28 writes are not in it.
+
+### The outlook to step 34
+
+Decimal megabytes added by each step, from the build plan's scope of the step and the costs recorded; each range's low end is the smaller scope and its high end the larger. Our own code is priced from the steps above (0.4 to 0.6 MB on Linux for a large step, at 1.4 times that on Windows).
+
+| Step | Its scope ([build-plan.md](../build-plan.md)) | Linux musl | Windows | Basis |
+|---|---|---:|---:|---|
+| 28, Extensions I | "Step 28": `cineris-ext`, the script runtime and its host functions, hooks, manifests, the management commands. Size L | +1.3 to +1.8 | +1.45 to +2.0 | QuickJS measured (+0.82, +0.76); the crate a guess from steps 24 to 27 |
+| 29, Extensions II | "Step 29": `propose_extension`, its checks, the review dialog. Size M to L | +0.25 to +0.5 | +0.35 to +0.7 | A guess from the steps above |
+| 30, MCP client | "Step 30": `cineris-mcp` on `rmcp`, both eras, local and remote servers. Size L | +1.4 to +2.6 | +2.0 to +3.6 | `rmcp` recorded at 1.76 MB (child processes) to 3.59 MB (with HTTP) at `opt-level = 3`, less what the binary already links; a guess |
+| 32, Hardening pass | "Step 32": tests, and fixes of what they find. "Must not change: features." Size M | 0 to +0.15 | 0 to +0.2 | A guess |
+| 33, Performance pass | "Step 33": measurement and fixes. "Must not change: behaviour." Size M | −0.1 to +0.15 | −0.15 to +0.2 | A guess |
+| 34, Release engineering | "Step 34": `cineris alias install` and `remove`, the release workflow. Size M to L | +0.05 to +0.2 | +0.07 to +0.3 | A guess |
+| Fixes between the steps | | +0.05 to +0.2 | +0.07 to +0.3 | As the fixes since step 23 |
+| **28 to 34 in all** | | **+2.95 to +5.6** | **+3.8 to +7.3** | |
+
+**At step 34, with the three cuts and nothing else:** Linux 17.5 to 20.1 MB (16.6 to 19.2 MiB), against 16 MiB; Windows 21.3 to 24.8 MB (20.3 to 23.6 MiB), against 18 MiB. **Both are over their budgets at the low end of the range:** Linux by 0.7 MB, Windows by 2.4 MB. Windows is over from step 28 on, at any point of the range. The size step's record has the proposal of budgets and reserves that follows from it ([steps/size-step/answered.md](../steps/size-step/answered.md)).
