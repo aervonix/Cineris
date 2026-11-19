@@ -315,6 +315,28 @@ struct Data {
     notes: Vec<String>,
 }
 
+/// Whether `path` is Rust that a crate holds as data and does not build: a
+/// `.rs` file under a crate's folder (`crates/<name>/` or `xtask/`) but in
+/// none of the folders cargo builds from (`src/`, `tests/`, `benches/`,
+/// `examples/`) and not its `build.rs`, such as `cineris-index`'s
+/// `fixtures/outlines/sample.rs` or `xtask`'s `fixtures/rules/*.rs`. Such a
+/// file is read like any data file: its readers are found by the paths that
+/// name it.
+pub(crate) fn rust_as_data(path: &str) -> bool {
+    let within = if let Some(rest) = path.strip_prefix("crates/") {
+        rest.split_once('/').map(|(_, within)| within)
+    } else {
+        path.strip_prefix("xtask/")
+    };
+    let Some(within) = within else {
+        return false;
+    };
+    let first = within.split('/').next().unwrap_or(within);
+    within.contains('/')
+        && path.ends_with(".rs")
+        && !["src", "tests", "benches", "examples"].contains(&first)
+}
+
 impl Data {
     fn read(touched: &BTreeSet<String>, sources: &dyn Sources) -> Self {
         let mut data = Data::default();
@@ -325,7 +347,7 @@ impl Data {
                 continue;
             }
             let name = path.rsplit('/').next().unwrap_or(path);
-            if path.ends_with(".rs") && name != "build.rs" {
+            if path.ends_with(".rs") && name != "build.rs" && !rust_as_data(path) {
                 // Rust outside the crates is in no break's build that the
                 // rule can tell of.
                 if outside_known(path) && data.every.is_none() {
@@ -1336,6 +1358,47 @@ mod tests {
             said.contains("`tables/rates.toml` is named by the code of base (and so every crate built on it): the breaks that run one of these 3 crate(s) can see it: base, demo, tester"),
             "{said}"
         );
+    }
+
+    #[test]
+    fn rust_a_crate_holds_as_data_is_read_as_data() {
+        use super::rust_as_data;
+        for data in [
+            "crates/demo/fixtures/outlines/sample.rs",
+            "xtask/fixtures/rules/a.rs",
+        ] {
+            assert!(rust_as_data(data), "{data}");
+        }
+        for built in [
+            "crates/demo/src/lib.rs",
+            "crates/demo/tests/it/main.rs",
+            "crates/demo/benches/b.rs",
+            "crates/demo/examples/e.rs",
+            "crates/demo/build.rs",
+            "xtask/src/main.rs",
+            "fuzz/fuzz_targets/a.rs",
+            "crates/demo/fixtures/a.txt",
+        ] {
+            assert!(!rust_as_data(built), "{built}");
+        }
+        // Read by another crate's code, a Rust fixture chooses that crate's
+        // breaks and those built on it, as any data file does.
+        let (files, breaks) = data_tree();
+        let files = files
+            .same(
+                "crates/base/src/lib.rs",
+                "pub const OUTLINE: &str = include_str!(\"../../other/fixtures/outline.rs\");",
+            )
+            .same("crates/other/fixtures/outline.rs", "fn shown() {}\n");
+        let changed = ["crates/other/fixtures/outline.rs".to_owned()];
+        let got = select(&breaks, &breaks, &changed, &files);
+        let by_data: Vec<&str> = got
+            .chosen
+            .iter()
+            .filter(|(_, reason)| matches!(reason, Reason::Data(_)))
+            .map(|(one, _)| one.id.as_str())
+            .collect();
+        assert_eq!(by_data, ["demo/a", "demo/b", "demo/base", "demo/tester"]);
     }
 
     #[test]
