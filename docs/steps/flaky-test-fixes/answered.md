@@ -80,7 +80,7 @@ The three breaks of [`mutations/tooling-10-decisions.breaks`](../../../mutations
   The test never failed on Linux, where `sh` starts in milliseconds.
 - **On Windows, before the fix** (`main`, try 44441142003, the same command): the test timed out in each of the 152 repeats the job reached.
 - **On Windows, after it** (try 44449545615, the same command): all 34 tests of the checks that Windows runs passed in each of the 166 repeats the job reached before its 40-minute limit. A repeat takes 13 s there, most of it the Windows system tests' shells under that load.
-- **The changed test alone, after the fix:** WINDOWS-200.
+- **The changed test alone, after the fix** (try 44454290039, `stress -p cineris-core --strict`, `--cores 2 --load 6`, 200 repeats): passed in all 200.
 
 ## The review before the first push
 
@@ -100,3 +100,7 @@ It also noted that [the tenth tooling step's record](../tooling-10/parts/decisio
 ## Its cost
 
 A one-runner A/B on Linux (try 44451657672, three rounds each, 5 ms a process start) gave tier 1 +1.3 s, and nothing else moved past a round's spread. The three new markdown tests that check every split took 1.1 s of that. A pull request now splits at every third width and the nightly at every width, as the existing every-split test does. That took the four tests from 0.42 s to 0.17 s at the desk in the `ci` profile.
+
+## Opened
+
+- [a-git-cap-of-zero-that-git-can-still-beat](../../outstanding/a-git-cap-of-zero-that-git-can-still-beat.md): `cineris-tools`' `changes::sys_git_that_does_not_answer_in_time_is_not_waited_for` failed once in this pull request's `test-linux`. The code it tests is not on this change's path. Its zero cap can be beaten by a git that answers before the wait is asked. It is marked as a known flake, and left to a fix session: a change of `cineris-tools`' detector or its test is outside these fixes.
