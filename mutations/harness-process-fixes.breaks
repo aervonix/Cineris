@@ -218,6 +218,35 @@ replace: if false {
 caught-by:
     cineris-core assemble::tests::a_shell_inside_a_write_root_is_passed_over
 
+# The core's hand-over to the shell's search and probe, end to end: the
+# session finds its own shell there, with no sandbox.
+[break] the-search-not-handed-the-avoided-roots
+rule: The core hands the shell's search the workspace to avoid, whether commands are confined or not.
+file: crates/cineris-core/src/assemble.rs
+in: assemble
+find: (&avoid, &confine_roots)
+replace: (&[], &confine_roots)
+caught-by:
+    cineris-core::it shell::sys_the_shell_a_session_finds_is_not_in_the_workspace_and_its_probe_has_no_key
+
+[break] the-probe-not-handed-the-removal-list
+rule: The core hands the shell's probe the shell tool's removal list, the providers' keys among it.
+file: crates/cineris-core/src/assemble.rs
+in: assemble
+find: &env_remove
+replace: &Vec::<String>::new()
+caught-by:
+    cineris-core::it shell::sys_the_shell_a_session_finds_is_not_in_the_workspace_and_its_probe_has_no_key
+
+[break] the-probe-not-handed-the-avoided-roots
+rule: The core hands the shell's probe the roots to keep out of its `PATH`.
+file: crates/cineris-core/src/assemble.rs
+in: find_shell
+find: let avoided = avoid.to_vec();
+replace: let avoided: Vec<PathBuf> = Vec::new(); let _ = avoid;
+caught-by:
+    cineris-core::it shell::sys_the_shell_a_session_finds_is_not_in_the_workspace_and_its_probe_has_no_key
+
 # ------------------------------------------------------ the reload's keys
 
 [break] a-reload-looks-again-only-at-key-env

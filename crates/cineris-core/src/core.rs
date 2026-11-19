@@ -199,8 +199,11 @@ pub struct CoreOptions {
     pub transport: Option<Arc<dyn Transport>>,
     /// Protocols beside the built-in ones, by name: a test's.
     pub protocols: BTreeMap<String, Arc<dyn Protocol>>,
-    /// The environment shell commands inherit from, in place of the
-    /// process's own: a test's.
+    /// The environment the harness's processes inherit from, in place of
+    /// the process's own: a test's. Shell commands are given it, the
+    /// harness's git is built from it, and the shell is looked for on its
+    /// `PATH` and asked its version with it, when [`CoreOptions::shell`]
+    /// does not give the shell.
     pub shell_env: Option<Vec<(OsString, OsString)>>,
     /// The process runner shell commands go through, in place of one on
     /// this core's timer and clock with the guard above: a test's.

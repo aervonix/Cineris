@@ -326,6 +326,100 @@ fn sys_a_reload_withholds_a_new_key_variable_and_still_the_old_one() {
     });
 }
 
+/// The shell a session finds for itself, with no sandbox, is never one in
+/// the workspace, and its probe is given no key and no workspace directory
+/// on its `PATH`: what the core hands the search and the probe, end to end
+/// (the harness's own processes' fixes). A `bash` planted in an activated
+/// `.venv/bin` first on `PATH` marks a file if it is ever started. A fake
+/// `bash` outside the workspace, next on `PATH`, writes what its probe was
+/// given and runs the real one for commands: it is the shell found.
+#[cfg(unix)]
+#[test]
+fn sys_the_shell_a_session_finds_is_not_in_the_workspace_and_its_probe_has_no_key() {
+    use std::os::unix::fs::PermissionsExt;
+    let world = World::new(
+        "shell_found_by_the_session",
+        [
+            calls(&[("c1", "shell", json!({"command": "echo ran"}))]),
+            says("Done."),
+        ],
+    );
+    let real =
+        cineris_base::program::find(&cineris_base::program::path_directories(), "bash", false)
+            .expect("bash on PATH");
+    let outside = world.dir.join("outside");
+    let planted_marker = outside.join("planted-ran");
+    let seen = outside.join("probe-saw");
+    let script = |path: &Path, text: String| {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    let venv = world.workspace.join(".venv").join("bin");
+    script(
+        &venv.join("bash"),
+        format!(
+            "#!/bin/sh\necho \"$*\" >> {}\nexec {} \"$@\"\n",
+            planted_marker.display(),
+            real.display()
+        ),
+    );
+    let fake = outside.join("bin");
+    script(
+        &fake.join("bash"),
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then\n  {{ echo \"key=${{MINE_PROVIDER_KEY-}}\"; \
+             echo \"path=$PATH\"; }} > {}\n  echo 'GNU bash, version 9.9.9(1)-release'\n  exit \
+             0\nfi\nexec {} \"$@\"\n",
+            seen.display(),
+            real.display()
+        ),
+    );
+    world.user_config(
+        "[sandbox]\nenabled = false\n\n[providers.mine]\nprotocol = \
+         \"anthropic-messages\"\nbase_url = \"https://llm.example.invalid\"\nkey_env = \
+         \"MINE_PROVIDER_KEY\"\n",
+    );
+    let path = format!(
+        "{}:{}:{}",
+        venv.display(),
+        fake.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let core = world.core_with(|options| {
+        // Found by the session's own search, not given.
+        options.shell = None;
+        options.shell_env = Some(world.shell_env(&[("PATH", &path), ("MINE_PROVIDER_KEY", KEY)]));
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn_allowing("run it").await;
+        let text = whole_output(&front, &shell_result(&front)).await;
+        assert!(text.contains("ran"), "{text}");
+        front.close().await;
+        // The probe may run on a thread of its own: the core waits for it.
+        core.shutdown().await;
+    });
+    assert!(
+        !planted_marker.exists(),
+        "the workspace's bash was started, as the shell or its probe: the core did not hand the \
+         search the workspace to avoid: {:?}",
+        std::fs::read_to_string(&planted_marker)
+    );
+    let probe = std::fs::read_to_string(&seen)
+        .expect("the shell found, the one outside the workspace, was asked its version");
+    assert!(
+        probe.lines().any(|line| line == "key="),
+        "the provider's key reached the probe: the core did not hand it the removal list\n{probe}"
+    );
+    assert!(!probe.contains(KEY), "{probe}");
+    assert!(
+        !probe.contains(&venv.display().to_string()),
+        "the probe's PATH kept the workspace's directory: the core did not hand it the roots to \
+         avoid\n{probe}"
+    );
+}
+
 /// A reload that gives a provider a header read from a variable withholds
 /// that variable from the next command, as a new `key_env` is: a header's
 /// variable holds a key too. Found by the early review of the harness's own

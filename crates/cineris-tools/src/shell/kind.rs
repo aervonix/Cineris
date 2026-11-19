@@ -529,9 +529,27 @@ impl ShellSearch {
     /// The search this process's environment describes.
     #[must_use]
     pub fn from_env() -> Self {
-        let variable = |name: &str| std::env::var_os(name).filter(|value| !value.is_empty());
+        Self::from_vars(std::env::vars_os())
+    }
+
+    /// The search an environment describes: this process's
+    /// ([`ShellSearch::from_env`]), or the one the harness's processes are
+    /// given in its place (a test's). The first of each name counts, as
+    /// `getenv` takes it; on Windows a name in any case.
+    #[must_use]
+    pub fn from_vars(
+        vars: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    ) -> Self {
+        let windows = cfg!(windows);
+        let vars: Vec<(std::ffi::OsString, std::ffi::OsString)> = vars.into_iter().collect();
+        let variable = |wanted: &str| {
+            vars.iter()
+                .find(|(name, _)| cineris_base::child_env::is_named(name, wanted, windows))
+                .map(|(_, value)| value.clone())
+                .filter(|value| !value.is_empty())
+        };
         Self {
-            windows: cfg!(windows),
+            windows,
             path: variable("PATH")
                 .map(|path| std::env::split_paths(&path).collect())
                 .unwrap_or_default(),
