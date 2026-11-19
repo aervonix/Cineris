@@ -51,23 +51,31 @@ replace: && key("if:").is_none()
 caught-by:
     rules::workflows::tests::only_the_main_branch_writes_a_cache
 
-[break] cache-save-condition-turned-round
-rule: A save's condition holds to the main branch with no `||` that lets another branch in and no `!` that turns it round.
+[break] cache-save-condition-with-an-or
+rule: A save's condition has no `||`: `main && a || true` holds on any branch.
 file: xtask/src/rules/workflows.rs
 in: holds_to_main
-find: !bare.contains("||") && !bare.contains('!') && bare.split("&&")
-replace: bare.split("&&")
+find: !bare.contains("||") && top_level_conjuncts(bare)
+replace: top_level_conjuncts(bare)
+caught-by:
+    rules::workflows::tests::only_the_main_branch_writes_a_cache
+
+[break] cache-condition-inside-parentheses
+rule: The main-branch test counts only outside parentheses: `(a && main) == false` does not hold to the main branch.
+file: xtask/src/rules/workflows.rs
+in: top_level_conjuncts
+find: b'(' if !quoted => depth += 1,
+replace: b'(' if !quoted => {}
 caught-by:
     rules::workflows::tests::only_the_main_branch_writes_a_cache
 
 [break] cache-the-combined-action
-rule: `actions/cache`, which saves after any run, is refused.
+rule: `actions/cache`, which saves after any run, is refused with a message of its own. Without that check it is still refused, as a cache action the rule does not know (`KNOWN_CACHES`), so no test can see the break: the message is what it changes.
 file: xtask/src/rules/workflows.rs
 in: cache_writes
 find: action.starts_with("actions/cache@")
 replace: action.starts_with("actions/cache-none@")
-caught-by:
-    rules::workflows::tests::only_the_main_branch_writes_a_cache
+expect: survives
 
 [break] cache-rust-cache-saves-by-default
 rule: rust-cache is told when to save: `"false"` or the main branch.
@@ -145,12 +153,12 @@ replace: if false; then
 caught-by:
     checkout_dates::sys_whatever_the_script_cannot_be_sure_of_leaves_every_date_alone
 
-[break] dates-the-changes-before-the-rest
-rule: What changed is dated now after everything is dated long before, not the other way round.
+[break] dates-nothing-now
+rule: What changed since the build is dated now, after everything was dated long before, so that it is rebuilt.
 file: .github/scripts/date-the-checkout.sh
 packages: xtask
-find: git ls-files -z | xargs -0 -r touch -c -m --date=@946684800
-replace: xargs -0 -r touch -c -m <"$changed"; git ls-files -z | xargs -0 -r touch -c -m --date=@946684800
+find: xargs -0 -r touch -c -m <"$changed"
+replace: true
 caught-by:
     checkout_dates::sys_what_differs_from_the_builds_commit_is_dated_now_and_the_rest_long_before
 
