@@ -242,9 +242,15 @@ jobs:
       # `target/try` made first by its `mkdir`, Windows tests of a file held
       # with no sharing failed there that pass in the blocking job
       # (docs/steps/tooling-3/ci.md).
+      # Each run step has a limit of its own, ten minutes under the job's, so
+      # that a command that overruns is stopped as a failed step and the steps
+      # after it still keep its output; a job stopped at its own limit is
+      # cancelled, and they do not run. `try` holds a job A/B's rounds and a
+      # mutate run's budget inside these.
       - name: Run (Linux)
         if: runner.os != 'Windows'
         shell: bash
+        timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 50 || 30)) }}
         env:
           TRY_COMMAND: ${{ inputs.command }}
           TRY_PROFILE: ${{ inputs.profile }}
@@ -284,6 +290,7 @@ jobs:
       - name: Run (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 50 || 30)) }}
         env:
           TRY_COMMAND: ${{ inputs.command }}
           TRY_PROFILE: ${{ inputs.profile }}
