@@ -140,33 +140,72 @@ pub(crate) fn check(file: &str, text: &str) -> Vec<Violation> {
 /// branch writes them.
 const MAIN_ONLY: &str = "github.ref == 'refs/heads/main'";
 
+/// The events whose runs build a pull request's code with `github.ref` set
+/// to the main branch: a cache written there is the main branch's, from a
+/// pull request. A workflow they start writes no cache at all.
+const PULL_REQUEST_CODE_ON_MAIN: [&str; 3] =
+    ["pull_request_target", "workflow_run", "issue_comment"];
+
+/// The cache actions this rule knows how to judge. Any other action with
+/// `cache` in its name is refused until it is taught here.
+const KNOWN_CACHES: [&str; 3] = [
+    "actions/cache/restore@",
+    "actions/cache/save@",
+    "swatinem/rust-cache@",
+];
+
 /// The steps that could write a cache from a run that is not the main
-/// branch's: `actions/cache/save` with no `if:` that holds to the main branch,
-/// `actions/cache` itself (which saves after every run that restored
-/// nothing), and rust-cache with a `save-if:` that is not `"false"` or the
-/// main branch.
+/// branch's: `actions/cache/save` with no `if:` that holds to the main
+/// branch, `actions/cache` itself (which saves after every run that restored
+/// nothing), rust-cache with a `save-if:` that is not `"false"` or the main
+/// branch, a setup action told to cache, any other cache action, and any
+/// cache written in a workflow that runs pull requests' code as the main
+/// branch. Also a `steps:` key it cannot read as a block list.
 fn cache_writes(file: &str, text: &str) -> Vec<Violation> {
-    let mut violations = Vec::new();
-    for (line, step) in steps(text) {
-        let Some(action) = step.iter().find_map(|line| used_action(line)) else {
+    let (steps, unread) = steps(text);
+    let mut violations: Vec<Violation> = unread
+        .into_iter()
+        .map(|line| {
+            Violation::new(
+                file,
+                Some(line),
+                "write `steps:` as a block list, one `- ` item a step: the rules read the \
+                 steps to see that only the main branch writes a cache",
+            )
+        })
+        .collect();
+    let pull_request_code_on_main = text
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or(line))
+        .any(|line| {
+            PULL_REQUEST_CODE_ON_MAIN
+                .iter()
+                .any(|event| has_word(line, event))
+        });
+    for step in steps {
+        let Some(action) = step.keys.iter().find_map(|line| used_action(line)) else {
             continue;
         };
-        let value = |key: &str| {
-            step.iter().find_map(|line| {
-                let line = line.trim_start().trim_start_matches("- ").trim_start();
-                line.strip_prefix(key)
+        let action = action.to_ascii_lowercase();
+        // A key of the step itself, not a line of a value under `with:`.
+        let key = |name: &str| {
+            step.keys.iter().find_map(|line| {
+                line.strip_prefix(name)
                     .map(|rest| rest.split(" #").next().unwrap_or(rest).trim())
             })
         };
-        // To the main branch, and nothing else: no `||` that lets another
-        // in, and no `!` that turns the test round.
-        let holds_to_main = |condition: Option<&str>| {
-            condition.is_some_and(|condition| {
-                condition.contains(MAIN_ONLY)
-                    && !condition.contains("||")
-                    && !condition.contains('!')
+        // An input under `with:`.
+        let input = |name: &str| {
+            step.all.iter().find_map(|line| {
+                line.trim_start()
+                    .strip_prefix(name)
+                    .map(|rest| rest.split(" #").next().unwrap_or(rest).trim())
             })
         };
+        let is_false =
+            |value: Option<&str>| matches!(value, Some("\"false\"" | "'false'" | "false"));
+        let rust_cache_saves =
+            action.starts_with("swatinem/rust-cache@") && !is_false(input("save-if:"));
         let problem = if action.starts_with("actions/cache@") {
             Some(
                 "`actions/cache` saves after any run that restored nothing, a pull request's \
@@ -174,18 +213,44 @@ fn cache_writes(file: &str, text: &str) -> Vec<Violation> {
                  under `if: … && github.ref == 'refs/heads/main'`"
                     .to_owned(),
             )
-        } else if action.starts_with("actions/cache/save@") && !holds_to_main(value("if:")) {
-            Some(format!(
-                "a step that saves a cache runs only on the main branch: its `if:` holds \
-                 `{MAIN_ONLY}`, joined with `&&`"
-            ))
-        } else if action.starts_with("Swatinem/rust-cache@")
-            && !matches!(value("save-if:"), Some("\"false\"" | "'false'" | "false"))
-            && !holds_to_main(value("save-if:"))
+        } else if action.starts_with("actions/cache/save@")
+            && !key("if:").is_some_and(holds_to_main)
         {
+            Some(format!(
+                "a step that saves a cache runs only on the main branch: its `if:` has \
+                 `{MAIN_ONLY}` as one of the conditions it joins with `&&`, and no `||` or `!`"
+            ))
+        } else if rust_cache_saves && !input("save-if:").is_some_and(holds_to_main) {
             Some(format!(
                 "rust-cache saves after every run unless told: give it `save-if: \"false\"` or \
                  `save-if: ${{{{ {MAIN_ONLY} }}}}`"
+            ))
+        } else if action.starts_with("actions/setup-")
+            && !matches!(input("cache:"), None | Some("" | "\"\"" | "''"))
+            && !is_false(input("cache:"))
+        {
+            Some(
+                "a setup action's `cache:` saves from any run: leave it out, and cache with \
+                 `actions/cache/restore` and `actions/cache/save`"
+                    .to_owned(),
+            )
+        } else if action.contains("cache")
+            && !KNOWN_CACHES.iter().any(|known| action.starts_with(known))
+        {
+            Some(format!(
+                "`{action}` is a cache action the rules do not know how to judge: use \
+                 `actions/cache/restore` and `actions/cache/save`, or teach `rules::workflows` \
+                 this one"
+            ))
+        } else if pull_request_code_on_main
+            && (action.starts_with("actions/cache/save@") || rust_cache_saves)
+        {
+            // Whatever its condition says: `github.ref` is the main
+            // branch's in these runs.
+            Some(format!(
+                "this workflow runs on {}, whose runs build a pull request's code with \
+                 `github.ref` the main branch's: it writes no cache",
+                PULL_REQUEST_CODE_ON_MAIN.join(", ")
             ))
         } else {
             None
@@ -193,7 +258,7 @@ fn cache_writes(file: &str, text: &str) -> Vec<Violation> {
         if let Some(problem) = problem {
             violations.push(Violation::new(
                 file,
-                Some(line),
+                Some(step.line),
                 format!(
                     "{problem}. Only the main branch writes a cache: a pull request's build \
                      could otherwise reach the next run's."
@@ -204,14 +269,59 @@ fn cache_writes(file: &str, text: &str) -> Vec<Violation> {
     violations
 }
 
-/// The steps of a workflow, each with its first line's number: from a line
-/// `- …` under a `steps:` key to the next at the same indent, or to a line
-/// indented less.
-fn steps(text: &str) -> Vec<(usize, Vec<&str>)> {
-    let mut found: Vec<(usize, Vec<&str>)> = Vec::new();
+/// Whether a condition holds to the main branch and nothing else: one of
+/// the conditions it joins with `&&` is exactly `github.ref ==
+/// 'refs/heads/main'`, and it has no `||` that lets another branch in and
+/// no `!` that turns a test round.
+fn holds_to_main(condition: &str) -> bool {
+    let bare: String = condition.chars().filter(|c| !c.is_whitespace()).collect();
+    // A whole value YAML quoted, and nothing inside it.
+    let bare = ['"', '\'']
+        .iter()
+        .find_map(|quote| {
+            bare.strip_prefix(*quote)
+                .and_then(|inner| inner.strip_suffix(*quote))
+        })
+        .unwrap_or(&bare);
+    let bare = bare
+        .strip_prefix("${{")
+        .and_then(|inner| inner.strip_suffix("}}"))
+        .unwrap_or(bare);
+    let main: String = MAIN_ONLY.chars().filter(|c| !c.is_whitespace()).collect();
+    !bare.contains("||") && !bare.contains('!') && bare.split("&&").any(|part| part == main)
+}
+
+/// Whether `word` is in `line` as a word of its own.
+fn has_word(line: &str, word: &str) -> bool {
+    line.match_indices(word).any(|(at, _)| {
+        let before = line[..at].chars().next_back();
+        let after = line[at + word.len()..].chars().next();
+        !before.is_some_and(|c| c.is_alphanumeric() || c == '_')
+            && !after.is_some_and(|c| c.is_alphanumeric() || c == '_')
+    })
+}
+
+/// A step of a workflow or action: its first line's number, its own keys
+/// (the lines at its keys' indent, the item's dash taken off), and all its
+/// lines.
+struct Step<'a> {
+    line: usize,
+    keys: Vec<&'a str>,
+    all: Vec<&'a str>,
+}
+
+/// The steps under every `steps:` key, read as YAML lays out a block list
+/// (its items indented under the key or level with it, a dash on a line of
+/// its own or before the item's first key), and the lines of `steps:` keys
+/// given a value on their own line, which this does not read.
+fn steps(text: &str) -> (Vec<Step<'_>>, Vec<usize>) {
+    let mut found: Vec<Step<'_>> = Vec::new();
+    let mut unread = Vec::new();
     // The indent of the `steps:` key whose list the lines are in, and of
-    // its items.
+    // its items once one is seen.
     let mut list: Option<(usize, Option<usize>)> = None;
+    // The indent of the current step's keys, once known.
+    let mut keys_at: Option<usize> = None;
     for (index, line) in text.lines().enumerate() {
         let indent = line.len() - line.trim_start().len();
         let trimmed = line.trim();
@@ -219,22 +329,73 @@ fn steps(text: &str) -> Vec<(usize, Vec<&str>)> {
             continue;
         }
         if let Some((key, items)) = list {
-            if indent <= key {
-                list = None;
-            } else if trimmed.starts_with("- ") && items.is_none_or(|items| indent == items) {
+            let is_item = trimmed == "-" || trimmed.starts_with("- ");
+            let at_items = items.map_or(indent >= key, |items| indent == items);
+            if is_item && at_items {
                 list = Some((key, Some(indent)));
-                found.push((index + 1, vec![line]));
-                continue;
-            } else if let Some(step) = found.last_mut() {
-                step.1.push(line);
+                let rest = trimmed.strip_prefix('-').unwrap_or("");
+                let content = rest.trim_start();
+                keys_at = (!content.is_empty()).then(|| indent + 1 + (rest.len() - content.len()));
+                found.push(Step {
+                    line: index + 1,
+                    keys: if content.is_empty() {
+                        Vec::new()
+                    } else {
+                        vec![content]
+                    },
+                    all: vec![line],
+                });
                 continue;
             }
+            if items.is_some_and(|items| indent > items)
+                && let Some(step) = found.last_mut()
+            {
+                step.all.push(line);
+                let at = *keys_at.get_or_insert(indent);
+                if indent == at {
+                    step.keys.push(trimmed);
+                }
+                continue;
+            }
+            list = None;
         }
-        if trimmed == "steps:" {
+        let key = trimmed.split(" #").next().unwrap_or(trimmed).trim_end();
+        if key == "steps:" {
             list = Some((indent, None));
+            keys_at = None;
+        } else if key.starts_with("steps:") {
+            unread.push(index + 1);
         }
     }
-    found
+    (found, unread)
+}
+
+/// The rules an action of this repository (`.github/actions/*/action.yml`)
+/// is held to: the actions it uses are pinned, and only the main branch
+/// writes a cache, as in a workflow.
+pub(crate) fn check_action(file: &str, text: &str) -> Vec<Violation> {
+    let mut violations = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.split(" #").next().unwrap_or(line);
+        if line.trim_start().starts_with('#') {
+            continue;
+        }
+        if let Some(action) = used_action(line)
+            && !action.starts_with("./")
+            && !is_pinned(action)
+        {
+            violations.push(Violation::new(
+                file,
+                Some(index + 1),
+                format!(
+                    "`{action}` is not pinned by commit hash. Write `owner/action@<40-character \
+                     commit hash> # vX.Y.Z`: a tag can be moved to different code, a hash cannot."
+                ),
+            ));
+        }
+    }
+    violations.extend(cache_writes(file, text));
+    violations
 }
 
 /// The one secret a workflow that runs on pull requests may read: the
@@ -473,6 +634,22 @@ mod tests {
             format!(
                 "      - uses: Swatinem/rust-cache@{HASH} # v2.9.3\n        with:\n          save-if: ${{{{ true }}}}\n"
             ),
+            // The test turned round without a `!`.
+            format!(
+                "      - if: ({main}) == false\n        uses: actions/cache/save@{HASH} # v6.1.0\n"
+            ),
+            // The condition only in an input's text, not the step's `if:`.
+            format!(
+                "      - uses: actions/cache/save@{HASH} # v6.1.0\n        with:\n          key: |\n            if: {main}\n"
+            ),
+            // Names are not case-sensitive to GitHub.
+            format!("      - uses: Actions/Cache/Save@{HASH} # v6.1.0\n"),
+            format!("      - uses: swatinem/rust-cache@{HASH} # v2.9.3\n"),
+            // A cache the rules do not know, and a setup action that caches.
+            format!("      - uses: mozilla-actions/sccache-action@{HASH} # v0.0.9\n"),
+            format!(
+                "      - uses: actions/setup-node@{HASH} # v7.1.0\n        with:\n          node-version: 22\n          cache: npm\n"
+            ),
         ] {
             let found = cache(&step);
             assert_eq!(found.len(), 1, "{step}: {found:#?}");
@@ -495,6 +672,106 @@ mod tests {
             found[0].starts_with(".github/workflows/ci.yml:14: "),
             "{found:?}"
         );
+    }
+
+    /// The same save, laid out in each way YAML allows, is found in each.
+    #[test]
+    fn a_cache_written_is_found_however_the_steps_are_laid_out() {
+        let save = format!("uses: actions/cache/save@{HASH} # v6.1.0");
+        for (layout, line) in [
+            // Items level with the key.
+            (
+                format!("    steps:\n    - run: cargo build\n    - {save}\n"),
+                12,
+            ),
+            // A comment after the key.
+            (format!("    steps: # the build\n      - {save}\n"), 11),
+            // A dash on a line of its own, and the step's keys under it.
+            (
+                format!(
+                    "    steps:\n      - run: cargo build\n      -\n        name: Save\n        {save}\n"
+                ),
+                12,
+            ),
+            // In the job after one whose items were level with its key.
+            (
+                format!(
+                    "    steps:\n    - run: cargo build\n  test:\n    steps:\n      - {save}\n"
+                ),
+                14,
+            ),
+        ] {
+            let text = format!(
+                "name: ci\non:\n  pull_request:\n  push:\n    branches: [main]\npermissions:\n  contents: read\njobs:\n  lint:\n{layout}"
+            );
+            let found = messages(".github/workflows/ci.yml", &text);
+            assert_eq!(found.len(), 1, "{layout}: {found:#?}");
+            assert!(
+                found[0].starts_with(&format!(".github/workflows/ci.yml:{line}: ")),
+                "{layout}: {found:?}"
+            );
+        }
+        // Steps on one line are not read, and so refused.
+        let text = format!(
+            "name: ci\npermissions:\n  contents: read\njobs:\n  lint:\n    steps: [{{ {save} }}]\n"
+        );
+        let found = messages(".github/workflows/ci.yml", &text);
+        assert_eq!(found.len(), 1, "{found:#?}");
+        assert!(found[0].contains("block list"), "{found:?}");
+    }
+
+    /// A workflow that runs a pull request's code with `github.ref` the main
+    /// branch's writes no cache, whatever the step's condition; an action
+    /// of the repository is held to the rule, and to pins, as a workflow is.
+    #[test]
+    fn no_cache_is_written_where_a_pull_requests_code_runs_as_main_nor_by_an_action() {
+        let main = "github.ref == 'refs/heads/main'";
+        for event in ["pull_request_target", "workflow_run", "issue_comment"] {
+            for step in [
+                format!("      - if: {main}\n        uses: actions/cache/save@{HASH} # v6.1.0\n"),
+                format!(
+                    "      - uses: Swatinem/rust-cache@{HASH} # v2.9.3\n        with:\n          save-if: ${{{{ {main} }}}}\n"
+                ),
+            ] {
+                let text = format!(
+                    "name: x\non:\n  {event}:\npermissions:\n  contents: read\njobs:\n  build:\n    steps:\n{step}"
+                );
+                let found = messages(".github/workflows/x.yml", &text);
+                assert_eq!(found.len(), 1, "{event}, {step}: {found:#?}");
+                assert!(found[0].contains("writes no cache"), "{found:?}");
+            }
+            // Reading one is still allowed.
+            let text = format!(
+                "name: x\non: [{event}]\npermissions:\n  contents: read\njobs:\n  build:\n    steps:\n      - uses: actions/cache/restore@{HASH} # v6.1.0\n"
+            );
+            assert_eq!(
+                messages(".github/workflows/x.yml", &text),
+                Vec::<String>::new()
+            );
+        }
+
+        let action = format!(
+            "name: x\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache/save@{HASH} # v6.1.0\n    - uses: actions/checkout@v7\n    - uses: ./.github/actions/other\n"
+        );
+        let found: Vec<String> = super::check_action(".github/actions/x/action.yml", &action)
+            .into_iter()
+            .map(|violation| violation.to_string())
+            .collect();
+        assert_eq!(found.len(), 2, "{found:#?}");
+        assert!(
+            found
+                .iter()
+                .any(|message| message.contains(":6: `actions/checkout@v7` is not pinned")),
+            "{found:?}"
+        );
+        assert!(
+            found.iter().any(|message| message.contains(":5: ")
+                && message.contains("Only the main branch writes a cache")),
+            "{found:?}"
+        );
+        // And the rules read the repository's actions.
+        let found = crate::rules::file_rules(".github/actions/x/action.yml", action.as_bytes());
+        assert_eq!(found.len(), 2, "{found:#?}");
     }
 
     #[test]
