@@ -80,7 +80,7 @@ caught-by:
 [break] worktree-include-negation-ignored
 rule: A `!` line of `.gitignore` takes a path back out: a file it names is not ignored.
 file: xtask/src/rules/worktree_include.rs
-in: ignored
+in: verdict
 find: ignored = !negated;
 replace: ignored = true;
 caught-by:
@@ -242,8 +242,8 @@ caught-by:
 [break] worktree-include-folder-pattern-takes-a-file
 rule: A folder-only pattern (`/notes/`) ignores what is under the folder, not a file of its name.
 file: xtask/src/rules/worktree_include.rs
-in: matches
-find: if folder_only && length == parts.len() && !folder {
+in: names
+find: if pattern.ends_with('/') && !folder {
 replace: if false {
 caught-by:
     rules::worktree_include::tests::a_folder_pattern_does_not_ignore_a_file_of_its_name
@@ -260,7 +260,7 @@ caught-by:
 [break] worktree-include-never-anchored
 rule: A pattern with a `/` is anchored at the root.
 file: xtask/src/rules/worktree_include.rs
-in: matches
+in: names
 find: let anchored = pattern.contains('/');
 replace: let anchored = false;
 caught-by:
@@ -270,8 +270,8 @@ caught-by:
 rule: A `// raw key:` mark on the line before the call counts too.
 file: xtask/src/rules/pty_keys.rs
 in: check_file
-find: if marked(line) || marked(line - 1) {
-replace: if marked(line) {
+find: (first.saturating_sub(1).max(1)..=last)
+replace: (first..=last)
 caught-by:
     rules::pty_keys::tests::what_is_not_a_key_and_a_marked_line_pass
 
@@ -287,8 +287,8 @@ caught-by:
 [break] pty-keys-byte-array-not-read
 rule: An array of bytes handed to a sender is read as the bytes it holds.
 file: xtask/src/rules/pty_keys.rs
-in: check_file
-find: array.push(byte);
+in: keys_of_arguments
+find: bytes.push(byte);
 replace: let _ = byte;
 caught-by:
     rules::pty_keys::tests::a_raw_key_sent_to_a_pty_fails
@@ -296,8 +296,8 @@ caught-by:
 [break] pty-keys-constant-not-read
 rule: A constant of the file handed to a sender is read as its literal.
 file: xtask/src/rules/pty_keys.rs
-in: check_file
-find: literal_bytes(token).or_else(|| constants.get(token).cloned())
+in: keys_of_arguments
+find: literal_bytes(token).or_else(|| bindings.get(token).cloned())
 replace: literal_bytes(token)
 caught-by:
     rules::pty_keys::tests::a_raw_key_sent_to_a_pty_fails
@@ -333,8 +333,8 @@ caught-by:
 rule: A word with an `s` after it is found: `laptops`.
 file: xtask/src/rules/public_words.rs
 in: whole
-find: Some('s' | 'S') => !after.next().is_some_and(word_char)
-replace: Some('s' | 'S') => false
+find: Some('s' | 'S') if plural => !after.next().is_some_and(word_char)
+replace: Some('s' | 'S') if plural => false
 caught-by:
     rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found
 
@@ -342,8 +342,8 @@ caught-by:
 rule: A phrase broken across two lines of a paragraph is found.
 file: xtask/src/rules/public_words.rs
 in: paragraphs
-find: if line.trim().is_empty() {
-replace: if true {
+find: let paragraph = current.get_or_insert_with(
+replace: paragraphs.extend(current.take()); let paragraph = current.get_or_insert_with(
 caught-by:
     rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found
 
@@ -353,5 +353,61 @@ file: xtask/src/rules/public_words.rs
 in: hits
 find: .any(|&(start, end, _)| start < hit.1 && hit.0 < end)
 replace: .any(|&(start, end, _)| start <= hit.0 && hit.1 <= end)
+caught-by:
+    rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found
+
+# What the second round of review found.
+
+[break] worktree-include-negation-under-an-ignored-folder
+rule: A `!` line cannot take back a file under an ignored folder: git does not look inside one.
+file: xtask/src/rules/worktree_include.rs
+in: ignored
+find: (1..parts.len()).any(|length| verdict(&parts[..length], true, patterns))
+replace: false
+caught-by:
+    rules::worktree_include::tests::a_file_under_an_ignored_folder_stays_ignored
+
+[break] pty-keys-an-index-read-as-bytes
+rule: Only an array literal (after `&`, `(`, `,` or `[`) holds bytes: a `[` after a name or a bracket is an index.
+file: xtask/src/rules/pty_keys.rs
+in: keys_of_arguments
+find: .is_some_and(|before| matches!(text(before), "&" | "(" | "," | "["))
+replace: .is_some()
+caught-by:
+    rules::pty_keys::tests::a_number_that_is_not_an_array_of_bytes_passes
+
+[break] pty-keys-a-repeat-read-as-bytes
+rule: A repeat (`[b'x'; 27]`) is no array of the bytes in it.
+file: xtask/src/rules/pty_keys.rs
+in: keys_of_arguments
+find: *frame = None;
+replace: let _ = frame;
+caught-by:
+    rules::pty_keys::tests::a_number_that_is_not_an_array_of_bytes_passes
+
+[break] pty-keys-local-helper-not-a-sender
+rule: A function of the file whose body calls `.send(` is a sender: its literal arguments are read.
+file: xtask/src/rules/pty_keys.rs
+in: local_senders
+find: found.push(text(index + 1));
+replace: let _ = index;
+caught-by:
+    rules::pty_keys::tests::a_raw_key_sent_to_a_pty_fails
+
+[break] public-words-exact-word-takes-a-plural
+rule: An `exact` word takes no plural: `each test locks its folder` is ordinary prose.
+file: xtask/src/rules/public_words.rs
+in: parse
+find: kind != "exact"
+replace: true
+caught-by:
+    rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found
+
+[break] public-words-quote-mark-kept
+rule: A quote's `>` and a comment's `#` at a line's start are not part of the sentence the lines make.
+file: xtask/src/rules/public_words.rs
+in: paragraphs
+find: let line = line.trim_start().trim_start_matches(['>', '#']);
+replace: let line = line;
 caught-by:
     rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found

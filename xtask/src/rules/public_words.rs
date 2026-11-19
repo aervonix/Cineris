@@ -52,6 +52,9 @@ struct Word {
     phrase: String,
     /// Matched in exactly its case; otherwise in any (ASCII) case.
     cased: bool,
+    /// Whether an `s` after it is taken too: not for an `exact` word, whose
+    /// plural is an ordinary verb (`each test locks its folder`).
+    plural: bool,
     /// What public text says instead.
     say: String,
 }
@@ -68,12 +71,13 @@ pub(crate) fn parse(text: &str) -> (Words, Vec<Violation>) {
         }
         let (kind, rest) = line.split_once(' ').unwrap_or((line, ""));
         let read = match kind {
-            "word" | "cased" => rest.split_once(" => ").and_then(|(phrase, say)| {
+            "word" | "cased" | "exact" => rest.split_once(" => ").and_then(|(phrase, say)| {
                 let phrase = phrase.trim();
                 (!phrase.is_empty() && !say.trim().is_empty()).then(|| {
                     words.words.push(Word {
                         phrase: phrase.to_owned(),
                         cased: kind == "cased",
+                        plural: kind != "exact",
                         say: say.trim().to_owned(),
                     });
                 })
@@ -95,8 +99,9 @@ pub(crate) fn parse(text: &str) -> (Words, Vec<Violation>) {
                 LIST,
                 Some(index + 1),
                 "a line this rule cannot read. It is `word PHRASE => ALTERNATIVE`, `cased \
-                 PHRASE => ALTERNATIVE`, `allow PHRASE -- REASON` or `history docs/steps/FOLDER/ \
-                 -- REASON` (the top of the file says what each does).",
+                 PHRASE => ALTERNATIVE`, `exact PHRASE => ALTERNATIVE`, `allow PHRASE -- REASON` \
+                 or `history docs/steps/FOLDER/ -- REASON` (the top of the file says what each \
+                 does).",
             ));
         }
     }
@@ -211,6 +216,9 @@ fn paragraphs(text: &str) -> Vec<Paragraph> {
             paragraph.text.push(' ');
         }
         paragraph.lines.push((paragraph.text.len(), index + 1));
+        // A quote's `>` and a comment's `#` (a workflow's) start each line
+        // of what reads as one sentence: they are not part of it.
+        let line = line.trim_start().trim_start_matches(['>', '#']);
         for c in line.chars() {
             if c.is_whitespace() {
                 if !paragraph.text.is_empty() && !paragraph.text.ends_with(' ') {
@@ -239,7 +247,7 @@ fn hits<'a>(line: &str, words: &'a Words, strict: bool) -> Vec<(&'a Word, usize)
         };
         for (start, _) in haystack.match_indices(needle.as_str()) {
             let end = start + needle.len();
-            if !whole(line, start, end, &needle) {
+            if !whole(line, start, end, &needle, word.plural) {
                 continue;
             }
             if !strict && allowed(&lower, start, end, &words.allowed) {
@@ -266,16 +274,16 @@ fn hits<'a>(line: &str, words: &'a Words, strict: bool) -> Vec<(&'a Word, usize)
 }
 
 /// Whether the phrase at `start..end` stands as whole words at whichever of
-/// its ends is a letter or digit. An `s` may follow it (`laptops`), and so
-/// may `'s`, which is not part of a word anyway.
-fn whole(line: &str, start: usize, end: usize, phrase: &str) -> bool {
+/// its ends is a letter or digit. An `s` may follow it when `plural`
+/// (`laptops`), and so may `'s`, which is not part of a word anyway.
+fn whole(line: &str, start: usize, end: usize, phrase: &str, plural: bool) -> bool {
     let word_char = |c: char| c.is_alphanumeric() || c == '_';
     let first = phrase.chars().next().is_some_and(word_char);
     let last = phrase.chars().next_back().is_some_and(word_char);
     let before = line[..start].chars().next_back();
     let mut after = line[end..].chars();
     let ends = match after.next() {
-        Some('s' | 'S') => !after.next().is_some_and(word_char),
+        Some('s' | 'S') if plural => !after.next().is_some_and(word_char),
         next => !next.is_some_and(word_char),
     };
     (!first || !before.is_some_and(word_char)) && (!last || ends)
@@ -304,6 +312,7 @@ cased the coordinator => the maintainers
 word `rx  => the plain `cargo xtask` command
 word rx test => `cargo xtask test`
 word the desktop => the reference machine
+exact test lock => locally
 allow the desktop number -- the budgets' column
 history docs/steps/08/ -- before the rule
 ";
@@ -363,6 +372,13 @@ history docs/steps/08/ -- before the rule
         assert!(run("docs/x.md", "at the\n\ndesk\n").is_empty());
         assert_eq!(run("docs/x.md", "Run `rx test`.\n").len(), 1);
         assert!(run("docs/x.md", "the deskside view\n").is_empty());
+        let quoted = run("docs/x.md", "> It took 3 s at the\n> desk, as before.\n");
+        assert_eq!(quoted.len(), 1, "{quoted:?}");
+        let comment = run(".github/workflows/ci.yml", "# measured at the\n# desk\n");
+        assert_eq!(comment.len(), 1, "{comment:?}");
+        // An `exact` word takes no plural: its plural is a verb.
+        assert!(run("docs/x.md", "Each test locks its own folder.\n").is_empty());
+        assert_eq!(run("docs/x.md", "the test lock was held\n").len(), 1);
     }
 
     /// An `allow` phrase excuses the hit inside it, and only that one; in

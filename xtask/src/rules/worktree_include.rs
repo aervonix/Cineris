@@ -37,18 +37,18 @@ pub(crate) fn check(include: &str, ignore: &str, files: &[String]) -> Vec<Violat
         }
         let folder = entry.ends_with('/');
         let path = entry.trim_start_matches('/').trim_end_matches('/');
-        let glob_entry = path.contains(['*', '?']);
-        let tracked = files.iter().any(|file| {
-            if glob_entry {
-                matches(entry, file, false)
-            } else {
-                file == path || file.starts_with(&format!("{path}/"))
-            }
-        });
+        // An entry is a pattern as git reads one: with no `/` it names a
+        // file at any depth, and it names everything under a folder.
+        let tracked = files.iter().any(|file| matches(entry, file, false));
         let problem = if tracked {
             Some(format!(
                 "`{entry}` is a file git tracks: a worktree would get the copy over the \
                  checked-out one. List only files `{IGNORE}` ignores."
+            ))
+        } else if !folder && !ignored(path, false, &patterns) && ignored(path, true, &patterns) {
+            Some(format!(
+                "`{entry}` is ignored by `{IGNORE}` only as a folder: if it is one, write \
+                 `{path}/`; if it is a file, add it to `{IGNORE}`."
             ))
         } else if !ignored(path, folder, &patterns) {
             Some(format!(
@@ -83,48 +83,54 @@ pub(crate) fn ignored_by(path: &str, ignore: &str) -> bool {
 }
 
 /// Whether `path` (relative, no leading `/`; a folder when `folder`) is
-/// ignored by `patterns`, in order, the last that matches deciding.
+/// ignored by `patterns`. As git does, a folder above it that is ignored
+/// ignores it, whatever a `!` line says of it (git does not look inside an
+/// ignored folder); otherwise the last pattern that names it decides.
 fn ignored(path: &str, folder: bool, patterns: &[&str]) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    (1..parts.len()).any(|length| verdict(&parts[..length], true, patterns))
+        || verdict(&parts, folder, patterns)
+}
+
+/// What the patterns, in order, say of the path `parts` itself.
+fn verdict(parts: &[&str], folder: bool, patterns: &[&str]) -> bool {
     let mut ignored = false;
     for pattern in patterns {
         let (negated, pattern) = match pattern.strip_prefix('!') {
             Some(rest) => (true, rest),
             None => (false, *pattern),
         };
-        if matches(pattern, path, folder) {
+        if names(pattern, parts, folder) {
             ignored = !negated;
         }
     }
     ignored
 }
 
-/// Whether one pattern matches `path` (a folder when `folder`) or a folder
-/// above it.
-fn matches(pattern: &str, path: &str, folder: bool) -> bool {
-    // A trailing `/` matches a folder only: one above the path, or the
-    // path itself when it is one.
-    let folder_only = pattern.ends_with('/');
+/// Whether one pattern names the path `parts` itself (a folder when
+/// `folder`): a trailing `/` names a folder only; a `/` anywhere else
+/// anchors it at the root; without one it names the last part of a path at
+/// any depth. A `**` is not read.
+fn names(pattern: &str, parts: &[&str], folder: bool) -> bool {
+    if pattern.ends_with('/') && !folder {
+        return false;
+    }
     let pattern = pattern.trim_end_matches('/');
     let anchored = pattern.contains('/');
-    let pattern = pattern.trim_start_matches('/');
-    let parts: Vec<&str> = path.split('/').collect();
-    let wanted: Vec<&str> = pattern.split('/').collect();
-    // Each prefix of the path is the path itself or a folder above it.
-    for length in 1..=parts.len() {
-        if folder_only && length == parts.len() && !folder {
-            break;
-        }
-        let prefix = &parts[..length];
-        let hit = if anchored {
-            prefix.len() == wanted.len() && prefix.iter().zip(&wanted).all(|(p, w)| glob(w, p))
-        } else {
-            glob(wanted[0], prefix[length - 1])
-        };
-        if hit {
-            return true;
-        }
+    let wanted: Vec<&str> = pattern.trim_start_matches('/').split('/').collect();
+    if anchored {
+        parts.len() == wanted.len() && parts.iter().zip(&wanted).all(|(p, w)| glob(w, p))
+    } else {
+        parts.last().is_some_and(|last| glob(wanted[0], last))
     }
-    false
+}
+
+/// Whether one pattern names `path` (a folder when `folder`) or a folder
+/// above it: what the pattern takes in, as a `.worktreeinclude` entry.
+fn matches(pattern: &str, path: &str, folder: bool) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    (1..parts.len()).any(|length| names(pattern, &parts[..length], true))
+        || names(pattern, &parts, folder)
 }
 
 /// `*` and `?` within one part of a path.
@@ -181,14 +187,36 @@ mod tests {
     }
 
     /// A folder-only pattern ignores what is under the folder, and the
-    /// folder as an entry that ends in `/`, but not a file of that name.
+    /// folder as an entry that ends in `/`, but not a file of that name;
+    /// the message says to write the folder's `/`.
     #[test]
     fn a_folder_pattern_does_not_ignore_a_file_of_its_name() {
         let ignore = "/notes/\n";
         assert!(check("notes/a.md\nnotes/\n", ignore, &[]).is_empty());
         let found = check("notes\n", ignore, &[]);
         assert_eq!(found.len(), 1, "{found:?}");
-        assert!(found[0].message.contains("not ignored"));
+        assert!(found[0].message.contains("write `notes/`"), "{found:?}");
+    }
+
+    /// A `!` line cannot take back a file under an ignored folder, as git
+    /// does not look inside one.
+    #[test]
+    fn a_file_under_an_ignored_folder_stays_ignored() {
+        assert!(super::ignored_by(
+            "target/keep.md",
+            "/target/\n!target/keep.md\n"
+        ));
+        assert!(!super::ignored_by("keep.log", "*.log\n!keep.log\n"));
+    }
+
+    /// A plain entry with no `/` names a file at any depth, as git reads
+    /// it: a tracked copy deeper down fails it as a wildcard would.
+    #[test]
+    fn a_plain_entry_names_a_tracked_file_at_any_depth() {
+        let files = ["crates/x/CLAUDE.local.md".to_owned()];
+        let found = check("CLAUDE.local.md\n", IGNORE, &files);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("git tracks"));
     }
 
     /// An entry with a wildcard is held to every tracked file it matches.
