@@ -201,14 +201,31 @@ jobs:
       # main branch builds every crate afresh and saves that, so a saved
       # build is always one commit's whole build. Only the main branch
       # writes it, as with rust-cache.
+      #
+      # Its key holds what decides the bytes a checkout writes without being
+      # any file's content: git's line-ending settings and every attributes
+      # file. A build made under other ones is not restored, since a file it
+      # read could differ on disk with nothing in git saying so.
+      - name: The checkout's settings, for the key of the workspace's build (Windows)
+        id: checkout-settings
+        if: runner.os == 'Windows' && steps.changes.outputs.code == 'true'
+        shell: bash
+        run: |
+          hash=$({
+            git config --get core.autocrlf || echo "no autocrlf"
+            git config --get core.eol || echo "no eol"
+            git ls-files -s -- ':(glob)**/.gitattributes'
+            cat .git/info/attributes 2>/dev/null || echo "no info/attributes"
+          } | sha256sum | cut -c1-16)
+          echo "hash=$hash" >> "$GITHUB_OUTPUT"
       - name: Restore the main branch's build of the workspace's crates (Windows)
         id: workspace-build
         if: runner.os == 'Windows' && steps.changes.outputs.code == 'true' && github.ref != 'refs/heads/main'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.WORKSPACE_BUILD }}
-          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ github.sha }}
-          restore-keys: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-
+          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-${{ github.sha }}
+          restore-keys: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-
       # Cargo judges a workspace crate's build by its files' dates, and a
       # checkout dates every file now: this dates them against the commit the
       # restored build was made from, which its key ends in, so that what
@@ -253,7 +270,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.WORKSPACE_BUILD }}
-          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ github.sha }}
+          key: workspace-build-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml') }}-${{ steps.checkout-settings.outputs.hash }}-${{ github.sha }}
 
   # Not a required check, and not one of the blocking jobs: the shipped
   # binary's size on each system, against its budget and against the size

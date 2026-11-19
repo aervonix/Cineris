@@ -62,6 +62,14 @@ if ! git diff --name-only --no-renames -z "$commit" HEAD >"$changed"; then
     echo "::warning::Could not compare $commit with the checkout: every crate is rebuilt."
     exit 0
 fi
+# Attributes change the bytes a checkout writes (line endings, filters)
+# without changing any file's content in git, so a file a build read could
+# differ on disk while its blob does not. The cache's key holds every
+# attributes file and the checkout's settings, so this is a second guard.
+if tr '\0' '\n' <"$changed" | grep -q '\(^\|/\)\.gitattributes$'; then
+    echo "::warning::A .gitattributes file changed since $commit: every crate is rebuilt."
+    exit 0
+fi
 
 # Every tracked file: long before any build.
 git ls-files -z | xargs -0 -r touch -c -m --date=@946684800
