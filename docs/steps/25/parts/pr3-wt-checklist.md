@@ -16,7 +16,7 @@ Five things no script can judge. The script has taken the screenshots each needs
 4. **The colours on your own scheme:** the answer at full brightness, the dim parts readable, the accent and the warnings told apart. Rows I9 and F9; C6.
 5. **A look through the flicker screenshots:** 30 frames 60 ms apart for each presenter, none with the live area blank or half drawn. Rows I2, F2 and C2. The script checks that each frame has its bottom rows drawn; it cannot tell a frame that is full but wrong.
 
-Optional, with your own files, never done by the script: the first run's imports step with your own `~/.claude.json` (`Space` on its row): each server's command shown whole, a token in an argument shown `[redacted]`, a server that holds one not offered. Row R5.
+Optional, with your own files, never done by the script: the first run's imports step with your own `~/.claude.json` (`Space` on its row): each server's command shown whole; a key of a known format in an argument shown `[redacted]`, and its server not offered; a value under a credential's name (`--api-key …`, `GITHUB_TOKEN=…`) shown `[redacted]`, its row saying it is imported as it is, unseen, when the value is one token, and its server not offered, the row saying to move the value into a variable, when it is not; a value under a name ending in `command`, `cmd`, `hook`, `script`, `file` or `path` shown whole. Row R5.
 
 Write down for all of them: the Windows Terminal version (Settings, About), the Windows build (`winver`), the font and its size, and the colour scheme.
 
@@ -148,6 +148,9 @@ $env:APPDATA = "$check\appdata\Roaming"
 $env:LOCALAPPDATA = "$check\appdata\Local"
 Set-Location "$check\work"
 # The first run's settings, on the command line: its own file does not exist yet.
+# The first run writes no model for the provider `scripted`, whose models the
+# catalog does not know, so the session runs model.main from here: a model of the
+# built-in `anthropic`, sent to the loopback.
 $firstRun = @(
     '-c', 'providers.anthropic.base_url=http://127.0.0.1:41917',
     '-c', 'providers.anthropic.key_env=SCRIPTED_MODEL_KEY',
@@ -193,7 +196,7 @@ if "%BEFORE%"=="%AFTER%" (echo check: exit %CODE%, modes RESTORED ^(%AFTER%^)) e
 
 - **`config.toml`** is the configuration for every row but A5 and the first run. `key_env` replaces the built-in provider's own variable, `ANTHROPIC_API_KEY`: the variable named is set, and it is looked at before the credential store, so neither a real key in the environment nor one stored as `cineris:anthropic` is read. `CINERIS_CONFIG` points the binary at this file, so your own configuration is untouched.
 - **`fkeys.toml`** binds F1 to F12 to the prompt's new line for row A5. The list replaces the action's defaults, so under this file `Shift+Enter` makes no new line.
-- **The first run** (rows R1 to R4) has no file: `CINERIS_CONFIG` names one that does not exist, and the settings come on the command line (`$firstRun`), as the first run's system test gives them.
+- **The first run** (rows R1 to R4) has no file: `CINERIS_CONFIG` names one that does not exist, and the settings come on the command line (`$firstRun`), as the first run's system test gives them. It chooses the provider `scripted` (R2), whose models the catalog does not know, so the file it writes names no model, nor a provider for the main role, and the session runs the command line's `model.main`, `claude-haiku-5-5`, as the built-in `anthropic`'s, at the loopback. Until the review of the first run's fixes it wrote `model.roles.main.provider = "scripted"`, and that model would not have been found.
 
 ### The check window
 
@@ -259,8 +262,8 @@ The rows run in that window, in its folder `$HOME\cineris-check\work`, with `Inv
 | R1 | **The first step.** `Invoke-Check @firstRun`, `CINERIS_CONFIG` naming a file that does not exist | The set-up card and `Provider  1 of 4`; its keys (`enter chooses · s skips this step · x skips the set-up`) a moment after the step | script | |
 | R2 | **A key typed and a key pasted,** for the provider `scripted` | `36 characters, hidden` typed; `0 characters` after `Ctrl+U`; `35 characters, hidden` pasted with `Ctrl+V` and with a right-click; nothing of either key on the screen | script | |
 | R3 | **Each step after it.** `Enter` at the imports and at the mode | Each step's keys a moment after it; the mode offers `read-only` and `supervised`, never `autonomous` (no sandbox enforces on Windows yet); `Set-up done.`; a prompt then answered | script | |
-| R4 | **What is left.** Credential Manager, the files, the screen | `cmdkey` lists `cineris:scripted`; the first run's file holds the choices; no file under the check's folder, and nothing in the buffer, holds eight characters of either key; the modes restored | script | |
-| R5 | **Optional, your own files:** the imports step with your `~/.claude.json` | Each command whole, a token `[redacted]`, a server holding one not offered | person | |
+| R4 | **What is left.** Credential Manager, the files, the screen | `cmdkey` lists `cineris:scripted`; the first run's file holds the choices and no `[model]` table (no model of `scripted` is known, which the last line says); no file under the check's folder, and nothing in the buffer, holds eight characters of either key; the modes restored | script | |
+| R5 | **Optional, your own files:** the imports step with your `~/.claude.json` | Each command whole; a key of a known format `[redacted]`, its server not offered; a token under a credential's name `[redacted]`, the row saying it is imported unseen; any other value under such a name `[redacted]`, its server not offered, the row saying to move it into a variable; a value under a name ending in `command`, `file` or `path` shown whole | person | |
 
 ### `cineris auth login` (runs 7 and 8)
 
@@ -385,7 +388,7 @@ The keys: typed, `sk-check-Qx7vR2Zt9kLw4Mp8Hd3Jc6Ny5Bf` (36 characters); pasted,
 2. **R1.** `run Invoke-Check @firstRun` · `screen has Provider  1 of 4 (≤ 5 s)` (two spaces), time T0 · `shot R1-step` · `screen has enter chooses`, time T1 · `shot R1-keys`. Record T1 − T0: a step takes its keys once it has been up 300 ms with a second of no input, so about a second after the `Enter` that started it.
 3. **R2.** `key Down` until the row holding `scripted` and `store a key` begins, after its spaces, with `◆` · `key Enter` · `screen has Paste or type the key for scripted`, T0 · `screen has enter stores it`, T1 · record T1 − T0 · `type sk-check-Qx7vR2Zt9kLw4Mp8Hd3Jc6Ny5Bf` · `screen has 36 characters, hidden` · `shot R2-typed` · `key Ctrl+U` · `screen has 0 characters, hidden` · `clip set sk-check-paste-Lm3Np7Qr1St5Uv9Wx2Yz` · `key Ctrl+V` · `screen has 35 characters, hidden` · `key Ctrl+U` · `screen has 0 characters, hidden` · `right-click` · `screen has 35 characters, hidden` · `shot R2-pasted`. Check, at each shot: the `buffer` holds no eight characters in a row of either key.
 4. **R3.** `key Enter` (stores the pasted key) · `screen has Imports  2 of 4`, T0 · `screen has enter keeps what is picked`, T1 · `shot R3-imports` · `key Enter` · `screen has Mode  3 of 4`, T0 · `screen has enter chooses`, T1 · `shot R3-mode` · check: the screen holds `read-only` and `supervised`, and `screen lacks autonomous` · `key Enter` · `buffer` holds `Set-up done. (≤ 10 s)` · `screen has Describe a task` · `type is the set-up done?` · `key Enter` · `log has -> the long answer` · `turn ends`. Record each T1 − T0. No fourth step comes: the work folder has no project files.
-5. **R4.** `key Ctrl+D` · `screen has check: exit 0, modes RESTORED` · `run cmdkey /list:cineris:scripted` · check: one entry, its target ending `cineris:scripted` · `run Get-Content "$check\first-run\config.toml"` · check: it holds `mode = "supervised"` and `instructions = false` · check: `Get-ChildItem $check -Recurse -File | Select-String -SimpleMatch -Pattern <every piece of eight characters of each key>` finds nothing, and the `buffer` holds none.
+5. **R4.** `key Ctrl+D` · `screen has check: exit 0, modes RESTORED` · `run cmdkey /list:cineris:scripted` · check: one entry, its target ending `cineris:scripted` · `run Get-Content "$check\first-run\config.toml"` · check: it holds `mode = "supervised"` and `instructions = false`, and no `[model` (the `buffer` holds `No model of scripted is known`) · check: `Get-ChildItem $check -Recurse -File | Select-String -SimpleMatch -Pattern <every piece of eight characters of each key>` finds nothing, and the `buffer` holds none.
 6. **After.** `run $env:CINERIS_CONFIG = "$check\config.toml"` · `run cineris auth logout scripted` · `screen has Removed the stored key of scripted.`
 
 ### Run 7: `auth login` in Windows Terminal (L1)
