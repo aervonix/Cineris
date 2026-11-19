@@ -13,7 +13,9 @@ use std::process::Command;
 #[cfg(unix)]
 use cineris_protocol::event::{Delta, Event, TurnOutcome};
 use cineris_protocol::item::ToolResultItem;
-use cineris_protocol::methods::{Op, OpResult, SessionArtifactParams, SessionRewindParams};
+use cineris_protocol::methods::{
+    ConfigReloadParams, Op, OpResult, SessionArtifactParams, SessionRewindParams,
+};
 use cineris_protocol::{Item, Part};
 use serde_json::json;
 
@@ -252,6 +254,74 @@ fn sys_a_command_is_given_the_environment_the_command_analysis_relies_on() {
             !result.artifacts.is_empty(),
             "the output was not cut, so the PATH was no longer than a line: {shown}"
         );
+        front.close().await;
+    });
+}
+
+/// The providers' key variables reach the shell by two paths, and each
+/// is a promise of its own (`docs/architecture/05-tools.md`, "`shell`",
+/// "Environment"). The configuration's removal list, which the core gives
+/// the key variables the session started with, keeps a variable that has
+/// stopped being a key withheld for the rest of the session; and what a
+/// reload changes (`ShellLive`) withholds a variable that has become one,
+/// from the next command on. Before a reload each covers the other, so a
+/// test without one could not see either go.
+#[test]
+fn sys_a_reload_withholds_a_new_key_variable_and_still_the_old_one() {
+    let world = World::new(
+        "shell_env_reload",
+        [
+            calls(&[("c1", "shell", json!({"command": print_env()}))]),
+            says("Seen."),
+        ],
+    );
+    let provider = |variable: &str| {
+        format!(
+            "[providers.mine]\nprotocol = \"anthropic-messages\"\nbase_url = \
+             \"https://llm.example.invalid\"\nkey_env = \"{variable}\"\n"
+        )
+    };
+    world.user_config(&provider("OLD_PROVIDER_KEY"));
+    let core = world.core_with(|options| {
+        options.shell_env = Some(world.shell_env(&[
+            ("OLD_PROVIDER_KEY", KEY),
+            ("NEW_PROVIDER_KEY", KEY),
+            ("KEPT", "yes"),
+        ]));
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        world.user_config(&provider("NEW_PROVIDER_KEY"));
+        let reloaded = front
+            .op(Op::ConfigReload(ConfigReloadParams::default()))
+            .await
+            .expect("the reload answers");
+        let OpResult::ConfigReload(reloaded) = reloaded else {
+            panic!("not the result of config/reload");
+        };
+        assert!(reloaded.errors.is_empty(), "{reloaded:?}");
+        front.turn_allowing("show the environment").await;
+        let text = whole_output(&front, &shell_result(&front)).await;
+        let env: BTreeMap<String, String> = text
+            .lines()
+            .filter_map(|line| line.trim_end().split_once('='))
+            .map(|(name, value)| (name.to_ascii_uppercase(), value.to_owned()))
+            .collect();
+        assert_eq!(env.get("KEPT").map(String::as_str), Some("yes"), "{text}");
+        assert_eq!(
+            env.get("NEW_PROVIDER_KEY"),
+            None,
+            "the variable a reload made a key reached the command: what the reload changes \
+             (ShellLive) was not applied\n{text}"
+        );
+        assert_eq!(
+            env.get("OLD_PROVIDER_KEY"),
+            None,
+            "the variable that was a key when the session started reached the command after a \
+             reload: the removal list the core seeds from the start's key variables was not \
+             applied\n{text}"
+        );
+        assert!(!text.contains(KEY), "{text}");
         front.close().await;
     });
 }

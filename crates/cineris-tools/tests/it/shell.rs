@@ -361,6 +361,88 @@ fn the_environment_the_directory_and_the_input(test: &str, shell: Shell) {
     );
 }
 
+/// What a workspace file named like a command prints when it runs.
+#[cfg(unix)]
+const PLANTED: &str = "a workspace file ran as a command";
+
+/// A file of the workspace named like a command never runs as that
+/// command, whatever `PATH` the harness was started with: one with only
+/// entries that name the directory a command runs in (`.`, an empty one),
+/// an empty one, or none at all. An empty `PATH` is that directory to a
+/// Unix shell, and with none a shell takes a default of its own, which
+/// upstream bash ends with `.` (`docs/architecture/05-tools.md`,
+/// "`shell`", "Environment").
+#[cfg(unix)]
+fn a_workspace_file_named_like_a_command_does_not_run(test: &str, shell: Shell) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = std::env::var("PATH").expect("the test's PATH");
+    // What a `PATH` that keeps an absolute directory is passed on as: those
+    // directories, in order.
+    let own: Vec<&str> = path
+        .split(':')
+        .filter(|entry| entry.starts_with('/'))
+        .collect();
+    let with_dot = format!(".:{path}");
+    let cases: [(&str, &[(&str, &str)]); 6] = [
+        ("dot", &[("PATH", ".")]),
+        ("empty", &[("PATH", "")]),
+        ("relative", &[("PATH", ":bin:./bin")]),
+        ("none", &[]),
+        // The test's own, with `.` in front: the absolute entries are kept,
+        // and the relative one goes.
+        ("absolute", &[("PATH", &with_dot)]),
+        // Named twice: a child would be given the second, which is empty
+        // once its relative entry has gone. One is given, the first's.
+        ("twice", &[("PATH", &path), ("PATH", ".")]),
+    ];
+    for (case, given) in cases {
+        let inherited: Vec<(std::ffi::OsString, std::ffi::OsString)> = given
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect();
+        let bench = Bench::inheriting(&format!("{test}_{case}"), shell.clone(), inherited);
+        for planted in ["ls", "bin/ls"] {
+            let file = bench
+                .ws
+                .file(planted, &format!("#!/bin/sh\necho '{PLANTED}'\n"));
+            std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+        // `export -p` is built into both shells and lists what the command
+        // was given: `$PATH` alone would show a default the shell made up
+        // for itself when it was given none, which is not the command's.
+        let ran = bench.command("ls; export -p");
+        let text = ran.text();
+        assert!(
+            !text.contains(PLANTED),
+            "{case}: the workspace's `ls` ran as `ls`:\n{text}"
+        );
+        // bash writes `declare -x PATH="…"`, dash `export PATH='…'`.
+        let found: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.trim_end().split_once(" PATH="))
+            .map(|(_, value)| value)
+            .collect();
+        assert_eq!(found.len(), 1, "{case}: not one PATH:\n{text}");
+        let given = found
+            .first()
+            .map(|value| value.trim_matches(['"', '\'']))
+            .unwrap_or_else(|| panic!("{case}: the command was given no PATH:\n{text}"));
+        let entries: Vec<&str> = given.split(':').collect();
+        assert!(
+            entries.iter().all(|entry| entry.starts_with('/')),
+            "{case}: the command was given PATH={given:?}:\n{text}"
+        );
+        if matches!(case, "absolute" | "twice") {
+            assert_eq!(entries, own, "{case}: {text}");
+        } else {
+            // The system's own directories, which hold nothing a command
+            // could have put there.
+            assert_eq!(given, "/usr/bin:/bin", "{case}: {text}");
+        }
+    }
+}
+
 fn output_too_large_to_show(test: &str, shell: Shell) {
     let bench = Bench::new(test, shell);
     const LINES: usize = 6000;
@@ -498,6 +580,15 @@ macro_rules! for_shell {
             #[test]
             fn sys_the_model_is_told_the_shell() {
                 run("told", the_model_is_told_the_shell);
+            }
+
+            #[cfg(unix)]
+            #[test]
+            fn sys_a_workspace_file_named_like_a_command_does_not_run() {
+                run(
+                    "planted",
+                    a_workspace_file_named_like_a_command_does_not_run,
+                );
             }
 
             #[test]

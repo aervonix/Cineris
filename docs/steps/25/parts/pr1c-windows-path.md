@@ -58,6 +58,6 @@ Looked for: the old and the new name as a folder (either in a path), the runner'
 
 ## Left open
 
-- [a-provider-key-break-no-longer-bites.md](../../../outstanding/a-provider-key-break-no-longer-bites.md): step 13a's `provider-key-variables-left-in`, and a break at the source of the key variables in its place.
-- [an-empty-path-runs-the-workspaces-files.md](../../../outstanding/an-empty-path-runs-the-workspaces-files.md): found by the review of this fix. When no entry of the harness's `PATH` is absolute, a command is given an empty one, and a Unix shell then looks in the workspace.
+- `a-provider-key-break-no-longer-bites` (settled by [the shell environment's fixes](../../shell-env-fixes/answered.md)): step 13a's `provider-key-variables-left-in`, and a break at the source of the key variables in its place.
+- `an-empty-path-runs-the-workspaces-files` (settled by [the shell environment's fixes](../../shell-env-fixes/answered.md)): found by the review of this fix. When no entry of the harness's `PATH` is absolute, a command is given an empty one, and a Unix shell then looks in the workspace.
 - [xtask-is-rooted-where-it-was-built.md](../../../outstanding/xtask-is-rooted-where-it-was-built.md): found while making this fix.
