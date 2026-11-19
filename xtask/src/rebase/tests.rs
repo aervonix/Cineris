@@ -976,6 +976,10 @@ fn run_ending(
 /// generated file changed, each on both sides, all settled in one stop,
 /// rustfmt run on the union, and the generator named at the end.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_end() {
     let scratch = Scratch::outside("xtask-rebase", "settles");
     let repo = repository(&scratch, &fixture("tests-appended.rs.theirs"));

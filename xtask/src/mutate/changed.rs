@@ -1586,6 +1586,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+    )]
     fn sys_a_real_repository_gives_the_files_a_diff_touches_with_both_names_of_a_move() {
         let root = crate::mutate::drive::tests::tree(
             "changed-git",

@@ -480,6 +480,10 @@ fn imported(branch: &str, mark: u32, from: Option<u32>, file: &str, text: &str) 
 /// git's own logic, the same on every system, and on Windows it would cost
 /// seconds of the system tier.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_records_reach_a_branch_not_checked_out_and_a_fold_rewrites_only_the_current_one() {
     let scratch = Scratch::outside("xtask-branch", "both");
     let repo = repository(&scratch);

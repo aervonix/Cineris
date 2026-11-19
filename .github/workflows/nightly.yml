@@ -119,6 +119,16 @@ jobs:
       - name: combine, against real git (Windows)
         if: runner.os == 'Windows'
         run: cargo test --locked -p xtask -- --ignored combine::tests::sys_
+      # The git-heavy tests of tools run locally or on Linux CI (the owner
+      # guard, rebase, branch, mutate --changed, git, rename): each starts
+      # git dozens of times, seconds of the blocking job's system tier on
+      # Windows, so the blocking job runs them on Linux alone. Here they run
+      # by name, and the step fails unless each one ran and passed
+      # (docs/testing-and-ci.md, "A system test that starts more than about
+      # 20 processes").
+      - name: The git tools' tests, against real git (Windows)
+        if: runner.os == 'Windows'
+        run: cargo run --locked --quiet --package xtask -- git-tests-on-windows
       - name: Keep the record
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

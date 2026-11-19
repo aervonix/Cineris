@@ -597,6 +597,10 @@ new file mode 100644
     /// The three questions on one small repository: a branch off `main`
     /// with a commit, a change staged, one not, and a new file.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+    )]
     fn sys_the_three_questions_read_a_branch_its_changes_and_its_new_files() {
         let scratch = Scratch::outside("xtask-git-read", "three");
         let repo = scratch.git_init("repo");

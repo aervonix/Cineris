@@ -1698,3 +1698,173 @@ mod partial_tests {
         assert!(error.contains("tests failed"), "{error}");
     }
 }
+
+/// The git-heavy system tests of tools run locally or on Linux CI, which the
+/// blocking job runs on Linux alone and the Windows nightly runs by name
+/// (`docs/testing-and-ci.md`, "A system test that starts more than about
+/// 20 processes"). Each is ignored on Windows with a reason whose last words
+/// say that the nightly runs it there; a test holds this list to them.
+pub(crate) const GIT_TESTS_ON_WINDOWS: &[&str] = &[
+    "owner_guard::local::tests::sys_a_push_is_searched_in_every_place_it_can_carry_a_term",
+    "owner_guard::local::tests::sys_a_clean_push_and_what_the_remote_has_find_nothing",
+    "owner_guard::local::tests::sys_what_the_machine_or_another_remote_could_hide_is_still_read",
+    "owner_guard::local::tests::sys_a_repository_that_requires_the_file_refuses_a_push_without_it",
+    "owner_guard::local::tests::sys_a_failing_git_is_an_error_not_a_pass",
+    "owner_guard::tests::sys_a_real_range_is_read_for_its_lines_its_paths_and_its_people",
+    "rebase::tests::sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_end",
+    "branch::tests::sys_records_reach_a_branch_not_checked_out_and_a_fold_rewrites_only_the_current_one",
+    "mutate::changed::tests::sys_a_real_repository_gives_the_files_a_diff_touches_with_both_names_of_a_move",
+    "git_read::tests::sys_the_three_questions_read_a_branch_its_changes_and_its_new_files",
+    "rename::tests::sys_a_rust_file_is_formatted_again_only_when_it_was_formatted",
+    "rename::tests::sys_a_branch_is_made_again_in_the_new_names_on_every_system",
+];
+
+/// `cargo xtask git-tests-on-windows`: runs [`GIT_TESTS_ON_WINDOWS`], ignored
+/// on Windows, by their exact names, and fails unless each one ran and
+/// passed. A name that matches no test would otherwise pass having run
+/// nothing.
+pub(crate) fn git_tests_on_windows() -> Result<()> {
+    let mut run = vec![
+        "test",
+        "--locked",
+        "-p",
+        "xtask",
+        "--",
+        "--ignored",
+        "--exact",
+    ];
+    run.extend(GIT_TESTS_ON_WINDOWS);
+    println!("$ cargo {}", run.join(" "));
+    let output = Command::new(workspace::cargo())
+        .args(&run)
+        .current_dir(workspace::root())
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| format!("could not run cargo: {error}"))?;
+    let printed = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    print!("{printed}");
+    every_test_passed(output.status.success(), &printed, GIT_TESTS_ON_WINDOWS)
+}
+
+/// Whether the run passed and its output has a passing line for each of
+/// `names` (`test NAME ... ok`, as the test harness prints it).
+fn every_test_passed(succeeded: bool, printed: &str, names: &[&str]) -> Result<()> {
+    if !succeeded {
+        return Err("the tests failed (above)".to_owned());
+    }
+    let passed: BTreeSet<&str> = printed
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("test ")?.strip_suffix(" ... ok"))
+        .collect();
+    let missing: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|name| !passed.contains(name))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} of the {} tests named did not run: {}.\n    A test renamed or moved must be renamed in \
+         GIT_TESTS_ON_WINDOWS (xtask/src/nonblocking.rs) too.",
+        missing.len(),
+        names.len(),
+        missing.join(", ")
+    ))
+}
+
+#[cfg(test)]
+mod git_tests_on_windows_tests {
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::Path;
+
+    use super::{GIT_TESTS_ON_WINDOWS, every_test_passed};
+    use crate::workspace;
+
+    /// The end of the reason such a test gives for being ignored on Windows.
+    const MARK: &str = "the nightly runs it on Windows\"";
+
+    /// Each test under `dir` whose ignore gives [`MARK`], by its path in the
+    /// test binary: its file's modules, `tests` for a module inline in it.
+    fn marked(src: &Path, dir: &Path, into: &mut BTreeSet<String>) {
+        for entry in fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                marked(src, &path, into);
+                continue;
+            }
+            if path.extension().is_none_or(|ext| ext != "rs") {
+                continue;
+            }
+            let text = fs::read_to_string(&path).unwrap();
+            if !text.contains(MARK) {
+                continue;
+            }
+            let relative = path.strip_prefix(src).unwrap().with_extension("");
+            let mut module: Vec<String> = relative
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                .collect();
+            if module.last().is_some_and(|last| last != "tests") {
+                assert!(text.contains("mod tests {"), "{}", path.display());
+                module.push("tests".to_owned());
+            }
+            for (at, _) in text.match_indices(MARK) {
+                let name = text[at..]
+                    .split("fn ")
+                    .nth(1)
+                    .and_then(|after| after.split('(').next())
+                    .unwrap_or_else(|| panic!("no test after the mark in {}", path.display()));
+                into.insert(format!("{}::{name}", module.join("::")));
+            }
+        }
+    }
+
+    /// A test marked but not named is run on Windows by nobody, and a name
+    /// with no test fails the nightly: the list and the marks agree, path
+    /// for path, and the nightly runs the command.
+    #[test]
+    fn every_test_kept_off_windows_is_named_for_the_nightly() {
+        let root = workspace::root();
+        let src = root.join("xtask").join("src");
+        let mut kept_off = BTreeSet::new();
+        marked(&src, &src, &mut kept_off);
+        let named: BTreeSet<String> = GIT_TESTS_ON_WINDOWS
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+        assert_eq!(named.len(), GIT_TESTS_ON_WINDOWS.len(), "a name twice");
+        assert_eq!(named, kept_off);
+        let nightly = fs::read_to_string(root.join(".github/workflows/nightly.yml")).unwrap();
+        assert!(
+            nightly.contains("-- git-tests-on-windows"),
+            "the nightly runs it"
+        );
+    }
+
+    #[test]
+    fn a_name_that_ran_nothing_fails_the_run_and_is_named() {
+        let printed = "running 2 tests\ntest a::tests::sys_one ... ok\ntest b::sys_two ... ok\n\n\
+                       test result: ok. 2 passed; 0 failed; 0 ignored\n";
+        assert_eq!(
+            every_test_passed(true, printed, &["a::tests::sys_one", "b::sys_two"]),
+            Ok(())
+        );
+        let error =
+            every_test_passed(true, printed, &["a::tests::sys_one", "c::sys_three"]).unwrap_err();
+        assert!(
+            error.starts_with("1 of the 2 tests named did not run: c::sys_three."),
+            "{error}"
+        );
+        // A test that ran and failed is not a pass, nor one that was ignored.
+        let failed = "test a::tests::sys_one ... FAILED\ntest b::sys_two ... ignored\n";
+        assert!(every_test_passed(true, failed, &["a::tests::sys_one"]).is_err());
+        assert!(every_test_passed(true, failed, &["b::sys_two"]).is_err());
+        assert!(every_test_passed(false, printed, &["a::tests::sys_one"]).is_err());
+    }
+}

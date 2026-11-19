@@ -785,6 +785,10 @@ diff --git a/a.md b/a.md
 
     /// A real repository: the guard runs git on it as CI does.
     #[test]
+    #[cfg_attr(
+        windows,
+        ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+    )]
     fn sys_a_real_range_is_read_for_its_lines_its_paths_and_its_people() {
         let dir = std::env::temp_dir().join(format!("xtask-owner-guard-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
