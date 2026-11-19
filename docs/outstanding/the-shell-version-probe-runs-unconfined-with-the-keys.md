@@ -1,8 +1,0 @@
-The shell's version is asked by starting the shell unconfined, with the harness's whole environment, and the shell may be a program inside a write root.
-
-- Area: cineris-tools
-- Owner: the maintainers
-
-| Item | Who | When |
-|---|---|---|
-| **The probe is the one start of the shell that nothing confines.** Found by the shell environment's fixes ([../steps/shell-env-fixes/answered.md](../steps/shell-env-fixes/answered.md)). `Shell::probe_version` (`crates/cineris-tools/src/shell/kind.rs`, around line 415) runs `bash --version` or `pwsh --version` through `process::brief::run`, which adds to the inherited environment and removes nothing: the providers' key variables reach it, outside the sandbox, at the start of every session. The shell is found by `cineris_base::program::find`, which takes any absolute `PATH` entry, one inside the workspace included (an activated `.venv/bin`; [../architecture/05-tools.md](../architecture/05-tools.md), "`shell`", accepts that on purpose), where git and the external editor use `find_outside` to pass over the session's write roots. So a `bash` a confined command wrote into such a directory would be, at the next session, both its probe, run unconfined with the keys, and its shell. **Recommendation:** find the shell with `find_outside` and the write roots, as git and the editor are found, and give the probe the shell's environment (`env::build`); or decide that a `PATH` entry inside the workspace is the user's own choice and say so in [../security.md](../security.md). **Not changed in the fixes:** how the shell is found is outside them. | The maintainers | Before the first release |

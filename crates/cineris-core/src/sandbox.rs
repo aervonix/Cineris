@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock, PoisonError};
 
+use cineris_base::child_env::Withheld;
 use cineris_base::git::{Confinement, Started};
 
 use cineris_policy::{NoSandbox, SandboxState};
@@ -388,9 +389,10 @@ impl Launcher for SessionSandbox {
     }
 }
 
-/// Where a session's own git runs: inside its sandbox, reading only,
-/// while its commands are confined, and never a git a confined command
-/// could have planted inside a write root.
+/// Where a session's own git runs, and with what: inside its sandbox,
+/// reading only, while its commands are confined; never a git inside the
+/// workspace, or inside a write root a confined command could have planted
+/// one in; and without the providers' key variables.
 ///
 /// The session's checkpoints need their git before its sandbox can be
 /// made (the sandbox needs the lease), so this is made first and given the
@@ -399,19 +401,36 @@ impl Launcher for SessionSandbox {
 #[derive(Debug)]
 pub(crate) struct SessionGit {
     sandbox: OnceLock<Arc<SessionSandbox>>,
-    /// The resolved write roots to keep the git program out of; empty when
-    /// the session would not confine.
-    confine_roots: Vec<PathBuf>,
+    /// The resolved directories to keep the git program out of: the
+    /// workspace, and the write roots while the session would confine.
+    avoid: Vec<PathBuf>,
+    /// The providers' key variables the session started with: a variable
+    /// that stops being a key at a reload is still withheld, as it is from
+    /// the shell's commands (their removal list is seeded the same way).
+    seeded: Vec<String>,
+    /// The providers' key variables as they are now: the list the shell
+    /// tool's commands are kept from, the same value, which a reload sets.
+    withheld: Arc<Withheld>,
+    /// The environment git's is built from, when it is not this process's
+    /// own (a test's).
+    inherited: Option<Vec<(OsString, OsString)>>,
 }
 
 impl SessionGit {
-    /// A git for a session whose confined commands could write
-    /// `confine_roots`: the git the harness starts is never found inside
-    /// one of them.
-    pub(crate) fn new(confine_roots: Vec<PathBuf>) -> Self {
+    /// A git that is never found inside one of `avoid`, and is never given
+    /// a variable that `withheld` names now or named when the session
+    /// started, from `inherited` or this process's own environment.
+    pub(crate) fn new(
+        avoid: Vec<PathBuf>,
+        withheld: Arc<Withheld>,
+        inherited: Option<Vec<(OsString, OsString)>>,
+    ) -> Self {
         Self {
             sandbox: OnceLock::new(),
-            confine_roots,
+            avoid,
+            seeded: withheld.get(),
+            withheld,
+            inherited,
         }
     }
 
@@ -426,16 +445,34 @@ impl Confinement for SessionGit {
         self.sandbox.get().is_some_and(|sandbox| sandbox.confines())
     }
 
+    /// Git on the `PATH` of the environment it inherits, outside every one
+    /// of `avoid`.
     fn git_program(&self) -> Option<PathBuf> {
-        if self.confine_roots.is_empty() {
-            return cineris_base::program::git().map(Path::to_path_buf);
-        }
-        cineris_base::program::find_outside(
-            &cineris_base::program::path_directories(),
-            "git",
-            cfg!(windows),
-            &self.confine_roots,
-        )
+        let path = match &self.inherited {
+            Some(inherited) => inherited
+                .iter()
+                .find(|(name, _)| cineris_base::child_env::is_named(name, "PATH", cfg!(windows)))
+                .map(|(_, value)| std::env::split_paths(value).collect())
+                .unwrap_or_default(),
+            None => cineris_base::program::path_directories(),
+        };
+        cineris_base::program::find_outside(&path, "git", cfg!(windows), &self.avoid)
+    }
+
+    fn withheld(&self) -> Vec<String> {
+        let mut withheld = self.seeded.clone();
+        withheld.extend(self.withheld.get());
+        withheld
+    }
+
+    fn avoid(&self) -> Vec<PathBuf> {
+        self.avoid.clone()
+    }
+
+    fn inherited(&self) -> Vec<(OsString, OsString)> {
+        self.inherited
+            .clone()
+            .unwrap_or_else(|| std::env::vars_os().collect())
     }
 
     fn start(&self, git: &Path, arguments: Vec<OsString>) -> Result<Started, String> {
@@ -662,6 +699,53 @@ mod tests {
         );
     }
 
+    /// The harness's git withholds the key variables a reload sets, through
+    /// the one value the shell holds too, and still the ones the session
+    /// started with.
+    #[test]
+    fn the_harness_git_withholds_what_a_reload_sets_and_what_the_start_had() {
+        let withheld = Arc::new(Withheld::new(vec!["OLD_KEY".to_owned()]));
+        let git = SessionGit::new(Vec::new(), Arc::clone(&withheld), None);
+        assert_eq!(git.withheld(), ["OLD_KEY", "OLD_KEY"]);
+        withheld.set(vec!["NEW_KEY".to_owned()]);
+        assert_eq!(git.withheld(), ["OLD_KEY", "NEW_KEY"]);
+    }
+
+    /// The harness's git is never one inside what the session avoids (the
+    /// workspace, a write root): the search goes on down `PATH`.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "the test plants programs")]
+    fn the_harness_git_is_never_one_inside_the_workspace() {
+        use cineris_base::Rng;
+        let dir = std::env::temp_dir().join(format!(
+            "cineris-core-git-avoid-{:016x}",
+            cineris_base::rng::SystemRng::new().next_u64()
+        ));
+        let name = if cfg!(windows) { "git.exe" } else { "git" };
+        let plant = |folder: &Path| {
+            std::fs::create_dir_all(folder).unwrap();
+            let path = folder.join(name);
+            std::fs::write(&path, "").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+            path
+        };
+        let ws = dir.join("ws");
+        let planted = plant(&ws.join(".venv").join("bin"));
+        let real = plant(&dir.join("usr").join("bin"));
+        let path =
+            std::env::join_paths([planted.parent().unwrap(), real.parent().unwrap()]).unwrap();
+        let inherited = Some(vec![(OsString::from("PATH"), path)]);
+        let avoiding = SessionGit::new(vec![ws], Arc::default(), inherited.clone());
+        assert_eq!(avoiding.git_program(), Some(real));
+        let not = SessionGit::new(Vec::new(), Arc::default(), inherited);
+        assert_eq!(not.git_program(), Some(planted));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// The harness's own git, while commands are confined, is started by the
     /// launcher under a policy that writes nothing and reaches no network;
     /// at `unrestricted` it is started as it is.
@@ -692,7 +776,7 @@ mod tests {
             &workspace,
             Limits::default(),
         ));
-        let git = SessionGit::new(Vec::new());
+        let git = SessionGit::new(Vec::new(), Arc::default(), None);
         let arguments = vec![OsString::from("status")];
         // Before it is given the sandbox, it starts nothing.
         assert!(

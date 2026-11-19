@@ -5,31 +5,36 @@
 
 [break] cmd-looks-where-the-command-runs
 rule: On Windows every command is given `NoDefaultCurrentDirectoryInExePath`, so `cmd.exe` does not run a workspace file ahead of `PATH`.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
+file: crates/cineris-base/src/child_env.rs
+in: no_current_directory
 find: env.push((OsString::from(NO_CURRENT_DIRECTORY), OsString::from("1")));
 replace:
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::on_windows_cmd_is_told_not_to_look_where_the_command_runs
+    cineris-base child_env::tests::on_windows_a_harness_program_is_told_not_to_look_where_it_runs
 
 [break] cmd-told-under-another-name
 rule: The variable is given under the name Windows reads, once, whatever spelling the user's environment had.
-file: crates/cineris-tools/src/shell/env.rs
+file: crates/cineris-base/src/child_env.rs
 in: NO_CURRENT_DIRECTORY
 in-string: NoDefaultCurrentDirectoryInExePath
 replace: NoDefaultCurrentDirectory
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::on_windows_cmd_is_told_not_to_look_where_the_command_runs
+    cineris-base child_env::tests::on_windows_a_harness_program_is_told_not_to_look_where_it_runs
 
 # The same on a Windows runner, where the shells show it: a name Windows
 # does not read leaves `cmd.exe` looking where the command runs.
 [break] cmd-told-a-name-it-does-not-read
 rule: The variable is given under the name `cmd.exe` reads, so that it does not look in the directory a command runs in.
-file: crates/cineris-tools/src/shell/env.rs
+file: crates/cineris-base/src/child_env.rs
 in: NO_CURRENT_DIRECTORY
 in-string: NoDefaultCurrentDirectoryInExePath
 replace: NoDefaultCurrentDirectoryInExePat
 os: windows
+packages: cineris-tools
 caught-by:
     cineris-tools::it shell::cmd::sys_cmd_does_not_look_where_the_command_runs
     cineris-tools::it shell::pwsh::sys_cmd_does_not_look_where_the_command_runs
@@ -37,12 +42,14 @@ caught-by:
 
 [break] users-spelling-of-the-variable-kept
 rule: A spelling of the variable the user's environment already had is replaced, so that one name, Windows', is passed on.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
-find: .is_some_and(|name| same(name, NO_CURRENT_DIRECTORY))
-replace: .is_some_and(|_| false)
+file: crates/cineris-base/src/child_env.rs
+in: no_current_directory
+find: env.retain(|(name, _)| !is_named(name, NO_CURRENT_DIRECTORY, true));
+replace:
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::on_windows_cmd_is_told_not_to_look_where_the_command_runs
+    cineris-base child_env::tests::on_windows_a_harness_program_is_told_not_to_look_where_it_runs
 
 [break] the-model-not-told-how-a-batch-file-calls-another
 rule: On Windows the tool's description tells the model that a file of the directory a command runs in is found only by its path, and how one batch file calls another.

@@ -41,22 +41,20 @@
 //!   ends with `.`. The command is given [`NO_ABSOLUTE_PATH`] in its place,
 //!   and the tool's description says so ([`path_replaced`]).
 //! - **On Windows `cmd.exe` does not look in the directory a command runs
-//!   in** before `PATH` ([`NO_CURRENT_DIRECTORY`]), which it does whatever
+//!   in** before `PATH` ([`child_env::NO_CURRENT_DIRECTORY`]), which it does whatever
 //!   `PATH` holds: a `hostname.bat` the model wrote would otherwise run as
 //!   `hostname`. A file there still runs by its path (`.\build.cmd`).
 
 use std::ffi::OsString;
 
+use cineris_base::child_env;
+
 /// The variables that are always removed: the keys of the providers the
 /// harness knows. The harness adds the key variable of every provider it
-/// is configured with, and what configuration lists.
-pub const DEFAULT_REMOVED: &[&str] = &[
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "OPENAI_API_KEY",
-    "GEMINI_API_KEY",
-    "GOOGLE_API_KEY",
-];
+/// is configured with, and what configuration lists. The same list keeps
+/// them from every program the harness starts for itself
+/// ([`child_env::KNOWN_KEYS`]).
+pub const DEFAULT_REMOVED: &[&str] = child_env::KNOWN_KEYS;
 
 /// The variables that are removed because the command analysis takes them
 /// to be unset. Not a matter of configuration: a user who could bring one
@@ -117,33 +115,16 @@ fn assemble(
     removed: &[String],
     windows: bool,
 ) -> (Vec<(OsString, OsString)>, bool) {
-    let same = |name: &str, pattern: &str| {
-        let (pattern, prefix) = match pattern.strip_suffix('*') {
-            Some(prefix) => (prefix, true),
-            None => (pattern, false),
-        };
-        let (head, tail) = match name.is_char_boundary(pattern.len()) {
-            true if name.len() >= pattern.len() => name.split_at(pattern.len()),
-            _ => return false,
-        };
-        let matches = if windows {
-            head.eq_ignore_ascii_case(pattern)
-        } else {
-            head == pattern
-        };
-        matches && (prefix || tail.is_empty())
-    };
+    let is = |name: &OsString, pattern: &str| child_env::is_named(name, pattern, windows);
+    // The keys go as they go from every program the harness starts, and
+    // with them what the command analysis takes to be unset and what is
+    // fixed below.
     let mut env: Vec<(OsString, OsString)> = inherited
         .into_iter()
         .filter(|(name, _)| {
-            // A name that is not Unicode is no name on either list.
-            let Some(name) = name.to_str() else {
-                return true;
-            };
-            !DEFAULT_REMOVED.iter().any(|pattern| same(name, pattern))
-                && !ANALYSIS_REMOVED.iter().any(|pattern| same(name, pattern))
-                && !removed.iter().any(|pattern| same(name, pattern))
-                && !FIXED.iter().any(|(fixed, _)| same(name, fixed))
+            !child_env::is_withheld(name, removed, windows)
+                && !ANALYSIS_REMOVED.iter().any(|pattern| is(name, pattern))
+                && !FIXED.iter().any(|(fixed, _)| is(name, fixed))
         })
         .collect();
     env.extend(
@@ -151,54 +132,19 @@ fn assemble(
             .iter()
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
     );
-    no_fsmonitor(&mut env, &same);
+    no_fsmonitor(&mut env, windows);
     if windows {
-        env.retain(|(name, _)| {
-            !name
-                .to_str()
-                .is_some_and(|name| same(name, NO_CURRENT_DIRECTORY))
-        });
-        env.push((OsString::from(NO_CURRENT_DIRECTORY), OsString::from("1")));
+        child_env::no_current_directory(&mut env);
     }
-    // One `PATH`, of absolute directories only. An environment may hold
-    // the name twice: the harness reads the first (as `getenv` does, and so
-    // the shell was found by it), and a child would be given the last, so
-    // every one goes and the first comes back without its relative entries.
-    let is_path = |name: &OsString| name.to_str().is_some_and(|name| same(name, PATH));
-    let first = env
-        .iter()
-        .find(|(name, _)| is_path(name))
-        .map(|(name, value)| (name.clone(), absolute_entries(value, windows)));
-    env.retain(|(name, _)| !is_path(name));
-    let replaced = !windows && first.as_ref().is_none_or(|(_, value)| value.is_empty());
-    match first {
-        Some((name, value)) if windows || !value.is_empty() => env.push((name, value)),
-        // On Windows the `PATH` is passed on as it is left.
-        _ if windows => {}
-        _ => env.push((OsString::from(PATH), OsString::from(NO_ABSOLUTE_PATH))),
-    }
+    // One `PATH`, of absolute directories only, by the rule every program
+    // the harness starts is given.
+    let replaced = child_env::one_absolute_path(&mut env, windows);
     (env, replaced)
 }
 
-/// The variable programs are looked up through.
-const PATH: &str = "PATH";
-
-/// The variable whose presence, with any value, turns off `cmd.exe`'s look
-/// for a program in the directory a command runs in, ahead of `PATH`
-/// (Windows' `NeedCurrentDirectoryForExePathW`). Every program `cmd.exe`
-/// starts inherits it. A program named by its path (`.\build.cmd`) still
-/// runs; a batch file that calls another of the directory by its bare name
-/// no longer finds it, and `call "%~dp0other.cmd"` does.
-pub(crate) const NO_CURRENT_DIRECTORY: &str = "NoDefaultCurrentDirectoryInExePath";
-
 /// The `PATH` a command is given on Unix when the harness's own names no
-/// absolute directory, or there is none: the system's own directories,
-/// which root writes and a command does not. The smallest standard set: the
-/// directories `getconf PATH` gives, with `/usr/bin` first because a
-/// merged-`/usr` system links `/bin` to it. An empty `PATH` would be the
-/// directory the command runs in, the workspace; and with no `PATH` a shell
-/// takes a default of its own, which upstream bash ends with `.`.
-pub(crate) const NO_ABSOLUTE_PATH: &str = "/usr/bin:/bin";
+/// absolute directory, or there is none ([`child_env::NO_ABSOLUTE_PATH`]).
+pub(crate) const NO_ABSOLUTE_PATH: &str = child_env::NO_ABSOLUTE_PATH;
 
 /// Whether a command built from `inherited` and `removed` is given
 /// [`NO_ABSOLUTE_PATH`] ([`build`]): on Unix, when the `PATH` names no
@@ -214,53 +160,12 @@ pub(crate) fn path_replaced<'a>(
     assemble(inherited.into_iter().cloned(), removed, windows).1
 }
 
-/// `path` without its empty and its relative entries, which both name the
-/// directory a command runs in.
-fn absolute_entries(path: &std::ffi::OsStr, windows: bool) -> OsString {
-    let Some(text) = path.to_str() else {
-        // Not Unicode: the system's own reading of it, which is what the
-        // command would be given anyway.
-        let kept = std::env::split_paths(path).filter(|entry| entry.is_absolute());
-        return std::env::join_paths(kept).unwrap_or_default();
-    };
-    let separator = if windows { ';' } else { ':' };
-    let absolute = |entry: &str| {
-        let bytes = entry.as_bytes();
-        if windows {
-            // A drive and a root (`C:\`), or a share (`\\server\…`).
-            // `C:bin` and `\bin` are relative to where the command is.
-            let slash = |byte: &u8| *byte == b'\\' || *byte == b'/';
-            (bytes.len() >= 3
-                && bytes[0].is_ascii_alphabetic()
-                && bytes[1] == b':'
-                && slash(&bytes[2]))
-                || (bytes.len() >= 2 && slash(&bytes[0]) && slash(&bytes[1]))
-        } else {
-            bytes.first() == Some(&b'/')
-        }
-    };
-    let kept: Vec<&str> = text
-        .split(separator)
-        .filter(|entry| {
-            // Windows allows an entry in quotes, for one with a semicolon.
-            // On Linux a quote is part of a name: `"/x"` is the directory
-            // `x` in a directory named `"`, which is relative.
-            if windows {
-                absolute(entry.trim_matches('"'))
-            } else {
-                absolute(entry)
-            }
-        })
-        .collect();
-    OsString::from(kept.join(&separator.to_string()))
-}
-
 /// Adds `core.fsmonitor=false` to the settings git reads from its
 /// environment, as the last of them: git takes the last value of a setting
 /// it is given twice, and settings from the environment win over every
 /// configuration file.
-fn no_fsmonitor(env: &mut Vec<(OsString, OsString)>, same: &dyn Fn(&str, &str) -> bool) {
-    let is = |name: &OsString, wanted: &str| name.to_str().is_some_and(|name| same(name, wanted));
+fn no_fsmonitor(env: &mut Vec<(OsString, OsString)>, windows: bool) {
+    let is = |name: &OsString, wanted: &str| child_env::is_named(name, wanted, windows);
     // What the user's environment counts. A count git itself would refuse
     // (not a number) counts nothing: the command then runs with ours alone,
     // where it would have failed.
@@ -321,6 +226,7 @@ pub(crate) fn starting_in(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cineris_base::child_env::NO_CURRENT_DIRECTORY;
 
     fn env(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         pairs

@@ -67,10 +67,11 @@ caught-by:
 
 [break] linux-path-quotes-trimmed
 rule: On Linux a quote in a PATH entry is part of a name, and `"/x"` is relative.
-file: crates/cineris-tools/src/shell/env.rs
+file: crates/cineris-base/src/child_env.rs
 in: absolute_entries
 find: absolute(entry)
 replace: absolute(entry.trim_matches('"'))
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
 

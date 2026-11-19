@@ -19,6 +19,7 @@ use std::path::Path;
 
 use cineris_protocol::Item;
 use cineris_protocol::lease::Level;
+use cineris_protocol::methods::{ConfigReloadParams, Op, OpResult};
 use cineris_protocol::session::{SandboxStatus, SessionSettings};
 use cineris_testkit::scratch::git;
 use serde_json::{Value, json};
@@ -308,6 +309,183 @@ fn sys_a_git_that_fails_inside_the_sandbox_leaves_the_list_incomplete_and_says_w
             !world.workspace.join(".git/filter-wrote").exists(),
             "the harness's git wrote in the workspace"
         );
+        front.close().await;
+    });
+}
+
+/// A filter named by a bare name is never one in the workspace, even
+/// through an absolute directory of `PATH` (an activated `.venv/bin`):
+/// the harness's git, unasked, would run a file a command wrote. The same
+/// name further down `PATH`, outside the workspace, is the one that runs.
+/// Found by the early review of the harness's own processes' fixes.
+#[test]
+fn sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace() {
+    use std::os::unix::fs::PermissionsExt;
+    let world = World::new("harness_git_path", []);
+    repository(&world);
+    let name = "cineris-planted-filter";
+    let outside = world.dir.join("outside");
+    let seen = outside.join("seen");
+    let bin = outside.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let filter = |said: &str| format!("#!/bin/sh\necho {said} >> {}\ncat\n", seen.display());
+    std::fs::write(bin.join(name), filter("outside")).unwrap();
+    std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let venv = world.workspace.join(".venv").join("bin");
+    world.put(
+        "fix.sh",
+        format!(
+            "mkdir -p .venv/bin\nprintf '#!/bin/sh\\necho planted >> {seen}\\ncat\\n' > \
+             .venv/bin/{name}\nchmod 755 .venv/bin/{name}\nprintf '[filter \"x\"]\\n\\tclean = \
+             {name}\\n' >> .git/config\necho '* filter=x' > .gitattributes\ntouch -d @0 \
+             tracked.txt\n",
+            seen = seen.display()
+        ),
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
+    world.provider.push(says("Done."));
+    let path = format!(
+        "{}:{}:{}",
+        venv.display(),
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let core = world.core_with(|options| {
+        options.trust_project = true;
+        options.shell_env = Some(world.shell_env(&[("PATH", &path)]));
+    });
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Unrestricted),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("go").await;
+        assert_eq!(shell_payload(&front)["changes"]["method"], "git");
+        let text = std::fs::read_to_string(&seen).unwrap_or_else(|_| {
+            panic!(
+                "the harness's git ran neither filter: {:?}",
+                front.results()
+            )
+        });
+        assert!(
+            !text.contains("planted"),
+            "the harness's git ran the workspace's {name}, through an absolute PATH entry inside \
+             the workspace: {text}"
+        );
+        assert!(text.contains("outside"), "{text}");
+        front.close().await;
+    });
+}
+
+/// The providers' key variables never reach a filter the harness's git
+/// runs, before a reload or after one: the variable the session started
+/// with as a key, and the one a reload made a key, through the one list
+/// the shell's commands are kept from (the harness's own processes' fixes;
+/// before them git was given the harness's whole environment). At
+/// `unrestricted`, where nothing confines, so the filter can write what it
+/// saw; and the filter is planted by the command, so the only git that
+/// runs it is the one after the reload.
+#[test]
+fn sys_a_reload_withholds_the_keys_from_a_filter_the_harness_git_runs() {
+    const KEY: &str = "sk-reload-git-key";
+    let world = World::new("harness_git_keys", []);
+    repository(&world);
+    let outside = world.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    let seen = outside.join("seen");
+    let filter = outside.join("filter.sh");
+    std::fs::write(
+        &filter,
+        format!(
+            "#!/bin/sh\necho \"${{OLD_PROVIDER_KEY-unset}} ${{NEW_PROVIDER_KEY-unset}} \
+             ${{KEPT-unset}}\" >> {seen}\ncat\n",
+            seen = seen.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&filter, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    world.put(
+        "fix.sh",
+        format!(
+            "printf '[filter \"x\"]\\n\\tclean = {filter}\\n' >> .git/config\n\
+             echo '* filter=x' > .gitattributes\n\
+             touch -d @0 tracked.txt\n",
+            filter = filter.display()
+        ),
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
+    world.provider.push(says("Done."));
+    let provider = |variable: &str| {
+        format!(
+            "[providers.mine]\nprotocol = \"anthropic-messages\"\nbase_url = \
+             \"https://llm.example.invalid\"\nkey_env = \"{variable}\"\n"
+        )
+    };
+    world.user_config(&provider("OLD_PROVIDER_KEY"));
+    let core = world.core_with(|options| {
+        options.trust_project = true;
+        options.shell_env = Some(world.shell_env(&[
+            ("OLD_PROVIDER_KEY", KEY),
+            ("NEW_PROVIDER_KEY", KEY),
+            ("KEPT", "yes"),
+        ]));
+    });
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Unrestricted),
+        )
+        .await
+        .expect("the session starts");
+        world.user_config(&provider("NEW_PROVIDER_KEY"));
+        let reloaded = front
+            .op(Op::ConfigReload(ConfigReloadParams::default()))
+            .await
+            .expect("the reload answers");
+        let OpResult::ConfigReload(reloaded) = reloaded else {
+            panic!("not the result of config/reload");
+        };
+        assert!(reloaded.errors.is_empty(), "{reloaded:?}");
+        front.turn("go").await;
+        assert_eq!(shell_payload(&front)["changes"]["method"], "git");
+        let text = std::fs::read_to_string(&seen).unwrap_or_else(|_| {
+            panic!(
+                "the harness's git did not run the filter: {:?}",
+                front.results()
+            )
+        });
+        for line in text.lines() {
+            let [old, new, kept] = line.split(' ').collect::<Vec<_>>()[..] else {
+                panic!("{text}");
+            };
+            assert_eq!(
+                kept, "yes",
+                "the filter was not given the environment the harness's git inherits: {text}"
+            );
+            assert_eq!(
+                new, "unset",
+                "the variable a reload made a key reached a filter the harness's git ran: the \
+                 list the reload sets did not reach git\n{text}"
+            );
+            assert_eq!(
+                old, "unset",
+                "the variable that was a key when the session started reached a filter the \
+                 harness's git ran after a reload\n{text}"
+            );
+        }
         front.close().await;
     });
 }

@@ -142,7 +142,7 @@ caught-by:
 [break] analysis-variables-left-in
 rule: `CDPATH`, `OLDPWD` and `RIPGREP_CONFIG_PATH` are removed from what every shell command is given.
 file: crates/cineris-tools/src/shell/env.rs
-find: && !ANALYSIS_REMOVED.iter().any(|pattern| same(name, pattern))
+find: && !ANALYSIS_REMOVED.iter().any(|pattern| is(name, pattern))
 replace:
 packages: cineris-core, cineris-tools
 caught-by:
@@ -152,7 +152,7 @@ caught-by:
 [break] fsmonitor-not-turned-off
 rule: Git's file-system monitor is turned off in every shell command's environment.
 file: crates/cineris-tools/src/shell/env.rs
-find: no_fsmonitor(&mut env, &same);
+find: no_fsmonitor(&mut env, windows);
 replace:
 packages: cineris-core, cineris-tools
 caught-by:
@@ -176,14 +176,16 @@ caught-by:
 
 [break] path-keeps-relative-entries
 rule: `PATH` keeps only its absolute directories.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
+file: crates/cineris-base/src/child_env.rs
+in: one_absolute_path
 find: (name.clone(), absolute_entries(value, windows))
 replace: (name.clone(), value.clone())
-packages: cineris-core, cineris-tools
+packages: cineris-base,cineris-core,cineris-tools
 caught-by:
     cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
     cineris-tools shell::env::tests::on_windows_path_is_found_under_any_spelling_and_read_as_windows_reads_it
+    cineris-base child_env::tests::a_harness_program_searches_only_absolute_directories
+    cineris-base git::tests::sys_a_relative_path_entry_does_not_find_a_filter
 
 # Broken at the source since the shell environment's fixes: the core
 # gives the key variables to the shell by two paths (the removal list and

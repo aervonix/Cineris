@@ -71,6 +71,8 @@ pub(crate) fn check_repository(root: &Path) -> Result<Vec<Violation>> {
     }
     violations.extend(rust_source::check(&sources));
     violations.extend(pty_keys::check(&sources));
+    let page = fs::read_to_string(root.join(rust_source::STARTS_PAGE)).ok();
+    violations.extend(rust_source::process_starts(&sources, page.as_deref()));
     violations.extend(check_docs(root, &files, &names)?);
 
     let metadata = workspace::metadata(root)?;

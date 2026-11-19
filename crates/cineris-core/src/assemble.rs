@@ -46,6 +46,7 @@
     reason = "assembling a session reads files, on the blocking pool"
 )]
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
@@ -1306,6 +1307,23 @@ fn engine_parts(
     }
 }
 
+/// A path the user wrote in `sandbox.write` or `sandbox.protect`, as an
+/// absolute path: `~` is the user's home, and a relative path is under the
+/// workspace `root`. `None` when it names a home there is none of. Every
+/// reader of those settings places an entry here, so that the sandbox's
+/// grant, the roots a front end is told of and the roots the harness's own
+/// programs are kept out of are the same places (found by the early review
+/// of the harness's own processes' fixes: the last read `~/.cargo` as a
+/// relative name, and so kept nothing out).
+pub(crate) fn placed_entry(entry: &str, home: Option<&Path>, root: &AbsPath) -> Option<PathBuf> {
+    let expanded = cineris_config::load::expand_home(entry, home)?;
+    Some(if expanded.is_absolute() {
+        expanded
+    } else {
+        root.to_fs_path().join(expanded)
+    })
+}
+
 /// What the session's sandbox grants, from `loaded`: the workspace, the
 /// session's temporary directory and `sandbox.write` to write, the
 /// protected paths, and `sandbox.network`.
@@ -1320,13 +1338,7 @@ pub(crate) fn sandbox_grant(
     // A path the user wrote, as where it really is. One that cannot be
     // placed is passed on as written, for the engine to refuse by name.
     let place = |entry: &String| -> String {
-        let expanded = cineris_config::load::expand_home(entry, home_dir.as_deref());
-        let absolute = match expanded {
-            Some(path) if path.is_absolute() => Some(path),
-            Some(path) => Some(root.to_fs_path().join(path)),
-            None => None,
-        };
-        absolute
+        placed_entry(entry, home_dir.as_deref(), root)
             .as_deref()
             .and_then(resolve_dir)
             .map_or_else(|| entry.clone(), |resolved| resolved.as_str().to_owned())
@@ -1710,10 +1722,17 @@ pub(crate) fn speeds(settings: &Settings) -> SpeedSettings {
 
 /// The shell a session's commands run in: the one the options give, or
 /// the one found on this machine, asked its version the first time.
+///
+/// `avoid` is where a shell found on `PATH` is never taken from (the
+/// workspace, and the write roots while confining: [`harness_avoid`]);
+/// `confine_roots` is where even a configured absolute one is refused.
+/// `removed` is the shell tool's own removal list, which the version's
+/// probe is kept from as a command is.
 fn find_shell(
     inner: &Inner,
     settings: &Settings,
-    confine_roots: &[PathBuf],
+    (avoid, confine_roots): (&[PathBuf], &[PathBuf]),
+    removed: &[String],
     told: &mut Vec<String>,
 ) -> Result<Shell, cineris_tools::shell::ShellError> {
     if let Some(shell) = &inner.options.shell {
@@ -1727,39 +1746,44 @@ fn find_shell(
         .get(&key)
         .cloned();
     // A shell cached by an earlier session is used only when its real path
-    // is still outside this session's write roots. The cache is shared
-    // across the process's sessions and keyed by the program and its
-    // arguments, not by the roots, so a shell a non-confining session (or
-    // one with other roots) resolved must not be inherited by a confining
-    // one without the write-root check (found by the independent review of
-    // the step 26 fixes). On a stale hit the search runs again below.
+    // is still outside what this session avoids. The cache is shared across
+    // the process's sessions and keyed by the program and its arguments,
+    // not by the workspace or the roots, so a shell another session
+    // resolved must not be inherited without the check (found by the
+    // independent review of the step 26 fixes). On a stale hit the search
+    // runs again below.
     if let Some(shell) = known
-        && cached_shell_is_usable(&shell, confine_roots)
+        && cached_shell_is_usable(&shell, avoid)
     {
         return Ok(shell);
     }
-    // When the session would confine commands, a shell whose real path is
-    // inside a write root is passed over: a confined command could have
-    // planted it there, and starting it to ask its version, or to run a
-    // command the user let leave the sandbox, would run that unconfined
-    // (found by the third review of step 26). The search goes on down
-    // `PATH`, so a system shell behind a project's `.venv/bin` is still
-    // found; the shell tool is unavailable only when nothing outside the
-    // write roots is left.
-    let (shell, skipped) = shell_outside_roots(
+    // A shell whose real path is inside the workspace, or inside a write
+    // root while the session would confine, is passed over: a command or a
+    // tool the model ran could have put it there, and it would then run
+    // every command, and be started unconfined for its version (found by
+    // the third review of step 26 for the write roots; the workspace since
+    // the harness's own processes' fixes). The search goes on down `PATH`,
+    // so a system shell behind a project's `.venv/bin` is still found; the
+    // shell tool is unavailable only when nothing outside is left.
+    let (shell, passed) = shell_outside_roots(
         ShellSearch::from_env(),
         key.0.as_deref(),
         key.1.as_deref(),
+        avoid,
         confine_roots,
     )?;
-    for passed in skipped {
+    if let Some(passed) = passed {
         told.push(format!(
-            "sandbox: the shell `{}` was passed over: it is inside a writable root, where a \
-             confined command could have planted it; the search went on.",
+            "The shell `{}` was passed over: it is inside the workspace or a writable root, where \
+             a command could have put it; the search went on.",
             passed.display()
         ));
     }
     let mut shell = shell;
+    // The probe is given what a command is given: the environment commands
+    // inherit from, without the keys and the removal list.
+    let inherited = inner.options.shell_env.clone();
+    let removed = removed.to_vec();
     // The description the model is given names the shell and its version.
     // Asking for it starts the shell, which for PowerShell is most of a
     // headless run's start-up on Windows (step 13b). So the answer is kept
@@ -1783,7 +1807,7 @@ fn find_shell(
                 let probe = std::thread::Builder::new()
                     .name("cineris-shell-version".to_owned())
                     .spawn(move || {
-                        asked.probe_version(std::time::Duration::from_secs(2));
+                        probe(&mut asked, inherited, &removed);
                         if let Some(version) = asked.version()
                             && state.ensure().is_ok()
                         {
@@ -1808,7 +1832,7 @@ fn find_shell(
             if asks {
                 cineris_base::hook::starting(shell.program().as_os_str());
             }
-            shell.probe_version(std::time::Duration::from_secs(2));
+            probe(&mut shell, inherited, &removed);
         }
     }
     inner
@@ -1819,64 +1843,83 @@ fn find_shell(
     Ok(shell)
 }
 
-/// The shell found by `search` whose real path is outside every root in
-/// `roots`, and the paths of those passed over for being inside one. The
-/// search goes on down `PATH` past a candidate inside a root; a configured
-/// absolute shell inside a root cannot be searched past, and is an error.
+/// Asks `shell` its version, from `inherited` (the options' environment
+/// for commands) or this process's own, kept from what `removed` names.
+fn probe(shell: &mut Shell, inherited: Option<Vec<(OsString, OsString)>>, removed: &[String]) {
+    let limit = std::time::Duration::from_secs(2);
+    match inherited {
+        Some(inherited) => shell.probe_version_from(limit, inherited, removed),
+        None => shell.probe_version(limit, removed),
+    }
+}
+
+/// The shell `search` finds outside `avoid`, and the one it would have
+/// taken with nothing avoided, when that was another: to tell the user.
+/// The search goes on down `PATH` past a candidate inside one of `avoid`.
+/// A configured absolute shell is taken as it is named, except inside one
+/// of `confine_roots`, where it is an error: nothing could be searched
+/// past it.
 fn shell_outside_roots(
     mut search: ShellSearch,
     program: Option<&str>,
     arguments: Option<&[String]>,
-    roots: &[PathBuf],
-) -> Result<(Shell, Vec<PathBuf>), cineris_tools::shell::ShellError> {
-    let mut skipped = Vec::new();
-    loop {
-        let candidate = search.find(program, arguments)?;
-        if under_a_write_root(candidate.program(), roots).is_none() {
-            return Ok((candidate, skipped));
-        }
-        let program_path = candidate.program().to_path_buf();
-        match program_path.parent() {
-            Some(dir) if search.path.iter().any(|entry| entry == dir) => {
-                search.path.retain(|entry| entry != dir);
-            }
-            _ => {
-                return Err(cineris_tools::shell::ShellError::NoneFound(
-                    "every shell found was inside a writable root".to_owned(),
-                ));
-            }
-        }
-        skipped.push(program_path);
+    avoid: &[PathBuf],
+    confine_roots: &[PathBuf],
+) -> Result<(Shell, Option<PathBuf>), cineris_tools::shell::ShellError> {
+    search.avoid = avoid.to_vec();
+    let found = search.find(program, arguments)?;
+    if under_a_write_root(found.program(), confine_roots) {
+        return Err(cineris_tools::shell::ShellError::NoneFound(
+            "every shell found was inside a writable root".to_owned(),
+        ));
     }
+    search.avoid.clear();
+    let passed = search
+        .find(program, arguments)
+        .ok()
+        .map(|first| first.program().to_path_buf())
+        .filter(|first| first != found.program());
+    Ok((found, passed))
 }
 
-/// The resolved write root `path` is inside, or `None` when it is under
-/// none of them: a program there is one a confined command could have
-/// planted, so the harness does not start it. `path` and `roots` are
-/// compared by their real paths, so a link into a root is caught.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "resolving a program's path is part of choosing it, on the blocking pool"
-)]
-fn under_a_write_root(path: &Path, roots: &[PathBuf]) -> Option<PathBuf> {
-    let real = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    // By place: a root that could not be resolved stays plain, and the real
-    // path is extended-length on Windows.
-    roots
-        .iter()
-        .find(|root| cineris_base::location_within(&real, root))
-        .cloned()
+/// Whether `path` is reached through any of `roots` on its way
+/// (`cineris_base::program::passes_through`): a program there, or a link
+/// there, is one a command that can write the root could have planted or
+/// can change, so the harness does not start it.
+fn under_a_write_root(path: &Path, roots: &[PathBuf]) -> bool {
+    cineris_base::program::passes_through(path, &cineris_base::program::resolved(roots))
 }
 
 /// Whether a shell cached by an earlier session may be reused by a session
-/// that confines commands to `roots`: only when the shell's real path is
-/// outside them. The cache is shared across the process's sessions and keyed
-/// by the program and its arguments, not by the roots, so a shell a
-/// non-confining session (or one with other roots) resolved must not be
-/// inherited by a confining one without the write-root check (found by the
-/// independent review of the step 26 fixes).
+/// that avoids `roots` ([`harness_avoid`]): only when the shell's real path
+/// is outside them. The cache is shared across the process's sessions and
+/// keyed by the program and its arguments, not by the workspace or the
+/// roots, so a shell another session resolved must not be inherited
+/// without the check (found by the independent review of the step 26
+/// fixes). A configured absolute shell inside the workspace is searched
+/// for again, and found as it is named.
 fn cached_shell_is_usable(shell: &Shell, roots: &[PathBuf]) -> bool {
-    under_a_write_root(shell.program(), roots).is_none()
+    !under_a_write_root(shell.program(), roots)
+}
+
+/// Where a program the harness starts for itself (the shell, its git) is
+/// never taken from by a search of `PATH`: the workspace, which a command
+/// or a tool the model ran can write wherever commands are confined or
+/// not, and the write roots while they are confined. Resolved, as
+/// `confine_roots` are.
+fn harness_avoid(root: &AbsPath, confine_roots: &[PathBuf]) -> Vec<PathBuf> {
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "resolving the workspace's path, as the write roots are, on the blocking pool"
+    )]
+    let workspace = std::fs::canonicalize(root.to_fs_path()).unwrap_or_else(|_| root.to_fs_path());
+    let mut avoid = vec![workspace];
+    for root in confine_roots {
+        if !avoid.contains(root) {
+            avoid.push(root.clone());
+        }
+    }
+    avoid
 }
 
 /// The write roots a session would confine commands to, resolved, when it
@@ -1888,13 +1931,28 @@ fn confine_roots(inner: &Inner, loaded: &Loaded, root: &AbsPath) -> Vec<PathBuf>
     if inner.sandbox.state(loaded.settings.sandbox.enabled).0 != SandboxState::Enforcing {
         return Vec::new();
     }
+    resolved_write_roots(
+        &loaded.settings.sandbox.write,
+        inner.options.env.home().as_deref(),
+        root,
+    )
+}
+
+/// The workspace and the `sandbox.write` entries, placed as the sandbox's
+/// grant places them ([`placed_entry`]) and resolved: an entry that names a
+/// home there is none of is left out, as the grant cannot give it either.
+/// They only keep the harness's own programs out; nothing is granted from
+/// them.
+fn resolved_write_roots(entries: &[String], home: Option<&Path>, root: &AbsPath) -> Vec<PathBuf> {
     let resolve = |path: &Path| std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let mut roots = vec![resolve(&root.to_fs_path())];
-    for entry in &loaded.settings.sandbox.write {
-        if let Some(resolved) = resolve_dir(Path::new(entry)) {
-            roots.push(resolve(&resolved.to_fs_path()));
-        } else {
-            roots.push(resolve(Path::new(entry)));
+    for entry in entries {
+        let Some(placed) = placed_entry(entry, home, root) else {
+            continue;
+        };
+        match resolve_dir(&placed) {
+            Some(resolved) => roots.push(resolve(&resolved.to_fs_path())),
+            None => roots.push(resolve(&placed)),
         }
     }
     roots
@@ -2067,11 +2125,24 @@ pub(crate) fn assemble(
     // shell or a git found inside one is passed over, so the harness never
     // starts a program a confined command planted.
     let confine_roots = confine_roots(inner, &loaded, &root);
+    // Where the shell and the harness's git found on `PATH` are never taken
+    // from: the workspace, and the write roots while confining.
+    let avoid = harness_avoid(&root, &confine_roots);
+    // The providers' key variables, as one value: the shell tool's
+    // commands, the harness's git and the shell's probe are all kept from
+    // it, and a reload sets it for all three.
+    let withheld = Arc::new(cineris_base::child_env::Withheld::new(
+        provider::key_variables(settings),
+    ));
     // The harness's own git, for the base state and a file's earlier
     // content: inside the session's sandbox, once it is made, while
-    // commands are confined, and never a git a confined command could have
-    // planted inside a write root.
-    let session_git = Arc::new(SessionGit::new(confine_roots.clone()));
+    // commands are confined; never a git inside the workspace or a write
+    // root; and without the keys.
+    let session_git = Arc::new(SessionGit::new(
+        avoid.clone(),
+        Arc::clone(&withheld),
+        options.shell_env.clone(),
+    ));
     let git: Arc<dyn Git> = options.git.clone().unwrap_or_else(|| {
         Arc::new(SystemGit::within(
             Arc::clone(&session_git) as Arc<dyn cineris_base::git::Confinement>
@@ -2235,7 +2306,18 @@ pub(crate) fn assemble(
     let sink = Arc::new(SessionSink::new(id.clone()));
 
     // ------------------------------------------------- the shell, if any
-    let shell_found = match find_shell(inner, settings, &confine_roots, &mut told) {
+    // The shell tool's removal list: the keys the session starts with,
+    // and what the configuration lists. The probe of the shell's version
+    // is kept from it too.
+    let mut env_remove = provider::key_variables(settings);
+    env_remove.extend(settings.shell.env_remove.iter().cloned());
+    let shell_found = match find_shell(
+        inner,
+        settings,
+        (&avoid, &confine_roots),
+        &env_remove,
+        &mut told,
+    ) {
         Ok(shell) => Some(shell),
         Err(failure) if settings.shell.program.is_some() => {
             return Err(error(
@@ -2415,14 +2497,12 @@ pub(crate) fn assemble(
     let mut checks_shell: Option<Arc<RecordingShell>> = None;
     // What of the shell a reload changes: the repository's trust and the
     // providers' key variables, for the next command.
-    let shell_live = Arc::new(cineris_tools::ShellLive::new(
+    let shell_live = Arc::new(cineris_tools::ShellLive::sharing(
         repository_trusted,
-        provider::key_variables(settings),
+        Arc::clone(&withheld),
     ));
     let repository = Arc::new(std::sync::atomic::AtomicBool::new(repository_trusted));
     if let Some(shell) = shell {
-        let mut env_remove = provider::key_variables(settings);
-        env_remove.extend(settings.shell.env_remove.iter().cloned());
         let (timeout, max_timeout) = shell_limits(settings);
         let config = ShellConfig {
             timeout,
@@ -2565,14 +2645,9 @@ pub(crate) fn assemble(
     // front end that keeps the programs it runs out of them (step 23).
     let mut write_roots = vec![root.to_native_string()];
     write_roots.push(sandbox::temp_path(&id).to_string_lossy().into_owned());
+    let home = options.env.home();
     for entry in &settings.sandbox.write {
-        let home = options.env.home();
-        if let Some(path) = cineris_config::load::expand_home(entry, home.as_deref()) {
-            let path = if path.is_absolute() {
-                path
-            } else {
-                root.to_fs_path().join(path)
-            };
+        if let Some(path) = placed_entry(entry, home.as_deref(), &root) {
             write_roots.push(path.to_string_lossy().into_owned());
         }
     }
@@ -2780,8 +2855,9 @@ mod tests {
         path
     }
 
-    /// A shell inside a write root is passed over and the next on `PATH` is
-    /// used; when nothing else is left, there is none.
+    /// A shell inside what a session avoids is passed over and the next on
+    /// `PATH` is used, and the user is told which; when nothing else is
+    /// left, there is none.
     #[test]
     fn a_shell_inside_a_write_root_is_passed_over() {
         let dir = std::env::temp_dir().join(format!(
@@ -2792,53 +2868,107 @@ mod tests {
         let clean = dir.join("usr").join("bin");
         program(&planted, "bash");
         let real = program(&clean, "bash");
-        let search = ShellSearch {
+        let search = |path: Vec<std::path::PathBuf>| ShellSearch {
             windows: false,
-            path: vec![planted.clone(), clean.clone()],
+            path,
             system_root: None,
             comspec: None,
+            avoid: Vec::new(),
         };
+        let both = search(vec![planted.clone(), clean.clone()]);
         let roots = vec![dir.join("ws")];
 
-        // The planted shell is passed over; the real one is used.
-        let (shell, skipped) = shell_outside_roots(search.clone(), None, None, &roots).unwrap();
+        // The planted shell is passed over, the real one is used, and the
+        // passed one is named. The same for a configured name.
+        let (shell, passed) = shell_outside_roots(both.clone(), None, None, &roots, &[]).unwrap();
         assert_eq!(shell.program(), real);
-        assert_eq!(skipped, vec![planted.join("bash")]);
+        assert_eq!(passed, Some(planted.join("bash")));
+        let (named, _) =
+            shell_outside_roots(both.clone(), Some("bash"), None, &roots, &[]).unwrap();
+        assert_eq!(named.program(), real);
 
-        // With no roots avoided, the first is taken.
-        let (first, skipped) = shell_outside_roots(search, None, None, &[]).unwrap();
+        // With nothing avoided, the first is taken, and nothing is said.
+        let (first, passed) = shell_outside_roots(both, None, None, &[], &[]).unwrap();
         assert_eq!(first.program(), planted.join("bash"));
-        assert!(skipped.is_empty());
+        assert_eq!(passed, None);
 
         // With only the planted shell, and its root avoided, there is none.
-        let only = ShellSearch {
-            windows: false,
-            path: vec![planted.clone()],
-            system_root: None,
-            comspec: None,
-        };
-        assert!(shell_outside_roots(only, None, None, &roots).is_err());
+        let only = search(vec![planted.clone()]);
+        assert!(shell_outside_roots(only.clone(), None, None, &roots, &[]).is_err());
 
-        // A shell an earlier session cached inside what is now a write root
-        // is not reused by a session that confines to that root; one outside
-        // it still is.
-        let planted_shell = shell_outside_roots(
-            ShellSearch {
-                windows: false,
-                path: vec![planted.clone()],
-                system_root: None,
-                comspec: None,
-            },
-            None,
-            None,
-            &[],
-        )
-        .unwrap()
-        .0;
+        // A configured absolute shell is taken as it is named inside the
+        // workspace, which is avoided, and refused inside a write root of a
+        // session that confines.
+        let configured = planted.join("bash");
+        let configured = configured.to_str().unwrap();
+        let (taken, _) =
+            shell_outside_roots(only.clone(), Some(configured), None, &roots, &[]).unwrap();
+        assert_eq!(taken.program(), planted.join("bash"));
+        assert!(shell_outside_roots(only.clone(), Some(configured), None, &roots, &roots).is_err());
+
+        // A shell an earlier session cached inside what this one avoids is
+        // not reused; one outside it still is.
+        let planted_shell = shell_outside_roots(only, None, None, &[], &[]).unwrap().0;
         assert!(!super::cached_shell_is_usable(&planted_shell, &roots));
         assert!(super::cached_shell_is_usable(&planted_shell, &[]));
         assert!(super::cached_shell_is_usable(&shell, &roots));
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A `sandbox.write` entry is kept out of as the sandbox grants it: `~`
+    /// is the home, and a relative entry is under the workspace. Read as
+    /// written, `~/.cargo` was a relative name that matched nothing.
+    #[test]
+    fn the_write_roots_kept_out_of_are_placed_as_the_grant_places_them() {
+        let dir = std::env::temp_dir().join(format!(
+            "cineris-core-roots-{:016x}",
+            cineris_base::rng::SystemRng::new().next_u64()
+        ));
+        let (ws, home) = (dir.join("ws"), dir.join("home"));
+        std::fs::create_dir_all(home.join(".cargo")).unwrap();
+        std::fs::create_dir_all(ws.join("out")).unwrap();
+        let root = cineris_base::AbsPath::from_os(&ws).unwrap();
+        let real = |path: std::path::PathBuf| std::fs::canonicalize(path).unwrap();
+        let roots = super::resolved_write_roots(
+            &["~/.cargo".to_owned(), "out".to_owned()],
+            Some(&home),
+            &root,
+        );
+        assert_eq!(
+            roots,
+            vec![
+                real(ws.clone()),
+                real(home.join(".cargo")),
+                real(ws.join("out"))
+            ]
+        );
+        // With no home, the `~` entry cannot be placed and is left out.
+        let roots = super::resolved_write_roots(&["~/.cargo".to_owned()], None, &root);
+        assert_eq!(roots, vec![real(ws)]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The workspace is avoided whether the session confines or not: with
+    /// no sandbox a file the model wrote there would otherwise become the
+    /// shell, or the harness's git (the harness's own processes' fixes).
+    /// The write roots are added while it confines.
+    #[test]
+    fn the_workspace_is_avoided_with_or_without_a_sandbox() {
+        let dir = std::env::temp_dir().join(format!(
+            "cineris-core-avoid-{:016x}",
+            cineris_base::rng::SystemRng::new().next_u64()
+        ));
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(&ws).unwrap();
+        let root = cineris_base::AbsPath::from_os(&ws).unwrap();
+        let real = std::fs::canonicalize(&ws).unwrap();
+        assert_eq!(super::harness_avoid(&root, &[]), vec![real.clone()]);
+        let extra = dir.join("extra");
+        assert_eq!(
+            super::harness_avoid(&root, &[real.clone(), extra.clone()]),
+            vec![real, extra]
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

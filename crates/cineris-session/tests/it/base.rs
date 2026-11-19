@@ -959,6 +959,14 @@ impl cineris_base::git::Confinement for Recording {
         true
     }
 
+    fn withheld(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn avoid(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
     fn start(
         &self,
         program: &Path,

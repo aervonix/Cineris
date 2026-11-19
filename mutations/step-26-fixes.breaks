@@ -98,8 +98,8 @@ caught-by:
 rule: A shell whose real path is inside a write root is passed over when the session would confine.
 file: crates/cineris-core/src/assemble.rs
 in: shell_outside_roots
-find: under_a_write_root(candidate.program(), roots).is_none()
-replace: true
+find: search.avoid = avoid.to_vec();
+replace:
 packages: cineris-core
 caught-by:
     cineris-core assemble::tests::a_shell_inside_a_write_root_is_passed_over
@@ -108,8 +108,8 @@ caught-by:
 rule: A program found for the harness is passed over when its real path is inside a write root to avoid.
 file: crates/cineris-base/src/program.rs
 in: find_outside
-find: !avoid.iter().any(|root| crate::path::location_within(&real, root))
-replace: true
+find: && !passes_through(candidate, &avoid)
+replace:
 packages: cineris-base
 caught-by:
     cineris-base program::tests::find_outside_passes_over_a_program_inside_a_root
@@ -168,7 +168,7 @@ caught-by:
 rule: A shell an earlier session cached inside a write root is not reused by a session that confines to that root.
 file: crates/cineris-core/src/assemble.rs
 in: cached_shell_is_usable
-find: under_a_write_root(shell.program(), roots).is_none()
+find: !under_a_write_root(shell.program(), roots)
 replace: true
 packages: cineris-core
 caught-by:

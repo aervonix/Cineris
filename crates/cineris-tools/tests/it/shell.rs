@@ -598,7 +598,7 @@ fn size(bytes: usize) -> String {
 
 fn the_model_is_told_the_shell(test: &str, mut shell: Shell) {
     // The version is asked of the shell itself.
-    shell.probe_version(crate::LIMIT);
+    shell.probe_version(crate::LIMIT, &[]);
     match shell.kind() {
         ShellKind::Bash | ShellKind::Pwsh | ShellKind::WindowsPowerShell => {
             let version = shell.version().expect("this shell says its version");

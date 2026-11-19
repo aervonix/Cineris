@@ -1,5 +1,6 @@
-//! A short program run for its answer: a shell asked for its version, `git`
-//! asked what has changed.
+//! A short program run for its answer: a shell asked for its version
+//! ([`run`]), `git` asked what has changed ([`answer`], for a git
+//! `cineris_base::git::start` started with its own environment).
 //!
 //! This is not how a model's command runs. It is for the harness's own
 //! questions to programs it chose itself: no process tree, no artifact, no
@@ -14,7 +15,7 @@
     reason = "runs on the blocking pool, and waits for a program with a limit"
 )]
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -40,19 +41,23 @@ pub(crate) enum Unanswered {
 /// Runs `program` with `arguments` and returns what it wrote to its
 /// standard output, if it exited with success within `limit`.
 ///
-/// Its standard error is thrown away and its input is closed. `env` is
-/// added to the inherited environment.
+/// Its standard error is thrown away and its input is closed. `env` is its
+/// whole environment: nothing is inherited, so that a program the harness
+/// starts for itself is given only what its caller built for it (no
+/// provider key, a `PATH` of absolute directories), never the harness's
+/// own by default (the harness's own processes' fixes).
 pub(crate) fn run(
     program: impl AsRef<OsStr>,
     arguments: &[&str],
     cwd: Option<&Path>,
-    env: &[(&str, &str)],
+    env: &[(OsString, OsString)],
     limit: Duration,
 ) -> Result<Vec<u8>, Unanswered> {
     let mut command = Command::new(program);
     command
         .args(arguments)
-        .envs(env.iter().copied())
+        .env_clear()
+        .envs(env.iter().map(|(name, value)| (name, value)))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
