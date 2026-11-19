@@ -3215,11 +3215,11 @@ caught-by:
     cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
 
 [break] a-loose-value-under-a-credentials-name-is-imported
-rule: A value under a credential's name that is not one token refuses its server: it would be imported unseen (M-B).
+rule: A value under a credential's name that is neither one token nor a relative path refuses its server: it would be imported unseen (M-B, B).
 file: crates/cineris-config/src/import.rs
 packages: cineris-config, cineris-cli
 in: server
-find: } else if launch_view(&server.launch, &server.places).1 == Masked::Loose {
+find: } else if launch_view(&server.launch).1 == Masked::Loose {
 replace: } else if false {
 caught-by:
     cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
@@ -3347,7 +3347,7 @@ caught-by:
 # the fixes (Opus)", settled by the coordinator)
 
 [break] a-semicolon-is-a-token-character
-rule: A token is ASCII letters and digits and `-._~+=:@` (and `%` only in a server's own address): a `;` is a shell's, and its value refuses its server (Medium 1).
+rule: A token is ASCII letters and digits and `-._~+=:@/` (and `%` only in a server's own address): a `;` is a shell's, and its value refuses its server (Medium 1).
 file: crates/cineris-config/src/import.rs
 in: token_character
 find: ':' | '@'
@@ -3409,13 +3409,14 @@ caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
 [break] a-path-under-a-key-name-is-refused
-rule: A relative path under a key's name is a place, and is shown (the coordinator's answer).
+rule: A relative path under a key's name is a place, and is shown, by its text alone (the coordinator's answer; since B, without it a relative path would be a token, masked).
 file: crates/cineris-config/src/import.rs
 in: Masked::of
-find: Some(PathForm::Relative) => true
-replace: Some(PathForm::Relative) => false
+find: || relative_path(value)
+replace:
 caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
+    cineris-config import::tests::a_slash_is_a_tokens_and_a_rooted_path_is_masked_and_imported
 
 [break] a-held-key-that-ends-a-step-types-into-the-input-box
 rule: A key a step took, held down, goes where its press went, nowhere, at the last step and once the step has gone (L-5, S-L3).
@@ -3474,27 +3475,10 @@ replace: .is_some_and(|_| false)
 caught-by:
     cineris-cli::bin/cineris setup::tests::a_providers_model_is_shared_when_another_provider_has_its_id
 
-# ------------- the final review (Opus) of these fixes, and the coordinator's
-# rule for places (docs/steps/25/parts/pr3-first-run.md, "The review of the
-# fixes (Opus)", settled by the coordinator)
-
-[break] every-rooted-value-is-a-place
-rule: A rooted path under a credential's name is a place only where it names a file or directory that exists: a base64 secret begins with `/` one time in 64 (settled by the coordinator).
-file: crates/cineris-config/src/import.rs
-in: Masked::of
-find: Some(PathForm::Rooted) => places.iter().any(|place| place == value)
-replace: Some(PathForm::Rooted) => true
-caught-by:
-    cineris-config import::tests::a_rooted_path_is_a_place_only_where_it_exists
-
-[break] an-existing-path-is-not-found
-rule: The reader asks the disk, by metadata, whether a rooted path exists, `~` the home directory (settled by the coordinator).
-file: crates/cineris-config/src/import.rs
-in: server
-find: path_form(value) == Some(PathForm::Rooted) && places.exists(value)
-replace: path_form(value) == Some(PathForm::Rooted) && false
-caught-by:
-    cineris-config import::tests::a_rooted_path_is_a_place_only_where_it_exists
+# ------------- the final review (Opus) of these fixes (docs/steps/25/parts/
+# pr3-first-run.md, "The review of the fixes (Opus)"). The breaks of the
+# coordinator's rule for places, `every-rooted-value-is-a-place` and
+# `an-existing-path-is-not-found`, went with that rule (B, below).
 
 [break] a-percent-is-a-tokens-in-an-argument
 rule: `%` is a token's only in an address's query or fragment: `cmd /c` expands `%NAME%` in an argument (the final review).
@@ -3595,82 +3579,16 @@ replace: self.run_config = chosen_config(&run.chosen, false);
 caught-by:
     cineris-tui app::tests::first_run::a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it
 
-# ------------- the narrow check (Opus) of the final review's fixes, and the
-# coordinator's time limit (docs/steps/25/parts/pr3-first-run.md, "The
-# review of the fixes (Opus)")
-
-[break] a-share-is-asked-about
-rule: A value that begins with two separators, before or after `~`, is never a place and never asked about: on Windows its metadata opens a share with the person's credentials (N-M1).
-file: crates/cineris-config/src/import.rs
-in: path_form
-find: if !shaped || doubled(value) || value.strip_prefix('~').is_some_and(doubled) {
-replace: if !shaped {
-caught-by:
-    cineris-config import::tests::the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share
-
-[break] the-programs-disk-asks-about-a-shared-home
-rule: The program's disk never asks about a path that begins with two separators once `~` is expanded: a home on a share (N-M1).
-file: crates/cineris-config/src/import.rs
-in: OnDisk::local_path
-find: if doubled(&real.to_string_lossy()) {
-replace: if false {
-caught-by:
-    cineris-config import::tests::the_programs_disk_never_asks_about_a_share_or_a_home_it_has_not
-
-[break] a-non-credential-flags-value-is-asked-about
-rule: The disk is asked only about a value judged by its name: not one after a flag that is not a credential's (N-M1).
-file: crates/cineris-config/src/import.rs
-in: server
-find: after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
-replace: after_flag = arg.starts_with('-') && !arg.contains('=');
-caught-by:
-    cineris-config import::tests::the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share
-
-[break] a-non-credential-names-value-is-asked-about
-rule: The disk is asked only about a value judged by its name: not a `NAME=value` whose name is not a credential's (N-M1).
-file: crates/cineris-config/src/import.rs
-in: server
-find: .filter(|(name, _)| !name.contains("://") && names_a_secret(name))
-replace: .filter(|(name, _)| !name.contains("://"))
-caught-by:
-    cineris-config import::tests::the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share
-
-[break] a-credential-names-value-is-not-asked-about
-rule: A credential's `NAME=value` with a rooted path is asked about: `--key=<path>`, `KEY=<path>` (N-L5).
-file: crates/cineris-config/src/import.rs
-in: server
-find: .map(|(_, value)| value)
-replace: .map(|_| "")
-caught-by:
-    cineris-config import::tests::a_rooted_path_is_a_place_only_where_it_exists
-    cineris-config import::tests::the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share
-
-[break] a-homeless-tilde-is-a-place
-rule: With no home, no `~` path is asked about, nor a place (N-L5).
-file: crates/cineris-config/src/import.rs
-in: OnDisk::local_path
-find: Some(rest) => self.home.as_ref()?.join(rest)
-replace: Some(rest) => self.home.clone().unwrap_or_default().join(rest)
-caught-by:
-    cineris-config import::tests::the_programs_disk_never_asks_about_a_share_or_a_home_it_has_not
-
-[break] the-disk-is-waited-for-without-a-limit
-rule: A path's metadata is waited for at most a short limit: past it, the path is not a place (the coordinator's time limit).
-file: crates/cineris-config/src/import.rs
-in: OnDisk::exists
-find: match answered.recv_timeout(self.limit) {
-replace: match answered.recv().map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected) {
-caught-by:
-    cineris-config import::tests::a_disk_that_does_not_answer_in_time_gives_no_place_and_is_asked_nothing_more
-
-[break] a-disk-that-did-not-answer-is-asked-again
-rule: Once a path did not answer in time, the rest of the file's reading asks the disk nothing more (the coordinator's time limit).
-file: crates/cineris-config/src/import.rs
-in: OnDisk::exists
-find: self.given_up.set(true);
-replace:
-caught-by:
-    cineris-config import::tests::a_disk_that_does_not_answer_in_time_gives_no_place_and_is_asked_nothing_more
+# ------------- the narrow check (Opus) of the final review's fixes
+# (docs/steps/25/parts/pr3-first-run.md, "The review of the fixes (Opus)").
+# The breaks of its place check and of the coordinator's time limit went with
+# the existence rule (B, below): `a-share-is-asked-about`,
+# `the-programs-disk-asks-about-a-shared-home`,
+# `a-non-credential-flags-value-is-asked-about`,
+# `a-non-credential-names-value-is-asked-about`,
+# `a-credential-names-value-is-not-asked-about`,
+# `a-homeless-tilde-is-a-place`, `the-disk-is-waited-for-without-a-limit`
+# and `a-disk-that-did-not-answer-is-asked-again`.
 
 [break] an-arguments-address-takes-a-percent
 rule: `%` is a token's only in a server's own address, not in an address inside an argument, which `cmd /c` expands (N-L2).
@@ -3744,6 +3662,50 @@ find: last.trim_end_matches(|character: char| character.is_ascii_digit()) == "pw
 replace: last == "pwd"
 caught-by:
     cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
+
+# ------------- the coordinator's settlement after the narrow check (B): no
+# value is asked of the disk, and `/` is a token's under a credential's name
+# (docs/steps/25/parts/pr3-first-run.md, "The review of the fixes (Opus)",
+# row B)
+
+[break] a-slash-is-not-a-tokens
+rule: Under a credential's name `/` is a token's, in an argument and in an address's field alike: a rooted path, a `~/` path and a base64 secret with a `/` are masked and imported, never refused (B, settled by the coordinator).
+file: crates/cineris-config/src/import.rs
+in: token_character
+find: ':' | '@' | '/'
+replace: ':' | '@'
+caught-by:
+    cineris-config import::tests::a_slash_is_a_tokens_and_a_rooted_path_is_masked_and_imported
+    cineris-config import::tests::a_value_is_judged_by_its_text_and_never_asked_of_the_disk
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+    cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
+
+[break] an-arguments-value-is-asked-of-the-disk
+rule: No argument's value is asked of the disk: a file or a directory that exists is judged as a path that names nothing is (B, settled by the coordinator).
+file: crates/cineris-config/src/import.rs
+in: Masked::of
+find: || relative_path(value)
+replace: || relative_path(value) || std::path::Path::new(value).exists()
+caught-by:
+    cineris-config import::tests::a_value_is_judged_by_its_text_and_never_asked_of_the_disk
+
+[break] an-addresss-value-is-asked-of-the-disk
+rule: No value in an address's query or fragment is asked of the disk (B, settled by the coordinator).
+file: crates/cineris-config/src/import.rs
+in: Masked::in_address
+find: if value.is_empty() || value == cineris_base::redact::MASK {
+replace: if value.is_empty() || value == cineris_base::redact::MASK || std::path::Path::new(value).exists() {
+caught-by:
+    cineris-config import::tests::a_value_is_judged_by_its_text_and_never_asked_of_the_disk
+
+[break] a-relative-path-holds-a-metacharacter
+rule: A relative path is a place only when it holds a token's characters and `\` alone: `./k;sh` refuses its server (B, as the place check had it).
+file: crates/cineris-config/src/import.rs
+in: relative_path
+find: .all(|character| token_character(character, false) || character == '\\')
+replace: .all(|_| true)
+caught-by:
+    cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
 
 # From mutations/step-25-detect.breaks (part `detect`).
 # Step 25's third pull request, the fixes of its full review in one group:
