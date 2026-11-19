@@ -18,7 +18,7 @@ API keys must be stored somewhere between runs. The audience is the broad public
 
 ## Measurement
 
-The `keyring` crate with its default features, built for Linux, desktop pinned to 4 cores ([measurements/dependency-costs.md](../measurements/dependency-costs.md)):
+The `keyring` crate with its default features, built for Linux, the reference machine pinned to 4 cores ([measurements/dependency-costs.md](../measurements/dependency-costs.md)):
 
 | | Dev build | Release build | Size added | Crates |
 |---|---|---|---|---|

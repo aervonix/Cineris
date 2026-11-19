@@ -1165,7 +1165,7 @@ pub(crate) fn drive_jobs(
             .collect();
         return Err(format!(
             "the tests of {} stalled with nothing broken, with one job: the machine is too \
-             busy to judge a break on. Run again when it is quieter (`rx busy` at the desk).",
+             busy to judge a break on. Run again when it is quieter.",
             names.join("; ")
         ));
     }

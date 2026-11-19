@@ -8,11 +8,11 @@ The spike code is throwaway and is not in this repo.
 
 - **One tiny program per candidate.** A workspace of small binary crates, each depending on one candidate and using it enough that the linker cannot discard it: the HTTP variants build a client and a streaming request, the terminal variant draws a frame, the engines evaluate a script, and so on. An empty program (`base`) is the floor.
 - **Clean builds, timed.** For each program the target directory is deleted, then `cargo build` is timed, once in the dev profile and once in release. Sources were fetched beforehand, so no download time is included.
-- **Pinned to 4 cores** (`taskset`, `-j4`) on the desktop, to approximate a GitHub-hosted runner's core count. The desktop's cores are faster than a runner's, so runner times will be longer: the working assumption is about double on Linux and more on Windows, to be replaced by real timings in the repo skeleton step.
+- **Pinned to 4 cores** (`taskset`, `-j4`) on the reference machine, to approximate a GitHub-hosted runner's core count. The reference machine's cores are faster than a runner's, so runner times will be longer: the working assumption is about double on Linux and more on Windows, to be replaced by real timings in the repo skeleton step.
 - **Size** is the release binary, stripped. "Added" is that size minus the empty program's 310 KB.
 - **Crates** is the number of distinct packages in the build, counting build dependencies.
 - **Release profile for the per-candidate table:** `opt-level = 3`, thin LTO, one codegen unit, `panic = "abort"`, stripped. The profile comparison further down varies these.
-- **Machine:** Intel Core i7-14700K, Linux 6.18 under WSL 2, Rust 1.99.1, the default linker.
+- **Machine:** the reference machine ([README.md](README.md#machines)): Intel Core i7-14700K, Linux 6.18, Rust 1.99.1, the default linker.
 - **One run each.** Build times repeat to within a few percent. Treat differences under about 10% as noise.
 
 ## Per candidate
@@ -33,7 +33,7 @@ The spike code is throwaway and is not in this repo.
 | lexopt | 0.3 s | 1.6 s | 18 KB | 2 | Yes ([0011](../decisions/0011-cli-parsing.md)) |
 | **Terminal UI** | | | | | |
 | ratatui with crossterm | 4.3 s | 6.7 s | 240 KB | 64 | No, and since step 20 not crossterm either ([0002](../decisions/0002-tui-rendering.md), "Amended in step 20") |
-| pulldown-cmark | 0.9 s | 3.0 s | 379 KB | 5 | No, since step 22: the streaming markdown parser is our own. The commit rule needs every piece of text's place in the source and the marks still open, which this whole-document parser does not give; the owner agreed through the coordinator on 2026-11-14 ([architecture/09-tui.md](../architecture/09-tui.md), "The commit rule") |
+| pulldown-cmark | 0.9 s | 3.0 s | 379 KB | 5 | No, since step 22: the streaming markdown parser is our own. The commit rule needs every piece of text's place in the source and the marks still open, which this whole-document parser does not give; the owner agreed on 2026-11-14 ([architecture/09-tui.md](../architecture/09-tui.md), "The commit rule") |
 | syntect, pure-Rust regex, default grammars | 5.2 s | 11.4 s | 2,254 KB | 45 | Yes, behind a feature ([0015](../decisions/0015-syntax-highlighting.md)) |
 | **Data and text** | | | | | |
 | serde, serde_json, toml | 2.5 s | 4.2 s | 259 KB | 18 | Yes |
@@ -87,7 +87,7 @@ The core set was built in both measurement passes; the range is the two results.
 | Boa | + 10.5 s | + 55.2 s | + 6.7 MB | + 70 |
 | wasmtime (trimmed) | + 19.6 s | + 64.9 s | + 10.2 MB | + 57 |
 
-**Estimate for the first release's third-party set** (core set, MCP with HTTP, syntect, QuickJS; keyring off on Linux). This combination was not built as one program. Taking the measured set with MCP, keyring and syntect, removing keyring and adding QuickJS gives about 30 s clean in dev, about 80 s in release on 4 desktop cores, and 11 to 12 MB of binary before any of our own code. The size budget of 16 MB in [../performance-budgets.md](../performance-budgets.md) is set from that.
+**Estimate for the first release's third-party set** (core set, MCP with HTTP, syntect, QuickJS; keyring off on Linux). This combination was not built as one program. Taking the measured set with MCP, keyring and syntect, removing keyring and adding QuickJS gives about 30 s clean in dev, about 80 s in release on 4 cores of the reference machine, and 11 to 12 MB of binary before any of our own code. The size budget of 16 MB in [../performance-budgets.md](../performance-budgets.md) is set from that.
 
 ## Build profiles
 

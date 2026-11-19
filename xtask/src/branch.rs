@@ -1,6 +1,6 @@
-//! `cargo xtask branch`: two changes of history a worktree session needs and
-//! the shell guard makes hard (`docs/testing-and-ci.md`, "A branch's history
-//! without the shell guard").
+//! `cargo xtask branch`: two changes of history that are hard to make by hand
+//! (`docs/testing-and-ci.md`, "A branch's history
+//! without an interactive rebase").
 //!
 //! - **`commit-records`** commits a step's records (its `ci.md`, its break
 //!   lists) to a branch that is not checked out: `ci-times --write` after a

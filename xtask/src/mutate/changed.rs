@@ -443,15 +443,14 @@ pub(crate) struct Git<'a> {
 
 impl<'a> Git<'a> {
     /// Opens the repository at `root` for a diff from `reference`. Refuses a
-    /// tree with no `.git` of its own (the desk's copy has none), and a
+    /// tree with no `.git` of its own (a copy made without it has none), and a
     /// reference that is no commit.
     pub(crate) fn open(root: &'a Path, reference: &str) -> Result<Self> {
         if !root.join(".git").exists() {
             return Err(format!(
-                "`--changed {reference}` needs git's history, and {} has no `.git`. At the \
-                 desk, `rx` copies the worktree without one: run `rx --git -- cargo xtask mutate \
-                 --changed {reference} ...`, which gives the copy a `.git` from a bundle of \
-                 every ref.",
+                "`--changed {reference}` needs git's history, and {} has no `.git`: run it in a \
+                 git checkout (a copy of the tree made without its `.git` cannot say what \
+                 changed).",
                 root.display()
             ));
         }
@@ -471,9 +470,9 @@ impl<'a> Git<'a> {
         let top = crate::owner_guard::git(root, &["rev-parse", "--show-toplevel"]).map_err(|why| {
             format!(
                 "`--changed {reference}` needs git's history, and git cannot read the `.git` of \
-                 {} ({why}). A copy of a worktree carries its `.git` as a pointer to the \
-                 worktree's folder, which is not in the copy: at the desk, `rx --git -- cargo \
-                 xtask mutate --changed {reference} ...`.",
+                 {} ({why}). A copy of a working tree carries its `.git` as a pointer to the \
+                 folder it came from, which is not in the copy: run it in the git checkout \
+                 itself.",
                 root.display()
             )
         })?;
@@ -1127,7 +1126,7 @@ mod tests {
         let error = super::Git::open(&root, "main").err().unwrap();
 
         assert!(error.contains("git cannot read the `.git`"), "{error}");
-        assert!(error.contains("rx --git"), "{error}");
+        assert!(error.contains("in the git checkout itself"), "{error}");
         let _ = std::fs::remove_dir_all(&root);
     }
 
@@ -1176,10 +1175,7 @@ mod tests {
         let error = super::Git::open(&root, "origin/main").err().unwrap();
 
         assert!(error.contains("has no `.git`"), "{error}");
-        assert!(
-            error.contains("rx --git -- cargo xtask mutate --changed origin/main"),
-            "{error}"
-        );
+        assert!(error.contains("run it in a git checkout"), "{error}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }

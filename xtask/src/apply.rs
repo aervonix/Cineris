@@ -1,15 +1,13 @@
 //! `cargo xtask apply SCRIPT`: the changes of a script and the checks of
-//! them, in one command (`docs/shell-guard.md`, "One command for an edit
-//! and its check").
+//! them, in one command (`CONTRIBUTING.md`, "Editing from a script").
 //!
-//! In a Claude Code worktree session the shell guard refuses a heredoc
-//! beside git or an interpreter, a `&&` chain, `xargs` into git and more,
-//! so every edit of wave 11's sessions became a script run in a call of its
-//! own, and its check another call. This takes both: the changes, in the
-//! form of `replace --script` with two more (a whole file written, a file
-//! deleted), and the checks to run on them (formatting, the repo rules, a
-//! crate's build, lints or tests). It is one command with one argument,
-//! which the guard accepts.
+//! An agent sandbox may refuse a heredoc beside git or an interpreter, a
+//! `&&` chain, `xargs` into git and more, so an edit becomes a script run in
+//! a call of its own, and its check another call. This takes both: the
+//! changes, in the form of `replace --script` with two more (a whole file
+//! written, a file deleted), and the checks to run on them (formatting, the
+//! repo rules, a crate's build, lints or tests). It is one command with one
+//! argument.
 //!
 //! **All or none.** Every change is made in memory first: if one cannot be
 //! made, no file is written and no check runs. If a check fails, every file
@@ -67,10 +65,7 @@ A check is one line outside a change, and they run in the order written:
 
 A check's words are split at spaces; quote a word that holds one ('…' or \"…\").
 Lines outside a change that begin with `#`, and empty ones, are comments.
-Paths are relative to the directory the command runs in.
-
-At the desk, run it on the laptop, or as `rx --back -- cargo xtask apply
-SCRIPT` so that what it wrote on the desktop comes back.";
+Paths are relative to the directory the command runs in.";
 
 /// One check of a script.
 #[derive(Debug, Clone, PartialEq)]

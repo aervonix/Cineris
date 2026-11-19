@@ -39,9 +39,9 @@ One tool, `summarise`: it takes JSON with a `text` field and returns JSON with t
 | **Host memory** | Growth of the host's resident memory from creating the runtime and loading the code. |
 | **Child memory** | Resident memory of the extension's own process, for the subprocess rows. |
 
-Three benchmark runs on the desktop; the figures are the median run. Boa was added afterwards in a second set of three desktop runs, in which every other row repeated to within a few percent. One run on the laptop.
+Three benchmark runs on the reference machine; the figures are the median run. Boa was added afterwards in a second set of three runs there, in which every other row repeated to within a few percent. One run on the second machine.
 
-### Results: desktop
+### Results: reference machine
 
 | Mechanism | Init | First call | Small call, median / 99th | 64 KiB call, median | Host memory | Child memory |
 |---|---|---|---|---|---|---|
@@ -58,7 +58,7 @@ Three benchmark runs on the desktop; the figures are the median run. Boa was add
 | Embedded Lua 5.4 | 0.04 ms | 0.005 ms | 4.1 / 8.7 µs | 0.79 ms | 0.2 MB | |
 | Embedded Rhai | 0.12 ms | 0.013 ms | 8.0 / 15.5 µs | 1.9 ms | 1.4 MB | |
 
-### Results: laptop
+### Results: second machine
 
 | Mechanism | Init | Small call, median / 99th | 64 KiB call, median | Host memory | Child memory |
 |---|---|---|---|---|---|
@@ -75,7 +75,7 @@ Three benchmark runs on the desktop; the figures are the median run. Boa was add
 | Embedded Lua 5.4 | 0.06 ms | 6.4 / 14.4 µs | 1.1 ms | 0.3 MB | |
 | Embedded Rhai | 0.22 ms | 16.1 / 25.6 µs | 4.0 ms | 1.4 MB | |
 
-Subprocess round trips are faster on the laptop (native Linux) than on the desktop (WSL 2), where pipe wake-ups cost more. Everything computed in-process is faster on the desktop.
+Subprocess round trips are faster on the second machine (native Linux) than on the reference machine (Linux in a virtual machine), where pipe wake-ups cost more. Everything computed in-process is faster on the reference machine.
 
 ### What each mechanism costs the host
 
@@ -92,7 +92,7 @@ From [dependency-costs.md](dependency-costs.md): clean builds pinned to 4 cores,
 | wasmtime, default features | 102.3 s | 14.4 MB | 147 | not measured | not measured |
 | Subprocess | 0 | 0 | 0 | 0 | 0 |
 
-Building the WASM guest itself took about 13 s on the laptop, and needs a Rust toolchain with the WASM target on the machine that builds it.
+Building the WASM guest itself took about 13 s on the second machine, and needs a Rust toolchain with the WASM target on the machine that builds it.
 
 ### Reading the mechanism numbers
 

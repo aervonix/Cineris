@@ -320,8 +320,8 @@ Working on the code
   apply SCRIPT [--dry-run] [--keep]
                     A script's changes (replace's edits, whole files written
                     or deleted) and the checks to run on them, in one command
-                    the shell guard accepts: all or none, and every file put
-                    back when a check fails. `apply --help` has the format.
+                    one command: all or none, and every file put back when
+                    a check fails. `apply --help` has the format.
   rename apply [--regen] | --check | --kept | branch BASE..TIP [--to NAME]
                     The names before decision 0038 turned into Cineris's: the
                     working tree (contents, then paths; a second run changes

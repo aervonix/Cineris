@@ -18,7 +18,7 @@ The core's work is I/O-bound: one or a few HTTP streams, a handful of child proc
 
 ## Measurements
 
-Desktop, release build, a binary with the planned dependency set ([measurements/dependency-costs.md](../measurements/dependency-costs.md)).
+Reference machine, release build, a binary with the planned dependency set ([measurements/dependency-costs.md](../measurements/dependency-costs.md)).
 
 | | Current-thread | Multi-thread (2 workers) |
 |---|---|---|

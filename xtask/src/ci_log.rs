@@ -8,7 +8,7 @@
 //! pattern with a little around them. Nothing here writes to GitHub.
 //!
 //! The repository is `gh`'s own: `{owner}/{repo}` of the directory it is run
-//! in, or `GH_REPO` when that is set, which is how it works through `rx`,
+//! in, or `GH_REPO` when that is set, which is how it works in a tree with no `.git`,
 //! whose copy of the tree has no `.git`.
 
 use std::fmt::Write as _;
@@ -35,8 +35,8 @@ RE is a small regular-expression dialect: literals, `.`, [classes], \\d \\w
 \\s, ( ), |, * + ? {n,m}, ^ and $, and `(?i)` first for a match that ignores
 case. --tail N prints the last N lines (of what --grep chose, when given).
 
-Through `rx`, whose copy of the tree has no .git, name the repository:
-`rx -- env GH_REPO=OWNER/REPO cargo xtask ci-log RUN`.";
+Where the tree has no .git, name the repository:
+`GH_REPO=OWNER/REPO cargo xtask ci-log RUN`.";
 
 /// How much of a job's log `--grep` shows around a line when not told.
 const CONTEXT: usize = 2;

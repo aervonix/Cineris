@@ -15,7 +15,7 @@ The method, every table, and what was not measured are in [measurements/tui-lang
 
 ## The numbers
 
-Desktop, medians. "Light" is a one-line live region; "heavy" is a 30-line live region re-rendered every frame. The laptop run gave the same ordering and ratios.
+Reference machine, medians. "Light" is a one-line live region; "heavy" is a 30-line live region re-rendered every frame. The second machine's run gave the same ordering and ratios.
 
 | Measure | Rust (ratatui, inline) | Rust (own line renderer) | TypeScript (Ink on Node) | TypeScript (Ink on Bun) |
 |---|---|---|---|---|
@@ -68,13 +68,13 @@ The RPC protocol is nonetheless complete enough for a TypeScript client to be bu
 
 ## The gap
 
-**Windows Terminal was not measured.** The measurement harness runs on Linux; the desktop used for measurements runs Linux under WSL 2. The Rust side compiles for Windows, and the harness itself can run there under ConPTY, but how a real Windows Terminal window behaves (flicker, resize, keys) needs eyes. The checklist is in [measurements/windows-terminal-checklist.md](../measurements/windows-terminal-checklist.md), for the owner to run on the desktop. The owner accepted this decision on 2026-11-12 on condition that the checklist was run before step 20, the terminal layer. It was run on 2026-11-13; the results are in "Checked on Windows" below.
+**Windows Terminal was not measured.** The measurement harness runs on Linux; the reference machine used for measurements runs Linux under WSL 2. The Rust side compiles for Windows, and the harness itself can run there under ConPTY, but how a real Windows Terminal window behaves (flicker, resize, keys) needs eyes. The checklist is in [measurements/windows-terminal-checklist.md](../measurements/windows-terminal-checklist.md), for the owner to run on a Windows machine. The owner accepted this decision on 2026-11-12 on condition that the checklist was run before step 20, the terminal layer. It was run on 2026-11-13; the results are in "Checked on Windows" below.
 
 Nothing known about Windows favours TypeScript here: both prototypes send the same kinds of terminal sequences, and Node's start-up is slower on Windows than on Linux.
 
 ## Checked on Windows
 
-The checklist was run on 2026-11-13, on the desktop, in Windows Terminal 1.24 on Windows build 26300, with each prototype started in a fresh 120 by 40 window, streamed to, typed into, narrowed and widened, scrolled back and quit. Flicker was judged from 30 screenshots per run, about 60 ms apart; the feel of typing was not judged.
+The checklist was run on 2026-11-13, on the reference machine's Windows host, in Windows Terminal 1.24 on Windows build 26300, with each prototype started in a fresh 120 by 40 window, streamed to, typed into, narrowed and widened, scrolled back and quit. Flicker was judged from 30 screenshots per run, about 60 ms apart; the feel of typing was not judged.
 
 - **The Rust line renderer (`lines`) was fine on all ten checks**: it drew at once, no sample caught the live area blank, the scrollback was in order with no gaps or duplicates, the window did not jump, typed letters showed while streaming, a resize while streaming redrew the live area cleanly, the 30-line case was smooth, quitting gave back a working prompt with the process gone within 2 s, and glyphs and colours were right.
 - **The TypeScript prototype (Ink) broke on resize**: lines duplicated and cut short when the window narrowed, garbled when it widened, and left in that state in the scrollback. It also left its editor and status line on screen after quitting.

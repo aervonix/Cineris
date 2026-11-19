@@ -24,7 +24,7 @@ The brand is fixed: Cortex-Harness. Crates use the `cortex-` prefix unless there
 
 ## How the alias ships
 
-The start-up budget on a desktop is 5 ms for `cortex --version` and 20 ms to the first frame ([performance-budgets.md](../performance-budgets.md)). The alias must not spend any of it.
+The start-up budget on a developer's machine is 5 ms for `cortex --version` and 20 ms to the first frame ([performance-budgets.md](../performance-budgets.md)). The alias must not spend any of it.
 
 | Option | Start-up cost | Size on disk | Linux | Windows | Assessment |
 |---|---|---|---|---|---|

@@ -18,7 +18,7 @@ The harness needs structured logs for diagnosis and span timings for the perform
 
 ## Measurement
 
-Desktop pinned to 4 cores ([measurements/dependency-costs.md](../measurements/dependency-costs.md)):
+The reference machine pinned to 4 cores ([measurements/dependency-costs.md](../measurements/dependency-costs.md)):
 
 | | Dev build | Release build | Size added | Crates |
 |---|---|---|---|---|

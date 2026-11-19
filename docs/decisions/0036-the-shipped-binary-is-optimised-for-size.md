@@ -7,14 +7,14 @@
 
 After step 23 the Windows `dist` binary was 19,226,112 bytes (18.34 MiB), over its 18 MiB budget ([performance-budgets.md](../performance-budgets.md), "Binary size"), and the `main` workflow's `size-windows` job failed on every push (run 43811142390, issue #61). The Linux musl binary had 518,808 bytes left, about one step's worth. Steps 24 to 34 are expected to add 4.5 to 6 MB more on Linux and about 1.3 times that on Windows: the script engine and the extension crate, the MCP client, and the rest.
 
-A read-only size study measured what the binary is made of and what each option saves, on the `main` workflow's runners and at the desk. Its figures, its method and the outlook are in [measurements/binary-size.md](../measurements/binary-size.md). Two more findings came with it:
+A read-only size study measured what the binary is made of and what each option saves, on the `main` workflow's runners and on the reference machine. Its figures, its method and the outlook are in [measurements/binary-size.md](../measurements/binary-size.md). Two more findings came with it:
 
-- **A binary built at a desk named its user.** It held 399 to 512 source paths under the build machine's home folder (the panic locations of every third-party crate, which cargo compiles from `~/.cargo/registry/src/…`). CI's binaries held the runner's home folder, whose user is `runner`. Rule 3 of the build plan forbids it wherever the binary is built.
+- **A binary built on a developer's machine named its user.** It held 399 to 512 source paths under the build machine's home folder (the panic locations of every third-party crate, which cargo compiles from `~/.cargo/registry/src/…`). CI's binaries held the runner's home folder, whose user is `runner`. Rule 3 of the build plan forbids it wherever the binary is built.
 - **A pull request never saw its own size.** Only the `main` workflow checked it, after the merge, which is how step 23's second pull request took Windows over.
 
 ## Options
 
-The study's, largest Windows saving first (Windows, Linux musl). The speed figures are the study's, a release build at the desk against `opt-level = 3`.
+The study's, largest Windows saving first (Windows, Linux musl). The speed figures are the study's, a release build on the reference machine against `opt-level = 3`.
 
 | Option | Saves | Costs |
 |---|---|---|
@@ -37,7 +37,7 @@ The study's, largest Windows saving first (Windows, Linux musl). The speed figur
 
 ## Why
 
-- **"s" saves 4 to 5 MB on each system and every speed figure stays far inside its budget,** measured before and after on the desk and on both hosted runners ([measurements/binary-size.md](../measurements/binary-size.md)). The harness's hot paths are rendering, highlighting, the map and JSON decoding; each was measured, and the slowest change leaves the figure a small fraction of its budget.
+- **"s" saves 4 to 5 MB on each system and every speed figure stays far inside its budget,** measured before and after on the reference machine and on both hosted runners ([measurements/binary-size.md](../measurements/binary-size.md)). The harness's hot paths are rendering, highlighting, the map and JSON decoding; each was measured, and the slowest change leaves the figure a small fraction of its budget.
 - **Unwinding is what keeps a bug in one tool from ending an hour-long session.** It costs far more than 0012 thought, and that is recorded, but "s" alone brings Windows well under its budget with room for the steps planned.
 - **Measuring what ships.** With `release` at 3 and `dist` at "s", every speed figure of record would describe code nobody runs.
 - **A host with letters outside ASCII is rare for a model provider,** and its `xn--` form is always available.

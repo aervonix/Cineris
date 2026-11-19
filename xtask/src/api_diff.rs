@@ -485,8 +485,8 @@ fn api_of(target: &Path, library: &Library) -> Result<read::Api> {
 fn report(root: &Path, request: &Request) -> Result<String> {
     if !root.join(".git").exists() {
         return Err(
-            "this copy of the tree has no .git (an rx copy?): run it with `rx --git -- cargo \
-             xtask api-diff …`, which gives the copy one"
+            "this tree has no .git: api-diff reads the other tree from git, so run it in a git \
+             checkout"
                 .to_owned(),
         );
     }

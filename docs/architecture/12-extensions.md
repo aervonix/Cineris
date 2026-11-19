@@ -23,7 +23,7 @@ This page compares the ways to build it, recommends one, and specifies it. The c
 
 ### Three mechanisms
 
-The same tool (JSON in, JSON out) was built behind each mechanism and measured, together with the cost each adds to the host. Method and full tables: [../measurements/extension-mechanisms.md](../measurements/extension-mechanisms.md) and [../measurements/dependency-costs.md](../measurements/dependency-costs.md). Desktop figures.
+The same tool (JSON in, JSON out) was built behind each mechanism and measured, together with the cost each adds to the host. Method and full tables: [../measurements/extension-mechanisms.md](../measurements/extension-mechanisms.md) and [../measurements/dependency-costs.md](../measurements/dependency-costs.md). Reference-machine figures.
 
 | | WASM components | Subprocess speaking JSON | Embedded scripting |
 |---|---|---|---|
@@ -67,7 +67,7 @@ How the first-try experiment was run, and its limits, are in the measurement pag
 
 - **Models do not separate JavaScript, Lua and Rust** at this size of tool. Rhai trails with a weaker model, because little Rhai exists to learn from.
 - **People do separate them.** The audience is the broad public, and JavaScript is the language most of them already write.
-- **The pure-Rust JavaScript engine is too slow for the job.** A tool that tidies a 64 KiB command output takes 155 ms in it on a fast desktop and 296 ms on a laptop, about 30 times longer than in QuickJS, and it costs six times the binary.
+- **The pure-Rust JavaScript engine is too slow for the job.** A tool that tidies a 64 KiB command output takes 155 ms in it on the reference machine and 296 ms on the second machine, about 30 times longer than in QuickJS, and it costs six times the binary.
 - **WASM is the strongest sandbox and cannot do the job**: the harness cannot write and load one on a machine without a toolchain.
 
 ## Decision

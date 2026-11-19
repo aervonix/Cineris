@@ -18,7 +18,7 @@ Both reference harnesses load extensions (TypeScript modules in one, JavaScript 
 
 ## Part 1: the mechanism
 
-The same tool was built behind each mechanism and measured. Method and full tables: [measurements/extension-mechanisms.md](../measurements/extension-mechanisms.md). Host costs: [measurements/dependency-costs.md](../measurements/dependency-costs.md). Desktop figures; build times are clean builds pinned to 4 cores.
+The same tool was built behind each mechanism and measured. Method and full tables: [measurements/extension-mechanisms.md](../measurements/extension-mechanisms.md). Host costs: [measurements/dependency-costs.md](../measurements/dependency-costs.md). Reference-machine figures; build times are clean builds pinned to 4 cores.
 
 | | WASM components | Subprocess speaking JSON | Embedded scripting |
 |---|---|---|---|
@@ -82,7 +82,7 @@ All four Rhai failures were calls to standard-library functions that do not exis
 
 - **Models do not separate JavaScript, Lua and Rust.** Rhai is behind, for lack of training material, and it would stay behind.
 - **People do separate them.** For a product aimed at the broad public, JavaScript is the language authors already have. An extension the harness wrote is also one the user must be able to read before approving it.
-- **Boa is too slow for the job today.** It is the only option that is both JavaScript and free of C. It is 6 times slower than QuickJS on a small call and about 30 times slower on real text work (155 ms against 5 ms; 296 ms against 12 ms on the laptop), and it costs six times the binary and build time.
+- **Boa is too slow for the job today.** It is the only option that is both JavaScript and free of C. It is 6 times slower than QuickJS on a small call and about 30 times slower on real text work (155 ms against 5 ms; 296 ms against 12 ms on the second machine), and it costs six times the binary and build time.
 - **WASM is the strongest sandbox and cannot do the job.** No toolchain on the user's machine means no self-written extension. It is also the largest dependency measured.
 - **Lua is the cheapest and fastest by a clear margin**, and loses only on familiarity.
 

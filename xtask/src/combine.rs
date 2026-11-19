@@ -43,8 +43,8 @@ the clone is made with `git clone --shared` and removed at the end.
   --no-ci   Combine and report conflicts, and run nothing.
   --repo URL --head BRANCH
             Take this branch from the repository at URL (pushed), not from
-            the checkout: for a copy of the tree with no .git, such as the
-            one `rx` builds in.";
+            the checkout: for a copy of the tree with no .git, such as an
+            archive.";
 
 /// One thing put on top of the main branch: a pull request, or this branch.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -395,7 +395,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         _ => {
             if !root.join(".git").exists() {
                 return Err(
-                    "this copy of the tree has no .git (an rx copy?): give the pushed branch \
+                    "this tree has no .git: run it in a git checkout, or give the pushed branch \
                      with --repo URL --head BRANCH"
                         .to_owned(),
                 );
