@@ -1,0 +1,86 @@
+# Bringing CI back under its tier budgets (docs/steps/ci-budgets/answered.md):
+# a lone ESC held while the terminal's replies are due, the history's tests
+# at bounds of their own, and the git tools' tests run on Windows by the
+# nightly.
+
+# ------------------------------------------------- a lone ESC while replies are due
+
+[break] escape-wait-ignores-the-replies
+rule: While the capability replies are due, a lone ESC waits `REPLY_ESCAPE_WAIT` for the rest of a reply, so that a reply split after its ESC types nothing.
+file: crates/cineris-term/src/terminal.rs
+in: escape_deadline
+find: let due = !self.answered && since < self.queried + REPLIES_DUE;
+replace: let due = false;
+caught-by:
+    cineris-term terminal::tests::a_reply_split_after_its_escape_while_the_replies_are_due_types_nothing
+    cineris-term terminal::tests::with_no_last_reply_the_longer_wait_ends_when_the_replies_are_no_longer_due
+
+[break] escape-wait-outlives-the-last-reply
+rule: The last reply (the device attributes) ends the longer wait: after it a lone ESC waits `ESCAPE_WAIT`.
+file: crates/cineris-term/src/terminal.rs
+in: escape_deadline
+find: let due = !self.answered && since < self.queried + REPLIES_DUE;
+replace: let due = since < self.queried + REPLIES_DUE;
+caught-by:
+    cineris-term terminal::tests::after_the_last_reply_a_split_escape_waits_only_its_own_time
+    cineris-term terminal::tests::the_last_reply_ends_the_longer_wait_of_the_next_escape
+    cineris-term terminal::tests::a_lone_escape_is_the_escape_key_after_a_short_wait
+
+[break] escape-wait-without-an-end
+rule: A terminal that never sends the last reply holds an ESC to the longer wait only within `REPLIES_DUE` of the queries.
+file: crates/cineris-term/src/terminal.rs
+in: escape_deadline
+find: let due = !self.answered && since < self.queried + REPLIES_DUE;
+replace: let due = !self.answered;
+caught-by:
+    cineris-term terminal::tests::with_no_last_reply_the_longer_wait_ends_when_the_replies_are_no_longer_due
+
+[break] escape-wait-counted-from-the-queries
+rule: The longer wait is the ESC's own, counted from when it came, and never more than `REPLY_ESCAPE_WAIT`.
+file: crates/cineris-term/src/terminal.rs
+in: escape_deadline
+find: since + if due { REPLY_ESCAPE_WAIT } else { ESCAPE_WAIT }
+replace: if due { self.queried + REPLY_ESCAPE_WAIT } else { since + ESCAPE_WAIT }
+caught-by:
+    cineris-term terminal::tests::with_no_last_reply_the_longer_wait_ends_when_the_replies_are_no_longer_due
+
+# ------------------------------------------------ the history's tests at their own bounds
+
+[break] history-bounds-not-passed-on
+rule: A history opened within limits reads, and writes again, within those limits.
+file: crates/cineris-cli/src/history.rs
+in: FileHistory::open_with
+find: let _ = filled.set(read(&path, &project, limits));
+replace: let _ = filled.set(read(&path, &project, Limits::PROGRAM));
+caught-by:
+    cineris-cli::bin/cineris history::tests::a_long_file_keeps_each_projects_newest
+    cineris-cli::bin/cineris history::tests::a_file_past_its_bytes_is_written_again_within_them
+    cineris-cli::bin/cineris history::tests::a_file_past_the_read_limit_is_read_from_its_end
+
+[break] program-bounds-out-of-order
+rule: The program's bounds keep the order the tests' smaller ones stand for: a project's prompts fewer than the lines that make the file be written again.
+file: crates/cineris-cli/src/history.rs
+find: keep: KEEP
+replace: keep: COMPACT
+caught-by:
+    cineris-cli::bin/cineris history::tests::the_small_limits_keep_the_programs_order
+
+# --------------------------------- the git tools' tests on Windows, in the nightly
+
+[break] a-test-kept-off-windows-not-run-there
+rule: Every git-heavy test the blocking job keeps off Windows is named for the nightly's run there, path for path.
+file: xtask/src/nonblocking.rs
+find: "git_read::tests::sys_the_three_questions_read_a_branch_its_changes_and_its_new_files"
+replace: "git_read::tests::sys_the_three_questions"
+packages: xtask
+caught-by:
+    xtask::bin/xtask nonblocking::git_tests_on_windows_tests::every_test_kept_off_windows_is_named_for_the_nightly
+
+[break] a-name-that-ran-nothing-passes
+rule: The nightly's run of the git tools' tests on Windows fails unless each named test ran and passed: a name that matches nothing would pass having run nothing.
+file: xtask/src/nonblocking.rs
+in: every_test_passed
+find: .filter(|name| !passed.contains(name))
+replace: .filter(|_| false)
+caught-by:
+    xtask::bin/xtask nonblocking::git_tests_on_windows_tests::a_name_that_ran_nothing_fails_the_run_and_is_named
