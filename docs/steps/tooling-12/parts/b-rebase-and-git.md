@@ -171,9 +171,22 @@ xtask: the rebase stopped on files left for a person
 ```
 
 
+**Breaks**, after the second round: `cargo xtask mutate tooling-12-b --jobs 2` on the reference machine, **49 breaks, 49 did what the list expects, 0 flagged** (828 tests pass with nothing broken).
+
+**The real rebase onto `main` after the first part of the step merged** (d0486fd3, its `answered.md` with the link to `parts/`), by this branch's own `cargo xtask rebase`:
+
+```text
+Rebased tooling-12-b onto origin/main with no conflict.
+docs/outstanding/README.md is up to date.
+The tip before was 0df0bb4c467b: `git reset --keep 0df0bb4c467b` takes the branch back to it.
+```
+
+**`cargo xtask ci`** on the reference machine, on the rebased branch: every step passed but the tier budgets, at 162% of tier 1's (and 151% before the rebase). Both runs shared the machine with other sessions' break runs, named in the first run's own warning; `xtask`'s share of tier 1 on the runners is unchanged (below), and CI's runners judge the tiers.
+
+**`try` run 44613316857** (`test -p xtask`, both systems, at f66ca2f4, rebased): **success on both**, the rules test among them now that the step's `answered.md` links this part. `xtask`'s tiers: Windows 15%, 0%, 21%; Linux 18%, 0%, 6%. This part's tests: Linux 62 in 0.68 s, Windows 58 in 2.57 s.
+
 ## Open
 
 - **A change both sides made alike, in a file with a union,** is refused by the count (it is taken once and counted twice). Rare in a file git stopped on; a person settles it (review finding 10, kept).
 - **A commit a person settles to nothing** before `--continue` is dropped by git's own `--continue`, unnamed: the command names only the commits it settled itself.
 - **The end runs `regen`, which builds and runs tests** for the snapshots' generator; `--no-regen` names the command instead. A rebase is a git operation run in the checkout, so where builds run on another machine, run it with `--no-regen` and the generators there.
-- **The record's link.** This part's record is linked from the step's `answered.md`, which the step's own session writes; until then `cargo xtask rules` names it as not linked.
