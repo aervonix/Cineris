@@ -1,0 +1,114 @@
+# Step 25's third pull request, the fixes of its full review in one group:
+# detecting a project's commands (`project/detect`), which the first run's
+# last step offers, every row unpicked. Their rules broken one at a time,
+# with the tests that must fail. Written with the code.
+
+# ------------------------------------------------------- reading the files
+
+[break] detection-waits-on-a-fifo
+rule: A manifest is read only when the open itself finds a regular file: a FIFO at its name is passed over without waiting for a writer, on the blocking pool. (The test is Unix's: on Windows nothing at a file's name makes an open wait.)
+file: crates/cineris-core/src/reads.rs
+in: detect_in
+find: let (file, _) = cineris_base::open_regular(&resolved.to_fs_path()).ok()?;
+replace:
+    let file = std::fs::File::open(resolved.to_fs_path()).ok()?;
+    if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        return None;
+    }
+os: linux
+caught-by:
+    cineris-core reads::tests::sys_detection_passes_over_a_fifo_without_waiting
+
+[break] a-manifest-past-the-cap-is-read
+rule: A manifest larger than `MAX_FILE` is not read for its commands.
+file: crates/cineris-core/src/reads.rs
+in: detect_in
+find: (text.len() as u64 <= cineris_knowledge::detect::MAX_FILE).then_some(text)
+replace: Some(text)
+caught-by:
+    cineris-core reads::tests::a_manifest_past_the_cap_is_not_read
+
+[break] a-manifest-past-the-cap-is-read-to-the-cap
+rule: A manifest larger than `MAX_FILE` is not read at all, not read to the cap and parsed as if that were the whole of it.
+file: crates/cineris-core/src/reads.rs
+in: detect_in
+find: file.take(cineris_knowledge::detect::MAX_FILE + 1)
+replace: file.take(cineris_knowledge::detect::MAX_FILE)
+caught-by:
+    cineris-core reads::tests::a_manifest_past_the_cap_is_not_read
+
+# ------------------------------------------------ what a script runs, whole
+
+[break] a-script-too-long-to-read-whole-is-offered
+rule: A script whose text is longer than `MAX_RUNS` characters is not offered: what is offered is given whole, never cut.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: runs.chars().count() <= MAX_RUNS && !runs.chars().any(cineris_base::acts_unseen)
+replace: !runs.chars().any(cineris_base::acts_unseen)
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_only_when_its_text_can_be_read_whole
+
+[break] a-script-at-the-cap-is-not-offered
+rule: A script whose text is exactly `MAX_RUNS` characters is offered.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: runs.chars().count() <= MAX_RUNS
+replace: runs.chars().count() < MAX_RUNS
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_only_when_its_text_can_be_read_whole
+
+[break] the-script-cap-counts-bytes
+rule: The cap on what a script runs counts characters, not bytes: a text of `MAX_RUNS` characters outside ASCII is offered.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: runs.chars().count() <= MAX_RUNS
+replace: runs.len() <= MAX_RUNS
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_only_when_its_text_can_be_read_whole
+
+[break] the-scripts-of-a-package-json-are-not-bounded
+rule: At most `MAX_SCRIPTS` scripts of one `package.json` are offered.
+file: crates/cineris-knowledge/src/detect.rs
+in: npm
+find: >= MAX_SCRIPTS
+replace: >= MAX_SCRIPTS * 2
+caught-by:
+    cineris-knowledge detect::tests::the_scripts_of_one_package_json_are_bounded
+
+# --------------------------------------------- nothing that acts unseen
+
+[break] a-script-whose-text-acts-unseen-is-offered
+rule: A script whose text holds a control character or a character that acts unseen is not offered: the person could not read the row as it is written.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: && !runs.chars().any(cineris_base::acts_unseen)
+replace:
+caught-by:
+    cineris-knowledge detect::tests::nothing_that_acts_unseen_is_offered
+
+[break] a-script-with-a-direction-override-is-offered
+rule: Not only a control character keeps a script from being offered: a direction override or a line separator in its text does too.
+file: crates/cineris-knowledge/src/detect.rs
+in: readable
+find: any(cineris_base::acts_unseen)
+replace: any(char::is_control)
+caught-by:
+    cineris-knowledge detect::tests::nothing_that_acts_unseen_is_offered
+
+[break] a-makefile-target-is-named-by-a-longer-name
+rule: A `Makefile` names a target only by that name and a colon: `test` followed by a direction override, a character of no width or a control character before its colon is another target, and `make test` is not offered for it.
+file: crates/cineris-knowledge/src/detect.rs
+in: make
+find: rest.starts_with(':') && !rest.starts_with(":=")
+replace: rest.contains(':') && !rest.starts_with(":=")
+caught-by:
+    cineris-knowledge detect::tests::nothing_that_acts_unseen_is_offered
+
+[break] a-command-that-is-not-plain-words-is-offered
+rule: A command is offered only as plain words, whatever made it: a line the observer's table classes that holds a character that acts unseen is not offered. (A script's name is held by the table too, which classes only plain names: this check is what holds a command not made from a name.)
+file: crates/cineris-knowledge/src/detect.rs
+in: Found::offer
+find: normal_line(command).filter(|line| line == command)
+replace: Some(command.to_owned())
+caught-by:
+    cineris-knowledge detect::tests::a_command_that_is_not_plain_words_is_not_offered

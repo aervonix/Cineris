@@ -171,7 +171,8 @@ pub(crate) async fn detect(
 
 /// The commands the files at `workspace`'s root name, each file read only
 /// when it is inside the workspace, the gate lets it through, and it is a
-/// file no larger than `cineris_knowledge::detect::MAX_FILE`.
+/// regular file no larger than `cineris_knowledge::detect::MAX_FILE`. A
+/// FIFO or a device at a file's name is passed over without waiting.
 pub(crate) fn detect_in(
     workspace: &Path,
     gate: &dyn cineris_tools::ReadGate,
@@ -185,10 +186,9 @@ pub(crate) fn detect_in(
         if !resolved.is_inside_workspace() || !gate.may_read(resolved.abs()) {
             return None;
         }
-        let file = std::fs::File::open(resolved.to_fs_path()).ok()?;
-        if !file.metadata().is_ok_and(|metadata| metadata.is_file()) {
-            return None;
-        }
+        // The open is the check: it waits on no FIFO or device, and what
+        // is read is the regular file the handle says it is.
+        let (file, _) = cineris_base::open_regular(&resolved.to_fs_path()).ok()?;
         let mut text = String::new();
         file.take(cineris_knowledge::detect::MAX_FILE + 1)
             .read_to_string(&mut text)
@@ -271,6 +271,61 @@ mod tests {
                 "a link out"
             );
         }
+    }
+
+    /// A FIFO at a manifest's name is passed over, and the files after it
+    /// are still read: opening one for reading would wait for a writer
+    /// that never comes, on the blocking pool. `mkfifo` is a process,
+    /// hence the `sys_` name.
+    #[cfg(unix)]
+    #[test]
+    fn sys_detection_passes_over_a_fifo_without_waiting() {
+        use std::time::Duration;
+
+        let scratch = Scratch::outside("cineris-core-unit", "detect_fifo");
+        scratch.file("ws/go.mod", "module x\n");
+        let stalled = cineris_testkit::stalled_file(&scratch.join("ws/Cargo.toml"));
+        let workspace = scratch.dir("ws");
+        // On a thread of its own, so that a detection that waits is a
+        // failed test and not a hung one.
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(detect_in(&workspace, &NoSecrets));
+        });
+        let found = receiver.recv_timeout(Duration::from_secs(5));
+        // Gone before it is dropped, so that its release, which opens the
+        // other end, finds nothing to wait on either.
+        let _ = std::fs::remove_file(stalled.path());
+        let found = found.expect("detection waited on a FIFO named `Cargo.toml`");
+        let lines: Vec<&str> = found.iter().map(|found| found.command.as_str()).collect();
+        assert_eq!(lines, ["go build ./...", "go test ./...", "go vet ./..."]);
+    }
+
+    /// A manifest larger than `MAX_FILE` is not read, and one of that size
+    /// is: a file past the cap gives nothing, though its first `MAX_FILE`
+    /// bytes, or all of it, would parse.
+    #[test]
+    fn a_manifest_past_the_cap_is_not_read() {
+        let cap = usize::try_from(cineris_knowledge::detect::MAX_FILE).unwrap();
+        let manifest = |size: usize| {
+            let head = "[package]\nname = \"a\"\n#";
+            format!("{head}{}\n", "x".repeat(size - head.len() - 1))
+        };
+        let scratch = Scratch::outside("cineris-core-unit", "detect_cap");
+        scratch.file("at/Cargo.toml", manifest(cap));
+        scratch.file("past/Cargo.toml", manifest(cap + 1));
+        assert_eq!(
+            std::fs::metadata(scratch.join("past/Cargo.toml"))
+                .unwrap()
+                .len(),
+            cineris_knowledge::detect::MAX_FILE + 1
+        );
+        let at = detect_in(&scratch.dir("at"), &NoSecrets);
+        assert_eq!(
+            at.first().map(|found| found.command.as_str()),
+            Some("cargo build")
+        );
+        assert_eq!(detect_in(&scratch.dir("past"), &NoSecrets), Vec::new());
     }
 
     #[test]
