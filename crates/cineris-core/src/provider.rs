@@ -161,7 +161,7 @@ pub(crate) fn catalog(loaded: &Loaded, env: &Env) -> Result<Catalog, Box<ErrorDa
                         "The model entry `[models.{name}]` in {} cannot be used: \
                          `[models.{first}]` marks the default of the provider `{provider}` \
                          already, and a provider has one. The session was not started, so that \
-                         the model a first run writes is not a guess. Mark one of them.",
+                         the model a first run writes is not a guess. Unmark one of them.",
                         place()
                     ),
                 ));

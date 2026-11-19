@@ -487,6 +487,7 @@ mod tests {
             env: Vec::new(),
             headers: Vec::new(),
             refused: None,
+            places: Vec::new(),
         }
     }
 

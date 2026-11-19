@@ -94,6 +94,9 @@ pub(super) struct FirstRun {
     /// ends the first run only then, not a later `/new`'s, `/resume`'s or
     /// fork's (since the review of the fixes of the third pull request).
     opening: bool,
+    /// A file found at the configuration's name could not be read when it
+    /// was read at once: it is not in force now (since the final review).
+    found_unread: bool,
     /// A frame has drawn the step's keys, which it shows once it is ready,
     /// as a dialog shows its answers: it takes keys only then.
     keys_drawn: bool,
@@ -260,6 +263,7 @@ impl FirstRun {
             skipped: false,
             released: false,
             opening: false,
+            found_unread: false,
             keys_drawn: false,
             seeded: false,
             whole: false,
@@ -701,7 +705,11 @@ impl App {
         run.step = Step::Opened;
         run.released = true;
         if own {
-            self.run_config = chosen_config(&run.chosen);
+            // Over a file found at the name, what was chosen names its
+            // provider beside its model: the file's own role provider
+            // would hold the chosen model to another's (the final review).
+            let found = matches!(run.written, Some(Err(NotWritten::Found(_))));
+            self.run_config = chosen_config(&run.chosen, found);
         }
         // The session made with what was chosen: its header is the one
         // card from now on.
@@ -752,7 +760,7 @@ impl App {
     /// session to be resumed or continued is a new one, which can carry
     /// that (the review of its fixes).
     pub(super) fn first_run_unstarted(&mut self, error: &std::io::Error) {
-        self.run_config = chosen_config(&Chosen::default());
+        self.run_config = chosen_config(&Chosen::default(), false);
         self.say(&format!(
             "The set-up could not start ({}): this run's sessions read nothing of other tools', \
              and the set-up runs again at the next start. `cineris auth login <provider>` stores \
@@ -797,6 +805,12 @@ impl App {
                             one_line(why)
                         )
                     });
+                }
+                if found
+                    && failed.is_some()
+                    && let Some(run) = self.first_run.as_mut()
+                {
+                    run.found_unread = true;
                 }
                 self.first_run_open(failed.is_some() || found);
             }
@@ -1923,6 +1937,14 @@ fn saved(run: &FirstRun) -> String {
             "{} holds the settings, and a change there is kept.",
             one_line(path)
         ),
+        // Found at the name, and not read when it was read at once (the
+        // final review: the line said it was in force all the same).
+        Some(Err(NotWritten::Found(path))) if run.found_unread => format!(
+            "Nothing of the set-up's was saved: {}, made meanwhile, could not be read, so this \
+             run's sessions carry what was chosen; the next start reads it again, and the set-up \
+             does not run again.",
+            one_line(path)
+        ),
         // Found at the name, not written (the review of the fixes of the
         // third pull request).
         Some(Err(NotWritten::Found(path))) => format!(
@@ -1939,9 +1961,11 @@ fn saved(run: &FirstRun) -> String {
 /// written is not in force: the instructions and the skills as picked, off
 /// unless picked; the mode; the model, and its provider beside it only when
 /// another provider has a model of its id, as the file has them (the review
-/// of the fixes of the third pull request). The servers picked are not
-/// among them: this version runs no MCP server.
-fn chosen_config(chosen: &Chosen) -> serde_json::Map<String, serde_json::Value> {
+/// of the fixes of the third pull request), or `over_found`, over a file
+/// found at the name, whose own role provider would otherwise hold the
+/// model (the final review). The servers picked are not among them: this
+/// version runs no MCP server.
+fn chosen_config(chosen: &Chosen, over_found: bool) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::{Value, json};
     let imports = chosen.imports.clone().unwrap_or_default();
     let mut config = serde_json::Map::new();
@@ -1955,7 +1979,7 @@ fn chosen_config(chosen: &Chosen) -> serde_json::Map<String, serde_json::Value> 
     if let Some(main) = &chosen.model {
         let mut model = serde_json::Map::new();
         model.insert("main".to_owned(), Value::String(main.clone()));
-        if chosen.model_shared
+        if (chosen.model_shared || over_found)
             && let Some(provider) = &chosen.provider
         {
             model.insert(

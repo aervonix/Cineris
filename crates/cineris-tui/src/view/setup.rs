@@ -325,6 +325,27 @@ fn prefix(row: &Row, look: &Look) -> usize {
         }
 }
 
+/// `text` cut into pieces of at most `width` columns between grapheme
+/// clusters, every character kept, white space too (which `wrap` drops at
+/// a break): a label is drawn whole, character for character. A cluster
+/// wider than `width` has a piece to itself.
+fn hard_wrap(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut pieces = vec![String::new()];
+    let mut used = 0;
+    for (_, cluster, wide) in cineris_base::text::graphemes(text) {
+        if used > 0 && used + wide > width {
+            pieces.push(String::new());
+            used = 0;
+        }
+        if let Some(piece) = pieces.last_mut() {
+            piece.push_str(cluster);
+        }
+        used += wide;
+    }
+    pieces
+}
+
 /// The lines of each of a step's rows: its label in its column, wrapped
 /// there when it is longer, and what it means beside it.
 fn row_lines(step: &Step, width: usize, look: &Look) -> Vec<Vec<Line>> {
@@ -384,8 +405,14 @@ fn row_lines(step: &Step, width: usize, look: &Look) -> Vec<Vec<Line>> {
         };
         // A label longer than its column wraps in it, never cut: the row
         // is drawn whole at the prose width (the review of the fixes of the
-        // third pull request, the coordinator's answer).
-        let label = wrap(&[Span::new(one_line(&row.label), label_style)], column);
+        // third pull request, the coordinator's answer), a character at a
+        // time, so that its white space is drawn too (the final review: a
+        // break at a space dropped it, as in a Windows path with a space in
+        // a folder's name).
+        let label: Vec<Line> = hard_wrap(&one_line(&row.label), column)
+            .into_iter()
+            .map(|piece| Line::styled(piece, label_style))
+            .collect();
         let detail_column = start + column + GAP;
         let detail_width = width.saturating_sub(detail_column).max(1);
         let details: Vec<Line> = row
@@ -686,6 +713,33 @@ mod tests {
             assert!(rows[at].ends_with("npx -y it"), "{rows:#?}");
             assert_eq!(rows[at + 1].trim(), &name[46..], "{rows:#?}");
             assert!(!rows.iter().any(|row| row.contains('…')), "{rows:#?}");
+        }
+    }
+
+    /// A label's white space is drawn where the label breaks, a single space
+    /// and a run of them alike: the label is cut a character at a time (the
+    /// final review: `wrap` dropped the white space at a break).
+    #[test]
+    fn a_wrapped_labels_white_space_is_drawn_at_the_break() {
+        assert_eq!(hard_wrap("ab cd", 2), ["ab", " c", "d"]);
+        assert_eq!(hard_wrap("abc   de", 3), ["abc", "   ", "de"]);
+        let look = look();
+        // The column at 80 is 46: the space falls at the break.
+        let name = format!("{} {}", "a".repeat(45), "b".repeat(10));
+        let spaced = format!("{}   {}", "c".repeat(46), "d".repeat(10));
+        for label in [name, spaced] {
+            let mut shown = ten("npx -y server-6");
+            shown.rows[6] = Row::new(1, Mark::Picked(false), label.clone(), vec!["x".to_owned()]);
+            let rows = text(&fitted(&shown, 80, &look, usize::MAX).lines);
+            let at = rows
+                .iter()
+                .position(|row| row.starts_with("  ◆"))
+                .expect("the selected row");
+            // Past the row's eight columns of indent and marks.
+            let first: String = rows[at].chars().skip(8).collect();
+            let first = first.strip_suffix("  x").unwrap_or(&first);
+            let rest: String = rows[at + 1].chars().skip(8).collect();
+            assert_eq!(format!("{first}{rest}"), label, "{rows:#?}");
         }
     }
 
