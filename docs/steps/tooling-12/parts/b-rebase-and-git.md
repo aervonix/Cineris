@@ -145,7 +145,7 @@ The tip before was a260b8c90fb5: `git reset --keep a260b8c90fb5` takes the branc
 
 **`cargo xtask ci`** on the reference machine after the fixes: every step passed. The tiers were not judged, as the run itself said: the disk stalled (tasks waited on I/O for 49% of the test runs) while other sessions' runs shared the machine. This part's record is linked from the step's `answered.md`, which the step's session writes; the run had a stand-in for it in the working tree, never committed, so that `rules` saw the link it will have.
 
-**`try` run 44607742443** (`test -p xtask`, both systems, at d4c5c848, before the last two commits): every test passed but `rules::tests::sys_the_repository_follows_its_own_rules`, on both systems, for the one reason above (the record not yet linked). This part's tests: Linux 58 in 0.90 s; Windows 54 in 2.70 s, the cross-system rebase test 1.44 s and the questions for git 0.71 s. TRY_FINAL
+**`try` run 44607742443** (`test -p xtask`, both systems, at d4c5c848, before the last two commits): every test passed but `rules::tests::sys_the_repository_follows_its_own_rules`, on both systems, for the one reason above (the record not yet linked). This part's tests: Linux 58 in 0.90 s; Windows 54 in 2.70 s, the cross-system rebase test 1.44 s and the questions for git 0.71 s. **`try` run 44610050146**, at 6410f868 with every fix: the same, on both systems: 787 and 788 tests of tiers 1 and 2 passed, and of the system tests only the rules test failed, for the record's link alone.
 
 ## Open
 
