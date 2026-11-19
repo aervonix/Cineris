@@ -56,6 +56,37 @@ pub(crate) const FILE_KEEP_BYTES: usize = 4 * 1024 * 1024;
 /// The most bytes read of the file: its end, when it is longer.
 pub(crate) const READ_LIMIT: u64 = 16 * 1024 * 1024;
 
+/// The bounds a history keeps to: the constants above in the program. A
+/// test gives smaller ones, in the same order, so that a file past them is
+/// a megabyte and not tens of them (`docs/steps/ci-budgets/answered.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Limits {
+    /// [`KEEP`].
+    pub(crate) keep: usize,
+    /// [`KEEP_BYTES`].
+    pub(crate) keep_bytes: usize,
+    /// [`COMPACT`].
+    pub(crate) compact: usize,
+    /// [`COMPACT_BYTES`].
+    pub(crate) compact_bytes: u64,
+    /// [`FILE_KEEP_BYTES`].
+    pub(crate) file_keep_bytes: usize,
+    /// [`READ_LIMIT`].
+    pub(crate) read_limit: u64,
+}
+
+impl Limits {
+    /// The program's.
+    pub(crate) const PROGRAM: Self = Self {
+        keep: KEEP,
+        keep_bytes: KEEP_BYTES,
+        compact: COMPACT,
+        compact_bytes: COMPACT_BYTES,
+        file_keep_bytes: FILE_KEEP_BYTES,
+        read_limit: READ_LIMIT,
+    };
+}
+
 /// How long the end of the program waits for the last prompts to reach
 /// the disk.
 const FLUSH_WAIT: Duration = Duration::from_secs(1);
@@ -142,12 +173,19 @@ pub(crate) struct FileHistory {
     writer: Option<Sender<Fragment>>,
     /// Said when the writer has written everything and ended.
     done: Option<Receiver<()>>,
+    /// The bounds it keeps to.
+    limits: Limits,
 }
 
 impl FileHistory {
     /// The history of the project `project` in the file at `path`, read
     /// and kept on a thread of its own.
     pub(crate) fn open(path: PathBuf, project: String) -> Self {
+        Self::open_with(path, project, Limits::PROGRAM)
+    }
+
+    /// [`open`](Self::open), within `limits`.
+    pub(crate) fn open_with(path: PathBuf, project: String, limits: Limits) -> Self {
         let earlier = Arc::new(OnceLock::new());
         let (writer, queue) = mpsc::channel::<Fragment>();
         let (finished, done) = mpsc::channel();
@@ -155,7 +193,7 @@ impl FileHistory {
         let spawned = std::thread::Builder::new()
             .name("cineris-history".to_owned())
             .spawn(move || {
-                let _ = filled.set(read(&path, &project));
+                let _ = filled.set(read(&path, &project, limits));
                 append(&path, &project, &queue);
                 let _ = finished.send(());
             });
@@ -173,6 +211,7 @@ impl FileHistory {
             sent: std::collections::VecDeque::new(),
             writer,
             done,
+            limits,
         }
     }
 
@@ -185,7 +224,7 @@ impl FileHistory {
             .chain(self.sent.iter())
             .map(held_bytes)
             .sum();
-        while self.len() > 1 && (self.len() > KEEP || held > KEEP_BYTES) {
+        while self.len() > 1 && (self.len() > self.limits.keep || held > self.limits.keep_bytes) {
             let dropped = if self.skipped < self.earlier().len() {
                 self.skipped += 1;
                 held_bytes(&self.earlier()[self.skipped - 1])
@@ -269,8 +308,8 @@ impl Drop for FileHistory {
 /// The project's newest prompts in the file, oldest first. The file is
 /// written again, smaller, when it has grown past [`COMPACT`] lines or
 /// [`COMPACT_BYTES`].
-fn read(path: &Path, project: &str) -> Vec<Fragment> {
-    let Ok((bytes, size)) = read_end(path) else {
+fn read(path: &Path, project: &str, limits: Limits) -> Vec<Fragment> {
+    let Ok((bytes, size)) = read_end(path, limits.read_limit) else {
         return Vec::new();
     };
     // Newest first, and only until the project's bounds are met: what is
@@ -282,7 +321,7 @@ fn read(path: &Path, project: &str) -> Vec<Fragment> {
     let mut mine = Vec::new();
     let mut held = 0;
     for line in newest_first(&bytes) {
-        if mine.len() == KEEP {
+        if mine.len() == limits.keep {
             break;
         }
         if !line.contains(&marker) {
@@ -292,7 +331,7 @@ fn read(path: &Path, project: &str) -> Vec<Fragment> {
             continue;
         };
         held += entry.size;
-        if held > KEEP_BYTES {
+        if held > limits.keep_bytes {
             break;
         }
         mine.push(entry.prompt);
@@ -302,26 +341,26 @@ fn read(path: &Path, project: &str) -> Vec<Fragment> {
         .split(|byte| *byte == b'\n')
         .filter(|line| !line.is_empty())
         .count();
-    if lines > COMPACT || size > COMPACT_BYTES {
-        let _ = compact(path);
+    if lines > limits.compact || size > limits.compact_bytes {
+        let _ = compact(path, limits);
     }
     mine
 }
 
-/// The file's last [`READ_LIMIT`] bytes, from the start of a line, and the
-/// file's whole size.
-fn read_end(path: &Path) -> io::Result<(Vec<u8>, u64)> {
+/// The file's last `read_limit` bytes ([`READ_LIMIT`]), from the start of a
+/// line, and the file's whole size.
+fn read_end(path: &Path, read_limit: u64) -> io::Result<(Vec<u8>, u64)> {
     use std::io::{Read as _, Seek as _};
     let mut file = std::fs::File::open(path)?;
     let size = file.metadata()?.len();
-    if size <= READ_LIMIT {
+    if size <= read_limit {
         let mut bytes = Vec::with_capacity(usize::try_from(size).unwrap_or(0));
         file.read_to_end(&mut bytes)?;
         return Ok((bytes, size));
     }
-    file.seek(io::SeekFrom::Start(size - READ_LIMIT))?;
+    file.seek(io::SeekFrom::Start(size - read_limit))?;
     let mut bytes = Vec::new();
-    file.take(READ_LIMIT).read_to_end(&mut bytes)?;
+    file.take(read_limit).read_to_end(&mut bytes)?;
     // The first line read may be the end of one: it is passed over.
     let start = bytes
         .iter()
@@ -345,9 +384,9 @@ fn newest_first(bytes: &[u8]) -> impl Iterator<Item = &str> {
 /// [`KEEP_BYTES`], and all of them within [`FILE_KEEP_BYTES`], under the
 /// store's lock: read again under it, so that what another process
 /// appended meanwhile is kept.
-fn compact(path: &Path) -> io::Result<()> {
+fn compact(path: &Path, limits: Limits) -> io::Result<()> {
     let _lock = cineris_base::private::hold_lock(path)?;
-    let (bytes, _) = read_end(path)?;
+    let (bytes, _) = read_end(path, limits.read_limit)?;
     // Newest first, one line parsed at a time: what is held is what is
     // kept, never every line of the file.
     let mut counts: std::collections::HashMap<String, (usize, usize)> =
@@ -355,11 +394,11 @@ fn compact(path: &Path) -> io::Result<()> {
     let mut total = 0;
     let mut kept: Vec<Entry> = Vec::new();
     for entry in newest_first(&bytes).filter_map(Entry::parse) {
-        if total + entry.size > FILE_KEEP_BYTES {
+        if total + entry.size > limits.file_keep_bytes {
             break;
         }
         let (count, held) = counts.entry(entry.project.clone()).or_insert((0, 0));
-        if *count < KEEP && *held + entry.size <= KEEP_BYTES {
+        if *count < limits.keep && *held + entry.size <= limits.keep_bytes {
             *count += 1;
             *held += entry.size;
             total += entry.size;
@@ -462,6 +501,36 @@ mod tests {
         }
     }
 
+    /// Smaller bounds, in the program's order, each still past what one
+    /// prompt holds at most ([`cineris_tui::history::TEXT_KEEP`] and a
+    /// chip's [`cineris_tui::history::CHIP_KEEP`]): a file past them is a
+    /// megabyte, where the program's are tens of them.
+    const SMALL: Limits = Limits {
+        keep: 50,
+        keep_bytes: 512 * 1024,
+        compact: 1_000,
+        compact_bytes: 1024 * 1024,
+        file_keep_bytes: 768 * 1024,
+        read_limit: 2 * 1024 * 1024,
+    };
+
+    /// The tests at [`SMALL`] stand for the program only while both keep
+    /// their bounds in one order.
+    #[test]
+    fn the_small_limits_keep_the_programs_order() {
+        for limits in [Limits::PROGRAM, SMALL] {
+            assert!(limits.keep_bytes < limits.file_keep_bytes, "{limits:?}");
+            assert!(
+                (limits.file_keep_bytes as u64) < limits.compact_bytes,
+                "{limits:?}"
+            );
+            assert!(limits.compact_bytes < limits.read_limit, "{limits:?}");
+            assert!(limits.keep < limits.compact, "{limits:?}");
+            let one = cineris_tui::history::TEXT_KEEP.max(4 * cineris_tui::history::CHIP_KEEP);
+            assert!(limits.keep_bytes > one, "{limits:?}");
+        }
+    }
+
     fn wait_read(history: &FileHistory) {
         // (The reader is a thread of its own, which this waits for; one that
         // never read is stopped by the test's time limit.)
@@ -527,7 +596,7 @@ mod tests {
         while !std::fs::read_to_string(&path).is_ok_and(|text| text.contains("before")) {
             std::thread::yield_now();
         }
-        compact(&path).expect("the compaction");
+        compact(&path, Limits::PROGRAM).expect("the compaction");
         history.push(&Fragment::text("after"));
         drop(history);
         let text = std::fs::read_to_string(&path).unwrap();
@@ -540,23 +609,28 @@ mod tests {
         let scratch = Scratch::new("compact");
         let path = scratch.join("history");
         let mut text = String::new();
-        for n in 0..=COMPACT {
+        for n in 0..=SMALL.compact {
             let project = if n % 2 == 0 { "a" } else { "b" };
             text.push_str(&format!(
                 "{{\"project\":\"{project}\",\"text\":\"prompt {n}\"}}\n"
             ));
         }
         std::fs::write(&path, text).unwrap();
-        let history = FileHistory::open(path.clone(), "a".to_owned());
+        let history = FileHistory::open_with(path.clone(), "a".to_owned(), SMALL);
         wait_read(&history);
-        assert_eq!(history.len(), KEEP);
+        assert_eq!(history.len(), SMALL.keep);
         assert_eq!(
-            history.get(KEEP - 1).map(Fragment::as_str),
-            Some(format!("prompt {COMPACT}").as_str())
+            history.get(SMALL.keep - 1).map(Fragment::as_str),
+            Some(format!("prompt {}", SMALL.compact).as_str())
         );
         drop(history);
         let lines = std::fs::read_to_string(&path).unwrap().lines().count();
-        assert_eq!(lines, 2 * KEEP, "each project's newest {KEEP}");
+        assert_eq!(
+            lines,
+            2 * SMALL.keep,
+            "each project's newest {}",
+            SMALL.keep
+        );
         // The file written again is private, as the one it replaced was
         // made (the review of step 23).
         assert!(cineris_base::private::is_private(&path).unwrap());
@@ -658,7 +732,7 @@ mod tests {
         let filler = "w".repeat(60 * 1024);
         let mut text = String::new();
         let mut n = 0;
-        while text.len() as u64 <= COMPACT_BYTES {
+        while text.len() as u64 <= SMALL.compact_bytes {
             let project = ["a", "b", "c"][n % 3];
             text.push_str(&format!(
                 "{{\"project\":\"{project}\",\"text\":\"{n} {filler}\"}}\n"
@@ -666,12 +740,12 @@ mod tests {
             n += 1;
         }
         std::fs::write(&path, &text).unwrap();
-        let history = FileHistory::open(path.clone(), "a".to_owned());
+        let history = FileHistory::open_with(path.clone(), "a".to_owned(), SMALL);
         wait_read(&history);
         let held: usize = (0..history.len())
             .map(|index| history.get(index).unwrap().as_str().len())
             .sum();
-        assert!(held <= KEEP_BYTES, "{held}");
+        assert!(held <= SMALL.keep_bytes, "{held}");
         let newest_a = (0..n).rev().find(|n| n % 3 == 0).unwrap();
         assert!(
             history
@@ -683,15 +757,18 @@ mod tests {
         );
         drop(history);
         let written = std::fs::read_to_string(&path).unwrap();
-        assert!(written.len() <= FILE_KEEP_BYTES, "{}", written.len());
-        assert!(written.len() + 3 * 70 * 1024 > FILE_KEEP_BYTES, "filled");
+        assert!(written.len() <= SMALL.file_keep_bytes, "{}", written.len());
+        assert!(
+            written.len() + 3 * 70 * 1024 > SMALL.file_keep_bytes,
+            "filled"
+        );
         for project in ["a", "b", "c"] {
             let bytes: usize = written
                 .lines()
                 .filter(|line| line.contains(&format!("\"project\":\"{project}\"")))
                 .map(|line| line.len() + 1)
                 .sum();
-            assert!(bytes <= KEEP_BYTES, "{project}: {bytes}");
+            assert!(bytes <= SMALL.keep_bytes, "{project}: {bytes}");
         }
         assert!(
             written.contains(&format!("\"{} ", n - 1)),
@@ -708,17 +785,19 @@ mod tests {
     fn an_older_builds_long_line_counts_as_what_is_kept() {
         let scratch = Scratch::new("old_long_line");
         let path = scratch.join("history");
-        let log = "a line of a log\n".repeat(300_000);
+        // Past what a project keeps, as the megabytes of an older build's were.
+        let log = "a line of a log\n".repeat(40_000);
+        assert!(log.len() > SMALL.keep_bytes);
         let mut text = String::from("{\"project\":\"p\",\"text\":\"first\"}\n");
         text.push_str(&serde_json::json!({"project": "p", "text": log}).to_string());
         text.push('\n');
         text.push_str("{\"project\":\"q\",\"text\":\"other\"}\n");
         // Past the file's bytes, so that it is written again.
-        let filler = "f".repeat(4 * 1024 * 1024);
+        let filler = "f".repeat(usize::try_from(SMALL.compact_bytes).unwrap() / 2);
         text.push_str(&format!("{{\"project\":\"r\",\"text\":\"{filler}\"}}\n"));
-        assert!(text.len() as u64 > COMPACT_BYTES);
+        assert!(text.len() as u64 > SMALL.compact_bytes);
         std::fs::write(&path, &text).unwrap();
-        let history = FileHistory::open(path.clone(), "p".to_owned());
+        let history = FileHistory::open_with(path.clone(), "p".to_owned(), SMALL);
         wait_read(&history);
         assert_eq!(history.len(), 2, "the long line hid the prompt before it");
         assert_eq!(history.get(0).map(Fragment::as_str), Some("first"));
@@ -736,10 +815,10 @@ mod tests {
     fn the_prompts_sent_in_a_run_are_held_within_the_bounds() {
         let scratch = Scratch::new("sent_bounds");
         let path = scratch.join("history");
-        let mut history = FileHistory::open(path, "p".to_owned());
+        let mut history = FileHistory::open_with(path, "p".to_owned(), SMALL);
         wait_read(&history);
         let paste = "x".repeat(cineris_tui::history::CHIP_KEEP);
-        for n in 0..60 {
+        for n in 0..12 {
             let chips = (0..4).map(|_| Chip::new(paste.as_str(), "[p]")).collect();
             history.push(
                 &Fragment::with_chips(format!("{n} \u{FFFC}\u{FFFC}\u{FFFC}\u{FFFC}"), chips)
@@ -749,19 +828,19 @@ mod tests {
         let held: usize = (0..history.len())
             .map(|index| held_bytes(history.get(index).unwrap()))
             .sum();
-        assert!(held <= KEEP_BYTES, "{held}");
-        assert!(history.len() < 60);
+        assert!(held <= SMALL.keep_bytes, "{held}");
+        assert!(history.len() < 12);
         assert!(
             history
                 .get(history.len() - 1)
                 .unwrap()
                 .as_str()
-                .starts_with("59 ")
+                .starts_with("11 ")
         );
-        for n in 0..KEEP + 5 {
+        for n in 0..SMALL.keep + 5 {
             history.push(&Fragment::text(format!("short {n}")));
         }
-        assert_eq!(history.len(), KEEP);
+        assert_eq!(history.len(), SMALL.keep);
     }
 
     /// A file past [`READ_LIMIT`] (an older build's, with pastes kept
@@ -773,11 +852,11 @@ mod tests {
         let path = scratch.join("history");
         let mut text = format!(
             "{{\"project\":\"p\",\"text\":\"old {}\"}}\n",
-            "o".repeat(usize::try_from(READ_LIMIT).unwrap())
+            "o".repeat(usize::try_from(SMALL.read_limit).unwrap())
         );
         text.push_str("{\"project\":\"p\",\"text\":\"newest\"}\n");
         std::fs::write(&path, &text).unwrap();
-        let history = FileHistory::open(path.clone(), "p".to_owned());
+        let history = FileHistory::open_with(path.clone(), "p".to_owned(), SMALL);
         wait_read(&history);
         assert_eq!(history.len(), 1);
         assert_eq!(history.get(0).map(Fragment::as_str), Some("newest"));
@@ -839,7 +918,7 @@ mod tests {
                 let size = history_of(&path, bytes);
                 let started = std::time::Instant::now();
                 // The first project, a paste in every other prompt of its.
-                let mine = read(&path, &format!("{:032x}", 0));
+                let mine = read(&path, &format!("{:032x}", 0), Limits::PROGRAM);
                 times.push(started.elapsed().as_secs_f64() * 1000.0);
                 held = mine
                     .iter()
