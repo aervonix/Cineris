@@ -10,7 +10,7 @@
 //! | File | What it gives |
 //! |---|---|
 //! | `Cargo.toml` | `cargo build`, `cargo test`, `cargo clippy … -D warnings` and `cargo fmt … --check`, with `--workspace` for a workspace |
-//! | `package.json` | `npm run <name>` for each script whose name says a build, a test run or a check, with what the script runs |
+//! | `package.json` | `npm run <name>` for each script whose name says a build, a test run or a check, with what the script runs; at most twelve |
 //! | `Makefile` | `make <target>` for the targets `build`, `test`, `check` and `lint` |
 //! | `go.mod` | `go build ./...`, `go test ./...` and `go vet ./...` |
 //! | `pyproject.toml` | `pytest`, `ruff check` and `mypy .`, each when the file has the tool's table |
@@ -20,8 +20,16 @@
 //! observer classes as a build, a test run or a check ([`classify`]). A
 //! name taken from a file (a script's, a target's) that is not plain words
 //! is not offered, so nothing a repository writes there reaches the
-//! screen as a command; what a script runs is given beside it as text, for
-//! the interface to make safe to show.
+//! screen as a command: a control character or a character that acts
+//! unseen in it included.
+//!
+//! **What a script runs is offered whole or not at all.** The person keeps
+//! a row after reading it, so a row must be one they can read as it is
+//! written: what a script runs is given beside its command in full, never
+//! cut, and a script whose text is longer than [`MAX_RUNS`] characters, or
+//! holds a character that acts unseen ([`cineris_base::acts_unseen`]: a
+//! control character, a tab and a line break among them, a direction
+//! override, a character of no width), is not offered.
 
 use cineris_protocol::project::DetectedCommand;
 use serde_json::Value;
@@ -41,7 +49,8 @@ pub const FILES: [&str; 5] = [
 /// The most bytes of one file read: a manifest is far smaller.
 pub const MAX_FILE: u64 = 512 * 1024;
 
-/// The most characters of what a script runs that are given.
+/// The most characters a script may run for it to be offered: what a
+/// script runs is given whole, and a longer one is not offered.
 pub const MAX_RUNS: usize = 1_000;
 
 /// The most scripts of one `package.json` offered.
@@ -77,9 +86,13 @@ struct Found {
 }
 
 impl Found {
-    /// Offers `command` when it is plain words the observer classes, and
-    /// not offered already.
+    /// Offers `command` when it is plain words the observer classes, what
+    /// it runs (a script's text) can be read whole, and it is not offered
+    /// already.
     fn offer(&mut self, name: &str, command: &str, runs: Option<&str>, source: &str) {
+        if runs.is_some_and(|runs| !readable(runs)) {
+            return;
+        }
         let Some(line) = normal_line(command).filter(|line| line == command) else {
             return;
         };
@@ -95,11 +108,17 @@ impl Found {
         self.commands.push(DetectedCommand {
             name: name.to_owned(),
             command: line,
-            runs: runs.map(|runs| runs.chars().take(MAX_RUNS).collect()),
+            runs: runs.map(str::to_owned),
             source: source.to_owned(),
             purpose: purpose.to_wire(),
         });
     }
+}
+
+/// Whether what a script runs can be read whole, as it is written: at
+/// most [`MAX_RUNS`] characters, none of which acts unseen.
+fn readable(runs: &str) -> bool {
+    runs.chars().count() <= MAX_RUNS && !runs.chars().any(cineris_base::acts_unseen)
 }
 
 fn cargo(text: &str, found: &mut Found) {
@@ -256,20 +275,35 @@ mod tests {
         assert_eq!(test.purpose, CommandPurpose::Test);
     }
 
+    /// What a script runs is given whole, or the script is not offered: a
+    /// text of `MAX_RUNS` characters is offered as it is, one a character
+    /// longer is not, and the cap counts characters, not bytes.
     #[test]
-    fn what_a_script_runs_is_cut_and_the_scripts_are_bounded() {
-        let long = "x".repeat(MAX_RUNS * 3);
+    fn a_script_is_offered_only_when_its_text_can_be_read_whole() {
+        let at_the_cap = "x".repeat(MAX_RUNS);
+        let past_it = "x".repeat(MAX_RUNS + 1);
+        let wide = "\u{e9}".repeat(MAX_RUNS);
+        let text = format!(
+            "{{\"scripts\": {{\"test\": \"{at_the_cap}\", \"lint\": \"{past_it}\", \
+             \"build\": \"{wide}\"}}}}"
+        );
+        let commands = found(&[("package.json", &text)]);
+        assert_eq!(lines(&commands), ["npm run build", "npm run test"]);
+        assert_eq!(commands[0].runs.as_deref(), Some(wide.as_str()));
+        assert_eq!(commands[1].runs.as_deref(), Some(at_the_cap.as_str()));
+    }
+
+    /// Only the scripts whose names the observer classes are offered, and
+    /// at most `MAX_SCRIPTS` of one file.
+    #[test]
+    fn the_scripts_of_one_package_json_are_bounded() {
         let mut scripts: Vec<String> = (0..40)
             .map(|n| format!("\"test:unit{n}\": \"a\""))
             .collect();
-        scripts.push(format!("\"test\": \"{long}\""));
+        scripts.push("\"test\": \"jest\"".to_owned());
         let text = format!("{{\"scripts\": {{{}}}}}", scripts.join(","));
         let commands = found(&[("package.json", &text)]);
         assert_eq!(lines(&commands), ["npm run test"], "only known variants");
-        assert_eq!(
-            commands[0].runs.as_ref().map(|runs| runs.chars().count()),
-            Some(MAX_RUNS)
-        );
         let variants = [
             "unit",
             "integration",
@@ -295,6 +329,50 @@ mod tests {
             &format!("{{\"scripts\": {{{}}}}}", named.join(",")),
         )]);
         assert_eq!(commands.len(), MAX_SCRIPTS);
+    }
+
+    /// A row the person keeps is one they can read as it is written: a
+    /// name (a script's, a target's) or what a script runs that holds a
+    /// control character or a character that acts unseen is not offered.
+    #[test]
+    fn nothing_that_acts_unseen_is_offered() {
+        let commands = found(&[
+            (
+                "package.json",
+                r#"{"scripts": {
+                    "test\u202e": "jest", "lint\u200b": "eslint .", "check\u0007": "tsc",
+                    "build": "tsc \u202e-p .", "test": "jest\u001b[2J", "lint": "eslint\n.",
+                    "typecheck": "tsc\t--noEmit", "check": "tsc\u2028--noEmit",
+                    "test:unit": "jest unit"}}"#,
+            ),
+            (
+                "Makefile",
+                "test\u{202e}:\n\tx\nbuild\u{200b}:\n\tx\nlint\u{7}:\n\tx\ncheck:\n\tx\n",
+            ),
+        ]);
+        assert_eq!(lines(&commands), ["npm run test:unit", "make check"]);
+        assert_eq!(commands[0].runs.as_deref(), Some("jest unit"));
+    }
+
+    /// A command is offered only as plain words, whatever made it: one
+    /// that holds a control character or a character that acts unseen is
+    /// not, even where the observer's table would class it, and nor is one
+    /// whose words are not as an entry holds them.
+    #[test]
+    fn a_command_that_is_not_plain_words_is_not_offered() {
+        let mut found = Found::default();
+        for command in [
+            "cargo test \u{202e}",
+            "cargo test \u{7}",
+            "cargo test \u{200b}",
+            "cargo test\t--workspace",
+            "cargo  test",
+        ] {
+            found.offer("test", command, None, "Cargo.toml");
+        }
+        assert_eq!(lines(&found.commands), Vec::<&str>::new());
+        found.offer("test", "cargo test --workspace", None, "Cargo.toml");
+        assert_eq!(lines(&found.commands), ["cargo test --workspace"]);
     }
 
     #[test]
