@@ -43,7 +43,7 @@ Built on `origin/main` at 6806291f.
 
 - `cineris_base::hook::started`, which every place that starts a process calls, stops a test whose name's last segment starts with neither `sys_` nor `perf_`. It works under the `test-hooks` feature, which every test build has, and under nextest. The message goes to the test's standard error, then the process aborts: an error would be a failed command, which a test of a turn can pass with. The message is in [testing-and-ci.md](../../../testing-and-ci.md#test-tiers).
 - **First built in `cineris-tools`' runner alone**, before it starts a command. On the maintainers' answer it moved into `started`, once that was measured to stop no test either: it now covers the harness's git, the pseudo-terminal and the test kit's children too.
-- **On `main` it stops no test:** the workspace's 4,932 tests passed with it on Linux. A planted test not named `sys_` was stopped, with the message, and a planted `sys_` test was not. `hook::refusal_tests::sys_a_test_not_named_sys_is_stopped_at_its_first_start` checks that end to end.
+- **On `main` it stops no test:** the workspace's 4,932 tests passed with it on Linux. On Windows, `try` run 44609114520 ran 4,824 tests at this branch's head, the 210 system tests among them, and none failed. A planted test not named `sys_` was stopped, with the message, and a planted `sys_` test was not. `hook::refusal_tests::sys_a_test_not_named_sys_is_stopped_at_its_first_start` checks that end to end.
 - **A version probe is refused where the harness decides to ask** (`hook::starting`, in `cineris-core`'s assembly of a shell), on the thread that decides; not on the probe's own thread, which a test may end before or after the probe starts (the first review's finding 6, and the second's finding 3).
 
 ### The timeout report names the test's own children
@@ -120,6 +120,17 @@ The run after the review's fixes had 38 breaks: 34 did what the list expects, an
 - The tree-or-roll break was caught only when the roll kept the child after the tree did, which is a race. A unit test in `cineris-base` now keeps a child both ways round, and catches it every time.
 
 All 38 now do what the list expects.
+
+After the second round's fixes, the list has 44 breaks. All 44 do what the list expects: 43 are caught, and the mouse's break survives, as its list says.
+
+## Windows
+
+Two `try` runs, at the head reviewed twice:
+- **44609114520:** the whole workspace on Windows, 4,824 tests, nothing failed.
+  - The `send_key` fixes ran there: the PageUp, PageDown and Escape keys of `cineris-cli`'s system tests, now win32 records.
+  - So did the refusal of every process start.
+  - The tiers were at 60%, 57% and 83% of their budgets.
+- **44609119186:** the timeout report's own system test, which is ignored in the blocking jobs, on both systems: 0.8 s on Linux, 3.3 s on Windows. It checks the children's section: a child still running, and one gone with nothing marking its wait.
 
 ## Open
 
