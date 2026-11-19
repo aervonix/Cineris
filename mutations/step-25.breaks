@@ -2536,6 +2536,7 @@ rule: A key a step took holds the dialog after it a key's repeat window, as a di
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: App::first_run_event
 find: self.taken = Some(at);
+occurrence: 1
 replace:
 caught-by:
     cineris-tui app::tests::first_run::the_key_that_answered_a_step_holds_the_dialog_after_it
@@ -2646,6 +2647,7 @@ rule: A file that could not be written leaves the choices in force for the run: 
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: App::first_run_answer
 find: self.first_run_open(true);
+occurrence: 1
 replace: self.first_run_open(false);
 caught-by:
     cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
@@ -2708,23 +2710,23 @@ caught-by:
     cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
 
 [break] the-provider-is-not-the-main-roles
-rule: The chosen provider is written as the main role's.
+rule: The chosen provider is written as the main role's beside a model whose id another provider has too (the review of the fixes, M-A).
 file: crates/cineris-config/src/write.rs
 in: table
 find: model.insert("roles".to_owned(), Value::Table(roles));
 replace:
 caught-by:
-    cineris-config write::tests::the_choices_are_written_as_settings_that_read_back_strictly
-    cineris-config write::tests::a_provider_with_no_model_known_is_written_and_said
+    cineris-config write::tests::the_provider_is_named_only_beside_a_model_of_an_id_another_has
 
-[break] the-model-written-is-not-the-catalogs-first
-rule: The model written for a provider is the first the catalog lists for it.
+[break] the-model-written-is-the-catalogs-first
+rule: The model written for a provider is the one the catalog marks as its default, not the first it lists (the review of the fixes; this break was `the-model-written-is-not-the-catalogs-first` before it).
 file: crates/cineris-core/src/manage.rs
 in: Core::default_model
-find: .find(|entry| entry.info.provider.as_str() == provider)
-replace: .filter(|entry| entry.info.provider.as_str() == provider).last()
+find: .find(|entry| entry.default && entry.info.provider.as_str() == provider)
+replace: .find(|entry| entry.info.provider.as_str() == provider)
 caught-by:
-    cineris-core::it start::the_first_runs_model_for_a_provider_is_the_first_the_catalog_lists
+    cineris-core::it start::the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks
+    cineris-core::it start::every_provider_the_first_run_offers_has_one_default_unless_it_is_local
 
 [break] the-last-line-names-no-model
 rule: The first run's last line says the model the session runs with.
@@ -2748,7 +2750,7 @@ caught-by:
 [break] a-value-named-as-a-credential-is-shown
 rule: A value whose name says it is a credential is shown masked in NAME=value.
 file: crates/cineris-config/src/import.rs
-in: ImportedServer::view
+in: launch_view
 find: format!("{name}={mask}")
 replace: arg.clone()
 caught-by:
@@ -2757,7 +2759,7 @@ caught-by:
 [break] a-value-after-a-credential-flag-is-shown
 rule: The value after a flag whose name says it is a credential is shown masked.
 file: crates/cineris-config/src/import.rs
-in: ImportedServer::view
+in: launch_view
 find: after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
 replace: after_flag = false;
 caught-by:
@@ -2767,19 +2769,20 @@ caught-by:
 rule: A query field of an address whose name says it is a credential is shown masked.
 file: crates/cineris-config/src/import.rs
 in: masked_query
-find: Some((name, value)) if names_a_secret(name) && value != mask =>
-replace: Some((name, value)) if false && names_a_secret(name) && value != mask =>
+find: Some((name, value)) if names_a_secret(name) && Masked::of(value) != Masked::No =>
+replace: Some((name, value)) if false && names_a_secret(name) && Masked::of(value) != Masked::No =>
 caught-by:
     cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
 
 [break] what-is-imported-unseen-is-not-told
 rule: A server whose shown command masks a part imported as it is says so.
 file: crates/cineris-config/src/import.rs
-in: ImportedServer::view
-find: hidden |= shown != *arg;
-replace:
+in: ImportedServer::hidden
+find: self.view().1 != Masked::No
+replace: false
 caught-by:
     cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
 
 [break] the-row-does-not-say-a-value-is-unseen
 rule: The imports' row of a server whose command shows a part masked that is imported as it is says so.
@@ -3033,8 +3036,8 @@ caught-by:
 rule: A row wider than the window is cut, and is not whole.
 file: crates/cineris-tui/src/view/setup.rs
 in: fitted
-find: .map(|lines| lines.iter().all(|line| line.width() <= width))
-replace: .map(|_| true)
+find: !label_cut && lines.iter().all(|line| line.width() <= rows_width)
+replace: !label_cut
 caught-by:
     cineris-tui view::setup::tests::a_window_too_narrow_for_a_rows_detail_is_not_whole
 
@@ -3091,6 +3094,254 @@ find: && self.held_sent.is_none()
 replace:
 caught-by:
     cineris-tui app::tests::first_run::the_last_step_waits_for_the_history_search_and_a_prompt_on_its_way
+
+# ------------- the review (Opus) of the fixes of the full review
+# (docs/steps/25/parts/pr3-first-run.md, "The review of the fixes (Opus)")
+
+[break] provider-pinned-when-the-id-is-unique
+rule: The provider is written as the main role's only beside a model whose id another provider has too: pinned always, it held `--model` and a hand edit to its models (M-A, settled by the coordinator).
+file: crates/cineris-config/src/write.rs
+packages: cineris-config, cineris-core
+in: table
+find: if choices.model_shared && let Some(provider) = &choices.provider
+replace: if let Some(provider) = &choices.provider
+caught-by:
+    cineris-config write::tests::the_choices_are_written_as_settings_that_read_back_strictly
+    cineris-core::it start::another_providers_model_can_be_named_after_a_first_run
+
+[break] the-runs-configuration-pins-a-unique-model
+rule: The run's own configuration names the provider beside its model only when another provider has a model of its id, as the file does (M-A).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: chosen_config
+find: if chosen.model_shared && let Some(provider) = &chosen.provider
+replace: if let Some(provider) = &chosen.provider
+caught-by:
+    cineris-tui app::tests::first_run::a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen
+
+[break] a-chosen-model-is-never-shared
+rule: Choosing a provider takes whether another provider has a model of its model's id (M-A).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: FirstRun::choose
+find: self.chosen.model_shared = known.is_some_and(|known| known.model_shared);
+replace: self.chosen.model_shared = false;
+caught-by:
+    cineris-tui app::tests::first_run::a_model_another_provider_has_too_names_its_provider_in_the_runs_configuration
+
+[break] the-program-writes-no-model-as-shared
+rule: The program writes whether the model chosen is shared with another provider (M-A).
+file: crates/cineris-cli/src/setup.rs
+in: choices
+find: model_shared: chosen.model_shared
+replace: model_shared: false
+caught-by:
+    cineris-cli::bin/cineris setup::tests::only_a_server_shown_and_importable_is_written
+
+[break] no-model-is-shared
+rule: A model is shared when another provider has a model of its id (M-A).
+file: crates/cineris-core/src/manage.rs
+in: Core::model_shared
+find: providers.any(|other| Some(other) != first)
+replace: false
+caught-by:
+    cineris-core::it start::the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks
+
+[break] a-catalog-default-is-not-read
+rule: An entry's `default` is read from the catalog (the default model, settled by the coordinator).
+file: crates/cineris-llm/src/catalog.rs
+packages: cineris-llm, cineris-core
+in: RawModel::into_entry
+find: default: self.default
+replace: default: false
+caught-by:
+    cineris-llm catalog::tests::each_provider_of_the_built_in_catalog_has_one_default_and_not_its_dearest
+    cineris-llm catalog::tests::a_provider_has_one_default_and_an_overlay_takes_it
+    cineris-core::it start::every_provider_the_first_run_offers_has_one_default_unless_it_is_local
+
+[break] two-defaults-of-a-provider-are-read
+rule: A catalog file marks at most one default for a provider.
+file: crates/cineris-llm/src/catalog.rs
+in: Catalog::read
+find: if entry.default
+replace: if false && entry.default
+caught-by:
+    cineris-llm catalog::tests::a_provider_has_one_default_and_an_overlay_takes_it
+
+[break] an-overlaid-default-leaves-the-old-one
+rule: A user's entry marked default takes its provider's default from the built-in one.
+file: crates/cineris-llm/src/catalog.rs
+packages: cineris-llm, cineris-core
+in: Catalog::overlay
+find: Arc::make_mut(existing).default = false;
+replace:
+caught-by:
+    cineris-llm catalog::tests::a_provider_has_one_default_and_an_overlay_takes_it
+    cineris-core::it start::the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks
+
+[break] a-credential-word-is-found-inside-a-word
+rule: A name says it is a credential's only by a whole word of it: `--author`, `--keyboard` and `--tokenizer` do not (M-B, settled by the coordinator).
+file: crates/cineris-config/src/import.rs
+in: names_a_secret
+find: words.iter().any(|word| SECRET_WORDS.contains(&word.as_str()))
+replace: SECRET_WORDS.iter().any(|word| name.to_ascii_lowercase().contains(word))
+caught-by:
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+
+[break] a-command-named-for-a-credential-is-hidden
+rule: The value of a name that ends in command, cmd, hook, script, file or path is shown (M-B).
+file: crates/cineris-config/src/import.rs
+in: names_a_secret
+find: if SHOWN_ENDINGS.contains(&last.as_str()) || words.first().is_some_and(|first| first == "no")
+replace: if words.first().is_some_and(|first| first == "no")
+caught-by:
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+
+[break] a-switch-turned-off-hides-the-next-value
+rule: A switch turned off (`--no-auth`) takes no value, and the argument after it is shown (M-B).
+file: crates/cineris-config/src/import.rs
+in: names_a_secret
+find: if SHOWN_ENDINGS.contains(&last.as_str()) || words.first().is_some_and(|first| first == "no")
+replace: if SHOWN_ENDINGS.contains(&last.as_str())
+caught-by:
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+
+[break] a-case-change-does-not-split-a-name
+rule: A name's words are split where the case changes too (`apiKey`, `APIKey`).
+file: crates/cineris-config/src/import.rs
+in: words
+find: if begins && !word.is_empty() {
+replace: if false && begins && !word.is_empty() {
+caught-by:
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+
+[break] a-loose-value-under-a-credentials-name-is-imported
+rule: A value under a credential's name that is not one token refuses its server: it would be imported unseen (M-B).
+file: crates/cineris-config/src/import.rs
+packages: cineris-config, cineris-cli
+in: server
+find: } else if launch_view(&server.launch).1 == Masked::Loose {
+replace: } else if false {
+caught-by:
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+    cineris-cli::bin/cineris setup::tests::a_loose_value_under_a_credentials_name_says_to_move_it
+
+[break] a-path-is-a-token
+rule: A value with a path separator is not a token (M-B).
+file: crates/cineris-config/src/import.rs
+in: token_shaped
+find: character.is_whitespace() || matches!(character, '/' | '\\')
+replace: character.is_whitespace()
+caught-by:
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+
+[break] a-loose-value-does-not-say-to-move-it
+rule: The row of a server refused for a loose value under a credential's name says to move it into a variable (M-B).
+file: crates/cineris-cli/src/setup.rs
+in: shown_server
+in-string: move it into a
+replace: keep it in a
+caught-by:
+    cineris-cli::bin/cineris setup::tests::a_loose_value_under_a_credentials_name_says_to_move_it
+
+[break] any-failed-open-ends-the-first-run
+rule: Only the first run's own open, when it fails, ends the first run: not a later `/new`'s (L-1).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_open_failed
+find: if !self.first_run.as_ref().is_some_and(|run| run.opening) {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::first_run::an_open_that_fails_after_the_first_runs_own_does_not_end_it
+
+[break] the-first-runs-open-is-not-marked
+rule: The first run marks its own open, so that its failure ends the first run (L-1).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_open
+find: run.opening = true;
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::a_session_that_does_not_open_ends_the_first_run_truthfully
+
+[break] an-open-session-leaves-the-first-runs-open-marked
+rule: Once a session opens, an open that fails after it is not the first run's own (L-1).
+file: crates/cineris-tui/src/app/state.rs
+in: App::opened
+find: self.first_run_session_opened();
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::an_open_that_fails_after_the_first_runs_own_does_not_end_it
+
+[break] a-resume-opens-on-the-defaults
+rule: A first run whose choices are not in force from a file opens a new session in the place of one to resume or continue (L-2).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_open
+find: let open = if own { self.own_open(open) } else { open };
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_force
+
+[break] an-unstarted-first-run-resumes-on-the-defaults
+rule: A first run that could not start opens a new session in the place of one to resume or continue (L-2).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_unstarted
+find: self.open = Some(self.own_open(open));
+replace: self.open = Some(open);
+caught-by:
+    cineris-tui app::tests::first_run::a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_force
+
+[break] a-file-found-is-a-failed-write
+rule: A file found at the configuration's name is told apart from a write that failed (L-3).
+file: crates/cineris-cli/src/setup.rs
+in: not_written
+find: WriteError::Exists(_) => NotWritten::Found(shown.to_owned()),
+replace: WriteError::Exists(_) => NotWritten::Failed(shown.to_owned()),
+caught-by:
+    cineris-cli::bin/cineris setup::tests::a_file_found_at_the_name_is_not_a_failure
+
+[break] a-file-found-is-said-to-be-nothing-saved
+rule: The last line says a file found at the name is the configuration from the next start, and the set-up does not run again (L-3).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: saved
+find: Some(Err(NotWritten::Found(path))) =>
+replace: Some(Err(NotWritten::Found(path))) if false =>
+caught-by:
+    cineris-tui app::tests::first_run::a_file_found_at_the_name_is_said_to_be_in_force_from_the_next_start
+
+[break] a-step-that-fits-by-height-is-said-whole
+rule: A step that fits the window by height is whole only when its selected row is drawn whole by width too (L-4).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_bottom
+find: let Fitted { lines: all, whole } = fitted(&view, width, look, usize::MAX);
+replace: let Fitted { lines: all, .. } = fitted(&view, width, look, usize::MAX); let whole = true;
+caught-by:
+    cineris-tui app::tests::first_run::a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height
+
+[break] a-label-cut-by-its-column-is-whole
+rule: A row whose label its column cuts is not drawn whole (L-4).
+file: crates/cineris-tui/src/view/setup.rs
+in: fitted
+find: !label_cut && lines.iter().all(|line| line.width() <= rows_width)
+replace: lines.iter().all(|line| line.width() <= rows_width)
+caught-by:
+    cineris-tui view::setup::tests::a_label_cut_by_its_column_is_not_whole_and_a_wider_window_shows_it
+    cineris-tui app::tests::first_run::a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height
+
+[break] a-long-label-keeps-to-the-prose-width
+rule: A step's rows take more than the prose width, up to the window's, when a label needs it, so that a larger window shows it whole (L-4).
+file: crates/cineris-tui/src/view/setup.rs
+in: fitted
+find: let rows_width = window_width.min(width.max(labels_need(step, look)));
+replace: let rows_width = width;
+caught-by:
+    cineris-tui view::setup::tests::a_label_cut_by_its_column_is_not_whole_and_a_wider_window_shows_it
+    cineris-tui app::tests::first_run::a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height
+
+[break] a-held-key-the-last-step-took-types-into-the-input-box
+rule: At the last step, the repeats of a press the step took go nowhere, as a dialog's (L-5).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_event
+find: if !pressed_here {
+replace: if true {
+caught-by:
+    cineris-tui app::tests::first_run::a_held_key_the_last_step_took_types_nothing_into_the_input_box
 
 # From mutations/step-25-detect.breaks (part `detect`).
 # Step 25's third pull request, the fixes of its full review in one group:
