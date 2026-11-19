@@ -34,6 +34,7 @@ mod decision;
 mod dependents;
 mod flaky;
 mod git_read;
+mod job_ab;
 mod junit;
 mod last_good;
 mod like_runner;
@@ -181,6 +182,11 @@ On the runners, without a pull request (the `try` workflow runs this)
                     starts the run, --against REF resolved to its commit
                     first, and names a run on BRANCH that has sat queued with
                     no jobs past --queued-warn MIN (10).
+  try --final [--against REF] [--count N] [--commit SHA] [--dry-run|--dispatch BRANCH]
+                    The checks before a pull request, as one run of three
+                    jobs: the Windows A/B against REF (main), the tests on
+                    Linux 22.04, and the binary's size against main's.
+                    `try-result RUN` reads them together.
   ab --base DIR [--label NAME] [--count N] [--keep-going] [-p CRATE]...
      [-- NEXTEST ARGS]
                     This tree's tests and those of the tree at DIR, each built
@@ -189,6 +195,14 @@ On the runners, without a pull request (the `try` workflow runs this)
                     runner's speed, and each side's wall time by round (kept
                     in target/ab/wall-times.json). --keep-going records a
                     round with a failing test and carries on.
+  ab --job --base DIR [--count N] [--minutes M] [--setup-base FILE]
+     [--setup-head FILE] [--keep-build] [-p CRATE]... [-- NEXTEST ARGS]
+                    The whole job two ways, N rounds (3) in turn: each side's
+                    build removed, its setup script run, its tests built and
+                    run, each phase timed, and each phase's median on both
+                    sides. A failed round is recorded and the run goes on;
+                    kept in target/ab/job-ab.json. `try` runs it for
+                    `test --job` with --against.
 
   perf-ab --base DIR [--label NAME] [--count N] [--cargo-profile release|dist]
           -p CRATE... [NAME]...

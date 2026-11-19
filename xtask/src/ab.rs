@@ -54,7 +54,10 @@ failed in), the other tests are compared as usual, and each such test is
 named, with its rounds and the first line of each side's failure. A test that
 failed on one side only, or a run that broke some other way, is a failure as
 above. When only tests that failed on both sides went wrong, the command
-succeeds.";
+succeeds.
+
+`ab --job` is the whole job two ways, built again each round, with each phase
+timed: `cargo xtask ab --job --help` has its options.";
 
 /// Rounds when not told: enough for a median, few enough for a Windows job.
 const ROUNDS: usize = 5;
@@ -132,6 +135,9 @@ impl Request {
 /// Whether `cargo xtask ab` would take `arguments`, which it reads and runs
 /// nothing: how `try` refuses what it cannot pass on before it builds.
 pub(crate) fn check_arguments(arguments: &[String]) -> Result<()> {
+    if crate::job_ab::asked(arguments) {
+        return crate::job_ab::Request::parse(arguments).map(|_| ());
+    }
     Request::parse(arguments).map(|_| ())
 }
 
@@ -898,6 +904,10 @@ fn build_in(tree: &Path, command: Command) -> Result<()> {
 
 /// `cargo xtask ab …`
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
+    // A whole job two ways: each round builds as well as runs.
+    if crate::job_ab::asked(arguments) {
+        return crate::job_ab::run(arguments);
+    }
     let request = Request::parse(arguments)?;
     crate::checks::require_nextest()?;
     let head = workspace::root();
