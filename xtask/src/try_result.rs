@@ -576,7 +576,10 @@ pub(crate) fn job_result(
             );
         }
     }
-    if let Some(path) = &kept.ci {
+    // A job A/B leaves the head's last round's report where a test run
+    // leaves its own: its rounds' reports are read above, and that one is not
+    // the run's tiers.
+    if let Some(path) = kept.ci.as_ref().filter(|_| kept.job_ab.is_none()) {
         reported = true;
         let cases = junit::read(path)?;
         let _ = writeln!(
@@ -1429,6 +1432,8 @@ mod tests {
         );
         assert_ne!(failing, BRANCH, "the fixture changed under the test");
         keep(&dir, "work/repo/target/ab/head-job-1.xml", &failing);
+        // The head's last round's report, where a test run leaves its own.
+        keep(&dir, "work/repo/target/nextest/ci/junit.xml", &failing);
         let result = job_result(
             5,
             &job("try-windows", "failure"),
@@ -1449,6 +1454,16 @@ mod tests {
         assert!(
             result.text.contains("(head job round 1)"),
             "{}",
+            result.text
+        );
+        assert!(
+            !result.text.contains("Tiers, against"),
+            "the head's last round is not the run's tiers: {}",
+            result.text
+        );
+        assert!(
+            !result.text.contains("the tests)"),
+            "its failure is named once, by its round: {}",
             result.text
         );
         assert!(
