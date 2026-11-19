@@ -145,7 +145,8 @@ Without one, every break.
                  breaks), and the compile of every break first is left out.
                  Says how many of each class it reached, and names the breaks
                  it left, with the commands that run them. In place of
-                 --minutes, not beside it; with --list, prints the order.
+                 --minutes N (--minutes 0 may stand beside it); with --list,
+                 prints the order.
   --jobs N       Run N breaks at a time, each in a copy of the tree and a build
                  directory of its own (2 when not given). Each copy's first
                  build is a whole build. The time budget is for all of them
@@ -215,7 +216,9 @@ struct Request {
     /// `--budget TIME`, as it was given: the breaks run by relevance, and
     /// the time budget is this (`budget`).
     by_relevance: Option<String>,
-    /// `--minutes` was given: it and `--budget` are the same limit.
+    /// `--minutes N` was given with N above 0: it and `--budget` are the same
+    /// limit. `--minutes 0` (no limit of its own, as `try` and a wrapper may
+    /// add) goes beside `--budget`, which is then the limit.
     minutes_given: bool,
 }
 
@@ -325,6 +328,7 @@ impl Request {
             by_relevance: None,
             minutes_given: false,
         };
+        let mut budget_time = None;
         let mut rest = arguments.iter();
         while let Some(argument) = rest.next() {
             let mut mode = |mode: Mode| {
@@ -425,11 +429,10 @@ impl Request {
                     let text = rest.next().ok_or_else(|| {
                         format!("`--budget` needs a length of time (30m, 90s, 1h)\n\n{USAGE}")
                     })?;
-                    request.budget = Some(budget::parse_time(text)?);
+                    budget_time = Some(budget::parse_time(text)?);
                     request.by_relevance = Some(text.trim().to_owned());
                 }
                 "--minutes" => {
-                    request.minutes_given = true;
                     let text = rest
                         .next()
                         .ok_or_else(|| format!("`--minutes` needs a number\n\n{USAGE}"))?;
@@ -439,6 +442,7 @@ impl Request {
                         .ok()
                         .filter(|minutes: &f64| minutes.is_finite() && *minutes >= 0.0)
                         .ok_or_else(not_minutes)?;
+                    request.minutes_given = minutes > 0.0;
                     request.budget = if minutes > 0.0 {
                         // A number too large to be a length of time is refused
                         // like one that is no number.
@@ -456,6 +460,9 @@ impl Request {
                 }
                 name => request.only.push(name.to_owned()),
             }
+        }
+        if budget_time.is_some() {
+            request.budget = budget_time;
         }
         for (given, flag, needs) in [
             (request.tests, "--tests", "--check"),
@@ -538,8 +545,9 @@ impl Request {
         if self.by_relevance.is_some() {
             if self.minutes_given {
                 return Err(format!(
-                    "`--budget` and `--minutes` do not go together: both are the run's time \
-                     limit (`--budget` also runs the most relevant breaks first)\n\n{USAGE}"
+                    "`--budget` and `--minutes N` do not go together: both are the run's time \
+                     limit (`--budget` also runs the most relevant breaks first; `--minutes 0` \
+                     may stand beside it)\n\n{USAGE}"
                 ));
             }
             if matches!(self.mode, Mode::Check | Mode::Merge) {
@@ -2222,6 +2230,19 @@ replace: 5
         assert_eq!(request.by_relevance.as_deref(), Some("1h30m"));
         // `--list` shows its order.
         assert!(Request::parse(&strings(&["--budget", "90s", "--list"])).is_ok());
+        // `--minutes 0`, which `try` and a wrapper may add, stands beside it,
+        // in either order, and the budget is the limit.
+        for arguments in [
+            &["--budget", "90s", "--minutes", "0"][..],
+            &["--minutes", "0", "--budget", "90s"][..],
+        ] {
+            let request = Request::parse(&strings(arguments)).unwrap();
+            assert_eq!(
+                request.budget,
+                Some(Duration::from_secs(90)),
+                "{arguments:?}"
+            );
+        }
         for (arguments, said) in [
             (
                 &["--budget", "30m", "--minutes", "5"][..],
@@ -2232,6 +2253,10 @@ replace: 5
                 "do not go together",
             ),
             (&["--budget", "30m", "--check"][..], "run no break"),
+            (
+                &["--budget", "30m", "--minutes", "0.5"][..],
+                "do not go together",
+            ),
             (&["--budget", "30"][..], "with its unit"),
             (&["--budget"][..], "needs a length of time"),
         ] {
