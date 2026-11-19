@@ -141,13 +141,7 @@ impl Setup for ProgramSetup {
             .cloned()
             .ok_or_else(|| "it was not among the files found".to_owned())?;
         let servers =
-            // A rooted path is a place only where it exists: asked of the
-            // disk's metadata as the file is read, here on the worker.
-            cineris_config::import::read_servers(
-                &real,
-                &cineris_config::import::OnDisk::new(self.env.home()),
-            )
-            .map_err(|error| error.to_string())?;
+            cineris_config::import::read_servers(&real).map_err(|error| error.to_string())?;
         let shown = servers.iter().map(shown_server).collect();
         self.read
             .lock()
@@ -245,8 +239,8 @@ fn shown_server(server: &ImportedServer) -> McpServer {
                 Refusal::Unseen => "holds a character that acts unseen",
                 Refusal::Name => "has a name that cannot be a setting's",
                 Refusal::NamedValue => {
-                    "passes a value named as a credential that is neither a token nor a path that \
-                     exists (move it into a variable)"
+                    "passes a value named as a credential that is neither one token nor a \
+                     relative path (move it into a variable)"
                 }
                 Refusal::NotUnderstood => "is not a server this version reads",
             }
@@ -412,9 +406,11 @@ mod tests {
         );
     }
 
-    /// A server whose value under a credential's name is not one token is
-    /// refused with a row saying to move it into a variable (the review of
-    /// the fixes of the third pull request).
+    /// A server whose value under a credential's name is neither one token
+    /// nor a relative path is refused with a row saying to move it into a
+    /// variable (the review of the fixes of the third pull request; the
+    /// words since the coordinator's settlement after the narrow check,
+    /// which judges a value by its text alone).
     #[test]
     fn a_loose_value_under_a_credentials_name_says_to_move_it() {
         let servers = cineris_config::import::servers_in(
@@ -426,8 +422,8 @@ mod tests {
         assert_eq!(
             shown.refused.as_deref(),
             Some(
-                "passes a value named as a credential that is neither a token nor a path that \
-                 exists (move it into a variable)"
+                "passes a value named as a credential that is neither one token nor a relative \
+                 path (move it into a variable)"
             )
         );
         assert!(!shown.shown.contains("a b c"), "{}", shown.shown);
