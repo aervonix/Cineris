@@ -186,32 +186,27 @@ pub const fn spawned(_pid: u32, _command: Described) {}
 #[inline(always)]
 pub const fn reaped(_pid: u32) {}
 
-/// Called by the process runner before it starts a command: with the
-/// `test-hooks` feature, under nextest, a test whose name does not start
-/// with `sys_` or `perf_` is stopped there, with a message that says what
-/// to do (`docs/testing-and-ci.md`, "Test tiers", since the twelfth tooling
-/// step). Without the feature this is nothing at all.
-#[cfg(not(feature = "test-hooks"))]
-#[inline(always)]
-pub const fn command_from_a_test(_program: &std::ffi::OsStr) {}
-
 /// Whether a test of this name may start a process: its last segment
-/// starts with `sys_` or `perf_` (`commands::sys_trust`).
+/// starts with `sys_` or `perf_` (`commands::sys_trust`). With the
+/// `test-hooks` feature, under nextest, [`started`] and [`probed`] stop a
+/// test that may not, with [`refusal`] (`docs/testing-and-ci.md`, "Test
+/// tiers", since the twelfth tooling step).
 #[must_use]
 pub fn may_start_a_process(test: &str) -> bool {
     let last = test.rsplit("::").next().unwrap_or(test);
     last.starts_with("sys_") || last.starts_with("perf_")
 }
 
-/// The message [`command_from_a_test`] stops a test with.
+/// The message a test that may not start a process is stopped with.
 #[must_use]
 pub fn refusal(test: &str, program: &str) -> String {
     format!(
-        "cineris test hooks: the test `{test}` had the process runner start `{program}`, and only \
-         a test named `sys_…` or `perf_…` may start a process (CONTRIBUTING.md, \"Test tiers\"; \
+        "cineris test hooks: the test `{test}` started `{program}`, and only a test named `sys_…` \
+         or `perf_…` may start a process (CONTRIBUTING.md, \"Test tiers\"; \
          docs/testing-and-ci.md). Rename the test `sys_…`, which puts it in the system tier with \
-         that tier's 60 s limit, or give its run a launcher or a script that starts nothing. The \
-         test was stopped here so that it does not pass by luck under tier 2's 10 s limit."
+         that tier's 60 s limit, or give it a launcher, a script or a scripted runner that starts \
+         nothing. The test was stopped here so that it does not pass by luck under tier 2's 10 s \
+         limit."
     )
 }
 
@@ -236,8 +231,7 @@ pub use starts::{launched, probed, program_name, started};
 
 #[cfg(feature = "test-hooks")]
 pub use children::{
-    Described, Spawned, command_from_a_test, describe, describe_line, reaped, spawned,
-    spawned_children,
+    Described, Spawned, describe, describe_line, reaped, spawned, spawned_children,
 };
 
 /// The children a test's process started, for its timeout report, and the
@@ -348,15 +342,17 @@ mod children {
             .collect()
     }
 
-    /// See [`super`]'s description without the feature. The test's name is
-    /// nextest's (`NEXTEST_TEST_NAME`), which a test's children inherit:
-    /// outside nextest nothing is refused, as `cargo test` runs many tests
-    /// in one process and cannot say whose start this is.
+    /// Stops the process of a test that may not start one
+    /// ([`super::may_start_a_process`]), with [`super::refusal`] on its
+    /// standard error. The test's name is nextest's (`NEXTEST_TEST_NAME`),
+    /// which a test's children inherit: outside nextest nothing is refused,
+    /// as `cargo test` runs many tests in one process and cannot say whose
+    /// start this is.
     #[allow(
         clippy::print_stderr,
         reason = "the refusal must reach the test's output before the process stops"
     )]
-    pub fn command_from_a_test(program: &OsStr) {
+    pub(super) fn refuse_outside_a_system_test(program: &OsStr) {
         let Ok(test) = std::env::var("NEXTEST_TEST_NAME") else {
             return;
         };
@@ -364,8 +360,9 @@ mod children {
             return;
         }
         eprintln!("\n{}\n", super::refusal(&test, &program.to_string_lossy()));
-        // A panic here would be the runner's error, which a test of a turn
-        // can take for a failed command and pass on; an abort cannot be.
+        // A panic would be an error of the start, which code that starts a
+        // command turns into a failed command, and a test can pass on that;
+        // an abort cannot be passed on.
         std::process::abort();
     }
 }
@@ -395,7 +392,11 @@ mod starts {
     /// it is, in `NEXTEST_BINARY_ID` and `NEXTEST_TEST_NAME`, and gives the
     /// variables to every process the test starts). Nothing is written,
     /// and nothing fails, otherwise: a start is never refused for this.
+    ///
+    /// Before that, a test not named `sys_…` or `perf_…` is stopped
+    /// ([`super::may_start_a_process`]).
     pub fn started(program: &OsStr) {
+        super::children::refuse_outside_a_system_test(program);
         write("", program);
     }
 
@@ -409,6 +410,7 @@ mod starts {
     /// As [`started`], for a start that asks `program` its version: the
     /// line's program is `probe>NAME`.
     pub fn probed(program: &OsStr) {
+        super::children::refuse_outside_a_system_test(program);
         write(super::PROBED, program);
     }
 
@@ -1526,6 +1528,60 @@ mod start_rule_tests {
 }
 
 #[cfg(all(test, feature = "test-hooks"))]
+mod refusal_tests {
+    use std::process::{Command, Stdio};
+
+    /// Marks a start under whatever name the test that runs it gives,
+    /// and says if it went on. It does nothing unless that test starts it.
+    #[test]
+    #[ignore = "run by sys_a_test_not_named_sys_is_stopped_at_its_first_start"]
+    #[allow(clippy::print_stderr, reason = "what the test that runs it reads")]
+    fn starts_a_process_on_purpose() {
+        if std::env::var_os("CINERIS_HOOK_START_ON_PURPOSE").is_none() {
+            return;
+        }
+        super::started(std::ffi::OsStr::new("git"));
+        eprintln!("the start went on");
+    }
+
+    fn run_as(test: &str) -> (bool, String) {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "hook::refusal_tests::starts_a_process_on_purpose",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("NEXTEST_TEST_NAME", test)
+            .env("CINERIS_HOOK_START_ON_PURPOSE", "1")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        (
+            output.status.success(),
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+        )
+    }
+
+    /// A start in a test not named `sys_…` or `perf_…` stops its process,
+    /// with the message; in a `sys_` test it goes on.
+    #[test]
+    fn sys_a_test_not_named_sys_is_stopped_at_its_first_start() {
+        let (passed, stderr) = run_as("verify::a_users_check");
+        assert!(!passed, "the process was not stopped: {stderr}");
+        assert!(
+            stderr.contains("the test `verify::a_users_check` started `git`"),
+            "{stderr}"
+        );
+        assert!(!stderr.contains("the start went on"), "{stderr}");
+
+        let (passed, stderr) = run_as("verify::sys_a_users_check");
+        assert!(passed, "{stderr}");
+        assert!(stderr.contains("the start went on"), "{stderr}");
+    }
+}
+
+#[cfg(all(test, feature = "test-hooks"))]
 mod children_tests {
     use super::{describe_line, reaped, spawned, spawned_children};
 
@@ -1538,11 +1594,16 @@ mod children_tests {
             4_000_002,
             describe_line("sh", &["-c".to_owned(), "true\n".to_owned()]),
         );
-        reaped(4_000_002);
+        // The earlier one's exit is seen: the later one stays unmarked.
+        reaped(4_000_001);
         let children = spawned_children();
         let git = children.iter().find(|c| c.pid == 4_000_001).unwrap();
         assert_eq!(git.command, "git status");
-        assert!(git.reaped_after.is_none());
+        assert!(git.reaped_after.is_some());
+        let sh = children.iter().find(|c| c.pid == 4_000_002).unwrap();
+        assert!(sh.reaped_after.is_none());
+        reaped(4_000_002);
+        let children = spawned_children();
         let sh = children.iter().find(|c| c.pid == 4_000_002).unwrap();
         assert_eq!(sh.command, "sh -c true ", "a line break is a space");
         assert!(sh.reaped_after.is_some());
