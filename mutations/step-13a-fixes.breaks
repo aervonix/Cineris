@@ -180,7 +180,7 @@ caught-by:
 [break] shutdown-does-not-stop-new-sessions
 rule: Once a shutdown has begun, no session starts.
 file: crates/cineris-core/src/core.rs
-in: Core::shutdown
+in: Core::shutdown_now
 find: self.inner.shutting_down.store(true, Ordering::SeqCst);
 replace:
 caught-by:

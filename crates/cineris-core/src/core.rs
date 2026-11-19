@@ -52,8 +52,8 @@ use cineris_protocol::session::{SandboxStatus, SessionSettings, SessionSummary};
 use cineris_protocol::{ErrorData, ErrorKind, LeaseId, SessionId};
 use cineris_session::entry::{LeaseEvent, LeaseRecord};
 use cineris_session::{Body, Git, Restore, SessionsRoot};
-use cineris_tools::PlanBoard;
 use cineris_tools::process::Runner;
+use cineris_tools::{BoxFuture, PlanBoard};
 use tokio::task::JoinHandle;
 
 use crate::assemble::{self, Assembled, EngineTemplate, TrustAnswer, Wanted, Which};
@@ -652,7 +652,14 @@ impl Core {
     /// session that is put together for it meanwhile either is in the table
     /// by then, and is closed here, or finds the client gone when it is
     /// put in the table, and closes itself.
-    pub async fn disconnect(&self, client: ClientId) {
+    ///
+    /// Boxed here so that its code is built once ([`Core::handle`] says why).
+    pub fn disconnect(&self, client: ClientId) -> BoxFuture<'_, ()> {
+        Box::pin(self.disconnect_now(client))
+    }
+
+    /// The body of [`Core::disconnect`].
+    async fn disconnect_now(&self, client: ClientId) {
         // Whether it may end a session, asked while it is still known.
         let drives = self.may_drive(client).is_ok();
         self.inner.clients.disconnect(client);
@@ -1172,7 +1179,14 @@ impl Core {
     /// looked at after: one that is put together meanwhile either is in the
     /// table by then, and is ended here, or finds the mark when it is put
     /// in the table, and ends itself.
-    pub async fn shutdown(&self) {
+    ///
+    /// Boxed here so that its code is built once ([`Core::handle`] says why).
+    pub fn shutdown(&self) -> BoxFuture<'_, ()> {
+        Box::pin(self.shutdown_now())
+    }
+
+    /// The body of [`Core::shutdown`].
+    async fn shutdown_now(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         // Every trust and rewind question still open ends as no answer, so
         // that no open and no undo waits for a person past the end
@@ -1221,15 +1235,30 @@ impl Core {
 
     /// Carries out one operation for `client`.
     ///
+    /// The future is boxed here, in this crate, so that its code is built
+    /// once. The future of an `async fn` that only other crates await is
+    /// built again in each crate that awaits it: `handle`'s, with all it
+    /// calls, was in the shipped binary twice, once for the binary's own
+    /// front ends and once for `cineris-rpc`'s server. Built once, the
+    /// binary is 266 KB smaller on Linux and 433 KB on Windows
+    /// (`docs/measurements/binary-size.md`, "The size step").
+    /// [`Core::disconnect`] and [`Core::shutdown`] are boxed for the same
+    /// reason.
+    ///
     /// # Errors
     ///
     /// The protocol's error object: its kind, a stable code and a message
     /// for a person.
+    pub fn handle(&self, client: ClientId, op: Op) -> BoxFuture<'_, Result<OpResult, OpError>> {
+        Box::pin(self.handle_op(client, op))
+    }
+
+    /// The body of [`Core::handle`].
     #[expect(
         clippy::too_many_lines,
         reason = "one arm an operation, each a few lines; splitting it would hide the table"
     )]
-    pub async fn handle(&self, client: ClientId, op: Op) -> Result<OpResult, OpError> {
+    async fn handle_op(&self, client: ClientId, op: Op) -> Result<OpResult, OpError> {
         match op {
             Op::Initialize(params) => {
                 let Some(version) = negotiate_version(&params, SUPPORTED_PROTOCOL_VERSIONS) else {

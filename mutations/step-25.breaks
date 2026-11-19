@@ -845,7 +845,7 @@ caught-by:
 [break] an-export-read-is-not-masked
 rule: session/read with `redacted` masks every item by the log's walk and filter.
 file: crates/cineris-core/src/core.rs
-in: Core::handle
+in: Core::handle_op
 find: let (items, masked) = if params.redacted {
 replace: let (items, masked) = if false {
 caught-by:
@@ -1628,7 +1628,7 @@ caught-by:
 [break] the-core-does-not-say-it-masked
 rule: A session/read with redacted says in its result that it masked the items.
 file: crates/cineris-core/src/core.rs
-in: Core::handle
+in: Core::handle_op
 find: redacted: params.redacted
 replace: redacted: false
 packages: cineris-core, cineris-rpc

@@ -672,7 +672,7 @@ caught-by:
 [break] shutdown-leaves-questions-open
 rule: The core's end withdraws every open trust and rewind question, so no open and no undo waits for a person past it.
 file: crates/cineris-core/src/core.rs
-in: Core::shutdown
+in: Core::shutdown_now
 find: self.inner.clients.withdraw(None);
 replace:
 caught-by:
@@ -681,7 +681,7 @@ caught-by:
 [break] workspace-files-walk-under-a-fresh-token
 rule: workspace/files walks under a child of the core's token, and ends with the core.
 file: crates/cineris-core/src/core.rs
-in: Core::handle
+in: Core::handle_op
 find: let cancel = self.inner.options.cancel.child();
 replace: let cancel = CancelToken::new();
 caught-by:
@@ -851,7 +851,7 @@ caught-by:
 [break] session-read-does-not-fence
 rule: session/read fences the reading client's queue at the seq it gives, so a delta merged after it holds only what came after it.
 file: crates/cineris-core/src/core.rs
-in: Core::handle
+in: Core::handle_op
 find: let (seq, progress) = live.sink.snapshot(reader.as_deref());
 replace: let (seq, progress) = live.sink.snapshot(reader.as_deref().filter(|_| false));
 caught-by:

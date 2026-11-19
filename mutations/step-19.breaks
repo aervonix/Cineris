@@ -596,7 +596,7 @@ caught-by:
 [break] verify-run-starts-a-turn-that-can-run-nothing
 rule: `verify/run` answers `no_checks`, saying why, and starts no turn, when no check could run.
 file: crates/cineris-core/src/core.rs
-in: Core::handle
+in: Core::handle_op
 find: if let Some(why) = live.verifier.why_none().await {
 replace: if let Some(why) = None::<crate::verify::Unready> {
 caught-by:
