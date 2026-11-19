@@ -42,3 +42,20 @@ At `059bd1c`, before the three escape tests split their documents only at every 
 | 3, system | 27.4 s (294 tests) | 27.2 s (293) | +0.1 s | 60 s |
 
 <!-- end of what cargo xtask ci-times wrote, section "Linux, both trees on one runner, before the splits were sampled" -->
+
+## Windows, both trees on one runner
+
+**A `test-windows` cut off at its 5-minute limit** (run 44456228950, at `4c48992`, whose last commit added only records): the build took 2m20s, and all 4,449 tests of tiers 1 and 2 passed. Of the system tests, 193 passed, two were stopped by the cancellation (`0xc000013a`) and nine had not started. The same code at `2021866` ran the job in 3m28s, every test passing. Rebased on `main` at `45f0ee0` (run 44457768453, at `e345877`), it was cut off again at 5m4s after the job said "Every test passed": 4,456 tests of tiers 1 and 2 and 207 system tests, after a build of 2m16s. The A/B below, both trees on one runner, puts the change at no cost on Windows in any tier: each is lower, within a round's spread, and tier 2 is lower by the shell start the verify test no longer makes.
+
+<!-- written by cargo xtask ci-times, section "Windows, both trees on one runner": it replaces this up to the end mark -->
+### Windows, both trees on one runner
+
+`try` with `-f against=main` (run 44456899061), the median of 3 runs each, on one runner at 5.0 ms a process start:
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 10.2 s (2,907 tests) | 11.4 s (2,902) | −1.2 s | 20 s |
+| 2, integration | 22.5 s (1,542 tests) | 24.6 s (1,542) | −2.1 s | 40 s |
+| 3, system | 55.0 s (204 tests) | 56.2 s (204) | −1.2 s | 90 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "Windows, both trees on one runner" -->
