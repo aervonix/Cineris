@@ -21,7 +21,7 @@
 #   gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7 --jobs 2"
 #   gh workflow run try --ref <branch> -f commit=<40-digit commit hash> -f command="test -p cineris-base"
 #   gh workflow run try --ref <branch> -f command=final -f against=main
-#   gh workflow run try --ref <branch> -f os=windows -f command="test --job --setup-head x.sh" -f against=main -f count=3
+#   gh workflow run try --ref <branch> -f os=windows -f command="test --job --setup-head x.sh" -f against=main -f count=2
 #   gh run watch <run id>                     (the id `try --dispatch` prints)
 #
 # `command=final` (`cargo xtask try --final --dispatch <branch>`) is three
@@ -124,11 +124,12 @@ jobs:
     # Not a blocking check: a dist build from scratch takes most of this on
     # Windows. A mutate run builds copies of the tree from cold and runs to
     # its end. A comparison of two trees' performance tests builds both in
-    # release from scratch. A final run's A/B builds the base without the
-    # cache. A job A/B builds both trees from cold every round: `try` gives
+    # release from scratch. An A/B, of the tests or of a final run, builds
+    # the base without the cache and runs both trees in turn: 60, as the
+    # performance A/B has. A job A/B builds both trees from cold every round: `try` gives
     # it `--minutes 200`, so that it starts no round it would not finish
     # within this.
-    timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 240 || (startsWith(inputs.command, 'mutate') && 90 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 60 || 40)) }}
+    timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 240 || (startsWith(inputs.command, 'mutate') && 90 || ((inputs.command == 'final' || inputs.against != '') && 60 || 45)) }}
     # `size --against-main` reads the main workflow's size record, which is
     # another run's artifact: `actions: read`, and the token below, which is
     # given to a `size` command only.
@@ -250,7 +251,7 @@ jobs:
       - name: Run (Linux)
         if: runner.os != 'Windows'
         shell: bash
-        timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 50 || 30)) }}
+        timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || inputs.against != '') && 50 || 35)) }}
         env:
           TRY_COMMAND: ${{ inputs.command }}
           TRY_PROFILE: ${{ inputs.profile }}
@@ -290,7 +291,7 @@ jobs:
       - name: Run (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || startsWith(inputs.command, 'perf') && inputs.against != '') && 50 || 30)) }}
+        timeout-minutes: ${{ contains(format(' {0} ', inputs.command), ' --job ') && 230 || (startsWith(inputs.command, 'mutate') && 80 || ((inputs.command == 'final' || inputs.against != '') && 50 || 35)) }}
         env:
           TRY_COMMAND: ${{ inputs.command }}
           TRY_PROFILE: ${{ inputs.profile }}
