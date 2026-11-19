@@ -628,21 +628,27 @@ mod tests {
             vec![long.as_str()],
             vec!["docs", "docs"],
         ] {
+            // Each guard of the table on its own, before anything is
+            // written: the read-back refuses most of them a second time.
             assert!(
-                matches!(
-                    user_config_text(&named(&names)),
-                    Err(WriteError::NotRead(_))
-                ),
+                matches!(table(&named(&names)), Err(WriteError::NotRead(_))),
                 "{names:?}"
             );
+            assert!(user_config_text(&named(&names)).is_err(), "{names:?}");
         }
         let many: Vec<String> = (0..=MAX_SERVERS).map(|n| format!("s{n}")).collect();
         let many: Vec<&str> = many.iter().map(String::as_str).collect();
-        assert!(matches!(
-            user_config_text(&named(&many)),
-            Err(WriteError::NotRead(_))
-        ));
+        assert!(matches!(table(&named(&many)), Err(WriteError::NotRead(_))));
         assert!(user_config_text(&named(&many[..MAX_SERVERS])).is_ok());
+        // Read back: a name that cannot be set, and too many servers.
+        let bad_name: Table = "[mcp.servers.\"\"]\ncommand = \"run\"\n".parse().unwrap();
+        assert!(check_mcp(&bad_name).is_err());
+        let too_many: Table = (0..=MAX_SERVERS)
+            .map(|n| format!("[mcp.servers.s{n}]\ncommand = \"run\"\n"))
+            .collect::<String>()
+            .parse()
+            .unwrap();
+        assert!(check_mcp(&too_many).is_err());
         // Read back: anything but 13-mcp's form is refused.
         for text in [
             "[mcp.servers.a]\ncommand = \"run\"\nnetwork = true\n",
