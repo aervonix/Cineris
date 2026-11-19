@@ -1,0 +1,58 @@
+# The size step (docs/steps/size-step/answered.md): the code its three cuts
+# wrote, each piece broken once, so that a later change that loses what the
+# cut kept is caught.
+
+# ------------------------------------- the core's handler, boxed in the core
+
+[break] shutdown-does-nothing
+rule: The boxed `Core::shutdown` runs the shutdown: no session starts after it, and every open question ends.
+file: crates/cineris-core/src/core.rs
+in: Core::shutdown
+find: Box::pin(self.shutdown_now())
+replace: Box::pin(std::future::ready(()))
+caught-by:
+    cineris-core::it lifecycle::a_session_started_while_the_core_shuts_down_does_not_run_on
+    cineris-core::it asking::an_undos_question_ends_when_the_core_ends
+
+[break] disconnect-does-nothing
+rule: The boxed `Core::disconnect` disconnects the client: a question it alone could answer ends as no answer.
+file: crates/cineris-core/src/core.rs
+in: Core::disconnect
+find: Box::pin(self.disconnect_now(client))
+replace: Box::pin(std::future::ready(()))
+caught-by:
+    cineris-core::it asking::a_question_whose_client_went_away_ends_as_no_answer
+    cineris-core::it lifecycle::a_session_another_client_joined_goes_on_when_its_first_client_leaves
+
+# ---------------------------------- the configuration's tables, through a Vec
+
+[break] table-of-drops-an-entry
+rule: `table_of` keeps every entry it is given.
+file: crates/cineris-config/src/schema/mod.rs
+in: table_of
+find: entries.into_iter().collect()
+occurrence: 2
+replace: entries.into_iter().skip(1).collect()
+caught-by:
+    cineris-config schema::redact::tests::a_declared_literal_is_redacted_and_a_variable_name_kept
+    cineris-config write::tests::the_choices_are_written_as_settings_that_read_back_strictly
+
+# ------------------------------------------ blocking work, as one type
+
+[break] erased-work-loses-its-value
+rule: The work's result comes back through the erased spawn as the caller's type.
+file: crates/cineris-tools/src/blocking.rs
+in: run_blocking
+find: Box::new(work(&token)) as Box<dyn Any + Send>
+replace: Box::new(drop(work(&token))) as Box<dyn Any + Send>
+caught-by:
+    cineris-tools blocking::tests::the_work_runs_and_its_value_comes_back
+
+[break] a-dropped-task-reads-as-a-panic
+rule: Work the runtime drops without running it (given after its end) is reported as cancelled, not as a panic.
+file: crates/cineris-tools/src/blocking.rs
+in: run_blocking
+find: Err(_) => Err(BlockingError::Cancelled)
+replace: Err(_) => Err(BlockingError::Panicked(String::new()))
+caught-by:
+    cineris-tools blocking::tests::work_handed_to_a_runtime_that_has_ended_is_cancelled
