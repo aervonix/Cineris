@@ -366,7 +366,9 @@ fn beside<'t>(
     end: usize,
 ) -> Option<(Vec<&'t str>, Vec<&'t str>)> {
     let addition = |side: &Side<'_, 't>| match side.0 {
-        [hunk] if hunk.is_addition() && hunk.a_start == end && hunk.a_start > start => {
+        // A change that starts at the place's end would end past it: one
+        // that starts there is an addition.
+        [hunk] if hunk.a_start == end && hunk.a_start > start => {
             Some(side.1.lines[hunk.b_start..hunk.b_end].to_vec())
         }
         _ => None,

@@ -133,15 +133,6 @@ replace: let placed = if true {
 caught-by:
     rebase::tests::a_line_both_sides_changed_is_left_for_a_person
 
-[break] rebase-a-change-counts-as-an-addition
-rule: Only a side whose one change at the place is lines added is put beside the other's change.
-file: xtask/src/rebase/merge.rs
-in: beside
-find: [hunk] if hunk.is_addition() && hunk.a_start == end && hunk.a_start > start =>
-replace: [hunk] if hunk.a_start == end && hunk.a_start > start =>
-caught-by:
-    rebase::tests::a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change
-
 [break] rebase-additions-not-pushed-down
 rule: A run of added lines is pushed down past the lines it starts with.
 file: xtask/src/rebase/merge.rs
@@ -276,11 +267,11 @@ caught-by:
 rule: An addition just before lines the other side changed is left for a person (review finding 1).
 file: xtask/src/rebase/merge.rs
 in: beside
-find: [hunk] if hunk.is_addition() && hunk.a_start == end && hunk.a_start > start =>
-replace: [hunk] if hunk.is_addition() && (hunk.a_start == end || hunk.a_start == start) =>
+find: [hunk] if hunk.a_start == end && hunk.a_start > start =>
+replace: [hunk] if hunk.a_start == end || hunk.a_start == start =>
 caught-by:
-    rebase::tests::an_addition_beside_lines_the_other_side_deleted_is_left
     rebase::tests::a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change
+    rebase::tests::changes_apart_merge_and_one_sides_change_is_taken_whole
 
 [break] rebase-go-on-skips-always
 rule: Only a commit this run settled to nothing is skipped (review findings 2 and 3).
