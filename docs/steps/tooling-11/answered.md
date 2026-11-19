@@ -153,7 +153,7 @@ The breaks, run after the fixes, found one more way round the rule: a condition 
 
 ### Left open
 
-- **The three real pull-request runs** read a cache only the main branch writes, so they come after the merge, from the next pull requests. They are recorded in a follow-up commit, by the coordinator's decision.
+- **The three real pull-request runs** read a cache only the main branch writes, so they came after the merge, from the next pull requests, by the coordinator's decision: 222 s (8 ms), 176 s (7 ms) and 231 s (6 ms, a change to `cineris-base`), all passed. They are in [ci.md](ci.md), "After the merge".
 - **A flake found on the way, outside this step:** `cineris-sandbox`'s `protect::tests::a_cargo_made_as_a_link_is_found` depends on the watch's 250 ms of real time. Opened as [a-sandbox-watch-test-depends-on-real-time](../../outstanding/a-sandbox-watch-test-depends-on-real-time.md), for the maintainers.
 
 ## xtask's root

@@ -111,3 +111,24 @@ How it was run:
 - **Runs 44438574322, 44438578004 and 44438583991** used a harness that had left Python's `.pyc` cache beside itself, an untracked file. The dating refused it ("files that are not its commit's") and every crate was rebuilt, as designed. The cached side then took 3 to 6 s longer than today's at the median, which is the cost of a fallback.
 - **Runs 44444591999, 44444595499 and 44444598564** built the stand-in for `main`'s cache with nextest directly, not through `cargo xtask ci test`. The two builds' environments differ, so most test binaries were rebuilt against it. The cached side still gained 26 to 48 s, and the runs on the scratch branch, where both builds go through xtask, did not show it.
 - **The runs above** build it as the main branch's job does.
+
+## After the merge: `main`'s saves and the first three pull requests
+
+**The main branch's saves.** Each saved the workspace's build after its tests. That build is what the pull requests below restored.
+
+| Run | `main` at | Start cost | Windows job | Build tests | Save |
+|---|---|---|---|---|---|
+| 44457639460 | `45f0ee0` (#103) | 8 ms | 309 s | 144 s | 8 s, 363 MB |
+| 44458332206 | `fe2ee71` (#105) | 5 ms | 196 s | 82 s | 5 s, 363 MB |
+
+**The first three pull-request runs that touched code and started after the first save** (04:25:32Z on 2026-11-19), as they came, none made for the purpose. Times in seconds, as in "Before".
+
+| Run | Pull request | Start cost | Job | Workspace restore | Dating | Files differing from the build | xtask build | Build tests | Rebuilt | Tiers 1 and 2 | Tier 3 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 44458467969 | #104, two flaky tests, at `b16a354` | 8 ms | **222** | 6 | 1 | 15, against `45f0ee0` | 1 | 71 | `cineris-tools`, `cineris-tui` and what depends on them (8 crates) | 51 | 50 |
+| 44459695495 | #104 again, at `8026226` | 7 ms | **176** | 8 | 1 | 13, against `fe2ee71` | 1 | 54 | the same 8 crates | 40 | 40 |
+| 44460417305 | #106, the public docs, at `9b516a6` | 6 ms | **231** | 10 | 1 | 84, against `fe2ee71` | 11 | 96 | every workspace crate: it changes `cineris-base` | 39 | 39 |
+
+- **All three passed, well inside five minutes:** 222 s on a slow runner (8 ms), against 293 to 313 s before.
+- **Each restored the newest build of `main` at the time**, and dated the checkout against it.
+- **#106 is the known slow case:** it changes `cineris-base`, under every crate. It still took 231 s on a 6 ms runner, about 4.3 minutes on a slow one by the A/B's ratio.
