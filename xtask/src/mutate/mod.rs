@@ -844,8 +844,47 @@ fn choose(all: &[Break], names: &[String]) -> Result<Vec<Break>> {
 /// the breaks name and runs and builds nothing.
 pub(crate) fn check_breaks_apply() -> Result<()> {
     let root = workspace::root();
+    for warning in rename_warnings(&list_files(&root)) {
+        println!("warning: {warning}");
+    }
     let all = list::load_all(&root)?;
     report_check(&root, &all, &Names::Kept)
+}
+
+/// The break lists' paths, `mutations/<name>.breaks`, in name order; none
+/// when the folder cannot be read (loading the lists then says why).
+fn list_files(root: &Path) -> Vec<String> {
+    let mut files: Vec<String> = std::fs::read_dir(root.join("mutations"))
+        .into_iter()
+        .flatten()
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".breaks"))
+        .map(|name| format!("mutations/{name}"))
+        .collect();
+    files.sort();
+    files
+}
+
+/// A warning for each break list whose name the rename's rules would
+/// rewrite: its path, and its name read as text (the old alias and the
+/// labels built on it, which a path alone is not checked for), each by
+/// `crate::rename`'s own check. The list's name is in every break's name,
+/// which the docs and records quote: a name the rename check refuses there
+/// is found late otherwise.
+pub(crate) fn rename_warnings(files: &[String]) -> Vec<String> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let name = file.rsplit('/').next().unwrap_or(file);
+            let found = crate::rename::violations(file, name.as_bytes());
+            let first = found.first()?;
+            Some(format!(
+                "{file}: the list's name is one the rename rules would rewrite ({}), and every \
+                 break's name begins with it: name the list with no old name in it",
+                first.message.split(". ").next().unwrap_or(&first.message)
+            ))
+        })
+        .collect()
 }
 
 /// How the tests a `caught-by` names are looked for.
@@ -1412,6 +1451,33 @@ mod tests {
 
     pub(super) fn breaks(list: &str, text: &str) -> Vec<Break> {
         list::parse(&format!("mutations/{list}.breaks"), text).unwrap()
+    }
+
+    #[test]
+    fn a_lists_name_the_rename_would_rewrite_is_warned_of() {
+        // The old names, made of pieces, so that this file holds none.
+        let alias = ["c", "x"].concat();
+        let project = ["cor", "tex"].concat();
+        let files = [
+            format!("mutations/{alias}-labels.breaks"),
+            format!("mutations/{project}-x.breaks"),
+            "mutations/old-alias-labels.breaks".to_owned(),
+            "mutations/step-12.breaks".to_owned(),
+            "mutations/context.breaks".to_owned(),
+        ];
+        let warnings = super::rename_warnings(&files);
+        assert_eq!(warnings.len(), 2, "{warnings:#?}");
+        assert!(
+            warnings[0].starts_with(&format!("mutations/{alias}-labels.breaks: ")),
+            "{}",
+            warnings[0]
+        );
+        assert!(warnings[0].contains("the old alias"), "{}", warnings[0]);
+        assert!(
+            warnings[1].starts_with(&format!("mutations/{project}-x.breaks: ")),
+            "{}",
+            warnings[1]
+        );
     }
 
     const SOURCE: &str = "\
