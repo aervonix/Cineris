@@ -95,6 +95,14 @@ pub(crate) fn check_repository(root: &Path) -> Result<Vec<Violation>> {
 pub(crate) fn file_rules(file: &str, bytes: &[u8]) -> Vec<Violation> {
     let mut violations = home_paths::check(file, bytes);
     violations.extend(crate::rename::violations(file, bytes));
+    if file.starts_with(".github/actions/")
+        && (file.ends_with("/action.yml") || file.ends_with("/action.yaml"))
+    {
+        violations.extend(workflows::check_action(
+            file,
+            &String::from_utf8_lossy(bytes),
+        ));
+    }
     if file.starts_with(".github/workflows/") {
         violations.extend(workflows::check(file, &String::from_utf8_lossy(bytes)));
     }

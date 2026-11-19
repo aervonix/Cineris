@@ -39,24 +39,24 @@ replace: if let Some(note) = workspace::choose_root(given.as_deref(), &workspace
 caught-by:
     workspace::tests::sys_a_build_from_one_checkout_works_on_the_checkout_it_runs_in
 
-# Only the main branch writes a cache: `rules` refuses a workflow step that
-# could write one from any other run.
+# Only the main branch writes a cache: `rules` refuses a workflow step, or a
+# step of the repository's actions, that could write one from any other run.
 
 [break] cache-save-from-any-branch
 rule: A step that saves a cache with `actions/cache/save` runs only on the main branch.
 file: xtask/src/rules/workflows.rs
 in: cache_writes
-find: action.starts_with("actions/cache/save@") && !holds_to_main(value("if:"))
-replace: action.starts_with("actions/cache/save@") && value("if:").is_none()
+find: && !key("if:").is_some_and(holds_to_main)
+replace: && key("if:").is_none()
 caught-by:
     rules::workflows::tests::only_the_main_branch_writes_a_cache
 
 [break] cache-save-condition-turned-round
-rule: A save's condition cannot hold to the main branch and let others in, with `||` or `!`.
+rule: A save's condition holds to the main branch with no `||` that lets another branch in and no `!` that turns it round.
 file: xtask/src/rules/workflows.rs
-in: cache_writes
-find: && !condition.contains('!')
-replace:
+in: holds_to_main
+find: !bare.contains("||") && !bare.contains('!') && bare.split("&&")
+replace: bare.split("&&")
 caught-by:
     rules::workflows::tests::only_the_main_branch_writes_a_cache
 
@@ -73,8 +73,8 @@ caught-by:
 rule: rust-cache is told when to save: `"false"` or the main branch.
 file: xtask/src/rules/workflows.rs
 in: cache_writes
-find: && !holds_to_main(value("save-if:"))
-replace: && value("save-if:").is_none()
+find: rust_cache_saves && !input("save-if:").is_some_and(holds_to_main)
+replace: rust_cache_saves && input("save-if:").is_none()
 caught-by:
     rules::workflows::tests::only_the_main_branch_writes_a_cache
 
@@ -86,3 +86,97 @@ find: violations.extend(cache_writes(file, text));
 replace:
 caught-by:
     rules::workflows::tests::only_the_main_branch_writes_a_cache
+
+[break] cache-names-by-case
+rule: Action names are compared as GitHub resolves them, whatever their case.
+file: xtask/src/rules/workflows.rs
+in: cache_writes
+find: let action = action.to_ascii_lowercase();
+replace: let action = action.to_owned();
+caught-by:
+    rules::workflows::tests::only_the_main_branch_writes_a_cache
+
+[break] cache-condition-from-an-input
+rule: A save's condition is the step's own `if:`, not a line of an input's text.
+file: xtask/src/rules/workflows.rs
+in: cache_writes
+find: step.keys.iter().find_map(|line| {
+replace: step.all.iter().map(|line| line.trim_start()).find_map(|line| {
+caught-by:
+    rules::workflows::tests::only_the_main_branch_writes_a_cache
+
+[break] cache-steps-level-with-their-key
+rule: Steps whose dashes are level with the `steps:` key are read as steps.
+file: xtask/src/rules/workflows.rs
+in: steps
+find: items.map_or(indent >= key, |items| indent == items)
+replace: items.map_or(indent > key, |items| indent == items)
+caught-by:
+    rules::workflows::tests::a_cache_written_is_found_however_the_steps_are_laid_out
+
+[break] cache-written-where-a-pull-request-runs-as-main
+rule: A workflow that runs pull requests' code with `github.ref` the main branch's writes no cache.
+file: xtask/src/rules/workflows.rs
+in: cache_writes
+find: } else if pull_request_code_on_main
+replace: } else if false
+caught-by:
+    rules::workflows::tests::no_cache_is_written_where_a_pull_requests_code_runs_as_main_nor_by_an_action
+
+[break] cache-actions-not-read
+rule: The repository's own actions are held to the rules on pins and caches.
+file: xtask/src/rules/mod.rs
+in: file_rules
+find: file.starts_with(".github/actions/")
+replace: file.starts_with(".github/no-actions/")
+caught-by:
+    rules::workflows::tests::no_cache_is_written_where_a_pull_requests_code_runs_as_main_nor_by_an_action
+
+# The dating of the checkout against the restored build
+# (.github/scripts/date-the-checkout.sh): what it dates now, what long
+# before, and what it leaves alone.
+
+[break] dates-a-stray-file-with-the-rest
+rule: A file on disk that is not the checkout's commit leaves every date alone, so that everything is rebuilt.
+file: .github/scripts/date-the-checkout.sh
+packages: xtask
+find: if [ -n "$stray" ]; then
+replace: if false; then
+caught-by:
+    checkout_dates::sys_whatever_the_script_cannot_be_sure_of_leaves_every_date_alone
+
+[break] dates-the-changes-before-the-rest
+rule: What changed is dated now after everything is dated long before, not the other way round.
+file: .github/scripts/date-the-checkout.sh
+packages: xtask
+find: git ls-files -z | xargs -0 -r touch -c -m --date=@946684800
+replace: xargs -0 -r touch -c -m <"$changed"; git ls-files -z | xargs -0 -r touch -c -m --date=@946684800
+caught-by:
+    checkout_dates::sys_what_differs_from_the_builds_commit_is_dated_now_and_the_rest_long_before
+
+[break] dates-only-modified-files
+rule: Every file that differs from the build's commit is dated now: added and renamed ones too, not only those modified.
+file: .github/scripts/date-the-checkout.sh
+packages: xtask
+find: git diff --name-only --no-renames -z "$commit" HEAD
+replace: git diff --name-only --no-renames --diff-filter=M -z "$commit" HEAD
+caught-by:
+    checkout_dates::sys_what_differs_from_the_builds_commit_is_dated_now_and_the_rest_long_before
+
+[break] dates-the-wrong-part-of-the-key
+rule: The build's commit is the last part of the restored key, checked to be one before it is used.
+file: .github/scripts/date-the-checkout.sh
+packages: xtask
+find: commit=${key##*-}
+replace: commit=${key#*-}
+caught-by:
+    checkout_dates::sys_what_differs_from_the_builds_commit_is_dated_now_and_the_rest_long_before
+
+[break] dates-after-an-attributes-change
+rule: A changed .gitattributes file leaves every date alone.
+file: .github/scripts/date-the-checkout.sh
+packages: xtask
+find: grep -q '\(^\|/\)\.gitattributes$'
+replace: grep -q 'no such file name'
+caught-by:
+    checkout_dates::sys_whatever_the_script_cannot_be_sure_of_leaves_every_date_alone
