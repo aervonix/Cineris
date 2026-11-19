@@ -206,7 +206,7 @@ Ranked by bytes against risk. Each figure is Linux musl; Windows is about the sa
 
 ### What costs speed: "z" for ten crates
 
-`opt-level = "z"` for ten library crates of ours that no hot path runs through (`cineris-agent`, `-base`, `-config`, `-core`, `-knowledge`, `-policy`, `-rpc`, `-sandbox`, `-session`, `-stats`), set on `release` so that the perf tools measure it: **Linux −315,392, Windows −503,808.** It is the step's last commit but one, and can be dropped.
+`opt-level = "z"` for ten library crates of ours that no hot path runs through (`cineris-agent`, `-base`, `-config`, `-core`, `-knowledge`, `-policy`, `-rpc`, `-sandbox`, `-session`, `-stats`), set on `release` so that the perf tools measure it: **Linux −315,392, Windows −503,808.** It was built as a commit of its own, and dropped by the maintainers on the costs below.
 
 - **The binary's own crate must stay at "s":** `cineris-cli` alone at "z" made the binary **3.5 MB larger** (18,031,472 against 14,506,416 on the reference machine): its level is what the fat-LTO link is made at.
 - `cineris-config` alone at "z" saved 8,192 bytes; the cold third-party crates (TOML, TLS, HTTP) added to the ten saved 69,600 more.

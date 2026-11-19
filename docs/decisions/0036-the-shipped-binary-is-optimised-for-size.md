@@ -1,6 +1,6 @@
 # 0036: The shipped binary is optimised for size, without ICU, and holds no path of the machine it was built on
 
-- **Status:** Accepted by the owner on 2026-11-16 (the size study's plan B, chosen by the owner; the home paths and the pull-request size job, the owner's picks from the same study). It replaces the line "`opt-level = 3` for `dist`. Size optimisation is held in reserve." of [decision 0012](0012-release-profile.md), which the owner left as it is; the rest of 0012 stands, unwinding on panic included.
+- **Status:** Accepted by the owner on 2026-11-16 (the size study's plan B, chosen by the owner; the home paths and the pull-request size job, the owner's picks from the same study). It replaces the line "`opt-level = 3` for `dist`. Size optimisation is held in reserve." of [decision 0012](0012-release-profile.md), which the owner left as it is; the rest of 0012 stands, unwinding on panic included. Its reserve (`panic = "abort"`) is replaced by the order of reserves in [decision 0039](0039-the-binary-s-budgets-are-20-mib-on-linux-and-25-on-windows.md) (the size step, 2026-11-19).
 - **Date:** 2026-11-16
 
 ## Context
