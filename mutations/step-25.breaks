@@ -2479,3 +2479,159 @@ find: .find(|server| &server.name == name && server.refused.is_none())
 replace: .find(|server| &server.name == name)
 caught-by:
     cineris-cli::bin/cineris setup::tests::only_a_server_shown_and_importable_is_written
+
+# ------------- the full review of the third pull request: how keys reach
+# the steps (docs/steps/25/parts/pr3-first-run.md, "The full review of the
+# third pull request", findings 3 to 6)
+
+[break] the-commands-come-under-a-turn
+rule: The last step is asked for only while the session is idle: never under the turn a prompt on the command line began.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_next
+find: if !self.first_run_idle() {
+replace: if false {
+caught-by:
+    cineris-tui app::tests::first_run::the_commands_wait_for_the_turn_a_prompt_on_the_command_line_began
+
+[break] a-hidden-step-takes-keys
+rule: The last step is shown, and takes keys, only while the session is idle: under a turn or a dialog the keys go where they would without it.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_shown
+find: Step::Commands(_) => self.first_run_idle(),
+replace: Step::Commands(_) => true,
+caught-by:
+    cineris-tui app::tests::first_run::the_commands_step_takes_no_key_while_a_turn_or_a_dialog_is_shown
+    cineris-tui app::tests::first_run::typing_just_before_a_step_comes_holds_it_a_quiet_second
+    cineris-tui app::tests::first_run::the_key_that_answered_a_dialog_holds_the_step_after_it
+
+[break] the-commands-come-over-what-is-typed
+rule: The last step waits while the input box holds text: it never takes the input box's place from what is being typed.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_idle
+find: && self.input.editor().is_empty()
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::typing_just_before_a_step_comes_holds_it_a_quiet_second
+
+[break] a-step-is-not-seeded-with-what-was-typed
+rule: A step's first frame takes what was typed just before it, as a dialog's does: it is ready a quiet second after it.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_drawn
+find: run.ready.typed(untaken);
+replace: let _ = untaken;
+caught-by:
+    cineris-tui app::tests::first_run::typing_just_before_a_step_comes_holds_it_a_quiet_second
+
+[break] a-step-is-not-seeded-with-the-key-taken
+rule: A step's first frame takes the key that answered what came before it, a dialog's included: it is ready a key's repeat window after it.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_drawn
+find: run.ready.not_before(taken + REPEAT);
+replace: let _ = taken;
+caught-by:
+    cineris-tui app::tests::first_run::the_key_that_answered_a_dialog_holds_the_step_after_it
+
+[break] a-steps-key-holds-no-dialog
+rule: A key a step took holds the dialog after it a key's repeat window, as a dialog's answer does.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_event
+find: self.taken = Some(at);
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::the_key_that_answered_a_step_holds_the_dialog_after_it
+
+[break] the-providers-come-under-a-ready-step
+rule: The providers that come while their step is ready start its grace again.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_answer
+find: run.rows_changed();
+occurrence: 1
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::the_providers_and_what_was_found_start_the_grace_again
+
+[break] what-was-found-comes-under-a-ready-step
+rule: What other tools left, coming while its step is ready, starts its grace again.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_answer
+find: run.rows_changed();
+occurrence: 2
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::the_providers_and_what_was_found_start_the_grace_again
+
+[break] a-files-servers-come-under-a-ready-step
+rule: A file's servers that come while their step is ready start its grace again: a key read as they are drawn does not land on them.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_answer
+find: run.rows_changed();
+occurrence: 3
+replace:
+caught-by:
+    cineris-tui app::tests::first_run::rows_that_come_under_a_ready_step_start_its_grace_again
+
+[break] the-grace-again-forgets-the-quiet
+rule: Rows changed under a step start its grace again and keep the quiet it owes input it did not take.
+file: crates/cineris-tui/src/app/ready.rs
+in: Readiness::again
+find: self.shown = None;
+replace: self.shown = None; self.typed = None;
+caught-by:
+    cineris-tui app::ready::tests::again_starts_its_grace_again_and_keeps_its_quiet
+
+[break] a-files-answer-moves-the-selection
+rule: The imports' selection is the row it is: a file's servers inserted above it do not move it onto the first of them, as a selection kept by its place would.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: .position(|pick| *pick == imports.selected)
+replace: .position(|pick| *pick == imports.selected || matches!((*pick, imports.selected), (Pick::Server(file, 0), Pick::File(next)) if file + 1 == next))
+caught-by:
+    cineris-tui app::tests::first_run::a_files_answer_does_not_move_the_selection_onto_its_servers
+
+[break] a-step-is-not-fitted
+rule: A step fits the window: its title and its selected row stay, the rows a window around it.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_bottom
+find: let room = self.rows.max(1).saturating_sub(under.len() + 1);
+replace: let room = usize::MAX;
+caught-by:
+    cineris-tui app::tests::first_run::in_a_short_window_the_step_keeps_its_title_and_the_selected_row_whole
+    cineris-tui app::tests::first_run::a_row_the_window_cannot_show_whole_is_not_accepted
+
+[break] the-card-stays-in-a-short-window
+rule: When the card and the step do not fit the window, the card goes first.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_bottom
+find: let whole = if lead + set_up.len() + all.len() <= room {
+replace: let whole = if true {
+caught-by:
+    cineris-tui app::tests::first_run::in_a_short_window_the_step_keeps_its_title_and_the_selected_row_whole
+    cineris-tui app::tests::first_run::a_row_the_window_cannot_show_whole_is_not_accepted
+
+[break] a-row-not-drawn-whole-is-accepted
+rule: A row is accepted only once it has been drawn whole: in a window too small for it, space on it picks nothing.
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_key
+find: let whole = run.whole;
+replace: let whole = true;
+caught-by:
+    cineris-tui app::tests::first_run::a_row_the_window_cannot_show_whole_is_not_accepted
+
+[break] a-selected-row-too-tall-is-said-whole
+rule: A selected row taller than the room is cut, and said not whole.
+file: crates/cineris-tui/src/view/setup.rs
+in: window
+find: let whole = cost(from, to) <= room;
+replace: let whole = true;
+caught-by:
+    cineris-tui view::setup::tests::a_step_taller_than_its_room_is_a_window_around_its_selected_row
+    cineris-tui app::tests::first_run::a_row_the_window_cannot_show_whole_is_not_accepted
+
+[break] a-mark-takes-no-room
+rule: The dim rows for what is above and below take a row each of the room.
+file: crates/cineris-tui/src/view/setup.rs
+in: window
+find: + usize::from(from > 0)
+replace:
+caught-by:
+    cineris-tui view::setup::tests::a_step_taller_than_its_room_is_a_window_around_its_selected_row

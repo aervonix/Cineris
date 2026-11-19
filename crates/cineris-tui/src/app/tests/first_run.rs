@@ -4,10 +4,15 @@
 //! imported, that a key is never drawn, and that every listing it shows
 //! holds hostile text.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use cineris_base::Secret;
+use cineris_protocol::TurnId;
+use cineris_protocol::event::{Event, TurnCompleted, TurnOutcome, TurnStarted};
 use cineris_protocol::methods::{
-    ConfigReloadResult, Op, OpResult, ProjectDetectResult, SessionResult,
+    ConfigReloadResult, Disposition, Op, OpResult, ProjectDetectResult, SessionResult,
+    TurnStartResult,
 };
 use cineris_protocol::project::{CommandPurpose, DetectedCommand};
 use cineris_protocol::session::TrustStanding;
@@ -16,9 +21,12 @@ use super::{key, text, type_text};
 use crate::app::setup::{
     Chosen, Found, Imported, KeyStore, McpFile, McpServer, Provider, Providers,
 };
-use crate::app::{Inbound, Ticket};
+use crate::app::{Inbound, Setup, Ticket};
 use crate::testing::{TRICKY, problems};
-use crate::testkit::{FakeSetup, Scripted, app_first_run, drain, session};
+use crate::testkit::{
+    FakeSetup, Scripted, app_first_run, app_first_run_on, app_first_run_prompted, approval, ask,
+    drain, event, session,
+};
 
 const KEY: &str = "sk-ant-api03-Zq7XfirstrunKEYw9";
 
@@ -102,8 +110,17 @@ struct Run {
 
 impl Run {
     fn new(setup: FakeSetup) -> Self {
+        Self::with(setup, 40, None)
+    }
+
+    /// A first run in a window of `rows`, the command line having given
+    /// `prompt`.
+    fn with(setup: FakeSetup, rows: usize, prompt: Option<&str>) -> Self {
         let now = Instant::now();
-        let (app, link) = app_first_run(now, &setup, 100, 40);
+        let (app, link) = match prompt {
+            Some(prompt) => app_first_run_prompted(now, &setup, 100, rows, prompt),
+            None => app_first_run(now, &setup, 100, rows),
+        };
         let mut run = Self {
             app,
             link,
@@ -114,6 +131,23 @@ impl Run {
         };
         run.frame();
         run.answer();
+        run
+    }
+
+    /// A first run on `program`, which keeps what it is asked in `setup`'s
+    /// log, its first frame drawn and nothing of the program's taken.
+    fn on(setup: FakeSetup, program: Arc<dyn Setup>) -> Self {
+        let now = Instant::now();
+        let (app, link) = app_first_run_on(now, program, 100, 40);
+        let mut run = Self {
+            app,
+            link,
+            setup,
+            now,
+            scrollback: Vec::new(),
+            drawn: Vec::new(),
+        };
+        run.frame();
         run
     }
 
@@ -187,6 +221,64 @@ impl Run {
     fn written(&self) -> Vec<Chosen> {
         self.setup.log().written.clone()
     }
+
+    /// Answers the project's detection the application sent with
+    /// `commands`.
+    fn detect(&mut self, commands: Vec<DetectedCommand>) {
+        let (detect, _) = self
+            .sent(|op| matches!(op, Op::ProjectDetect(_)))
+            .expect("the project's commands asked for");
+        self.give(
+            detect,
+            OpResult::ProjectDetect(ProjectDetectResult { commands }),
+        );
+    }
+
+    /// The session's turn begins.
+    fn turn_starts(&mut self) {
+        self.link.give(event(Event::TurnStarted(TurnStarted {})));
+        drain(&mut self.app, self.now);
+    }
+
+    /// The session's turn ends.
+    fn turn_ends(&mut self) {
+        self.link.give(event(Event::TurnCompleted(TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            stop_reason: None,
+            error: None,
+            usage: Default::default(),
+            verification: None,
+            duration_ms: Some(10),
+        })));
+        drain(&mut self.app, self.now);
+    }
+
+    /// Whether the last frame `live` shows the commands' step.
+    fn shows_commands(live: &[String]) -> bool {
+        live.iter().any(|row| row == "◇ Commands  4 of 4")
+    }
+}
+
+/// Two commands of a project's files.
+fn two_commands() -> Vec<DetectedCommand> {
+    vec![
+        detected("build", "cargo build --workspace", None, "Cargo.toml"),
+        detected("test", "cargo test --workspace", None, "Cargo.toml"),
+    ]
+}
+
+/// To the imports' step, its file of servers read and its keys drawn
+/// again after its rows came.
+fn to_the_servers(run: &mut Run) {
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let _ = run.ready();
+    run.key("down");
+    run.key("down");
+    run.key("space");
+    run.answer();
+    let _ = run.ready();
 }
 
 /// `s` at the provider (whose skip asks for what other tools left), at
@@ -252,6 +344,8 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
     run.key("space");
     run.answer();
     assert_eq!(run.setup.log().read, ["~/.claude.json"]);
+    // Its servers came: the step's grace starts again.
+    let _ = run.ready();
     run.key("down");
     run.key("space");
     // The refused server cannot be picked.
@@ -626,6 +720,7 @@ fn nothing_unpicked_is_imported() {
     run.key("down");
     run.key("space");
     run.answer();
+    let _ = run.ready();
     run.key("enter");
     let _ = run.ready();
     run.key("enter");
@@ -695,7 +790,7 @@ fn every_listing_holds_hostile_text() {
         run.key("down");
         run.key("space");
         run.answer();
-        let _ = run.frame();
+        let _ = run.ready();
         run.key("enter");
         let _ = run.ready();
         run.key("enter");
@@ -798,4 +893,471 @@ fn a_project_with_no_commands_ends_the_first_run() {
         "{said}"
     );
     assert!(said.contains("· Set-up done."), "{said}");
+}
+
+// ------------------------------------------------ the full review of the
+// third pull request: how keys reach the steps
+
+/// The first start given a prompt (`cineris "fix the build"`): the prompt
+/// goes at the open, and the project's commands are asked for, and their
+/// step shown, only once its turn has ended; until then the input box is
+/// the input box.
+#[test]
+fn the_commands_wait_for_the_turn_a_prompt_on_the_command_line_began() {
+    let mut run = Run::with(fake(), 40, Some("fix the build"));
+    skip_three(&mut run);
+    run.open(TrustStanding::Trusted);
+    let _ = run.frame();
+    let sent = run.link.take_sent();
+    let (turn, _) = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::TurnStart(_)))
+        .expect("the prompt sent at the open");
+    assert!(
+        !sent
+            .iter()
+            .any(|(_, op)| matches!(op, Op::ProjectDetect(_))),
+        "the commands are not asked for while its turn runs"
+    );
+    let turn = *turn;
+    run.give(
+        turn,
+        OpResult::TurnStart(TurnStartResult {
+            turn_id: TurnId::from("t_1"),
+            disposition: Disposition::Started,
+        }),
+    );
+    run.turn_starts();
+    let live = run.ready();
+    assert!(!Run::shows_commands(&live), "{live:#?}");
+    assert!(run.sent(|op| matches!(op, Op::ProjectDetect(_))).is_none());
+    run.turn_ends();
+    let _ = run.frame();
+    run.detect(two_commands());
+    let live = run.ready();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+}
+
+/// The commands' step shown, a turn begins (another client's) and a
+/// dialog of its comes: the step is not shown while either is, and no key
+/// reaches it: `x` under the turn, `space` and `enter` under the dialog
+/// go where they would without it. Once the session is idle again the
+/// step is shown again, its grace begun anew, nothing picked.
+#[test]
+fn the_commands_step_takes_no_key_while_a_turn_or_a_dialog_is_shown() {
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    run.open(TrustStanding::Trusted);
+    let _ = run.frame();
+    run.detect(two_commands());
+    let live = run.ready();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+    run.turn_starts();
+    let live = run.ready();
+    assert!(!Run::shows_commands(&live), "{live:#?}");
+    run.key("x");
+    assert!(run.app.in_first_run(), "x reached the input box");
+    ask(&mut run.app, &run.link, 7, approval("c_1"), run.now);
+    let live = run.ready();
+    assert!(
+        live.iter().any(|row| row.contains("Allow once")),
+        "the dialog, its answers drawn: {live:#?}"
+    );
+    run.key("space");
+    run.key("enter");
+    assert!(
+        run.sent(|op| matches!(op, Op::ProjectUpdate(_))).is_none(),
+        "no command kept"
+    );
+    assert!(run.app.in_first_run());
+    // The turn's end closes its dialog; what the keys typed is taken out
+    // of the input box.
+    run.turn_ends();
+    run.key("ctrl+u");
+    let live = run.frame();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+    assert!(
+        !live.iter().any(|row| row.contains("enter keeps")),
+        "its grace begun anew: {live:#?}"
+    );
+    let live = run.ready();
+    assert_eq!(
+        live.iter().filter(|row| row.contains('☐')).count(),
+        2,
+        "nothing picked: {live:#?}"
+    );
+}
+
+/// Typing into the input box when the commands come: the step waits while
+/// the input box holds text, and once it is empty holds a quiet second
+/// after the last key, as a dialog would: past its grace, and within that
+/// second, its keys are not drawn and `space` and `enter` keep nothing.
+#[test]
+fn typing_just_before_a_step_comes_holds_it_a_quiet_second() {
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    run.open(TrustStanding::Trusted);
+    let _ = run.frame();
+    let (detect, _) = run
+        .sent(|op| matches!(op, Op::ProjectDetect(_)))
+        .expect("the project's commands asked for");
+    // Long after the mode's key, which holds what comes next no more.
+    run.now += Duration::from_secs(5);
+    let typed = run.now;
+    type_text(&mut run.app, "a", typed);
+    run.give(
+        detect,
+        OpResult::ProjectDetect(ProjectDetectResult {
+            commands: two_commands(),
+        }),
+    );
+    let live = run.frame();
+    assert!(
+        !Run::shows_commands(&live),
+        "not over what is being typed: {live:#?}"
+    );
+    // The last key leaves the input box empty.
+    key(&mut run.app, "backspace", typed);
+    run.now = typed + Duration::from_millis(10);
+    let live = run.frame();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+    run.now = typed + Duration::from_millis(600);
+    let live = run.frame();
+    assert!(
+        !live.iter().any(|row| row.contains("space picks")),
+        "a quiet second after the typing: {live:#?}"
+    );
+    run.key("space");
+    run.key("enter");
+    assert!(run.sent(|op| matches!(op, Op::ProjectUpdate(_))).is_none());
+    let live = run.ready();
+    assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
+}
+
+/// The key that answered a dialog just before the commands' step is shown
+/// holds the step a key's repeat window, as it would hold the next
+/// dialog: past its grace, and within that window, `space` and `enter`
+/// keep nothing.
+#[test]
+fn the_key_that_answered_a_dialog_holds_the_step_after_it() {
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    run.open(TrustStanding::Trusted);
+    // A question comes (another client's turn's, say), and the commands
+    // found come while it is up: the step waits under it.
+    ask(&mut run.app, &run.link, 7, approval("c_1"), run.now);
+    run.detect(two_commands());
+    let live = run.ready();
+    assert!(!Run::shows_commands(&live), "{live:#?}");
+    assert!(
+        live.iter().any(|row| row.contains("Allow once")),
+        "{live:#?}"
+    );
+    let answered = run.now;
+    run.key("y");
+    assert_eq!(run.link.script().answers.len(), 1, "the dialog answered");
+    let live = run.frame();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+    run.now = answered + Duration::from_millis(600);
+    let live = run.frame();
+    assert!(
+        !live.iter().any(|row| row.contains("space picks")),
+        "a key's repeat window after the answer: {live:#?}"
+    );
+    run.key("space");
+    run.key("enter");
+    assert!(run.sent(|op| matches!(op, Op::ProjectUpdate(_))).is_none());
+    let live = run.ready();
+    assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
+}
+
+/// The other way: the key that answered the mode holds the session's trust
+/// question that comes just after it a key's repeat window, as a dialog's
+/// answer would, so that the `enter` held down, or a `y` typed on, does
+/// not answer it past its grace.
+#[test]
+fn the_key_that_answered_a_step_holds_the_dialog_after_it() {
+    let mut run = Run::new(fake());
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
+    let chosen = run.now;
+    run.key("enter");
+    run.answer();
+    let (reload, _) = run
+        .sent(|op| matches!(op, Op::ConfigReload(_)))
+        .expect("the configuration read again");
+    run.give(
+        reload,
+        OpResult::ConfigReload(ConfigReloadResult::default()),
+    );
+    // The session's own trust question, as it opens.
+    let shown = chosen + Duration::from_millis(100);
+    ask(
+        &mut run.app,
+        &run.link,
+        9,
+        super::trust_request(Vec::new()),
+        shown,
+    );
+    let past_its_grace = shown + Duration::from_millis(350);
+    let _ = run.app.frame(past_its_grace);
+    run.app.drawn(past_its_grace);
+    key(
+        &mut run.app,
+        "y",
+        past_its_grace + Duration::from_millis(50),
+    );
+    assert!(
+        run.link.script().answers.is_empty(),
+        "a key's repeat window after the mode's"
+    );
+}
+
+/// A file's servers that come while the imports' step is ready start its
+/// grace again: a key read as they are drawn picks nothing it had not
+/// shown.
+#[test]
+fn rows_that_come_under_a_ready_step_start_its_grace_again() {
+    let mut run = Run::new(fake());
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let _ = run.ready();
+    run.key("down");
+    run.key("down");
+    run.key("space");
+    run.answer();
+    let live = run.frame();
+    assert!(live.iter().any(|row| row.contains("docs")), "{live:#?}");
+    assert!(
+        !live.iter().any(|row| row.contains("enter keeps")),
+        "its keys wait for its grace: {live:#?}"
+    );
+    run.key("down");
+    run.key("space");
+    let live = run.ready();
+    assert!(live.iter().any(|row| row.contains("☐ docs")), "{live:#?}");
+    assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
+}
+
+/// [`FakeSetup`], its providers and what other tools left held until the
+/// test opens their gates: a step is ready, reading, when they come.
+struct Held {
+    setup: FakeSetup,
+    providers: cineris_testkit::Gate,
+    found: cineris_testkit::Gate,
+}
+
+impl Setup for Held {
+    fn providers(&self) -> Result<Providers, String> {
+        assert!(self.providers.wait(Duration::from_secs(10)), "let go");
+        self.setup.providers()
+    }
+
+    fn store_key(&self, provider: &str, key: Secret) -> Result<(), String> {
+        self.setup.store_key(provider, key)
+    }
+
+    fn discover(&self) -> Found {
+        assert!(self.found.wait(Duration::from_secs(10)), "let go");
+        self.setup.discover()
+    }
+
+    fn read_servers(&self, path: &str) -> Result<Vec<McpServer>, String> {
+        self.setup.read_servers(path)
+    }
+
+    fn write_config(&self, chosen: &Chosen) -> Result<String, String> {
+        self.setup.write_config(chosen)
+    }
+}
+
+/// The providers, and what other tools left, that come while their step
+/// is ready, reading, start its grace again: a key read as they are drawn
+/// chooses nothing and moves nothing.
+#[test]
+fn the_providers_and_what_was_found_start_the_grace_again() {
+    let setup = fake();
+    let held = Held {
+        setup: setup.clone(),
+        providers: cineris_testkit::Gate::new(),
+        found: cineris_testkit::Gate::new(),
+    };
+    let (providers, found) = (held.providers.clone(), held.found.clone());
+    let mut run = Run::on(setup, Arc::new(held));
+    let live = run.ready();
+    assert!(
+        live.iter().any(|row| row.contains("s skips this step")),
+        "ready, reading: {live:#?}"
+    );
+    providers.open();
+    run.answer();
+    let live = run.frame();
+    assert!(
+        live.iter().any(|row| row.contains("ANTHROPIC_API_KEY")),
+        "{live:#?}"
+    );
+    assert!(
+        !live.iter().any(|row| row.contains("enter chooses")),
+        "its keys wait for its grace: {live:#?}"
+    );
+    run.key("enter");
+    let live = run.frame();
+    assert!(run.scrollback.is_empty(), "nothing chosen: {live:#?}");
+    assert!(
+        live.iter().any(|row| row == "◇ Provider  1 of 4"),
+        "{live:#?}"
+    );
+    let _ = run.ready();
+    run.key("enter");
+    let live = run.ready();
+    assert!(
+        live.iter().any(|row| row == "◇ Imports  2 of 4"),
+        "{live:#?}"
+    );
+    found.open();
+    run.answer();
+    let live = run.frame();
+    assert!(
+        live.iter().any(|row| row.contains("~/.claude.json")),
+        "{live:#?}"
+    );
+    assert!(
+        !live.iter().any(|row| row.contains("enter keeps")),
+        "its keys wait for its grace: {live:#?}"
+    );
+    run.key("down");
+    let live = run.ready();
+    assert!(
+        live.iter().any(|row| row.starts_with("  ◆ ☐ AGENTS.md")),
+        "the selection did not move: {live:#?}"
+    );
+}
+
+/// The imports' selection is the row it is: the first file's servers,
+/// which come after the person moved on to the second file, are inserted
+/// above it, and `space` still reads the second file, not the first
+/// server that came.
+#[test]
+fn a_files_answer_does_not_move_the_selection_onto_its_servers() {
+    let mut setup = fake();
+    setup.servers.insert(
+        "~/.cursor/mcp.json".to_owned(),
+        vec![server("search", "npx -y @example/search-mcp", None)],
+    );
+    let mut run = Run::new(setup);
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let _ = run.ready();
+    run.key("down");
+    run.key("down");
+    run.key("space");
+    // To the second file before the first's answer comes.
+    run.key("down");
+    run.answer();
+    let _ = run.ready();
+    run.key("space");
+    run.answer();
+    assert_eq!(
+        run.setup.log().read,
+        ["~/.claude.json", "~/.cursor/mcp.json"]
+    );
+    let live = run.ready();
+    assert!(live.iter().any(|row| row.contains("search")), "{live:#?}");
+    assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
+}
+
+/// In a window of 24 rows, a file of eight servers: every frame fits the
+/// window and keeps the step's title; the selected row is drawn whole as
+/// it moves down the list, a dim row saying what is above and below; and
+/// the last server, picked, is the one written.
+#[test]
+fn in_a_short_window_the_step_keeps_its_title_and_the_selected_row_whole() {
+    let mut setup = fake();
+    let command = |n: usize| {
+        format!("npx -y @example/server-{n}-mcp --root ~/src/project-{n} --port 70{n:02} --verbose")
+    };
+    setup.servers.insert(
+        "~/.claude.json".to_owned(),
+        (1..=8)
+            .map(|n| server(&format!("server-{n}"), &command(n), None))
+            .collect(),
+    );
+    let mut run = Run::with(setup, 24, None);
+    to_the_servers(&mut run);
+    for n in 1..=8 {
+        run.key("down");
+        let live = run.frame();
+        assert!(live.len() <= 24, "{} rows: {live:#?}", live.len());
+        assert!(
+            live.iter().any(|row| row == "◇ Imports  2 of 4"),
+            "{live:#?}"
+        );
+        let selected = live
+            .iter()
+            .position(|row| row.starts_with("  ◆"))
+            .expect("the selected row is drawn");
+        assert!(
+            live[selected].contains(&format!("server-{n} ")),
+            "{live:#?}"
+        );
+        assert!(
+            squash(&live[selected..].join(" ")).contains(&command(n)),
+            "server-{n}'s command whole: {live:#?}"
+        );
+        if n == 1 {
+            assert!(
+                live.iter().any(|row| row.contains("more below")),
+                "{live:#?}"
+            );
+        }
+        if n == 8 {
+            assert!(
+                live.iter().any(|row| row.contains("more above")),
+                "{live:#?}"
+            );
+        }
+    }
+    run.key("space");
+    run.key("enter");
+    let _ = run.ready();
+    run.key("enter");
+    run.answer();
+    assert_eq!(
+        run.written()[0]
+            .imports
+            .as_ref()
+            .map(|imported| imported.servers.clone()),
+        Some(vec![("~/.claude.json".to_owned(), "server-8".to_owned())])
+    );
+}
+
+/// A server whose command is taller than the window is cut, the hint row
+/// says a taller window shows it whole, and `space` does not pick it:
+/// what is accepted has been drawn whole.
+#[test]
+fn a_row_the_window_cannot_show_whole_is_not_accepted() {
+    let mut setup = fake();
+    setup.servers.get_mut("~/.claude.json").unwrap()[0].shown = (1..=60)
+        .map(|n| format!("--flag-{n}=value-{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut run = Run::with(setup, 16, None);
+    to_the_servers(&mut run);
+    run.key("down");
+    let live = run.frame();
+    assert!(live.len() <= 16, "{} rows: {live:#?}", live.len());
+    assert!(
+        live.iter()
+            .any(|row| row.contains("a taller window shows this row whole")),
+        "{live:#?}"
+    );
+    run.key("space");
+    let live = run.frame();
+    assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
 }

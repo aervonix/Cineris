@@ -97,9 +97,15 @@ fn sys_the_first_run_in_an_empty_home_reaches_a_working_session() {
     session.send(b"\r");
 
     phases.mark("the imports");
+    // Its keys once what other tools left has come: rows that come start
+    // its grace again.
     wait_all(
         &mut session,
-        &["Imports  2 of 4", "enter keeps what is picked"],
+        &[
+            "Imports  2 of 4",
+            "no other client's file was found",
+            "enter keeps what is picked",
+        ],
     );
     session.send(b"\r");
     phases.mark("the mode");

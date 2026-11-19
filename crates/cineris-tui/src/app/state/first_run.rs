@@ -19,6 +19,19 @@
 //! done, the rest take their defaults. `Ctrl+C` twice leaves the program,
 //! nothing written but what a finished step wrote.
 //!
+//! **Since the full review of the third pull request:** a step is shown,
+//! and takes keys, only when nothing else has the input box's place: never
+//! under a dialog or the viewer, and the last step, which comes once the
+//! session is open, only while the session is idle (no turn, no prompt on
+//! its way, the input box empty; [`App::first_run_idle`]); until then the
+//! input box is the input box. On its first frame a step takes what was
+//! typed just before it and the key that answered what came before it, as
+//! a dialog does; hidden and shown again, it starts as if new; its rows
+//! changed under it by the worker, its grace starts again. The imports'
+//! selection is the row it is, not its place. A step fits the window: the
+//! card goes first, then its rows are a window around the selected one,
+//! which is drawn whole, and a row is accepted only once it has been.
+//!
 //! **Nothing found is started, trusted or put in the prompt without a
 //! yes:** the imports' rows start unpicked, a skip picks nothing, and the
 //! commands' rows start unpicked too.
@@ -33,14 +46,14 @@ use cineris_protocol::project::{DetectedCommand, EntryKind, NewCommand, NewEntry
 use cineris_protocol::{ErrorData, SessionId};
 use cineris_term::{Event as TermEvent, Key, KeyCode, Line, Mods};
 
-use super::{App, Pending};
+use super::{App, LastKey, Pending};
 use crate::app::ready::{REPEAT, Readiness};
 use crate::app::setup::{
     Answer, Chosen, Found, Imported, Job, KeyStore, McpServer, Providers, Setup, Worker,
 };
 use crate::keys::{Action, Context};
 use crate::secret::{KEYS as KEY_KEYS, KeyEdit, KeyInput, key_box};
-use crate::view::setup::{Mark, Row, Step as StepView, card, step};
+use crate::view::setup::{Mark, Row, Step as StepView, card, fitted, step};
 use crate::view::{Hint, one_line};
 
 /// What an operation the first run sent is for.
@@ -74,6 +87,14 @@ pub(super) struct FirstRun {
     /// A frame has drawn the step's keys, which it shows once it is ready,
     /// as a dialog shows its answers: it takes keys only then.
     keys_drawn: bool,
+    /// The step's readiness has been seeded since it was last shown: with
+    /// the input nothing took and the key something took, as a dialog's is
+    /// on its first frame (the full review of the third pull request).
+    seeded: bool,
+    /// The last frame drew the selected row whole: a key that accepts it
+    /// (`enter` on a provider or a mode, `space` on a server or a command)
+    /// is taken only then (the full review of the third pull request).
+    whole: bool,
 }
 
 #[derive(Debug)]
@@ -104,7 +125,10 @@ enum Step {
 #[derive(Debug, Default)]
 struct Imports {
     found: Option<Found>,
-    selected: usize,
+    /// The row selected, by what it is: a file's answer inserts its
+    /// servers above the rows after it, and the selection stays where it
+    /// was (the full review of the third pull request).
+    selected: Pick,
     instructions: bool,
     skills: bool,
     files: Vec<File>,
@@ -120,8 +144,9 @@ struct File {
 }
 
 /// A row of the imports one can select.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 enum Pick {
+    #[default]
     Instructions,
     Skills,
     File(usize),
@@ -172,6 +197,8 @@ impl FirstRun {
             skipped: false,
             released: false,
             keys_drawn: false,
+            seeded: false,
+            whole: false,
         })
     }
 
@@ -193,9 +220,23 @@ impl FirstRun {
         self.keys_drawn && self.ready.ready(at)
     }
 
-    /// Whether a step is shown, in the input box's place.
-    fn shows(&self) -> bool {
-        !matches!(self.step, Step::Waiting | Step::Opened)
+    /// Not drawn in the last frame (under a dialog, the viewer or a turn):
+    /// shown again, it starts as if new, its grace from its next frame and
+    /// its readiness seeded again.
+    fn hidden(&mut self) {
+        self.ready.hide();
+        self.keys_drawn = false;
+        self.seeded = false;
+        self.whole = false;
+    }
+
+    /// Its rows changed under it, from the worker (the providers came, a
+    /// file was read): its grace starts again with its next frame, keeping
+    /// the quiet it owes input it did not take, so that a key meant for
+    /// what was there does not land on what came.
+    fn rows_changed(&mut self) {
+        self.ready.again();
+        self.keys_drawn = false;
     }
 
     /// Whether the set-up card is shown: until the session opens.
@@ -210,6 +251,8 @@ impl FirstRun {
     fn to(&mut self, step: Step) {
         self.step = step;
         self.keys_drawn = false;
+        self.seeded = false;
+        self.whole = false;
         self.ready = Readiness::default();
         if let Some(taken) = self.taken {
             self.ready.not_before(taken + REPEAT);
@@ -274,12 +317,71 @@ impl App {
         self.first_run.as_ref().is_some_and(FirstRun::holds_open)
     }
 
-    /// A frame was drawn at `at`: a step shown starts its grace.
+    /// Whether a step of the first run is what the input box's place
+    /// shows, and so what takes the keys: never under a dialog or the
+    /// viewer, and the last step, which comes once the session is open,
+    /// only while it is idle ([`App::first_run_idle`]). A step not shown
+    /// takes no key: the keys go where they would without it (the full
+    /// review of the third pull request).
+    pub(super) fn first_run_shown(&self) -> bool {
+        let Some(run) = &self.first_run else {
+            return false;
+        };
+        match run.step {
+            Step::Waiting | Step::Opened => false,
+            Step::Commands(_) => self.first_run_idle(),
+            _ => self.dialogs.is_empty() && !self.viewing(),
+        }
+    }
+
+    /// Whether the session is idle, for the last step, which is asked for
+    /// and shown only then: open, no turn running and no prompt on its
+    /// way, no dialog, not under the viewer, the full screen's search or a
+    /// rewind, no item of a panel being edited, and the input box empty
+    /// with no menu open. Until then the input box is the input box, and
+    /// a prompt sent from it is a prompt (the full review of the third
+    /// pull request: the step took the input box's place under a turn).
+    fn first_run_idle(&self) -> bool {
+        self.session.is_some()
+            && !self.opening
+            && self.running.is_none()
+            && !self.turn_runs
+            && self.held_prompts.is_empty()
+            && self.held_sent.is_none()
+            && self.dialogs.is_empty()
+            && !self.viewing()
+            && !self.screen_searching()
+            && !self.holds_prompts_for_rewind()
+            && self.item_edit.is_none()
+            && self.input.editor().is_empty()
+            && self.input.menu().is_none()
+            && self.input.search().is_none()
+    }
+
+    /// A frame was drawn at `at`. A step shown starts its grace, and on
+    /// its first frame takes what was typed just before it and the key
+    /// that answered what came before it, as a dialog does; a step not
+    /// shown starts again as if new (the full review of the third pull
+    /// request).
     pub(super) fn first_run_drawn(&mut self, at: Instant) {
-        if let Some(run) = self.first_run.as_mut()
-            && run.shows()
-        {
-            run.ready.drawn(at);
+        let shown = self.first_run_shown();
+        let (untaken, taken) = (self.untaken, self.taken);
+        let Some(run) = self.first_run.as_mut() else {
+            return;
+        };
+        if !shown {
+            run.hidden();
+            return;
+        }
+        run.ready.drawn(at);
+        if !run.seeded {
+            run.seeded = true;
+            if let Some(untaken) = untaken {
+                run.ready.typed(untaken);
+            }
+            if let Some(taken) = taken {
+                run.ready.not_before(taken + REPEAT);
+            }
         }
     }
 
@@ -290,11 +392,23 @@ impl App {
         }
     }
 
+    /// Input the first run's step did not take, read at `at`: what is
+    /// shown next, a dialog or a step, waits a quiet second after it, as
+    /// after typing into the editor.
+    fn first_run_untaken(&mut self, at: Instant) {
+        self.untaken = Some(at);
+        self.panel_untaken = Some(at);
+        self.last_key = Some(LastKey { typing: true });
+    }
+
     /// When the step shown is to be drawn with its keys: the end of its
     /// grace, until a frame has drawn them.
     pub(super) fn first_run_deadline(&self) -> Option<Instant> {
+        if !self.first_run_shown() {
+            return None;
+        }
         let run = self.first_run.as_ref()?;
-        if !run.shows() || run.keys_drawn {
+        if run.keys_drawn {
             return None;
         }
         run.ready.ready_at()
@@ -358,6 +472,7 @@ impl App {
                 run.providers = Some(providers);
                 if let Step::Provider { selected: at } = &mut run.step {
                     *at = selected;
+                    run.rows_changed();
                 }
             }
             Answer::Providers(Err(why)) => {
@@ -411,6 +526,7 @@ impl App {
                         })
                         .collect();
                     imports.found = Some(found);
+                    run.rows_changed();
                 }
             }
             Answer::Servers(path, read) => {
@@ -422,6 +538,7 @@ impl App {
                     file.servers = Some(read.map(|servers| {
                         servers.into_iter().map(|server| (server, false)).collect()
                     }));
+                    run.rows_changed();
                 }
             }
             Answer::Written(written) => {
@@ -510,9 +627,10 @@ impl App {
     }
 
     /// What follows by itself: the commands asked for once the session is
-    /// open and no dialog is up.
+    /// open and idle ([`App::first_run_idle`]), or, after `x`, the first
+    /// run's end once no dialog is up.
     fn first_run_next(&mut self) {
-        let Some(run) = self.first_run.as_mut() else {
+        let Some(run) = self.first_run.as_ref() else {
             return;
         };
         if !matches!(run.step, Step::Opened) || !self.dialogs.is_empty() || self.opening {
@@ -525,6 +643,15 @@ impl App {
             self.first_run_end();
             return;
         }
+        // Not under a turn, a dialog, the viewer or what is being typed:
+        // the step that follows takes the input box's place (the full
+        // review of the third pull request).
+        if !self.first_run_idle() {
+            return;
+        }
+        let Some(run) = self.first_run.as_mut() else {
+            return;
+        };
         run.step = Step::Waiting;
         let trusted = self.session.as_ref().is_some_and(|state| {
             state
@@ -596,12 +723,15 @@ impl App {
     }
 
     /// A terminal event while the first run shows a step: `None` when it
-    /// does not, and the event goes where it would otherwise.
+    /// does not ([`App::first_run_shown`]), and the event goes where it
+    /// would otherwise. What the step takes, and what it does not, count
+    /// for what comes after it as a dialog's keys do (the full review of
+    /// the third pull request).
     pub(super) fn first_run_event(&mut self, event: &TermEvent, at: Instant) -> Option<bool> {
-        let run = self.first_run.as_mut()?;
-        if !run.shows() {
+        if !self.first_run_shown() {
             return None;
         }
+        let run = self.first_run.as_mut()?;
         match event {
             TermEvent::Key(key) => {
                 // The global keys: `Ctrl+C` twice leaves, `Ctrl+L` draws
@@ -638,18 +768,25 @@ impl App {
                     if !*storing && input.key(*key) == KeyEdit::Changed {
                         *error = None;
                     }
+                    self.first_run_untaken(at);
                     return Some(true);
                 }
                 if !run.takes_keys(at) {
                     run.typed(at);
+                    self.first_run_untaken(at);
                     return Some(true);
                 }
+                // A key the step took: what comes next waits a key's
+                // repeat window after it.
+                self.taken = Some(at);
+                self.last_key = Some(LastKey { typing: false });
                 self.first_run_key(*key, at);
                 Some(true)
             }
             // A key held down never answers a step.
             TermEvent::Repeat(_) => {
                 run.typed(at);
+                self.first_run_untaken(at);
                 Some(true)
             }
             // A paste is the key's, or nobody's: it never answers a step.
@@ -667,6 +804,7 @@ impl App {
                     }
                     _ => run.typed(at),
                 }
+                self.first_run_untaken(at);
                 Some(true)
             }
             _ => None,
@@ -689,6 +827,10 @@ impl App {
         let editing = matches!(&run.step, Step::Commands(commands) if commands.editing.is_some());
         let typing_key = matches!(run.step, Step::Key { .. });
         let levels = run.levels();
+        // A row is accepted only once it has been drawn whole: in a window
+        // too small for it, `enter` on it and `space` on it do nothing (the
+        // full review of the third pull request).
+        let whole = run.whole;
         if letter == Some('x') && !typing_key && !editing {
             self.first_run_skip_all(at);
             return;
@@ -709,7 +851,10 @@ impl App {
                     run.worker.ask(Job::Discover);
                     run.to(Step::Imports(Imports::default()));
                     self.say("Provider: skipped. `cineris auth login <provider>` stores a key.");
-                } else if enter && let Some((provider, how)) = rows.get(*selected).cloned() {
+                } else if enter
+                    && whole
+                    && let Some((provider, how)) = rows.get(*selected).cloned()
+                {
                     run.taken = Some(at);
                     match how {
                         How::Type => run.to(Step::Key {
@@ -776,12 +921,22 @@ impl App {
             }
             Step::Imports(imports) => {
                 let picks = imports.picks();
+                // Where the selection is now: rows a file's answer inserted
+                // above it move it down, not onto them.
+                let place = picks
+                    .iter()
+                    .position(|pick| *pick == imports.selected)
+                    .unwrap_or(0);
                 if up {
-                    imports.selected = imports.selected.saturating_sub(1);
+                    if let Some(pick) = picks.get(place.saturating_sub(1)) {
+                        imports.selected = *pick;
+                    }
                 } else if down {
-                    imports.selected = (imports.selected + 1).min(picks.len().saturating_sub(1));
-                } else if space {
-                    match picks.get(imports.selected) {
+                    if let Some(pick) = picks.get((place + 1).min(picks.len().saturating_sub(1))) {
+                        imports.selected = *pick;
+                    }
+                } else if space && whole {
+                    match picks.get(place) {
                         Some(Pick::Instructions) => imports.instructions = !imports.instructions,
                         Some(Pick::Skills) => imports.skills = !imports.skills,
                         Some(Pick::File(index)) => {
@@ -841,7 +996,7 @@ impl App {
                     *selected = selected.saturating_sub(1);
                 } else if down {
                     *selected = (*selected + 1).min(levels.len().saturating_sub(1));
-                } else if enter || letter == Some('s') {
+                } else if (enter && whole) || letter == Some('s') {
                     run.taken = Some(at);
                     run.chosen.mode = if enter {
                         levels.get(*selected).map(|(level, _)| (*level).to_owned())
@@ -854,7 +1009,7 @@ impl App {
             Step::Commands(commands) => {
                 if let Some(text) = &mut commands.editing {
                     match key.code {
-                        KeyCode::Enter if key.mods.is_empty() => {
+                        KeyCode::Enter if key.mods.is_empty() && whole => {
                             let edited = text.trim().to_owned();
                             if let Some((row, picked)) = commands.rows.get_mut(commands.selected)
                                 && !edited.is_empty()
@@ -881,7 +1036,7 @@ impl App {
                 } else if down {
                     commands.selected =
                         (commands.selected + 1).min(commands.rows.len().saturating_sub(1));
-                } else if space {
+                } else if space && whole {
                     if let Some((_, picked)) = commands.rows.get_mut(commands.selected) {
                         *picked = !*picked;
                     }
@@ -958,28 +1113,24 @@ impl App {
     }
 
     /// The first run's rows in the input box's place, with the set-up card
-    /// above them until the session opens, and its keys under them. `None`
-    /// when it shows no step.
+    /// above them until the session opens, and its keys under them, in at
+    /// most the window's rows: the card goes first when they do not fit,
+    /// then the step is fitted ([`fitted`]). `None` when it shows no step.
     pub(super) fn first_run_bottom(&mut self, now: Instant, width: usize) -> Option<Vec<Line>> {
-        let run = self.first_run.as_mut()?;
-        if !run.shows() {
+        if !self.first_run_shown() {
             return None;
         }
+        let run = self.first_run.as_mut()?;
         // Its keys once it is ready, as a dialog's answers.
         let ready = run.ready.ready(now);
         run.keys_drawn = ready;
         let run = self.first_run.as_ref()?;
         let look = &self.look;
-        let mut lines = Vec::new();
-        if !self.kept.is_empty() {
-            lines.push(Line::new());
-        }
-        if run.card() {
-            lines.extend(card(&self.version, width, look));
-            lines.push(Line::new());
-        }
-        let (view, keys) = self.first_run_view(run);
-        lines.extend(step(&view, width, look));
+        let (view, mut keys) = self.first_run_view(run);
+        // Under the step: the key's box and what it says, or a blank; then
+        // the hint row.
+        let mut under = Vec::new();
+        under.push(Line::new());
         if let Step::Key {
             input,
             error,
@@ -987,18 +1138,50 @@ impl App {
             ..
         } = &run.step
         {
-            lines.push(Line::new());
-            lines.extend(key_box(input, width, look));
+            under.extend(key_box(input, width, look));
             let said = if *storing {
                 Some(format!("storing{}", look.glyphs.ellipsis))
             } else {
                 error.clone().or_else(|| input.refusal().map(str::to_owned))
             };
             if let Some(said) = said {
-                lines.extend(crate::secret::sentence(&said, width, look));
+                under.extend(crate::secret::sentence(&said, width, look));
             }
-        } else {
+        }
+        // The window's rows (the full review of the third pull request): a
+        // step taller than them lost its title and its sentence off the
+        // top, and its selected row could be off the screen.
+        let room = self.rows.max(1).saturating_sub(under.len() + 1);
+        let lead = usize::from(!self.kept.is_empty());
+        let set_up = if run.card() {
+            let mut lines = card(&self.version, width, look);
             lines.push(Line::new());
+            lines
+        } else {
+            Vec::new()
+        };
+        let all = step(&view, width, look);
+        let mut lines = Vec::new();
+        let whole = if lead + set_up.len() + all.len() <= room {
+            lines.extend((lead == 1).then(Line::new));
+            lines.extend(set_up);
+            lines.extend(all);
+            true
+        } else if lead + all.len() <= room {
+            lines.extend((lead == 1).then(Line::new));
+            lines.extend(all);
+            true
+        } else if all.len() <= room {
+            lines.extend(all);
+            true
+        } else {
+            let fitted = fitted(&view, width, look, room);
+            lines.extend(fitted.lines);
+            fitted.whole
+        };
+        lines.extend(under);
+        if !whole {
+            keys.insert(0, "a taller window shows this row whole".to_owned());
         }
         let hint = if self.input.quit_armed() {
             Hint::QuitArmed
@@ -1008,6 +1191,9 @@ impl App {
             Hint::Empty
         };
         lines.push(self.hint_row(hint, now));
+        if let Some(run) = self.first_run.as_mut() {
+            run.whole = whole;
+        }
         Some(lines)
     }
 
@@ -1110,7 +1296,11 @@ impl App {
                     ..StepView::default()
                 };
                 let picks = imports.picks();
-                let selected = picks.get(imports.selected).copied();
+                // As the keys find it: the first row when it is gone.
+                let selected = picks
+                    .contains(&imports.selected)
+                    .then_some(imports.selected)
+                    .or_else(|| picks.first().copied());
                 let mut rows = vec![Row::heading("Instructions")];
                 let mark = |at: Pick, rows: &Vec<Row>| (selected == Some(at)).then_some(rows.len());
                 view.selected = mark(Pick::Instructions, &rows);
