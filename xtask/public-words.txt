@@ -76,6 +76,7 @@ history docs/steps/27/ -- written before the rule
 history docs/steps/31/ -- written before the rule
 history docs/steps/33/ -- written before the rule
 history docs/steps/flaky-test-fixes/ -- written before the rule
+history docs/steps/old-alias-labels/ -- written before the rule
 history docs/steps/rename-cineris/ -- written before the rule
 history docs/steps/shell-env-fixes/ -- written before the rule
 history docs/steps/step-12-redecide/ -- written before the rule
