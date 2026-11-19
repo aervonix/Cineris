@@ -54,7 +54,7 @@ use toml::{Table, Value};
 use crate::document;
 use crate::import::{ImportedServer, Launch, MAX_SERVERS, settable_name};
 use crate::layer::LayerKind;
-use crate::schema::CONFIG_VERSION;
+use crate::schema::{CONFIG_VERSION, table_of};
 use crate::validate::{Checked, validate};
 
 /// What the first run chose. `None` for a step skipped: its comment then
@@ -364,19 +364,21 @@ fn server_table(server: &ImportedServer) -> Table {
         }
     }
     if !server.env.is_empty() {
-        let env = server
-            .env
-            .iter()
-            .map(|name| (name.clone(), variable(name.clone())))
-            .collect();
+        let env = table_of(
+            server
+                .env
+                .iter()
+                .map(|name| (name.clone(), variable(name.clone()))),
+        );
         table.insert("env".to_owned(), Value::Table(env));
     }
     if !server.headers.is_empty() {
-        let headers = server
-            .headers
-            .iter()
-            .map(|name| (name.clone(), variable(server.header_variable(name))))
-            .collect();
+        let headers = table_of(
+            server
+                .headers
+                .iter()
+                .map(|name| (name.clone(), variable(server.header_variable(name)))),
+        );
         table.insert("headers".to_owned(), Value::Table(headers));
     }
     table
