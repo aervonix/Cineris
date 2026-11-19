@@ -592,11 +592,15 @@ pub(crate) fn job_result(
     }
     if let Some(path) = &kept.job_ab {
         reported = true;
-        let _ = writeln!(
-            result.text,
-            "{}",
-            crate::job_ab::render(&crate::job_ab::from_json(&read_text(path)?)?)
-        );
+        let record = crate::job_ab::from_json(&read_text(path)?)?;
+        let _ = writeln!(result.text, "{}", crate::job_ab::render(&record));
+        // Stopped by its minutes before each order had a whole round: what
+        // it printed is of one order.
+        if record.stopped.is_some()
+            && let Some(said) = crate::job_ab::one_order_only(&record)
+        {
+            result.problems.push(format!("`{name}`: {said}"));
+        }
         for ((round, side), path) in crate::job_ab::kept_reports(&files) {
             failures_in(
                 &read_text(&path)?,
@@ -1462,6 +1466,44 @@ mod tests {
             "the first, trimmed"
         );
         assert_eq!(super::command_of(&strings(&["$ cargo nextest run"])), None);
+    }
+
+    #[test]
+    fn a_job_ab_stopped_with_one_order_measured_is_a_problem_of_the_run() {
+        use crate::ab::Which;
+        use crate::job_ab::{Record, SideRound, to_json};
+        let dir = scratch("job-ab-one-order");
+        let side = |which| SideRound {
+            round: 1,
+            which,
+            phases: Vec::new(),
+            error: None,
+        };
+        let record = Record {
+            label: "main".to_owned(),
+            rounds: 4,
+            sides: vec![side(Which::Base), side(Which::Head)],
+            stopped: Some("Stopped before round 2 of 4".to_owned()),
+        };
+        keep(&dir, "work/repo/target/ab/job-ab.json", &to_json(&record));
+        let result = job_result(
+            5,
+            &job("try-windows", "failure"),
+            Os::Windows,
+            Some(&dir),
+            &|| Err("not asked".to_owned()),
+            &request(),
+        )
+        .unwrap();
+        assert!(
+            result
+                .problems
+                .iter()
+                .any(|problem| problem.contains("no whole round with the head first")),
+            "{:?}",
+            result.problems
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
