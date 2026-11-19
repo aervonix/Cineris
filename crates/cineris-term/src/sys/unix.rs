@@ -468,6 +468,12 @@ fn guard_just_ended() -> bool {
 }
 
 /// Whether `action` is the guard's do-nothing handler.
+///
+/// It tells the handler by its address, so it relies on distinct functions
+/// having distinct addresses: a linker that folds identical functions
+/// (`--icf=all`) would give this handler and `hangup_passed_over`, both
+/// empty, one address, and no test would notice, since tests are never
+/// linked that way (`docs/measurements/binary-size.md`, "The size step").
 fn is_passing_over(action: &libc::sigaction) -> bool {
     action.sa_sigaction == on_interrupt_passed_over as *const () as libc::sighandler_t
 }
