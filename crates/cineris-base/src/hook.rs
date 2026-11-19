@@ -228,6 +228,16 @@ pub fn refusal(test: &str, program: &str) -> String {
 #[inline(always)]
 pub const fn probed(_program: &std::ffi::OsStr) {}
 
+/// Marks that `program` is about to be started, on the thread that
+/// decides to start it, where the start itself happens on a thread of its
+/// own (the shell's version probe): with the `test-hooks` feature, under
+/// nextest, a test not named `sys_…` or `perf_…` is stopped here, as
+/// [`started`] stops it, and not by a race with that thread. Without the
+/// feature this is nothing at all.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn starting(_program: &std::ffi::OsStr) {}
+
 /// What a line of [`probed`] starts with, before the program's name.
 pub const PROBED: &str = "probe>";
 
@@ -236,7 +246,7 @@ pub const PROBED: &str = "probe>";
 pub const STARTS: &str = "CINERIS_TESTKIT_STARTS";
 
 #[cfg(feature = "test-hooks")]
-pub use starts::{launched, probed, program_name, started};
+pub use starts::{launched, probed, program_name, started, starting};
 
 #[cfg(feature = "test-hooks")]
 pub use children::{
@@ -437,12 +447,18 @@ mod starts {
         write(&prefix, program);
     }
 
+    /// See [`super`]'s description without the feature.
+    pub fn starting(program: &OsStr) {
+        super::children::refuse_outside_a_system_test(program);
+    }
+
     /// As [`started`], for a start that asks `program` its version: the
     /// line's program is `probe>NAME`.
     pub fn probed(program: &OsStr) {
-        // Not refused: the harness asks a shell its version on a thread
-        // of its own, which a test may end before or after the start, and
-        // a refusal there would stop the test or not by that race.
+        // Not refused here: the harness asks a shell its version on a
+        // thread of its own, which a test may end before or after the
+        // start; it is refused where the harness decides to ask
+        // ([`starting`]), on the thread that decides.
         write(super::PROBED, program);
     }
 

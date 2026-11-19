@@ -9,9 +9,13 @@
 //! means something else on Windows (`docs/conpty.md`). The test kit's
 //! `Session::send_key` sends each key as the terminal would on each system.
 //!
-//! The rule reads every literal handed to a `.send(` call in the crates'
-//! Rust files, decodes its escapes, and fails on each escape sequence in it
-//! that is a key: a lone Escape, Alt with a character (`ESC x`), `SS3 X`
+//! The rule reads the crates' test code (a file under a `tests` folder, or a
+//! test module in a file of its own), and in it each call of a sender:
+//! `.send(`, `type_text(`, or a function of the file whose body calls
+//! `.send(`. It reads the call's literals, the file's
+//! bindings of a literal (`const`, `static`, `let`) it names, and its array
+//! literals of bytes, decodes them, and fails on each escape sequence that
+//! is a key: a lone Escape, Alt with a character (`ESC x`), `SS3 X`
 //! and a `CSI` sequence that ends as a key does. What is not a key passes:
 //! the mouse's SGR reports (`CSI < … M`), bracketed paste's marks
 //! (`CSI 200 ~`, `CSI 201 ~`), focus reports (`CSI I`, `CSI O`), and a
@@ -20,7 +24,10 @@
 //! raw bytes, says so on the line or the line before: `// raw key: WHY`.
 //!
 //! It cannot see a sequence built at run time (`format!`), which is how a
-//! test writes the win32 records it checks; that is a test of the decoder.
+//! test writes the win32 records it checks (a test of the decoder); a
+//! binding or a helper of another file; or a test module written inside a
+//! product file. A cursor position answer for the first row (`CSI 1 ; m R`)
+//! has the bytes of F3 with a modifier, and is taken for the key.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -79,9 +86,14 @@ fn literal_bytes(literal: &str) -> Option<Vec<u8>> {
     })
 }
 
-/// A byte a token stands for in an array: `0x1b`, `27`, `27u8`, `b'['`.
+/// A byte a token stands for in an array: `0x1b`, `27`, `27u8`, `b'['`,
+/// `'\x1b'` (before `as u8`).
 fn byte_of(token: &str) -> Option<u8> {
-    if let Some(inner) = token.strip_prefix("b'").and_then(|t| t.strip_suffix('\'')) {
+    if let Some(inner) = token
+        .strip_prefix("b'")
+        .or_else(|| token.strip_prefix('\''))
+        .and_then(|t| t.strip_suffix('\''))
+    {
         let bytes = unescape(inner);
         return (bytes.len() == 1).then(|| bytes[0]);
     }
@@ -95,22 +107,56 @@ fn byte_of(token: &str) -> Option<u8> {
     }
 }
 
-/// The file's constants whose value is a literal: `const UP: &[u8] =
-/// b"\x1b[A";`, by name.
-fn constants<'a>(source: &'a str, all: &[lex::Token]) -> HashMap<&'a str, Vec<u8>> {
+/// Where the bracket that opens at `open` closes, if it does.
+fn closing(source: &str, all: &[lex::Token], open: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (at, token) in all.iter().enumerate().skip(open) {
+        match token.text(source) {
+            "(" | "[" | "{" => depth += 1,
+            ")" | "]" | "}" => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(at);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// The file's names whose value is a literal, by name: `const UP: &[u8;
+/// 3] = b"\x1b[A";`, `static`, and `let up = b"\x1b[A";` (a name of any
+/// function of the file: the rule does not tell their scopes apart).
+fn bindings<'a>(source: &'a str, all: &[lex::Token]) -> HashMap<&'a str, Vec<u8>> {
     let text = |index: usize| all[index].text(source);
     let mut found = HashMap::new();
     for index in 0..all.len().saturating_sub(2) {
-        if !matches!(text(index), "const" | "static") {
+        if !matches!(text(index), "const" | "static" | "let") {
             continue;
         }
-        let name = text(index + 1);
-        let Some(equals) = (index..all.len())
-            .take_while(|&at| text(at) != ";")
-            .find(|&at| text(at) == "=")
-        else {
-            continue;
-        };
+        let mut name_at = index + 1;
+        if text(name_at) == "mut" {
+            name_at += 1;
+        }
+        let name = text(name_at);
+        // The `=` at the binding's own depth: a type's `[u8; 3]` holds a
+        // `;` that does not end the binding.
+        let mut depth = 0usize;
+        let mut equals = None;
+        for at in name_at + 1..all.len() {
+            match text(at) {
+                "(" | "[" | "{" | "<" => depth += 1,
+                ")" | "]" | "}" | ">" => depth = depth.saturating_sub(1),
+                "=" if depth == 0 => {
+                    equals = Some(at);
+                    break;
+                }
+                ";" if depth == 0 => break,
+                _ => {}
+            }
+        }
+        let Some(equals) = equals else { continue };
         let value: Vec<&str> = (equals + 1..all.len())
             .map(text)
             .take_while(|token| *token != ";")
@@ -124,67 +170,78 @@ fn constants<'a>(source: &'a str, all: &[lex::Token]) -> HashMap<&'a str, Vec<u8
     found
 }
 
+/// The file's own helpers that type into a pseudo-terminal: each function
+/// whose body calls `.send(`, by name. Their literal arguments are read as
+/// a sender's are: a helper that sends its text a character at a time
+/// (`type_timed`) types an escape sequence all the same.
+fn local_senders<'a>(source: &'a str, all: &[lex::Token]) -> Vec<&'a str> {
+    let text = |index: usize| all[index].text(source);
+    let mut found = Vec::new();
+    for index in 0..all.len().saturating_sub(2) {
+        if text(index) != "fn" || text(index + 2) != "(" {
+            continue;
+        }
+        let Some(params_end) = closing(source, all, index + 2) else {
+            continue;
+        };
+        let Some(body) = (params_end..all.len()).find(|&at| matches!(text(at), "{" | ";")) else {
+            continue;
+        };
+        if text(body) == ";" {
+            continue;
+        }
+        let Some(body_end) = closing(source, all, body) else {
+            continue;
+        };
+        let sends = (body..body_end)
+            .any(|at| text(at) == "." && text(at + 1) == "send" && text(at + 2) == "(");
+        if sends {
+            found.push(text(index + 1));
+        }
+    }
+    found
+}
+
 fn check_file(file: &str, source: &str) -> Vec<Violation> {
     let all = lex::tokens(source);
     let text = |index: usize| all[index].text(source);
     let lines: Vec<&str> = source.lines().collect();
-    let constants = constants(source, &all);
+    let bindings = bindings(source, &all);
+    let mut senders: Vec<&str> = SENDERS.to_vec();
+    senders.extend(local_senders(source, &all));
     let mut violations = Vec::new();
     for index in 0..all.len().saturating_sub(2) {
-        // A call of a sender: `.send(`, or `type_text(` not being defined.
+        // A call of a sender: `.send(`, or a helper not being defined.
         let before = index.checked_sub(1).map(text);
-        if !SENDERS.contains(&text(index))
+        if !senders.contains(&text(index))
             || text(index + 1) != "("
             || before == Some("fn")
             || (text(index) == "send" && before != Some("."))
         {
             continue;
         }
-        // The arguments: each literal (`b"…"`, `&b"…"`, `"…".as_bytes()`),
-        // each constant of the file by its name, and an array of bytes
-        // (`&[0x1b, b'[', b'A']`), all together.
-        let mut at = index + 2;
-        let mut depth = 0usize;
-        let mut keys = Vec::new();
-        let mut array: Vec<u8> = Vec::new();
-        while at < all.len() {
-            let token = text(at);
-            match token {
-                "(" | "[" | "{" => depth += 1,
-                ")" | "]" | "}" if depth == 0 => break,
-                ")" | "]" | "}" => depth -= 1,
-                "," | "&" | "." | ":" => {}
-                _ => {
-                    if let Some(bytes) =
-                        literal_bytes(token).or_else(|| constants.get(token).cloned())
-                    {
-                        keys.extend(keys_in(&bytes));
-                    } else if depth > 0
-                        && let Some(byte) = byte_of(token)
-                    {
-                        array.push(byte);
-                    }
-                }
-            }
-            at += 1;
-        }
-        keys.extend(keys_in(&array));
+        let Some(end) = closing(source, &all, index + 1) else {
+            continue;
+        };
+        let keys = keys_of_arguments(source, &all, index + 2..end, &bindings);
         if keys.is_empty() {
             continue;
         }
-        let line = lex::line_of(source, all[index].start);
-        let marked = |line: usize| {
-            line.checked_sub(1)
-                .and_then(|at| lines.get(at))
+        // A mark on the line before the call, or on any line of it.
+        let first = lex::line_of(source, all[index].start);
+        let last = lex::line_of(source, all[end].start);
+        let marked = (first.saturating_sub(1).max(1)..=last).any(|line| {
+            lines
+                .get(line - 1)
                 .and_then(|text| text.split_once(ALLOW))
                 .is_some_and(|(_, reason)| !reason.trim().is_empty())
-        };
-        if marked(line) || marked(line - 1) {
+        });
+        if marked {
             continue;
         }
         violations.push(Violation::new(
             file,
-            Some(line),
+            Some(first),
             format!(
                 "a pty test sends {} as raw bytes. Under Windows' win32 input mode a \
                  pseudo-console misreads or drops a plain sequence: send each key with \
@@ -197,6 +254,57 @@ fn check_file(file: &str, source: &str) -> Vec<Violation> {
         ));
     }
     violations
+}
+
+/// The keys in a call's arguments, the tokens `range`: each literal
+/// (`b"…"`, `&b"…"`, `"…".as_bytes()`), each binding of the file by its
+/// name, and each array literal of bytes (`&[0x1b, b'[', b'A']`). An index
+/// (`[..27]`, a `[` after a name or a bracket) and a repeat (`[b'x'; 27]`)
+/// are not arrays of bytes.
+fn keys_of_arguments(
+    source: &str,
+    all: &[lex::Token],
+    range: std::ops::Range<usize>,
+    bindings: &HashMap<&str, Vec<u8>>,
+) -> Vec<String> {
+    let text = |index: usize| all[index].text(source);
+    let mut keys = Vec::new();
+    // One frame for each open bracket: the bytes of an array literal, or
+    // nothing.
+    let mut frames: Vec<Option<Vec<u8>>> = Vec::new();
+    for at in range {
+        let token = text(at);
+        match token {
+            "[" => {
+                let array = at
+                    .checked_sub(1)
+                    .is_some_and(|before| matches!(text(before), "&" | "(" | "," | "["));
+                frames.push(array.then(Vec::new));
+            }
+            "(" | "{" => frames.push(None),
+            ")" | "]" | "}" => {
+                if let Some(Some(bytes)) = frames.pop() {
+                    keys.extend(keys_in(&bytes));
+                }
+            }
+            ";" => {
+                // A repeat: `[b'x'; 27]` is no array of the bytes in it.
+                if let Some(frame) = frames.last_mut() {
+                    *frame = None;
+                }
+            }
+            _ => {
+                if let Some(bytes) = literal_bytes(token).or_else(|| bindings.get(token).cloned()) {
+                    keys.extend(keys_in(&bytes));
+                } else if let Some(Some(bytes)) = frames.last_mut()
+                    && let Some(byte) = byte_of(token)
+                {
+                    bytes.push(byte);
+                }
+            }
+        }
+    }
+    keys
 }
 
 /// The bytes a string literal's text stands for: its escapes decoded.
@@ -377,6 +485,10 @@ mod tests {
             r#"session.send(b"\x1b]0;t\x07\x1b[A");"#,
             r#"session.send(b"\x1bO");"#,
             r#"session.send(b"\x1bP");"#,
+            "const UP3: &[u8; 3] = b\"\\x1b[A\";\nsession.send(UP3);",
+            "let up = b\"\\x1b[A\";\nsession.send(up);",
+            "session.send(&['\\x1b' as u8, b'[', b'A']);",
+            "fn type_timed(session: &mut Session, word: &str) { for c in word.chars() { session.send(c.to_string().as_bytes()); } }\ntype_timed(session, \"\\x1b[A\");",
         ] {
             let found = found(planted);
             assert_eq!(found.len(), 1, "{planted}: {found:?}");
@@ -402,6 +514,27 @@ mod tests {
             .is_empty()
         );
         assert!(found(r#"let ok = send(1); let x = "\x1b[A";"#).is_empty());
+    }
+
+    /// A number in a call that is no array of bytes is not read as one: a
+    /// slice's end, a repeat's count, a channel's message.
+    #[test]
+    fn a_number_that_is_not_an_array_of_bytes_passes() {
+        for passes in [
+            r#"session.send(&b"abcdef"[..27]);"#,
+            "session.send(&[b'x'; 27]);",
+            "tx.send(Event::Byte(27));",
+            "tx.send((27, 65));",
+        ] {
+            assert!(found(passes).is_empty(), "{passes}: {:?}", found(passes));
+        }
+    }
+
+    /// A mark on any line of a call that spans several passes it.
+    #[test]
+    fn a_mark_inside_a_long_call_passes_it() {
+        let source = "session.send(\n    // raw key: a test of the decoder\n    b\"\\x1b[A\",\n);";
+        assert!(found(source).is_empty(), "{:?}", found(source));
     }
 
     /// The mouse, bracketed paste, focus and a terminal's answers are not

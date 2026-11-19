@@ -44,7 +44,7 @@ Built on `origin/main` at 6806291f.
 - `cineris_base::hook::started`, which every place that starts a process calls, stops a test whose name's last segment starts with neither `sys_` nor `perf_`. It works under the `test-hooks` feature, which every test build has, and under nextest. The message goes to the test's standard error, then the process aborts: an error would be a failed command, which a test of a turn can pass with. The message is in [testing-and-ci.md](../../../testing-and-ci.md#test-tiers).
 - **First built in `cineris-tools`' runner alone**, before it starts a command. On the maintainers' answer it moved into `started`, once that was measured to stop no test either: it now covers the harness's git, the pseudo-terminal and the test kit's children too.
 - **On `main` it stops no test:** the workspace's 4,932 tests passed with it on Linux. A planted test not named `sys_` was stopped, with the message, and a planted `sys_` test was not. `hook::refusal_tests::sys_a_test_not_named_sys_is_stopped_at_its_first_start` checks that end to end.
-- **A version probe is not refused** (`hook::probed`): the harness starts it on a thread of its own, which a test may end before or after it, and a refusal there would make the test pass or fail by that race (the review's finding 6).
+- **A version probe is refused where the harness decides to ask** (`hook::starting`, in `cineris-core`'s assembly of a shell), on the thread that decides; not on the probe's own thread, which a test may end before or after the probe starts (the first review's finding 6, and the second's finding 3).
 
 ### The timeout report names the test's own children
 
@@ -81,6 +81,22 @@ One independent review of the whole diff, then one of the changes since. Each fi
 | 5 | The records still described the runner's refusal | Confirmed | Rewritten |
 | 6 | A version probe on a thread of its own could stop a test, or not, by a race | Plausible | The probe is not refused, and the docs say why |
 | 7 | No test reached the marks at their real call sites; several branches had no break | Confirmed | The sandbox and git tests check them; 19 breaks added |
+
+The second round, on the fixes:
+
+| # | Finding | Verdict | Fix, and its test or break |
+|---|---|---|---|
+| 1 | Every byte-sized number inside a call was read as a byte of an array: a slice's end, a repeat's count, a channel's message | Confirmed | Only an array literal (after `&`, `(`, `,` or `[`) holds bytes, and a repeat is none. Test `a_number_that_is_not_an_array_of_bytes_passes`; breaks `pty-keys-an-index-read-as-bytes`, `-a-repeat-read-as-bytes` |
+| 2 | A constant typed `&[u8; 3]`, a `let` binding, `'\x1b' as u8` and the `type_timed` helper passed | Confirmed | All read: a binding's `=` is found at its own depth, `let` is read, a char literal is a byte, and any function of the file whose body calls `.send(` is a sender. Tests in `a_raw_key_sent_to_a_pty_fails`; break `pty-keys-local-helper-not-a-sender` |
+| 3 | Version probes were exempt everywhere, also where they run on the calling thread | Plausible | Refused where the harness decides to probe (`hook::starting`), on that thread |
+| 4 | The plural made "each test locks its folder" a hit, and "tx and rx copy" was one | Confirmed | An `exact` kind of entry takes no plural; the lock words use it, and the copy entry is gone. Break `public-words-exact-word-takes-a-plural` |
+| 5 | A phrase across two lines of a quote or a workflow's comment was missed | Confirmed | Each line's leading `>` or `#` is left out. Break `public-words-quote-mark-kept` |
+| 6 | A plain entry was held only at the root, a wildcard one at any depth | Confirmed | Every entry is read as git reads a pattern. Test `a_plain_entry_names_a_tracked_file_at_any_depth` |
+| 7 | A folder entry without its `/` got a misleading message; a `!` took a file back from under an ignored folder | Confirmed | The message says to write the `/`; a file under an ignored folder stays ignored, as in git. `**` is still not read, and is said so. Test `a_file_under_an_ignored_folder_stays_ignored`; break `worktree-include-negation-under-an-ignored-folder` |
+| 8 | A `// raw key:` mark inside a call over several lines was not seen | Confirmed | A mark on any line of the call counts. Test `a_mark_inside_a_long_call_passes_it` |
+| 9 | The docs and the module's comment described the rule before the fixes | Confirmed | Rewritten |
+| 10 | The lines-not-joined break stopped the rule reading anything at all | Confirmed | It now ends the paragraph after each line |
+| 11 | A cursor position answer for the first row is taken for F3 with a modifier (from before) | Confirmed | Same bytes; said in the docs, and a test that answers one marks itself |
 
 The review also checked, and found right:
 - the key encodings against xterm's modifier parameter and the win32 record format;

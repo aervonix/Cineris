@@ -1774,6 +1774,10 @@ fn find_shell(
         (true, Some((file, state)), Some(stamp)) => match shell_cache::lookup(&file, &stamp) {
             Some(version) => shell = shell.with_version(version),
             None => {
+                // Under the test hooks, a test that may not start a process
+                // is stopped here, where the probe is decided, and not by a
+                // race with the probe's thread.
+                cineris_base::hook::starting(shell.program().as_os_str());
                 let mut asked = shell.clone();
                 let clock = Arc::clone(&inner.options.clock);
                 let probe = std::thread::Builder::new()
@@ -1800,7 +1804,12 @@ fn find_shell(
         },
         // Nowhere to keep it, a shell that cannot be looked at, or one that
         // is not asked (asking it starts nothing).
-        _ => shell.probe_version(std::time::Duration::from_secs(2)),
+        _ => {
+            if asks {
+                cineris_base::hook::starting(shell.program().as_os_str());
+            }
+            shell.probe_version(std::time::Duration::from_secs(2));
+        }
     }
     inner
         .shells
