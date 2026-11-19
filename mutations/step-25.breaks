@@ -3527,8 +3527,8 @@ caught-by:
 rule: A credential in an address's fragment is masked as one in its query: `#access_token=…` (the final review).
 file: crates/cineris-config/src/import.rs
 in: masked_query
-find: let (fields, masked) = masked_fields(part, percent, nested);
-replace: let (fields, masked) = if mark == '#' { (part.to_owned(), Masked::No) } else { masked_fields(part, percent, nested) };
+find: let (fields, masked) = masked_fields(part, percent, depth);
+replace: let (fields, masked) = if mark == '#' { (part.to_owned(), Masked::No) } else { masked_fields(part, percent, depth) };
 caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
@@ -3676,8 +3676,8 @@ caught-by:
 rule: `%` is a token's only in a server's own address, not in an address inside an argument, which `cmd /c` expands (N-L2).
 file: crates/cineris-config/src/import.rs
 in: launch_view
-find: masked_query(arg, false, false)
-replace: masked_query(arg, true, false)
+find: masked_query(arg, false, 0)
+replace: masked_query(arg, true, 0)
 caught-by:
     cineris-config import::tests::a_percent_is_a_tokens_only_in_an_address
 
@@ -3691,13 +3691,32 @@ caught-by:
     cineris-config import::tests::a_semicolon_in_a_value_stays_there_and_an_address_in_a_value_is_masked
 
 [break] an-address-in-a-value-is-not-looked-into
-rule: A field whose value is an address has that address's fields masked too, once: `?next=…?api_key=…` (N-L3).
+rule: A field whose value is an address has that address's fields masked too, to a depth of three: `?next=…?api_key=…` (N-L3).
 file: crates/cineris-config/src/import.rs
 in: masked_fields
-find: Some((name, value)) if !nested && value.contains(['?', '#']) =>
+find: Some((name, value)) if value.contains(['?', '#']) =>
 replace: Some((name, value)) if false && value.contains(['?', '#']) =>
 caught-by:
     cineris-config import::tests::a_semicolon_in_a_value_stays_there_and_an_address_in_a_value_is_masked
+    cineris-config import::tests::an_address_too_deep_to_look_into_is_masked_whole_and_refused
+
+[break] a-too-deep-address-is-imported
+rule: An address inside a field's value deeper than three refuses its server (the session's own read of the narrow check's fixes).
+file: crates/cineris-config/src/import.rs
+in: masked_fields
+find: hidden = hidden.and(Masked::Loose);
+replace: hidden = hidden.and(Masked::No);
+caught-by:
+    cineris-config import::tests::an_address_too_deep_to_look_into_is_masked_whole_and_refused
+
+[break] an-address-is-looked-into-once
+rule: An address inside a field's value is looked into to a depth of three, not once: a second address's credential is masked (the session's own read of the narrow check's fixes).
+file: crates/cineris-config/src/import.rs
+in: masked_fields
+find: if depth < ADDRESS_DEPTH {
+replace: if depth < 1 {
+caught-by:
+    cineris-config import::tests::an_address_too_deep_to_look_into_is_masked_whole_and_refused
 
 [break] white-space-at-a-break-ends-its-piece
 rule: White space that would end a label's piece at a break begins the next one, where it shows (N-L4).
