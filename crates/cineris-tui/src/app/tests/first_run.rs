@@ -1693,6 +1693,8 @@ fn an_edit_kept_picks_only_a_change_and_holds_the_next_enter() {
     run.key("e");
     type_text(&mut run.app, " --release", run.now);
     run.key("enter");
+    // A frame between: only the repeat window holds the second.
+    let _ = run.frame();
     run.key("enter");
     assert!(
         run.sent(|op| matches!(op, Op::ProjectUpdate(_) | Op::TurnStart(_)))

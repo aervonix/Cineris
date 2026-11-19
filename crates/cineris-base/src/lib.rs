@@ -5,7 +5,7 @@
 //! |---|---|
 //! | [`error`] | [`ErrorKind`], the closed set that drives retries, exit codes and the protocol's error kind, and [`Classified`], by which an error says which kind it is. |
 //! | [`secret`] | [`Secret`], a credential that cannot be printed or serialised. |
-//! | [`secret_buf`] | [`SecretBuf`], a key being typed: fixed capacity, written over with zeros when dropped (since step 25). |
+//! | [`secret_buf`] | [`SecretBuf`], a key being typed: fixed capacity, written over with zeros when dropped, as a best effort (since step 25). |
 //! | [`time`], [`clock`] | [`UtcTime`] and its RFC 3339 form; the [`Clock`] trait, the system clock and the [`FakeClock`]. |
 //! | [`rng`] | The [`Rng`] trait, the system generator and the [`SeededRng`]. |
 //! | [`id`] | [`IdGenerator`] for unique, time-ordered ids and [`IdCounter`] for counted ones. |
