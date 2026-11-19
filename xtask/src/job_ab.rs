@@ -37,9 +37,10 @@ side goes first as often as the other) in alternating order on this machine,
 and each phase's median on each side and its change paired by round. Each
 side's round:
 
-  clean   its build of the tests (target/ci and target/tmp) is removed: in the
-          first round always, so that both sides start cold, and in the
-          others unless --keep-build is given
+  clean   its build of the tests (target/ci and target/tmp) is removed: in
+          every round, or with --keep-build (and --count 4 or more) in the
+          first two alone, one in each order; then a cold round's phases are
+          named apart from a warm one's (`build (cold)`, `build (warm)`)
   setup   FILE, a script in this tree, run by bash (a .ps1 by pwsh) in the
           side's tree: --setup-base for the base, --setup-head for the head.
           It may write KEY=VALUE lines to the file $CINERIS_AB_ENV, which are
@@ -51,8 +52,9 @@ side's round:
   tier N  each tier's tests' time summed above their processes' start, from
           the report
 
-`the job` is the setup, the build and the runs together; the clean is not in
-it. A failed clean, setup or build ends that side's round; a failed run of the
+Before the first round each tree is warmed, untimed (`cargo fetch --locked`,
+`cargo nextest --version`). `the job` is the setup, the build and the runs
+together; the clean is not in it. A failed clean, setup or build ends that side's round; a failed run of the
 tests does not (the next run is made, and the tiers' sums and `the job` count
 as failed). Either way the round is recorded, the run goes on, and the command
 fails at the end. Each side's median is of the rounds the phase passed in on
@@ -157,6 +159,13 @@ impl Request {
             }
         }
         request.base = base.ok_or_else(|| format!("say which tree is the base\n\n{USAGE}"))?;
+        if request.keep_build && request.rounds < 2 * COLD_ROUNDS {
+            return Err(format!(
+                "`--keep-build` needs `--count 4` or more: the first {COLD_ROUNDS} rounds build \
+                 from cold, one in each order, and the rounds after them, warm, are compared \
+                 apart from them"
+            ));
+        }
         for file in request.setup.iter().flatten() {
             // A root alone (`/x.sh`) is not absolute on Windows, which wants
             // a drive too: any root, drive or `..` is refused, on both.
@@ -222,6 +231,10 @@ const JOB: &str = "the job";
 
 /// Where a phase goes in the tables: the order a round makes them in.
 fn rank(name: &str) -> usize {
+    let name = name
+        .strip_suffix(" (cold)")
+        .or_else(|| name.strip_suffix(" (warm)"))
+        .unwrap_or(name);
     match name {
         "clean" => 0,
         "setup" => 1,
@@ -509,6 +522,11 @@ pub(crate) fn conclusion(record: &Record) -> Result<()> {
     if record.sides.is_empty() {
         return Err("no round was run".to_owned());
     }
+    if record.stopped.is_some()
+        && let Some(said) = one_order_only(record)
+    {
+        return Err(said);
+    }
     if failed.is_empty() {
         Ok(())
     } else {
@@ -518,6 +536,40 @@ pub(crate) fn conclusion(record: &Record) -> Result<()> {
             failed.join(", ")
         ))
     }
+}
+
+/// What is said of a run that ended before it had a whole round in each
+/// order (`--minutes` stopped it): its changes are of the order's as much as
+/// of the trees. `None` for a run that has both.
+pub(crate) fn one_order_only(record: &Record) -> Option<String> {
+    let whole = |round: usize| {
+        [Which::Base, Which::Head].iter().all(|which| {
+            record
+                .sides
+                .iter()
+                .any(|side| side.round == round && side.which == *which)
+        })
+    };
+    let mut rounds: Vec<usize> = record.sides.iter().map(|side| side.round).collect();
+    rounds.sort_unstable();
+    rounds.dedup();
+    let mut first = [false; 2];
+    for round in rounds.into_iter().filter(|round| whole(*round)) {
+        first[order(round - 1)[0] as usize] = true;
+    }
+    (first != [true; 2]).then(|| {
+        format!(
+            "the run has no whole round {}: every change it printed is of one order, and the \
+             first side pays for what the second finds ready",
+            if first[0] {
+                "with the head first"
+            } else if first[1] {
+                "with the base first"
+            } else {
+                "at all"
+            }
+        )
+    })
 }
 
 fn side_name(which: Which) -> &'static str {
@@ -748,12 +800,69 @@ pub(crate) trait SidePhases {
     fn tiers(&mut self) -> Result<[f64; 3]>;
 }
 
-/// Whether a side's round begins by removing its build: always in the first
-/// round, so that both sides start cold whatever was in their build
-/// directories (on a runner, the cache restores `main`'s build into the
-/// head's tree alone), and in every round unless `--keep-build`.
-pub(crate) fn cleans(keep_build: bool, round: usize) -> bool {
-    !keep_build || round == 1
+/// What a side's round does before its phases are timed, and what its
+/// phases are called: worked out here, apart from the commands, so that it
+/// is tested.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SidePlan {
+    /// Whether the round begins by removing the side's build.
+    pub(crate) clean: bool,
+    /// Under `--keep-build`, `cold` or `warm`: the round's phases are named
+    /// with it (`build (cold)`), so that a cold build and a warm one are
+    /// never in one median or one pair.
+    pub(crate) temperature: Option<&'static str>,
+    /// The side's own setup script, a path in the head's tree.
+    pub(crate) setup: Option<PathBuf>,
+}
+
+/// The plan of `which`'s round `round` (from 1). The build is removed in
+/// every round, or under `--keep-build` in the first two alone: both sides
+/// start cold whatever their build directories held (on a runner, the cache
+/// restores `main`'s build into the head's tree alone), and the two cold
+/// rounds put each side first once, as the warm rounds after them do.
+pub(crate) fn side_plan(request: &Request, which: Which, round: usize) -> SidePlan {
+    let clean = !request.keep_build || round <= COLD_ROUNDS;
+    SidePlan {
+        clean,
+        temperature: request
+            .keep_build
+            .then_some(if clean { "cold" } else { "warm" }),
+        setup: request.setup[which as usize].clone(),
+    }
+}
+
+/// The rounds `--keep-build` builds cold: one in each order.
+const COLD_ROUNDS: usize = 2;
+
+/// `name` marked with the round's temperature, when it has one.
+fn marked(name: &str, temperature: Option<&str>) -> String {
+    match temperature {
+        Some(temperature) => format!("{name} ({temperature})"),
+        None => name.to_owned(),
+    }
+}
+
+/// `cargo nextest …` in `tree`, with the side's environment set: what the
+/// setup's file said.
+pub(crate) fn nextest_command(
+    tree: &Path,
+    arguments: &[String],
+    environment: &[(String, String)],
+) -> Command {
+    let mut command = crate::ab::nextest(tree, arguments);
+    command.envs(environment.iter().map(|(key, value)| (key, value)));
+    command
+}
+
+/// What runs, untimed, in each tree before the first round: the crates'
+/// sources fetched and unpacked, and cargo and nextest started once, so that
+/// what a first run pays for once (the registry's sources, the toolchain and
+/// nextest read into the disk cache) falls on neither side's timed round.
+pub(crate) fn warm_up_commands() -> [Vec<String>; 2] {
+    [
+        vec!["fetch".to_owned(), "--locked".to_owned()],
+        vec!["nextest".to_owned(), "--version".to_owned()],
+    ]
 }
 
 /// One side's round, every phase timed by `clock` (seconds) and recorded. It
@@ -765,16 +874,17 @@ pub(crate) fn drive_side(
     phases: &mut impl SidePhases,
     round: usize,
     which: Which,
-    clean: bool,
+    plan: &SidePlan,
     clock: &mut dyn FnMut() -> f64,
 ) -> SideRound {
+    let named = |name: &str| marked(name, plan.temperature);
     let mut side = SideRound {
         round,
         which,
         phases: Vec::new(),
         error: None,
     };
-    if clean {
+    if plan.clean {
         let started = clock();
         let outcome = phases.clean();
         let took = clock() - started;
@@ -788,15 +898,15 @@ pub(crate) fn drive_side(
         let took = clock() - started;
         if !phase(&mut side, "setup", took, outcome) {
             let took = clock() - job_started;
-            return job_failed(side, took);
+            return job_failed(side, &named(JOB), took);
         }
     }
     let started = clock();
     let outcome = phases.build();
     let took = clock() - started;
-    if !phase(&mut side, "build", took, outcome) {
+    if !phase(&mut side, &named("build"), took, outcome) {
         let took = clock() - job_started;
-        return job_failed(side, took);
+        return job_failed(side, &named(JOB), took);
     }
     let runs = phases.runs();
     let mut runs_passed = true;
@@ -804,14 +914,14 @@ pub(crate) fn drive_side(
         let started = clock();
         let outcome = phases.run(index);
         let took = clock() - started;
-        runs_passed &= phase(&mut side, &run_name(index, runs), took, outcome);
+        runs_passed &= phase(&mut side, &named(&run_name(index, runs)), took, outcome);
     }
     let job_seconds = clock() - job_started;
     match phases.tiers() {
         Ok(sums) => {
             for (tier, seconds) in Tier::ALL.into_iter().zip(sums) {
                 side.phases.push(Phase {
-                    name: tier_name(tier),
+                    name: named(&tier_name(tier)),
                     seconds,
                     passed: runs_passed,
                 });
@@ -823,7 +933,7 @@ pub(crate) fn drive_side(
         }
     }
     side.phases.push(Phase {
-        name: JOB.to_owned(),
+        name: named(JOB),
         seconds: job_seconds,
         passed: runs_passed,
     });
@@ -837,6 +947,8 @@ struct RealSide<'a> {
     which: Which,
     round: usize,
     request: &'a Request,
+    /// The side's setup script, from its plan.
+    setup: Option<PathBuf>,
     /// What the setup's file set, for the build and the runs.
     environment: Vec<(String, String)>,
     /// The job's runs, as its own `.config/nextest.toml` makes them.
@@ -845,9 +957,7 @@ struct RealSide<'a> {
 
 impl RealSide<'_> {
     fn command(&self, arguments: &[String]) -> Command {
-        let mut command = crate::ab::nextest(self.tree, arguments);
-        command.envs(self.environment.iter().map(|(key, value)| (key, value)));
-        command
+        nextest_command(self.tree, arguments, &self.environment)
     }
 }
 
@@ -857,7 +967,7 @@ impl SidePhases for RealSide<'_> {
     }
 
     fn setup(&mut self) -> Option<Result<()>> {
-        let script = self.request.setup[self.which as usize].as_ref()?;
+        let script = self.setup.as_ref()?;
         let env_file = self.tree.join("target").join("job-ab-env");
         let script = self.head.join(script);
         let (program, before) = setup_program(&script);
@@ -951,9 +1061,9 @@ fn phase(side: &mut SideRound, name: &str, seconds: f64, outcome: Result<()>) ->
 }
 
 /// A side's round that ended in a failed phase: the job, as far as it went.
-fn job_failed(mut side: SideRound, seconds: f64) -> SideRound {
+fn job_failed(mut side: SideRound, name: &str, seconds: f64) -> SideRound {
     side.phases.push(Phase {
-        name: JOB.to_owned(),
+        name: name.to_owned(),
         seconds,
         passed: false,
     });
@@ -1011,6 +1121,23 @@ pub(crate) fn drive_rounds(
     }
 }
 
+/// Runs [`warm_up_commands`] in `tree`, untimed. One that fails is said, and
+/// the rounds go on: a fetch that cannot be made is the build's to fail.
+fn warm_up(tree: &Path) {
+    for arguments in warm_up_commands() {
+        let mut command = Command::new(workspace::cargo());
+        command
+            .args(&arguments)
+            .current_dir(tree)
+            .env("CARGO_TARGET_DIR", tree.join("target"))
+            .stdout(std::process::Stdio::null());
+        let (_, outcome) = timed(command, &format!("cargo {}", arguments.join(" ")));
+        if let Err(error) = outcome {
+            println!("(the warm-up in {}: {error})", tree.display());
+        }
+    }
+}
+
 /// `cargo xtask ab --job …`
 pub(crate) fn run(arguments: &[String]) -> Result<()> {
     let request = Request::parse(arguments)?;
@@ -1047,6 +1174,9 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         sides: Vec::new(),
         stopped: None,
     };
+    for which in [Which::Base, Which::Head] {
+        warm_up(tree(which));
+    }
     let started = Instant::now();
     let mut clock = || started.elapsed().as_secs_f64();
     let mut side = |which: Which, round: usize| {
@@ -1059,12 +1189,14 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             }
         );
         let tree = tree(which);
+        let plan = side_plan(&request, which, round);
         let mut phases = RealSide {
             head: &head,
             tree,
             which,
             round,
             request: &request,
+            setup: plan.setup.clone(),
             environment: Vec::new(),
             runs: crate::checks::ci_runs(
                 &request.packages,
@@ -1073,13 +1205,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
             ),
         };
         let mut clock = || started.elapsed().as_secs_f64();
-        drive_side(
-            &mut phases,
-            round,
-            which,
-            cleans(request.keep_build, round),
-            &mut clock,
-        )
+        drive_side(&mut phases, round, which, &plan, &mut clock)
     };
     // After every side, so that a run that is stopped keeps what it made. A
     // record that cannot be written is said, and the run goes on: the log
@@ -1125,10 +1251,20 @@ pub(crate) fn kept_reports(files: &[PathBuf]) -> BTreeMap<(usize, &'static str),
 #[cfg(test)]
 mod tests {
     use super::{
-        JOB, Paired, Phase, Record, Request, SidePhases, SideRound, cleans, conclusion,
-        drive_rounds, drive_side, from_json, medians, medians_table, paired, read_env, render,
-        report_name, report_of_name, round_fits, run_name, to_json,
+        JOB, Paired, Phase, Record, Request, SidePhases, SidePlan, SideRound, conclusion,
+        drive_rounds, drive_side, from_json, medians, medians_table, nextest_command,
+        one_order_only, paired, read_env, render, report_name, report_of_name, round_fits,
+        run_name, side_plan, to_json, warm_up_commands,
     };
+
+    /// A plan that cleans or not, with no temperature and no setup.
+    fn plan(clean: bool) -> SidePlan {
+        SidePlan {
+            clean,
+            temperature: None,
+            setup: None,
+        }
+    }
     use crate::ab::Which;
 
     fn strings(words: &[&str]) -> Vec<String> {
@@ -1188,7 +1324,7 @@ mod tests {
             "--label",
             "main",
             "--count",
-            "2",
+            "4",
             "--minutes",
             "200",
             "--setup-head",
@@ -1201,7 +1337,7 @@ mod tests {
             "test(/a/)",
         ]))
         .unwrap();
-        assert_eq!(request.rounds, 2);
+        assert_eq!(request.rounds, 4);
         assert_eq!(request.minutes, Some(200));
         assert_eq!(request.setup[0], None);
         assert_eq!(
@@ -1391,13 +1527,183 @@ mod tests {
     }
 
     #[test]
-    fn both_sides_start_cold_and_keep_build_keeps_only_later_rounds() {
-        assert!(cleans(false, 1) && cleans(false, 2));
-        assert!(
-            cleans(true, 1),
-            "the first round is cold whatever is in the build"
+    fn each_side_has_its_own_setup_and_the_first_two_rounds_are_cold_under_keep_build() {
+        let request = Request::parse(&strings(&[
+            "--base",
+            "b",
+            "--setup-base",
+            "a.sh",
+            "--setup-head",
+            "h.sh",
+        ]))
+        .unwrap();
+        let base = side_plan(&request, Which::Base, 1);
+        assert_eq!(base.setup.as_deref(), Some(std::path::Path::new("a.sh")));
+        let head = side_plan(&request, Which::Head, 2);
+        assert_eq!(head.setup.as_deref(), Some(std::path::Path::new("h.sh")));
+        // Without --keep-build every round is cold, and unmarked.
+        assert!(base.clean && head.clean);
+        assert_eq!((base.temperature, head.temperature), (None, None));
+        let keep =
+            Request::parse(&strings(&["--base", "b", "--keep-build", "--count", "4"])).unwrap();
+        let rounds: Vec<(bool, Option<&str>)> = (1..=4)
+            .map(|round| {
+                let plan = side_plan(&keep, Which::Head, round);
+                (plan.clean, plan.temperature)
+            })
+            .collect();
+        assert_eq!(
+            rounds,
+            [
+                (true, Some("cold")),
+                (true, Some("cold")),
+                (false, Some("warm")),
+                (false, Some("warm"))
+            ],
+            "one cold round in each order, then warm ones"
         );
-        assert!(!cleans(true, 2));
+        assert_eq!(side_plan(&keep, Which::Base, 1).setup, None);
+        let error =
+            Request::parse(&strings(&["--base", "b", "--keep-build", "--count", "2"])).unwrap_err();
+        assert!(error.contains("needs `--count 4` or more"), "{error}");
+        assert!(Request::parse(&strings(&["--base", "b", "--keep-build"])).is_err());
+    }
+
+    #[test]
+    fn under_keep_build_cold_and_warm_rounds_are_paired_and_marked_apart() {
+        let time = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let mut clock = {
+            let time = time.clone();
+            move || time.get()
+        };
+        let keep =
+            Request::parse(&strings(&["--base", "b", "--keep-build", "--count", "4"])).unwrap();
+        let mut side = |which: Which, round: usize| {
+            let mut fake = Fake::new(&[], &time);
+            fake.setup = false;
+            let mut clock = || time.get();
+            drive_side(
+                &mut fake,
+                round,
+                which,
+                &side_plan(&keep, which, round),
+                &mut clock,
+            )
+        };
+        let mut keep_record = |_: &Record| {};
+        let mut record = Record {
+            label: "main".to_owned(),
+            rounds: 4,
+            sides: Vec::new(),
+            stopped: None,
+        };
+        drive_rounds(&mut record, None, &mut side, &mut keep_record, &mut clock);
+        assert_eq!(
+            names(&record.sides[0])[..3],
+            ["clean", "build (cold)", "tests: tiers 1 and 2 (cold)"]
+        );
+        assert_eq!(
+            names(&record.sides[4])[..2],
+            ["build (warm)", "tests: tiers 1 and 2 (warm)"]
+        );
+        for name in [
+            "build (cold)",
+            "build (warm)",
+            "the job (cold)",
+            "the job (warm)",
+        ] {
+            let pair = paired(&record, name);
+            assert_eq!((pair.pairs, pair.base_first), (2, 1), "{name}");
+        }
+        assert_eq!(
+            paired(&record, "build").pairs,
+            0,
+            "never one median over both"
+        );
+        let table = medians_table(&record);
+        assert!(
+            !table.contains("* the base"),
+            "each kind even in its order: {table}"
+        );
+        let rows: Vec<&str> = table
+            .lines()
+            .filter(|line| line.starts_with("build"))
+            .collect();
+        assert_eq!(rows.len(), 2, "{table}");
+    }
+
+    #[test]
+    fn the_sides_environment_reaches_its_build_and_its_runs() {
+        let environment = vec![("CARGO_PROFILE_CI_DEBUG".to_owned(), "false".to_owned())];
+        let command = nextest_command(
+            std::path::Path::new("tree"),
+            &strings(&["nextest", "run"]),
+            &environment,
+        );
+        let set: Vec<(String, Option<String>)> = command
+            .get_envs()
+            .map(|(key, value)| {
+                (
+                    key.to_string_lossy().into_owned(),
+                    value.map(|value| value.to_string_lossy().into_owned()),
+                )
+            })
+            .collect();
+        assert!(
+            set.contains(&(
+                "CARGO_PROFILE_CI_DEBUG".to_owned(),
+                Some("false".to_owned())
+            )),
+            "{set:?}"
+        );
+        assert!(
+            set.iter().any(|(key, _)| key == "CARGO_TARGET_DIR"),
+            "its own build directory: {set:?}"
+        );
+    }
+
+    #[test]
+    fn both_trees_are_warmed_before_the_first_round() {
+        assert_eq!(
+            warm_up_commands(),
+            [
+                strings(&["fetch", "--locked"]),
+                strings(&["nextest", "--version"])
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_stopped_with_one_order_measured_fails() {
+        let mut one = record(vec![
+            passed(1, Which::Base, 1.0),
+            passed(1, Which::Head, 1.0),
+        ]);
+        assert_eq!(
+            one_order_only(&one)
+                .as_deref()
+                .map(|said| said.contains("with the head first")),
+            Some(true)
+        );
+        assert!(conclusion(&one).is_ok(), "not stopped: a count of its own");
+        one.stopped = Some("Stopped before round 2 of 4".to_owned());
+        assert!(conclusion(&one).is_err());
+        let mut both = record(vec![
+            passed(1, Which::Base, 1.0),
+            passed(1, Which::Head, 1.0),
+            passed(2, Which::Head, 1.0),
+            passed(2, Which::Base, 1.0),
+        ]);
+        both.stopped = Some("Stopped before round 3 of 4".to_owned());
+        assert_eq!(one_order_only(&both), None);
+        assert!(conclusion(&both).is_ok());
+        // A round with one side only is no whole round.
+        let half = record(vec![
+            passed(1, Which::Base, 1.0),
+            passed(1, Which::Head, 1.0),
+            passed(2, Which::Head, 1.0),
+        ]);
+        assert!(one_order_only(&half).is_some());
     }
 
     /// A side's phases from a list: each phase takes `seconds[phase]` of the
@@ -1468,7 +1774,7 @@ mod tests {
             move || time.get()
         };
         let mut fake = Fake::new(&[], &time);
-        let side = drive_side(&mut fake, 1, Which::Base, true, &mut clock);
+        let side = drive_side(&mut fake, 1, Which::Base, &plan(true), &mut clock);
         assert_eq!(
             names(&side),
             [
@@ -1492,7 +1798,7 @@ mod tests {
         assert_eq!(side.error, None);
 
         let mut fake = Fake::new(&["build"], &time);
-        let side = drive_side(&mut fake, 2, Which::Head, false, &mut clock);
+        let side = drive_side(&mut fake, 2, Which::Head, &plan(false), &mut clock);
         assert_eq!(names(&side), ["setup", "build !", "the job !"]);
         assert_eq!(
             fake.made,
@@ -1502,7 +1808,7 @@ mod tests {
         assert_eq!(side.error.as_deref(), Some("build failed"));
 
         let mut fake = Fake::new(&["setup"], &time);
-        let side = drive_side(&mut fake, 2, Which::Head, true, &mut clock);
+        let side = drive_side(&mut fake, 2, Which::Head, &plan(true), &mut clock);
         assert_eq!(names(&side), ["clean", "setup !", "the job !"]);
     }
 
@@ -1515,7 +1821,7 @@ mod tests {
         };
         let mut fake = Fake::new(&["run 0"], &time);
         fake.setup = false;
-        let side = drive_side(&mut fake, 1, Which::Head, false, &mut clock);
+        let side = drive_side(&mut fake, 1, Which::Head, &plan(false), &mut clock);
         assert_eq!(
             names(&side),
             [
@@ -1550,7 +1856,7 @@ mod tests {
             };
             let mut fake = Fake::new(failing, &time);
             let mut clock = || time.get();
-            drive_side(&mut fake, round, which, true, &mut clock)
+            drive_side(&mut fake, round, which, &plan(true), &mut clock)
         };
         let mut kept = Vec::new();
         let mut keep = |record: &Record| kept.push(record.sides.len());
