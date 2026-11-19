@@ -20,14 +20,14 @@
 #   gh workflow run try --ref <branch> -f os=windows -f command="test --dependents -p cineris-config"
 #   gh workflow run try --ref <branch> -f os=windows -f command="mutate tooling-7 --jobs 2"
 #   gh workflow run try --ref <branch> -f commit=<40-digit commit hash> -f command="test -p cineris-base"
-#   ci-wait --workflow try                    (from the branch, for its head commit)
+#   gh run watch <run id>                     (the id `try --dispatch` prints)
 #
 # `commit` makes the branch's side of the run that commit (and not the
 # branch's head), so that a variant needs no branch of its own: commit each
 # variant on one branch, each on top of the last, push, and dispatch with
 # each commit's hash. The workflow file is the ref's; the commit's own `xtask`
 # runs the command, so the commit must contain this workflow's `try`. `cargo
-# xtask try --dry-run --command "..."` shows, at a desk, the command the job
+# xtask try --dry-run --command "..."` shows, locally, the command the job
 # would run and fails as the job would.
 #
 # The inputs reach `cargo xtask try` as arguments, through the environment,
@@ -201,7 +201,7 @@ jobs:
       # against its hash. It is kept on the runner's temporary disk, the one
       # the workspace is on, so that a measured tree can hard-link its files
       # (on Windows the user's cache folder is on the system disk). Fetched
-      # each time: about 5 to 15 s at a desk, and no cache to key and keep.
+      # each time: about 5 to 15 s locally, and no cache to key and keep.
       - name: Keep the corpus of real code beside the workspace
         if: startsWith(inputs.command, 'perf')
         shell: bash
