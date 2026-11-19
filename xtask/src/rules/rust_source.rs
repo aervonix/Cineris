@@ -16,6 +16,13 @@
 //!   finds a program with `cineris_base::program` and starts it by the
 //!   absolute path found (step 13a's review, R4). [`STARTERS`] names the
 //!   calls that start what they are given.
+//! - **Every place that starts a process is in the table** of
+//!   `docs/security.md`, section 12 ([`process_starts`]): a file of the
+//!   product that calls one of [`STARTS`] outside its tests is named there,
+//!   with how it finds its program, its environment and whether it is
+//!   confined, and every file the table names still starts one. So a new
+//!   start is looked at before it is merged (the harness's own processes'
+//!   fixes, which found two starts the shell's rules had not reached).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -111,6 +118,132 @@ pub(super) fn check(sources: &BTreeMap<String, String>) -> Vec<Violation> {
         if !test_files.contains(file) && calls_a_starter(source) {
             violations.extend(bare_programs(file, source, false));
         }
+    }
+    violations
+}
+
+// ---------------------------------------------------------- process starts
+
+/// The page whose table lists every place the product starts a process.
+pub(super) const STARTS_PAGE: &str = "docs/security.md";
+
+/// The heading of that table's section.
+const STARTS_SECTION: &str = "## 12. Every process the harness starts";
+
+/// The calls that start a process, by the last two segments of their path
+/// as [`STARTERS`] are: the standard library's and tokio's `Command`, and
+/// the one wrapper of it that takes a program from its caller. A call of
+/// Windows' `CreateProcessW` counts too, by its name alone.
+const STARTS: [&str; 2] = ["Command::new", "brief::run"];
+
+/// The line of the first process start in `source` outside its test
+/// modules, if there is one.
+fn first_start(source: &str) -> Option<usize> {
+    if !STARTS
+        .iter()
+        .chain(&["CreateProcessW"])
+        .any(|start| source.contains(&format!("{start}(")))
+    {
+        return None;
+    }
+    let all = lex::tokens(source);
+    let text = |index: usize| all[index].text(source);
+    let tests = test_modules(source, &all);
+    (0..all.len()).find_map(|index| {
+        let windows =
+            text(index) == "CreateProcessW" && index + 1 < all.len() && text(index + 1) == "(";
+        let call = index + 4 < all.len()
+            && text(index + 1) == ":"
+            && text(index + 2) == ":"
+            && text(index + 4) == "("
+            && STARTS.contains(&format!("{}::{}", text(index), text(index + 3)).as_str());
+        ((windows || call) && !tests.iter().any(|range| range.contains(&index)))
+            .then(|| lex::line_of(source, all[index].start))
+    })
+}
+
+/// The files the table of [`STARTS_SECTION`] in `page` names: every
+/// `crates/….rs` in backquotes in the section.
+fn listed_starts(page: &str) -> Option<BTreeSet<String>> {
+    let start = page.find(&format!("\n{STARTS_SECTION}\n"))?;
+    let section = &page[start + 1..];
+    let end = section[STARTS_SECTION.len()..]
+        .find("\n## ")
+        .map_or(section.len(), |end| end + STARTS_SECTION.len());
+    Some(
+        section[..end]
+            .split('`')
+            .skip(1)
+            .step_by(2)
+            .filter(|name| name.starts_with("crates/") && name.ends_with(".rs"))
+            .map(str::to_owned)
+            .collect(),
+    )
+}
+
+/// Every file of the product that starts a process and is not in the table
+/// of [`STARTS_PAGE`], and every file the table names that starts none. Not
+/// tests: a file under a `tests` directory, a module under a test `cfg`,
+/// and the places of [`ALLOWED_PLACES`] (the developer's commands and the
+/// test kit).
+pub(super) fn process_starts(
+    sources: &BTreeMap<String, String>,
+    page: Option<&str>,
+) -> Vec<Violation> {
+    let Some(listed) = page.and_then(listed_starts) else {
+        return vec![Violation::new(
+            STARTS_PAGE,
+            None,
+            format!(
+                "the section `{STARTS_SECTION}` is not here: it holds the table of every place \
+                 the product starts a process, which `cargo xtask rules` checks the code against."
+            ),
+        )];
+    };
+    let test_files = test_module_files(sources);
+    let mut violations = Vec::new();
+    let mut starting = BTreeSet::new();
+    for (file, source) in sources {
+        if !file.starts_with("crates/")
+            || test_files.contains(file)
+            || file
+                .split('/')
+                .any(|part| part == "tests" || part == "examples")
+            || ALLOWED_PLACES
+                .iter()
+                .any(|(place, _)| file.starts_with(place))
+        {
+            continue;
+        }
+        let Some(line) = first_start(source) else {
+            continue;
+        };
+        starting.insert(file.clone());
+        if !listed.contains(file) {
+            violations.push(Violation::new(
+                file,
+                Some(line),
+                format!(
+                    "this file starts a process, and the table of every process the harness \
+                     starts ({STARTS_PAGE}, \"{}\") does not name it. Add its row: how the \
+                     program is found, the environment it is given (does it carry the providers' \
+                     key variables, or a relative `PATH`?), whether it is confined, and what of \
+                     its output reaches the model.",
+                    STARTS_SECTION.trim_start_matches("## ")
+                ),
+            ));
+        }
+    }
+    for file in listed.difference(&starting) {
+        violations.push(Violation::new(
+            STARTS_PAGE,
+            None,
+            format!(
+                "the table of every process the harness starts names `{file}`, which starts none \
+                 outside its tests now (or is gone): take its row out, or name where the start \
+                 moved to."
+            ),
+        ));
     }
     violations
 }
@@ -467,7 +600,62 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
-    use super::{bare_programs, check, defaults_of, test_module_files, wrapped_traits};
+    use super::{
+        STARTS_PAGE, bare_programs, check, defaults_of, process_starts, test_module_files,
+        wrapped_traits,
+    };
+
+    /// A file of the product that starts a process must be in the table,
+    /// and the table names only files that do; tests, the test kit and
+    /// `xtask` are not looked at.
+    #[test]
+    fn every_process_start_is_in_the_table() {
+        let page = "# Security\n\n## 12. Every process the harness starts\n\n| Where |\n|---|\n\
+                    | `crates/a/src/git.rs` |\n| `crates/a/src/gone.rs` |\n\n## Reporting\n\
+                    `crates/a/src/after.rs`\n";
+        let starts = "fn f() { let c = std::process::Command::new(path); }\n";
+        let wrapped = "fn f() { crate::process::brief::run(&p, &[], None, &env, l); }\n";
+        let windows = "unsafe fn f() { CreateProcessW(\n a, b) }\n";
+        let only_in_tests =
+            "#[cfg(test)]\nmod tests {\n fn f() { std::process::Command::new(p); }\n}\n";
+        let sources: BTreeMap<String, String> = [
+            ("crates/a/src/git.rs", starts),
+            ("crates/a/src/new.rs", starts),
+            ("crates/a/src/probe.rs", wrapped),
+            ("crates/a/src/pty.rs", windows),
+            ("crates/a/src/after.rs", starts),
+            ("crates/a/src/quiet.rs", only_in_tests),
+            ("crates/a/tests/it/main.rs", starts),
+            ("crates/cineris-testkit/src/lib.rs", starts),
+            ("xtask/src/main.rs", starts),
+        ]
+        .into_iter()
+        .map(|(file, source)| (file.to_owned(), source.to_owned()))
+        .collect();
+        let found = process_starts(&sources, Some(page));
+        let named: Vec<(&str, Option<usize>)> = found
+            .iter()
+            .map(|violation| (violation.file.as_str(), violation.line))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                // A table after the section's end does not count.
+                ("crates/a/src/after.rs", Some(1)),
+                ("crates/a/src/new.rs", Some(1)),
+                ("crates/a/src/probe.rs", Some(1)),
+                ("crates/a/src/pty.rs", Some(1)),
+                (STARTS_PAGE, None),
+            ],
+            "{found:#?}"
+        );
+        assert!(found[4].message.contains("`crates/a/src/gone.rs`"));
+        assert!(found[1].message.contains("does not name it"));
+        // Without the section, that is said once.
+        let none = process_starts(&sources, Some("# Security\n"));
+        assert_eq!(none.len(), 1);
+        assert!(none[0].message.contains("is not here"));
+    }
 
     fn fixture(name: &str) -> String {
         std::fs::read_to_string(

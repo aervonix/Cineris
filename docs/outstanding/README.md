@@ -35,7 +35,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cineris-base
 
 - [log-crate-bridge](log-crate-bridge.md): The logging subscriber has no bridge for dependencies that log through the `log` crate at `warn` and above. Owner: step 32, or the first step whose dependency needs it.
-- [the-harness-git-is-given-the-provider-keys](the-harness-git-is-given-the-provider-keys.md): The harness's own git is started with the harness's whole environment: the providers' key variables, and `PATH` as it came, relative entries and all. Owner: the maintainers.
+- [the-harness-git-reads-the-repository-git-names-in-the-environment](the-harness-git-reads-the-repository-git-names-in-the-environment.md): The harness's own git reads `GIT_DIR`, `GIT_INDEX_FILE` and git's other variables of a repository's place from the harness's environment, so a harness started from a git hook answers about another repository. Owner: the maintainers.
 
 ### cineris-cli
 
@@ -56,6 +56,8 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is accepted and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
 - [a-file-held-open-on-ntfs-and-its-stamp](a-file-held-open-on-ntfs-and-its-stamp.md): NTFS updates a directory entry's stamp lazily while a writer holds a file open, so the index may read it every pass or keep an old outline. Owner: a later index step, or step 33.
+- [a-key-a-reload-added-is-passed-again-after-another-reload](a-key-a-reload-added-is-passed-again-after-another-reload.md): A variable that one reload made a provider's key, and a later reload made no longer one, is given to commands and to the harness's git again. Owner: the maintainers.
+- [a-reload-of-the-write-roots-leaves-the-harness-git-avoiding-the-old-ones](a-reload-of-the-write-roots-leaves-the-harness-git-avoiding-the-old-ones.md): A reload that changes `sandbox.write` leaves the harness's git, and its `PATH`, keeping out of the write roots the session started with. Owner: the maintainers.
 - [a-supervisor-lowering-a-wait](a-supervisor-lowering-a-wait.md): A client that is not a `user` is refused every tighten-only key in `session/new`'s overrides, a shorter value too; taking a lower one needs a comparison with a second load. Owner: step 37.
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored there (the interactive half is done). Owner: step 32.
 - [memory-a-pass-leaves-resident](memory-a-pass-leaves-resident.md): The allocator keeps what the index's pass freed: on real code 22.8 MB resident after a cold pass on Linux, from 8.7 MB, and the idle TUI at 30.5 MB in a glibc build with 20,000 files (12.3 MB in the musl build that ships), against 25 MB. Owner: step 33.
@@ -147,7 +149,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-git-cap-of-zero-that-git-can-still-beat](a-git-cap-of-zero-that-git-can-still-beat.md): A test of git's time limit in the look for a command's changes passes only when git has not answered before its limit of zero is asked about; one CI flake. Owner: the maintainers, to a fix session.
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
 - [names-that-escape-to-the-same-text](names-that-escape-to-the-same-text.md): Two names that are one text once escaped are counted twice and shown once by `list`, and share their matches in `search`. Owner: a later `cineris-tools` step, or step 32.
-- [the-shell-version-probe-runs-unconfined-with-the-keys](the-shell-version-probe-runs-unconfined-with-the-keys.md): The shell's version is asked by starting the shell unconfined, with the harness's whole environment, and the shell may be a program inside a write root. Owner: the maintainers.
 
 ### cineris-tui
 

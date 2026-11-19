@@ -35,6 +35,7 @@ mod kind;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use cineris_base::child_env::Withheld;
 use cineris_base::git::{AsItIs, Confinement};
 use cineris_base::{AbsPath, CancelToken, ResolvedPath};
 use cineris_protocol::item::ArtifactRef;
@@ -116,20 +117,39 @@ impl Default for ShellConfig {
 /// trusted, so whether the look at what a command changed may ask git, and
 /// the providers' key variables, which no command is given. Both take
 /// effect for the next command.
+///
+/// The key variables are a [`Withheld`] the harness's own git holds too
+/// ([`ShellLive::withheld`]), so that one reload changes what both
+/// withhold and neither keeps an old copy (the harness's own processes'
+/// fixes).
 #[derive(Debug, Default)]
 pub struct ShellLive {
     repository_trusted: std::sync::atomic::AtomicBool,
-    key_variables: Mutex<Vec<String>>,
+    key_variables: Arc<Withheld>,
 }
 
 impl ShellLive {
     /// The settings a session starts with.
     #[must_use]
     pub fn new(repository_trusted: bool, key_variables: Vec<String>) -> Self {
+        Self::sharing(repository_trusted, Arc::new(Withheld::new(key_variables)))
+    }
+
+    /// The settings a session starts with, the key variables being a list
+    /// the session's other readers hold too.
+    #[must_use]
+    pub fn sharing(repository_trusted: bool, key_variables: Arc<Withheld>) -> Self {
         Self {
             repository_trusted: std::sync::atomic::AtomicBool::new(repository_trusted),
-            key_variables: Mutex::new(key_variables),
+            key_variables,
         }
+    }
+
+    /// The key variables as a value other readers can hold: what
+    /// [`ShellLive::set_key_variables`] sets, they read.
+    #[must_use]
+    pub fn withheld(&self) -> Arc<Withheld> {
+        Arc::clone(&self.key_variables)
     }
 
     /// Whether the project is trusted now.
@@ -148,18 +168,12 @@ impl ShellLive {
     /// The providers' key variables now.
     #[must_use]
     pub fn key_variables(&self) -> Vec<String> {
-        self.key_variables
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+        self.key_variables.get()
     }
 
     /// The providers' key variables, in place of those there were.
     pub fn set_key_variables(&self, variables: Vec<String>) {
-        *self
-            .key_variables
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = variables;
+        self.key_variables.set(variables);
     }
 }
 
@@ -371,7 +385,7 @@ fn spec(shell: &Shell, config: &ShellConfig, path_replaced: bool) -> ToolSpec {
         _ => "",
     };
     // Every command is given `NoDefaultCurrentDirectoryInExePath` on
-    // Windows (`env::NO_CURRENT_DIRECTORY`), so a file of the directory a
+    // Windows (`cineris_base::child_env::NO_CURRENT_DIRECTORY`), so a file of the directory a
     // command runs in is found only by its path, from a batch file too.
     let here = if cfg!(windows) {
         " A program or batch file in the directory the command runs in is found only by its \

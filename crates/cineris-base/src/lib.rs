@@ -50,6 +50,7 @@
 
 pub mod atomic;
 pub mod cancel;
+pub mod child_env;
 pub mod clock;
 pub mod error;
 pub mod framing;

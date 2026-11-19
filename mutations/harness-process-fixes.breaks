@@ -1,0 +1,200 @@
+# The harness's own processes' fixes (docs/steps/harness-process-fixes/answered.md):
+# the environment of a program the harness starts for itself (its git, and
+# the shell asked its version), and where the shell and git are found.
+
+# ------------------------------------------------------- the harness's git
+
+[break] git-given-the-inherited-environment-as-it-is
+rule: The harness's git is given the environment built for it, without the key variables, not the one it inherits.
+file: crates/cineris-base/src/git.rs
+find: .envs(env)
+replace: .envs(confinement.inherited())
+packages: cineris-base,cineris-core
+caught-by:
+    cineris-base git::tests::sys_a_filter_driver_is_given_no_key_variable
+    cineris-core::it harness_git::sys_a_reload_withholds_the_keys_from_a_filter_the_harness_git_runs
+
+# The harness's own process holds no key in the tests, so only a variable of
+# the test process's own (one nextest sets) shows that git inherited.
+[break] git-environment-not-cleared
+rule: The harness's git inherits nothing beside the environment built for it.
+file: crates/cineris-base/src/git.rs
+find: .env_clear()
+replace:
+caught-by:
+    cineris-base git::tests::sys_a_filter_driver_is_given_no_key_variable
+
+[break] git-not-told-the-withheld-list
+rule: The harness's git is kept from the key variables its confinement withholds, beside the known ones.
+file: crates/cineris-base/src/git.rs
+find: &confinement.withheld()
+replace: &[]
+packages: cineris-base,cineris-core
+caught-by:
+    cineris-base git::tests::sys_a_filter_driver_is_given_no_key_variable
+    cineris-core::it harness_git::sys_a_reload_withholds_the_keys_from_a_filter_the_harness_git_runs
+
+[break] git-keys-not-reloaded
+rule: The session's git withholds the key variables a reload sets, through the one value the shell holds too.
+file: crates/cineris-core/src/sandbox.rs
+in: withheld
+find: withheld.extend(self.withheld.get());
+replace:
+caught-by:
+    cineris-core sandbox::tests::the_harness_git_withholds_what_a_reload_sets_and_what_the_start_had
+    cineris-core::it harness_git::sys_a_reload_withholds_the_keys_from_a_filter_the_harness_git_runs
+
+[break] git-start-keys-forgotten-at-a-reload
+rule: The session's git still withholds a variable that was a key when the session started, after a reload, as the shell's commands do.
+file: crates/cineris-core/src/sandbox.rs
+in: withheld
+find: let mut withheld = self.seeded.clone();
+replace: let mut withheld: Vec<String> = Vec::new();
+caught-by:
+    cineris-core sandbox::tests::the_harness_git_withholds_what_a_reload_sets_and_what_the_start_had
+    cineris-core::it harness_git::sys_a_reload_withholds_the_keys_from_a_filter_the_harness_git_runs
+
+[break] git-found-in-the-workspace
+rule: The session's git is never one inside the workspace or a write root: the search goes on down `PATH`.
+file: crates/cineris-core/src/sandbox.rs
+in: git_program
+find: cineris_base::program::find_outside(&path, "git", cfg!(windows), &self.avoid)
+replace: cineris_base::program::find(&path, "git", cfg!(windows))
+caught-by:
+    cineris-core sandbox::tests::the_harness_git_is_never_one_inside_the_workspace
+
+[break] workspace-not-avoided-without-a-sandbox
+rule: The workspace is avoided for the shell and the harness's git whether commands are confined or not.
+file: crates/cineris-core/src/assemble.rs
+in: harness_avoid
+find: let mut avoid = vec![workspace];
+replace: let mut avoid: Vec<PathBuf> = Vec::new(); let _ = workspace;
+caught-by:
+    cineris-core assemble::tests::the_workspace_is_avoided_with_or_without_a_sandbox
+
+# -------------------------------------------- the PATH every one is given
+
+[break] harness-path-keeps-relative-entries
+rule: A program the harness starts searches only the absolute directories of `PATH`: an empty or relative entry names the workspace.
+file: crates/cineris-base/src/child_env.rs
+in: absolute_entries
+find: absolute(entry)
+replace: true
+os: linux
+packages: cineris-base,cineris-tools
+caught-by:
+    cineris-base child_env::tests::a_harness_program_searches_only_absolute_directories
+    cineris-base git::tests::sys_a_relative_path_entry_does_not_find_a_filter
+    cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
+
+[break] git-searches-the-workspace
+rule: A program the harness starts for itself does not search a directory of `PATH` inside the workspace or a write root.
+file: crates/cineris-base/src/child_env.rs
+in: for_harness
+find: keep_out_of(&mut env, avoid, windows);
+replace:
+caught-by:
+    cineris-base child_env::tests::a_harness_program_does_not_search_the_workspace
+
+[break] git-not-told-what-to-avoid
+rule: The harness's git is given a `PATH` without the directories its confinement avoids.
+file: crates/cineris-base/src/git.rs
+find: &confinement.avoid()
+replace: &[]
+packages: cineris-base,cineris-core
+caught-by:
+    cineris-core::it harness_git::sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace
+
+[break] harness-told-nothing-on-windows
+rule: On Windows a program the harness starts for itself is given `NoDefaultCurrentDirectoryInExePath`, as a command is.
+file: crates/cineris-base/src/child_env.rs
+in: for_harness
+find: no_current_directory(&mut env);
+replace:
+caught-by:
+    cineris-base child_env::tests::on_windows_a_harness_program_is_told_not_to_look_where_it_runs
+
+[break] the-known-keys-not-withheld
+rule: The keys of the providers the harness knows are withheld whatever list a caller gives.
+file: crates/cineris-base/src/child_env.rs
+in: is_withheld
+find: KNOWN_KEYS
+replace: [""; 0]
+packages: cineris-base,cineris-tools
+caught-by:
+    cineris-base child_env::tests::a_harness_program_is_given_no_key_and_the_rest_as_it_came
+    cineris-base git::tests::sys_a_filter_driver_is_given_no_key_variable
+    cineris-tools shell::env::tests::credentials_are_removed_and_the_rest_is_inherited
+    cineris-tools::it shell_search::sys_the_probe_is_given_no_key_variable
+
+# ------------------------------------------------------ the shell's probe
+
+[break] probe-environment-not-cleared
+rule: A program run for its answer inherits nothing beside the environment its caller built.
+file: crates/cineris-tools/src/process/brief.rs
+in: run
+find: .env_clear()
+replace:
+caught-by:
+    cineris-tools::it shell_search::sys_the_probe_is_given_no_key_variable
+
+[break] probe-given-the-whole-environment
+rule: The shell asked its version is given what a command is given, not the environment it inherits.
+file: crates/cineris-tools/src/shell/kind.rs
+in: probe_version_from
+find: let env = super::env::build(inherited, removed, cfg!(windows));
+replace: let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = inherited.into_iter().collect(); let _ = removed;
+caught-by:
+    cineris-tools::it shell_search::sys_the_probe_is_given_no_key_variable
+
+# ------------------------------------------------------ the shell's search
+
+[break] a-link-in-a-root-that-leads-out-taken
+rule: A program reached through a link inside an avoided root is passed over, wherever the link leads: the link can be replaced after the harness chose it.
+file: crates/cineris-base/src/program.rs
+in: passes_through
+find: .chain(std::iter::once(&real))
+replace: .skip(usize::MAX).chain(std::iter::once(&real))
+packages: cineris-base
+caught-by:
+    cineris-base program::tests::a_link_into_or_out_of_an_avoided_root_is_passed_over
+
+[break] a-link-only-followed-to-its-end
+rule: A link outside the roots that leads through a link inside one, and out again, is passed over: each link on the way is a place a command could change.
+file: crates/cineris-base/src/program.rs
+in: places_on_the_way
+find: places.push(directory.join(&name));
+replace: if !std::fs::symlink_metadata(&next).is_ok_and(|metadata| metadata.file_type().is_symlink()) { places.push(directory.join(&name)); }
+packages: cineris-base
+caught-by:
+    cineris-base program::tests::a_link_into_or_out_of_an_avoided_root_is_passed_over
+
+[break] shell-found-inside-a-write-root
+rule: A shell on `PATH` inside the workspace or a write root is never chosen: the search goes on to the next.
+file: crates/cineris-tools/src/shell/kind.rs
+in: on_path
+find: cineris_base::program::find_outside(&self.path, name, self.windows, &self.avoid)
+replace: cineris_base::program::find(&self.path, name, self.windows)
+packages: cineris-tools,cineris-core
+caught-by:
+    cineris-tools::it shell_search::a_shell_in_an_avoided_directory_is_not_chosen
+    cineris-core assemble::tests::a_shell_inside_a_write_root_is_passed_over
+
+[break] a-configured-shell-in-a-write-root-taken
+rule: A configured absolute shell inside a write root of a session that confines is refused, as nothing can be searched past it.
+file: crates/cineris-core/src/assemble.rs
+in: shell_outside_roots
+find: if under_a_write_root(found.program(), confine_roots) {
+replace: if false {
+caught-by:
+    cineris-core assemble::tests::a_shell_inside_a_write_root_is_passed_over
+
+# ------------------------------------------------------ the reload's keys
+
+[break] a-reload-looks-again-only-at-key-env
+rule: Any reload that changes a provider looks again at what its key variables are: a header read from a variable holds a key too.
+file: crates/cineris-core/src/reload.rs
+find: if touches(now, &["providers"]) {
+replace: if provider_field(now, &["key_env"]) {
+caught-by:
+    cineris-core::it shell::sys_a_reload_withholds_a_variable_a_new_header_reads

@@ -24,6 +24,14 @@
 //! the sandbox, reading only, with no network: whatever the configuration
 //! makes it start is confined as the command was, and can change nothing
 //! (found by the third review of step 26).
+//!
+//! **What such a program sees** is git's environment, so that is built, not
+//! inherited ([`crate::child_env::for_harness`]): no provider key variable,
+//! and a `PATH` of absolute directories only, so that a filter named by a
+//! bare name is never a workspace file found through `.` or an empty entry.
+//! Where nothing confines commands (no sandbox, `unrestricted`) the filter
+//! runs with the user's rights, and before the harness's own processes'
+//! fixes it ran with the keys too.
 
 #![allow(
     clippy::disallowed_types,
@@ -103,6 +111,28 @@ pub trait Confinement: Send + Sync + std::fmt::Debug {
         crate::program::git().map(Path::to_path_buf)
     }
 
+    /// The variables git, and every program it starts, is not given,
+    /// beside [`crate::child_env::KNOWN_KEYS`]: the providers' key
+    /// variables as they are now ([`crate::child_env::Withheld`]). Required,
+    /// so that every confinement says what it withholds: a filter a
+    /// repository's configuration names runs with what git is given.
+    fn withheld(&self) -> Vec<String>;
+
+    /// The directories git, and every program it starts, is never found
+    /// in: the workspace, and the write roots while commands are confined.
+    /// Required for the same reason as [`Confinement::withheld`]: a filter
+    /// git finds by a bare name is found on git's `PATH`, which leaves
+    /// these out ([`crate::child_env::for_harness`]).
+    fn avoid(&self) -> Vec<PathBuf>;
+
+    /// The environment git's is built from, before the withheld variables
+    /// go and `PATH` keeps its absolute directories
+    /// ([`crate::child_env::for_harness`]): this process's own, unless a
+    /// test gives one of its own.
+    fn inherited(&self) -> Vec<(OsString, OsString)> {
+        std::env::vars_os().collect()
+    }
+
     /// What to start in place of `git` with `arguments`.
     ///
     /// # Errors
@@ -135,6 +165,17 @@ impl Confinement for AsItIs {
         false
     }
 
+    /// No list beyond the known keys: a harness with a configuration gives
+    /// its own confinement, which holds the configured keys.
+    fn withheld(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// No directory: where nothing is confined, and nothing is configured.
+    fn avoid(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
     fn start(&self, git: &Path, arguments: Vec<OsString>) -> Result<Started, String> {
         Ok(Started {
             program: git.to_owned(),
@@ -161,9 +202,16 @@ pub enum StartError {
 /// Starts the harness's own git with `arguments`, in `dir`, inside
 /// `confinement`: the one way every crate starts it.
 ///
-/// Git is the one found in the absolute directories of `PATH`
-/// ([`crate::program::git`]), started by that path, with [`GIT_HARDENING`]
-/// before `arguments` and [`GIT_ENV`] in its environment. Its output is a
+/// Git is the one the confinement finds ([`Confinement::git_program`]),
+/// started by that path, with [`GIT_HARDENING`] before `arguments`. Its
+/// environment is built, not inherited: the confinement's
+/// ([`Confinement::inherited`]) without the providers' key variables and
+/// with a `PATH` of absolute directories only
+/// ([`crate::child_env::for_harness`]), then [`GIT_ENV`]. A program git
+/// starts in turn (a filter a repository's configuration names) is given
+/// the same, so it never sees a key, and never finds a workspace file by a
+/// bare name through an empty or relative `PATH` entry. A launcher that
+/// confines git passes its environment on as it was given. Its output is a
 /// pipe for the caller to read; its standard error is thrown away; its
 /// input is closed, after what the confinement gives it to read.
 ///
@@ -185,10 +233,18 @@ pub fn start(
     let started = confinement
         .start(&git, all)
         .map_err(StartError::NotConfined)?;
+    let env = crate::child_env::for_harness(
+        confinement.inherited(),
+        &confinement.withheld(),
+        &confinement.avoid(),
+        cfg!(windows),
+    );
     let mut command = Command::new(&started.program);
     command
         .args(&started.arguments)
         .current_dir(dir)
+        .env_clear()
+        .envs(env)
         .envs(GIT_ENV)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -211,6 +267,10 @@ pub fn start(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the tests make a repository of their own in a scratch directory"
+)]
 mod tests {
     use super::*;
 
@@ -227,6 +287,14 @@ mod tests {
     impl Confinement for Recording {
         fn confines(&self) -> bool {
             true
+        }
+
+        fn withheld(&self) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn avoid(&self) -> Vec<PathBuf> {
+            Vec::new()
         }
 
         fn start(&self, git: &Path, arguments: Vec<OsString>) -> Result<Started, String> {
@@ -281,6 +349,179 @@ mod tests {
             Err(StartError::NotConfined(_))
         ));
         assert!(!AsItIs.confines());
+    }
+
+    /// Git as it is, from an environment the test gives, withholding what
+    /// the test names: the core's confinement, without a sandbox.
+    #[derive(Debug)]
+    struct Given {
+        inherited: Vec<(OsString, OsString)>,
+        withheld: Vec<String>,
+    }
+
+    impl Confinement for Given {
+        fn confines(&self) -> bool {
+            false
+        }
+
+        fn withheld(&self) -> Vec<String> {
+            self.withheld.clone()
+        }
+
+        fn avoid(&self) -> Vec<PathBuf> {
+            Vec::new()
+        }
+
+        fn inherited(&self) -> Vec<(OsString, OsString)> {
+            self.inherited.clone()
+        }
+
+        fn start(&self, git: &Path, arguments: Vec<OsString>) -> Result<Started, String> {
+            AsItIs.start(git, arguments)
+        }
+    }
+
+    /// A repository of its own, with `a.txt` sent through the filter `x`,
+    /// whose clean command is `clean`. `None` when the system has no git,
+    /// which only a desk without one may lack.
+    fn filtered_repository(test: &str, clean: &str) -> Option<PathBuf> {
+        use crate::rng::{Rng, SystemRng};
+        let Some(git) = crate::program::git() else {
+            assert!(std::env::var_os("CI").is_none(), "CI has git");
+            return None;
+        };
+        let dir = std::env::temp_dir().join(format!(
+            "cineris-base-git-{test}-{:016x}",
+            SystemRng::new().next_u64()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let run = |arguments: &[&str]| {
+            let status = Command::new(git)
+                .args(arguments)
+                .current_dir(&dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "git {arguments:?}");
+        };
+        run(&["init", "--quiet"]);
+        run(&["config", "filter.x.clean", clean]);
+        std::fs::write(dir.join(".gitattributes"), "a.txt filter=x\n").unwrap();
+        std::fs::write(dir.join("a.txt"), "content\n").unwrap();
+        Some(dir)
+    }
+
+    /// Asks the harness's git to hash `a.txt`, which runs its clean filter.
+    fn hash_through_the_filter(confinement: &Given, dir: &Path) {
+        let child = start(confinement, dir, &["hash-object", "a.txt"]).unwrap();
+        // The answer does not matter: a filter that is not found or fails
+        // leaves the content as it is.
+        let _ = child.wait_with_output().unwrap();
+    }
+
+    /// A variable of this process's own that the test leaves out of what it
+    /// gives git: one cargo or nextest sets for every test. A child that
+    /// sees it was given this process's environment on top of the one
+    /// built for it.
+    fn a_variable_of_the_process() -> Option<String> {
+        std::env::vars_os()
+            .filter_map(|(name, _)| name.into_string().ok())
+            .find(|name| name.starts_with("NEXTEST") || name.starts_with("CARGO_"))
+    }
+
+    /// A key variable in the harness's environment never reaches a filter
+    /// driver the repository's configuration names (found by the shell
+    /// environment's fixes: `git::start` passed the harness's whole
+    /// environment). The same filter, given the variable unwithheld, does
+    /// see it: so the filter ran, and it is the list that kept it out.
+    #[test]
+    fn sys_a_filter_driver_is_given_no_key_variable() {
+        const KEY: &str = "CINERIS_TEST_PROVIDER_KEY";
+        let process = a_variable_of_the_process();
+        let extra = process.as_deref().unwrap_or("CINERIS_TEST_NOT_SET");
+        let clean = format!(
+            "printf '%s %s %s\\n' \"${{{KEY}-unset}}\" \"${{ANTHROPIC_API_KEY-unset}}\" \
+             \"${{{extra}-unset}}\" > .git/seen; cat"
+        );
+        let Some(dir) = filtered_repository("keys", &clean) else {
+            return;
+        };
+        let mut inherited: Vec<(OsString, OsString)> = std::env::vars_os()
+            .filter(|(name, _)| name.to_str() != Some(extra))
+            .collect();
+        inherited.push((KEY.into(), "sk-configured-key".into()));
+        inherited.push(("ANTHROPIC_API_KEY".into(), "sk-known-key".into()));
+        let seen = |withheld: &[&str]| {
+            let _ = std::fs::remove_file(dir.join(".git").join("seen"));
+            let given = Given {
+                inherited: inherited.clone(),
+                withheld: withheld.iter().map(|name| (*name).to_owned()).collect(),
+            };
+            hash_through_the_filter(&given, &dir);
+            std::fs::read_to_string(dir.join(".git").join("seen"))
+                .unwrap_or_else(|_| panic!("the filter did not run"))
+        };
+        assert_eq!(
+            seen(&[KEY]).trim(),
+            "unset unset unset",
+            "a key variable, or a variable of the harness the environment given to git left \
+             out, reached a filter git ran"
+        );
+        // Not withheld, the configured key reaches it: the filter ran, and
+        // saw what it was given. The known one goes whatever the list.
+        assert_eq!(seen(&[]).trim(), "sk-configured-key unset unset");
+        if process.is_none() {
+            assert!(std::env::var_os("CI").is_none(), "{extra}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A filter named by a bare name is never found through an empty or
+    /// relative `PATH` entry, which names the directory git runs in: the
+    /// workspace. The same program, through an absolute entry, runs.
+    #[cfg(unix)]
+    #[test]
+    fn sys_a_relative_path_entry_does_not_find_a_filter() {
+        use std::os::unix::fs::PermissionsExt;
+        let name = "cineris-planted-filter";
+        let Some(dir) = filtered_repository("relative", name) else {
+            return;
+        };
+        let planted = dir.join(name);
+        std::fs::write(&planted, "#!/bin/sh\ntouch .git/planted\ncat\n").unwrap();
+        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let marker = dir.join(".git").join("planted");
+        let real = std::env::var("PATH").unwrap_or_default();
+        let ran = |path: String| {
+            let _ = std::fs::remove_file(&marker);
+            let mut inherited: Vec<(OsString, OsString)> = std::env::vars_os()
+                .filter(|(name, _)| name != "PATH")
+                .collect();
+            inherited.push(("PATH".into(), path.into()));
+            let given = Given {
+                inherited,
+                withheld: Vec::new(),
+            };
+            hash_through_the_filter(&given, &dir);
+            marker.exists()
+        };
+        for path in [
+            format!(".:{real}"),
+            format!(":{real}"),
+            format!("{real}:"),
+            format!("./:{real}"),
+            ".".to_owned(),
+            String::new(),
+        ] {
+            assert!(
+                !ran(path.clone()),
+                "git found the workspace's {name} through `PATH={path}`"
+            );
+        }
+        // Named by an absolute entry, it runs: the filter is one git runs.
+        assert!(ran(format!("{}:{real}", dir.display())));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

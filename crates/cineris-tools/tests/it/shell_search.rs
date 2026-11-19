@@ -36,6 +36,7 @@ fn search(windows: bool, path: &[&Path]) -> ShellSearch {
             .collect(),
         system_root: None,
         comspec: None,
+        avoid: Vec::new(),
     }
 }
 
@@ -237,6 +238,7 @@ fn sys_a_relative_path_entry_does_not_make_a_file_there_the_shell() {
                     path: std::env::split_paths(&path).collect(),
                     system_root: None,
                     comspec: None,
+                    avoid: Vec::new(),
                 }
             };
             let shown = |found: Result<cineris_tools::Shell, ShellError>| {
@@ -255,6 +257,7 @@ fn sys_a_relative_path_entry_does_not_make_a_file_there_the_shell() {
                 path: RELATIVE.iter().map(PathBuf::from).collect(),
                 system_root: None,
                 comspec: None,
+                avoid: Vec::new(),
             };
             rerun::say(
                 &format!("{name} only relative"),
@@ -451,4 +454,161 @@ fn the_real_search_finds_this_systems_shell() {
         );
     }
     assert!(found.program().is_absolute(), "{found:?}");
+}
+
+/// A shell in an avoided directory of `PATH` (the workspace's activated
+/// `.venv/bin`, a write root) is never chosen, by the default search or a
+/// configured name, on either system's rules: the search goes on to the
+/// next. Nothing avoided, it is the one taken. Found by the shell
+/// environment's fixes: the shell was found by `program::find`, which took
+/// any absolute entry.
+#[test]
+fn a_shell_in_an_avoided_directory_is_not_chosen() {
+    let ws = Workspace::new("search_avoided");
+    for (windows, name, configured) in [(false, "bash", "bash"), (true, "pwsh.exe", "pwsh")] {
+        let planted_root = ws.dir.join(format!("ws-{configured}"));
+        let planted = program(&planted_root.join(".venv").join("bin"), name);
+        let real = program(&ws.dir.join(format!("usr-{configured}")), name);
+        let path = [planted.parent().unwrap(), real.parent().unwrap()];
+        let mut avoiding = search(windows, &path);
+        avoiding.avoid = vec![planted_root.clone()];
+        for asked in [None, Some(configured)] {
+            assert_eq!(
+                avoiding.find(asked, None).expect("a shell").program(),
+                real,
+                "{name}, asked {asked:?}: the shell in the avoided directory was chosen"
+            );
+            assert_eq!(
+                search(windows, &path)
+                    .find(asked, None)
+                    .expect("a shell")
+                    .program(),
+                planted,
+                "{name}, asked {asked:?}"
+            );
+        }
+        // With only the avoided one, it is not found by its name.
+        let mut only = search(windows, &path[..1]);
+        only.avoid = vec![planted_root];
+        assert!(only.find(Some(configured), None).is_err(), "{name}");
+    }
+}
+
+/// A fake shell that writes what it was given to a file beside itself and
+/// says a version: on Linux a `bash` script, on Windows a `pwsh.bat`, which
+/// the system runs through `cmd.exe`.
+fn telling_shell(dir: &Path, extra: &str) -> (cineris_tools::Shell, PathBuf) {
+    std::fs::create_dir_all(dir).expect("a directory");
+    let seen = dir.join("seen");
+    if cfg!(windows) {
+        let path = dir.join("pwsh.bat");
+        std::fs::write(
+            &path,
+            format!(
+                "@echo off\r\n(echo key=%CINERIS_TEST_PROVIDER_KEY%& echo \
+                 known=%ANTHROPIC_API_KEY%& echo extra=%{extra}%& echo path=%PATH%) > \
+                 \"%~dp0seen\"\r\necho PowerShell 7.9.9\r\n"
+            ),
+        )
+        .expect("write the shell");
+        (cineris_tools::Shell::of_kind(ShellKind::Pwsh, path), seen)
+    } else {
+        let path = program(dir, "bash");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf 'key=%s\\nknown=%s\\nextra=%s\\npath=%s\\n' \
+                 \"${{CINERIS_TEST_PROVIDER_KEY-}}\" \"${{ANTHROPIC_API_KEY-}}\" \
+                 \"${{{extra}-}}\" \"$PATH\" > \"${{0%/*}}/seen\"\necho 'GNU bash, version \
+                 9.9.9(1)-release'\n"
+            ),
+        )
+        .expect("write the shell");
+        (cineris_tools::Shell::of_kind(ShellKind::Bash, path), seen)
+    }
+}
+
+/// The shell asked its version is given what a command is given: no key
+/// variable (a configured one the removal list names, nor a known one), no
+/// variable of the harness's beyond the environment it was built from, and
+/// a `PATH` of absolute directories only. Found by the shell environment's
+/// fixes: the probe ran unconfined with the harness's whole environment.
+/// The same shell, its key not withheld, sees it: so it ran, and it is the
+/// list that kept it out.
+#[test]
+fn sys_the_probe_is_given_no_key_variable() {
+    let ws = Workspace::new("probe_env");
+    // A variable of this process the environment given leaves out: one
+    // cargo or nextest sets for every test.
+    let extra = std::env::vars_os()
+        .filter_map(|(name, _)| name.into_string().ok())
+        .find(|name| name.starts_with("NEXTEST") || name.starts_with("CARGO_"))
+        .unwrap_or_else(|| "CINERIS_TEST_NOT_SET".to_owned());
+    let (shell, seen) = telling_shell(&ws.dir.join("fake"), &extra);
+    let (absolute, separator) = if cfg!(windows) {
+        (
+            std::env::var("SystemRoot").expect("SystemRoot") + "\\System32",
+            ";",
+        )
+    } else {
+        ("/usr/bin".to_owned(), ":")
+    };
+    let mut inherited: Vec<(std::ffi::OsString, std::ffi::OsString)> = std::env::vars_os()
+        .filter(|(name, _)| {
+            let name = name.to_string_lossy();
+            name != extra.as_str() && !name.eq_ignore_ascii_case("PATH")
+        })
+        .collect();
+    inherited.push(("CINERIS_TEST_PROVIDER_KEY".into(), "sk-configured".into()));
+    inherited.push(("ANTHROPIC_API_KEY".into(), "sk-known".into()));
+    inherited.push((
+        "PATH".into(),
+        format!(".{separator}{absolute}{separator}bin").into(),
+    ));
+    let said = |removed: &[String]| -> Vec<String> {
+        let _ = std::fs::remove_file(&seen);
+        let mut asked = shell.clone();
+        asked.probe_version_from(crate::LIMIT, inherited.clone(), removed);
+        assert_eq!(
+            asked.version(),
+            Some("9.9.9"),
+            "the fake shell did not answer"
+        );
+        std::fs::read_to_string(&seen)
+            .expect("the shell wrote what it saw")
+            .lines()
+            .map(|line| line.trim_end().to_owned())
+            .collect()
+    };
+    // In a batch file an unset variable is empty, as in the script.
+    let value = |lines: &[String], name: &str| -> String {
+        lines
+            .iter()
+            .find_map(|line| line.strip_prefix(&format!("{name}=")))
+            .unwrap_or_else(|| panic!("no {name} in {lines:?}"))
+            .to_owned()
+    };
+    // The removal list's own key is gone, with the known one and the
+    // harness's variable; `PATH` is its absolute entry.
+    let lines = said(&["CINERIS_TEST_PROVIDER_KEY".to_owned()]);
+    assert_eq!(
+        value(&lines, "key"),
+        "",
+        "the configured key reached the probe: {lines:?}"
+    );
+    assert_eq!(
+        value(&lines, "known"),
+        "",
+        "a known key reached the probe: {lines:?}"
+    );
+    assert_eq!(
+        value(&lines, "extra"),
+        "",
+        "a variable of the harness's own reached the probe: it inherited: {lines:?}"
+    );
+    assert_eq!(value(&lines, "path"), absolute, "{lines:?}");
+    // Not on the list, the configured key reaches it.
+    let lines = said(&[]);
+    assert_eq!(value(&lines, "key"), "sk-configured", "{lines:?}");
+    assert_eq!(value(&lines, "known"), "", "{lines:?}");
 }

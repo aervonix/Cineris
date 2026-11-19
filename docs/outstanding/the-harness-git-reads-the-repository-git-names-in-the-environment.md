@@ -1,0 +1,8 @@
+The harness's own git reads `GIT_DIR`, `GIT_INDEX_FILE` and git's other variables of a repository's place from the harness's environment, so a harness started from a git hook answers about another repository.
+
+- Area: cineris-base
+- Owner: the maintainers
+
+| Item | Who | When |
+|---|---|---|
+| **The harness's git takes the repository its environment names.** Found by the audit of every process start in the harness's own processes' fixes ([../steps/harness-process-fixes/answered.md](../steps/harness-process-fixes/answered.md)). `cineris_base::git::start` builds git's environment from the harness's (`child_env::for_harness`), which takes out the providers' key variables and fixes `PATH` and passes the rest as it came, `GIT_*` included. A harness started where git has set its own variables (inside a hook, a `rebase --exec`, a `git submodule foreach`) has `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE` or `GIT_OBJECT_DIRECTORY` set. Its git then answers about that repository and index while the change detection found the workspace's repository by walking up for `.git`, so a base state or a change list could describe another repository. Not a security hole: the hardening is given with `-c`, which git ranks above every setting from the environment, and the variables are the user's own. **Recommendation:** take out of git's environment what `git rev-parse --local-env-vars` lists, which is what git itself does before it runs a command in another repository, and keep the user's global settings (`GIT_CONFIG_GLOBAL`, `GIT_CONFIG_NOSYSTEM`). Left open on purpose in the fixes (the maintainers' call): they change what git sees only by the keys and `PATH`. | The maintainers | Before the first release |

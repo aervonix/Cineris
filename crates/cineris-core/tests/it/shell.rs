@@ -326,6 +326,61 @@ fn sys_a_reload_withholds_a_new_key_variable_and_still_the_old_one() {
     });
 }
 
+/// A reload that gives a provider a header read from a variable withholds
+/// that variable from the next command, as a new `key_env` is: a header's
+/// variable holds a key too. Found by the early review of the harness's own
+/// processes' fixes: the reload looked again at the keys only when a
+/// `key_env` changed.
+#[test]
+fn sys_a_reload_withholds_a_variable_a_new_header_reads() {
+    let world = World::new(
+        "shell_env_reload_header",
+        [
+            calls(&[("c1", "shell", json!({"command": print_env()}))]),
+            says("Seen."),
+        ],
+    );
+    let provider = "[providers.mine]\nprotocol = \"anthropic-messages\"\nbase_url = \
+                    \"https://llm.example.invalid\"\nkey_env = \"MINE_PROVIDER_KEY\"\n";
+    world.user_config(provider);
+    let core = world.core_with(|options| {
+        options.shell_env = Some(world.shell_env(&[
+            ("MINE_PROVIDER_KEY", KEY),
+            ("HEADER_PROVIDER_KEY", KEY),
+            ("KEPT", "yes"),
+        ]));
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        world.user_config(&format!(
+            "{provider}\n[providers.mine.headers]\nx-team = {{ env = \"HEADER_PROVIDER_KEY\" }}\n"
+        ));
+        let reloaded = front
+            .op(Op::ConfigReload(ConfigReloadParams::default()))
+            .await
+            .expect("the reload answers");
+        let OpResult::ConfigReload(reloaded) = reloaded else {
+            panic!("not the result of config/reload");
+        };
+        assert!(reloaded.errors.is_empty(), "{reloaded:?}");
+        front.turn_allowing("show the environment").await;
+        let text = whole_output(&front, &shell_result(&front)).await;
+        let env: BTreeMap<String, String> = text
+            .lines()
+            .filter_map(|line| line.trim_end().split_once('='))
+            .map(|(name, value)| (name.to_ascii_uppercase(), value.to_owned()))
+            .collect();
+        assert_eq!(env.get("KEPT").map(String::as_str), Some("yes"), "{text}");
+        assert_eq!(
+            env.get("HEADER_PROVIDER_KEY"),
+            None,
+            "the variable a header a reload added reads reached the command\n{text}"
+        );
+        assert!(!text.contains(KEY), "{text}");
+        front.close().await;
+    });
+}
+
 /// A command that ignores the polite interrupt sits out a grace that
 /// nothing ends in this test. The second interrupt kills it.
 #[cfg(unix)]

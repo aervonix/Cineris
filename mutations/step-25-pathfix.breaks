@@ -9,27 +9,27 @@
 
 [break] path-loses-what-follows-its-first-entries
 rule: `PATH` keeps every absolute directory it was given, in order, however long it is: only the empty and relative entries are dropped.
-file: crates/cineris-tools/src/shell/env.rs
+file: crates/cineris-base/src/child_env.rs
 in: absolute_entries
 find: .collect();
 replace: .take(32).collect();
-packages: cineris-core
+packages: cineris-base,cineris-core
 caught-by:
     cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
 
 [break] path-loses-its-first-entry
 rule: `PATH` keeps its first absolute directory: only the empty and relative entries are dropped.
-file: crates/cineris-tools/src/shell/env.rs
+file: crates/cineris-base/src/child_env.rs
 in: absolute_entries
 find: .collect();
 replace: .skip(1).collect();
-packages: cineris-core
+packages: cineris-base,cineris-core
 caught-by:
     cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
 
 [break] path-put-in-order
 rule: `PATH` keeps the order it was given in, which is the order programs are looked for in.
-file: crates/cineris-tools/src/shell/env.rs
+file: crates/cineris-base/src/child_env.rs
 in: absolute_entries
 find: OsString::from(kept.join(&separator.to_string()))
 replace:
@@ -38,13 +38,13 @@ replace:
         kept.sort_unstable();
         OsString::from(kept.join(&separator.to_string()))
     }
-packages: cineris-core
+packages: cineris-base,cineris-core
 caught-by:
     cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
 
 [break] path-repeats-taken-out
 rule: `PATH` keeps a directory it names twice: nothing but the empty and relative entries is dropped.
-file: crates/cineris-tools/src/shell/env.rs
+file: crates/cineris-base/src/child_env.rs
 in: absolute_entries
 find: OsString::from(kept.join(&separator.to_string()))
 replace:
@@ -53,6 +53,6 @@ replace:
         kept.dedup();
         OsString::from(kept.join(&separator.to_string()))
     }
-packages: cineris-core
+packages: cineris-base,cineris-core
 caught-by:
     cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on

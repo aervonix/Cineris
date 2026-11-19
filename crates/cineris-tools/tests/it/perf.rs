@@ -151,7 +151,7 @@ fn perf_starting_a_command() {
     let ws = Workspace::new("perf_start");
     let mut shell = ShellSearch::from_env().find(None, None).expect("a shell");
     let probe = Instant::now();
-    shell.probe_version(std::time::Duration::from_secs(30));
+    shell.probe_version(std::time::Duration::from_secs(30), &[]);
     println!(
         "the shell: {}; asking its version took {:.1} ms",
         shell.name(),

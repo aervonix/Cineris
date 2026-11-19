@@ -472,6 +472,14 @@ impl cineris_base::git::Confinement for Recording {
         true
     }
 
+    fn withheld(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn avoid(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
     fn start(
         &self,
         program: &Path,
@@ -545,6 +553,14 @@ struct Flipping(std::sync::atomic::AtomicBool);
 impl cineris_base::git::Confinement for Flipping {
     fn confines(&self) -> bool {
         self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn withheld(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn avoid(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
     }
 
     fn start(

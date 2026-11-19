@@ -987,7 +987,12 @@ async fn prepare(
             ),
         });
     }
-    if provider_field(now, &["key_env"]) {
+    // Any change of a provider may change what is a key: its `key_env`, a
+    // header that reads a variable, a provider added or taken out. Before
+    // the harness's own processes' fixes only `key_env` was looked at, and a
+    // header's variable reached every command and the harness's git until
+    // the next session (found by their early review).
+    if touches(now, &["providers"]) {
         prepared.key_variables = Some(crate::provider::key_variables(&mix.settings));
     }
     if trusted.repository != was.repository {

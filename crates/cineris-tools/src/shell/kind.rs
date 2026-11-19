@@ -406,13 +406,33 @@ impl Shell {
     /// that does not say, or says nothing this can read, stays without a
     /// version. Windows PowerShell is 5.1 and `cmd.exe` has none worth
     /// telling, so neither is started.
-    pub fn probe_version(&mut self, limit: std::time::Duration) {
+    ///
+    /// **It is started with what a command is given** (`env::build`): this
+    /// process's environment without the providers' key variables and
+    /// what `removed` names (the shell tool's own list), and a `PATH` of
+    /// absolute directories. It runs unconfined, so it is never given more
+    /// than a confined command would be. Before the harness's own
+    /// processes' fixes it had the harness's whole environment.
+    pub fn probe_version(&mut self, limit: std::time::Duration, removed: &[String]) {
+        self.probe_version_from(limit, std::env::vars_os(), removed);
+    }
+
+    /// [`Shell::probe_version`], with the environment it is built from in
+    /// place of this process's own: for a test, which cannot change its
+    /// process's.
+    pub fn probe_version_from(
+        &mut self,
+        limit: std::time::Duration,
+        inherited: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+        removed: &[String],
+    ) {
         let arguments: &[&str] = match self.kind {
             ShellKind::Bash | ShellKind::Pwsh => &["--version"],
             ShellKind::Posix | ShellKind::WindowsPowerShell | ShellKind::Cmd => return,
         };
+        let env = super::env::build(inherited, removed, cfg!(windows));
         cineris_base::hook::probed(self.program.as_os_str());
-        let Ok(said) = crate::process::brief::run(&self.program, arguments, None, &[], limit)
+        let Ok(said) = crate::process::brief::run(&self.program, arguments, None, &env, limit)
         else {
             return;
         };
@@ -484,6 +504,13 @@ pub struct ShellSearch {
     /// `%ComSpec%`, the system's own word for where `cmd.exe` is. Used only
     /// when it is absolute.
     pub comspec: Option<PathBuf>,
+    /// Directories a shell found on `PATH` is never taken from: the
+    /// workspace, and the session's write roots while its commands are
+    /// confined, where a command or a tool the model ran could have put a
+    /// program (`cineris_base::program::find_outside`). The search goes on
+    /// down `PATH` past a candidate inside one. A configured absolute path
+    /// is taken as it is named, wherever it is.
+    pub avoid: Vec<PathBuf>,
 }
 
 impl ShellSearch {
@@ -498,6 +525,7 @@ impl ShellSearch {
                 .unwrap_or_default(),
             system_root: variable("SystemRoot").map(PathBuf::from),
             comspec: variable("ComSpec").map(PathBuf::from),
+            avoid: Vec::new(),
         }
     }
 
@@ -515,10 +543,13 @@ impl ShellSearch {
     /// arguments before the command.
     ///
     /// **What is found is an absolute path, as found.** Only absolute
-    /// directories are looked in (`cineris_base::program::find`), so nothing
-    /// is found through a relative entry of `PATH`. An absolute entry is
-    /// the user's own, even one inside the workspace (an activated virtual
-    /// environment). A link is not resolved here: a program that is several
+    /// directories are looked in, and none of [`ShellSearch::avoid`]
+    /// (`cineris_base::program::find_outside`), so nothing is found through
+    /// a relative entry of `PATH`, nor through an absolute one inside the
+    /// workspace (an activated virtual environment): a file there, which
+    /// the model can write, must not become the program that runs every
+    /// command (the harness's own processes' fixes; until then such an
+    /// entry was taken where nothing confined). A link is not resolved here: a program that is several
     /// programs (`busybox`) knows which one to be from the name it is
     /// started by. The harness keys what it keeps about the shell by the
     /// resolved path.
@@ -604,10 +635,11 @@ impl ShellSearch {
     }
 
     /// The first program called `name` in the absolute directories of
-    /// `PATH`. Whether a directory is absolute is this system's question,
-    /// as the directories are this system's.
+    /// `PATH` whose real path is in none of [`ShellSearch::avoid`]. Whether a
+    /// directory is absolute is this system's question, as the directories
+    /// are this system's.
     fn on_path(&self, name: &str) -> Option<PathBuf> {
-        cineris_base::program::find(&self.path, name, self.windows)
+        cineris_base::program::find_outside(&self.path, name, self.windows, &self.avoid)
     }
 }
 

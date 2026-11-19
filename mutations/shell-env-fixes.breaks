@@ -36,38 +36,44 @@ caught-by:
 
 [break] path-left-empty-when-nothing-is-absolute
 rule: On Unix a command is never given an empty `PATH`, which is the directory it runs in.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
+file: crates/cineris-base/src/child_env.rs
+in: one_absolute_path
 find: Some((name, value)) if windows || !value.is_empty() => env.push((name, value)),
 replace: Some((name, value)) => env.push((name, value)),
 os: linux
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
     cineris-tools::it shell::bash::sys_a_workspace_file_named_like_a_command_does_not_run
     cineris-tools::it shell::sh::sys_a_workspace_file_named_like_a_command_does_not_run
+    cineris-base child_env::tests::a_harness_program_searches_only_absolute_directories
 
 [break] path-left-out-when-nothing-is-absolute
 rule: On Unix a command is never left without a `PATH`, with which a shell takes a default of its own.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
+file: crates/cineris-base/src/child_env.rs
+in: one_absolute_path
 find: _ => env.push((OsString::from(PATH), OsString::from(NO_ABSOLUTE_PATH)))
 replace: Some(_) => env.push((OsString::from(PATH), OsString::from(NO_ABSOLUTE_PATH))), None => {}
 os: linux
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
     cineris-tools::it shell::bash::sys_a_workspace_file_named_like_a_command_does_not_run
     cineris-tools::it shell::sh::sys_a_workspace_file_named_like_a_command_does_not_run
+    cineris-base child_env::tests::a_harness_program_searches_only_absolute_directories
 
 [break] path-with-an-absolute-entry-replaced
 rule: A `PATH` that keeps an absolute directory is passed on, not replaced.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
+file: crates/cineris-base/src/child_env.rs
+in: one_absolute_path
 find: Some((name, value)) if windows || !value.is_empty() => env.push((name, value)),
 replace: Some((name, value)) if windows => env.push((name, value)),
 os: linux
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
     cineris-tools::it shell::bash::sys_a_workspace_file_named_like_a_command_does_not_run
+    cineris-base child_env::tests::a_harness_program_searches_only_absolute_directories
 
 # Only the unit test sees this one: the process runner hands the list to
 # std's `Command`, which keeps the last value of a name, and `build` puts
@@ -75,24 +81,28 @@ caught-by:
 # the early review found, where the last was the filtered, empty one.
 [break] a-second-path-passed-on
 rule: An environment that names `PATH` twice gives a command one `PATH`, of absolute directories: a child would take the last, unfiltered.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
+file: crates/cineris-base/src/child_env.rs
+in: one_absolute_path
 find: env.retain(|(name, _)| !is_path(name));
 replace: if let Some(at) = env.iter().position(|(name, _)| is_path(name)) { env.remove(at); }
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
+    cineris-base child_env::tests::a_harness_program_searches_only_absolute_directories
 
 [break] a-path-that-holds-a-program
 rule: The `PATH` a command is given when none of the harness's is absolute is the system's own directories, and no directory a command could put a program in.
-file: crates/cineris-tools/src/shell/env.rs
+file: crates/cineris-base/src/child_env.rs
 in: NO_ABSOLUTE_PATH
 in-string: /usr/bin:/bin
 replace: /tmp
 os: linux
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
     cineris-tools::it shell::bash::sys_a_workspace_file_named_like_a_command_does_not_run
     cineris-tools::it shell::sh::sys_a_workspace_file_named_like_a_command_does_not_run
+    cineris-base child_env::tests::a_harness_program_searches_only_absolute_directories
 
 [break] path-replaced-without-telling-the-model
 rule: The shell tool's description tells the model when a command's `PATH` was replaced, and to run programs by their full paths.
@@ -122,18 +132,21 @@ caught-by:
 
 [break] the-description-judged-by-the-paths-text
 rule: Whether the description says `PATH` was replaced is told by the code that replaces it, not read back from the text, which a harness's own `PATH` may share.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
+file: crates/cineris-base/src/child_env.rs
+in: one_absolute_path
 find: let replaced = !windows && first.as_ref().is_none_or(|(_, value)| value.is_empty());
 replace: let replaced = !windows && first.as_ref().is_none_or(|(_, value)| value.is_empty() || value == NO_ABSOLUTE_PATH);
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
 
 [break] windows-given-the-unix-path
 rule: On Windows the `PATH` is passed on as it is left, and none is made where there was none.
-file: crates/cineris-tools/src/shell/env.rs
-in: assemble
+file: crates/cineris-base/src/child_env.rs
+in: one_absolute_path
 find: _ if windows => {}
 replace:
+packages: cineris-base,cineris-tools
 caught-by:
     cineris-tools shell::env::tests::path_keeps_only_its_absolute_directories
+    cineris-base child_env::tests::on_windows_a_harness_program_is_told_not_to_look_where_it_runs
