@@ -189,7 +189,8 @@ Four jobs block a pull request: `lint-linux`, `lint-windows`, `test-linux` and `
 
 - A step is not done until its tests pass on both OSes.
 - Nothing that blocks uses a secret or a paid API.
-- Only the main branch writes the build caches. A pull request reads them.
+- Only the main branch writes the build caches. A pull request reads them. `cargo xtask rules` refuses a workflow step that could write one from any other run.
+- On Windows the cache holds the main branch's build of the workspace's own crates too, and a pull request rebuilds only the crates it changes and what depends on them: the checkout's files are dated against the commit that build was made from, and anything that cannot be worked out is rebuilt whole ([docs/testing-and-ci.md](docs/testing-and-ci.md), "The workspace's own build, cached").
 - A pull request that touches only `docs/**` and `*.md` skips the Rust build and tests. Its four checks still report, and the Linux lint job still runs the repo rules, because those rules are mostly about documentation. The generated files in `docs/protocol/` and `docs/configuration/` are the exception: they count as code.
 - Two workflows do not block: `main`, after each merge, and `nightly`. When one fails it opens an issue labelled `ci-failure`, or adds a comment to the open one. Close the issue when the cause is fixed.
 - A change that makes the blocking checks slower than their budget moves the slow part to a non-blocking tier, or raises it for a decision. The limit is not loosened quietly.
