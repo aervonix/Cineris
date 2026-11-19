@@ -2682,7 +2682,7 @@ caught-by:
     cineris-tui app::tests::first_run::a_configuration_that_could_not_be_read_again_opens_the_session_with_what_was_chosen
 
 [break] no-model-written
-rule: The chosen provider's model is written as model.main (High 2, the coordinator's decision on the reviewer's recommendation).
+rule: The chosen provider's model is written as model.main (High 2, the maintainers' decision on the reviewer's recommendation).
 file: crates/cineris-config/src/write.rs
 in: table
 find: model.insert("main".to_owned(), Value::String(main.clone()));
@@ -3099,7 +3099,7 @@ caught-by:
 # (docs/steps/25/parts/pr3-first-run.md, "The review of the fixes (Opus)")
 
 [break] provider-pinned-when-the-id-is-unique
-rule: The provider is written as the main role's only beside a model whose id another provider has too: pinned always, it held `--model` and a hand edit to its models (M-A, settled by the coordinator).
+rule: The provider is written as the main role's only beside a model whose id another provider has too: pinned always, it held `--model` and a hand edit to its models (M-A, settled by the maintainers).
 file: crates/cineris-config/src/write.rs
 packages: cineris-config, cineris-core
 in: table
@@ -3146,7 +3146,7 @@ caught-by:
     cineris-core::it start::the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks
 
 [break] a-catalog-default-is-not-read
-rule: An entry's `default` is read from the catalog (the default model, settled by the coordinator).
+rule: An entry's `default` is read from the catalog (the default model, settled by the maintainers).
 file: crates/cineris-llm/src/catalog.rs
 packages: cineris-llm, cineris-core
 in: RawModel::into_entry
@@ -3178,7 +3178,7 @@ caught-by:
     cineris-core::it start::the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks
 
 [break] a-credential-word-is-found-inside-a-word
-rule: A name says it is a credential's by its words, not by a part of one: `--author`, `--keyboard` and `--tokenizer` do not (M-B, settled by the coordinator).
+rule: A name says it is a credential's by its words, not by a part of one: `--author`, `--keyboard` and `--tokenizer` do not (M-B, settled by the maintainers).
 file: crates/cineris-config/src/import.rs
 in: names_a_secret
 find: words.iter().any(|word| a_credentials_word(word))
@@ -3226,7 +3226,7 @@ caught-by:
     cineris-cli::bin/cineris setup::tests::a_loose_value_under_a_credentials_name_says_to_move_it
 
 [break] a-place-name-hides-its-value
-rule: The value of a name that ends in url names a place, and is shown (settled by the coordinator, after the review of the fixes); `dir` has a break of its own since the final review.
+rule: The value of a name that ends in url names a place, and is shown (settled by the maintainers, after the review of the fixes); `dir` has a break of its own since the final review.
 file: crates/cineris-config/src/import.rs
 find: "path", "url", "dir"
 replace: "path", "dir"
@@ -3242,7 +3242,7 @@ caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
 [break] an-arguments-address-shows-its-query-credential
-rule: An address in an argument shows its host and path, and a credential in its query is masked, as in a server's own address (settled by the coordinator, after the review of the fixes).
+rule: An address in an argument shows its host and path, and a credential in its query is masked, as in a server's own address (settled by the maintainers, after the review of the fixes).
 file: crates/cineris-config/src/import.rs
 in: launch_view
 find: } else if arg.contains("://") {
@@ -3332,7 +3332,7 @@ caught-by:
     cineris-tui app::tests::first_run::a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height
 
 [break] a-long-label-is-cut
-rule: A label longer than its column wraps in it, so that its row is drawn whole and can be accepted at 80 columns (settled by the coordinator, after the review of the fixes).
+rule: A label longer than its column wraps in it, so that its row is drawn whole and can be accepted at 80 columns (settled by the maintainers, after the review of the fixes).
 file: crates/cineris-tui/src/view/setup.rs
 in: row_lines
 find: hard_wrap(&one_line(&row.label), column)
@@ -3343,8 +3343,8 @@ caught-by:
 
 
 # ------------- the short review (Opus) of this review's fixes, and the
-# coordinator's answers (docs/steps/25/parts/pr3-first-run.md, "The review of
-# the fixes (Opus)", settled by the coordinator)
+# maintainers' answers (docs/steps/25/parts/pr3-first-run.md, "The review of
+# the fixes (Opus)", settled by the maintainers)
 
 [break] a-semicolon-is-a-token-character
 rule: A token is ASCII letters and digits and `-._~+=:@/` (and `%` only in a server's own address): a `;` is a shell's, and its value refuses its server (Medium 1).
@@ -3401,7 +3401,7 @@ caught-by:
     cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
 
 [break] a-uri-endpoint-or-directory-hides-its-value
-rule: The value of a name that ends in uri, endpoint or directory names a place, and is shown (the coordinator's answer).
+rule: The value of a name that ends in uri, endpoint or directory names a place, and is shown (the maintainers' answer).
 file: crates/cineris-config/src/import.rs
 find: "dir", "uri", "endpoint", "directory"
 replace: "dir"
@@ -3409,7 +3409,7 @@ caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
 [break] a-path-under-a-key-name-is-refused
-rule: A relative path under a key's name is a place, and is shown, by its text alone (the coordinator's answer; since B, without it a relative path would be a token, masked).
+rule: A relative path under a key's name is a place, and is shown, by its text alone (the maintainers' answer; since B, without it a relative path would be a token, masked).
 file: crates/cineris-config/src/import.rs
 in: Masked::of
 find: || relative_path(value)
@@ -3477,7 +3477,7 @@ caught-by:
 
 # ------------- the final review (Opus) of these fixes (docs/steps/25/parts/
 # pr3-first-run.md, "The review of the fixes (Opus)"). The breaks of the
-# coordinator's rule for places, `every-rooted-value-is-a-place` and
+# maintainers' rule for places, `every-rooted-value-is-a-place` and
 # `an-existing-path-is-not-found`, went with that rule (B, below).
 
 [break] a-percent-is-a-tokens-in-an-argument
@@ -3581,7 +3581,7 @@ caught-by:
 
 # ------------- the narrow check (Opus) of the final review's fixes
 # (docs/steps/25/parts/pr3-first-run.md, "The review of the fixes (Opus)").
-# The breaks of its place check and of the coordinator's time limit went with
+# The breaks of its place check and of the maintainers' time limit went with
 # the existence rule (B, below): `a-share-is-asked-about`,
 # `the-programs-disk-asks-about-a-shared-home`,
 # `a-non-credential-flags-value-is-asked-about`,
@@ -3663,13 +3663,13 @@ replace: last == "pwd"
 caught-by:
     cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
 
-# ------------- the coordinator's settlement after the narrow check (B): no
+# ------------- the maintainers' settlement after the narrow check (B): no
 # value is asked of the disk, and `/` is a token's under a credential's name
 # (docs/steps/25/parts/pr3-first-run.md, "The review of the fixes (Opus)",
 # row B)
 
 [break] a-slash-is-not-a-tokens
-rule: Under a credential's name `/` is a token's, in an argument and in an address's field alike: a rooted path, a `~/` path and a base64 secret with a `/` are masked and imported, never refused (B, settled by the coordinator).
+rule: Under a credential's name `/` is a token's, in an argument and in an address's field alike: a rooted path, a `~/` path and a base64 secret with a `/` are masked and imported, never refused (B, settled by the maintainers).
 file: crates/cineris-config/src/import.rs
 in: token_character
 find: ':' | '@' | '/'
@@ -3681,7 +3681,7 @@ caught-by:
     cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
 
 [break] an-arguments-value-is-asked-of-the-disk
-rule: No argument's value is asked of the disk: a file or a directory that exists is judged as a path that names nothing is (B, settled by the coordinator).
+rule: No argument's value is asked of the disk: a file or a directory that exists is judged as a path that names nothing is (B, settled by the maintainers).
 file: crates/cineris-config/src/import.rs
 in: Masked::of
 find: || relative_path(value)
@@ -3690,7 +3690,7 @@ caught-by:
     cineris-config import::tests::a_value_is_judged_by_its_text_and_never_asked_of_the_disk
 
 [break] an-addresss-value-is-asked-of-the-disk
-rule: No value in an address's query or fragment is asked of the disk (B, settled by the coordinator).
+rule: No value in an address's query or fragment is asked of the disk (B, settled by the maintainers).
 file: crates/cineris-config/src/import.rs
 in: Masked::in_address
 find: if value.is_empty() || value == cineris_base::redact::MASK {
