@@ -108,8 +108,10 @@ fn sys_the_first_run_in_an_empty_home_reaches_a_working_session() {
         &["Provider  1 of 4", "ANTHROPIC_API_KEY", "enter chooses"],
     );
     // The key in the environment is offered by its variable's name; the
-    // second row stores a key for the same provider.
-    session.send(b"\x1b[B");
+    // second row stores a key for the same provider. Down as the terminal
+    // sends it: on Windows, win32 input records, which the pseudo-console
+    // asks for (a plain sequence there is not read as the key).
+    session.send_key("down");
     session.wait_for(LIMIT, "the second row selected", |t| {
         t.screen().iter().any(|text| {
             text.contains("anthropic") && text.contains("store a key") && !text.starts_with("    ")
