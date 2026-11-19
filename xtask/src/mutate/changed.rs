@@ -440,13 +440,35 @@ impl Data {
                 }
                 continue;
             }
-            let seen = seen_from(&readers);
-            let names: Vec<&str> = readers.iter().map(String::as_str).collect();
+            let mut seen = if readers.built.is_empty() {
+                BTreeSet::new()
+            } else {
+                seen_from(&readers.built)
+            };
+            seen.extend(readers.tests.iter().cloned());
+            let list = |names: &BTreeSet<String>| {
+                names
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            let mut by = Vec::new();
+            if !readers.built.is_empty() {
+                by.push(format!(
+                    "the code of {} (and so every crate built on it)",
+                    list(&readers.built)
+                ));
+            }
+            if !readers.tests.is_empty() {
+                by.push(format!("the tests alone of {}", list(&readers.tests)));
+            }
             data.notes.push(format!(
-                "`{path}` is named by the Rust of {}: the breaks that run {} crate(s) (those and \
-                 the crates built on them, or whose tests use them) can see it",
-                names.join(", "),
-                seen.len()
+                "`{path}` is named by {}: the breaks that run one of these {} crate(s) can see \
+                 it: {}",
+                by.join(", and "),
+                seen.len(),
+                list(&seen)
             ));
             data.seen.push((seen, Reason::Data(path)));
         }
@@ -1311,7 +1333,7 @@ mod tests {
             "{said}"
         );
         assert!(
-            said.contains("`tables/rates.toml` is named by the Rust of base"),
+            said.contains("`tables/rates.toml` is named by the code of base (and so every crate built on it): the breaks that run one of these 3 crate(s) can see it: base, demo, tester"),
             "{said}"
         );
     }

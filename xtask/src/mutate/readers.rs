@@ -4,8 +4,8 @@
 //! can see it, and not every break.
 //!
 //! A crate reads a file when a string literal of one of its Rust files
-//! names it. The literal is read three ways, and any of them that names the
-//! file, or a folder the file is in, counts:
+//! names it, by at least one name that is not a climb (`..` or `/` alone
+//! name nothing). The literal is read three ways:
 //!
 //! - **from the source file's folder,** as `include_str!` and
 //!   `include_bytes!` read their path
@@ -15,24 +15,31 @@
 //!   `CARGO_MANIFEST_DIR` are (`Path::new(dir).join("../../catalog/models.toml")`,
 //!   `concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures")`);
 //! - **from the top of the repository,** as `xtask` names its files
-//!   (`"docs/outstanding"`). A literal of one word names a folder this way
-//!   only with a `/` in it: `"docs"` alone is too common a word to be a
-//!   reader of every file under `docs/`.
+//!   (`"docs/outstanding"`).
 //!
-//! And a literal whose path ends the file's (`"models.toml"`,
-//! `"catalog/models.toml"`) names it, wherever it is: a path joined from
-//! pieces (`root.join("corpus").join("PIN")`) still has its last one.
+//! Each way, it names the file, or a folder the file is in; from the top, a
+//! folder only by two names or more (`"docs"` alone is too common a word to
+//! read every file under `docs/`). And a literal of two names or more that
+//! ends the file's path (`"catalog/models.toml"`) names it from anywhere.
+//! A file's name alone (`"request.json"`) does not: many crates name files
+//! of that name, and it would make a reader of each.
+//!
+//! **A reader in its crate's tests only** (a file under the crate's
+//! `tests/`, `benches/` or `examples/`, or inside a `#[cfg(test)] mod … {}`)
+//! is seen by that crate's tests alone; any other is seen by every crate
+//! built on it, or whose tests use it.
 //!
 //! **What this cannot see,** and what `--changed` then does: a path made at
-//! run time from pieces none of which is the file's name, or read from the
-//! environment or a setting; a file a program the tests start reads by a
-//! path of its own; a folder walked whose name is one word from the top of
-//! the repository. A file outside the folders `--changed` reads one by one
-//! that no crate names chooses every break, as before; one inside them
+//! run time from pieces that do not name it by two names (a folder's name
+//! joined to the file's: `root.join("corpus").join("PIN")`), or read from
+//! the environment or a setting; a file a program the tests start reads by
+//! a path of its own. A file outside the folders `--changed` reads one by
+//! one that no crate names chooses every break, as before; one inside them
 //! (`docs/`, `.github/`, a crate's own folder) is left to the rules that
 //! read those (a crate's own files choose its breaks).
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::Range;
 
 use super::lex;
 use crate::workspace::Package;
@@ -90,8 +97,21 @@ pub(crate) fn literal_names(text: &str, source: &str, crate_folder: &str, path: 
     if text.is_empty() || text.contains(['{', '}', '\n', '\0']) {
         return false;
     }
+    let parts: Vec<&str> = text
+        .split(['/', '\\'])
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    let names = parts.iter().filter(|part| **part != "..").count();
+    // `..`, `../..`, `/`: a climb names no file, and would hold every file
+    // above the source.
+    if names == 0 {
+        return false;
+    }
     let rooted = text.starts_with(['/', '\\']);
-    if let Some(named) = joined(crate_folder, text)
+    // `text` from `folder`, when it names something there: not the folder
+    // itself or one above it (`a/../..` climbs past the name it gives).
+    let from = |folder: &str| joined(folder, text).filter(|named| !names_or_holds(named, folder));
+    if let Some(named) = from(crate_folder)
         && names_or_holds(&named, path)
     {
         return true;
@@ -99,41 +119,110 @@ pub(crate) fn literal_names(text: &str, source: &str, crate_folder: &str, path: 
     if crate_only || rooted {
         return false;
     }
-    if let Some(named) = joined(folder_of(source), text)
+    if let Some(named) = from(folder_of(source))
         && names_or_holds(&named, path)
     {
         return true;
     }
-    // From the top: the file itself, or a folder of two parts or more.
+    // From the top: the file itself, or a folder of two names or more.
     if let Some(named) = normalise(text)
         && (named == path || (named.contains('/') && names_or_holds(&named, path)))
     {
         return true;
     }
-    // The end of the file's path, its climbs taken off: `models.toml`,
-    // `../catalog/models.toml`.
-    let tail: Vec<&str> = text
-        .split(['/', '\\'])
-        .filter(|part| !part.is_empty())
-        .skip_while(|part| matches!(*part, "." | ".."))
+    // The end of the file's path, of two names or more, its climbs taken
+    // off: `../catalog/models.toml`.
+    let tail: Vec<&str> = parts
+        .iter()
+        .copied()
+        .skip_while(|part| *part == "..")
         .collect();
-    if tail.is_empty() || tail.iter().any(|part| matches!(*part, "." | "..")) {
+    if tail.len() < 2 || tail.contains(&"..") {
         return false;
     }
     let tail = tail.join("/");
     path == tail || path.ends_with(&format!("/{tail}"))
 }
 
-/// The text of each string literal of `source`, between its quotes, as it
-/// is written (escapes are left as they are: a path has none).
-pub(crate) fn literals(source: &str) -> Vec<&str> {
+/// Each string literal of `source`: where it starts, and its text between
+/// its quotes, as it is written (escapes are left as they are: a path has
+/// none).
+pub(crate) fn literals(source: &str) -> Vec<(usize, &str)> {
     lex::code_tokens(source)
         .into_iter()
         .filter_map(|token| {
             let literal = token.text(source);
-            lex::string_content(literal).map(|content| &literal[content])
+            lex::string_content(literal).map(|content| (token.start, &literal[content]))
         })
         .collect()
+}
+
+/// Where each `#[cfg(test)] mod NAME { … }` of `source` is: what only the
+/// crate's own tests build. Any other `cfg(test)` (on a function, a `use`,
+/// a module in a file of its own) is not counted: the reader is then taken
+/// to be seen by the crates built on it too, which chooses more and never
+/// less.
+pub(crate) fn test_modules(source: &str) -> Vec<Range<usize>> {
+    let tokens = lex::code_tokens(source);
+    let text = |index: usize| tokens.get(index).map_or("", |token| token.text(source));
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < tokens.len() {
+        let attribute = ["#", "[", "cfg", "(", "test", ")", "]"];
+        if !(0..attribute.len()).all(|offset| text(at + offset) == attribute[offset]) {
+            at += 1;
+            continue;
+        }
+        let mut next = at + attribute.len();
+        if text(next) == "pub" {
+            next += 1;
+            if text(next) == "(" {
+                while next < tokens.len() && text(next) != ")" {
+                    next += 1;
+                }
+                next += 1;
+            }
+        }
+        if text(next) != "mod" || text(next + 2) != "{" {
+            at += 1;
+            continue;
+        }
+        let open = next + 2;
+        let mut depth = 0usize;
+        let mut close = None;
+        for index in open..tokens.len() {
+            match text(index) {
+                "{" => depth += 1,
+                "}" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = Some(index);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        // An unclosed module is not counted.
+        let Some(close) = close else {
+            break;
+        };
+        found.push(tokens[at].start..tokens[close].end);
+        at = close + 1;
+    }
+    found
+}
+
+/// Whether a Rust file is built only for its crate's own tests: one under
+/// the crate's `tests/`, `benches/` or `examples/`.
+fn tests_only_file(path: &str, crate_folder: &str) -> bool {
+    path.strip_prefix(crate_folder)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .is_some_and(|rest| {
+            ["tests/", "benches/", "examples/"]
+                .iter()
+                .any(|folder| rest.starts_with(folder))
+        })
 }
 
 /// The folder of each package, from its manifest: `crates/cineris-llm`,
@@ -149,6 +238,22 @@ pub(crate) fn folders(packages: &[Package]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The crates that read a file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Readers {
+    /// Those whose code built for others reads it: the crates built on them
+    /// see it too.
+    pub(crate) built: BTreeSet<String>,
+    /// Those whose own tests alone read it.
+    pub(crate) tests: BTreeSet<String>,
+}
+
+impl Readers {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.built.is_empty() && self.tests.is_empty()
+    }
+}
+
 /// For each of `wanted` (repository paths), the crates whose Rust files
 /// name it. `files` is each Rust file of the crates, as `(crate, crate's
 /// folder, path, text)`: as it is, and as it was at the reference when the
@@ -156,28 +261,43 @@ pub(crate) fn folders(packages: &[Package]) -> Vec<(String, String)> {
 pub(crate) fn readers<'a>(
     wanted: &[String],
     files: impl IntoIterator<Item = (&'a str, &'a str, &'a str, &'a str)>,
-) -> BTreeMap<String, BTreeSet<String>> {
-    let mut found: BTreeMap<String, BTreeSet<String>> = wanted
+) -> BTreeMap<String, Readers> {
+    let mut found: BTreeMap<String, Readers> = wanted
         .iter()
-        .map(|path| (path.clone(), BTreeSet::new()))
+        .map(|path| (path.clone(), Readers::default()))
         .collect();
     for (name, folder, source, text) in files {
-        for literal in literals(text) {
+        let whole_file = tests_only_file(source, folder);
+        let modules = if whole_file {
+            Vec::new()
+        } else {
+            test_modules(text)
+        };
+        for (at, literal) in literals(text) {
+            let tests_only = whole_file || modules.iter().any(|module| module.contains(&at));
             for path in wanted {
-                if literal_names(literal, source, folder, path) {
-                    found
-                        .get_mut(path)
-                        .map(|crates| crates.insert(name.to_owned()));
+                if literal_names(literal, source, folder, path)
+                    && let Some(readers) = found.get_mut(path)
+                {
+                    if tests_only {
+                        readers.tests.insert(name.to_owned());
+                    } else {
+                        readers.built.insert(name.to_owned());
+                    }
                 }
             }
         }
+    }
+    for readers in found.values_mut() {
+        let built = readers.built.clone();
+        readers.tests.retain(|name| !built.contains(name));
     }
     found
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{literal_names, literals, normalise, readers};
+    use super::{literal_names, literals, normalise, readers, test_modules};
 
     #[test]
     fn a_path_is_resolved_and_one_that_climbs_out_is_none() {
@@ -275,41 +395,92 @@ mod tests {
     }
 
     #[test]
-    fn the_end_of_a_path_names_the_file_wherever_it_is() {
+    fn the_end_of_a_path_of_two_names_names_the_file_wherever_it_is() {
         let (source, folder) = ("xtask/src/corpus.rs", "xtask");
-        // `root.join("corpus").join("STAMP")`: the last piece.
-        assert!(literal_names("STAMP", source, folder, "pins/STAMP"));
         assert!(literal_names(
+            "tables/rates.toml",
+            source,
+            folder,
+            "data/tables/rates.toml"
+        ));
+        assert!(literal_names(
+            "../tables/rates.toml",
+            "crates/x/src/deep/a.rs",
+            "crates/x",
+            "tables/rates.toml"
+        ));
+        // A file's name alone is too common to make a reader.
+        assert!(!literal_names("STAMP", source, folder, "pins/STAMP"));
+        assert!(!literal_names(
             "rates.toml",
             source,
             folder,
             "tables/rates.toml"
         ));
-        assert!(literal_names(
-            "../tables/rates.toml",
-            "crates/x/src/a.rs",
-            "crates/x",
-            "tables/rates.toml"
-        ));
         // Part of a name is not its end.
         assert!(!literal_names(
-            "els.toml",
+            "s/rates.toml",
             source,
             folder,
             "tables/rates.toml"
         ));
         assert!(!literal_names("", source, folder, "tables/rates.toml"));
-        assert!(!literal_names("..", source, folder, "tables/rates.toml"));
+    }
+
+    #[test]
+    fn a_literal_that_only_climbs_names_nothing() {
+        // `../..` from a source two folders down would hold every file of
+        // the crates: it names none.
+        for climb in [
+            "..",
+            "../..",
+            "../../",
+            "/",
+            ".",
+            "./..",
+            "a/../..",
+            "/../..",
+            "a/b/../..",
+        ] {
+            assert!(
+                !literal_names(
+                    climb,
+                    "crates/x/src/deep/a.rs",
+                    "crates/x",
+                    "crates/y/fixtures/a.json"
+                ),
+                "{climb}"
+            );
+        }
     }
 
     #[test]
     fn the_literals_of_a_file_are_its_strings_and_not_its_comments() {
         let source = "// \"not/this.toml\"\nconst A: &str = \"one\";\nfn f() { g(r#\"two\"#) }\n";
-        assert_eq!(literals(source), ["one", "two"]);
+        let found: Vec<&str> = literals(source).into_iter().map(|(_, text)| text).collect();
+        assert_eq!(found, ["one", "two"]);
+        assert_eq!(&source[literals(source)[0].0..][..5], "\"one\"");
     }
 
     #[test]
-    fn each_wanted_file_gets_the_crates_that_name_it() {
+    fn a_test_module_is_found_from_its_attribute_to_its_closing_brace() {
+        let source = "fn a() { \"x\"; }\n#[cfg(test)]\nmod tests {\n    fn b() { { \"y\"; } }\n}\n\
+                      fn c() { \"z\"; }\n#[cfg(test)]\nfn d() {}\n#[cfg(test)]\nmod outside;\n";
+
+        let modules = test_modules(source);
+
+        assert_eq!(modules.len(), 1);
+        let module = &source[modules[0].clone()];
+        assert!(module.starts_with("#[cfg(test)]\nmod tests {"), "{module}");
+        assert!(module.ends_with("}\n}"), "{module}");
+        assert!(!module.contains('z'), "{module}");
+        // `pub(crate) mod` too.
+        let source = "#[cfg(test)]\npub(crate) mod kit { const P: &str = \"q\"; }";
+        assert_eq!(test_modules(source).len(), 1);
+    }
+
+    #[test]
+    fn each_wanted_file_gets_the_crates_that_name_it_and_whose_tests_alone_do() {
         let files = [
             (
                 "demo-llm",
@@ -320,26 +491,41 @@ mod tests {
             (
                 "demo-stats",
                 "crates/demo-stats",
-                "crates/demo-stats/src/synthetic/tests.rs",
+                "crates/demo-stats/src/synthetic.rs",
+                "pub fn f() {}\n#[cfg(test)]\nmod tests {\n    const T: &str = \
+                 include_str!(\"../../../tables/rates.toml\");\n}\n",
+            ),
+            (
+                "demo-tools",
+                "crates/demo-tools",
+                "crates/demo-tools/tests/it/main.rs",
                 "const T: &str = include_str!(\"../../../../tables/rates.toml\");",
             ),
             (
                 "demo-base",
                 "crates/demo-base",
                 "crates/demo-base/src/lib.rs",
-                "// tables/rates.toml\nconst X: &str = \"tables\";",
+                "// tables/rates.toml\nconst X: &str = \"tables\"; const Y: &str = \"rates.toml\";",
+            ),
+            // Built and tested both: built.
+            (
+                "demo-llm",
+                "crates/demo-llm",
+                "crates/demo-llm/tests/it/main.rs",
+                "const T: &str = include_str!(\"../../../../tables/rates.toml\");",
             ),
         ];
         let wanted = vec!["tables/rates.toml".to_owned(), "pins/STAMP".to_owned()];
 
         let found = readers(&wanted, files);
 
+        let names = |set: &std::collections::BTreeSet<String>| {
+            set.iter().map(String::as_str).collect::<Vec<_>>().join(",")
+        };
+        assert_eq!(names(&found["tables/rates.toml"].built), "demo-llm");
         assert_eq!(
-            found["tables/rates.toml"]
-                .iter()
-                .map(String::as_str)
-                .collect::<Vec<_>>(),
-            ["demo-llm", "demo-stats"]
+            names(&found["tables/rates.toml"].tests),
+            "demo-stats,demo-tools"
         );
         assert!(found["pins/STAMP"].is_empty());
     }
