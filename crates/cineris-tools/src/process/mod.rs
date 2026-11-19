@@ -1132,6 +1132,55 @@ mod tests {
         assert!(poll(&mut waits).is_none(), "a cancellation is told once");
     }
 
+    /// The exit and the end of the output, told by the command's two threads
+    /// after the run has looked and gone to wait, each wake the run, in
+    /// either order, with its only other wait a time limit that never ends (a
+    /// test's manual timer). That the waker is stored before the run looks,
+    /// under the lock the threads tell under, so that nothing told between
+    /// the look and the wait is lost, is in `Waits::poll`; this test holds
+    /// the wake itself (since the flaky-test fixes,
+    /// `docs/steps/flaky-test-fixes/answered.md`).
+    #[test]
+    fn an_exit_or_an_end_told_after_the_run_went_to_wait_wakes_it() {
+        struct Count(std::sync::atomic::AtomicUsize);
+        impl std::task::Wake for Count {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let exit: fn(&mut State) = |state| state.exit = Some(Ok(Exit::Code(1)));
+        let end: fn(&mut State) = |state| state.reader_done = true;
+        for (first, second) in [(exit, end), (end, exit)] {
+            let shared = Arc::new(Shared::default());
+            let mut waits = waits(&shared);
+            let (limit, _never) = manual();
+            waits.timeout = Some(limit);
+            let count = Arc::new(Count(std::sync::atomic::AtomicUsize::new(0)));
+            let waker = Waker::from(Arc::clone(&count));
+            let mut cx = Context::from_waker(&waker);
+            let mut seen = Ready::default();
+            for (told, tell) in [first, second].into_iter().enumerate() {
+                assert!(waits.poll(&mut cx).is_pending(), "nothing new yet");
+                let teller = Arc::clone(&shared);
+                std::thread::spawn(move || teller.update(tell))
+                    .join()
+                    .expect("the thread tells");
+                assert_eq!(
+                    count.0.load(Ordering::SeqCst),
+                    told + 1,
+                    "what the thread told woke the run"
+                );
+                let Poll::Ready(ready) = waits.poll(&mut cx) else {
+                    panic!("what was told is seen");
+                };
+                seen.exit = seen.exit.or(ready.exit);
+                seen.reader_done |= ready.reader_done;
+            }
+            assert_eq!(seen.exit, Some(Ok(Exit::Code(1))));
+            assert!(seen.reader_done);
+        }
+    }
+
     #[test]
     fn a_front_end_that_falls_behind_is_told_once_and_holds_a_bounded_amount() {
         let mut state = State::default();
