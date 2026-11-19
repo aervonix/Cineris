@@ -1848,7 +1848,40 @@ fn run(arguments: &[String]) -> Result<ExitCode> {
     if first == "mutate" {
         return Ok(crate::mutate::main(rest));
     }
+    if let Some((name, value)) = commit_variable(first, plan.inputs.commit.as_deref()) {
+        return run_as_child(&plan.command, name, value);
+    }
     crate::run(first, rest).map(|()| ExitCode::SUCCESS)
+}
+
+/// The variable a command run for `commit` needs set to it, when the
+/// command reads the commit it measured from the environment: `size` writes
+/// `GITHUB_SHA` in its record, which on a runner is the head of the ref the
+/// run was dispatched on, not the commit checked out. The workflow cannot
+/// set it (GitHub's own `GITHUB_*` variables are not overridden), so `try`
+/// runs the command as a child of its own with it set.
+fn commit_variable<'a>(verb: &str, commit: Option<&'a str>) -> Option<(&'static str, &'a str)> {
+    match (verb, commit) {
+        ("size", Some(commit)) => Some(("GITHUB_SHA", commit)),
+        _ => None,
+    }
+}
+
+/// `cargo xtask COMMAND…` as a child of this `xtask`, with `name` set to
+/// `value`, and its exit code.
+fn run_as_child(command: &[String], name: &str, value: &str) -> Result<ExitCode> {
+    let exe = std::env::current_exe()
+        .map_err(|error| format!("could not find this xtask to run it again: {error}"))?;
+    let status = std::process::Command::new(exe)
+        .args(command)
+        .env(name, value)
+        .status()
+        .map_err(|error| format!("could not run `cargo xtask {}`: {error}", command.join(" ")))?;
+    Ok(if status.success() {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    })
 }
 
 /// Whether a command is the crates' ignored `perf_` tests (`perf -p CRATE`,
@@ -3491,6 +3524,16 @@ mod tests {
                  -f label=main"
             )
         );
+    }
+
+    #[test]
+    fn a_size_of_a_commit_records_that_commit_and_no_other() {
+        assert_eq!(
+            super::commit_variable("size", Some(HASH)),
+            Some(("GITHUB_SHA", HASH))
+        );
+        assert_eq!(super::commit_variable("size", None), None, "the ref's head");
+        assert_eq!(super::commit_variable("ci", Some(HASH)), None);
     }
 
     #[test]
