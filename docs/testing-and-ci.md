@@ -706,7 +706,7 @@ Left (24):
   …
 ```
 
-`--budget` is the run's time limit, so it is refused beside `--minutes`, and beside `--check` and `--merge`, which run no break. `--list --budget TIME` prints the order, each break with its class, and runs nothing. A run that stops for the time exits 2, as `--minutes` does.
+`--budget` is the run's time limit, so it is refused beside `--minutes N` (`--minutes 0`, no limit of its own, which `try` gives a `mutate` command, may stand beside it), and beside `--check` and `--merge`, which run no break. `--list --budget TIME` prints the order, each break with its class, and runs nothing. A run that stops for the time exits 2, as `--minutes` does.
 
 **It needs git's history.** In a tree with no `.git` (a copy of the sources made without one) `--changed` fails and says so. Name a ref the checkout has (`main`, brought up to date with `git fetch` and a fast-forward first); a ref it lacks is an error, never "nothing changed". **A diff it cannot read is exit status 3** (since the ninth tooling step), apart from 1, a break that did not do what its list expects: a tree with no `.git`, a `.git` git cannot read (a linked working tree's pointer to a folder that is not in a copy), a `.git` whose work tree is another folder (a copy inside another repository, whose diff would be that repository's), or a reference that is no commit. Nothing is run, and the message says how to have the history.
 
