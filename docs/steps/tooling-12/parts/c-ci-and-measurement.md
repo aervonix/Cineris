@@ -90,13 +90,18 @@ try-linux        success  cargo xtask size --check --against-main --target x86_6
 
 ## The breaks
 
-`mutations/tooling-12-c.breaks`, 19 breaks, run with `cargo xtask mutate tooling-12-c --jobs 2` on the reference machine: **19 caught, 0 flagged**, against 811 passing tests.
+`mutations/tooling-12-c.breaks`, 31 breaks: 19 of `try --final`, `ab --job`, `try-result`, `clippy -p` and the list-name warning, and 12 of the data-file rule and `--budget`, put in from the `mutate` work's own list with `cargo xtask mutate --merge tooling-12-c mutate`. Run on the reference machine at this part's last head with `cargo xtask mutate tooling-12-c --jobs 2`, against 832 passing tests: **31 caught, 0 flagged**.
 
-PENDING-BREAKS
+- Each rule above has one break: the parts of a final run (the tests part made an A/B, the A/B's count lost, `main` not the default, `--os` taken, a part run on the wrong system, a final run with no part); a job A/B's options without `--job`, its `--minutes` from `try`, the round that starts past the budget, a failed phase in its median, a failed side that passes, a comment in the setup's file; `try-result`'s log tail and command; the workspace's features (members' defaults, features followed, dev-dependencies, what cargo refuses); the list-name warning; the data-file readers (from the crate's folder, a climb, a bare name, a reader in tests alone), the crates chosen (built on the reader, no reader, a reader the diff removed, a manifest), and the budget (a named test's class, the order, no class begun once spent, what was left).
+- Four `--changed` breaks of `mutations/tooling-8.breaks` were moved to the code as it is now and caught when the `mutate` work ran them.
+- The break of the workflow's matrix is not in the list: the matrix is held by a test that reads `try.yml`, and breaking that test would break the check, not the code.
 
 ## The cost to the blocking jobs
 
 None: `ci.yml` is not changed. The new tests are pure functions in `xtask`'s unit tier, under 0.1 s together.
+- `cargo xtask ci` on the reference machine passes every step; its tier 1 warned at 136% while a run of breaks shared the machine.
+- The Windows A/B on one runner (run 44593957018) puts this part at −0.1 s, −0.3 s and −0.1 s in tiers 1, 2 and 3 against `main`: no cost.
+- Linux 22.04's tier 1 was 66% of its budget in the first final run and 137% in the second, on the same tests: that runner's speed, which the A/B on one runner takes out.
 
 ## Left open
 
