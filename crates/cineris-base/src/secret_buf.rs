@@ -1,6 +1,6 @@
 //! [`SecretBuf`]: a key being typed, in memory that never moves and is
-//! written over with zeros when it is dropped (since step 25;
-//! `docs/architecture/08-configuration.md`, "Credentials").
+//! written over with zeros, as far as safe Rust can, when it is dropped
+//! (since step 25; `docs/architecture/08-configuration.md`, "Credentials").
 //!
 //! A [`Secret`] is a `String`: it can grow, which moves its text and leaves
 //! the old copy behind, and it is not wiped when it is dropped. A key typed
@@ -12,20 +12,29 @@
 //!   login` reads), and never grows, so no copy of the text is left where an
 //!   earlier, smaller allocation was. Text that would not fit is refused
 //!   whole: nothing of it is kept.
-//! - **Wiped.** Taking a character away, emptying it and dropping it write
-//!   zeros over the bytes that held text. The writes are followed by
-//!   [`std::hint::black_box`] on the buffer and a compiler fence, so that
-//!   the compiler does not drop them as writes to memory nothing reads
-//!   again. Both are the standard library's, and need no `unsafe`, which
-//!   this crate denies; a volatile write would need it, or a crate for it.
+//! - **One line of text.** Text that holds a line break, or any other
+//!   control character (a tab, an escape), is refused whole, on every
+//!   system: no key has one.
+//! - **Wiped, as a best effort.** Taking a character away, emptying it and
+//!   dropping it write zeros over the bytes that held text, with ordinary
+//!   writes (`fill(0)`), followed by [`std::hint::black_box`] on the buffer
+//!   and a compiler fence, so that the compiler does not drop them as writes
+//!   to memory nothing reads again. Both are the standard library's, and
+//!   need no `unsafe`, which this crate denies.
+//! - **What the wipe cannot promise.** `black_box` is a hint the compiler is
+//!   asked to honour, not a guarantee, and there is no volatile write, which
+//!   would need `unsafe` or a crate for it. Nor does it reach copies outside
+//!   the buffer: a page of it the kernel swapped out, or a core file written,
+//!   while the key was in it; and the other copies the key passes through
+//!   (below), which the allocator takes back as they were.
 //! - **Never printed.** `Debug` says how many characters it holds, never
 //!   which. It is not `Clone`, `Display` or `Serialize`.
 //!
 //! **What is not wiped** is said in 08's "Credentials": the terminal
 //! layer's read buffer, the decoder's, and a paste's string pass the key
 //! before it reaches this buffer, and the `Secret` given to the store is a
-//! `String` of its own. They are the process's memory, short-lived, and
-//! never written anywhere.
+//! `String` of its own. They are the process's memory, short-lived, cleared
+//! rather than written over, and never written anywhere.
 
 use crate::Secret;
 
@@ -37,6 +46,9 @@ pub enum Refused {
     /// It holds a line break: a key is one line, and a paste with two is
     /// something else.
     LineBreak,
+    /// It holds a control character other than a line break (a tab, an
+    /// escape): no key has one.
+    Control,
 }
 
 /// A key being typed. See the [module documentation](self).
@@ -65,7 +77,8 @@ impl SecretBuf {
     }
 
     /// Adds `text` at the end, whole, or refuses it whole: a line break
-    /// (`\n` or `\r`) anywhere in it, or more than is left of the capacity.
+    /// (`\n` or `\r`) anywhere in it, any other control character, or more
+    /// than is left of the capacity.
     ///
     /// # Errors
     ///
@@ -73,6 +86,9 @@ impl SecretBuf {
     pub fn push_str(&mut self, text: &str) -> Result<(), Refused> {
         if text.contains(['\n', '\r']) {
             return Err(Refused::LineBreak);
+        }
+        if text.contains(char::is_control) {
+            return Err(Refused::Control);
         }
         let end = self.len + text.len();
         if end > self.bytes.len() {
@@ -83,7 +99,8 @@ impl SecretBuf {
         Ok(())
     }
 
-    /// Adds one character at the end.
+    /// Adds one character at the end, with no copy of it left but this
+    /// buffer's: the bytes it is encoded in on the way are written over.
     ///
     /// # Errors
     ///
@@ -110,12 +127,6 @@ impl SecretBuf {
     /// Empties it, writing zeros over what it held.
     pub fn clear(&mut self) {
         wipe(&mut self.bytes[..self.len]);
-        self.len = 0;
-    }
-
-    /// Writes zeros over the whole buffer: what the drop runs.
-    fn wipe(&mut self) {
-        wipe(&mut self.bytes);
         self.len = 0;
     }
 
@@ -176,9 +187,22 @@ impl Default for SecretBuf {
 }
 
 impl Drop for SecretBuf {
+    /// Writes zeros over the whole buffer.
     fn drop(&mut self) {
-        self.wipe();
+        wipe(&mut self.bytes);
+        self.len = 0;
+        #[cfg(test)]
+        LEFT_BY_DROP.set(Some((self.bytes.len(), self.all_zero())));
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What the last buffer dropped on this thread left: how many bytes it
+    /// had, and whether every one of them was zero. Freed memory cannot be
+    /// read without `unsafe`, so in tests the drop says what it left.
+    static LEFT_BY_DROP: std::cell::Cell<Option<(usize, bool)>> =
+        const { std::cell::Cell::new(None) };
 }
 
 impl std::fmt::Debug for SecretBuf {
@@ -187,7 +211,8 @@ impl std::fmt::Debug for SecretBuf {
     }
 }
 
-/// Writes zeros over `bytes`, in a way the compiler keeps.
+/// Writes zeros over `bytes`, in a way the compiler is asked to keep (see
+/// the [module documentation](self) for what that cannot promise).
 fn wipe(bytes: &mut [u8]) {
     bytes.fill(0);
     std::hint::black_box(&mut *bytes);
@@ -225,6 +250,33 @@ mod tests {
         assert_eq!(buffer.to_secret().unwrap().expose(), "abc12345");
     }
 
+    /// A tab, an escape, a delete, a C1 control and NUL are refused whole
+    /// wherever they are, as typed characters and in text, on every system.
+    #[test]
+    fn a_control_character_is_refused_whole() {
+        let mut buffer = SecretBuf::with_capacity(32);
+        buffer.push_str("sk-").unwrap();
+        for text in ["ab\tcd", "\u{1b}[2J", "ab\u{7f}", "\u{9b}31m", "a\0", "\t"] {
+            assert_eq!(buffer.push_str(text), Err(Refused::Control), "{text:?}");
+        }
+        for character in ['\t', '\u{1b}', '\u{7}', '\u{85}'] {
+            assert_eq!(
+                buffer.push(character),
+                Err(Refused::Control),
+                "{character:?}"
+            );
+        }
+        assert_eq!(
+            buffer.to_secret().unwrap().expose(),
+            "sk-",
+            "nothing was kept"
+        );
+        assert!(
+            buffer.bytes[3..].iter().all(|byte| *byte == 0),
+            "nothing was written past what was kept"
+        );
+    }
+
     #[test]
     fn what_is_taken_away_or_emptied_is_zero() {
         let mut buffer = SecretBuf::with_capacity(16);
@@ -246,16 +298,17 @@ mod tests {
         assert!(buffer.to_secret().is_none(), "only spaces is no key");
     }
 
+    /// The drop itself writes zeros over every byte the key was in: read by
+    /// the drop, in tests, since the freed memory cannot be read without
+    /// `unsafe`.
     #[test]
-    fn what_the_drop_runs_leaves_every_byte_zero() {
-        // The drop runs `wipe`, the code below; its memory cannot be read
-        // after it without `unsafe`, so the same code is run here on a
-        // buffer that is still alive.
+    fn a_dropped_buffer_leaves_every_byte_zero() {
         let mut buffer = SecretBuf::with_capacity(32);
         buffer.push_str(KEY).unwrap();
-        buffer.wipe();
-        assert!(buffer.all_zero());
-        assert_eq!(buffer.chars(), 0);
+        assert!(!buffer.all_zero());
+        LEFT_BY_DROP.set(None);
+        drop(buffer);
+        assert_eq!(LEFT_BY_DROP.get(), Some((32, true)));
     }
 
     #[test]
@@ -264,9 +317,6 @@ mod tests {
         buffer.push_str(" sk-plain ").unwrap();
         assert!(buffer.is_printable_ascii());
         buffer.push_str("é").unwrap();
-        assert!(!buffer.is_printable_ascii());
-        buffer.clear();
-        buffer.push('\u{7}').unwrap();
         assert!(!buffer.is_printable_ascii());
     }
 }
