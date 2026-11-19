@@ -547,6 +547,9 @@ impl Runner {
         shared: &Arc<Shared>,
     ) -> Result<Running, StartError> {
         let launch = &start.launch;
+        // Under the test hooks, only a system or performance test may get
+        // here (`docs/testing-and-ci.md`, "Test tiers").
+        cineris_base::hook::command_from_a_test(launch.command.program.as_os_str());
         let mut command = Command::new(&launch.command.program);
         for argument in &launch.command.arguments {
             match argument {

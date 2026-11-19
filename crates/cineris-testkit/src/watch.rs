@@ -271,11 +271,83 @@ fn report(ran: Duration, limit: Duration, why: &str) -> (String, impl FnOnce() -
     );
     text.push_str(&waits());
     let tree = || {
-        let mut tail = tree(std::process::id());
+        let children = cineris_base::hook::spawned_children();
+        let pids: Vec<u32> = children.iter().map(|child| child.pid).collect();
+        let (tree, alive) = tree(std::process::id(), &pids);
+        let mut tail = children_text(&children, |pid| there(pid, alive.as_deref()));
+        tail.push_str(&tree);
         tail.push_str("== end of cineris-testkit's report\n");
         tail
     };
     (text, tree)
+}
+
+/// Whether a child is still there when the report is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum There {
+    Running,
+    /// Exited, and not yet waited for: a zombie, on Linux.
+    Unreaped,
+    Gone,
+    /// The system was not asked.
+    Unknown,
+}
+
+/// Where a child is: from `/proc` on Linux, and on Windows from the ids
+/// PowerShell found among the system's processes (`alive`).
+fn there(pid: u32, alive: Option<&[u32]>) -> There {
+    if cfg!(target_os = "linux") {
+        linux::there(pid)
+    } else if let Some(alive) = alive {
+        if alive.contains(&pid) {
+            There::Running
+        } else {
+            There::Gone
+        }
+    } else {
+        There::Unknown
+    }
+}
+
+/// The test's own children (since the twelfth tooling step): each process
+/// the harness or the test kit started for it (`cineris_base::hook::spawned`),
+/// with its id, how long ago it started, whether the code that started it
+/// saw it exit and whether it is still there, and its command line. A child
+/// that is gone but whose exit no wait saw, beside a thread still waiting,
+/// is a wake that was missed; one still running is a late exit.
+fn children_text(children: &[cineris_base::hook::Spawned], there: impl Fn(u32) -> There) -> String {
+    let mut text = String::from(
+        "the test's own children, oldest first: pid, how long ago it started, what became of \
+         it, its command line\n",
+    );
+    if children.is_empty() {
+        text.push_str("  none was started through the harness or the test kit\n");
+    }
+    for child in children {
+        let state = match (child.reaped_after, there(child.pid)) {
+            (Some(after), _) => format!(
+                "exited after {:.1} s, and its wait returned",
+                after.as_secs_f64()
+            ),
+            (None, There::Running) => "still running, and nothing has seen it exit".to_owned(),
+            (None, There::Unreaped) => {
+                "exited, and not yet waited for (a zombie): nothing has seen its exit".to_owned()
+            }
+            (None, There::Gone) => {
+                "gone, with no wait here seeing it exit (its exit may have been read elsewhere)"
+                    .to_owned()
+            }
+            (None, There::Unknown) => "not asked of the system".to_owned(),
+        };
+        let _ = writeln!(
+            text,
+            "  {} started {:.1} s ago, {state}: {}",
+            child.pid,
+            child.ago.as_secs_f64(),
+            child.command
+        );
+    }
+    text
 }
 
 /// The whole report at once, for a test.
@@ -328,14 +400,16 @@ pub(crate) fn waits() -> String {
     text
 }
 
-/// The process tree under `root`.
-fn tree(root: u32) -> String {
+/// The process tree under `root`, and on Windows which of `pids` the
+/// system still has (asked of the same PowerShell).
+fn tree(root: u32, pids: &[u32]) -> (String, Option<Vec<u32>>) {
     if cfg!(target_os = "linux") {
-        linux::tree(root)
+        (linux::tree(root), None)
     } else if cfg!(windows) {
-        windows_tree(root)
+        let (tree, alive) = windows_tree(root, pids);
+        (tree, Some(alive))
     } else {
-        "processes: not read on this OS\n".to_owned()
+        ("processes: not read on this OS\n".to_owned(), None)
     }
 }
 
@@ -354,6 +428,16 @@ mod linux {
         let state = rest.next()?.chars().next()?;
         let parent = rest.next()?.parse().ok()?;
         Some((parent, state, name))
+    }
+
+    /// Whether process `pid` is running, has exited and not been waited
+    /// for (a zombie), or is gone.
+    pub(super) fn there(pid: u32) -> super::There {
+        match stat(&format!("/proc/{pid}/stat")) {
+            Some((_, 'Z' | 'X', _)) => super::There::Unreaped,
+            Some(_) => super::There::Running,
+            None => super::There::Gone,
+        }
     }
 
     pub(super) fn tree(root: u32) -> String {
@@ -442,7 +526,9 @@ mod linux {
 /// time: on a cold nightly runner the tree of a test and one child took
 /// longer than the 30 s the watch's own test waited for it (nightly run
 /// 43675736382).
-fn windows_tree(root: u32) -> String {
+fn windows_tree(root: u32, pids: &[u32]) -> (String, Vec<u32>) {
+    let ids: Vec<String> = pids.iter().map(u32::to_string).collect();
+    let ids = ids.join(",");
     let script = format!(
         "$all = Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine; \
          $todo = [System.Collections.Generic.Queue[object]]::new(); $todo.Enqueue(@({root}, 1)); \
@@ -454,7 +540,9 @@ fn windows_tree(root: u32) -> String {
            if ($process) {{ $process.Threads | ForEach-Object {{ \
              $reason = if ($_.ThreadState -eq 'Wait') {{ $_.WaitReason }} else {{ '-' }}; \
              Write-Output ('  ' * $depth + \"  thread $($_.Id) state $($_.ThreadState) wait reason $reason\") }} }}; \
-           $all | Where-Object {{ $_.ParentProcessId -eq $id -and $_.ProcessId -ne $id }} | ForEach-Object {{ $todo.Enqueue(@($_.ProcessId, ($depth + 1))) }} }}"
+           $all | Where-Object {{ $_.ParentProcessId -eq $id -and $_.ProcessId -ne $id }} | ForEach-Object {{ $todo.Enqueue(@($_.ProcessId, ($depth + 1))) }} }}; \
+         $known = @($all | ForEach-Object {{ $_.ProcessId }}); \
+         Write-Output ('{ALIVE} ' + ((@({ids}) | Where-Object {{ $known -contains $_ }}) -join ' '))"
     );
     let output = Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
@@ -463,14 +551,31 @@ fn windows_tree(root: u32) -> String {
         "processes: pid and command line; then each thread's state and, while it waits, \
          its wait reason. Thread stacks are not read on Windows.\n",
     );
+    let mut alive = Vec::new();
     match output {
-        Ok(output) => text.push_str(&String::from_utf8_lossy(&output.stdout)),
+        Ok(output) => {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
+                if let Some(ids) = line.strip_prefix(ALIVE) {
+                    alive.extend(
+                        ids.split_whitespace()
+                            .filter_map(|id| id.parse::<u32>().ok()),
+                    );
+                } else {
+                    text.push_str(line);
+                    text.push('\n');
+                }
+            }
+        }
         Err(error) => {
             let _ = writeln!(text, "  PowerShell could not be asked: {error}");
         }
     }
-    text
+    (text, alive)
 }
+
+/// What the line of the children's ids that the system still has starts
+/// with, in PowerShell's answer.
+const ALIVE: &str = "cineris-alive:";
 
 #[cfg(test)]
 mod tests {
@@ -524,6 +629,41 @@ mod tests {
         }
     }
 
+    /// Each child with its id, its age, what became of it and its command:
+    /// an exit its wait saw, still running, a zombie, gone unseen.
+    #[test]
+    fn each_child_is_told_running_exited_or_gone() {
+        use cineris_base::hook::Spawned;
+        let child = |pid, reaped: Option<u64>| Spawned {
+            pid,
+            command: format!("program {pid}"),
+            ago: Duration::from_millis(7_900),
+            reaped_after: reaped.map(Duration::from_millis),
+        };
+        let children = [
+            child(1, Some(300)),
+            child(2, None),
+            child(3, None),
+            child(4, None),
+        ];
+        let text = super::children_text(&children, |pid| match pid {
+            2 => super::There::Running,
+            3 => super::There::Unreaped,
+            _ => super::There::Gone,
+        });
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 5, "{text}");
+        assert_eq!(
+            lines[1],
+            "  1 started 7.9 s ago, exited after 0.3 s, and its wait returned: program 1"
+        );
+        assert!(lines[2].contains("still running") && lines[2].ends_with("program 2"));
+        assert!(lines[3].contains("a zombie"), "{text}");
+        assert!(lines[4].contains("gone, with no wait"), "{text}");
+        let none = super::children_text(&[], |_| super::There::Unknown);
+        assert!(none.contains("none was started"), "{none}");
+    }
+
     #[test]
     fn a_wait_is_reported_while_it_lasts() {
         // The waits alone: the process tree is asked of PowerShell on
@@ -575,14 +715,27 @@ mod tests {
         // A child that stays until it is killed: this binary, waiting on
         // its standard input, which is never closed.
         let program = std::env::current_exe().unwrap();
-        let mut child = Command::new(program)
+        let mut command = Command::new(&program);
+        command
             .args(["--exact", "watch::tests::stays", "--ignored"])
             .env("CINERIS_WATCH_STAY", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::null());
+        let described = cineris_base::hook::describe(&command);
+        let mut child = command.spawn().unwrap();
+        cineris_base::hook::spawned(child.id(), described);
+        // And one that is gone before the report, its exit seen by nobody
+        // the hooks hear from: the report says so.
+        let mut quick = Command::new(&program);
+        quick
+            .arg("--list")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let described = cineris_base::hook::describe(&quick);
+        let mut quick = quick.spawn().unwrap();
+        cineris_base::hook::spawned(quick.id(), described);
+        let _ = quick.wait();
         let stuck = Gate::new();
         let _ = stuck.wait(Duration::from_secs(600));
         // Not reached: the test that started this one kills it first.
@@ -759,6 +912,19 @@ mod tests {
             text.contains(
                 "connection 1, POST /v1/held: holding the response until the gate made at"
             ),
+            "{text}"
+        );
+        // The test's own children: the one that stays, still running, and
+        // the quick one, gone with no wait the hooks heard from.
+        assert!(text.contains("the test's own children"), "{text}");
+        assert!(
+            text.lines()
+                .any(|line| line.contains("still running") && line.contains("stays")),
+            "{text}"
+        );
+        assert!(
+            text.lines()
+                .any(|line| line.contains("gone, with no wait") && line.contains("--list")),
             "{text}"
         );
         // The tree: the test and its child.

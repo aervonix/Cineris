@@ -1,0 +1,186 @@
+# The twelfth tooling step's breaks, first pull request: the repo rules
+# and the test kit.
+
+# Public text: no word of the maintainers' private setup.
+
+[break] public-words-match-inside-a-longer-word
+rule: A word of the list matches only as a whole word: `the desk` is not found in `the desktop`.
+file: xtask/src/rules/public_words.rs
+in: whole
+find: (!first || !before.is_some_and(word_char)) && (!last || !after.is_some_and(word_char))
+replace: true
+caught-by:
+    rules::public_words::tests::words_are_whole_and_a_cased_word_keeps_its_case
+
+[break] public-words-cased-word-in-any-case
+rule: A `cased` word matches only in its own case, so the product's Coordinator is not the maintainers'.
+file: xtask/src/rules/public_words.rs
+in: hits
+find: let (haystack, needle) = if word.cased {
+replace: let (haystack, needle) = if false {
+caught-by:
+    rules::public_words::tests::words_are_whole_and_a_cased_word_keeps_its_case
+
+[break] public-words-allow-in-agents-md
+rule: AGENTS.md takes no `allow`: it names none of the words at all.
+file: xtask/src/rules/public_words.rs
+in: hits
+find: if !strict && allowed(&lower, start, end, &words.allowed) {
+replace: if allowed(&lower, start, end, &words.allowed) {
+caught-by:
+    rules::public_words::tests::an_allowed_phrase_passes_except_in_agents_md
+
+[break] public-words-every-step-record-is-history
+rule: Only the step records named on `history` lines keep their words; a later record is held to the rule.
+file: xtask/src/rules/public_words.rs
+in: check
+find: .any(|folder| file.starts_with(folder.as_str()))
+replace: .any(|folder| file.starts_with(folder.as_str())) || file.starts_with(STEPS)
+caught-by:
+    rules::public_words::tests::old_step_records_keep_their_words_and_new_ones_do_not
+
+[break] public-words-workflows-not-read
+rule: The workflows are public text too.
+file: xtask/src/rules/public_words.rs
+in: is_read
+find: || (file.starts_with(".github/workflows/")
+replace: || (file.starts_with(".github/nothing/")
+caught-by:
+    rules::public_words::tests::old_step_records_keep_their_words_and_new_ones_do_not
+
+[break] public-words-bad-line-dropped
+rule: A line of the list the rule cannot read is a violation, not a word quietly dropped.
+file: xtask/src/rules/public_words.rs
+in: parse
+find: if read.is_none() {
+replace: if read.is_none() && false {
+caught-by:
+    rules::public_words::tests::a_bad_line_or_a_stale_folder_in_the_list_fails
+
+[break] public-words-stale-history-passes
+rule: A `history` line that names a folder with no file in it is a violation.
+file: xtask/src/rules/public_words.rs
+in: check
+find: if !files.iter().any(|file| file.starts_with(folder.as_str())) {
+replace: if false {
+caught-by:
+    rules::public_words::tests::a_bad_line_or_a_stale_folder_in_the_list_fails
+
+# `.worktreeinclude` names only files git ignores.
+
+[break] worktree-include-tracked-file-passes
+rule: A file git tracks may not be listed in `.worktreeinclude`.
+file: xtask/src/rules/worktree_include.rs
+in: check
+find: let problem = if tracked {
+replace: let problem = if false {
+caught-by:
+    rules::worktree_include::tests::only_files_git_ignores_may_be_listed
+
+[break] worktree-include-negation-ignored
+rule: A `!` line of `.gitignore` takes a path back out: a file it names is not ignored.
+file: xtask/src/rules/worktree_include.rs
+in: ignored
+find: ignored = !negated;
+replace: ignored = true;
+caught-by:
+    rules::worktree_include::tests::only_files_git_ignores_may_be_listed
+
+# A pty test sends a key through `send_key`.
+
+[break] pty-keys-lone-escape-passes
+rule: A lone Escape sent as a raw byte is a key.
+file: xtask/src/rules/pty_keys.rs
+in: keys_in
+find: None | Some(&ESC) => (at + 1, true),
+replace: None | Some(&ESC) => (at + 1, false),
+caught-by:
+    rules::pty_keys::tests::a_raw_key_sent_to_a_pty_fails
+    rules::pty_keys::tests::each_sequence_is_told_key_or_not
+
+[break] pty-keys-mouse-is-a-key
+rule: The mouse's SGR reports are not keys, and pass.
+file: xtask/src/rules/pty_keys.rs
+in: csi_is_key
+find: .is_some_and(|byte| matches!(byte, b'?' | b'<' | b'>' | b'='))
+replace: .is_some_and(|byte| matches!(byte, b'?' | b'>' | b'='))
+caught-by:
+    rules::pty_keys::tests::what_is_not_a_key_and_a_marked_line_pass
+
+[break] pty-keys-paste-is-a-key
+rule: Bracketed paste's marks are not keys, and pass.
+file: xtask/src/rules/pty_keys.rs
+in: csi_is_key
+find: b'~' => !matches!(body, b"200" | b"201"),
+replace: b'~' => true,
+caught-by:
+    rules::pty_keys::tests::what_is_not_a_key_and_a_marked_line_pass
+
+[break] pty-keys-mark-without-reason
+rule: A `// raw key:` mark lets a line pass only with a reason after it.
+file: xtask/src/rules/pty_keys.rs
+in: check_file
+find: .is_some_and(|(_, reason)| !reason.trim().is_empty())
+replace: .is_some()
+caught-by:
+    rules::pty_keys::tests::what_is_not_a_key_and_a_marked_line_pass
+
+# `send_key`'s names: Escape and the modifiers.
+
+[break] key-modifier-parameter-wrong
+rule: A modifier is xterm's parameter: 1, and 1 more for Shift, 2 for Alt, 4 for Ctrl.
+file: crates/cineris-testkit/src/pty.rs
+in: key_bytes
+find: let modifier = 1 + u8::from(shift) + 2 * u8::from(alt) + 4 * u8::from(ctrl);
+replace: let modifier = 1 + u8::from(shift) + 4 * u8::from(alt) + 2 * u8::from(ctrl);
+caught-by:
+    cineris-testkit pty::tests::escape_and_the_modifiers_are_sent_as_a_terminal_sends_them
+
+[break] key-escape-without-its-character
+rule: In a win32 record Escape carries its own character, as Windows Terminal sends it.
+file: crates/cineris-testkit/src/pty.rs
+in: key_bytes
+find: ("escape", 0x1b, 0x01, 27, false, "\x1b")
+replace: ("escape", 0x1b, 0x01, 0, false, "\x1b")
+caught-by:
+    cineris-testkit pty::tests::escape_and_the_modifiers_are_sent_as_a_terminal_sends_them
+
+# Only a `sys_` or `perf_` test starts a process.
+
+[break] start-rule-any-module-named-sys
+rule: The test's own name decides, its last segment; a module named `sys_…` above it does not count.
+file: crates/cineris-base/src/hook.rs
+in: may_start_a_process
+find: let last = test.rsplit("::").next().unwrap_or(test);
+replace: let last = test;
+caught-by:
+    cineris-base hook::start_rule_tests::only_a_sys_or_perf_test_may_start_a_process
+
+[break] start-rule-perf-refused
+rule: A `perf_` test may start a process too.
+file: crates/cineris-base/src/hook.rs
+in: may_start_a_process
+find: last.starts_with("sys_") || last.starts_with("perf_")
+replace: last.starts_with("sys_")
+caught-by:
+    cineris-base hook::start_rule_tests::only_a_sys_or_perf_test_may_start_a_process
+
+# The timeout report's children.
+
+[break] children-reaped-marks-another
+rule: A child's exit is marked on the child of that id that is not yet marked.
+file: crates/cineris-base/src/hook.rs
+in: children::reaped
+find: .find(|record| record.pid == pid && record.reaped.is_none())
+replace: .find(|record| record.reaped.is_none())
+caught-by:
+    cineris-base hook::children_tests::a_child_is_kept_and_its_exit_is_marked
+
+[break] children-running-said-gone
+rule: A child still running is said to be running: a late exit, not a missed wake.
+file: crates/cineris-testkit/src/watch.rs
+in: children_text
+find: (None, There::Running) => "still running, and nothing has seen it exit".to_owned(),
+replace: (None, There::Running) => "gone, with no wait".to_owned(),
+caught-by:
+    cineris-testkit watch::tests::each_child_is_told_running_exited_or_gone

@@ -198,7 +198,9 @@ pub fn start(
             Stdio::null()
         });
     crate::hook::started(started.program.as_os_str());
+    let described = crate::hook::describe(&command);
     let mut child = command.spawn()?;
+    crate::hook::spawned(child.id(), described);
     if let (Some(bytes), Some(mut input)) = (started.stdin, child.stdin.take()) {
         // A launcher reads its policy to the end before anything else, and
         // a policy is far smaller than a pipe holds. One that is gone

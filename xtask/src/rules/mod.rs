@@ -18,8 +18,11 @@ mod dependency_list;
 pub(crate) mod home_paths;
 mod layout;
 mod links;
+mod pty_keys;
+mod public_words;
 mod rust_source;
 mod workflows;
+mod worktree_include;
 
 /// One broken rule, at a place in the repository.
 #[derive(Debug, PartialEq, Eq)]
@@ -67,6 +70,7 @@ pub(crate) fn check_repository(root: &Path) -> Result<Vec<Violation>> {
         }
     }
     violations.extend(rust_source::check(&sources));
+    violations.extend(pty_keys::check(&sources));
     violations.extend(check_docs(root, &files, &names)?);
 
     let metadata = workspace::metadata(root)?;
@@ -131,7 +135,38 @@ pub(crate) fn check_docs(
     let names: BTreeSet<String> = names.iter().chain(files).cloned().collect();
     let mut violations = links::check(&texts, &names);
     violations.extend(layout::check(&texts, &names));
+
+    // Public text: the words of the maintainers' private setup.
+    let mut public = BTreeMap::new();
+    for file in files {
+        if public_words::is_read(file) {
+            let text = match texts.get(file) {
+                Some(text) => text.clone(),
+                None => read_text(root, file)?,
+            };
+            public.insert(file.clone(), text);
+        }
+    }
+    let list = read_text(root, public_words::LIST)?;
+    let (words, problems) = public_words::parse(&list);
+    violations.extend(problems);
+    violations.extend(public_words::check(&public, &words, &names));
+
+    // What an agent tool copies into each worktree is ignored by git.
+    if files.iter().any(|file| file == worktree_include::FILE) {
+        violations.extend(worktree_include::check(
+            &read_text(root, worktree_include::FILE)?,
+            &read_text(root, worktree_include::IGNORE).unwrap_or_default(),
+            files,
+        ));
+    }
     Ok(violations)
+}
+
+fn read_text(root: &Path, file: &str) -> Result<String> {
+    fs::read(root.join(file))
+        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+        .map_err(|error| format!("could not read {file}: {error}"))
 }
 
 #[cfg(test)]

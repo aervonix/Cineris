@@ -34,7 +34,10 @@ impl Pty {
         rows: u16,
     ) -> io::Result<Self> {
         cineris_base::hook::started(std::ffi::OsStr::new(program));
-        sys::pty::Pty::spawn(program, arguments, env, cols, rows).map(Self)
+        let described = cineris_base::hook::describe_line(program, arguments);
+        let pty = sys::pty::Pty::spawn(program, arguments, env, cols, rows)?;
+        cineris_base::hook::spawned(pty.pid(), described);
+        Ok(Self(pty))
     }
 
     /// As [`spawn`](Self::spawn), with the pseudo-terminal not the program's
@@ -53,7 +56,10 @@ impl Pty {
         rows: u16,
     ) -> io::Result<Self> {
         cineris_base::hook::started(std::ffi::OsStr::new(program));
-        sys::pty::Pty::spawn_as(program, arguments, env, (cols, rows), false).map(Self)
+        let described = cineris_base::hook::describe_line(program, arguments);
+        let pty = sys::pty::Pty::spawn_as(program, arguments, env, (cols, rows), false)?;
+        cineris_base::hook::spawned(pty.pid(), described);
+        Ok(Self(pty))
     }
 
     /// What the program writes to its terminal. A read that ends with an

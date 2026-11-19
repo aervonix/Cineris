@@ -1,0 +1,93 @@
+# The words of the maintainers' private working setup, which public text
+# does not use (`cargo xtask rules`, "Public text" in docs/testing-and-ci.md).
+#
+# The list was taken from what pull request #106, the public docs pass,
+# took out of the docs. A word belongs here when it names the maintainers'
+# own machines, scripts or way of running sessions, not the product.
+#
+# Lines, one entry each; a line that starts with `#` is a comment:
+#
+#   word PHRASE => ALTERNATIVE    a phrase public text does not use, in any
+#                                 case, and what to say instead
+#   cased PHRASE => ALTERNATIVE   the same, in exactly this case (the
+#                                 product's Coordinator is spelt with a
+#                                 capital and is not the maintainers)
+#   allow PHRASE -- REASON        a longer phrase that is the product's own
+#                                 use of a word: a hit inside it passes.
+#                                 Never in AGENTS.md.
+#   history FOLDER -- REASON      a folder of step records written before the
+#                                 rule; its records keep their words
+#
+# A phrase that begins or ends with a letter or digit matches only as a
+# whole word there: `the desk` is not found in `the desktop`.
+
+word `rx` => the plain `cargo xtask` command
+word `rx  => the plain `cargo xtask` command
+word rx -- => the plain `cargo xtask` command
+word rx check => `cargo xtask check`
+word rx test => `cargo xtask test`
+word rx busy => "when the machine is quieter"
+word rx throttle => the plain `cargo xtask` command
+word rx ab => `cargo xtask ab --base DIR`
+word ci-wait => a CI wait (`gh run watch RUN`)
+cased the desktop => the reference machine
+cased The desktop => The reference machine
+word laptop => the second machine
+word the desk => locally
+word at the desk => locally
+cased the coordinator => the maintainers
+cased The coordinator => The maintainers
+word shell guard => "a sandbox that refuses compound git commands"
+word test lock => "on an otherwise idle machine"
+word side lock => "on an otherwise idle machine"
+word target/coordinator => target/review/
+word build session => a session
+
+allow the desktop number -- the Desktop column of the performance budgets: the class of machine users run on
+allow an 8-thread laptop -- the measurement pages describe the second machine's class, as they do the reference machine's
+
+history docs/steps/02/ -- written before the rule
+history docs/steps/03/ -- written before the rule
+history docs/steps/04/ -- written before the rule
+history docs/steps/05/ -- written before the rule
+history docs/steps/06/ -- written before the rule
+history docs/steps/07/ -- written before the rule
+history docs/steps/08/ -- written before the rule
+history docs/steps/09/ -- written before the rule
+history docs/steps/10/ -- written before the rule
+history docs/steps/11/ -- written before the rule
+history docs/steps/12/ -- written before the rule
+history docs/steps/13a/ -- written before the rule
+history docs/steps/13b/ -- written before the rule
+history docs/steps/14/ -- written before the rule
+history docs/steps/15/ -- written before the rule
+history docs/steps/16/ -- written before the rule
+history docs/steps/17/ -- written before the rule
+history docs/steps/18/ -- written before the rule
+history docs/steps/19/ -- written before the rule
+history docs/steps/20/ -- written before the rule
+history docs/steps/21/ -- written before the rule
+history docs/steps/22/ -- written before the rule
+history docs/steps/23/ -- written before the rule
+history docs/steps/24/ -- written before the rule
+history docs/steps/25/ -- written before the rule
+history docs/steps/26/ -- written before the rule
+history docs/steps/27/ -- written before the rule
+history docs/steps/31/ -- written before the rule
+history docs/steps/33/ -- written before the rule
+history docs/steps/flaky-test-fixes/ -- written before the rule
+history docs/steps/rename-cineris/ -- written before the rule
+history docs/steps/shell-env-fixes/ -- written before the rule
+history docs/steps/step-12-redecide/ -- written before the rule
+history docs/steps/tooling-2/ -- written before the rule
+history docs/steps/tooling-3/ -- written before the rule
+history docs/steps/tooling-4/ -- written before the rule
+history docs/steps/tooling-5/ -- written before the rule
+history docs/steps/tooling-6/ -- written before the rule
+history docs/steps/tooling-7/ -- written before the rule
+history docs/steps/tooling-8/ -- written before the rule
+history docs/steps/tooling-9/ -- written before the rule
+history docs/steps/tooling-10/ -- written before the rule
+history docs/steps/tooling-11/ -- written before the rule
+history docs/steps/tooling-w5/ -- written before the rule
+history docs/steps/tui-design/ -- written before the rule

@@ -251,6 +251,7 @@ fn sys_keys_arrive_with_their_modifiers() {
     session.wait_for(LIMIT, "the first frame", |t| t.shows(STATUS_MARK));
 
     // A lone Escape is the Escape key once nothing follows it.
+    // raw key: the decoder's reading of a lone Escape byte is what is tested
     session.send(b"\x1b");
     last_key(&mut session, "Esc");
     // With a key right after it, Alt with that key; and a sequence with
@@ -259,8 +260,10 @@ fn sys_keys_arrive_with_their_modifiers() {
     // sequences that follow an Escape: there they are checked by
     // sequence only, in the decoder's unit tests.
     if cfg!(unix) {
+        // raw key: the decoder's reading of plain xterm sequences is what is tested
         session.send(b"\x1bx");
         last_key(&mut session, "Alt+x");
+        // raw key: the same, with a modifier parameter
         session.send(b"\x1b[1;5A");
         last_key(&mut session, "Ctrl+Up");
         // The demo turns the win32 input mode on when the terminal says it

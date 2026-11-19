@@ -502,7 +502,7 @@ fn sys_a_turn_is_interrupted_mid_stream_and_mid_tool() {
     phases.mark("interrupted mid-stream");
     type_text(&mut session, "explain\r");
     wait_shows(&mut session, "The first half of the answer");
-    session.send(b"\x1b");
+    session.send_key("escape");
     assert!(closed.wait(LIMIT), "the request was not dropped");
     wait_shows(&mut session, "Interrupted.");
     // What had arrived stays.
@@ -516,7 +516,7 @@ fn sys_a_turn_is_interrupted_mid_stream_and_mid_tool() {
         .try_into()
         .unwrap_or_else(|_| panic!("the command did not start"));
     let began = Instant::now();
-    session.send(b"\x1b");
+    session.send_key("escape");
     assert!(running.gone_within(LIMIT), "the command was not stopped");
     session.wait_for(LIMIT, "the second interruption", |t| {
         let all = t.history();
@@ -1868,17 +1868,17 @@ fn perf_two_hundred_turns_in_each_presenter() {
         if presenter == "fullscreen" {
             // To the top and back, two resizes, and a search.
             for _ in 0..(turns * 4) {
-                session.send(b"\x1b[5~");
+                session.send_key("pageup");
             }
             session.wait_for(LIMIT, "the top", |t| t.shows(HEADER));
             for _ in 0..(turns * 4) {
-                session.send(b"\x1b[6~");
+                session.send_key("pagedown");
             }
             session.resize(70, 30);
             session.resize(100, 30);
             session.send(b"\x06turn 1\r");
             settle(&mut session);
-            session.send(b"\x1b");
+            session.send_key("escape");
             settle(&mut session);
             report(&format!(
                 "{presenter}: scrolled, resized and searched, {}",

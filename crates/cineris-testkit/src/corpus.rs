@@ -47,8 +47,8 @@ pub fn try_real_code_in(root: &Path, pin: &Pin) -> Result<PathBuf, String> {
         .map_err(|problem| {
             format!(
                 "the corpus of real code is not usable: {problem}\n\
-                 Fetch it with `cargo xtask corpus fetch` (on the desk, `rx -- cargo xtask corpus \
-                 fetch`); it is kept outside the repository, so one fetch serves every worktree."
+                 Fetch it with `cargo xtask corpus fetch`, on the machine the tests run on; it is \
+                 kept outside the repository, so one fetch serves every checkout."
             )
         })
 }
