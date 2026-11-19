@@ -138,6 +138,27 @@ fn the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks() {
     );
     assert!(core.model_shared("claude-sonnet-5-5"));
     assert!(!core.model_shared("house-model"));
+
+    // An entry that replaces the built-in default, unmarked, keeps it the
+    // default; two of the user's entries marked for one provider stop the
+    // core (the short review of the fixes).
+    world.raw_user_config(&entry("sonnet", "anthropic", "claude-sonnet-5-5", false));
+    assert_eq!(
+        world.core().default_model("anthropic").as_deref(),
+        Some("claude-sonnet-5-5")
+    );
+    world.raw_user_config(&format!(
+        "{}{}",
+        entry("first", "anthropic", "claude-haiku-5-5", true),
+        entry("second", "anthropic", "claude-opus-5-5", true),
+    ));
+    let error = start_error(&world);
+    assert_eq!(error.code, "invalid_catalog");
+    assert!(
+        error.message.contains("[models.first]") && error.message.contains("[models.second]"),
+        "{}",
+        error.message
+    );
 }
 
 /// Every provider the first run offers (the core's, as `credentials`

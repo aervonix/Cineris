@@ -88,6 +88,11 @@ pub(crate) fn catalog(loaded: &Loaded, env: &Env) -> Result<Catalog, Box<ErrorDa
     let Some(section) = loaded.section("models") else {
         return Ok(catalog);
     };
+    // The user's entries marked as a provider's default, by provider: one
+    // each, checked across them, since each is read alone (since the short
+    // review of the fixes of step 25's third pull request).
+    let mut defaults: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
     for (name, entry) in section {
         let place = || {
             // The origin of the entry, of one of its keys, or of the
@@ -147,6 +152,21 @@ pub(crate) fn catalog(loaded: &Loaded, env: &Env) -> Result<Catalog, Box<ErrorDa
             )
         })?;
         catalog.overlay(&one);
+        if let Some(marked) = one.models().first().filter(|entry| entry.default) {
+            let provider = marked.info.provider.as_str().to_owned();
+            if let Some(first) = defaults.insert(provider.clone(), name.clone()) {
+                return Err(config_error(
+                    "invalid_catalog",
+                    format!(
+                        "The model entry `[models.{name}]` in {} cannot be used: \
+                         `[models.{first}]` marks the default of the provider `{provider}` \
+                         already, and a provider has one. The session was not started, so that \
+                         the model a first run writes is not a guess. Mark one of them.",
+                        place()
+                    ),
+                ));
+            }
+        }
     }
     Ok(catalog)
 }

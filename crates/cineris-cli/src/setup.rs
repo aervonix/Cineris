@@ -427,6 +427,48 @@ mod tests {
         assert!(!shown.shown.contains("a b c"), "{}", shown.shown);
     }
 
+    /// The program says a provider's model is shared when another provider
+    /// has a model of its id in the core's catalog, the user's entries
+    /// included, and only then (the short review of the fixes, Low 6:
+    /// nothing caught the program dropping it).
+    #[test]
+    fn a_providers_model_is_shared_when_another_provider_has_its_id() {
+        let scratch = cineris_testkit::Scratch::outside("cineris-cli-unit", "first_run_shared");
+        let env = env_at(&scratch.dir("home"));
+        let mut dirs = cineris_config::Dirs::from_env(&env);
+        dirs.managed_config = Some(scratch.join("managed/config.toml"));
+        let user = dirs.user_config.clone().unwrap();
+        std::fs::create_dir_all(user.parent().unwrap()).unwrap();
+        let anthropic = |config: &str| {
+            std::fs::write(&user, config).unwrap();
+            let mut options = cineris_core::CoreOptions::new(
+                env.clone(),
+                std::sync::Arc::new(cineris_core::TokioTimer),
+            );
+            options.dirs = Some(dirs.clone());
+            let core = Core::start(options).expect("the core starts");
+            ProgramSetup::new(core, env.clone(), scratch.dir("work"), user.clone())
+                .providers()
+                .unwrap()
+                .providers
+                .into_iter()
+                .find(|provider| provider.name == "anthropic")
+                .unwrap()
+        };
+        let keys = "[credentials]\nstore = \"file\"\n";
+        let alone = anthropic(keys);
+        assert_eq!(alone.model.as_deref(), Some("claude-sonnet-5-5"));
+        assert!(!alone.model_shared);
+        let twin = anthropic(&format!(
+            "{keys}\n[models.twin]\nprovider = \"local\"\nid = \"claude-sonnet-5-5\"\nname = \
+             \"Twin\"\nprotocol = \"anthropic-messages\"\ncontext_window = 100000\nmax_output = \
+             8000\n\n[providers.local]\nprotocol = \"anthropic-messages\"\nbase_url = \
+             \"http://127.0.0.1:9\"\n"
+        ));
+        assert_eq!(twin.model.as_deref(), Some("claude-sonnet-5-5"));
+        assert!(twin.model_shared, "another provider has a model of its id");
+    }
+
     #[test]
     fn a_key_is_kept_where_the_store_says() {
         assert_eq!(

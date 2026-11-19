@@ -499,8 +499,9 @@ pub struct App {
     /// runs on past `/plan`'s `Enter` never acts on it. Moving the focus
     /// (`Ctrl+P`) is not such input.
     panel_untaken: Option<Instant>,
-    /// The last key a panel took, when it or a repeat of it was last read,
-    /// and whether only a repeat the terminal marks is taken for it held:
+    /// The last key a panel, or a step of the first run, took, when it or
+    /// a repeat of it was last read, and whether only a repeat the terminal
+    /// marks is taken for it held:
     /// the same key again within [`REPEAT`] is that key held down, and goes
     /// where its press went (nowhere); after a key that began an item edit,
     /// what is typed is the item's, and only a marked repeat is held.

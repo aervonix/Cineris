@@ -2188,10 +2188,11 @@ fn an_open_that_fails_after_the_first_runs_own_does_not_end_it() {
     assert!(Run::shows_commands(&live), "{live:#?}");
 }
 
-/// A first run asked to resume or continue a session, whose choices are
-/// not in force from a file (not written, or its worker never started),
+/// A first run asked to resume, continue or fork a session, whose choices
+/// are not in force from a file (not written, or its worker never started),
 /// opens a new session with them in its place and says so; with the file
-/// in force it resumes as asked (L-2).
+/// in force it resumes as asked (L-2; the fork since the short review of
+/// the fixes).
 #[test]
 fn a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_force() {
     let resume = || Open::Resume(cineris_protocol::SessionId::from("s_old"));
@@ -2201,16 +2202,18 @@ fn a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_f
         ephemeral: false,
     };
     let instead = "This is a new session, not the one asked for";
-    for open in [resume(), continuing()] {
+    let fork = || Open::Fork(cineris_protocol::SessionId::from("s_old"));
+    for open in [resume(), continuing(), fork()] {
         let mut setup = fake();
         setup.write_fails = Some("the disk is full".to_owned());
         let mut run = Run::opening(setup, open);
         skip_three(&mut run);
         let sent = run.link.take_sent();
         assert!(
-            !sent
-                .iter()
-                .any(|(_, op)| matches!(op, Op::SessionOpen(_) | Op::SessionList(_))),
+            !sent.iter().any(|(_, op)| matches!(
+                op,
+                Op::SessionOpen(_) | Op::SessionList(_) | Op::SessionFork(_)
+            )),
             "{sent:?}"
         );
         let Some((_, Op::SessionNew(params))) = sent
@@ -2263,35 +2266,29 @@ fn a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_f
 }
 
 /// A file that appears at the configuration's name before it is written is
-/// left as it is and said to be the configuration from the next start, not
-/// that nothing was saved and the set-up runs again; the session carries
-/// what was chosen (L-3).
+/// left as it is, read now, and said so: what was chosen applies over it
+/// for the run, which the session carries; not that nothing was saved and
+/// the set-up runs again (L-3, and the short review of the fixes: it was
+/// said to be in force only from the next start, though the core's watch
+/// reads it at the next key).
 #[test]
-fn a_file_found_at_the_name_is_said_to_be_in_force_from_the_next_start() {
+fn a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it() {
     let mut setup = fake();
     setup.file_appears = true;
     let mut run = Run::new(setup);
     skip_three(&mut run);
-    let sent = run.link.take_sent();
-    assert!(
-        !sent.iter().any(|(_, op)| matches!(op, Op::ConfigReload(_))),
-        "the file found is not read now"
-    );
-    let Some((open, Op::SessionNew(params))) = sent
-        .into_iter()
-        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
-    else {
-        panic!("no session opened");
-    };
-    assert_eq!(
-        serde_json::Value::Object(params.config),
-        serde_json::json!({ "compat": { "instructions": false, "skills": false } })
-    );
+    let (reload, _) = run
+        .sent(|op| matches!(op, Op::ConfigReload(_)))
+        .expect("the file found is read now");
     run.give(
-        open,
-        OpResult::SessionNew(SessionResult {
-            session: session().trust(TrustStanding::Trusted).build(),
-        }),
+        reload,
+        OpResult::ConfigReload(ConfigReloadResult::default()),
+    );
+    let config = run.opened(TrustStanding::Trusted);
+    assert_eq!(
+        serde_json::Value::Object(config),
+        serde_json::json!({ "compat": { "instructions": false, "skills": false } }),
+        "what was chosen applies over it"
     );
     let _ = run.frame();
     run.detect(Vec::new());
@@ -2300,52 +2297,79 @@ fn a_file_found_at_the_name_is_said_to_be_in_force_from_the_next_start() {
     let said = squash(&run.scrollback.join(" "));
     for line in [
         "· Mode: supervised, for this run. ~/.config/cineris/config.toml was made meanwhile, not \
-         by the set-up, and was left as it is: it is the configuration from the next start.",
+         by the set-up, and was left as it is: it is read now, and what was chosen applies over \
+         it for this run.",
         "Nothing of the set-up's was saved: ~/.config/cineris/config.toml, made meanwhile, is the \
-         configuration from the next start, and the set-up does not run again.",
+         configuration now, what was chosen applying over it for this run, and the set-up does \
+         not run again.",
     ] {
         assert!(said.contains(line), "{line}: {said}");
     }
     assert!(!said.contains("runs again at the next start"), "{said}");
 }
 
-/// "Drawn whole" holds by width as by height (L-4): in a window 11 columns
-/// wide, where the step fits by height, a provider whose name its column
-/// cuts is not chosen; at 80 columns a server whose name is longer than its
-/// column is not picked, and the hint row says a larger window shows it
-/// whole, which at 100 it does, and it is picked.
+/// "Drawn whole" holds by width as by height (L-4): in a window 8 columns
+/// wide, where the step fits by height but a provider's detail begins past
+/// the edge, no provider is chosen; at 11 columns, where each row wraps
+/// whole (its label a character a line, since labels wrap), one is.
 #[test]
 fn a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height() {
-    let mut run = Run::sized(fake(), 11, 400);
+    let mut run = Run::sized(fake(), 8, 400);
     let _ = run.ready();
     run.key("enter");
     let _ = run.frame();
     assert!(run.scrollback.is_empty(), "no provider chosen");
-    let name = "a-server-with-a-name-longer-than-its-column-leaves";
+    let mut run = Run::sized(fake(), 11, 400);
+    let _ = run.ready();
+    run.key("enter");
+    run.answer();
+    let _ = run.frame();
+    assert!(!run.scrollback.is_empty(), "the provider chosen");
+}
+
+/// A label longer than its column wraps in it, and its row is drawn whole
+/// and accepted at 80 columns: Claude Desktop's file on Windows is read,
+/// and a server named in 60 characters is picked (the coordinator's answer
+/// to the review of the fixes: such a row could not be accepted on a small
+/// terminal).
+#[test]
+fn a_long_label_wraps_and_is_accepted_at_80_columns() {
+    let path = "~\\AppData\\Roaming\\Claude\\claude_desktop_config.json";
+    let name = "a-server-named-in-sixty-characters-which-is-longer-than-room";
     let mut setup = fake();
+    setup.found.user_mcp = vec![McpFile {
+        path: path.to_owned(),
+        from: "Claude Desktop".to_owned(),
+    }];
     setup.servers.insert(
-        "~/.claude.json".to_owned(),
+        path.to_owned(),
         vec![server(name, "npx -y @example/long-mcp", None)],
     );
-    let mut run = Run::sized(setup.clone(), 81, 60);
+    let mut run = Run::sized(setup, 81, 60);
     to_the_servers(&mut run);
-    run.moves("down");
+    assert_eq!(run.setup.log().read, [path], "the file's row was accepted");
     let live = run.frame();
     assert!(
-        live.iter()
-            .any(|row| row.contains("a larger window shows this row whole")),
+        live.join("\n")
+            .contains("~\\AppData\\Roaming\\Claude\\claude_desktop"),
         "{live:#?}"
     );
-    run.key("space");
-    let live = run.frame();
-    assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
-    let mut run = Run::sized(setup, 100, 60);
-    to_the_servers(&mut run);
     run.moves("down");
     run.key("space");
     let live = run.frame();
+    let at = live
+        .iter()
+        .position(|row| row.starts_with("  ◆"))
+        .expect("the selected row");
     assert!(
-        live.iter().any(|row| row.contains(&format!("☑ {name}"))),
+        live[at].contains(&format!("☑ {}", &name[..40])),
+        "picked, its name whole: {live:#?}"
+    );
+    assert!(live[at + 1].contains(&name[50..]), "{live:#?}");
+    assert!(
+        !live
+            .iter()
+            .any(|row| row.contains("a larger window shows this row whole")),
         "{live:#?}"
     );
 }
@@ -2387,4 +2411,32 @@ fn a_held_key_the_last_step_took_types_nothing_into_the_input_box() {
     run.key("a");
     repeat(&mut run, 'a');
     assert_eq!(run.app.input().editor().text(), "aaaa");
+}
+
+/// A key that ended the last step, held down, types nothing into the input
+/// box the step gives back: its repeats, marked or not, go where its press
+/// went (the short review of the fixes, Low 3: a held `s` typed `sss`).
+#[test]
+fn a_held_key_that_ends_the_last_step_types_nothing() {
+    let mut run = Run::new(fake());
+    let _ = commands_step(&mut run);
+    run.key("s");
+    assert!(!run.app.in_first_run(), "`s` ended it");
+    for _ in 0..3 {
+        run.app.terminal(
+            &cineris_term::Event::Repeat(cineris_term::Key::plain(cineris_term::KeyCode::Char(
+                's',
+            ))),
+            run.now,
+        );
+        run.now += Duration::from_millis(30);
+    }
+    // A repeat the terminal does not mark: the same key within the repeat
+    // window.
+    run.key("s");
+    assert_eq!(run.app.input().editor().text(), "");
+    // A press after the window is typing.
+    run.now += Duration::from_secs(1);
+    run.key("s");
+    assert_eq!(run.app.input().editor().text(), "s");
 }
