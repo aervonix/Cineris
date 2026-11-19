@@ -418,8 +418,19 @@ fn token_by_token_commits_what_all_at_once_does_split_at_every_point() {
 /// pieces split at every place, commits the lines the document laid out
 /// whole shows. For documents with no mark a row is held for, so that no
 /// row is committed early with its marks frozen.
+///
+/// All at once is checked at every width. A pull request splits it at every
+/// place at every third width, and the nightly run at every width: the
+/// splits cost a second of tier 1 on a runner, and rows committed early
+/// show what they show without one.
 fn commits_what_the_whole_shows(document: &str, widths: std::ops::Range<usize>) {
     let look = look();
+    let step = if cineris_testkit::cases::exhaustive() {
+        1
+    } else {
+        3
+    };
+    let first = widths.start;
     for width in widths {
         let expected = whole(document, width, &look);
         let all = at_once(document, width, &look);
@@ -429,6 +440,9 @@ fn commits_what_the_whole_shows(document: &str, widths: std::ops::Range<usize>) 
             "all at once, at {width}: {document:?}"
         );
         assert_eq!(all, expected, "styles differ, at {width}: {document:?}");
+        if (width - first) % step != 0 {
+            continue;
+        }
         for split in (0..=document.len()).filter(|&at| document.is_char_boundary(at)) {
             let (lines, stream) = streamed(
                 Flavor::Answer,
