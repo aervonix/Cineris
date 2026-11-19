@@ -40,7 +40,7 @@ Branch `worktree-step-02-tooling-10-runs`, on `origin/main` at 7f820234.
 - `AGENTS.md` "Working here": the `try-result` row mentions the wall times and the queued line; a row for `try --dispatch`; a row each for `branch commit-records` and `branch fold`/`to-end`.
 - `xtask/src/main.rs` USAGE: `try-result`, `try`, `ab` and the new `branch`.
 - `docs/testing-and-ci.md`: two bullets after the `--dispatch` bullet in "A run on the runners without a pull request" (against fixed at dispatch; a queued run named), a bullet in "Two trees on one runner" (each side's wall time), and a new section "A branch's history without the shell guard" before "The public API between two trees".
-- `docs/shell-guard.md`: a bullet in "The forms to use".
+- `shell-guard.md` (a page since moved out of the public docs): a bullet in "The forms to use".
 - `.github/workflows/try.yml`: uploads `target/ab/wall-times.json`.
 
 ## Tests

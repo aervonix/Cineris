@@ -759,7 +759,7 @@ impl Inputs {
         }
         if self.profile != "ci" {
             return Err(
-                "`mutate` builds its own copy of the tree, as it does at a desk: the ci profile"
+                "`mutate` builds its own copy of the tree, as it does locally: the ci profile"
                     .to_owned(),
             );
         }
@@ -770,7 +770,7 @@ impl Inputs {
             match word.as_str() {
                 "--check" | "--list" | "--report" | "--tests" | "--fix-in" | "--write" => {
                     return Err(format!(
-                        "`{word}` runs no break: it is for a desk, which reads the lists and the tree. A try run runs the breaks"
+                        "`{word}` runs no break: it is for a local run, which reads the lists and the tree. A try run runs the breaks"
                     ));
                 }
                 "--minutes" => {
@@ -1394,7 +1394,7 @@ fn dispatch(branch: &str, inputs: &Inputs) -> Result<()> {
         if !made.is_empty() {
             for run in &made {
                 println!(
-                    "dispatched: run {run}. Wait for it with `ci-wait --runs {run}`, and read \
+                    "dispatched: run {run}. Wait for it with `gh run watch {run}`, and read \
                      it with `cargo xtask try-result {run}`."
                 );
             }

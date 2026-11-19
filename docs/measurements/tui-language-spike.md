@@ -39,7 +39,7 @@ A benchmark harness (Rust) runs a prototype under a pseudo-terminal of 120 by 40
 | **CPU** | Process-tree CPU time over the streaming window, as a share of one core. |
 | **Size** | Bytes of what would ship. |
 
-**Scenarios.** `light`: the live region holds one streaming line, as in the proposed design. `heavy`: the live region holds up to 30 lines of the block being streamed, re-rendered every frame, which is how a UI that does not commit lines early behaves. `long`: 20 turns back to back, 60 seconds at 2,000 tokens per second, to see whether cost grows with the transcript. Rates: 100 tokens per second (a typical large model), 400 (a fast one), 2,000 (faster than any hosted model today). Each run streams for 12 seconds. Three repetitions on the desktop, two on the laptop; medians.
+**Scenarios.** `light`: the live region holds one streaming line, as in the proposed design. `heavy`: the live region holds up to 30 lines of the block being streamed, re-rendered every frame, which is how a UI that does not commit lines early behaves. `long`: 20 turns back to back, 60 seconds at 2,000 tokens per second, to see whether cost grows with the transcript. Rates: 100 tokens per second (a typical large model), 400 (a fast one), 2,000 (faster than any hosted model today). Each run streams for 12 seconds. Three repetitions on the reference machine, two on the second machine; medians.
 
 **Flicker, measured.** Flicker is what a user sees when the terminal paints a frame that is only partly written. Two things are measured from the recording:
 
@@ -48,17 +48,19 @@ A benchmark harness (Rust) runs a prototype under a pseudo-terminal of 120 by 40
 
 **Machines.**
 
-| | Desktop | Laptop |
+| | Reference machine | Second machine |
 |---|---|---|
 | CPU | Intel Core i7-14700K, 28 threads | Intel Core i5-1135G7, 8 threads |
-| System | Linux 6.18 under WSL 2 | Linux 7.0, native |
+| System | Linux 6.18, in a virtual machine | Linux 7.0, native |
 | Rust | 1.99.1 | 1.99.1 |
+
+The two machines are described in [README.md](README.md#machines).
 
 **Builds.** The Rust programs were built with `opt-level = 3`, fat LTO, one codegen unit, `panic = "abort"`, and stripped. The TypeScript prototype was bundled and minified for production.
 
-**Two corrections made during the work.** The first desktop run used wall-clock timestamps. WSL 2 steps the wall clock, which corrupted a few frame-interval figures and broke key matching in three runs. The harness was changed to the monotonic clock and to match each key independently, and everything was run again. All figures below are from the corrected runs.
+**Two corrections made during the work.** The first run on the reference machine used wall-clock timestamps. On the reference machine (Linux under WSL 2) the wall clock steps, which corrupted a few frame-interval figures and broke key matching in three runs. The harness was changed to the monotonic clock and to match each key independently, and everything was run again. All figures below are from the corrected runs.
 
-## Results: desktop
+## Results: reference machine
 
 ### Start-up, memory, size
 
@@ -107,7 +109,7 @@ Medians of three runs. Times in milliseconds.
 | | `ink-node` | 8.4 / 16.3 | 0.83 / 1.61 | 0.67 / 1.34 | 0.3% | 14.2 |
 | | `ink-bun` | 9.1 / 17.2 | 0.95 / 2.13 | 0.69 / 1.62 * | 0% | 17.1 |
 
-\* The Bun frame-cost figures are from the first desktop run. In the corrected run the Bun prototype's internal timestamps were on a different clock from the harness and could not be matched. The other columns are from the corrected run.
+\* The Bun frame-cost figures are from the first run on the reference machine. In the corrected run the Bun prototype's internal timestamps were on a different clock from the harness and could not be matched. The other columns are from the corrected run.
 
 **At idle** (8 keys typed before the stream starts in each run), key echo was 0.10 to 0.26 ms median for the Rust prototypes and 1.6 to 2.4 ms for the TypeScript one, with single keys as slow as 13 ms. The 99th percentile of the interval between frames while streaming was 16.8 to 17.1 ms for the Rust prototypes and 17.2 to 22.9 ms for the TypeScript one, against a 16.7 ms target.
 
@@ -138,7 +140,7 @@ Reading it:
 - **On a terminal that does not**, the difference is whether a frame reaches the terminal in one piece. A pseudo-terminal hands over output in chunks of about 4 KiB. `rust-lines` and `rust-inline` in the light scenario write each frame with one system call and stay under one chunk, so there is nothing partial to paint. Ink writes a frame in several pieces and erases lines before rewriting them, so a blank flash is possible in a third or more of frames.
 - **A cell-grid renderer sends more than it needs to when text scrolls.** `rust-full` and `rust-inline` in the heavy scenario rewrite most cells of the region whenever a line scrolls: 6 to 8 KiB a frame, against 3 KiB for a line-based renderer and under 1 KiB when the live region is kept small.
 
-## Results: laptop
+## Results: second machine
 
 Native Linux, a slower CPU, two repetitions. The ordering and the ratios are the same.
 
@@ -154,13 +156,13 @@ Native Linux, a slower CPU, two repetitions. The ordering and the ratios are the
 | CPU, heavy at 2,000 tok/s | 6.3% | 7.2% | 8.1% | 11.2% | 43.9% | 61.4% |
 | Frames dropped | 0% | 0% | 0% | 0% | 0% | 0% |
 
-One laptop run overlapped with a short compile on the same machine. The medians above do not show an effect.
+One run on the second machine overlapped with a short compile on the same machine. The medians above do not show an effect.
 
 ## The reference harnesses as installed
 
-For scale, the two reference harnesses were installed from the npm registry into scratch space and started on the laptop: Pi 1.5.2 on Node 26.13, and Opencode 1.19.5 as its self-contained executable. Each ran with an empty home directory, so each showed whatever it shows on a first run. These are complete products and the prototypes above are not, so this is a statement of where the bar is today, not a like-for-like comparison.
+For scale, the two reference harnesses were installed from the npm registry into scratch space and started on the second machine: Pi 1.5.2 on Node 26.13, and Opencode 1.19.5 as its self-contained executable. Each ran with an empty home directory, so each showed whatever it shows on a first run. These are complete products and the prototypes above are not, so this is a statement of where the bar is today, not a like-for-like comparison.
 
-| | Pi 1.5.2 | Opencode 1.19.5 | Rust prototype (`rust-lines`), same laptop |
+| | Pi 1.5.2 | Opencode 1.19.5 | Rust prototype (`rust-lines`), same second machine |
 |---|---|---|---|
 | `--version` | 175 ms | 371 ms | under 1 ms |
 | Interactive: first output | 223 ms | 526 ms | 1.3 ms to a complete first frame |

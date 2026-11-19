@@ -1,10 +1,10 @@
 # Windows Terminal checklist
 
-A short manual check for the owner to run on the desktop, in native Windows. It covers the one thing the TUI measurements could not: how the prototypes behave in a real Windows Terminal window.
+A short manual check to run on a Windows machine, in Windows Terminal. It covers the one thing the TUI measurements could not: how the prototypes behave in a real Windows Terminal window.
 
-**When.** Before step 20 of the build plan, the terminal layer. The owner accepted both decisions on 2026-11-12 on the condition that this is run first. It was run on 2026-11-13; the results are recorded in decisions [0001](../decisions/0001-tui-language.md) and [0002](../decisions/0002-tui-rendering.md), each under "Checked on Windows".
+**When.** Before step 20 of the build plan, the terminal layer. The owner accepted both decisions on 2026-11-12 on the condition that this is run first. The owner ran it on 2026-11-13 (Windows Terminal 1.24, Windows build 26300); the results are recorded in decisions [0001](../decisions/0001-tui-language.md) and [0002](../decisions/0002-tui-rendering.md), each under "Checked on Windows".
 
-**Why it is manual.** The measurement harness ran on Linux (the laptop, and the desktop under WSL 2). It cannot see a Windows terminal window, and a pseudo-terminal recording does not show what a person sees. The decision in [decisions/0001-tui-language.md](../decisions/0001-tui-language.md) stayed provisional until this had been run.
+**Why it is manual.** The measurement harness ran on Linux (the reference machine and the second machine, both Linux: [README.md](README.md#machines)). It cannot see a Windows terminal window, and a pseudo-terminal recording does not show what a person sees. The decision in [decisions/0001-tui-language.md](../decisions/0001-tui-language.md) stayed provisional until this had been run.
 
 **Time:** about 20 minutes.
 

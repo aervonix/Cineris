@@ -70,8 +70,7 @@ Without one, every break.
   --tests        With --check: build the tests of the crates the breaks run
                  (cargo nextest list), keep their lists, and check every
                  `caught-by` against them. BREAK narrows which breaks' names.
-                 This is the one that builds; at the desk, `rx -- cargo xtask
-                 mutate --check --tests`.
+                 This is the one that builds.
   --fix-in       With --check: for each break whose `in:` no longer holds its
                  `find`, print the `in:` of the one item that holds it now.
                  Refuses to guess when the code is in several items, in none,
@@ -120,8 +119,8 @@ Without one, every break.
                  that is new or changed in its list, or the build's settings
                  changed. Says how many it left and why, and chooses a break
                  when it cannot tell (a test name no file has). Needs git's
-                 history: at the desk, `rx --git -- cargo xtask mutate
-                 --changed REF ...`. Narrows names, --file and --flagged; not
+                 history (a `.git`: run it in a git
+                 checkout). Narrows names, --file and --flagged; not
                  with --check, --break or --merge. A full run, without it,
                  is what a report rests on.
   --list         Print the breaks chosen, and stop.

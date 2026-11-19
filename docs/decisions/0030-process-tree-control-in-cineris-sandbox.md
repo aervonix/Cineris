@@ -18,7 +18,7 @@ The runner is in `cineris-tools`, where `unsafe` is denied. The rule so far allo
 
 ## Options considered
 
-Measured on the desktop on 2026-11-13, 4 cores pinned, clean builds, by the method of [measurements/dependency-costs.md](../measurements/dependency-costs.md), with no other run active. The Windows figures are `cargo check` for the Windows target, because the desktop cannot link a Windows program. An empty program builds in 0.6 s (dev) and 1.3 s (release), and checks for Windows in 0.1 s.
+Measured on the reference machine on 2026-11-13, 4 cores pinned, clean builds, by the method of [measurements/dependency-costs.md](../measurements/dependency-costs.md), with no other run active. The Windows figures are `cargo check` for the Windows target, because the reference machine cannot link a Windows program. An empty program builds in 0.6 s (dev) and 1.3 s (release), and checks for Windows in 0.1 s.
 
 | Option | Gives | Cannot give | New packages | Build |
 |---|---|---|---|---|
@@ -61,7 +61,7 @@ So some `unsafe` of ours is needed unless the polite interrupt on Windows, or th
 - **Others need the same control.** `cineris-ext` and `cineris-mcp` start hook commands and MCP servers. Both depend on `cineris-sandbox` already, and now get tree control from it without going through the shell tool.
 - **The Windows sandbox will create the process there anyway.** An AppContainer process cannot be started by the standard library (step 49). With Job Objects in `cineris-tools`, that step would split one mechanism across two crates.
 - **No rule changes.** A fourth place where `unsafe` may be written was the alternative, for the same code.
-- **The guard is the only mechanism that reaches a grandchild on Linux** without root, a container or user namespaces. Measured on the desktop (release build, 400 runs each): telling the guard of a tree and of its end costs two pipe writes, 6 µs a command, and one process start a session. A guard process for each command would cost 105 µs a command.
+- **The guard is the only mechanism that reaches a grandchild on Linux** without root, a container or user namespaces. Measured on the reference machine (release build, 400 runs each): telling the guard of a tree and of its end costs two pipe writes, 6 µs a command, and one process start a session. A guard process for each command would cost 105 µs a command.
 
 ## What is given up
 

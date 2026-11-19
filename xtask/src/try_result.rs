@@ -707,7 +707,7 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
 /// jobs past the limit, when it has.
 pub(crate) fn unfinished_text(run: u64, status: &str, queued: Option<String>) -> String {
     let mut text = format!(
-        "run {run} is {}, not finished: `ci-wait --runs {run}` waits for it",
+        "run {run} is {}, not finished: `gh run watch {run}` waits for it",
         if status.is_empty() {
             "not completed"
         } else {
@@ -887,12 +887,12 @@ mod tests {
         let text = super::unfinished_text(77, "queued", Some(queued.clone()));
         assert_eq!(
             text,
-            format!("run 77 is queued, not finished: `ci-wait --runs 77` waits for it\n{queued}")
+            format!("run 77 is queued, not finished: `gh run watch 77` waits for it\n{queued}")
         );
         let text = super::unfinished_text(77, "", None);
         assert_eq!(
             text,
-            "run 77 is not completed, not finished: `ci-wait --runs 77` waits for it"
+            "run 77 is not completed, not finished: `gh run watch 77` waits for it"
         );
     }
 

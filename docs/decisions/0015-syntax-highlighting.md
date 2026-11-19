@@ -18,7 +18,7 @@ Code blocks and diffs read better highlighted. Highlighting is the most expensiv
 
 ## Measurement
 
-Desktop pinned to 4 cores, syntect with default features off, the pure-Rust regex engine and the default packed grammar set ([measurements/dependency-costs.md](../measurements/dependency-costs.md)):
+The reference machine pinned to 4 cores, syntect with default features off, the pure-Rust regex engine and the default packed grammar set ([measurements/dependency-costs.md](../measurements/dependency-costs.md)):
 
 | | Dev build | Release build | Size added | Crates |
 |---|---|---|---|---|

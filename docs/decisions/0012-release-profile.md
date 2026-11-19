@@ -9,7 +9,7 @@ The build profiles set three things the project budgets for: how long builds tak
 
 ## Measurements
 
-A program with the core dependency set, clean release builds pinned to 4 cores on the desktop, binary stripped. Method: [measurements/dependency-costs.md](../measurements/dependency-costs.md).
+A program with the core dependency set, clean release builds pinned to 4 cores of the reference machine, binary stripped. Method: [measurements/dependency-costs.md](../measurements/dependency-costs.md).
 
 | LTO | Codegen units | Opt level | Panic | Build | Binary |
 |---|---|---|---|---|---|
@@ -79,9 +79,9 @@ So there is a fifth profile:
 |---|---|---|
 | `ci` | The blocking CI test jobs, and `cargo xtask ci` | Inherits `dev`; dependencies at `opt-level = 0` |
 
-- **`dev` is unchanged.** At a desk, dependencies are built once and kept, and optimising them makes tests and the debug binary faster.
+- **`dev` is unchanged.** On a developer's machine, dependencies are built once and kept, and optimising them makes tests and the debug binary faster.
 - **Our own crates keep line tables in `ci`,** so a failing test's backtrace has line numbers. Measured on the same runners, that costs between nothing and 8% of a cold build.
-- **What is given up:** tests in CI run against unoptimised dependencies, so a test that spends its time inside one runs slower there than at a desk. If that shows in a tier's budget, that crate gets `opt-level = 1` in the `ci` profile.
+- **What is given up:** tests in CI run against unoptimised dependencies, so a test that spends its time inside one runs slower there than on a developer's machine. If that shows in a tier's budget, that crate gets `opt-level = 1` in the `ci` profile.
 
 The measurements and their method are in [testing-and-ci.md](../testing-and-ci.md).
 

@@ -11,7 +11,7 @@
 2. **The network.** Neither mechanism can filter by host. What exactly may a command with the network off reach?
 3. **Failing closed.** Once the harness has said the sandbox enforces, what happens when applying it fails?
 
-The kernels the project runs on, measured on 2026-11-13: the hosted `ubuntu-24.04` runners (x86-64 and arm64) have Linux 7.0 and Landlock 8; `ubuntu-22.04` has Linux 6.8 and Landlock 4; the desktop's WSL 2 has Linux 6.18 and Landlock 7. Ubuntu 24.04's own kernel is 6.8 (Landlock 4); Debian 12's is 6.1 (Landlock 2).
+The kernels the project runs on, measured on 2026-11-13: the hosted `ubuntu-24.04` runners (x86-64 and arm64) have Linux 7.0 and Landlock 8; `ubuntu-22.04` has Linux 6.8 and Landlock 4; the reference machine's WSL 2 has Linux 6.18 and Landlock 7. Ubuntu 24.04's own kernel is 6.8 (Landlock 4); Debian 12's is 6.1 (Landlock 2).
 
 | Landlock | Linux | What it adds that matters here |
 |---|---|---|

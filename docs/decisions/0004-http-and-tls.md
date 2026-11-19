@@ -9,7 +9,7 @@ The provider client needs HTTPS with streaming response bodies, HTTP/2, proxies,
 
 ## Options considered and measured
 
-Clean builds pinned to 4 cores on the desktop, to approximate a hosted CI runner. Sizes are the stripped release binary of a minimal program that uses the client, minus an empty program. Full method and tables: [measurements/dependency-costs.md](../measurements/dependency-costs.md).
+Clean builds pinned to 4 cores of the reference machine, to approximate a hosted CI runner. Sizes are the stripped release binary of a minimal program that uses the client, minus an empty program. Full method and tables: [measurements/dependency-costs.md](../measurements/dependency-costs.md).
 
 | Option | Dev build | Release build | Size added | Crates | Notes |
 |---|---|---|---|---|---|

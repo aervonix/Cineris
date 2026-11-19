@@ -11,7 +11,7 @@ The page left the means to the permissions step: a pure-Rust parser crate, or a 
 
 ## Options considered
 
-Measured on the desktop on 2026-11-13, 4 cores pinned, clean builds, by the method of [measurements/dependency-costs.md](../measurements/dependency-costs.md), with no other run active. Each candidate was also given 43 lines chosen to be awkward.
+Measured on the reference machine on 2026-11-13, 4 cores pinned, clean builds, by the method of [measurements/dependency-costs.md](../measurements/dependency-costs.md), with no other run active. Each candidate was also given 43 lines chosen to be awkward.
 
 | Option | Grammar it covers | On input it does not understand | Upkeep | Dev build | Release build | Size | Packages |
 |---|---|---|---|---|---|---|---|

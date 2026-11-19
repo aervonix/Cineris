@@ -9,7 +9,7 @@ The `cineris` binary has a modest command line: a few global flags, a handful of
 
 ## Options considered and measured
 
-Desktop pinned to 4 cores; sizes are a stripped release binary of a minimal program, minus an empty program ([measurements/dependency-costs.md](../measurements/dependency-costs.md)).
+The reference machine pinned to 4 cores; sizes are a stripped release binary of a minimal program, minus an empty program ([measurements/dependency-costs.md](../measurements/dependency-costs.md)).
 
 | Option | Dev build | Release build | Size added | Crates | Notes |
 |---|---|---|---|---|---|

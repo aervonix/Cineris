@@ -31,7 +31,7 @@ Four rules hold for all of them.
 
 - Events are queued to a writer thread (since step 16 the statistics' own, not the log's). Recording never blocks the core.
 - Nothing is read at start-up. The aggregates file (kilobytes) is loaded the first time an adaptive decision needs it.
-- Old monthly files are folded into the aggregates and deleted after a retention period (default 3 months since step 16, the coordinator's decision, which the owner may revisit; 12 before: a year of a heavy user's raw events is about 1.1 GB, and every all-time figure is in the aggregates).
+- Old monthly files are folded into the aggregates and deleted after a retention period (default 3 months since step 16, the maintainers' decision, which the owner may revisit; 12 before: a year of a heavy user's raw events is about 1.1 GB, and every all-time figure is in the aggregates).
 
 **Control.** `cineris stats` shows what is stored, in plain numbers. `cineris stats reset` deletes it. `stats.enabled = false` turns recording off, and every adaptive feature then falls back to its catalog default.
 
@@ -232,7 +232,7 @@ Each part is a list item, with one sentence a line, so that two changes to one p
   A `remember` call writes the store itself, and waits for the lock as any change does.
   `project/list` waits for that work: a listing after a turn holds what the turn's commands showed.
   The policy and the checkpoints hold the session's knowledge weakly, so a closed session is let go.
-  `cineris-knowledge` does not implement the tools' traits itself: it would have to depend on `cineris-tools`, which the workspace's edges do not give it, so the core does (a departure from the build plan's wording, accepted by the coordinator).
+  `cineris-knowledge` does not implement the tools' traits itself: it would have to depend on `cineris-tools`, which the workspace's edges do not give it, so the core does (a departure from the build plan's wording, accepted by the maintainers).
 - **The safe list**:
   The engine is given one exact allow rule (`exact_command_rule`, [06-permissions-and-sandbox.md](06-permissions-and-sandbox.md)) for each command that `runs_unasked`: in use **and accepted**.
   They go in with `Engine::set_learned` and never in the rules a session starts with, so they can be taken back.

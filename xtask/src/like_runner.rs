@@ -1,5 +1,5 @@
 //! What a hosted runner would report for the tests run at a desk
-//! (`docs/testing-and-ci.md`, "What a runner would say, from a desk").
+//! (`docs/testing-and-ci.md`, "What a runner would say, from a local run").
 //!
 //! `cargo xtask ci --tiers --like-runner` runs the tests as the blocking job
 //! does, in CI's profile and at a runner's four test threads, and then
@@ -136,7 +136,7 @@ fn by_crate_and_tier(cases: &[TestCase]) -> BTreeMap<(String, Tier), f64> {
 pub(crate) fn estimate(cases: &[TestCase]) -> String {
     let desk = by_crate_and_tier(cases);
     let mut text = String::from(
-        "\nWhat a hosted runner would report, estimated from this desk's run (each crate's time \
+        "\nWhat a hosted runner would report, estimated from this machine's run (each crate's time \
          in each tier times a factor measured for it, docs/testing-and-ci.md):\n",
     );
     for os in [Os::Linux, Os::Windows] {
@@ -146,7 +146,7 @@ pub(crate) fn estimate(cases: &[TestCase]) -> String {
         };
         let _ = writeln!(
             text,
-            "\n  {}            desk   runner   a slow runner   budget",
+            "\n  {}            local  runner   a slow runner   budget",
             match os {
                 Os::Linux => "Linux  ",
                 Os::Windows => "Windows",
@@ -190,8 +190,8 @@ pub(crate) fn estimate(cases: &[TestCase]) -> String {
     }
     text.push_str(
         "\n  The runner columns are an estimate, and say most about a change to crates the \
-         factors know: a runner's speed varies, and Windows-only work is not seen at a Linux \
-         desk. Measure a change on the runner with `try -f against=main`.\n",
+         factors know: a runner's speed varies, and Windows-only work is not seen on a Linux \
+         machine. Measure a change on the runner with `try -f against=main`.\n",
     );
     text
 }
@@ -351,7 +351,7 @@ pub(crate) fn starts_text(cases: &[TestCase], starts: &Starts) -> String {
     let estimate = windows_estimate(cases, starts);
     let mut text = String::from(
         "\n  Processes the tests started, and what the Windows runner would charge for them \
-         (a POSIX shell at the desk is Windows PowerShell there):\n",
+         (a POSIX shell on a Linux machine is Windows PowerShell there):\n",
     );
     for tier in Tier::ALL {
         let index = tier.index();
@@ -406,8 +406,8 @@ pub(crate) fn compare(
     let new = windows_estimate(&kept(head.0), head.1);
     let old = windows_estimate(&kept(base.0), base.1);
     let mut text = format!(
-        "\nThe Windows runner's tiers, estimated for this tree and for {label}, both run at this \
-         desk:\n\n  tier              {label:>12}   this tree   change   budget   starts, then and now\n"
+        "\nThe Windows runner's tiers, estimated for this tree and for {label}, both run on this \
+         machine:\n\n  tier              {label:>12}   this tree   change   budget   starts, then and now\n"
     );
     let mut warned = false;
     for tier in Tier::ALL {

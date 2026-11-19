@@ -1,5 +1,5 @@
 //! The processes each test started, as the test kit wrote them down
-//! (`docs/testing-and-ci.md`, "What a runner would say, from a desk").
+//! (`docs/testing-and-ci.md`, "What a runner would say, from a local run").
 //!
 //! With `CINERIS_TESTKIT_STARTS` naming a directory, every place in the
 //! workspace that starts a process writes a line to a file of its process's

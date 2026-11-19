@@ -19,7 +19,7 @@ Of the reference harnesses, one renders full screen. The other began inline, add
 
 ## Measurements
 
-From [measurements/tui-language-spike.md](../measurements/tui-language-spike.md), desktop, at 2,000 tokens per second.
+From [measurements/tui-language-spike.md](../measurements/tui-language-spike.md), reference machine, at 2,000 tokens per second.
 
 | | Own line renderer, inline | Framework, inline | Framework, full screen |
 |---|---|---|---|
@@ -75,7 +75,7 @@ So inline by default, on our own line renderer, is confirmed as it stands.
 
 ## Amended in step 20
 
-**No terminal library: the terminal modes and the input decoding are our own,** on `libc` and `windows-sys`, which were in the build already. The owner approved it on 2026-11-13, during step 20, on the coordinator's recommendation.
+**No terminal library: the terminal modes and the input decoding are our own,** on `libc` and `windows-sys`, which were in the build already. The owner approved it on 2026-11-13, during step 20, on the maintainers' recommendation.
 
 | | crossterm 0.29 (only `events` and `windows`) | Our own |
 |---|---|---|

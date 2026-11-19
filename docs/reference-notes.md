@@ -189,7 +189,7 @@ See [architecture/10-headless.md](architecture/10-headless.md) and [architecture
 
 **Opencode.** One self-contained executable per platform built with Bun's compile mode, behind a small launcher script when installed from npm (Opencode 1.19.5, `packages/opencode/script/build.ts`).
 
-Neither project publishes start-up or memory figures. Measured for this design on a laptop, with both tools installed from the npm registry into scratch space: Pi 1.5.2 answers `--version` in 175 ms and shows its first screen in about 280 ms, holding 124 MB; Opencode 1.19.5 takes 371 ms and about 540 ms, holding 614 MB, and its executable is 214 MB. Method and caveats are in [measurements/tui-language-spike.md](measurements/tui-language-spike.md).
+Neither project publishes start-up or memory figures. Measured for this design on the second machine, with both tools installed from the npm registry into scratch space: Pi 1.5.2 answers `--version` in 175 ms and shows its first screen in about 280 ms, holding 124 MB; Opencode 1.19.5 takes 371 ms and about 540 ms, holding 614 MB, and its executable is 214 MB. Method and caveats are in [measurements/tui-language-spike.md](measurements/tui-language-spike.md).
 
 **Where Cineris differs.** A native binary with no runtime to embed, and budgets for start-up, memory and size that are checked in CI.
 

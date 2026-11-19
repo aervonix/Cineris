@@ -815,7 +815,7 @@ fn ci_tiers(arguments: &[String]) -> Result<()> {
     if let Some(run) = &request.factors_from {
         let Some(desk) = &request.from else {
             return Err(
-                "`--factors-from` measures against the desk's report: give it with \
+                "`--factors-from` measures against the local run's report: give it with \
                         `--from`"
                     .to_owned(),
             );

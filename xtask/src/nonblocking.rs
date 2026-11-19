@@ -570,8 +570,7 @@ impl Archive {
         .map_err(|error| {
             format!(
                 "`--at {commit}`: {error}. It reads the commit with git, in this repository: \
-                     a copy with no `.git` (the desk's `rx` makes one) cannot, and a commit not \
-                     fetched is not here"
+                     a copy with no `.git` cannot, and a commit not fetched is not here"
             )
         })?;
         let directory = workspace::metadata(&root)?

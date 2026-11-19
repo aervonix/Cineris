@@ -19,7 +19,7 @@ Of the reference harnesses, one keeps a JSONL file per session and the other kee
 
 ## Measurement
 
-Bundled SQLite through rusqlite, on the desktop pinned to 4 cores ([measurements/dependency-costs.md](../measurements/dependency-costs.md)):
+Bundled SQLite through rusqlite, on the the reference machine pinned to 4 cores ([measurements/dependency-costs.md](../measurements/dependency-costs.md)):
 
 | | Dev build | Release build | Size added | Crates |
 |---|---|---|---|---|
