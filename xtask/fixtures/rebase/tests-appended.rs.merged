@@ -1,0 +1,58 @@
+#[cfg(test)]
+mod tests {
+    use super::{WRITERS, listing, select};
+
+    #[test]
+    fn no_name_is_every_generator_and_names_keep_their_order() {
+        assert_eq!(
+            names(&select(&[]).unwrap()),
+            [
+                "outstanding",
+                "protocol",
+                "configuration",
+                "screens",
+                "snapshots"
+            ]
+        );
+        assert_eq!(
+            names(&select(&["screens".to_owned(), "protocol".to_owned()]).unwrap()),
+            ["protocol", "screens"]
+        );
+        let error = select(&["schema".to_owned()]).unwrap_err();
+        assert!(
+            error.contains("`schema`") && error.contains("protocol"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn every_place_regen_writes_is_in_the_repository() {
+        let files = workspace::repository_files(&workspace::root()).unwrap();
+        for writer in &WRITERS {
+            for path in writer.writes {
+                assert!(
+                    files.iter().any(|file| file.starts_with(path)),
+                    "{}: nothing is kept under `{path}`: the generator or the list is out of date",
+                    writer.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_listing_names_every_generator_and_everything_left_out() {
+        let text = listing();
+        for writer in &WRITERS {
+            assert!(text.contains(writer.name), "{text}");
+            for path in writer.writes {
+                assert!(text.contains(path), "{text}");
+            }
+        }
+        for left in &NOT_COVERED {
+            assert!(
+                text.contains(left.what) && text.contains(left.instead),
+                "{text}"
+            );
+        }
+    }
+}

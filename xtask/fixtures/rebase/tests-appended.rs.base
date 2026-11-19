@@ -1,0 +1,27 @@
+#[cfg(test)]
+mod tests {
+    use super::{WRITERS, listing, select};
+
+    #[test]
+    fn no_name_is_every_generator_and_names_keep_their_order() {
+        assert_eq!(
+            names(&select(&[]).unwrap()),
+            [
+                "outstanding",
+                "protocol",
+                "configuration",
+                "screens",
+                "snapshots"
+            ]
+        );
+        assert_eq!(
+            names(&select(&["screens".to_owned(), "protocol".to_owned()]).unwrap()),
+            ["protocol", "screens"]
+        );
+        let error = select(&["schema".to_owned()]).unwrap_err();
+        assert!(
+            error.contains("`schema`") && error.contains("protocol"),
+            "{error}"
+        );
+    }
+}

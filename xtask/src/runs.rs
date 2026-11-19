@@ -743,7 +743,9 @@ that. An A/B's two OSes are then `###` parts of it. --heading TEXT is the
 heading a new section is added with, when it should not be its name (a dated
 one); with no --section it is the name too, which is how an older page that has
 no marks gets a section of its own. A section is added at the end of the page.
-A heading of that text that the tool did not write is refused.";
+A heading of that text that the tool did not write is refused. A page that is
+not there, or is empty, is made, with the heading its place in docs/steps/
+gives it (`# After step 24: its CI times`), its folder with it.";
 
 impl TimesRequest {
     pub(crate) fn parse(arguments: &[String]) -> Result<Self> {

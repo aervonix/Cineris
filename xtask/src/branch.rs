@@ -73,10 +73,10 @@ pub(crate) struct Git {
 /// One `git` to run: its arguments, an index of its own, more variables,
 /// and what to write to its standard input.
 #[derive(Default)]
-struct Call<'a> {
-    index: Option<&'a Path>,
-    env: Vec<(&'static str, String)>,
-    input: Option<&'a [u8]>,
+pub(crate) struct Call<'a> {
+    pub(crate) index: Option<&'a Path>,
+    pub(crate) env: Vec<(&'static str, String)>,
+    pub(crate) input: Option<&'a [u8]>,
 }
 
 impl Git {
@@ -89,7 +89,17 @@ impl Git {
         }
     }
 
-    fn output(&self, arguments: &[&str], call: &Call<'_>) -> Result<Output> {
+    /// git in `dir` with variables of its own: a test's, kept from the
+    /// machine's configuration.
+    #[cfg(test)]
+    pub(crate) fn with_env(dir: &Path, env: Vec<(&'static str, Option<OsString>)>) -> Self {
+        Self {
+            dir: dir.to_path_buf(),
+            env,
+        }
+    }
+
+    pub(crate) fn output(&self, arguments: &[&str], call: &Call<'_>) -> Result<Output> {
         let mut command = Command::new("git");
         // A hook exports these, and they would point git elsewhere.
         for variable in crate::owner_guard::GIT_LOCATION {
@@ -141,7 +151,7 @@ impl Git {
     }
 
     /// What git printed, as it printed it, when it succeeded.
-    fn raw(&self, arguments: &[&str], call: &Call<'_>) -> Result<String> {
+    pub(crate) fn raw(&self, arguments: &[&str], call: &Call<'_>) -> Result<String> {
         let output = self.output(arguments, call)?;
         if !output.status.success() {
             return Err(Self::failed(arguments, &output));
@@ -155,17 +165,17 @@ impl Git {
     }
 
     /// What git printed, trimmed, when it succeeded.
-    fn run(&self, arguments: &[&str]) -> Result<String> {
+    pub(crate) fn run(&self, arguments: &[&str]) -> Result<String> {
         Ok(self.raw(arguments, &Call::default())?.trim().to_owned())
     }
 
-    fn run_with(&self, arguments: &[&str], call: &Call<'_>) -> Result<String> {
+    pub(crate) fn run_with(&self, arguments: &[&str], call: &Call<'_>) -> Result<String> {
         Ok(self.raw(arguments, call)?.trim().to_owned())
     }
 
     /// A question git answers by its exit code: 0 is yes and 1 is no.
     /// Anything else is an error.
-    fn yes(&self, arguments: &[&str]) -> Result<bool> {
+    pub(crate) fn yes(&self, arguments: &[&str]) -> Result<bool> {
         let output = self.output(arguments, &Call::default())?;
         match output.status.code() {
             Some(0) => Ok(true),
@@ -205,7 +215,7 @@ impl Git {
 
     /// The text of each blob of `hashes` (`cat-file --batch`, one git for
     /// all of them).
-    fn blobs(&self, hashes: &[String]) -> Result<Vec<String>> {
+    pub(crate) fn blobs(&self, hashes: &[String]) -> Result<Vec<String>> {
         let input: String = hashes.iter().map(|hash| format!("{hash}\n")).collect();
         let output = self.output(
             &["cat-file", "--batch"],
