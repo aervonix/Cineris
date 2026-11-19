@@ -34,7 +34,7 @@ Step 13 was split in two so that the core could be reviewed before a front end i
 | **When an `item.resync` is queued.** | At once, in place of the first delta dropped, not "when room appears" as [architecture/02-runtime.md](../../architecture/02-runtime.md) first said: a resync that waits is read after events that came later, with `seq` going backwards. The page is changed with the code. | The same page, "Event backpressure" |
 | **`session/set`.** | Applied whole or not at all. A reasoning level carried over to a model that does not have it is left behind with a notice; one asked for is refused. | [architecture/11-rpc-protocol.md](../../architecture/11-rpc-protocol.md) |
 | **Which header values are secrets.** | The ones read from the environment. One written out in the configuration file is not masked by value: it is as often a date or a version. | [security.md](../../security.md), section 4 |
-| **`cmd.exe` and the directory a command runs in.** | Left as it is, with a file under `outstanding/`. | [outstanding/cmd-searches-the-current-directory.md](../../outstanding/cmd-searches-the-current-directory.md) |
+| **`cmd.exe` and the directory a command runs in.** | Left as it is, with a file under `outstanding/`. | `cmd-searches-the-current-directory`, settled the other way by [the shell environment's fixes](../shell-env-fixes/answered.md), "Windows" |
 | **Hashing large files on the round's path; files over 16 MiB; the account in the replay rule; `config/reload`.** | Left as they are, each with a file under `outstanding/`. | [outstanding/](../../outstanding/README.md) |
 
 ## After the review, 2026-11-13

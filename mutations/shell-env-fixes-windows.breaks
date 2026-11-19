@@ -1,0 +1,55 @@
+# The shell environment's fixes, on Windows (docs/steps/shell-env-fixes/
+# answered.md, "Windows"): `cmd.exe` is told not to look in the directory
+# a command runs in. A list of its own, so that the commit that adds it
+# can be dropped without touching the fix's other list.
+
+[break] cmd-looks-where-the-command-runs
+rule: On Windows every command is given `NoDefaultCurrentDirectoryInExePath`, so `cmd.exe` does not run a workspace file ahead of `PATH`.
+file: crates/cineris-tools/src/shell/env.rs
+in: assemble
+find: env.push((OsString::from(NO_CURRENT_DIRECTORY), OsString::from("1")));
+replace:
+caught-by:
+    cineris-tools shell::env::tests::on_windows_cmd_is_told_not_to_look_where_the_command_runs
+
+[break] cmd-told-under-another-name
+rule: The variable is given under the name Windows reads, once, whatever spelling the user's environment had.
+file: crates/cineris-tools/src/shell/env.rs
+in: NO_CURRENT_DIRECTORY
+in-string: NoDefaultCurrentDirectoryInExePath
+replace: NoDefaultCurrentDirectory
+caught-by:
+    cineris-tools shell::env::tests::on_windows_cmd_is_told_not_to_look_where_the_command_runs
+
+# The same on a Windows runner, where the shells show it: a name Windows
+# does not read leaves `cmd.exe` looking where the command runs.
+[break] cmd-told-a-name-it-does-not-read
+rule: The variable is given under the name `cmd.exe` reads, so that it does not look in the directory a command runs in.
+file: crates/cineris-tools/src/shell/env.rs
+in: NO_CURRENT_DIRECTORY
+in-string: NoDefaultCurrentDirectoryInExePath
+replace: NoDefaultCurrentDirectoryInExePat
+os: windows
+caught-by:
+    cineris-tools::it shell::cmd::sys_cmd_does_not_look_where_the_command_runs
+    cineris-tools::it shell::pwsh::sys_cmd_does_not_look_where_the_command_runs
+    cineris-tools::it shell::powershell::sys_cmd_does_not_look_where_the_command_runs
+
+[break] users-spelling-of-the-variable-kept
+rule: A spelling of the variable the user's environment already had is replaced, so that one name, Windows', is passed on.
+file: crates/cineris-tools/src/shell/env.rs
+in: assemble
+find: .is_some_and(|name| same(name, NO_CURRENT_DIRECTORY))
+replace: .is_some_and(|_| false)
+caught-by:
+    cineris-tools shell::env::tests::on_windows_cmd_is_told_not_to_look_where_the_command_runs
+
+[break] the-model-not-told-how-a-batch-file-calls-another
+rule: On Windows the tool's description tells the model that a file of the directory a command runs in is found only by its path, and how one batch file calls another.
+file: crates/cineris-tools/src/shell/mod.rs
+occurrence: 1
+in-string: call \"%~dp0other.cmd\"
+replace: call other
+os: windows
+caught-by:
+    cineris-tools shell::tests::the_model_is_told_how_a_file_where_the_command_runs_is_found

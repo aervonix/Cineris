@@ -361,6 +361,91 @@ fn the_environment_the_directory_and_the_input(test: &str, shell: Shell) {
     );
 }
 
+/// `cmd.exe` looks for a program in the directory a command runs in before
+/// it looks at `PATH`, unless `NoDefaultCurrentDirectoryInExePath` is in its
+/// environment, and every command is given it: a workspace file named like
+/// a command does not run in its place, through `cmd.exe` or through a
+/// batch file PowerShell starts. What the variable costs is pinned too: a
+/// file named by its path still runs, a batch file that calls another of
+/// its directory by bare name no longer finds it, and one that calls it
+/// through `%~dp0` does (`docs/steps/shell-env-fixes/answered.md`,
+/// "Windows").
+#[cfg(windows)]
+fn cmd_does_not_look_where_the_command_runs(test: &str, shell: Shell) {
+    let bench = Bench::new(test, shell);
+    bench
+        .ws
+        .file("hostname.bat", "@echo planted hostname ran\r\n");
+    bench.ws.file("outer.cmd", "@call inner\r\n");
+    bench
+        .ws
+        .file("outer_dp0.cmd", "@call \"%~dp0inner.cmd\"\r\n");
+    bench.ws.file("inner.cmd", "@echo inner ran\r\n");
+    // A real tool on the runner's `PATH`: git for Windows.
+    bench.ws.file("git.cmd", "@echo planted git ran\r\n");
+    let parts = [
+        ("bare", "hostname"),
+        ("git", "git --version"),
+        ("explicit", ".\\hostname.bat"),
+        ("sibling", ".\\outer.cmd"),
+        ("dp0", ".\\outer_dp0.cmd"),
+    ];
+    let command = if bench.shell().kind() == ShellKind::Cmd {
+        parts
+            .iter()
+            .map(|(name, part)| format!("echo =={name}& call {part}"))
+            .collect::<Vec<_>>()
+            .join("& ")
+    } else {
+        parts
+            .iter()
+            // Written to the handle, as the batch files write, so that a
+            // marker and what follows it cannot change places.
+            .map(|(name, part)| format!("[Console]::Out.WriteLine('=={name}'); {part}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    };
+    let ran = bench.command(&command);
+    let text = ran.text();
+    // What each part printed, by its marker.
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for line in lines(&text) {
+        match line.strip_prefix("==") {
+            Some(name) => seen.push((name.to_owned(), String::new())),
+            None => {
+                if let Some((_, said)) = seen.last_mut() {
+                    said.push_str(line);
+                    said.push('\n');
+                }
+            }
+        }
+    }
+    let said = |name: &str| {
+        seen.iter()
+            .find(|(part, _)| part == name)
+            .map(|(_, said)| said.as_str())
+            .unwrap_or_else(|| panic!("no `=={name}` part: {text}"))
+    };
+    let observed = format!(
+        "bare hostname ran the workspace's: {}; bare git ran the workspace's: {}; \
+         .\\hostname.bat ran it: {}; a sibling called by bare name ran: {}; one called through \
+         %~dp0 ran: {}",
+        said("bare").contains("planted hostname ran"),
+        said("git").contains("planted git ran"),
+        said("explicit").contains("planted hostname ran"),
+        said("sibling").contains("inner ran"),
+        said("dp0").contains("inner ran"),
+    );
+    assert_eq!(
+        observed,
+        "bare hostname ran the workspace's: false; bare git ran the workspace's: false; \
+         .\\hostname.bat ran it: true; a sibling called by bare name ran: false; one called \
+         through %~dp0 ran: true",
+        "{}:\n{text}",
+        bench.shell().name()
+    );
+}
+
 /// What a workspace file named like a command prints when it runs.
 #[cfg(unix)]
 const PLANTED: &str = "a workspace file ran as a command";
@@ -589,6 +674,12 @@ macro_rules! for_shell {
                     "planted",
                     a_workspace_file_named_like_a_command_does_not_run,
                 );
+            }
+
+            #[cfg(windows)]
+            #[test]
+            fn sys_cmd_does_not_look_where_the_command_runs() {
+                run("cmd_here", cmd_does_not_look_where_the_command_runs);
             }
 
             #[test]

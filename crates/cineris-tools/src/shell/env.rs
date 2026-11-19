@@ -40,6 +40,10 @@
 //!   with none a shell takes a default of its own, which upstream bash
 //!   ends with `.`. The command is given [`NO_ABSOLUTE_PATH`] in its place,
 //!   and the tool's description says so ([`path_replaced`]).
+//! - **On Windows `cmd.exe` does not look in the directory a command runs
+//!   in** before `PATH` ([`NO_CURRENT_DIRECTORY`]), which it does whatever
+//!   `PATH` holds: a `hostname.bat` the model wrote would otherwise run as
+//!   `hostname`. A file there still runs by its path (`.\build.cmd`).
 
 use std::ffi::OsString;
 
@@ -148,6 +152,14 @@ fn assemble(
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
     );
     no_fsmonitor(&mut env, &same);
+    if windows {
+        env.retain(|(name, _)| {
+            !name
+                .to_str()
+                .is_some_and(|name| same(name, NO_CURRENT_DIRECTORY))
+        });
+        env.push((OsString::from(NO_CURRENT_DIRECTORY), OsString::from("1")));
+    }
     // One `PATH`, of absolute directories only. An environment may hold
     // the name twice: the harness reads the first (as `getenv` does, and so
     // the shell was found by it), and a child would be given the last, so
@@ -170,6 +182,14 @@ fn assemble(
 
 /// The variable programs are looked up through.
 const PATH: &str = "PATH";
+
+/// The variable whose presence, with any value, turns off `cmd.exe`'s look
+/// for a program in the directory a command runs in, ahead of `PATH`
+/// (Windows' `NeedCurrentDirectoryForExePathW`). Every program `cmd.exe`
+/// starts inherits it. A program named by its path (`.\build.cmd`) still
+/// runs; a batch file that calls another of the directory by its bare name
+/// no longer finds it, and `call "%~dp0other.cmd"` does.
+pub(crate) const NO_CURRENT_DIRECTORY: &str = "NoDefaultCurrentDirectoryInExePath";
 
 /// The `PATH` a command is given on Unix when the harness's own names no
 /// absolute directory, or there is none: the system's own directories,
@@ -700,5 +720,21 @@ mod tests {
         assert!(get(&on_windows, "Pager").is_empty());
         assert_eq!(get(&on_windows, "TERM"), ["dumb"]);
         assert_eq!(get(&on_windows, "PAGER"), ["cat"]);
+    }
+
+    #[test]
+    fn on_windows_cmd_is_told_not_to_look_where_the_command_runs() {
+        let built = build(
+            env(&[("NODEFAULTCURRENTDIRECTORYINEXEPATH", ""), ("KEPT", "1")]),
+            &defaults(),
+            true,
+        );
+        // Once, under its own spelling, whatever the user's said.
+        assert_eq!(get(&built, NO_CURRENT_DIRECTORY), ["1"]);
+        assert!(get(&built, "NODEFAULTCURRENTDIRECTORYINEXEPATH").is_empty());
+        assert_eq!(get(&built, "KEPT"), ["1"]);
+        // On Linux it means nothing, and nothing is added.
+        let built = build(env(&[("KEPT", "1")]), &defaults(), false);
+        assert!(get(&built, NO_CURRENT_DIRECTORY).is_empty());
     }
 }
