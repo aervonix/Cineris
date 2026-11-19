@@ -334,6 +334,8 @@ pub(crate) fn medians_table(record: &Record) -> String {
             format!("{:>width$}", format!("{shown} ({passed}/{})", runs[side]))
         };
         let change = match (sides[0].0, sides[1].0) {
+            // A change that rounds to nothing is +0.0, never -0.0.
+            (Some(base), Some(head)) if (head - base).abs() < 0.05 => "+0.0".to_owned(),
             (Some(base), Some(head)) => format!("{:+.1}", head - base),
             _ => "-".to_owned(),
         };
@@ -1084,6 +1086,9 @@ mod tests {
         assert!(table.contains("110.0 (3/3)"), "{table}");
         assert!(table.contains("30.0 (2/3)"), "{table}");
         assert!(table.contains("-20.0"), "{table}");
+        // The clean took 1.0 s on both sides: no change, and no minus sign.
+        let clean = table.lines().find(|line| line.starts_with("clean")).unwrap();
+        assert!(clean.trim_end().ends_with(" +0.0"), "{clean}");
     }
 
     #[test]
