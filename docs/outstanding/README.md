@@ -107,7 +107,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 - [a-launcher-refusal-read-from-the-commands-output](a-launcher-refusal-read-from-the-commands-output.md): The launcher's refusal is read from the command's own output, so a check can pass for blocked and not be fed back. Owner: step 32.
 - [a-refused-socket-the-result-does-not-name](a-refused-socket-the-result-does-not-name.md): A Unix socket refused by the filter, network on, gives a bare `EPERM` and no sandbox explanation. Owner: step 32.
-- [a-sandbox-watch-test-depends-on-real-time](a-sandbox-watch-test-depends-on-real-time.md): A test of the sandbox's watch of protected paths fails when its walk takes longer than the watch's 250 ms of real time, which a loaded runner can; one CI flake. Owner: the maintainers, through the coordinator, who queues the fix.
+- [a-sandbox-watch-test-depends-on-real-time](a-sandbox-watch-test-depends-on-real-time.md): A test of the sandbox's watch of protected paths fails when its walk takes longer than the watch's 250 ms of real time, which a loaded runner can; one CI flake. Owner: the maintainers, who queue the fix.
 - [a-session-of-its-own-in-the-sandbox](a-session-of-its-own-in-the-sandbox.md): `setsid` is faked in the sandbox, breaking terminal-making programs; a subreaper and cgroup kill would allow it. Owner: step 32.
 - [confined-git-and-lfs-filters](confined-git-and-lfs-filters.md): The confined read-only git cannot run a git-lfs filter that must write, leaving change detection and undo incomplete. Owner: step 32.
 - [datagrams-from-a-socket-pair](datagrams-from-a-socket-pair.md): With the network off, a datagram `socketpair` can `sendto` a local datagram socket by path, such as journald's. Owner: step 32.
