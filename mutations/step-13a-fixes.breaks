@@ -324,19 +324,17 @@ find:
 replace:
     .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
     .find(|candidate| is_program(candidate, windows))
-packages: cineris-base, cineris-tools
+packages: cineris-base
 caught-by:
     cineris-base program::tests::a_relative_path_entry_does_not_make_a_file_there_the_program
-    cineris-tools::it shell_search::sys_a_relative_path_entry_does_not_make_a_file_there_the_shell
 
 [break] harness-starts-git-by-name
-rule: The harness starts git by the path found in an absolute directory of PATH, never by its bare name. Since the fixes of step 26 the session store and the shell tool start git through one function, `cineris_base::git::start`. The test kit's rerun helper gives a child a PATH with a relative entry, which is the one thing a test cannot give its own process (Linux only: the planted git is a shell script).
+rule: The harness starts git by the path found in an absolute directory of PATH, never by its bare name. Since the fixes of step 26 the session store and the shell tool start git through one function, `cineris_base::git::start`. The test kit's rerun helper gives a child a PATH with a relative entry, which is the one thing a test cannot give its own process (Linux only: the planted git is a shell script). Since the harness's own processes' fixes git is given a PATH of absolute directories only, so a bare name finds what the search found and the test cannot tell the two apart: each covers the other. The PATH alone is pinned by `harness-process-fixes/harness-path-keeps-relative-entries`.
 file: crates/cineris-base/src/git.rs
 find: let mut command = Command::new(&started.program);
 replace: let _ = &started.program; let mut command = Command::new("git");
 packages: cineris-base, cineris-session
-caught-by:
-    cineris-session::it base::sys_git_is_never_found_through_a_relative_path_entry
+expect: survives
 
 [break] drive-relative-shell-looked-up-as-a-name
 rule: On Windows a configured shell with a drive and no root (`C:bash.exe`) is a relative path, refused. Its test is Windows-only (`shell_search::on_windows_a_shell_named_with_a_drive_and_no_root_is_refused`, run in CI and windows-try), and on Linux such a name is one plain file name, so a run of the breaks at a Linux desk sees nothing.

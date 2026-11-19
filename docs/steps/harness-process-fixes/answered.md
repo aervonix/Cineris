@@ -55,16 +55,19 @@ The builder passes `Path` on empty when the harness's had entries but none absol
 - `cineris-base`
   - `git::tests::sys_a_filter_driver_is_given_no_key_variable` (Linux and Windows): a repository whose `.gitattributes` sends a file through a clean filter that writes three variables, hashed by `git::start`. Neither a key the confinement withholds, nor a known key, nor a variable of the test process left out of the environment given reaches the filter. The same filter, the key not withheld, sees it: so it ran.
   - `git::tests::sys_a_relative_path_entry_does_not_find_a_filter` (Linux): a filter named by a bare name, the same name in the repository, and `PATH` with `.`, an empty entry in front, behind, alone, and `./`. The program never runs; through an absolute entry it does.
-  - `child_env::tests`: the keys and the rest; the `PATH` rule; Windows' variable and `Path`; the shared list.
+  - `child_env::tests`: the keys and the rest; the `PATH` rule; Windows' variable and `Path`; a directory of `PATH` inside an avoided root left out (`a_harness_program_does_not_search_the_workspace`); the shared list.
+  - `program::tests::a_link_into_or_out_of_an_avoided_root_is_passed_over` (Linux and Windows, whose runners can make links): a link in a root that leads out, one outside that leads in, a chain through a root, a directory of `PATH` that is a link into one; and `a_link_that_leads_to_itself_is_inside`.
 - `cineris-tools`
-  - `shell_search::sys_the_probe_is_given_no_key_variable` (Linux, a fake `bash`; Windows, a fake `pwsh.bat`): the probe sees no key, no variable of the test process, and only the absolute entry of `PATH`; the key not withheld, it sees it.
+  - `shell_search::sys_the_probe_is_given_no_key_variable` (Linux, a fake `bash`; Windows, a fake `pwsh.bat`): the probe sees no key, no variable of the test process, and of `PATH` only the absolute entry outside the workspace; the key not withheld, it sees it.
   - `shell_search::a_shell_in_an_avoided_directory_is_not_chosen` (both systems' rules): a `bash` or `pwsh.exe` in an avoided `.venv/bin` is passed over, by the default search and by a configured name.
 - `cineris-core`
+  - `harness_git::sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace`: with the sandbox off, a filter named by a bare name is in an activated `.venv/bin` and in a directory outside further down `PATH`; the outside one runs.
+  - `shell::sys_a_reload_withholds_a_variable_a_new_header_reads`: a reload that gives a provider a header read from a variable withholds it from the next command.
   - `harness_git::sys_a_reload_withholds_the_keys_from_a_filter_the_harness_git_runs`: a session at `unrestricted` whose command plants a filter; after a reload moves the provider's key from one variable to another, the filter the after-look's git runs sees neither, and sees the environment's other variables.
-  - `sandbox::tests::the_harness_git_withholds_what_a_reload_sets_and_what_the_start_had`, `sandbox::tests::the_harness_git_is_never_one_inside_the_workspace`, `assemble::tests::the_workspace_is_avoided_with_or_without_a_sandbox`, and `assemble::tests::a_shell_inside_a_write_root_is_passed_over` as changed.
+  - `sandbox::tests::the_harness_git_withholds_what_a_reload_sets_and_what_the_start_had`, `sandbox::tests::the_harness_git_is_never_one_inside_the_workspace`, `assemble::tests::the_workspace_is_avoided_with_or_without_a_sandbox`, `assemble::tests::the_write_roots_kept_out_of_are_placed_as_the_grant_places_them`, and `assemble::tests::a_shell_inside_a_write_root_is_passed_over` as changed.
 - `xtask`: `rules::rust_source::tests::every_process_start_is_in_the_table`, for the rule below.
 
-**What is left untested:** that the core gives the probe the shell tool's removal list (`find_shell`'s `removed`). The core's tests give their sessions a shell, so none probes one. The probe's environment itself is tested in `cineris-tools`.
+**What is left untested:** what the core hands the shell's search and probe (`find_shell`'s `avoid` and `removed`). The core's tests give their sessions a shell, so none searches for one or probes it. The search and the probe themselves are tested in `cineris-tools`, the composition of the avoided roots in `assemble::tests`, and the same roots' hand-over to git by the core's system test above.
 
 ## The table, kept by a rule
 
@@ -76,8 +79,54 @@ Looked at while in `git.rs`. The fixes do not change what it measures.
 
 ## The reviews
 
-To come.
+### The early review of the builder and the search (Opus, 2026-11-19)
+
+The environment builder and the shell's search, read on their own by a reviewer that had not seen the reasoning, as soon as they existed. It agreed that calls A to C only narrow, once its first two findings were fixed.
+
+| Finding | Fix |
+|---|---|
+| **High, confirmed:** `confine_roots` read each `sandbox.write` entry as written: `~/.cargo` was a relative name that no path was ever inside, and a relative entry was not under the workspace. A `bash` a confined command wrote in `~/.cargo/bin`, which rustup puts first on `PATH`, would become the next session's shell and its unconfined probe. | One helper, `placed_entry`, places an entry for every reader: the sandbox's grant, the roots a front end is told of, and the roots the harness's programs are kept out of. `confine_roots` feeds nothing that grants: only what is avoided, and the refusal of a configured shell inside a write root. Test `assemble::tests::the_write_roots_kept_out_of_are_placed_as_the_grant_places_them`. |
+| **High, confirmed:** `find_outside` looked only at where a candidate's last link led. `.venv/bin/bash`, a link to `/usr/bin/bash`, was taken by the link's path, and a confined command could then replace the link with a script. | A candidate is passed over when any place on its way is inside a root: a directory, the place it is found at, each link, and each link's target (`program::passes_through`). The core's own check (a configured shell, the cross-session cache) uses it too. Test `program::tests::a_link_into_or_out_of_an_avoided_root_is_passed_over`, on both systems, with a link in a root that leads out, one outside that leads in, a chain that passes through a root, and a directory of `PATH` that is a link into one. |
+| Medium, plausible: git's `PATH` kept an absolute entry inside the workspace, so a filter the user's own configuration names by a bare name (`git-lfs`) could be a file in `.venv/bin`. | The harness's `PATH` leaves out the directories its confinement avoids (`child_env::for_harness`, `Confinement::avoid`). The commands' `PATH` keeps them. Tests `child_env::tests::a_harness_program_does_not_search_the_workspace` and `harness_git::sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace`, whose filter is found further down `PATH`, outside, as a positive check. |
+| Medium, confirmed: a reload that gave a provider a header read from a variable did not look at the key variables again (only a change of `key_env` did), so that variable reached commands and git until the next session. | Any change under `providers` recomputes them. Test `shell::sys_a_reload_withholds_a_variable_a_new_header_reads`. |
+| Low: a reload of `sandbox.write` leaves git's avoided roots as they were. | Open: [a-reload-of-the-write-roots-leaves-the-harness-git-avoiding-the-old-ones.md](../../outstanding/a-reload-of-the-write-roots-leaves-the-harness-git-avoiding-the-old-ones.md). |
+| Low: a variable one reload made a key and a later one did not is passed again. The shell's commands behave the same. | Open: [a-key-a-reload-added-is-passed-again-after-another-reload.md](../../outstanding/a-key-a-reload-added-is-passed-again-after-another-reload.md). |
+| Info: the private temporary directory is not among the avoided roots; a shell or git found only inside the workspace is no longer found; a workspace of `~` puts the user's own tools inside it. | The temporary directory is the session's own and on no `PATH`. The other two are what calls A and B decided. |
+
+**Why the first two were not found before.** Both came in with step 26's third review, whose independent review tested `find_outside` and `confine_roots` with roots that were already absolute and resolved, and with planted programs that were plain files. Neither test had a `~` or relative entry, or a link inside a root. **The shape to brief a review on:** a path check whose test inputs are already canonical, and which compares only the final target. Such a review tries inputs that are not in canonical form, and links in both directions.
+
+### The review of the whole change (Opus, 2026-11-19)
+
+The whole diff, against this record's design and [security.md](../../security.md), section 12, by a reviewer that had not seen the reasoning. **It found no hole:** each of the early review's four fixes is real; no key reaches git, a filter or the probe; no program reached through the workspace or a write root is chosen; the shell's commands' environment and the sandbox's grant are as they were; every new test fails with its fix reverted and has a check that the program it watches ran.
+
+| Finding | Fix |
+|---|---|
+| **Medium, confirmed:** the break `a-link-only-followed-to-its-end` could not bite: the root's own directory is a place on the way before any link inside it. | Dropped. The rule is held by `a-link-in-a-root-that-leads-out-taken`. |
+| Low, confirmed: calls A and B at the core's call sites were pinned only by unit tests. The core's tests run where the sandbox enforces, and there the write roots hold the workspace already, so handing git the write roots in place of the avoided roots passed. | `harness_git::sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace` turns the sandbox off; the break `git-given-only-the-write-roots-to-avoid`. The shell's call site is left untested (above). |
+| Low, confirmed: a `PATH` that is not Unicode, every directory of which is avoided, was left empty on Unix, which a shell reads as the directory it runs in. | It is `/usr/bin:/bin` there too, as in the Unicode case. |
+| Low, plausible: the probe's `PATH` kept the workspace's directories, where a shell that is a wrapper (a version manager's shim) looks up its real program, unconfined. | The probe's `PATH` leaves out the avoided roots too (`child_env::keep_out_of`); the probe's test has an avoided `.venv/bin` in it, and the break `probe-searches-the-workspace`. |
+| Low, docs: section 12 said the shell is never a program inside the workspace, where a configured absolute `shell.program`, `%ComSpec%` and the shells under `%SystemRoot%` are taken as named. | Said so. |
+| Low, latent: the rule that keeps the table would miss `.map(Command::new)`, `CreateProcessAsUserW`, a start under another name, one in a macro. | The first two are seen now (the rule's test has them); the others are said in the rule's documentation: the table is the look, and the rule keeps it from going stale. A test `cfg` on a field taken to cover the next item is the rule's older scan of test modules, shared with the rule against bare names, and is left as it is. |
+| Info: this record's list of tests left out five of them. | Listed. |
+| Info: an empty Windows `Path` reaching Git for Windows' `sh`; a `PATH` entry under `/proc/self/cwd`; DLL search from the workspace; git looked up at every start. | An empty `Path` cannot reach git: git is found on an absolute entry outside the avoided roots, which stays. The others are noted, not changed: `/proc/self/cwd` in a user's `PATH` is the user's own; the DLL search is Windows' own for every program the user starts; a look-up costs a few metadata calls beside git's own start. |
+
+**The window between the look and the start.** The shell is found once a session, and git at each start. Nothing on the way to the program chosen can be written by a confined command, so a swap between the look and the start needs a writer the look has already ruled out. A command that is not confined can write anything the user can, which section 12 of [security.md](../../security.md) leaves open on purpose.
 
 ## The breaks
 
-To come.
+Run with `cargo xtask mutate` on the reference machine, beside other work: verdicts, not timings.
+
+| What | Breaks | Verdict |
+|---|---|---|
+| `mutations/harness-process-fixes.breaks` | 21: git's environment cleared, built, told the withheld list, the reload's and the start's keys, the roots avoided, the call site's roots (6); its `PATH` without relative entries, without avoided ones, and told the avoided roots; Windows' variable; the known keys (5); the probe's environment cleared, built, and its `PATH` (3); the search's relative entries, a shell in a root, a configured one in a write root, a link in a root that leads out, a git in the workspace, the workspace avoided without a sandbox (6); a reload's look at any provider (1) | 21 caught |
+| Moved, in the shell environment's fixes' lists (11), `step-13a.breaks` (3), `step-13a-fixes.breaks` (1), `step-25-pathfix.breaks` (4) and `step-26-fixes.breaks` (3) | The code they break moved into `cineris_base::child_env` and `program`; each names the tests of `cineris-base` that catch it there too | Every one caught by the tests it names |
+| `step-13a-fixes/program-search-looks-in-relative-entries` | The shell's search is `find_outside` now, so the shell's test no longer reaches `find`: the line is taken out, and `program-search-outside-looks-in-relative-entries` breaks the same rule in `find_outside` | Caught by `cineris-base`'s test |
+| `step-13a-fixes/harness-starts-git-by-name` | Git's `PATH` holds no relative entry now, so a bare `git` finds what the search found, and the test cannot tell them apart | `expect: survives`, with the reason in its rule; the `PATH` is pinned by `harness-path-keeps-relative-entries` |
+| Every other break `mutate --changed` chose for the files this fix touched (200 in all) | | As their lists expect, but five below |
+
+**Five breaks that do not bite on `main` either**, found by `mutate --changed` because they break code in `assemble.rs`, and run again on a copy of `main` as it was (`6c43dfb1`) with the same verdicts. This fix does not touch the code they break, so they are reported, not changed:
+- `step-13a/protected-directory-unresolved` and `step-13a/configuration-directory-not-closed`: not caught by `start::a_configuration_directory_behind_a_link_is_protected_where_it_really_is`. Something else closes the configuration directory too.
+- `step-13a/repository-trust-not-given-to-the-shell` and `step-13a/shell-given-rules-trust`: they break `ShellConfig::repository_trusted`, which `ShellLive`'s trust overrides since step 24.
+- `step-13a/engine-told-every-projects-rules-are-approved`: expected to survive, and caught.
+
+**Stress:** to come.

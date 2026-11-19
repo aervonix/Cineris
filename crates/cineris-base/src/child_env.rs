@@ -133,11 +133,12 @@ pub fn for_harness(
     env
 }
 
-/// Takes out of the one `PATH` of `env` ([`one_absolute_path`] left it)
-/// every directory reached through one of `avoid`
-/// ([`crate::program::passes_through`]). On Unix a `PATH` left with none
-/// is [`NO_ABSOLUTE_PATH`], as one with no absolute directory is.
-fn keep_out_of(env: &mut [(OsString, OsString)], avoid: &[std::path::PathBuf], windows: bool) {
+/// Takes out of the first `PATH` of `env` every directory reached through
+/// one of `avoid` ([`crate::program::passes_through`]): for a program the
+/// harness starts unasked, which must not find what it runs in the
+/// workspace. On Unix a `PATH` left with none is [`NO_ABSOLUTE_PATH`], as
+/// one with no absolute directory is.
+pub fn keep_out_of(env: &mut [(OsString, OsString)], avoid: &[std::path::PathBuf], windows: bool) {
     let avoid = crate::program::resolved(avoid);
     let separator = if windows { ';' } else { ':' };
     let Some((_, value)) = env
@@ -150,7 +151,12 @@ fn keep_out_of(env: &mut [(OsString, OsString)], avoid: &[std::path::PathBuf], w
         let kept = std::env::split_paths(value)
             .filter(|entry| !crate::program::passes_through(entry, &avoid))
             .collect::<Vec<_>>();
-        *value = std::env::join_paths(kept).unwrap_or_default();
+        // An empty `PATH` would be the directory the program runs in.
+        *value = if kept.is_empty() && !windows {
+            OsString::from(NO_ABSOLUTE_PATH)
+        } else {
+            std::env::join_paths(kept).unwrap_or_default()
+        };
         return;
     };
     let kept: Vec<&str> = text

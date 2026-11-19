@@ -132,17 +132,25 @@ const STARTS_SECTION: &str = "## 12. Every process the harness starts";
 
 /// The calls that start a process, by the last two segments of their path
 /// as [`STARTERS`] are: the standard library's and tokio's `Command`, and
-/// the one wrapper of it that takes a program from its caller. A call of
-/// Windows' `CreateProcessW` counts too, by its name alone.
+/// the one wrapper of it that takes a program from its caller. They count
+/// whether called there or passed as a function (`.map(Command::new)`).
+/// Windows' own calls count by their names alone ([`WINDOWS_STARTS`]).
+///
+/// **What it does not see:** a start under another name (`use
+/// std::process::Command as Cmd`, `use brief::run`), and one in a macro's
+/// expansion. The table is the look; the rule keeps it from going stale.
 const STARTS: [&str; 2] = ["Command::new", "brief::run"];
+
+/// Windows' calls that start a process.
+const WINDOWS_STARTS: [&str; 2] = ["CreateProcessW", "CreateProcessAsUserW"];
 
 /// The line of the first process start in `source` outside its test
 /// modules, if there is one.
 fn first_start(source: &str) -> Option<usize> {
     if !STARTS
         .iter()
-        .chain(&["CreateProcessW"])
-        .any(|start| source.contains(&format!("{start}(")))
+        .chain(&WINDOWS_STARTS)
+        .any(|start| source.contains(start))
     {
         return None;
     }
@@ -150,12 +158,12 @@ fn first_start(source: &str) -> Option<usize> {
     let text = |index: usize| all[index].text(source);
     let tests = test_modules(source, &all);
     (0..all.len()).find_map(|index| {
-        let windows =
-            text(index) == "CreateProcessW" && index + 1 < all.len() && text(index + 1) == "(";
-        let call = index + 4 < all.len()
+        let windows = WINDOWS_STARTS.contains(&text(index))
+            && index + 1 < all.len()
+            && text(index + 1) == "(";
+        let call = index + 3 < all.len()
             && text(index + 1) == ":"
             && text(index + 2) == ":"
-            && text(index + 4) == "("
             && STARTS.contains(&format!("{}::{}", text(index), text(index + 3)).as_str());
         ((windows || call) && !tests.iter().any(|range| range.contains(&index)))
             .then(|| lex::line_of(source, all[index].start))
@@ -616,6 +624,7 @@ mod tests {
         let starts = "fn f() { let c = std::process::Command::new(path); }\n";
         let wrapped = "fn f() { crate::process::brief::run(&p, &[], None, &env, l); }\n";
         let windows = "unsafe fn f() { CreateProcessW(\n a, b) }\n";
+        let passed = "fn f() { names.map(std::process::Command::new); }\n";
         let only_in_tests =
             "#[cfg(test)]\nmod tests {\n fn f() { std::process::Command::new(p); }\n}\n";
         let sources: BTreeMap<String, String> = [
@@ -623,6 +632,7 @@ mod tests {
             ("crates/a/src/new.rs", starts),
             ("crates/a/src/probe.rs", wrapped),
             ("crates/a/src/pty.rs", windows),
+            ("crates/a/src/passed.rs", passed),
             ("crates/a/src/after.rs", starts),
             ("crates/a/src/quiet.rs", only_in_tests),
             ("crates/a/tests/it/main.rs", starts),
@@ -643,13 +653,14 @@ mod tests {
                 // A table after the section's end does not count.
                 ("crates/a/src/after.rs", Some(1)),
                 ("crates/a/src/new.rs", Some(1)),
+                ("crates/a/src/passed.rs", Some(1)),
                 ("crates/a/src/probe.rs", Some(1)),
                 ("crates/a/src/pty.rs", Some(1)),
                 (STARTS_PAGE, None),
             ],
             "{found:#?}"
         );
-        assert!(found[4].message.contains("`crates/a/src/gone.rs`"));
+        assert!(found[5].message.contains("`crates/a/src/gone.rs`"));
         assert!(found[1].message.contains("does not name it"));
         // Without the section, that is said once.
         let none = process_starts(&sources, Some("# Security\n"));

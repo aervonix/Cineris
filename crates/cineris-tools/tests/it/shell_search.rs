@@ -507,7 +507,7 @@ fn telling_shell(dir: &Path, extra: &str) -> (cineris_tools::Shell, PathBuf) {
             format!(
                 "@echo off\r\n(echo key=%CINERIS_TEST_PROVIDER_KEY%& echo \
                  known=%ANTHROPIC_API_KEY%& echo extra=%{extra}%& echo path=%PATH%) > \
-                 \"%~dp0seen\"\r\necho PowerShell 7.9.9\r\n"
+                 \"%~dp0seen\"\r\necho PowerShell 9.9.9\r\n"
             ),
         )
         .expect("write the shell");
@@ -561,14 +561,23 @@ fn sys_the_probe_is_given_no_key_variable() {
         .collect();
     inherited.push(("CINERIS_TEST_PROVIDER_KEY".into(), "sk-configured".into()));
     inherited.push(("ANTHROPIC_API_KEY".into(), "sk-known".into()));
+    // An absolute directory inside the workspace, as an activated
+    // `.venv/bin` is: kept out of the probe's `PATH`.
+    let venv = ws.dir.join("ws").join(".venv").join("bin");
+    std::fs::create_dir_all(&venv).expect("a directory");
     inherited.push((
         "PATH".into(),
-        format!(".{separator}{absolute}{separator}bin").into(),
+        format!(
+            ".{separator}{}{separator}{absolute}{separator}bin",
+            venv.display()
+        )
+        .into(),
     ));
+    let avoid = [ws.dir.join("ws")];
     let said = |removed: &[String]| -> Vec<String> {
         let _ = std::fs::remove_file(&seen);
         let mut asked = shell.clone();
-        asked.probe_version_from(crate::LIMIT, inherited.clone(), removed);
+        asked.probe_version_from(crate::LIMIT, inherited.clone(), removed, &avoid);
         assert_eq!(
             asked.version(),
             Some("9.9.9"),
@@ -589,7 +598,8 @@ fn sys_the_probe_is_given_no_key_variable() {
             .to_owned()
     };
     // The removal list's own key is gone, with the known one and the
-    // harness's variable; `PATH` is its absolute entry.
+    // harness's variable; `PATH` is its absolute entry outside the
+    // workspace.
     let lines = said(&["CINERIS_TEST_PROVIDER_KEY".to_owned()]);
     assert_eq!(
         value(&lines, "key"),
