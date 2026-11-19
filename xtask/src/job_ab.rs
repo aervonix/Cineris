@@ -32,11 +32,14 @@ usage: cargo xtask ab --job --base DIR [--label NAME] [--count N] [--minutes M]
                       [-p CRATE]... [-- NEXTEST ARGUMENT...]
 
 The whole blocking test job of this tree (the head) and of the tree at DIR (the
-base), N rounds (3 when not given, at most 20) in alternating order on this
-machine, and the median of each phase on each side. Each side's round:
+base), N rounds (2 when not given; an even number, at most 20, so that each
+side goes first as often as the other) in alternating order on this machine,
+and each phase's median on each side and its change paired by round. Each
+side's round:
 
-  clean   its build of the tests (target/ci and target/tmp) is removed, unless
-          --keep-build is given (then only the first round builds from cold)
+  clean   its build of the tests (target/ci and target/tmp) is removed: in the
+          first round always, so that both sides start cold, and in the
+          others unless --keep-build is given
   setup   FILE, a script in this tree, run by bash (a .ps1 by pwsh) in the
           side's tree: --setup-base for the base, --setup-head for the head.
           It may write KEY=VALUE lines to the file $CINERIS_AB_ENV, which are
@@ -49,15 +52,20 @@ machine, and the median of each phase on each side. Each side's round:
           the report
 
 `the job` is the setup, the build and the runs together; the clean is not in
-it. A side that fails in a phase is recorded with the phases it finished, the
-run goes on, and the command fails at the end, after the medians, which are of
-the rounds each phase passed in. --minutes M starts no round that the longest
+it. A failed clean, setup or build ends that side's round; a failed run of the
+tests does not (the next run is made, and the tiers' sums and `the job` count
+as failed). Either way the round is recorded, the run goes on, and the command
+fails at the end. Each side's median is of the rounds the phase passed in on
+that side; the change is the median of head minus base over the rounds the
+phase passed in on both sides, with how many such rounds there were and in how
+many the base ran first. --minutes M starts no round that the longest
 round so far would carry past M minutes from the start; what it stopped
 before is said. Everything measured is kept in target/ab/job-ab.json after
 each side, and each side's report as target/ab/<side>-job-<round>.xml.";
 
-/// Rounds when not told: each is two whole jobs.
-const ROUNDS: usize = 3;
+/// Rounds when not told: each is two whole jobs, and an even number puts
+/// each side first as often as the other.
+const ROUNDS: usize = 2;
 
 /// The most rounds a run may ask for.
 const MOST_ROUNDS: usize = 20;
@@ -115,9 +123,15 @@ impl Request {
                     request.rounds = text
                         .parse()
                         .ok()
-                        .filter(|rounds| (1..=MOST_ROUNDS).contains(rounds))
+                        .filter(|rounds: &usize| {
+                            (2..=MOST_ROUNDS).contains(rounds) && rounds.is_multiple_of(2)
+                        })
                         .ok_or_else(|| {
-                            format!("`--count {text}`: a number of rounds from 1 to {MOST_ROUNDS}")
+                            format!(
+                                "`--count {text}`: an even number of rounds from 2 to \
+                                 {MOST_ROUNDS}, so that each side goes first as often as the \
+                                 other (the first pays for a cold disk cache)"
+                            )
                         })?;
                 }
                 "--minutes" => {
@@ -309,7 +323,50 @@ fn rounds_run(record: &Record, which: Which) -> usize {
         .count()
 }
 
-/// The table of each phase's median on each side, and the difference.
+/// A phase's change, paired by round: the median of head minus base over the
+/// rounds in which it passed on both sides, how many such rounds there were,
+/// and in how many of them the base ran first. Each side's own median drops
+/// its own failed rounds, so two medians can be of different rounds, and of
+/// rounds one side always began; the pairs cannot.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Paired {
+    pub(crate) change: Option<f64>,
+    pub(crate) pairs: usize,
+    pub(crate) base_first: usize,
+}
+
+/// The paired change of the phase `name` ([`Paired`]).
+pub(crate) fn paired(record: &Record, name: &str) -> Paired {
+    let time = |which: Which, round: usize| {
+        record
+            .sides
+            .iter()
+            .filter(|side| side.which == which && side.round == round)
+            .flat_map(|side| &side.phases)
+            .find(|phase| phase.name == name && phase.passed)
+            .map(|phase| phase.seconds)
+    };
+    let mut rounds: Vec<usize> = record.sides.iter().map(|side| side.round).collect();
+    rounds.sort_unstable();
+    rounds.dedup();
+    let mut changes = Vec::new();
+    let mut base_first = 0;
+    for round in rounds {
+        if let (Some(base), Some(head)) = (time(Which::Base, round), time(Which::Head, round)) {
+            changes.push(head - base);
+            if order(round.saturating_sub(1))[0] == Which::Base {
+                base_first += 1;
+            }
+        }
+    }
+    Paired {
+        pairs: changes.len(),
+        change: median(changes),
+        base_first,
+    }
+}
+
+/// The table of each phase's median on each side, and its paired change.
 pub(crate) fn medians_table(record: &Record) -> String {
     let base = format!("base ({})", record.label);
     let width = base.len().max(16);
@@ -325,10 +382,13 @@ pub(crate) fn medians_table(record: &Record) -> String {
         rounds_run(record, Which::Head),
     ];
     let mut text = format!(
-        "Each phase's median, in seconds, over the rounds it passed in (passed of run):\n\n\
-         {:<name_width$}  {base:>width$}  {:>width$}  {:>8}\n",
-        "phase", "head (this tree)", "change"
+        "Each phase's median, in seconds, over the rounds it passed in (passed of run), and \
+         its change, head minus base, paired by round (the median over the rounds it passed \
+         in on both sides; how many, and in how many the base ran first):\n\n\
+         {:<name_width$}  {base:>width$}  {:>width$}  {:>24}\n",
+        "phase", "head (this tree)", "paired change"
     );
+    let mut lopsided = false;
     for (name, sides) in &rows {
         let cell = |side: usize| {
             let (seconds, passed) = sides[side];
@@ -338,17 +398,33 @@ pub(crate) fn medians_table(record: &Record) -> String {
             };
             format!("{:>width$}", format!("{shown} ({passed}/{})", runs[side]))
         };
-        let change = match (sides[0].0, sides[1].0) {
-            // A change that rounds to nothing is +0.0, never -0.0.
-            (Some(base), Some(head)) if (head - base).abs() < 0.05 => "+0.0".to_owned(),
-            (Some(base), Some(head)) => format!("{:+.1}", head - base),
-            _ => "-".to_owned(),
+        let pair = paired(record, name);
+        // A change that rounds to nothing is +0.0, never -0.0.
+        let shown = match pair.change {
+            Some(change) if change.abs() < 0.05 => "+0.0".to_owned(),
+            Some(change) => format!("{change:+.1}"),
+            None => "-".to_owned(),
         };
+        // The order is even only when the base went first in half the pairs.
+        let uneven = pair.pairs > 0 && pair.base_first * 2 != pair.pairs;
+        lopsided |= uneven;
+        let change = format!(
+            "{shown} ({}, {} base first){}",
+            pair.pairs,
+            pair.base_first,
+            if uneven { "*" } else { " " }
+        );
         let _ = writeln!(
             text,
-            "{name:<name_width$}  {}  {}  {change:>8}",
+            "{name:<name_width$}  {}  {}  {change:>24}",
             cell(0),
             cell(1)
+        );
+    }
+    if lopsided {
+        text.push_str(
+            "* the base did not go first in half of the paired rounds: its change is partly \
+             the order's (the first side pays for a cold disk cache)\n",
         );
     }
     text
@@ -410,7 +486,9 @@ pub(crate) fn render(record: &Record) -> String {
         let _ = writeln!(
             text,
             "\n{failed} side round(s) failed (marked ! above): a failed phase is left out of \
-             its median, and so is every phase after it"
+             its median and of the paired change. A failed clean, setup or build ends the \
+             side's round; a failed run of the tests does not, and the tiers' sums and `the \
+             job` of that round count as failed"
         );
     }
     if let Some(stopped) = &record.stopped {
@@ -652,119 +730,96 @@ fn clean(tree: &Path) -> Result<()> {
     Ok(())
 }
 
-/// One side's round: every phase, timed, and what went wrong. It never
-/// fails: a phase that fails ends the side's round, and is recorded.
-fn run_side(head: &Path, tree: &Path, which: Which, round: usize, request: &Request) -> SideRound {
+/// What one side's round does, phase by phase: [`RealSide`] runs the
+/// commands, and a test answers from a list. Each returns how the phase
+/// ended; [`drive_side`] times them and records them.
+pub(crate) trait SidePhases {
+    /// Removes the side's build of the tests.
+    fn clean(&mut self) -> Result<()>;
+    /// Runs the side's setup: `None` when it has none.
+    fn setup(&mut self) -> Option<Result<()>>;
+    /// Builds the tests.
+    fn build(&mut self) -> Result<()>;
+    /// How many runs the job makes of them.
+    fn runs(&self) -> usize;
+    /// Makes run `index`, its report kept for the next.
+    fn run(&mut self, index: usize) -> Result<()>;
+    /// Each tier's tests' time summed above the start, from the report.
+    fn tiers(&mut self) -> Result<[f64; 3]>;
+}
+
+/// Whether a side's round begins by removing its build: always in the first
+/// round, so that both sides start cold whatever was in their build
+/// directories (on a runner, the cache restores `main`'s build into the
+/// head's tree alone), and in every round unless `--keep-build`.
+pub(crate) fn cleans(keep_build: bool, round: usize) -> bool {
+    !keep_build || round == 1
+}
+
+/// One side's round, every phase timed by `clock` (seconds) and recorded. It
+/// never fails. A failed clean, setup or build ends the side's round: what
+/// would follow would measure something else. A failed run of the tests does
+/// not: the job's next run is still made and timed, as the blocking job
+/// makes it, and the tiers' sums and `the job` count as failed.
+pub(crate) fn drive_side(
+    phases: &mut impl SidePhases,
+    round: usize,
+    which: Which,
+    clean: bool,
+    clock: &mut dyn FnMut() -> f64,
+) -> SideRound {
     let mut side = SideRound {
         round,
         which,
         phases: Vec::new(),
         error: None,
     };
-    if !request.keep_build {
-        let started = Instant::now();
-        let outcome = clean(tree);
-        if !phase(&mut side, "clean", started.elapsed().as_secs_f64(), outcome) {
+    if clean {
+        let started = clock();
+        let outcome = phases.clean();
+        let took = clock() - started;
+        if !phase(&mut side, "clean", took, outcome) {
             return side;
         }
     }
-    let job_started = Instant::now();
-    let mut environment = Vec::new();
-    if let Some(script) = &request.setup[which as usize] {
-        let env_file = tree.join("target").join("job-ab-env");
-        let script = head.join(script);
-        let (program, before) = setup_program(&script);
-        let mut command = Command::new(program);
-        command
-            .args(before)
-            .arg(&script)
-            .current_dir(tree)
-            .env("CINERIS_AB_ENV", &env_file)
-            .env("CINERIS_AB_SIDE", side_name(which))
-            .env("CINERIS_AB_ROUND", round.to_string());
-        let prepared = std::fs::create_dir_all(tree.join("target"))
-            .and_then(|()| workspace_forget(&env_file))
-            .map_err(|error| format!("could not prepare {}: {error}", env_file.display()));
-        let (seconds, outcome) = match prepared {
-            Ok(()) => timed(command, &format!("the setup {}", script.display())),
-            Err(error) => (0.0, Err(error)),
-        };
-        let outcome = outcome.and_then(|()| match std::fs::read_to_string(&env_file) {
-            Ok(text) => read_env(&text).map(|pairs| environment = pairs),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(format!("could not read {}: {error}", env_file.display())),
-        });
-        if !phase(&mut side, "setup", seconds, outcome) {
-            return job_failed(side, job_started);
+    let job_started = clock();
+    let started = clock();
+    if let Some(outcome) = phases.setup() {
+        let took = clock() - started;
+        if !phase(&mut side, "setup", took, outcome) {
+            let took = clock() - job_started;
+            return job_failed(side, took);
         }
     }
-    let with_environment = |arguments: &[String]| {
-        let mut command = crate::ab::nextest(tree, arguments);
-        command.envs(environment.iter().map(|(key, value)| (key, value)));
-        command
-    };
-    let mut build = crate::checks::ci_run(&request.packages);
-    build.push("--no-run".to_owned());
-    let (seconds, outcome) = timed(with_environment(&build), "the build");
-    if !phase(&mut side, "build", seconds, outcome) {
-        return job_failed(side, job_started);
+    let started = clock();
+    let outcome = phases.build();
+    let took = clock() - started;
+    if !phase(&mut side, "build", took, outcome) {
+        let took = clock() - job_started;
+        return job_failed(side, took);
     }
-    if let Err(error) = crate::checks::forget_reports(tree) {
-        phase(&mut side, "tests", 0.0, Err(error));
-        return job_failed(side, job_started);
-    }
-    let runs = crate::checks::ci_runs(
-        &request.packages,
-        &request.rest,
-        crate::checks::splits(tree),
-    );
+    let runs = phases.runs();
     let mut runs_passed = true;
-    for (index, run) in runs.iter().enumerate() {
-        let name = run_name(index, runs.len());
-        let (seconds, outcome) = timed(with_environment(run), &name);
-        runs_passed &= phase(&mut side, &name, seconds, outcome);
-        let last = index + 1 == runs.len();
-        let kept = if last {
-            crate::checks::bring_together(tree)
-        } else {
-            crate::checks::set_aside(tree)
-        };
-        if let Err(error) = kept {
-            runs_passed = false;
-            side.error = Some(match side.error.take() {
-                Some(earlier) => format!("{earlier}; {error}"),
-                None => error,
-            });
-        }
+    for index in 0..runs {
+        let started = clock();
+        let outcome = phases.run(index);
+        let took = clock() - started;
+        runs_passed &= phase(&mut side, &run_name(index, runs), took, outcome);
     }
-    let job_seconds = job_started.elapsed().as_secs_f64();
-    let report = workspace::nextest_report(tree, "ci");
-    match junit::read(&report) {
-        Ok(cases) => {
-            let (start, _) = tiers::start_of(&cases);
-            for tier in Tier::ALL {
-                let total = tiers::total(&cases, tier, start);
+    let job_seconds = clock() - job_started;
+    match phases.tiers() {
+        Ok(sums) => {
+            for (tier, seconds) in Tier::ALL.into_iter().zip(sums) {
                 side.phases.push(Phase {
                     name: tier_name(tier),
-                    seconds: total.above_start,
+                    seconds,
                     passed: runs_passed,
                 });
-            }
-            let kept = head
-                .join("target")
-                .join("ab")
-                .join(report_name(which, round));
-            if let Err(error) = std::fs::create_dir_all(kept.parent().unwrap_or(head))
-                .and_then(|()| std::fs::copy(&report, &kept))
-            {
-                println!("(could not keep {}: {error})", kept.display());
             }
         }
         Err(error) => {
             runs_passed = false;
-            if side.error.is_none() {
-                side.error = Some(error);
-            }
+            add_error(&mut side, error);
         }
     }
     side.phases.push(Phase {
@@ -773,6 +828,109 @@ fn run_side(head: &Path, tree: &Path, which: Which, round: usize, request: &Requ
         passed: runs_passed,
     });
     side
+}
+
+/// A side's phases as they really run: commands in its tree.
+struct RealSide<'a> {
+    head: &'a Path,
+    tree: &'a Path,
+    which: Which,
+    round: usize,
+    request: &'a Request,
+    /// What the setup's file set, for the build and the runs.
+    environment: Vec<(String, String)>,
+    /// The job's runs, as its own `.config/nextest.toml` makes them.
+    runs: Vec<Vec<String>>,
+}
+
+impl RealSide<'_> {
+    fn command(&self, arguments: &[String]) -> Command {
+        let mut command = crate::ab::nextest(self.tree, arguments);
+        command.envs(self.environment.iter().map(|(key, value)| (key, value)));
+        command
+    }
+}
+
+impl SidePhases for RealSide<'_> {
+    fn clean(&mut self) -> Result<()> {
+        clean(self.tree)
+    }
+
+    fn setup(&mut self) -> Option<Result<()>> {
+        let script = self.request.setup[self.which as usize].as_ref()?;
+        let env_file = self.tree.join("target").join("job-ab-env");
+        let script = self.head.join(script);
+        let (program, before) = setup_program(&script);
+        let mut command = Command::new(program);
+        command
+            .args(before)
+            .arg(&script)
+            .current_dir(self.tree)
+            .env("CINERIS_AB_ENV", &env_file)
+            .env("CINERIS_AB_SIDE", side_name(self.which))
+            .env("CINERIS_AB_ROUND", self.round.to_string());
+        let outcome = std::fs::create_dir_all(self.tree.join("target"))
+            .and_then(|()| workspace_forget(&env_file))
+            .map_err(|error| format!("could not prepare {}: {error}", env_file.display()))
+            .and_then(|()| timed(command, &format!("the setup {}", script.display())).1)
+            .and_then(|()| match std::fs::read_to_string(&env_file) {
+                Ok(text) => read_env(&text).map(|pairs| self.environment = pairs),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                Err(error) => Err(format!("could not read {}: {error}", env_file.display())),
+            });
+        Some(outcome)
+    }
+
+    fn build(&mut self) -> Result<()> {
+        let mut build = crate::checks::ci_run(&self.request.packages);
+        build.push("--no-run".to_owned());
+        timed(self.command(&build), "the build").1?;
+        crate::checks::forget_reports(self.tree)
+    }
+
+    fn runs(&self) -> usize {
+        self.runs.len()
+    }
+
+    fn run(&mut self, index: usize) -> Result<()> {
+        let name = run_name(index, self.runs.len());
+        let outcome = timed(self.command(&self.runs[index]), &name).1;
+        let kept = if index + 1 == self.runs.len() {
+            crate::checks::bring_together(self.tree)
+        } else {
+            crate::checks::set_aside(self.tree)
+        };
+        match (outcome, kept) {
+            (Ok(()), kept) => kept,
+            (Err(error), Ok(())) => Err(error),
+            (Err(error), Err(also)) => Err(format!("{error}; {also}")),
+        }
+    }
+
+    fn tiers(&mut self) -> Result<[f64; 3]> {
+        let report = workspace::nextest_report(self.tree, "ci");
+        let cases = junit::read(&report)?;
+        let (start, _) = tiers::start_of(&cases);
+        let kept = self
+            .head
+            .join("target")
+            .join("ab")
+            .join(report_name(self.which, self.round));
+        if let Err(error) = std::fs::create_dir_all(kept.parent().unwrap_or(self.head))
+            .and_then(|()| std::fs::copy(&report, &kept))
+        {
+            println!("(could not keep {}: {error})", kept.display());
+        }
+        Ok(Tier::ALL.map(|tier| tiers::total(&cases, tier, start).above_start))
+    }
+}
+
+/// `error` added to the side's.
+fn add_error(side: &mut SideRound, error: String) {
+    side.error = Some(match side.error.take() {
+        Some(earlier) => format!("{earlier}; {error}"),
+        None => error,
+    });
 }
 
 /// Records a phase of `side` that took `seconds` and ended as `outcome`, an
@@ -786,20 +944,17 @@ fn phase(side: &mut SideRound, name: &str, seconds: f64, outcome: Result<()>) ->
     match outcome {
         Ok(()) => true,
         Err(error) => {
-            side.error = Some(match side.error.take() {
-                Some(earlier) => format!("{earlier}; {error}"),
-                None => error,
-            });
+            add_error(side, error);
             false
         }
     }
 }
 
 /// A side's round that ended in a failed phase: the job, as far as it went.
-fn job_failed(mut side: SideRound, started: Instant) -> SideRound {
+fn job_failed(mut side: SideRound, seconds: f64) -> SideRound {
     side.phases.push(Phase {
         name: JOB.to_owned(),
-        seconds: started.elapsed().as_secs_f64(),
+        seconds,
         passed: false,
     });
     side
@@ -810,6 +965,49 @@ fn workspace_forget(path: &Path) -> std::io::Result<()> {
     match std::fs::remove_file(path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => Err(error),
         _ => Ok(()),
+    }
+}
+
+/// The rounds of `record` (its `rounds`), each side in its turn
+/// ([`order`]): `side(which, round)` makes a side's round, counted from 1,
+/// which never fails; `keep(record)` is called after every side; `clock`
+/// gives seconds. A side that failed is said and the run goes on. A round
+/// that the longest so far would carry past `minutes` is not begun, and
+/// the record says where it stopped.
+pub(crate) fn drive_rounds(
+    record: &mut Record,
+    minutes: Option<u64>,
+    side: &mut dyn FnMut(Which, usize) -> SideRound,
+    keep: &mut dyn FnMut(&Record),
+    clock: &mut dyn FnMut() -> f64,
+) {
+    let started = clock();
+    let mut longest: Option<f64> = None;
+    for round in 0..record.rounds {
+        let spent = clock() - started;
+        if !round_fits(spent, longest, minutes) {
+            record.stopped = Some(format!(
+                "Stopped before round {} of {}: {:.0} min spent, and the longest round took \
+                 {:.0} min, which would pass --minutes {}.",
+                round + 1,
+                record.rounds,
+                spent / 60.0,
+                longest.unwrap_or_default() / 60.0,
+                minutes.unwrap_or_default()
+            ));
+            break;
+        }
+        let round_started = clock();
+        for which in order(round) {
+            let made = side(which, round + 1);
+            if let Some(error) = &made.error {
+                println!("== it failed: {}; carrying on ==", first_line(error));
+            }
+            record.sides.push(made);
+            keep(record);
+        }
+        let took = clock() - round_started;
+        longest = Some(longest.map_or(took, |longest| longest.max(took)));
     }
 }
 
@@ -850,49 +1048,56 @@ pub(crate) fn run(arguments: &[String]) -> Result<()> {
         stopped: None,
     };
     let started = Instant::now();
-    let mut longest: Option<f64> = None;
-    for round in 0..request.rounds {
-        let spent = started.elapsed().as_secs_f64();
-        if !round_fits(spent, longest, request.minutes) {
-            record.stopped = Some(format!(
-                "Stopped before round {} of {}: {:.0} min spent, and the longest round took \
-                 {:.0} min, which would pass --minutes {}.",
-                round + 1,
-                request.rounds,
-                spent / 60.0,
-                longest.unwrap_or_default() / 60.0,
-                request.minutes.unwrap_or_default()
-            ));
-            break;
-        }
-        let round_started = Instant::now();
-        for which in order(round) {
-            println!(
-                "== round {} of {}: the {} ==",
-                round + 1,
-                request.rounds,
-                match which {
-                    Which::Base => format!("base ({label})"),
-                    Which::Head => "head (this tree)".to_owned(),
-                }
-            );
-            let side = run_side(&head, tree(which), which, round + 1, &request);
-            if let Some(error) = &side.error {
-                println!("== it failed: {}; carrying on ==", first_line(error));
+    let mut clock = || started.elapsed().as_secs_f64();
+    let mut side = |which: Which, round: usize| {
+        println!(
+            "== round {round} of {}: the {} ==",
+            request.rounds,
+            match which {
+                Which::Base => format!("base ({label})"),
+                Which::Head => "head (this tree)".to_owned(),
             }
-            record.sides.push(side);
-            // After every side, so that a run that is stopped keeps what it
-            // made. A record that cannot be written is said, and the run
-            // goes on: the log has every line of it too.
-            if let Err(error) = std::fs::create_dir_all(record_file.parent().unwrap_or(&head))
-                .and_then(|()| std::fs::write(&record_file, to_json(&record)))
-            {
-                println!("(could not write {}: {error})", record_file.display());
-            }
+        );
+        let tree = tree(which);
+        let mut phases = RealSide {
+            head: &head,
+            tree,
+            which,
+            round,
+            request: &request,
+            environment: Vec::new(),
+            runs: crate::checks::ci_runs(
+                &request.packages,
+                &request.rest,
+                crate::checks::splits(tree),
+            ),
+        };
+        let mut clock = || started.elapsed().as_secs_f64();
+        drive_side(
+            &mut phases,
+            round,
+            which,
+            cleans(request.keep_build, round),
+            &mut clock,
+        )
+    };
+    // After every side, so that a run that is stopped keeps what it made. A
+    // record that cannot be written is said, and the run goes on: the log
+    // has every line of it too.
+    let mut keep = |record: &Record| {
+        if let Err(error) = std::fs::create_dir_all(record_file.parent().unwrap_or(&head))
+            .and_then(|()| std::fs::write(&record_file, to_json(record)))
+        {
+            println!("(could not write {}: {error})", record_file.display());
         }
-        let took = round_started.elapsed().as_secs_f64();
-        longest = Some(longest.map_or(took, |longest| longest.max(took)));
-    }
+    };
+    drive_rounds(
+        &mut record,
+        request.minutes,
+        &mut side,
+        &mut keep,
+        &mut clock,
+    );
     if let Err(error) = std::fs::write(&record_file, to_json(&record)) {
         println!("(could not write {}: {error})", record_file.display());
     }
@@ -920,8 +1125,9 @@ pub(crate) fn kept_reports(files: &[PathBuf]) -> BTreeMap<(usize, &'static str),
 #[cfg(test)]
 mod tests {
     use super::{
-        JOB, Phase, Record, Request, SideRound, conclusion, from_json, medians, medians_table,
-        read_env, render, report_name, report_of_name, round_fits, run_name, to_json,
+        JOB, Paired, Phase, Record, Request, SidePhases, SideRound, cleans, conclusion,
+        drive_rounds, drive_side, from_json, medians, medians_table, paired, read_env, render,
+        report_name, report_of_name, round_fits, run_name, to_json,
     };
     use crate::ab::Which;
 
@@ -1007,13 +1213,15 @@ mod tests {
         assert_eq!(request.rest, ["-E", "test(/a/)"]);
         assert_eq!(
             Request::parse(&strings(&["--base", "b"])).unwrap().rounds,
-            3,
-            "three rounds when not told"
+            2,
+            "two rounds when not told: each side first once"
         );
         for (arguments, said) in [
-            (&["--count", "1"][..], "say which tree"),
-            (&["--base", "b", "--count", "0"], "from 1 to 20"),
-            (&["--base", "b", "--count", "21"], "from 1 to 20"),
+            (&["--count", "2"][..], "say which tree"),
+            (&["--base", "b", "--count", "0"], "an even number"),
+            (&["--base", "b", "--count", "3"], "an even number"),
+            (&["--base", "b", "--count", "1"], "an even number"),
+            (&["--base", "b", "--count", "22"], "an even number"),
             (&["--base", "b", "--minutes", "0"], "above 0"),
             (
                 &["--base", "b", "--setup-base", "/abs.sh"],
@@ -1086,17 +1294,29 @@ mod tests {
             (Some(30.0), 2),
             "the round it failed in is left out"
         );
+        // Tier 3 ran after tiers 1 and 2 failed in round 2, and counts.
+        assert_eq!(rows[3].1[1], (Some(50.0), 3), "tier 3 of the failed round");
         let table = medians_table(&record);
         assert!(table.contains("base (main)"), "{table}");
         assert!(table.contains("110.0 (3/3)"), "{table}");
         assert!(table.contains("30.0 (2/3)"), "{table}");
-        assert!(table.contains("-20.0"), "{table}");
+        // The build paired by round: -10, +370 and -30, three pairs, the
+        // base first in rounds 1 and 3: not half, so marked.
+        let build = table
+            .lines()
+            .find(|line| line.starts_with("build"))
+            .unwrap();
+        assert!(build.ends_with("-10.0 (3, 2 base first)*"), "{build}");
+        assert!(
+            table.contains("* the base did not go first in half"),
+            "{table}"
+        );
         // The clean took 1.0 s on both sides: no change, and no minus sign.
         let clean = table
             .lines()
             .find(|line| line.starts_with("clean"))
             .unwrap();
-        assert!(clean.trim_end().ends_with(" +0.0"), "{clean}");
+        assert!(clean.contains(" +0.0 (3, "), "{clean}");
     }
 
     #[test]
@@ -1119,7 +1339,280 @@ mod tests {
             .find(|line| line.starts_with("build"))
             .unwrap();
         assert!(line.contains("- (0/1)"), "{line}");
-        assert!(line.trim_end().ends_with('-'), "{line}");
+        assert!(line.trim_end().ends_with("- (0, 0 base first)"), "{line}");
+    }
+
+    #[test]
+    fn a_change_is_paired_by_round_and_says_which_side_went_first() {
+        // Two rounds: the base first in round 1, the head first in round 2.
+        let even = record(vec![
+            passed(1, Which::Base, 100.0),
+            passed(1, Which::Head, 80.0),
+            passed(2, Which::Head, 90.0),
+            passed(2, Which::Base, 100.0),
+        ]);
+        assert_eq!(
+            paired(&even, "build"),
+            Paired {
+                change: Some(-15.0),
+                pairs: 2,
+                base_first: 1
+            }
+        );
+        assert!(
+            !medians_table(&even).contains("* the base"),
+            "an even order"
+        );
+        // A round the base failed is no pair: the head's round 2 alone, in
+        // which the head went first, is not compared with the base's round 1.
+        let mut failed_base = passed(2, Which::Base, 100.0);
+        failed_base.phases[1].passed = false;
+        let odd = record(vec![
+            passed(1, Which::Base, 200.0),
+            passed(1, Which::Head, 190.0),
+            passed(2, Which::Head, 50.0),
+            failed_base,
+        ]);
+        assert_eq!(
+            paired(&odd, "build"),
+            Paired {
+                change: Some(-10.0),
+                pairs: 1,
+                base_first: 1
+            }
+        );
+        let medians = medians(&odd);
+        let build = &medians.iter().find(|(name, _)| name == "build").unwrap().1;
+        assert_eq!(
+            (build[0].0, build[1].0),
+            (Some(200.0), Some(120.0)),
+            "unpaired medians would say -80"
+        );
+    }
+
+    #[test]
+    fn both_sides_start_cold_and_keep_build_keeps_only_later_rounds() {
+        assert!(cleans(false, 1) && cleans(false, 2));
+        assert!(
+            cleans(true, 1),
+            "the first round is cold whatever is in the build"
+        );
+        assert!(!cleans(true, 2));
+    }
+
+    /// A side's phases from a list: each phase takes `seconds[phase]` of the
+    /// fake clock, and fails when named in `failing`.
+    struct Fake {
+        failing: Vec<&'static str>,
+        setup: bool,
+        runs: usize,
+        made: Vec<String>,
+        clock: std::rc::Rc<std::cell::Cell<f64>>,
+    }
+
+    impl Fake {
+        fn new(failing: &[&'static str], clock: &std::rc::Rc<std::cell::Cell<f64>>) -> Self {
+            Fake {
+                failing: failing.to_vec(),
+                setup: true,
+                runs: 2,
+                made: Vec::new(),
+                clock: clock.clone(),
+            }
+        }
+
+        fn step(&mut self, name: &str, seconds: f64) -> crate::Result<()> {
+            self.made.push(name.to_owned());
+            self.clock.set(self.clock.get() + seconds);
+            if self.failing.contains(&name) {
+                Err(format!("{name} failed"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl SidePhases for Fake {
+        fn clean(&mut self) -> crate::Result<()> {
+            self.step("clean", 1.0)
+        }
+        fn setup(&mut self) -> Option<crate::Result<()>> {
+            self.setup.then(|| self.step("setup", 2.0))
+        }
+        fn build(&mut self) -> crate::Result<()> {
+            self.step("build", 100.0)
+        }
+        fn runs(&self) -> usize {
+            self.runs
+        }
+        fn run(&mut self, index: usize) -> crate::Result<()> {
+            self.step(&format!("run {index}"), 10.0)
+        }
+        fn tiers(&mut self) -> crate::Result<[f64; 3]> {
+            self.step("tiers", 0.0).map(|()| [1.0, 2.0, 3.0])
+        }
+    }
+
+    fn names(side: &SideRound) -> Vec<String> {
+        side.phases
+            .iter()
+            .map(|phase| format!("{}{}", phase.name, if phase.passed { "" } else { " !" }))
+            .collect()
+    }
+
+    #[test]
+    fn a_side_times_each_phase_and_a_failed_build_ends_its_round() {
+        let time = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let mut clock = {
+            let time = time.clone();
+            move || time.get()
+        };
+        let mut fake = Fake::new(&[], &time);
+        let side = drive_side(&mut fake, 1, Which::Base, true, &mut clock);
+        assert_eq!(
+            names(&side),
+            [
+                "clean",
+                "setup",
+                "build",
+                "tests: tiers 1 and 2",
+                "tests: tier 3",
+                "tier 1, unit summed",
+                "tier 2, integration summed",
+                "tier 3, system summed",
+                JOB
+            ]
+        );
+        assert_eq!(side.phases[2].seconds, 100.0);
+        assert_eq!(
+            side.phases.last().unwrap().seconds,
+            122.0,
+            "setup, build, runs"
+        );
+        assert_eq!(side.error, None);
+
+        let mut fake = Fake::new(&["build"], &time);
+        let side = drive_side(&mut fake, 2, Which::Head, false, &mut clock);
+        assert_eq!(names(&side), ["setup", "build !", "the job !"]);
+        assert_eq!(
+            fake.made,
+            ["setup", "build"],
+            "nothing after a failed build"
+        );
+        assert_eq!(side.error.as_deref(), Some("build failed"));
+
+        let mut fake = Fake::new(&["setup"], &time);
+        let side = drive_side(&mut fake, 2, Which::Head, true, &mut clock);
+        assert_eq!(names(&side), ["clean", "setup !", "the job !"]);
+    }
+
+    #[test]
+    fn a_failed_run_of_the_tests_does_not_end_the_round() {
+        let time = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let mut clock = {
+            let time = time.clone();
+            move || time.get()
+        };
+        let mut fake = Fake::new(&["run 0"], &time);
+        fake.setup = false;
+        let side = drive_side(&mut fake, 1, Which::Head, false, &mut clock);
+        assert_eq!(
+            names(&side),
+            [
+                "build",
+                "tests: tiers 1 and 2 !",
+                "tests: tier 3",
+                "tier 1, unit summed !",
+                "tier 2, integration summed !",
+                "tier 3, system summed !",
+                "the job !"
+            ],
+            "tier 3 is still run and timed"
+        );
+        assert_eq!(side.error.as_deref(), Some("run 0 failed"));
+    }
+
+    #[test]
+    fn a_failed_round_is_recorded_and_the_rounds_go_on_in_turn() {
+        let time = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let mut clock = {
+            let time = time.clone();
+            move || time.get()
+        };
+        let mut made = Vec::new();
+        let mut side = |which: Which, round: usize| {
+            made.push((which, round));
+            time.set(time.get() + 60.0);
+            let failing: &[&'static str] = if which == Which::Base && round == 1 {
+                &["build"]
+            } else {
+                &[]
+            };
+            let mut fake = Fake::new(failing, &time);
+            let mut clock = || time.get();
+            drive_side(&mut fake, round, which, true, &mut clock)
+        };
+        let mut kept = Vec::new();
+        let mut keep = |record: &Record| kept.push(record.sides.len());
+        let mut record = Record {
+            label: "main".to_owned(),
+            rounds: 4,
+            sides: Vec::new(),
+            stopped: None,
+        };
+        drive_rounds(&mut record, None, &mut side, &mut keep, &mut clock);
+        assert_eq!(
+            made,
+            [
+                (Which::Base, 1),
+                (Which::Head, 1),
+                (Which::Head, 2),
+                (Which::Base, 2),
+                (Which::Base, 3),
+                (Which::Head, 3),
+                (Which::Head, 4),
+                (Which::Base, 4)
+            ]
+        );
+        assert_eq!(kept, [1, 2, 3, 4, 5, 6, 7, 8], "kept after every side");
+        assert_eq!(record.sides.len(), 8);
+        assert!(record.sides[0].error.is_some(), "the failed round is kept");
+        assert_eq!(record.stopped, None);
+        assert!(conclusion(&record).is_err());
+    }
+
+    #[test]
+    fn the_rounds_stop_before_one_that_would_pass_the_minutes() {
+        let time = std::rc::Rc::new(std::cell::Cell::new(0.0));
+        let mut clock = {
+            let time = time.clone();
+            move || time.get()
+        };
+        // Each side takes 20 minutes, a round 40: within 100 minutes the
+        // second round may start (40 spent + 40) and the third may not.
+        let mut side = |which: Which, round: usize| {
+            time.set(time.get() + 20.0 * 60.0);
+            SideRound {
+                round,
+                which,
+                phases: Vec::new(),
+                error: None,
+            }
+        };
+        let mut keep = |_: &Record| {};
+        let mut record = Record {
+            label: "main".to_owned(),
+            rounds: 4,
+            sides: Vec::new(),
+            stopped: None,
+        };
+        drive_rounds(&mut record, Some(100), &mut side, &mut keep, &mut clock);
+        assert_eq!(record.sides.len(), 4, "two rounds");
+        let stopped = record.stopped.unwrap();
+        assert!(
+            stopped.starts_with("Stopped before round 3 of 4"),
+            "{stopped}"
+        );
     }
 
     #[test]
