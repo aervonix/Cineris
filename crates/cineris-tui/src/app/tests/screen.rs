@@ -1809,10 +1809,28 @@ fn panels_sit_beside_the_transcript_on_a_wide_window() {
 
 /// Code whose colours were late is drawn plain as it commits, kept as late,
 /// handed to the highlighter again, and drawn in its colours by the full
-/// screen once they come (closes `highlighted-code-drawn-again`).
+/// screen once they come (closes `highlighted-code-drawn-again`): taken by
+/// the loop's drain, with the full screen's view in its place.
 #[cfg(feature = "highlight")]
 #[test]
 fn code_committed_plain_is_coloured_once_its_colours_come() {
+    coloured_once_they_come(true);
+}
+
+/// The same, the colours taken by the frame itself, while the full
+/// screen's view is out to make it: the block is drawn again in that frame
+/// (the break `the-full-screen-keeps-the-plain-rows` went uncaught when
+/// only the drain's way was tested; found in step 25's third pull request).
+#[cfg(feature = "highlight")]
+#[test]
+fn code_coloured_while_a_frame_is_made_is_drawn_in_that_frame() {
+    coloured_once_they_come(false);
+}
+
+/// Late colours coming, taken by the loop's drain (`by_drain`) or by the
+/// next frame.
+#[cfg(feature = "highlight")]
+fn coloured_once_they_come(by_drain: bool) {
     use crate::highlight::Highlighter;
     use crate::markdown::Markdown;
     use crate::theme::Token;
@@ -1861,8 +1879,10 @@ fn code_committed_plain_is_coloured_once_its_colours_come() {
     highlighter.hold(false);
     assert!(highlighter.settle(BOUND));
     // Their coming is a change the loop draws, with nothing else happening
-    // (the review of step 25).
-    assert!(app.drain(later, 64).changed, "the colours schedule a frame");
+    // (the review of step 25); or the frame takes them itself.
+    if by_drain {
+        assert!(app.drain(later, 64).changed, "the colours schedule a frame");
+    }
     let (lines, _) = app.screen_frame(later);
     assert!(
         coloured(&lines),
