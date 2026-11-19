@@ -728,6 +728,44 @@ mod tests {
         assert_eq!(read.get(0).unwrap().expanded(), "t");
     }
 
+    /// A file of one project alone, past its bytes, is written again with
+    /// that project's newest within [`KEEP_BYTES`], though the file could
+    /// hold more: the bound on each project in a file written again, which
+    /// a file of three projects in turn never reaches, the file's own
+    /// bound coming first (the review of the CI-budgets fix).
+    #[test]
+    fn a_file_of_one_project_is_written_again_within_its_bytes() {
+        let scratch = Scratch::new("one_project");
+        let path = scratch.join("history");
+        let filler = "w".repeat(60 * 1024);
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() as u64 <= SMALL.compact_bytes {
+            text.push_str(&format!(
+                "{{\"project\":\"a\",\"text\":\"{n} {filler}\"}}\n"
+            ));
+            n += 1;
+        }
+        std::fs::write(&path, &text).unwrap();
+        let history = FileHistory::open_with(path.clone(), "a".to_owned(), SMALL);
+        wait_read(&history);
+        drop(history);
+        let written = std::fs::read_to_string(&path).unwrap();
+        assert!(written.len() <= SMALL.keep_bytes, "{}", written.len());
+        // Past one more line it would be over: the bound is the project's,
+        // not the file's.
+        assert!(
+            written.len() + 62 * 1024 > SMALL.keep_bytes,
+            "{}",
+            written.len()
+        );
+        const { assert!(SMALL.keep_bytes + 62 * 1024 < SMALL.file_keep_bytes) };
+        assert!(
+            written.contains(&format!("\"{} ", n - 1)),
+            "the newest line"
+        );
+    }
+
     /// A file past [`COMPACT_BYTES`] is written again within
     /// [`FILE_KEEP_BYTES`], each project within [`KEEP_BYTES`], newest
     /// kept; and what one project holds in memory is within
