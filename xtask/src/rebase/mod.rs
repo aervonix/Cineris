@@ -50,11 +50,14 @@ settled by its class:
                 `cargo xtask outstanding` at the end (which runs after every
                 rebase, as git merges the index line by line).
   additions     a .rs or .md file where both sides only added lines at the
-                same place: both additions, the side rebased onto first,
-                when every line of both sides is in the result in its order,
-                and it checks: brackets balance and rustfmt leaves it as it
-                is (Rust); every line added is a table's row with the shape
-                of its table (Markdown).
+                same place (both kept, the side rebased onto first), or one
+                side added lines just before or after lines the other
+                changed (the addition beside the change, kept whole): when
+                every line of both sides is in the result, as many times as
+                their changes come to and in order, and it checks: brackets
+                balance and rustfmt leaves it as it is (Rust); every line
+                put side by side is a table's row with the shape of its
+                table (Markdown).
   anything else left conflicted, for a person.
 
 When every file is settled the rebase goes on. When one is left, it stops
@@ -611,8 +614,11 @@ pub(crate) fn rustfmt_leaves(top: &Path, text: &str) -> std::result::Result<(), 
 /// (or, with `regen` false, named).
 fn finish(top: &Path, generators: &BTreeSet<String>, regen: bool) -> Result<Vec<String>> {
     let mut said = Vec::new();
+    let mut wrote = false;
     if top.join(crate::outstanding::INDEX).is_file() {
-        said.push(crate::outstanding::write(top, false)?);
+        let index = crate::outstanding::write(top, false)?;
+        wrote |= index.starts_with("wrote");
+        said.push(index);
     }
     let names: Vec<String> = generators
         .iter()
@@ -625,18 +631,22 @@ fn finish(top: &Path, generators: &BTreeSet<String>, regen: bool) -> Result<Vec<
             println!("$ {command}");
             crate::regen::run(&names)?;
             said.push(format!("Ran `{command}`."));
+            wrote = true;
         } else {
             said.push(format!("Run `{command}` to write the files taken."));
         }
     }
-    if !said.is_empty() {
-        said.push(
-            "What the end wrote is not committed: look at it, and commit it (or fold it in \
-             with `cargo xtask branch fold`)."
-                .to_owned(),
-        );
+    if wrote {
+        said.push(uncommitted_note());
     }
     Ok(said)
+}
+
+/// What the end says when it wrote files.
+pub(crate) fn uncommitted_note() -> String {
+    "What the end wrote is not committed: look at it, and commit it (or fold it in with \
+     `cargo xtask branch fold`)."
+        .to_owned()
 }
 
 /// `cargo xtask rebase …`
