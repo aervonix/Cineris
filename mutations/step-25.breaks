@@ -3511,8 +3511,8 @@ caught-by:
 rule: A credential in an address's fragment is masked as one in its query: `#access_token=…` (the final review).
 file: crates/cineris-config/src/import.rs
 in: masked_query
-find: let (fields, masked) = masked_fields(part, percent, depth);
-replace: let (fields, masked) = if mark == '#' { (part.to_owned(), Masked::No) } else { masked_fields(part, percent, depth) };
+find: let (fields, masked) = masked_fields(part, percent, cmd, depth);
+replace: let (fields, masked) = if mark == '#' { (part.to_owned(), Masked::No) } else { masked_fields(part, percent, cmd, depth) };
 caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
@@ -3594,8 +3594,8 @@ caught-by:
 rule: `%` is a token's only in a server's own address, not in an address inside an argument, which `cmd /c` expands (N-L2).
 file: crates/cineris-config/src/import.rs
 in: launch_view
-find: masked_query(arg, false, 0)
-replace: masked_query(arg, true, 0)
+find: masked_query(arg, false, cmd, 0)
+replace: masked_query(arg, true, cmd, 0)
 caught-by:
     cineris-config import::tests::a_percent_is_a_tokens_only_in_an_address
 
@@ -3706,6 +3706,121 @@ find: .all(|character| token_character(character, false) || character == '\\')
 replace: .all(|_| true)
 caught-by:
     cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
+
+# ------------- the short read of B (Opus): a hidden token after a name with
+# a shell's character, a whole address, a program's name, a `cmd` switch, and
+# `\` (docs/steps/25/parts/pr3-first-run.md, "The review of the fixes (Opus)",
+# rows B-M1 to B-L7)
+
+[break] a-name-with-a-shells-character-hides-a-token
+rule: A token under a credential's name that holds anything but ASCII letters, digits, `-`, `_` and `.` is loose, masked and refused: `--api-key;`, `--api-key&` and `$API_KEY=` are a script's text, and what they hide could be run (B-M1, settled by the session).
+file: crates/cineris-config/src/import.rs
+in: Masked::under
+find: !plain_name(name) ||
+replace: !plain_name(name) && false ||
+caught-by:
+    cineris-config import::tests::a_token_under_a_name_with_a_shells_character_refuses
+
+[break] a-flags-name-is-not-judged
+rule: The value after a credential's flag is judged under that flag's name, and in an argument of `cmd` (B-M1, B-L4).
+file: crates/cineris-config/src/import.rs
+in: launch_view
+find: Masked::of(arg).under(before, arg, cmd)
+replace: Masked::of(arg)
+caught-by:
+    cineris-config import::tests::a_token_under_a_name_with_a_shells_character_refuses
+    cineris-config import::tests::a_hidden_slash_in_an_argument_of_cmd_refuses
+
+[break] the-flag-before-a-value-is-not-kept
+rule: The value after a credential's flag is judged under that flag's own name (B-M1).
+file: crates/cineris-config/src/import.rs
+in: launch_view
+find: before = arg;
+replace:
+caught-by:
+    cineris-config import::tests::a_token_under_a_name_with_a_shells_character_refuses
+
+[break] a-named-values-name-is-not-judged
+rule: The value of a credential's `NAME=value` is judged under that name, and in an argument of `cmd` (B-M1, B-L4).
+file: crates/cineris-config/src/import.rs
+in: launch_view
+find: Masked::of(value).under(name, value, cmd)
+replace: Masked::of(value)
+caught-by:
+    cineris-config import::tests::a_token_under_a_name_with_a_shells_character_refuses
+    cineris-config import::tests::a_hidden_slash_in_an_argument_of_cmd_refuses
+
+[break] an-address-fields-name-is-not-judged
+rule: The value of a credential's field in an address is judged under the field's name, and in an argument of `cmd` (B-M1, B-L4).
+file: crates/cineris-config/src/import.rs
+in: masked_fields
+find: Masked::in_address(value, percent).under(name, value, cmd)
+replace: Masked::in_address(value, percent)
+caught-by:
+    cineris-config import::tests::a_token_under_a_name_with_a_shells_character_refuses
+    cineris-config import::tests::a_hidden_slash_in_an_argument_of_cmd_refuses
+
+[break] a-whole-address-is-a-token
+rule: A value that holds `://` is not a token: an address under a credential's name is masked and refused, never hidden whole (B-M2, settled by the session).
+file: crates/cineris-config/src/import.rs
+in: token_shaped
+find: && !value.contains("://")
+replace:
+caught-by:
+    cineris-config import::tests::an_address_under_a_credentials_name_refuses
+
+[break] a-helper-names-value-is-hidden
+rule: The value of a name that ends in helper, exec, program or plugin names a program that gives a credential, and is shown (B-L3).
+file: crates/cineris-config/src/import.rs
+find: "directory", "helper", "exec", "program", "plugin"
+replace: "directory"
+caught-by:
+    cineris-config import::tests::a_program_named_by_helper_exec_program_or_plugin_is_shown
+
+[break] a-cmd-switch-is-hidden
+rule: In an argument of `cmd`, a hidden token that holds a `/` is loose, masked and refused: `cmd` reads it as a switch (B-L4).
+file: crates/cineris-config/src/import.rs
+in: Masked::under
+find: || (cmd && value.contains('/'))
+replace: || (cmd && value.contains('/') && false)
+caught-by:
+    cineris-config import::tests::a_hidden_slash_in_an_argument_of_cmd_refuses
+
+[break] cmd-is-known-only-by-its-bare-name
+rule: `cmd` is known by its file name after any directory: `C:\Windows\System32\cmd.exe` (B-L4).
+file: crates/cineris-config/src/import.rs
+in: runs_cmd
+find: program.rsplit(['/', '\\']).next().unwrap_or(program)
+replace: program
+caught-by:
+    cineris-config import::tests::a_hidden_slash_in_an_argument_of_cmd_refuses
+
+[break] cmd-is-known-only-in-lower-case
+rule: `cmd` is known in any case: `CMD.EXE`, `Cmd` (B-L4).
+file: crates/cineris-config/src/import.rs
+in: runs_cmd
+find: file.eq_ignore_ascii_case("cmd") || file.eq_ignore_ascii_case("cmd.exe")
+replace: file == "cmd" || file == "cmd.exe"
+caught-by:
+    cineris-config import::tests::a_hidden_slash_in_an_argument_of_cmd_refuses
+
+[break] an-arguments-address-is-not-read-as-cmds
+rule: An address in an argument of `cmd` is read as `cmd` reads it: a hidden token there with a `/` is loose (B-L4).
+file: crates/cineris-config/src/import.rs
+in: launch_view
+find: masked_query(arg, false, cmd, 0)
+replace: masked_query(arg, false, false, 0)
+caught-by:
+    cineris-config import::tests::a_hidden_slash_in_an_argument_of_cmd_refuses
+
+[break] a-backslash-is-a-tokens
+rule: `\` stays out of a token: `--key C:\certs\k.pem` refuses, the row saying to move it into a variable (B-L6).
+file: crates/cineris-config/src/import.rs
+in: token_character
+find: ':' | '@' | '/'
+replace: ':' | '@' | '/' | '\\'
+caught-by:
+    cineris-config import::tests::a_slash_is_a_tokens_and_a_rooted_path_is_masked_and_imported
 
 # From mutations/step-25-detect.breaks (part `detect`).
 # Step 25's third pull request, the fixes of its full review in one group:
