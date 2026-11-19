@@ -1722,7 +1722,8 @@ pub(crate) const GIT_TESTS_ON_WINDOWS: &[&str] = &[
 /// `cargo xtask git-tests-on-windows`: runs [`GIT_TESTS_ON_WINDOWS`], ignored
 /// on Windows, by their exact names, and fails unless each one ran and
 /// passed. A name that matches no test would otherwise pass having run
-/// nothing.
+/// nothing. Ignored tests run with the others, so that it runs the same
+/// tests on a system where they are not ignored.
 pub(crate) fn git_tests_on_windows() -> Result<()> {
     let mut run = vec![
         "test",
@@ -1730,7 +1731,7 @@ pub(crate) fn git_tests_on_windows() -> Result<()> {
         "-p",
         "xtask",
         "--",
-        "--ignored",
+        "--include-ignored",
         "--exact",
     ];
     run.extend(GIT_TESTS_ON_WINDOWS);

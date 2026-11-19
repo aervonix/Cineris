@@ -127,7 +127,7 @@ jobs:
       # (docs/testing-and-ci.md, "A system test that starts more than about
       # 20 processes").
       - name: The git tools' tests, against real git (Windows)
-        if: runner.os == 'Windows'
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
         run: cargo run --locked --quiet --package xtask -- git-tests-on-windows
       - name: Keep the record
         if: ${{ !cancelled() }}

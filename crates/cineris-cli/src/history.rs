@@ -501,21 +501,24 @@ mod tests {
         }
     }
 
-    /// Smaller bounds, in the program's order, each still past what one
-    /// prompt holds at most ([`cineris_tui::history::TEXT_KEEP`] and a
-    /// chip's [`cineris_tui::history::CHIP_KEEP`]): a file past them is a
-    /// megabyte, where the program's are tens of them.
+    /// Smaller bounds, in the program's order, a project's still past what
+    /// one prompt holds at most ([`cineris_tui::history::TEXT_KEEP`] of
+    /// text and [`cineris_tui::history::CHIP_TEXT_KEEP`] of chips): a file
+    /// past them is a megabyte or two, where the program's are tens of them.
     const SMALL: Limits = Limits {
         keep: 50,
-        keep_bytes: 512 * 1024,
+        keep_bytes: 384 * 1024,
         compact: 1_000,
-        compact_bytes: 1024 * 1024,
+        compact_bytes: 1536 * 1024,
         file_keep_bytes: 768 * 1024,
-        read_limit: 2 * 1024 * 1024,
+        read_limit: 4 * 1024 * 1024,
     };
 
     /// The tests at [`SMALL`] stand for the program only while both keep
-    /// their bounds in one order.
+    /// their bounds in one order, and a file past its bytes, of three
+    /// projects in turn, holds more of each than a project keeps: else the
+    /// bound on what a project holds is never reached (the review of the
+    /// CI-budgets fix).
     #[test]
     fn the_small_limits_keep_the_programs_order() {
         for limits in [Limits::PROGRAM, SMALL] {
@@ -526,8 +529,12 @@ mod tests {
             );
             assert!(limits.compact_bytes < limits.read_limit, "{limits:?}");
             assert!(limits.keep < limits.compact, "{limits:?}");
-            let one = cineris_tui::history::TEXT_KEEP.max(4 * cineris_tui::history::CHIP_KEEP);
+            let one = cineris_tui::history::TEXT_KEEP + cineris_tui::history::CHIP_TEXT_KEEP;
             assert!(limits.keep_bytes > one, "{limits:?}");
+            assert!(
+                limits.compact_bytes / 3 > limits.keep_bytes as u64,
+                "{limits:?}"
+            );
         }
     }
 
@@ -793,7 +800,7 @@ mod tests {
         text.push('\n');
         text.push_str("{\"project\":\"q\",\"text\":\"other\"}\n");
         // Past the file's bytes, so that it is written again.
-        let filler = "f".repeat(usize::try_from(SMALL.compact_bytes).unwrap() / 2);
+        let filler = "f".repeat(usize::try_from(SMALL.compact_bytes).unwrap());
         text.push_str(&format!("{{\"project\":\"r\",\"text\":\"{filler}\"}}\n"));
         assert!(text.len() as u64 > SMALL.compact_bytes);
         std::fs::write(&path, &text).unwrap();
