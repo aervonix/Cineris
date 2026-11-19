@@ -68,7 +68,16 @@ fn a_rule_that_denies_is_a_refusal_with_its_reason_and_the_run_goes_on() {
 /// not looked at for what it changed; one that writes is.
 #[test]
 fn sys_a_command_that_only_reads_is_told_to_the_loop_as_changing_nothing() {
-    let listing = if cfg!(windows) { "Get-Location" } else { "pwd" };
+    // On Windows `echo`, which every other test's command uses too: the
+    // first `Get-Location` on a machine has Windows PowerShell look through
+    // its modules for it, 2 to 3 s on a fresh hosted runner, which this
+    // test alone paid (`docs/steps/ci-budgets/answered.md`). What it pins is
+    // the loop's, for any command the table says only reads.
+    let listing = if cfg!(windows) {
+        "echo 'hello there'"
+    } else {
+        "pwd"
+    };
     let world = World::new(
         "read_only_command",
         [
