@@ -145,9 +145,7 @@ impl Setup for ProgramSetup {
             // disk's metadata as the file is read, here on the worker.
             cineris_config::import::read_servers(
                 &real,
-                &cineris_config::import::OnDisk {
-                    home: self.env.home(),
-                },
+                &cineris_config::import::OnDisk::new(self.env.home()),
             )
             .map_err(|error| error.to_string())?;
         let shown = servers.iter().map(shown_server).collect();
@@ -247,8 +245,8 @@ fn shown_server(server: &ImportedServer) -> McpServer {
                 Refusal::Unseen => "holds a character that acts unseen",
                 Refusal::Name => "has a name that cannot be a setting's",
                 Refusal::NamedValue => {
-                    "passes a value named as a credential that is not one token (move it into a \
-                     variable)"
+                    "passes a value named as a credential that is neither a token nor a path that \
+                     exists (move it into a variable)"
                 }
                 Refusal::NotUnderstood => "is not a server this version reads",
             }
@@ -428,8 +426,8 @@ mod tests {
         assert_eq!(
             shown.refused.as_deref(),
             Some(
-                "passes a value named as a credential that is not one token (move it into a \
-                 variable)"
+                "passes a value named as a credential that is neither a token nor a path that \
+                 exists (move it into a variable)"
             )
         );
         assert!(!shown.shown.contains("a b c"), "{}", shown.shown);

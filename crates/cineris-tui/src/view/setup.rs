@@ -327,23 +327,40 @@ fn prefix(row: &Row, look: &Look) -> usize {
 
 /// `text` cut into pieces of at most `width` columns between grapheme
 /// clusters, every character kept, white space too (which `wrap` drops at
-/// a break): a label is drawn whole, character for character. A cluster
-/// wider than `width` has a piece to itself.
+/// a break): a label is drawn whole, character for character. White space
+/// that would end a piece at a break begins the next one instead, where it
+/// shows as indentation, not as a blank at the edge that looks like none
+/// (the narrow check). A cluster wider than `width` has a piece to itself.
 fn hard_wrap(text: &str, width: usize) -> Vec<String> {
     let width = width.max(1);
-    let mut pieces = vec![String::new()];
-    let mut used = 0;
+    let blank = |cluster: &str| cluster.chars().all(char::is_whitespace);
+    let span = |piece: &[(&str, usize)]| piece.iter().map(|(_, wide)| wide).sum::<usize>();
+    let mut pieces: Vec<Vec<(&str, usize)>> = vec![Vec::new()];
     for (_, cluster, wide) in cineris_base::text::graphemes(text) {
+        let used = pieces.last().map_or(0, |piece| span(piece));
         if used > 0 && used + wide > width {
-            pieces.push(String::new());
-            used = 0;
+            let mut carried = Vec::new();
+            if let Some(piece) = pieces.last_mut()
+                && piece.iter().any(|(cluster, _)| !blank(cluster))
+            {
+                while piece.last().is_some_and(|(cluster, _)| blank(cluster)) {
+                    carried.extend(piece.pop());
+                }
+                carried.reverse();
+            }
+            if !carried.is_empty() && span(&carried) + wide > width {
+                pieces.push(std::mem::take(&mut carried));
+            }
+            pieces.push(carried);
         }
         if let Some(piece) = pieces.last_mut() {
-            piece.push_str(cluster);
+            piece.push((cluster, wide));
         }
-        used += wide;
     }
     pieces
+        .into_iter()
+        .map(|piece| piece.into_iter().map(|(cluster, _)| cluster).collect())
+        .collect()
 }
 
 /// The lines of each of a step's rows: its label in its column, wrapped
@@ -723,6 +740,9 @@ mod tests {
     fn a_wrapped_labels_white_space_is_drawn_at_the_break() {
         assert_eq!(hard_wrap("ab cd", 2), ["ab", " c", "d"]);
         assert_eq!(hard_wrap("abc   de", 3), ["abc", "   ", "de"]);
+        // A space at the end of a full piece begins the next (the narrow
+        // check: `C:\Program ` over `Files` looked as if it had none).
+        assert_eq!(hard_wrap("abc de", 4), ["abc", " de"]);
         let look = look();
         // The column at 80 is 46: the space falls at the break.
         let name = format!("{} {}", "a".repeat(45), "b".repeat(10));
@@ -735,11 +755,13 @@ mod tests {
                 .iter()
                 .position(|row| row.starts_with("  ◆"))
                 .expect("the selected row");
-            // Past the row's eight columns of indent and marks.
-            let first: String = rows[at].chars().skip(8).collect();
-            let first = first.strip_suffix("  x").unwrap_or(&first);
+            // Past the row's eight columns of indent and marks, the label's
+            // column of 46, and then the rest of it under them.
+            let first: String = rows[at].chars().skip(8).take(46).collect();
             let rest: String = rows[at + 1].chars().skip(8).collect();
-            assert_eq!(format!("{first}{rest}"), label, "{rows:#?}");
+            assert_eq!(format!("{}{rest}", first.trim_end()), label, "{rows:#?}");
+            // The white space at the break begins the second line.
+            assert!(rest.starts_with(' '), "{rows:#?}");
         }
     }
 
