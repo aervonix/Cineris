@@ -97,6 +97,7 @@ impl Setup for ProgramSetup {
                     Err(_) => (None, false),
                 };
                 Provider {
+                    model: self.core.default_model(&credential.provider),
                     name: credential.provider,
                     variable,
                     stored,
@@ -209,6 +210,7 @@ fn shown_server(server: &ImportedServer) -> McpServer {
     McpServer {
         name: server.name.clone(),
         shown: server.shown(),
+        hidden: server.hidden(),
         env: server.env.clone(),
         headers: server
             .headers
@@ -219,6 +221,7 @@ fn shown_server(server: &ImportedServer) -> McpServer {
             match refusal {
                 Refusal::HoldsCredential => "holds a credential in its command",
                 Refusal::Unseen => "holds a character that acts unseen",
+                Refusal::Name => "has a name that cannot be a setting's",
                 Refusal::NotUnderstood => "is not a server this version reads",
             }
             .to_owned()
@@ -231,6 +234,7 @@ fn shown_server(server: &ImportedServer) -> McpServer {
 fn choices(chosen: &Chosen, read: &BTreeMap<String, Vec<ImportedServer>>) -> FirstRunChoices {
     FirstRunChoices {
         provider: chosen.provider.clone(),
+        model: chosen.model.clone(),
         imports: chosen.imports.as_ref().map(|imports| Imports {
             instructions: imports.instructions,
             skills: imports.skills,
@@ -322,7 +326,8 @@ mod tests {
         let mut read = BTreeMap::new();
         read.insert("~/.claude.json".to_owned(), servers);
         let chosen = Chosen {
-            provider: None,
+            provider: Some("anthropic".to_owned()),
+            model: Some("claude-opus-5-5".to_owned()),
             imports: Some(Imported {
                 instructions: true,
                 skills: false,
@@ -335,6 +340,12 @@ mod tests {
             mode: Some("read-only".to_owned()),
         };
         let written = choices(&chosen, &read);
+        assert_eq!(written.provider.as_deref(), Some("anthropic"));
+        assert_eq!(
+            written.model.as_deref(),
+            Some("claude-opus-5-5"),
+            "the model chosen with the provider is written"
+        );
         let imports = written.imports.unwrap();
         assert!(imports.instructions);
         let names: Vec<&str> = imports

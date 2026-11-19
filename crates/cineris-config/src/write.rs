@@ -14,6 +14,27 @@
 //!
 //! The file is private to the user (`cineris_base::private`), as the
 //! credentials file is: it can name the servers a person uses.
+//!
+//! **Since the full review of step 25's third pull request:**
+//!
+//! - **The model is written:** the chosen provider's model, the first the
+//!   model catalog lists for it, as `model.main`, and the provider as the
+//!   main role's (`model.roles.main.provider`), so that the first prompt
+//!   has a model with no other setting.
+//! - **`[mcp]` is checked as the loader does not check it:** the section is
+//!   reserved in this version, so the strict read-back passes over it. A
+//!   server's name must be settable ([`settable_name`]), two servers picked
+//!   may not share a name, and at most [`MAX_SERVERS`] are written; the
+//!   table read back must hold exactly those servers, each in 13-mcp's
+//!   form ([`WriteError::NotRead`] otherwise).
+//! - **The file appears whole or not at all.** Its text goes to a private
+//!   file of its own beside it, is flushed, and is given the file's name
+//!   by a hard link, which refuses a name that is taken (a rename would
+//!   replace it); a crash leaves that file behind, never part of the
+//!   settings under the name the first run looks for.
+//!
+//! [`settable_name`]: crate::import::settable_name
+//! [`MAX_SERVERS`]: crate::import::MAX_SERVERS
 
 #![allow(
     clippy::disallowed_methods,
@@ -27,7 +48,7 @@ use std::path::Path;
 use toml::{Table, Value};
 
 use crate::document;
-use crate::import::{ImportedServer, Launch};
+use crate::import::{ImportedServer, Launch, MAX_SERVERS, settable_name};
 use crate::layer::LayerKind;
 use crate::schema::CONFIG_VERSION;
 use crate::validate::{Checked, validate};
@@ -37,8 +58,12 @@ use crate::validate::{Checked, validate};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FirstRunChoices {
     /// The provider whose key was stored or found, `None` when the step was
-    /// skipped.
+    /// skipped: written as the main role's provider.
     pub provider: Option<String>,
+    /// The provider's model, the first the catalog lists for it: written as
+    /// `model.main`. `None` when no provider was chosen, or the catalog
+    /// knows none of its models.
+    pub model: Option<String>,
     /// What the imports step picked, `None` when it was skipped: then
     /// nothing was picked, and the file says so as it says a choice.
     pub imports: Option<Imports>,
@@ -95,10 +120,18 @@ pub fn user_config_text(choices: &FirstRunChoices) -> Result<String, WriteError>
          # the mode, `/project` shows what is kept of a project, and this file is\n\
          # yours to edit.\n",
     );
-    if choices.provider.is_none() {
-        text.push_str(
-            "# The provider was skipped: `cineris auth login <provider>` stores a key.\n",
-        );
+    match (&choices.provider, &choices.model) {
+        (None, _) => text.push_str(
+            "# The provider was skipped: `cineris auth login <provider>` stores a key, and\n\
+             # model.main names the model.\n",
+        ),
+        (Some(_), None) => {
+            text.push_str("# No model of the provider chosen is known: model.main names one.\n")
+        }
+        (Some(_), Some(_)) => text.push_str(
+            "# model.main is the first model the catalog lists for the provider chosen:\n\
+             # `/model` chooses another for a session, and a change here keeps one.\n",
+        ),
     }
     if choices.imports.is_none() {
         text.push_str(
@@ -135,17 +168,42 @@ pub fn write_user_config(path: &Path, choices: &FirstRunChoices) -> Result<(), W
     {
         cineris_base::private::create_dir_all(folder).map_err(failed)?;
     }
-    let mut file = match cineris_base::private::create_new(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-            return Err(WriteError::Exists(shown));
-        }
-        Err(error) => return Err(failed(error)),
-    };
+    // Something at the name already: nothing is made beside it.
+    if std::fs::symlink_metadata(path).is_ok() {
+        return Err(WriteError::Exists(shown));
+    }
+    // The text, whole and flushed, in a private file of its own beside the
+    // file; then the file's name, which a hard link takes only when it is
+    // free.
+    let (new, mut file) = beside(path).map_err(failed)?;
     let written = file
         .write_all(text.as_bytes())
         .and_then(|()| file.sync_all());
     drop(file);
+    if let Err(error) = written {
+        let _ = std::fs::remove_file(&new);
+        return Err(failed(error));
+    }
+    cineris_base::hook::point(BEFORE_THE_NAME);
+    let named = std::fs::hard_link(&new, path);
+    let _ = std::fs::remove_file(&new);
+    let written = match named {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(WriteError::Exists(shown));
+        }
+        // A file system with no hard links: the text is written at the
+        // name itself, made new.
+        Err(_) => match cineris_base::private::create_new(path) {
+            Ok(mut file) => file
+                .write_all(text.as_bytes())
+                .and_then(|()| file.sync_all()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                return Err(WriteError::Exists(shown));
+            }
+            Err(error) => return Err(failed(error)),
+        },
+    };
     let back = written.and_then(|()| std::fs::read_to_string(path));
     let kept = match back {
         Ok(back) if back == text => Ok(()),
@@ -160,6 +218,33 @@ pub fn write_user_config(path: &Path, choices: &FirstRunChoices) -> Result<(), W
     kept
 }
 
+/// The point of [`write_user_config`] where the file's text is whole and
+/// flushed in a file of its own beside it, before it takes the file's
+/// name: a test holds it (`cineris_base::hook`) to see that nothing is at
+/// the name yet.
+pub const BEFORE_THE_NAME: &str =
+    "write_user_config: the text is whole beside the file, before it takes the file's name";
+
+/// A new private file beside `path`, named for it, to write its text in.
+fn beside(path: &Path) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    for attempt in 0..16_u32 {
+        let new = path.with_file_name(format!(".{name}.{}-{attempt}.new", std::process::id()));
+        match cineris_base::private::create_new(&new) {
+            Ok(file) => return Ok((new, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "no name beside the file was free",
+    ))
+}
+
 /// The settings as a table.
 fn table(choices: &FirstRunChoices) -> Result<Table, WriteError> {
     let mut root = Table::new();
@@ -167,6 +252,22 @@ fn table(choices: &FirstRunChoices) -> Result<Table, WriteError> {
         "config_version".to_owned(),
         Value::Integer(i64::from(CONFIG_VERSION)),
     );
+    // The model of the provider chosen, and the provider as the main
+    // role's (since the full review of step 25's third pull request).
+    let mut model = Table::new();
+    if let Some(main) = &choices.model {
+        model.insert("main".to_owned(), Value::String(main.clone()));
+    }
+    if let Some(provider) = &choices.provider {
+        let mut main = Table::new();
+        main.insert("provider".to_owned(), Value::String(provider.clone()));
+        let mut roles = Table::new();
+        roles.insert("main".to_owned(), Value::Table(main));
+        model.insert("roles".to_owned(), Value::Table(roles));
+    }
+    if !model.is_empty() {
+        root.insert("model".to_owned(), Value::Table(model));
+    }
     if let Some(mode) = &choices.mode {
         let mut permissions = Table::new();
         permissions.insert("mode".to_owned(), Value::String(mode.clone()));
@@ -181,12 +282,31 @@ fn table(choices: &FirstRunChoices) -> Result<Table, WriteError> {
     compat.insert("skills".to_owned(), Value::Boolean(imports.skills));
     root.insert("compat".to_owned(), Value::Table(compat));
     if !imports.servers.is_empty() {
+        if imports.servers.len() > MAX_SERVERS {
+            return Err(WriteError::NotRead(format!(
+                "more than {MAX_SERVERS} servers were picked"
+            )));
+        }
         let mut servers = Table::new();
         for server in &imports.servers {
             if server.refused.is_some() {
                 return Err(WriteError::NotRead(
                     "a server that cannot be imported was picked".to_owned(),
                 ));
+            }
+            if !settable_name(&server.name) {
+                return Err(WriteError::NotRead(format!(
+                    "the server name {} cannot be a setting's",
+                    cineris_base::visible(&server.name)
+                )));
+            }
+            // A second of one name would take the first's place, and the
+            // table would still read back as itself.
+            if servers.contains_key(&server.name) {
+                return Err(WriteError::NotRead(format!(
+                    "two servers picked are named {}: one name is one server",
+                    cineris_base::visible(&server.name)
+                )));
             }
             servers.insert(server.name.clone(), Value::Table(server_table(server)));
         }
@@ -266,10 +386,70 @@ fn reads_back(text: &str, meant: &Table) -> Result<(), WriteError> {
             .collect();
         return Err(WriteError::NotRead(said.join("; ")));
     }
+    check_mcp(&parsed.table)?;
     if parsed.table != *meant {
         return Err(WriteError::NotRead(
             "it reads as other settings than were chosen".to_owned(),
         ));
+    }
+    Ok(())
+}
+
+/// The `[mcp]` table as it reads back, checked as the loader does not check
+/// it (the section is reserved in this version): only servers, at most
+/// [`MAX_SERVERS`] of them, each with a settable name and in 13-mcp's form,
+/// a command (with text arguments) or an address, and its environment and
+/// headers each a reference to a variable.
+fn check_mcp(table: &Table) -> Result<(), WriteError> {
+    let bad = |why: &str| Err(WriteError::NotRead(format!("its [mcp] table {why}")));
+    let Some(mcp) = table.get("mcp") else {
+        return Ok(());
+    };
+    let Some(mcp) = mcp.as_table() else {
+        return bad("is not a table");
+    };
+    if mcp.keys().any(|key| key != "servers") {
+        return bad("holds more than servers");
+    }
+    let Some(servers) = mcp.get("servers").and_then(Value::as_table) else {
+        return bad("has no table of servers");
+    };
+    if servers.len() > MAX_SERVERS {
+        return bad("holds more servers than are written");
+    }
+    let reference = |value: &Value| {
+        value.as_table().is_some_and(|reference| {
+            reference.len() == 1 && reference.get("env").is_some_and(Value::is_str)
+        })
+    };
+    for (name, server) in servers {
+        if !settable_name(name) {
+            return bad("names a server with a name that cannot be a setting's");
+        }
+        let Some(server) = server.as_table() else {
+            return bad("holds a server that is not a table");
+        };
+        for (key, value) in server {
+            let written = match key.as_str() {
+                "command" | "url" => value.is_str(),
+                "args" => value
+                    .as_array()
+                    .is_some_and(|args| args.iter().all(Value::is_str)),
+                "env" | "headers" => value
+                    .as_table()
+                    .is_some_and(|names| names.values().all(reference)),
+                _ => false,
+            };
+            if !written {
+                return bad(&format!(
+                    "gives a server {} as the first run never writes it",
+                    cineris_base::visible(key)
+                ));
+            }
+        }
+        if server.contains_key("command") == server.contains_key("url") {
+            return bad("holds a server with neither or both of a command and an address");
+        }
     }
     Ok(())
 }
@@ -307,6 +487,7 @@ mod tests {
         tracker.headers = vec!["Authorization".to_owned()];
         FirstRunChoices {
             provider: Some("anthropic".to_owned()),
+            model: Some("claude-opus-5-5".to_owned()),
             imports: Some(Imports {
                 instructions: true,
                 skills: false,
@@ -320,6 +501,12 @@ mod tests {
     fn the_choices_are_written_as_settings_that_read_back_strictly() {
         let text = user_config_text(&chosen()).unwrap();
         let parsed: Table = text.parse().unwrap();
+        assert_eq!(parsed["model"]["main"].as_str(), Some("claude-opus-5-5"));
+        assert_eq!(
+            parsed["model"]["roles"]["main"]["provider"].as_str(),
+            Some("anthropic")
+        );
+        assert!(text.contains("`/model` chooses another"), "{text}");
         assert_eq!(parsed["permissions"]["mode"].as_str(), Some("read-only"));
         assert_eq!(parsed["compat"]["instructions"].as_bool(), Some(true));
         assert_eq!(parsed["compat"]["skills"].as_bool(), Some(false));
@@ -355,6 +542,25 @@ mod tests {
         assert_eq!(parsed["compat"]["skills"].as_bool(), Some(false));
         assert!(parsed.get("permissions").is_none());
         assert!(parsed.get("mcp").is_none());
+        assert!(parsed.get("model").is_none());
+    }
+
+    /// A provider the catalog knows no model of is still written as the
+    /// main role's, and the file says model.main names one.
+    #[test]
+    fn a_provider_with_no_model_known_is_written_and_said() {
+        let choices = FirstRunChoices {
+            provider: Some("internal".to_owned()),
+            ..FirstRunChoices::default()
+        };
+        let text = user_config_text(&choices).unwrap();
+        let parsed: Table = text.parse().unwrap();
+        assert!(parsed["model"].get("main").is_none());
+        assert_eq!(
+            parsed["model"]["roles"]["main"]["provider"].as_str(),
+            Some("internal")
+        );
+        assert!(text.contains("model.main names one"), "{text}");
     }
 
     /// A name from another tool's file cannot leave its table: whatever it
@@ -362,11 +568,11 @@ mod tests {
     #[test]
     fn a_hostile_name_stays_one_server() {
         for name in [
-            "a]\n[permissions]\nmode = \"unrestricted\"",
-            "x\" = 1\n[y",
+            "a] [permissions] mode = \"unrestricted\"",
+            "x\" = 1 [y",
             "with space",
             "dotted.name",
-            "",
+            "# a comment",
         ] {
             let choices = FirstRunChoices {
                 imports: Some(Imports {
@@ -388,6 +594,110 @@ mod tests {
             assert_eq!(servers.len(), 1);
             assert!(servers.contains_key(name));
         }
+    }
+
+    /// What the `[mcp]` table may hold is checked as the loader does not
+    /// check it: a name that cannot be a setting's, two servers of one name
+    /// and too many servers are refused before anything is written; a table
+    /// read back with anything 13-mcp's form does not have is refused (the
+    /// full review of the third pull request).
+    #[test]
+    fn the_mcp_table_is_checked_as_the_loader_does_not() {
+        let named = |names: &[&str]| FirstRunChoices {
+            imports: Some(Imports {
+                servers: names
+                    .iter()
+                    .map(|name| {
+                        server(
+                            name,
+                            Launch::Command {
+                                program: "run".to_owned(),
+                                args: Vec::new(),
+                            },
+                        )
+                    })
+                    .collect(),
+                ..Imports::default()
+            }),
+            ..FirstRunChoices::default()
+        };
+        let long = "n".repeat(crate::import::MAX_NAME + 1);
+        for names in [
+            vec![""],
+            vec!["line\nbreak"],
+            vec![long.as_str()],
+            vec!["docs", "docs"],
+        ] {
+            assert!(
+                matches!(
+                    user_config_text(&named(&names)),
+                    Err(WriteError::NotRead(_))
+                ),
+                "{names:?}"
+            );
+        }
+        let many: Vec<String> = (0..=MAX_SERVERS).map(|n| format!("s{n}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        assert!(matches!(
+            user_config_text(&named(&many)),
+            Err(WriteError::NotRead(_))
+        ));
+        assert!(user_config_text(&named(&many[..MAX_SERVERS])).is_ok());
+        // Read back: anything but 13-mcp's form is refused.
+        for text in [
+            "[mcp.servers.a]\ncommand = \"run\"\nnetwork = true\n",
+            "[mcp.servers.a]\ncommand = \"run\"\nurl = \"https://x.example.com\"\n",
+            "[mcp.servers.a]\nargs = [\"x\"]\n",
+            "[mcp.servers.a]\ncommand = \"run\"\nargs = [1]\n",
+            "[mcp.servers.a]\ncommand = \"run\"\nenv = { A = \"value\" }\n",
+            "[mcp]\nexpose = \"direct\"\n",
+        ] {
+            let table: Table = text.parse().unwrap();
+            assert!(check_mcp(&table).is_err(), "{text}");
+        }
+        let fine: Table =
+            "[mcp.servers.a]\ncommand = \"run\"\nargs = [\"x\"]\nenv = { A = { env = \"A\" } }\n"
+                .parse()
+                .unwrap();
+        assert!(check_mcp(&fine).is_ok());
+    }
+
+    /// The file appears whole or not at all: while its text is written,
+    /// nothing is at its name, and the file it was written in is gone once
+    /// it has the name (the full review of the third pull request).
+    #[test]
+    fn the_file_takes_its_name_only_once_it_is_whole() {
+        let scratch = cineris_testkit::Scratch::outside("cineris-config-unit", "write_whole");
+        let path = scratch.join("cineris/config.toml");
+        let hold = cineris_base::hook::Hold::new(BEFORE_THE_NAME);
+        let writing = {
+            let path = path.clone();
+            std::thread::spawn(move || write_user_config(&path, &chosen()))
+        };
+        assert!(hold.wait_reached(std::time::Duration::from_secs(10)));
+        assert!(
+            std::fs::symlink_metadata(&path).is_err(),
+            "nothing is at the name while the text is written"
+        );
+        let beside: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        assert_eq!(beside.len(), 1, "{beside:?}");
+        assert_eq!(
+            std::fs::read_to_string(&beside[0]).unwrap(),
+            user_config_text(&chosen()).unwrap(),
+            "the text is whole before it takes the name"
+        );
+        hold.release();
+        writing.join().unwrap().unwrap();
+        let left: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .collect();
+        assert_eq!(left, [path.clone()], "only the file is left");
     }
 
     #[test]

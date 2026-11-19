@@ -18,7 +18,20 @@
 //!   step 17 refuses an entry that holds one.
 //! - **A name, a command or an address with a control character or a
 //!   character that acts unseen** is [`Refusal::Unseen`], and is not
-//!   imported either.
+//!   imported either; nor is a name that cannot be a setting's
+//!   ([`Refusal::Name`]: empty, or longer than [`MAX_NAME`]).
+//!
+//! **What is shown masks more than what refuses** (since the full review
+//! of step 25's third pull request, [`ImportedServer::shown`]): a value
+//! whose name says it is a credential (`key`, `token`, `secret`,
+//! `password` or `auth` in it) is shown [`MASK`](cineris_base::redact::MASK)
+//! in `NAME=value`, after such a flag (`--api-key value`), and in an
+//! address's query (`?token=…`). Such a server is still imported, as it is
+//! in its file: a name says nothing certain of its value.
+//! [`ImportedServer::hidden`] says that what is shown hides a part of what
+//! would be imported, so that the first run can say so. **Every argument's
+//! bounds show:** one that is empty, or holds a space or a `"`, is shown in
+//! double quotes, its `"` and `\` escaped.
 //!
 //! The files read: `~/.claude.json`, Cursor's `~/.cursor/mcp.json` and
 //! Claude Desktop's file (`mcpServers`, each server a `command` with
@@ -43,6 +56,79 @@ pub const MAX_FILE: u64 = 16 * 1024 * 1024;
 
 /// The most servers given from one file.
 pub const MAX_SERVERS: usize = 64;
+
+/// The most characters of a server's name that can be imported: the
+/// name is a key of the user's file, and names the server's tools.
+pub const MAX_NAME: usize = 64;
+
+/// The words a name holds when its value is taken for a credential, and
+/// shown masked: `GITHUB_TOKEN=…`, `--api-key …`, `?auth=…`.
+const SECRET_WORDS: [&str; 5] = ["key", "token", "secret", "password", "auth"];
+
+/// Whether `name` says its value is a credential.
+fn names_a_secret(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    SECRET_WORDS.iter().any(|word| name.contains(word))
+}
+
+/// Whether `name` can be a server's name in the user's file: one to
+/// [`MAX_NAME`] characters, none a control character or one that acts
+/// unseen.
+#[must_use]
+pub fn settable_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.chars().count() <= MAX_NAME
+        && !name.chars().any(cineris_base::acts_unseen)
+}
+
+/// `part` as an argument is shown: in double quotes, its `"` and `\`
+/// escaped, when it is empty or holds white space or a `"`, so that where
+/// each argument begins and ends shows.
+fn quoted(part: &str) -> String {
+    if !part.is_empty() && !part.chars().any(|c| c.is_whitespace() || c == '"') {
+        return part.to_owned();
+    }
+    let mut shown = String::with_capacity(part.len() + 2);
+    shown.push('"');
+    for character in part.chars() {
+        if matches!(character, '"' | '\\') {
+            shown.push('\\');
+        }
+        shown.push(character);
+    }
+    shown.push('"');
+    shown
+}
+
+/// `url` with the value of each query field whose name says it is a
+/// credential masked, and whether one was.
+fn masked_query(url: &str) -> (String, bool) {
+    let mask = cineris_base::redact::MASK;
+    let Some((base, rest)) = url.split_once('?') else {
+        return (url.to_owned(), false);
+    };
+    let (query, fragment) = match rest.split_once('#') {
+        Some((query, fragment)) => (query, Some(fragment)),
+        None => (rest, None),
+    };
+    let mut hidden = false;
+    let fields: Vec<String> = query
+        .split('&')
+        .map(|field| match field.split_once('=') {
+            Some((name, value)) if names_a_secret(name) && value != mask => {
+                hidden = true;
+                format!("{name}={mask}")
+            }
+            _ => field.to_owned(),
+        })
+        .collect();
+    let mut shown = format!("{base}?{}", fields.join("&"));
+    if let Some(fragment) = fragment {
+        shown.push('#');
+        shown.push_str(fragment);
+    }
+    (shown, hidden)
+}
 
 /// How a server is reached.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +155,8 @@ pub enum Refusal {
     /// Its name, command or address holds a control character or one
     /// that acts unseen.
     Unseen,
+    /// Its name cannot be a setting's: empty, or longer than [`MAX_NAME`].
+    Name,
     /// It is neither a command nor an address this version reads.
     NotUnderstood,
 }
@@ -108,19 +196,47 @@ impl ImportedServer {
             .collect()
     }
 
-    /// The command line or the address, as one text to show.
+    /// The command line or the address, as one text to show: each
+    /// argument's bounds shown, and each value whose name says it is a
+    /// credential masked (the [module documentation](self)).
     #[must_use]
     pub fn shown(&self) -> String {
+        self.view().0
+    }
+
+    /// Whether [`shown`](Self::shown) masks a part that would be imported
+    /// as it is in its file: what the person accepts is then not all on the
+    /// screen, which the first run says.
+    #[must_use]
+    pub fn hidden(&self) -> bool {
+        self.view().1
+    }
+
+    fn view(&self) -> (String, bool) {
+        let mask = cineris_base::redact::MASK;
         match &self.launch {
             Launch::Command { program, args } => {
-                let mut line = program.clone();
+                let mut hidden = false;
+                let mut parts = vec![quoted(program)];
+                // The value after a flag whose name says it is a credential.
+                let mut after_flag = false;
                 for arg in args {
-                    line.push(' ');
-                    line.push_str(arg);
+                    let shown = if after_flag && !arg.starts_with('-') {
+                        mask.to_owned()
+                    } else if let Some((name, _)) = arg.split_once('=')
+                        && names_a_secret(name)
+                    {
+                        format!("{name}={mask}")
+                    } else {
+                        arg.clone()
+                    };
+                    hidden |= shown != *arg;
+                    after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
+                    parts.push(quoted(&shown));
                 }
-                line
+                (parts.join(" "), hidden)
             }
-            Launch::Remote { url } => url.clone(),
+            Launch::Remote { url } => masked_query(url),
         }
     }
 }
@@ -147,13 +263,18 @@ pub enum ImportError {
 ///
 /// [`ImportError`] when it cannot be read or is not understood.
 pub fn read_servers(path: &Path) -> Result<Vec<ImportedServer>, ImportError> {
+    read_servers_within(path, MAX_FILE)
+}
+
+/// [`read_servers`] with `limit` in [`MAX_FILE`]'s place, for its test.
+fn read_servers_within(path: &Path, limit: u64) -> Result<Vec<ImportedServer>, ImportError> {
     let file =
         std::fs::File::open(path).map_err(|error| ImportError::Unreadable(error.to_string()))?;
     let mut text = String::new();
-    file.take(MAX_FILE + 1)
+    file.take(limit + 1)
         .read_to_string(&mut text)
         .map_err(|error| ImportError::Unreadable(error.to_string()))?;
-    if text.len() as u64 > MAX_FILE {
+    if text.len() as u64 > limit {
         return Err(ImportError::TooLarge);
     }
     let toml = path
@@ -267,8 +388,14 @@ fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> Impor
         .iter()
         .chain(&server.headers)
         .any(|name| unseen(name) || name.is_empty());
-    server.refused = if unseen(&server.name) || unseen(&server.shown()) || names_unseen {
+    let launch_unseen = match &server.launch {
+        Launch::Command { program, args } => unseen(program) || args.iter().any(|arg| unseen(arg)),
+        Launch::Remote { url } => unseen(url),
+    };
+    server.refused = if unseen(&server.name) || launch_unseen || names_unseen {
         Some(Refusal::Unseen)
+    } else if !settable_name(&server.name) {
+        Some(Refusal::Name)
     } else if masked {
         Some(Refusal::HoldsCredential)
     } else {
@@ -364,6 +491,135 @@ mod tests {
         assert!(servers_in("[[", true).is_err());
         assert!(servers_in("{\"mcpServers\": [1]}", false).is_err());
         assert_eq!(servers_in("{}", false).unwrap(), Vec::new());
+    }
+
+    /// A value whose name says it is a credential is shown masked (in
+    /// `NAME=value`, after such a flag, in an address's query) and the
+    /// server is still imported, as it is in its file, which `hidden` says;
+    /// a flag of that name followed by another flag masks nothing (the full
+    /// review of the third pull request).
+    #[test]
+    fn a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is() {
+        let servers = servers_in(
+            r#"{"mcpServers": {
+                "search": {"command": "search-mcp", "args": ["--api-key", "plain-value-1",
+                    "--token=plain-value-2", "API_SECRET=plain-value-3", "--auth", "--verbose",
+                    "--root", "~/src"]},
+                "remote": {"url": "https://search.example.com/mcp?key=plain-value-4&mode=fast#top"},
+                "plain": {"command": "docs-mcp", "args": ["--root", "~/src/docs"]}
+            }}"#,
+            false,
+        )
+        .unwrap();
+        let search = by_name(&servers, "search");
+        assert_eq!(
+            search.shown(),
+            format!(
+                "search-mcp --api-key {MASK} --token={MASK} API_SECRET={MASK} --auth --verbose \
+                 --root ~/src"
+            )
+        );
+        assert!(search.hidden());
+        assert_eq!(search.refused, None, "a name is not a refusal");
+        assert_eq!(
+            search.launch,
+            Launch::Command {
+                program: "search-mcp".to_owned(),
+                args: [
+                    "--api-key",
+                    "plain-value-1",
+                    "--token=plain-value-2",
+                    "API_SECRET=plain-value-3",
+                    "--auth",
+                    "--verbose",
+                    "--root",
+                    "~/src",
+                ]
+                .map(str::to_owned)
+                .to_vec(),
+            },
+            "imported as it is in its file"
+        );
+        let remote = by_name(&servers, "remote");
+        assert_eq!(
+            remote.shown(),
+            format!("https://search.example.com/mcp?key={MASK}&mode=fast#top")
+        );
+        assert!(remote.hidden());
+        assert_eq!(remote.refused, None);
+        let plain = by_name(&servers, "plain");
+        assert!(!plain.hidden());
+        assert_eq!(plain.shown(), "docs-mcp --root ~/src/docs");
+    }
+
+    /// Where each argument begins and ends shows: one that is empty, or
+    /// holds a space or a `"`, is quoted, its `"` and `\` escaped.
+    #[test]
+    fn every_arguments_bounds_show() {
+        let servers = servers_in(
+            r#"{"mcpServers": {"x": {"command": "C:\\Program Files\\x.exe",
+                "args": ["two words", "", "say \"hi\"", "C:\\tools\\y", "plain"]}}}"#,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            servers[0].shown(),
+            r#""C:\\Program Files\\x.exe" "two words" "" "say \"hi\"" C:\tools\y plain"#
+        );
+    }
+
+    /// A control character or one that acts unseen, in a name, the program,
+    /// an argument or an address, refuses the server; so does a name that
+    /// cannot be a setting's.
+    #[test]
+    fn a_control_or_unseen_character_or_a_name_that_cannot_be_set_refuses_a_server() {
+        let long = "n".repeat(MAX_NAME + 1);
+        let longest = "n".repeat(MAX_NAME);
+        let text = format!(
+            r#"{{"mcpServers": {{
+                "bell": {{"command": "run\u0007"}},
+                "line": {{"command": "run", "args": ["a\nb"]}},
+                "tab\there": {{"command": "run"}},
+                "space": {{"url": "https://x.example.com/\u200bmcp"}},
+                "": {{"command": "run"}},
+                "{long}": {{"command": "run"}},
+                "{longest}": {{"command": "run"}}
+            }}}}"#
+        );
+        let servers = servers_in(&text, false).unwrap();
+        for name in ["bell", "line", "tab\there", "space"] {
+            assert_eq!(
+                by_name(&servers, name).refused,
+                Some(Refusal::Unseen),
+                "{name:?}"
+            );
+        }
+        assert_eq!(by_name(&servers, "").refused, Some(Refusal::Name));
+        assert_eq!(by_name(&servers, &long).refused, Some(Refusal::Name));
+        assert_eq!(by_name(&servers, &longest).refused, None);
+    }
+
+    /// At most [`MAX_SERVERS`] of a file's servers are given, and a file
+    /// past the size read is refused whole.
+    #[test]
+    fn the_size_caps_hold() {
+        let many: Vec<String> = (0..=MAX_SERVERS)
+            .map(|n| format!("\"s{n:03}\": {{\"command\": \"run\"}}"))
+            .collect();
+        let text = format!("{{\"mcpServers\": {{{}}}}}", many.join(","));
+        assert_eq!(servers_in(&text, false).unwrap().len(), MAX_SERVERS);
+        let scratch = cineris_testkit::Scratch::outside("cineris-config-unit", "import_cap");
+        let path = scratch.file("mcp.json", &text);
+        let size = text.len() as u64;
+        assert_eq!(
+            read_servers_within(&path, size).unwrap().len(),
+            MAX_SERVERS,
+            "a file of the size read is read"
+        );
+        assert_eq!(
+            read_servers_within(&path, size - 1),
+            Err(ImportError::TooLarge)
+        );
     }
 
     #[test]

@@ -178,6 +178,21 @@ impl Core {
             .map_err(|failure| error(ErrorKind::Auth, "store_failed", failure.to_string()))
     }
 
+    /// The model the first run writes as `model.main` when `provider` is
+    /// chosen: the first the model catalog lists for it, the user's own
+    /// entries included (since the full review of step 25's third pull
+    /// request). `None` when it lists none.
+    #[must_use]
+    pub fn default_model(&self, provider: &str) -> Option<String> {
+        self.inner
+            .providers
+            .catalog
+            .models()
+            .iter()
+            .find(|entry| entry.info.provider.as_str() == provider)
+            .map(|entry| entry.info.id.as_str().to_owned())
+    }
+
     /// Removes the stored key of `provider`. Says whether there was one.
     ///
     /// # Errors

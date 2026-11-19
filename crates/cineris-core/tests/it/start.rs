@@ -83,6 +83,26 @@ fn an_invalid_entry_of_the_users_catalog_stops_the_core_and_says_where_and_what(
     );
 }
 
+/// The model the first run writes for a provider is the first the catalog
+/// lists for it, the user's own entries included, and none for a provider
+/// it lists nothing of (the full review of step 25's third pull request).
+#[test]
+fn the_first_runs_model_for_a_provider_is_the_first_the_catalog_lists() {
+    let world = World::new("first_run_model", []);
+    world.raw_user_config(LOCAL_MODEL);
+    let core = world.core();
+    let first = cineris_llm::Catalog::builtin()
+        .unwrap()
+        .models()
+        .iter()
+        .find(|entry| entry.info.provider.as_str() == "anthropic")
+        .map(|entry| entry.info.id.as_str().to_owned());
+    assert!(first.is_some());
+    assert_eq!(core.default_model("anthropic"), first);
+    assert_eq!(core.default_model("local").as_deref(), Some("house-model"));
+    assert_eq!(core.default_model("nobody"), None);
+}
+
 #[test]
 fn a_valid_entry_of_the_users_catalog_is_a_model_like_any_other() {
     let world = World::new("catalog_good", [says("From the house model.")]);

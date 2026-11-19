@@ -30,6 +30,9 @@ use crate::testkit::{
 
 const KEY: &str = "sk-ant-api03-Zq7XfirstrunKEYw9";
 
+/// The model the program says it writes for `anthropic`.
+const MODEL: &str = "claude-opus-5-5";
+
 fn providers() -> Providers {
     Providers {
         providers: vec![
@@ -37,11 +40,13 @@ fn providers() -> Providers {
                 name: "anthropic".to_owned(),
                 variable: Some("ANTHROPIC_API_KEY".to_owned()),
                 stored: false,
+                model: Some(MODEL.to_owned()),
             },
             Provider {
                 name: "openai".to_owned(),
                 variable: None,
                 stored: false,
+                model: None,
             },
         ],
         store: KeyStore::File("~/.config/cineris/credentials.toml".to_owned()),
@@ -53,6 +58,7 @@ fn server(name: &str, shown: &str, refused: Option<&str>) -> McpServer {
     McpServer {
         name: name.to_owned(),
         shown: shown.to_owned(),
+        hidden: false,
         env: Vec::new(),
         headers: Vec::new(),
         refused: refused.map(str::to_owned),
@@ -180,6 +186,14 @@ impl Run {
         self.now += Duration::from_millis(50);
     }
 
+    /// A key that moves the selection, and the frame the loop draws after
+    /// it, as it draws one after every key: a key that accepts a row takes
+    /// the row that frame drew.
+    fn moves(&mut self, binding: &str) {
+        self.key(binding);
+        let _ = self.frame();
+    }
+
     /// The worker's next answer, taken.
     fn answer(&mut self) {
         assert!(
@@ -198,8 +212,9 @@ impl Run {
         drain(&mut self.app, self.now);
     }
 
-    /// Answers the reload and the open, the session `trust`.
-    fn open(&mut self, trust: TrustStanding) {
+    /// Answers the reload and the open, the session `trust`. Gives the
+    /// configuration the session was opened with as its own.
+    fn open(&mut self, trust: TrustStanding) -> serde_json::Map<String, serde_json::Value> {
         let (reload, _) = self
             .sent(|op| matches!(op, Op::ConfigReload(_)))
             .expect("the configuration read again");
@@ -207,15 +222,24 @@ impl Run {
             reload,
             OpResult::ConfigReload(ConfigReloadResult::default()),
         );
-        let (open, _) = self
+        self.opened(trust)
+    }
+
+    /// Answers the open, the session `trust`; the configuration it carried.
+    fn opened(&mut self, trust: TrustStanding) -> serde_json::Map<String, serde_json::Value> {
+        let (open, op) = self
             .sent(|op| matches!(op, Op::SessionNew(_)))
             .expect("the session opened once the file was written");
+        let Op::SessionNew(params) = op else {
+            unreachable!()
+        };
         self.give(
             open,
             OpResult::SessionNew(SessionResult {
                 session: session().trust(trust).build(),
             }),
         );
+        params.config
     }
 
     fn written(&self) -> Vec<Chosen> {
@@ -274,8 +298,8 @@ fn to_the_servers(run: &mut Run) {
     run.key("s");
     run.answer();
     let _ = run.ready();
-    run.key("down");
-    run.key("down");
+    run.moves("down");
+    run.moves("down");
     run.key("space");
     run.answer();
     let _ = run.ready();
@@ -339,18 +363,18 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
         "{live:#?}"
     );
     // Down to the first file, read it, down to its first server, pick it.
-    run.key("down");
-    run.key("down");
+    run.moves("down");
+    run.moves("down");
     run.key("space");
     run.answer();
     assert_eq!(run.setup.log().read, ["~/.claude.json"]);
     // Its servers came: the step's grace starts again.
     let _ = run.ready();
-    run.key("down");
+    run.moves("down");
     run.key("space");
     // The refused server cannot be picked.
-    run.key("down");
-    run.key("down");
+    run.moves("down");
+    run.moves("down");
     run.key("space");
     let live = run.frame();
     assert!(live.iter().any(|row| row.contains("☑ docs")), "{live:#?}");
@@ -368,6 +392,7 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
         run.written(),
         [Chosen {
             provider: Some("anthropic".to_owned()),
+            model: Some(MODEL.to_owned()),
             imports: Some(Imported {
                 instructions: false,
                 skills: false,
@@ -376,7 +401,10 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
             mode: Some("supervised".to_owned()),
         }]
     );
-    run.open(TrustStanding::Trusted);
+    assert!(
+        run.open(TrustStanding::Trusted).is_empty(),
+        "the file written holds what was chosen"
+    );
     let _ = run.frame();
     let (detect, _) = run
         .sent(|op| matches!(op, Op::ProjectDetect(_)))
@@ -413,7 +441,7 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
         !live.iter().any(|row| row.contains("Setting up")),
         "one card once the session is open: {live:#?}"
     );
-    run.key("down");
+    run.moves("down");
     run.key("space");
     run.key("enter");
     let (kept, update) = run
@@ -453,6 +481,8 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
         "· Mode: supervised. Written to ~/.config/cineris/config.toml.",
         "· Project: ~/src/parser trusted.",
         "· Commands: test kept in this project's profile.",
+        "The model is anthropic's claude-opus-5-5 (model.main).",
+        "~/.config/cineris/config.toml holds the settings, and a change there is kept.",
     ] {
         assert!(said.contains(line), "{line}: {said}");
     }
@@ -478,7 +508,7 @@ fn every_step_can_be_skipped() {
     assert_eq!(run.written(), [Chosen::default()]);
     assert!(run.setup.log().stored.is_empty());
     assert!(run.setup.log().read.is_empty(), "no file was read");
-    run.open(TrustStanding::Untrusted);
+    let _ = run.open(TrustStanding::Untrusted);
     let _ = run.frame();
     let (detect, _) = run.sent(|op| matches!(op, Op::ProjectDetect(_))).unwrap();
     run.give(
@@ -509,18 +539,22 @@ fn x_skips_the_whole_set_up() {
     run.key("x");
     run.answer();
     assert_eq!(run.written(), [Chosen::default()]);
-    run.open(TrustStanding::Trusted);
+    let _ = run.open(TrustStanding::Trusted);
     let _ = run.frame();
     let _ = run.frame();
     assert!(run.sent(|op| matches!(op, Op::ProjectDetect(_))).is_none());
     assert!(!run.app.in_first_run());
     let said = run.scrollback.join("\n");
+    assert!(said.contains("· Set-up skipped."), "{said}");
     assert!(
-        said.contains("· Set-up skipped. Each step can be done again"),
+        squash(&said).contains(
+            "No provider was chosen, so there is no model yet: model.main names one once a key \
+             is stored."
+        ),
         "{said}"
     );
     assert!(
-        said.contains("~/.config/cineris/config.toml holds"),
+        squash(&said).contains("~/.config/cineris/config.toml holds the settings"),
         "{said}"
     );
 }
@@ -677,7 +711,7 @@ fn a_store_that_refuses_keeps_the_step_and_esc_goes_back() {
     setup.store_fails = Some("the disk is full".to_owned());
     let mut run = Run::new(setup);
     let _ = run.ready();
-    run.key("down");
+    run.moves("down");
     run.key("enter");
     let _ = run.ready();
     type_text(&mut run.app, KEY, run.now);
@@ -716,8 +750,8 @@ fn nothing_unpicked_is_imported() {
         live.iter().any(|row| row.contains("off unless picked")),
         "{live:#?}"
     );
-    run.key("down");
-    run.key("down");
+    run.moves("down");
+    run.moves("down");
     run.key("space");
     run.answer();
     let _ = run.ready();
@@ -750,8 +784,8 @@ fn an_mcp_command_is_shown_whole_and_its_credential_masked() {
     run.key("s");
     run.answer();
     let _ = run.ready();
-    run.key("down");
-    run.key("down");
+    run.moves("down");
+    run.moves("down");
     run.key("space");
     run.answer();
     let live = run.frame();
@@ -786,8 +820,8 @@ fn every_listing_holds_hostile_text() {
         run.key("enter");
         run.answer();
         let _ = run.ready();
-        run.key("down");
-        run.key("down");
+        run.moves("down");
+        run.moves("down");
         run.key("space");
         run.answer();
         let _ = run.ready();
@@ -795,7 +829,7 @@ fn every_listing_holds_hostile_text() {
         let _ = run.ready();
         run.key("enter");
         run.answer();
-        run.open(TrustStanding::Untrusted);
+        let _ = run.open(TrustStanding::Untrusted);
         let _ = run.frame();
         let (detect, _) = run.sent(|op| matches!(op, Op::ProjectDetect(_))).unwrap();
         run.give(
@@ -843,7 +877,7 @@ fn autonomous_is_offered_only_where_the_sandbox_enforces() {
         }
         assert_eq!(levels, expected, "{live:#?}");
         // The last offered, chosen.
-        run.key("down");
+        run.moves("down");
         run.key("enter");
         run.answer();
         assert_eq!(
@@ -873,7 +907,7 @@ fn ctrl_c_twice_leaves_with_nothing_written() {
 fn a_project_with_no_commands_ends_the_first_run() {
     let mut run = Run::new(fake());
     skip_three(&mut run);
-    run.open(TrustStanding::Untrusted);
+    let _ = run.open(TrustStanding::Untrusted);
     let _ = run.frame();
     let (detect, _) = run.sent(|op| matches!(op, Op::ProjectDetect(_))).unwrap();
     run.give(
@@ -906,7 +940,7 @@ fn a_project_with_no_commands_ends_the_first_run() {
 fn the_commands_wait_for_the_turn_a_prompt_on_the_command_line_began() {
     let mut run = Run::with(fake(), 40, Some("fix the build"));
     skip_three(&mut run);
-    run.open(TrustStanding::Trusted);
+    let _ = run.open(TrustStanding::Trusted);
     let _ = run.frame();
     let sent = run.link.take_sent();
     let (turn, _) = sent
@@ -947,7 +981,7 @@ fn the_commands_wait_for_the_turn_a_prompt_on_the_command_line_began() {
 fn the_commands_step_takes_no_key_while_a_turn_or_a_dialog_is_shown() {
     let mut run = Run::new(fake());
     skip_three(&mut run);
-    run.open(TrustStanding::Trusted);
+    let _ = run.open(TrustStanding::Trusted);
     let _ = run.frame();
     run.detect(two_commands());
     let live = run.ready();
@@ -996,7 +1030,7 @@ fn the_commands_step_takes_no_key_while_a_turn_or_a_dialog_is_shown() {
 fn typing_just_before_a_step_comes_holds_it_a_quiet_second() {
     let mut run = Run::new(fake());
     skip_three(&mut run);
-    run.open(TrustStanding::Trusted);
+    let _ = run.open(TrustStanding::Trusted);
     let _ = run.frame();
     let (detect, _) = run
         .sent(|op| matches!(op, Op::ProjectDetect(_)))
@@ -1042,7 +1076,7 @@ fn typing_just_before_a_step_comes_holds_it_a_quiet_second() {
 fn the_key_that_answered_a_dialog_holds_the_step_after_it() {
     let mut run = Run::new(fake());
     skip_three(&mut run);
-    run.open(TrustStanding::Trusted);
+    let _ = run.open(TrustStanding::Trusted);
     // A question comes (another client's turn's, say), and the commands
     // found come while it is up: the step waits under it.
     ask(&mut run.app, &run.link, 7, approval("c_1"), run.now);
@@ -1127,8 +1161,8 @@ fn rows_that_come_under_a_ready_step_start_its_grace_again() {
     run.key("s");
     run.answer();
     let _ = run.ready();
-    run.key("down");
-    run.key("down");
+    run.moves("down");
+    run.moves("down");
     run.key("space");
     run.answer();
     let live = run.frame();
@@ -1137,7 +1171,7 @@ fn rows_that_come_under_a_ready_step_start_its_grace_again() {
         !live.iter().any(|row| row.contains("enter keeps")),
         "its keys wait for its grace: {live:#?}"
     );
-    run.key("down");
+    run.moves("down");
     run.key("space");
     let live = run.ready();
     assert!(live.iter().any(|row| row.contains("☐ docs")), "{live:#?}");
@@ -1230,7 +1264,7 @@ fn the_providers_and_what_was_found_start_the_grace_again() {
         !live.iter().any(|row| row.contains("enter keeps")),
         "its keys wait for its grace: {live:#?}"
     );
-    run.key("down");
+    run.moves("down");
     let live = run.ready();
     assert!(
         live.iter().any(|row| row.starts_with("  ◆ ☐ AGENTS.md")),
@@ -1254,11 +1288,11 @@ fn a_files_answer_does_not_move_the_selection_onto_its_servers() {
     run.key("s");
     run.answer();
     let _ = run.ready();
-    run.key("down");
-    run.key("down");
+    run.moves("down");
+    run.moves("down");
     run.key("space");
     // To the second file before the first's answer comes.
-    run.key("down");
+    run.moves("down");
     run.answer();
     let _ = run.ready();
     run.key("space");
@@ -1291,7 +1325,7 @@ fn in_a_short_window_the_step_keeps_its_title_and_the_selected_row_whole() {
     let mut run = Run::with(setup, 24, None);
     to_the_servers(&mut run);
     for n in 1..=8 {
-        run.key("down");
+        run.moves("down");
         let live = run.frame();
         assert!(live.len() <= 24, "{} rows: {live:#?}", live.len());
         assert!(
@@ -1349,15 +1383,704 @@ fn a_row_the_window_cannot_show_whole_is_not_accepted() {
         .join(" ");
     let mut run = Run::with(setup, 16, None);
     to_the_servers(&mut run);
-    run.key("down");
+    run.moves("down");
     let live = run.frame();
     assert!(live.len() <= 16, "{} rows: {live:#?}", live.len());
     assert!(
         live.iter()
-            .any(|row| row.contains("a taller window shows this row whole")),
+            .any(|row| row.contains("a larger window shows this row whole")),
         "{live:#?}"
     );
     run.key("space");
     let live = run.frame();
     assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
+}
+
+// ------------------------------------------------ the full review of the
+// third pull request: what is written, what opens, and the rest
+
+/// To the commands' step, two commands found, its keys drawn.
+fn commands_step(run: &mut Run) -> Vec<String> {
+    skip_three(run);
+    let _ = run.open(TrustStanding::Trusted);
+    let _ = run.frame();
+    run.detect(two_commands());
+    run.ready()
+}
+
+/// A file that could not be written: the line says truthfully that
+/// nothing was saved, the configuration is not read again, and this run's
+/// sessions, `/new`'s too, are opened with what was chosen as their own
+/// settings: the instructions as picked, the mode, the model and its
+/// provider (High 1).
+#[test]
+fn a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen() {
+    let mut setup = fake();
+    setup.write_fails = Some("the disk is full".to_owned());
+    let mut run = Run::new(setup);
+    let _ = run.ready();
+    run.key("enter");
+    run.answer();
+    let _ = run.ready();
+    run.key("space");
+    run.key("enter");
+    let _ = run.ready();
+    run.moves("up");
+    run.key("enter");
+    run.answer();
+    let chosen = serde_json::json!({
+        "compat": { "instructions": true, "skills": false },
+        "permissions": { "mode": "read-only" },
+        "model": { "main": MODEL, "roles": { "main": { "provider": "anthropic" } } },
+    });
+    let sent = run.link.take_sent();
+    assert!(
+        !sent.iter().any(|(_, op)| matches!(op, Op::ConfigReload(_))),
+        "nothing to read again"
+    );
+    let (open, op) = sent
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+        .expect("the session opened all the same");
+    let Op::SessionNew(params) = op else {
+        unreachable!()
+    };
+    assert_eq!(serde_json::Value::Object(params.config), chosen);
+    run.give(
+        open,
+        OpResult::SessionNew(SessionResult {
+            session: session().trust(TrustStanding::Trusted).build(),
+        }),
+    );
+    let _ = run.frame();
+    run.detect(Vec::new());
+    let _ = run.frame();
+    assert!(!run.app.in_first_run());
+    let said = squash(&run.scrollback.join(" "));
+    for line in [
+        "· Mode: read-only, for this run. Nothing was saved: the disk is full. This run's \
+         sessions are opened with what was chosen, and the set-up runs again at the next start.",
+        "The model is anthropic's claude-opus-5-5 (model.main).",
+        "Nothing was saved, so the set-up runs again at the next start.",
+    ] {
+        assert!(said.contains(line), "{line}: {said}");
+    }
+    assert!(!said.contains("holds the settings"), "{said}");
+    // `/new` opens its session with them too.
+    type_text(&mut run.app, "/new", run.now);
+    run.key("enter");
+    run.key("enter");
+    let (_, op) = run
+        .sent(|op| matches!(op, Op::SessionNew(_)))
+        .expect("a new session");
+    let Op::SessionNew(params) = op else {
+        unreachable!()
+    };
+    assert_eq!(serde_json::Value::Object(params.config), chosen);
+}
+
+/// A reload that fails, or finds the files wrong, leaves the file written
+/// out of force: the line says so, and the session is opened with what was
+/// chosen; a reload that goes well opens it with nothing of its own (High
+/// 1).
+#[test]
+fn a_configuration_that_could_not_be_read_again_opens_the_session_with_what_was_chosen() {
+    let failures = [
+        Ok(ConfigReloadResult {
+            errors: vec!["config.toml: an unknown key".to_owned()],
+            ..ConfigReloadResult::default()
+        }),
+        Err(cineris_protocol::ErrorData::new(
+            cineris_protocol::ErrorKind::Config,
+            "invalid_configuration",
+            "config.toml: an unknown key",
+        )),
+    ];
+    for failure in failures {
+        let mut run = Run::new(fake());
+        skip_three(&mut run);
+        let (reload, _) = run
+            .sent(|op| matches!(op, Op::ConfigReload(_)))
+            .expect("read again");
+        run.link
+            .give(Inbound::Done(reload, failure.map(OpResult::ConfigReload)));
+        drain(&mut run.app, run.now);
+        let config = run.opened(TrustStanding::Trusted);
+        assert_eq!(
+            serde_json::Value::Object(config),
+            serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+        );
+        let _ = run.frame();
+        let said = squash(&run.scrollback.join(" "));
+        assert!(
+            said.contains(
+                "· ~/.config/cineris/config.toml was written, but the configuration could not be \
+                 read again: config.toml: an unknown key. This run's sessions are opened with \
+                 what was chosen."
+            ),
+            "{said}"
+        );
+    }
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    assert!(
+        run.open(TrustStanding::Trusted).is_empty(),
+        "the file holds them"
+    );
+}
+
+/// A session that does not open ends the first run, with a line that says
+/// what was saved (High 2: it waited for good).
+#[test]
+fn a_session_that_does_not_open_ends_the_first_run_truthfully() {
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    let (reload, _) = run
+        .sent(|op| matches!(op, Op::ConfigReload(_)))
+        .expect("read again");
+    run.give(
+        reload,
+        OpResult::ConfigReload(ConfigReloadResult::default()),
+    );
+    let (open, _) = run
+        .sent(|op| matches!(op, Op::SessionNew(_)))
+        .expect("opened");
+    run.link.give(Inbound::Done(
+        open,
+        Err(cineris_protocol::ErrorData::new(
+            cineris_protocol::ErrorKind::Usage,
+            "no_workspace",
+            "The workspace is gone.",
+        )),
+    ));
+    drain(&mut run.app, run.now);
+    let _ = run.frame();
+    assert!(!run.app.in_first_run(), "it ended");
+    let said = squash(&run.scrollback.join(" "));
+    assert!(
+        said.contains(
+            "· Set-up ended: the session could not be opened. ~/.config/cineris/config.toml \
+             holds the settings, and a change there is kept. /new tries again."
+        ),
+        "{said}"
+    );
+}
+
+/// `x` at the mode keeps what the imports step answered: only the steps
+/// not reached take their defaults (Medium 8).
+#[test]
+fn x_at_the_mode_keeps_the_imports_answered() {
+    let mut run = Run::new(fake());
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let _ = run.ready();
+    run.key("space");
+    run.key("enter");
+    let _ = run.ready();
+    run.key("x");
+    run.answer();
+    assert_eq!(
+        run.written(),
+        [Chosen {
+            imports: Some(Imported {
+                instructions: true,
+                ..Imported::default()
+            }),
+            ..Chosen::default()
+        }]
+    );
+}
+
+/// A server whose command shows a value masked by its name, which is
+/// imported as it is, says so on its row (Medium 7).
+#[test]
+fn a_server_imported_with_a_value_unseen_says_so() {
+    let mut setup = fake();
+    let docs = &mut setup.servers.get_mut("~/.claude.json").unwrap()[0];
+    docs.shown = "npx -y @example/docs-mcp --api-key [redacted]".to_owned();
+    docs.hidden = true;
+    let mut run = Run::new(setup);
+    to_the_servers(&mut run);
+    let live = squash(&run.frame().join(" "));
+    assert!(
+        live.contains("a value shown [redacted] is imported as it is in that file, unseen here"),
+        "{live}"
+    );
+}
+
+/// Two servers of one name, from two files, are not both picked: one name
+/// is one server in the user's file, which the step says.
+#[test]
+fn a_second_server_of_a_name_picked_is_not_picked() {
+    let mut setup = fake();
+    setup.servers.insert(
+        "~/.cursor/mcp.json".to_owned(),
+        vec![server("docs", "npx -y @other/docs-mcp", None)],
+    );
+    let mut run = Run::new(setup);
+    to_the_servers(&mut run);
+    run.moves("down");
+    run.key("space");
+    for _ in 0..3 {
+        run.moves("down");
+    }
+    run.key("space");
+    run.answer();
+    let _ = run.ready();
+    run.moves("down");
+    run.key("space");
+    let live = squash(&run.frame().join(" "));
+    assert!(
+        live.contains(
+            "A server named docs is picked already, from ~/.claude.json: one name is one server."
+        ),
+        "{live}"
+    );
+    run.key("enter");
+    let _ = run.ready();
+    run.key("enter");
+    run.answer();
+    assert_eq!(
+        run.written()[0]
+            .imports
+            .as_ref()
+            .map(|imported| imported.servers.clone()),
+        Some(vec![("~/.claude.json".to_owned(), "docs".to_owned())])
+    );
+}
+
+/// Typing into a command's edit field is typing: a key held down and a
+/// paste go in (a paste's line break at its end left off), a paste with a
+/// character that cannot be shown is refused whole and said.
+#[test]
+fn typing_into_a_commands_edit_is_typing() {
+    let mut run = Run::new(fake());
+    let _ = commands_step(&mut run);
+    run.key("e");
+    run.app.terminal(
+        &cineris_term::Event::Repeat(cineris_term::Key::plain(cineris_term::KeyCode::Char('x'))),
+        run.now,
+    );
+    run.app
+        .terminal(&cineris_term::Event::Paste(" --all\n".to_owned()), run.now);
+    run.app
+        .terminal(&cineris_term::Event::Paste("a\u{7}b".to_owned()), run.now);
+    let live = squash(&run.frame().join(" "));
+    assert!(live.contains("cargo build --workspacex --all_"), "{live}");
+    assert!(
+        live.contains("That paste holds a line break or a character that cannot be shown"),
+        "{live}"
+    );
+}
+
+/// The edit's `Enter` keeps a changed command and picks it; one that
+/// changed nothing picks nothing; and a second `Enter` straight after does
+/// not keep the commands: the step waits a key's repeat window (the early
+/// review of the fixes).
+#[test]
+fn an_edit_kept_picks_only_a_change_and_holds_the_next_enter() {
+    let mut run = Run::new(fake());
+    let _ = commands_step(&mut run);
+    run.key("e");
+    run.key("enter");
+    let live = run.ready();
+    assert_eq!(
+        live.iter().filter(|row| row.contains('☐')).count(),
+        2,
+        "an edit that changed nothing picks nothing: {live:#?}"
+    );
+    run.key("e");
+    type_text(&mut run.app, " --release", run.now);
+    run.key("enter");
+    run.key("enter");
+    assert!(
+        run.sent(|op| matches!(op, Op::ProjectUpdate(_) | Op::TurnStart(_)))
+            .is_none(),
+        "a second enter keeps nothing"
+    );
+    let live = run.ready();
+    assert!(
+        live.iter()
+            .any(|row| row.contains("☑ build") && row.contains("cargo build --workspace --release")),
+        "{live:#?}"
+    );
+    run.key("enter");
+    let (_, update) = run
+        .sent(|op| matches!(op, Op::ProjectUpdate(_)))
+        .expect("kept");
+    let Op::ProjectUpdate(update) = update else {
+        unreachable!()
+    };
+    assert_eq!(
+        update.add[0]
+            .command
+            .as_ref()
+            .map(|command| command.command.as_str()),
+        Some("cargo build --workspace --release")
+    );
+}
+
+/// Keys the last step does not take yet go to the input box, as at a
+/// dialog: what they type there hides the step until it is sent or
+/// emptied (the early review of the fixes).
+#[test]
+fn keys_before_the_last_step_is_ready_go_to_the_input_box() {
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    let _ = run.open(TrustStanding::Trusted);
+    let _ = run.frame();
+    run.detect(two_commands());
+    let live = run.frame();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+    type_text(&mut run.app, "hi", run.now);
+    assert_eq!(run.app.input().editor().text(), "hi");
+    let live = run.frame();
+    assert!(!Run::shows_commands(&live), "{live:#?}");
+}
+
+/// A command being edited when a turn begins: the edit is dropped and
+/// said, and the `Enter` that was to keep it does not send the input box's
+/// text as a prompt (the early review of the fixes).
+#[test]
+fn an_edit_cut_by_a_turn_sends_nothing() {
+    let mut run = Run::new(fake());
+    let _ = commands_step(&mut run);
+    run.key("e");
+    type_text(&mut run.app, "ab", run.now);
+    run.turn_starts();
+    type_text(&mut run.app, "c", run.now);
+    run.key("enter");
+    assert!(
+        run.sent(|op| matches!(op, Op::TurnStart(_))).is_none(),
+        "nothing sent"
+    );
+    let _ = run.frame();
+    assert!(
+        squash(&run.scrollback.join(" "))
+            .contains("The commands' step gave way while a command was being edited"),
+        "{:#?}",
+        run.scrollback
+    );
+}
+
+/// Continued after a stop (`fg`), a step starts its grace again: the
+/// `Enter` that ended `fg` chooses nothing (the early review of the fixes).
+#[test]
+fn a_step_starts_its_grace_again_after_fg() {
+    let mut run = Run::new(fake());
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
+    run.app.terminal(&cineris_term::Event::Resumed, run.now);
+    run.key("enter");
+    run.answer();
+    assert!(run.written().is_empty(), "nothing chosen");
+    let live = run.frame();
+    assert!(live.iter().any(|row| row == "◇ Mode  3 of 4"), "{live:#?}");
+}
+
+/// After one `Ctrl+C` the hint row says what a second does, not the
+/// step's keys, and the step takes no key until they are drawn again (the
+/// early review of the fixes).
+#[test]
+fn a_key_after_one_ctrl_c_answers_nothing() {
+    let mut run = Run::new(fake());
+    let _ = run.ready();
+    run.key("ctrl+c");
+    let _ = run.frame();
+    run.key("enter");
+    let live = run.frame();
+    assert!(run.scrollback.is_empty(), "nothing chosen: {live:#?}");
+    assert!(
+        live.iter().any(|row| row == "◇ Provider  1 of 4"),
+        "{live:#?}"
+    );
+}
+
+/// A row is accepted only as the last frame drew it: a move and an accept
+/// read before the next frame accept nothing (the early review of the
+/// fixes).
+#[test]
+fn a_key_after_a_move_and_before_a_frame_accepts_nothing() {
+    let mut setup = fake();
+    setup.servers.get_mut("~/.claude.json").unwrap()[0].shown = (1..=60)
+        .map(|n| format!("--flag-{n}=value-{n}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut run = Run::with(setup, 16, None);
+    to_the_servers(&mut run);
+    // From the file's row, drawn whole, to the server too tall to be.
+    run.key("down");
+    run.key("space");
+    let live = run.frame();
+    assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
+}
+
+/// Every accepting key holds to "drawn whole": a command too tall for the
+/// window is neither picked nor kept from its edit, and a provider or a
+/// mode in a window too small for its row is not chosen (the early review
+/// of the fixes).
+#[test]
+fn no_accepting_key_takes_a_row_not_drawn_whole() {
+    let long = (1..=120)
+        .map(|n| format!("step-{n}"))
+        .collect::<Vec<_>>()
+        .join(" && ");
+    let mut run = Run::with(fake(), 16, None);
+    skip_three(&mut run);
+    let _ = run.open(TrustStanding::Trusted);
+    let _ = run.frame();
+    run.detect(vec![
+        detected("build", "npm run build", Some(&long), "package.json"),
+        detected("test", "cargo test", None, "Cargo.toml"),
+    ]);
+    let _ = run.ready();
+    run.key("space");
+    run.key("e");
+    type_text(&mut run.app, "x", run.now);
+    run.key("enter");
+    let live = squash(&run.ready().join(" "));
+    assert!(!live.contains('☑'), "{live}");
+    assert!(
+        live.contains("enter keeps the edit"),
+        "still editing: {live}"
+    );
+    // A provider and a mode in a window of four rows.
+    let mut run = Run::with(fake(), 4, None);
+    let _ = run.ready();
+    run.key("enter");
+    let _ = run.frame();
+    assert!(run.scrollback.is_empty(), "no provider chosen");
+    run.key("s");
+    run.answer();
+    let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
+    run.key("enter");
+    run.answer();
+    assert!(run.written().is_empty(), "no mode chosen");
+}
+
+/// What is typed into a command's edit holds a dialog that comes just
+/// after, as typing into the input box would (the early review of the
+/// fixes: `first_run_untaken`).
+#[test]
+fn typing_into_an_edit_holds_the_dialog_after_it() {
+    let mut run = Run::new(fake());
+    let _ = commands_step(&mut run);
+    run.key("e");
+    run.now += Duration::from_secs(5);
+    let typed = run.now;
+    type_text(&mut run.app, "x", typed);
+    run.turn_starts();
+    ask(
+        &mut run.app,
+        &run.link,
+        7,
+        approval("c_1"),
+        typed + Duration::from_millis(10),
+    );
+    let _ = run.app.frame(typed + Duration::from_millis(450));
+    run.app.drawn(typed + Duration::from_millis(450));
+    key(&mut run.app, "y", typed + Duration::from_millis(500));
+    assert!(
+        run.link.script().answers.is_empty(),
+        "a quiet second after the typing"
+    );
+}
+
+/// The last step waits while the history search is open, and while a
+/// prompt held at the open is on its way though no turn runs (the early
+/// review of the fixes).
+#[test]
+fn the_last_step_waits_for_the_history_search_and_a_prompt_on_its_way() {
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    let _ = run.open(TrustStanding::Trusted);
+    let _ = run.frame();
+    let (detect, _) = run
+        .sent(|op| matches!(op, Op::ProjectDetect(_)))
+        .expect("asked for");
+    run.key("ctrl+r");
+    run.give(
+        detect,
+        OpResult::ProjectDetect(ProjectDetectResult {
+            commands: two_commands(),
+        }),
+    );
+    let live = run.frame();
+    assert!(!Run::shows_commands(&live), "{live:#?}");
+    run.key("esc");
+    let live = run.frame();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+
+    // The command line's prompt steers a turn the open says runs; that
+    // turn ends before the prompt's answer comes.
+    let mut run = Run::with(fake(), 40, Some("and the tests"));
+    skip_three(&mut run);
+    let (reload, _) = run
+        .sent(|op| matches!(op, Op::ConfigReload(_)))
+        .expect("read again");
+    run.give(
+        reload,
+        OpResult::ConfigReload(ConfigReloadResult::default()),
+    );
+    let (open, _) = run
+        .sent(|op| matches!(op, Op::SessionNew(_)))
+        .expect("opened");
+    run.give(
+        open,
+        OpResult::SessionNew(SessionResult {
+            session: session().running("t_1").build(),
+        }),
+    );
+    assert!(
+        run.sent(|op| matches!(op, Op::TurnStart(_))).is_some(),
+        "the prompt on its way"
+    );
+    run.turn_ends();
+    let _ = run.frame();
+    assert!(
+        run.sent(|op| matches!(op, Op::ProjectDetect(_))).is_none(),
+        "not while the prompt is on its way"
+    );
+}
+
+/// With the full screen's search open the last step is not asked for: a
+/// frame has the view out while it asks (the early review of the fixes).
+#[test]
+fn the_last_step_waits_for_the_full_screens_search() {
+    let setup = fake();
+    let now = Instant::now();
+    let link = Scripted::default();
+    let start = crate::app::Start {
+        version: "0.1.0".to_owned(),
+        folder: "~/src/parser".to_owned(),
+        cwd: None,
+        workspace: crate::testkit::WORKSPACE.to_owned(),
+        open: crate::app::Open::New {
+            workspace: crate::testkit::WORKSPACE.to_owned(),
+            settings: cineris_protocol::session::SessionSettings::default(),
+            ephemeral: false,
+        },
+        prompt: None,
+        settings: crate::app::Settings {
+            presenter: crate::app::Presenter::Fullscreen,
+            ..crate::app::Settings::default()
+        },
+        keymap: crate::keys::KeyMap::defaults(),
+        notices: Vec::new(),
+        history: Box::new(crate::history::MemoryHistory::new()),
+        highlighter: crate::highlight::Highlighter::off(),
+        restyle: None,
+        export: None,
+        setup: Some(Arc::new(setup.clone())),
+    };
+    let mut app = crate::app::App::new(
+        Box::new(link.clone()),
+        start,
+        &crate::testkit::caps(),
+        99,
+        40,
+        now,
+    );
+    let mut now = now;
+    let frame = |app: &mut crate::app::App, at: Instant| {
+        let _ = app.screen_frame(at);
+        app.drawn(at);
+    };
+    let wait = |app: &mut crate::app::App| assert!(app.wait_for_setup(Duration::from_secs(10)));
+    frame(&mut app, now);
+    wait(&mut app);
+    for _ in 0..3 {
+        now += Duration::from_secs(2);
+        frame(&mut app, now);
+        now += Duration::from_millis(1500);
+        frame(&mut app, now);
+        key(&mut app, "s", now);
+        wait(&mut app);
+    }
+    let reload = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::ConfigReload(_)))
+        .expect("read again")
+        .0;
+    link.give(Inbound::Done(
+        reload,
+        Ok(OpResult::ConfigReload(ConfigReloadResult::default())),
+    ));
+    drain(&mut app, now);
+    key(&mut app, "ctrl+f", now);
+    let open = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+        .expect("opened")
+        .0;
+    link.give(Inbound::Done(
+        open,
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().trust(TrustStanding::Trusted).build(),
+        })),
+    ));
+    drain(&mut app, now);
+    frame(&mut app, now);
+    frame(&mut app, now);
+    assert!(
+        !link
+            .take_sent()
+            .iter()
+            .any(|(_, op)| matches!(op, Op::ProjectDetect(_))),
+        "not while the search is open"
+    );
+}
+
+/// A store that panics ends `storing…` with why, and the step goes on
+/// (a panicking call of the program's).
+#[test]
+fn a_store_that_panics_ends_storing() {
+    let mut setup = fake();
+    setup.providers.providers[0].variable = None;
+    setup.store_panics = true;
+    let mut run = Run::new(setup);
+    let _ = run.ready();
+    run.key("enter");
+    let _ = run.ready();
+    type_text(&mut run.app, KEY, run.now);
+    run.key("enter");
+    run.answer();
+    let live = squash(&run.frame().join(" "));
+    assert!(
+        live.contains("The key could not be stored: it failed inside the program"),
+        "{live}"
+    );
+    assert!(!live.contains("storing"), "{live}");
+}
+
+/// A worker that cannot start is said, and this run's sessions read
+/// nothing of other tools'.
+#[test]
+fn a_first_run_that_cannot_start_is_said() {
+    crate::app::setup::REFUSE_THREAD.with(|refuse| refuse.set(true));
+    let mut run = Run::new(fake());
+    assert!(!run.app.in_first_run());
+    let config = run.opened(TrustStanding::Trusted);
+    assert_eq!(
+        serde_json::Value::Object(config),
+        serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+    );
+    let _ = run.frame();
+    assert!(
+        squash(&run.scrollback.join(" ")).contains(
+            "The set-up could not start (no thread could be made): this run's sessions read \
+             nothing of other tools'"
+        ),
+        "{:#?}",
+        run.scrollback
+    );
 }

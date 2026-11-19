@@ -198,6 +198,8 @@ impl App {
         let Some(mut view) = self.screen.take() else {
             return (Vec::new(), None);
         };
+        // Whether the search is open, for what asks while the view is out.
+        self.search_aside = view.search.is_some();
         // The block still open was laid out at another width: again, at
         // this one (an answer resized while it streams).
         if view.width != width {
@@ -265,6 +267,7 @@ impl App {
             row: top + row,
             col,
         });
+        self.search_aside = false;
         self.screen = Some(view);
         (lines, cursor)
     }
@@ -598,11 +601,16 @@ impl App {
         true
     }
 
-    /// Whether the full screen's search is open.
+    /// Whether the full screen's search is open: its view's, or, while a
+    /// frame has the view out, what the frame found (the early review of
+    /// step 25's third pull request's fixes: the first run asked whether a
+    /// search was open while the frame had the view, and was told no).
     pub(super) fn screen_searching(&self) -> bool {
-        self.screen
-            .as_ref()
-            .is_some_and(|view| view.search.is_some())
+        self.search_aside
+            || self
+                .screen
+                .as_ref()
+                .is_some_and(|view| view.search.is_some())
     }
 
     /// Takes the search worker's answer, when it has come: the loop's drain

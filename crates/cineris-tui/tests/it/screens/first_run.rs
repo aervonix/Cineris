@@ -38,6 +38,7 @@ fn setup(windows: bool) -> FakeSetup {
                     variable: (*name == "anthropic" && !windows)
                         .then(|| "ANTHROPIC_API_KEY".to_owned()),
                     stored: false,
+                    model: (*name == "anthropic").then(|| "claude-opus-5-5".to_owned()),
                 })
                 .collect(),
             store: if windows {
@@ -68,6 +69,7 @@ fn setup(windows: bool) -> FakeSetup {
             McpServer {
                 name: "docs".to_owned(),
                 shown: "npx -y @example/docs-mcp --root ~/src/docs".to_owned(),
+                hidden: false,
                 env: Vec::new(),
                 headers: Vec::new(),
                 refused: None,
@@ -75,6 +77,7 @@ fn setup(windows: bool) -> FakeSetup {
             McpServer {
                 name: "tracker".to_owned(),
                 shown: "https://tracker.example.com/mcp".to_owned(),
+                hidden: false,
                 env: Vec::new(),
                 headers: vec![("Authorization".to_owned(), "TRACKER_AUTH".to_owned())],
                 refused: None,
@@ -84,6 +87,7 @@ fn setup(windows: bool) -> FakeSetup {
                 shown:
                     "docker run -i --rm -e GITHUB_TOKEN=[redacted] ghcr.io/example/github-mcp:1.4"
                         .to_owned(),
+                hidden: false,
                 env: Vec::new(),
                 headers: Vec::new(),
                 refused: Some("holds a credential in its command".to_owned()),
@@ -173,6 +177,11 @@ impl Drive {
     fn key(&mut self, code: KeyCode) {
         self.app.terminal(&Event::Key(Key::plain(code)), self.now);
         self.now += Duration::from_millis(50);
+        // The frame the loop draws after a key: a key that accepts a row
+        // takes the row the last frame drew whole.
+        if matches!(code, KeyCode::Up | KeyCode::Down) {
+            let _ = self.frame();
+        }
     }
 
     fn answer(&mut self) {

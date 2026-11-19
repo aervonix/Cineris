@@ -196,6 +196,33 @@ pub fn fitted(step: &Step, width: usize, look: &Look, room: usize) -> Fitted {
     );
     let sentence = paragraph(&step.sentence, INDENT, width, theme.style(Token::Text));
     let rows = row_lines(step, width, look);
+    // A window too narrow for a row's label column and its detail (eleven
+    // columns or fewer) gives lines wider than it: each is cut to the
+    // width, and that row is not whole (the early review of the third pull
+    // request's fixes).
+    let rows_whole: Vec<bool> = rows
+        .iter()
+        .map(|lines| lines.iter().all(|line| line.width() <= width))
+        .collect();
+    let rows: Vec<Vec<Line>> = rows
+        .into_iter()
+        .map(|lines| {
+            lines
+                .into_iter()
+                .map(|line| {
+                    if line.width() > width {
+                        cut(&line, width, look.glyphs.ellipsis)
+                    } else {
+                        line
+                    }
+                })
+                .collect()
+        })
+        .collect();
+    let selected_fits = step
+        .selected
+        .and_then(|at| rows_whole.get(at).copied())
+        .unwrap_or(true);
     let note = step.note.as_ref().map_or_else(Vec::new, |note| {
         let mut lines = vec![Line::new()];
         lines.extend(paragraph(note, INDENT, width, theme.style(Token::Warning)));
@@ -211,7 +238,10 @@ pub fn fitted(step: &Step, width: usize, look: &Look, room: usize) -> Fitted {
         }
         lines.extend(rows.into_iter().flatten());
         lines.extend(note);
-        return Fitted { lines, whole: true };
+        return Fitted {
+            lines,
+            whole: selected_fits,
+        };
     }
     let selected = step.selected.filter(|at| *at < rows.len());
     let at = selected.unwrap_or(0);
@@ -251,7 +281,7 @@ pub fn fitted(step: &Step, width: usize, look: &Look, room: usize) -> Fitted {
     lines.truncate(room);
     Fitted {
         lines,
-        whole: whole || selected.is_none(),
+        whole: (whole && selected_fits) || selected.is_none(),
     }
 }
 
@@ -590,6 +620,23 @@ mod tests {
             selected: Some(6),
             note: Some("A note under the rows.".to_owned()),
         }
+    }
+
+    /// A window too narrow for a row's label column and its detail cuts
+    /// the row to the width, and says it is not whole (the early review of
+    /// the third pull request's fixes: the detail ran past the edge).
+    #[test]
+    fn a_window_too_narrow_for_a_rows_detail_is_not_whole() {
+        let look = look();
+        let shown = ten("npx -y server-6");
+        // The detail's column is nine in: the mark, the label cut to one
+        // column, the gap.
+        for width in [6, 9] {
+            let drawn = fitted(&shown, width, &look, usize::MAX);
+            assert!(!drawn.whole, "{width}");
+            assert_eq!(problems(&drawn.lines, width), Vec::<String>::new());
+        }
+        assert!(fitted(&shown, 60, &look, usize::MAX).whole);
     }
 
     /// A step taller than its room keeps its title, its sentence, its note

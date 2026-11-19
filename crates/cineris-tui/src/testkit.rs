@@ -368,6 +368,12 @@ pub struct FakeSetup {
     pub servers: BTreeMap<String, Vec<crate::app::setup::McpServer>>,
     /// Why storing a key fails, when it does.
     pub store_fails: Option<String>,
+    /// Storing a key panics, as a store with a bug would (since the full
+    /// review of step 25's third pull request).
+    pub store_panics: bool,
+    /// Why writing the configuration fails, when it does (since the same
+    /// review).
+    pub write_fails: Option<String>,
     /// What it was asked.
     pub log: Arc<Mutex<SetupLog>>,
 }
@@ -389,6 +395,7 @@ impl crate::app::Setup for FakeSetup {
     }
 
     fn store_key(&self, provider: &str, key: cineris_base::Secret) -> Result<(), String> {
+        assert!(!self.store_panics, "the store broke");
         if let Some(why) = &self.store_fails {
             return Err(why.clone());
         }
@@ -411,6 +418,9 @@ impl crate::app::Setup for FakeSetup {
     }
 
     fn write_config(&self, chosen: &crate::app::setup::Chosen) -> Result<String, String> {
+        if let Some(why) = &self.write_fails {
+            return Err(why.clone());
+        }
         self.log().written.push(chosen.clone());
         Ok("~/.config/cineris/config.toml".to_owned())
     }
