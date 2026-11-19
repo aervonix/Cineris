@@ -354,3 +354,31 @@ About 740 KiB (757,760 bytes) was left on Windows then. The review fixes grew th
 - `App::bottom` grew by the first run's branch inside it (+9.1 KiB). Moving that branch into a function of its own would not shrink it, only move it.
 
 So the first run's cost is its own code, and no cheap cut would change the picture. The budget question (Windows at 96.5% at the final head) goes to the owner with the Windows test job's time.
+
+## The pull request's CI
+
+<!-- written by cargo xtask ci-times, section "The pull request's CI": it replaces this up to the end mark -->
+Pull request 108, on `main` at `d1dda31`. "Main" is main's own run at `d1dda31` (run 44461390844).
+The PR's run is 44461434161, at `ad17a09`.
+
+| Job | Main, `d1dda31` | The PR at `ad17a09` |
+|---|---|---|
+| `lint-linux` | 51 s | 52 s |
+| `test-linux` | 101 s | 139 s |
+| `lint-windows` | 101 s | 101 s |
+| `test-windows` | 242 s | 260 s |
+| `pr-size-linux` (blocks nothing) | — | 335 s |
+| `ts-client` (blocks nothing) | 0 s | 56 s |
+| `pr-size-windows` (blocks nothing) | — | 384 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `ad17a09` (4 ms) | Windows, main (6 ms) | Windows, `ad17a09` (6 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s) | 12.3 s | 24.4 s | 15.3 s | 17.3 s |
+| Tier 2, integration (40 s) | 19.7 s | 32.7 s | 30.1 s | 32.4 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 26.8 s | 34.6 s | 77.4 s | 84.5 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The pull request's CI" -->
+
+The CI times are from run 44461434161 at `ad17a09`, whose code the last commit leaves as it is (it changes text alone). Its Windows test job was first cut off at its 5-minute limit while the runner built cold, before `main`'s saved build existed: the 4,586 unit and integration tests had passed, 193 of the system tests had passed, the 2 that "failed" were the two the cancel ended (`0xc000013a`), and 14 had not run. Run again once `main` had saved its build, it passed in 4 minutes 20 seconds.
+
+**Linux's tier 1 is at 122% of its budget on this run, a warning** (it fails at 150%). The tests that moved are not this pull request's: `cineris-policy`'s store-lock tests and `cineris-config`'s private-file writes went from about 5 ms to about 0.6 s each (`cargo xtask ci --tiers --compare 44461434161 --against main`), crates this pull request does not touch, which is the runner's disk. This pull request's own new tests add about 0.6 s to Linux's tier 1, and the Windows A/B above, both trees on one runner, puts tier 1 at +0.2 s.
