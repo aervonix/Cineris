@@ -180,6 +180,15 @@ pub fn describe_line(_program: &str, _arguments: &[String]) -> Described {
 #[inline(always)]
 pub const fn spawned(_pid: u32, _command: Described) {}
 
+/// [`spawned`], for a start whose code marks the child's exit with
+/// [`reaped`] when its wait returns: the report can then say that an exit
+/// no wait saw is one, where for a child of [`spawned`] it can only say
+/// that the child is gone. Without the `test-hooks` feature this is nothing
+/// at all.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn spawned_tracked(_pid: u32, _command: Described) {}
+
 /// Marks that the code which started process `pid` saw it exit (its wait
 /// returned). Without the `test-hooks` feature this is nothing at all.
 #[cfg(not(feature = "test-hooks"))]
@@ -188,8 +197,8 @@ pub const fn reaped(_pid: u32) {}
 
 /// Whether a test of this name may start a process: its last segment
 /// starts with `sys_` or `perf_` (`commands::sys_trust`). With the
-/// `test-hooks` feature, under nextest, [`started`] and [`probed`] stop a
-/// test that may not, with [`refusal`] (`docs/testing-and-ci.md`, "Test
+/// `test-hooks` feature, under nextest, [`started`] stops a test that may
+/// not, with [`refusal`] ([`probed`] does not: see it) (`docs/testing-and-ci.md`, "Test
 /// tiers", since the twelfth tooling step).
 #[must_use]
 pub fn may_start_a_process(test: &str) -> bool {
@@ -231,7 +240,7 @@ pub use starts::{launched, probed, program_name, started};
 
 #[cfg(feature = "test-hooks")]
 pub use children::{
-    Described, Spawned, describe, describe_line, reaped, spawned, spawned_children,
+    Described, Spawned, describe, describe_line, reaped, spawned, spawned_children, spawned_tracked,
 };
 
 /// The children a test's process started, for its timeout report, and the
@@ -252,6 +261,7 @@ mod children {
         command: String,
         at: Instant,
         reaped: Option<Instant>,
+        tracked: bool,
     }
 
     static CHILDREN: Mutex<Vec<Record>> = Mutex::new(Vec::new());
@@ -268,6 +278,10 @@ mod children {
         /// How long after its start the code that started it saw it exit,
         /// if it did.
         pub reaped_after: Option<Duration>,
+        /// Whether the code that started it marks its exit
+        /// ([`spawned_tracked`]): if not, a child that is gone may have
+        /// been waited for all the same.
+        pub tracked: bool,
     }
 
     /// A command line kept for [`spawned`].
@@ -301,6 +315,15 @@ mod children {
 
     /// See [`super`]'s description without the feature.
     pub fn spawned(pid: u32, command: Described) {
+        keep(pid, command, false);
+    }
+
+    /// See [`super`]'s description without the feature.
+    pub fn spawned_tracked(pid: u32, command: Described) {
+        keep(pid, command, true);
+    }
+
+    fn keep(pid: u32, command: Described, tracked: bool) {
         let mut children = lock(&CHILDREN);
         if children.len() == KEPT {
             children.remove(0);
@@ -310,18 +333,24 @@ mod children {
             command: command.0,
             at: Instant::now(),
             reaped: None,
+            tracked,
         });
     }
 
     /// See [`super`]'s description without the feature.
+    /// The latest record of `pid` that marks its wait is marked, or, when
+    /// there is none, the latest of `pid` at all: the same child can be
+    /// kept twice (by the code that started it, and by a roll it reported
+    /// to), and the wait is the starter's.
     pub fn reaped(pid: u32) {
         let mut children = lock(&CHILDREN);
-        if let Some(record) = children
-            .iter_mut()
-            .rev()
-            .find(|record| record.pid == pid && record.reaped.is_none())
-        {
-            record.reaped = Some(Instant::now());
+        let open = |record: &Record| record.pid == pid && record.reaped.is_none();
+        let at = children
+            .iter()
+            .rposition(|record| open(record) && record.tracked)
+            .or_else(|| children.iter().rposition(open));
+        if let Some(at) = at {
+            children[at].reaped = Some(Instant::now());
         }
     }
 
@@ -338,6 +367,7 @@ mod children {
                 reaped_after: record
                     .reaped
                     .map(|at| at.saturating_duration_since(record.at)),
+                tracked: record.tracked,
             })
             .collect()
     }
@@ -410,7 +440,9 @@ mod starts {
     /// As [`started`], for a start that asks `program` its version: the
     /// line's program is `probe>NAME`.
     pub fn probed(program: &OsStr) {
-        super::children::refuse_outside_a_system_test(program);
+        // Not refused: the harness asks a shell its version on a thread
+        // of its own, which a test may end before or after the start, and
+        // a refusal there would stop the test or not by that race.
         write(super::PROBED, program);
     }
 

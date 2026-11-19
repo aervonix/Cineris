@@ -10,10 +10,13 @@
 //!
 //! The patterns are read as git reads them, for the forms the root's
 //! `.gitignore` uses: a leading `/` anchors a pattern, a trailing `/`
-//! matches a folder (and so everything under it), `*` and `?` match within
-//! one part of a path, and a `!` line takes a path back out. A pattern with
-//! no `/` matches a name at any depth. A `.gitignore` deeper in the tree is
-//! not read.
+//! matches only a folder (and so everything under it: an entry under it, or
+//! an entry that ends in `/`), `*` and `?` match within one part of a path,
+//! and a `!` line takes a path back out. A pattern with no `/` matches a
+//! name at any depth. A `.gitignore` deeper in the tree is not read. An
+//! entry with `*` or `?` in it is checked against every tracked file it
+//! matches. In a copy of the tree with no repository the rule is not run
+//! (`rules::check_docs`): nothing there says what git tracks.
 
 use super::Violation;
 
@@ -25,27 +28,29 @@ pub(crate) const IGNORE: &str = ".gitignore";
 
 /// Checks each entry of `include` against `ignore` and the tracked `files`.
 pub(crate) fn check(include: &str, ignore: &str, files: &[String]) -> Vec<Violation> {
-    let patterns: Vec<&str> = ignore
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .collect();
+    let patterns = patterns(ignore);
     let mut violations = Vec::new();
     for (index, line) in include.lines().enumerate() {
-        let entry = line.trim();
-        if entry.is_empty() || entry.starts_with('#') {
+        let entry = line.trim_end();
+        if entry.trim_start().is_empty() || entry.starts_with('#') {
             continue;
         }
+        let folder = entry.ends_with('/');
         let path = entry.trim_start_matches('/').trim_end_matches('/');
-        let tracked = files
-            .iter()
-            .any(|file| file == path || file.starts_with(&format!("{path}/")));
+        let glob_entry = path.contains(['*', '?']);
+        let tracked = files.iter().any(|file| {
+            if glob_entry {
+                matches(entry, file, false)
+            } else {
+                file == path || file.starts_with(&format!("{path}/"))
+            }
+        });
         let problem = if tracked {
             Some(format!(
                 "`{entry}` is a file git tracks: a worktree would get the copy over the \
                  checked-out one. List only files `{IGNORE}` ignores."
             ))
-        } else if !ignored(path, &patterns) {
+        } else if !ignored(path, folder, &patterns) {
             Some(format!(
                 "`{entry}` is not ignored by `{IGNORE}`: every worktree would show it as a new \
                  file, one `git add` from a commit. Add it to `{IGNORE}`, or take it out of \
@@ -61,27 +66,44 @@ pub(crate) fn check(include: &str, ignore: &str, files: &[String]) -> Vec<Violat
     violations
 }
 
-/// Whether `path` (relative, no leading `/`) is ignored by `patterns`, in
-/// order, the last that matches deciding.
-fn ignored(path: &str, patterns: &[&str]) -> bool {
+/// The patterns of an ignore file's text.
+fn patterns(ignore: &str) -> Vec<&str> {
+    ignore
+        .lines()
+        .map(str::trim_end)
+        .filter(|line| !line.trim_start().is_empty() && !line.starts_with('#'))
+        .collect()
+}
+
+/// Whether a file of the repository, `path`, is ignored by the ignore file
+/// `ignore`: for a copy of the tree with no repository, whose walk finds
+/// the files git would not have listed.
+pub(crate) fn ignored_by(path: &str, ignore: &str) -> bool {
+    ignored(path, false, &patterns(ignore))
+}
+
+/// Whether `path` (relative, no leading `/`; a folder when `folder`) is
+/// ignored by `patterns`, in order, the last that matches deciding.
+fn ignored(path: &str, folder: bool, patterns: &[&str]) -> bool {
     let mut ignored = false;
     for pattern in patterns {
         let (negated, pattern) = match pattern.strip_prefix('!') {
             Some(rest) => (true, rest),
             None => (false, *pattern),
         };
-        if matches(pattern, path) {
+        if matches(pattern, path, folder) {
             ignored = !negated;
         }
     }
     ignored
 }
 
-/// Whether one pattern matches `path` or a folder above it.
-fn matches(pattern: &str, path: &str) -> bool {
-    // A trailing `/` (a folder only) is not told apart: an entry is a file
-    // or a folder, which the text does not say, and a folder above it
-    // matches either way.
+/// Whether one pattern matches `path` (a folder when `folder`) or a folder
+/// above it.
+fn matches(pattern: &str, path: &str, folder: bool) -> bool {
+    // A trailing `/` matches a folder only: one above the path, or the
+    // path itself when it is one.
+    let folder_only = pattern.ends_with('/');
     let pattern = pattern.trim_end_matches('/');
     let anchored = pattern.contains('/');
     let pattern = pattern.trim_start_matches('/');
@@ -89,6 +111,9 @@ fn matches(pattern: &str, path: &str) -> bool {
     let wanted: Vec<&str> = pattern.split('/').collect();
     // Each prefix of the path is the path itself or a folder above it.
     for length in 1..=parts.len() {
+        if folder_only && length == parts.len() && !folder {
+            break;
+        }
         let prefix = &parts[..length];
         let hit = if anchored {
             prefix.len() == wanted.len() && prefix.iter().zip(&wanted).all(|(p, w)| glob(w, p))
@@ -153,6 +178,36 @@ mod tests {
             found[3].message.contains("not ignored"),
             "a `!` line takes it back"
         );
+    }
+
+    /// A folder-only pattern ignores what is under the folder, and the
+    /// folder as an entry that ends in `/`, but not a file of that name.
+    #[test]
+    fn a_folder_pattern_does_not_ignore_a_file_of_its_name() {
+        let ignore = "/notes/\n";
+        assert!(check("notes/a.md\nnotes/\n", ignore, &[]).is_empty());
+        let found = check("notes\n", ignore, &[]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("not ignored"));
+    }
+
+    /// An entry with a wildcard is held to every tracked file it matches.
+    #[test]
+    fn a_wildcard_entry_may_match_no_tracked_file() {
+        let ignore = "*.local.md\n";
+        assert!(check("*.local.md\n", ignore, &["docs/a.md".to_owned()]).is_empty());
+        let found = check("*.local.md\n", ignore, &["docs/zz.local.md".to_owned()]);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].message.contains("git tracks"));
+    }
+
+    /// For a copy of the tree with no repository: what the ignore file
+    /// ignores.
+    #[test]
+    fn a_file_the_ignore_file_names_is_ignored() {
+        assert!(super::ignored_by("CLAUDE.local.md", IGNORE));
+        assert!(super::ignored_by("target/x/y.md", IGNORE));
+        assert!(!super::ignored_by("docs/a.md", IGNORE));
     }
 
     /// An anchored pattern matches from the root only.

@@ -313,8 +313,13 @@ fn there(pid: u32, alive: Option<&[u32]>) -> There {
 /// the harness or the test kit started for it (`cineris_base::hook::spawned`),
 /// with its id, how long ago it started, whether the code that started it
 /// saw it exit and whether it is still there, and its command line. A child
-/// that is gone but whose exit no wait saw, beside a thread still waiting,
-/// is a wake that was missed; one still running is a late exit.
+/// that is gone while the wait of the code that started it has not
+/// returned, beside a thread still waiting, is a wake that was missed; one
+/// still running is a late exit. Only a start marked as tracked
+/// (`spawned_tracked`: the sandbox's process tree, the runner's commands)
+/// marks its wait; of the others the report says only that they are gone.
+/// A child is found by its id alone, which the system may give a new
+/// process once the child is gone (soon, on Windows).
 fn children_text(children: &[cineris_base::hook::Spawned], there: impl Fn(u32) -> There) -> String {
     let mut text = String::from(
         "the test's own children, oldest first: pid, how long ago it started, what became of \
@@ -324,20 +329,26 @@ fn children_text(children: &[cineris_base::hook::Spawned], there: impl Fn(u32) -
         text.push_str("  none was started through the harness or the test kit\n");
     }
     for child in children {
-        let state = match (child.reaped_after, there(child.pid)) {
-            (Some(after), _) => format!(
+        let state = match (child.reaped_after, there(child.pid), child.tracked) {
+            (Some(after), _, _) => format!(
                 "exited after {:.1} s, and its wait returned",
                 after.as_secs_f64()
             ),
-            (None, There::Running) => "still running, and nothing has seen it exit".to_owned(),
-            (None, There::Unreaped) => {
-                "exited, and not yet waited for (a zombie): nothing has seen its exit".to_owned()
+            (None, There::Running, _) => "still running".to_owned(),
+            (None, There::Unreaped, _) => {
+                "exited, and nothing has waited for it yet (a zombie)".to_owned()
             }
-            (None, There::Gone) => {
-                "gone, with no wait here seeing it exit (its exit may have been read elsewhere)"
+            (None, There::Gone, true) => {
+                "gone, and the wait of the code that started it has not returned: a wake missed, \
+                 or a wait not reached yet"
                     .to_owned()
             }
-            (None, There::Unknown) => "not asked of the system".to_owned(),
+            (None, There::Gone, false) => {
+                "gone (the code that started it does not mark its wait, so whether its exit was \
+                 seen is not known)"
+                    .to_owned()
+            }
+            (None, There::Unknown, _) => "not asked of the system".to_owned(),
         };
         let _ = writeln!(
             text,
@@ -406,8 +417,7 @@ fn tree(root: u32, pids: &[u32]) -> (String, Option<Vec<u32>>) {
     if cfg!(target_os = "linux") {
         (linux::tree(root), None)
     } else if cfg!(windows) {
-        let (tree, alive) = windows_tree(root, pids);
-        (tree, Some(alive))
+        windows_tree(root, pids)
     } else {
         ("processes: not read on this OS\n".to_owned(), None)
     }
@@ -526,7 +536,7 @@ mod linux {
 /// time: on a cold nightly runner the tree of a test and one child took
 /// longer than the 30 s the watch's own test waited for it (nightly run
 /// 43675736382).
-fn windows_tree(root: u32, pids: &[u32]) -> (String, Vec<u32>) {
+fn windows_tree(root: u32, pids: &[u32]) -> (String, Option<Vec<u32>>) {
     let ids: Vec<String> = pids.iter().map(u32::to_string).collect();
     let ids = ids.join(",");
     let script = format!(
@@ -551,14 +561,17 @@ fn windows_tree(root: u32, pids: &[u32]) -> (String, Vec<u32>) {
         "processes: pid and command line; then each thread's state and, while it waits, \
          its wait reason. Thread stacks are not read on Windows.\n",
     );
-    let mut alive = Vec::new();
+    // None unless PowerShell answered which are there: no answer is not
+    // an answer that none is.
+    let mut alive = None;
     match output {
         Ok(output) => {
             for line in String::from_utf8_lossy(&output.stdout).lines() {
                 if let Some(ids) = line.strip_prefix(ALIVE) {
-                    alive.extend(
+                    alive = Some(
                         ids.split_whitespace()
-                            .filter_map(|id| id.parse::<u32>().ok()),
+                            .filter_map(|id| id.parse::<u32>().ok())
+                            .collect(),
                     );
                 } else {
                     text.push_str(line);
@@ -634,17 +647,19 @@ mod tests {
     #[test]
     fn each_child_is_told_running_exited_or_gone() {
         use cineris_base::hook::Spawned;
-        let child = |pid, reaped: Option<u64>| Spawned {
+        let child = |pid, reaped: Option<u64>, tracked| Spawned {
             pid,
             command: format!("program {pid}"),
             ago: Duration::from_millis(7_900),
             reaped_after: reaped.map(Duration::from_millis),
+            tracked,
         };
         let children = [
-            child(1, Some(300)),
-            child(2, None),
-            child(3, None),
-            child(4, None),
+            child(1, Some(300), true),
+            child(2, None, true),
+            child(3, None, false),
+            child(4, None, true),
+            child(5, None, false),
         ];
         let text = super::children_text(&children, |pid| match pid {
             2 => super::There::Running,
@@ -652,14 +667,18 @@ mod tests {
             _ => super::There::Gone,
         });
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 5, "{text}");
+        assert_eq!(lines.len(), 6, "{text}");
         assert_eq!(
             lines[1],
             "  1 started 7.9 s ago, exited after 0.3 s, and its wait returned: program 1"
         );
         assert!(lines[2].contains("still running") && lines[2].ends_with("program 2"));
         assert!(lines[3].contains("a zombie"), "{text}");
-        assert!(lines[4].contains("gone, with no wait"), "{text}");
+        assert!(lines[4].contains("a wake missed"), "{text}");
+        assert!(
+            lines[5].contains("gone (the code that started it does not mark its wait"),
+            "{text}"
+        );
         let none = super::children_text(&[], |_| super::There::Unknown);
         assert!(none.contains("none was started"), "{none}");
     }
@@ -924,7 +943,7 @@ mod tests {
         );
         assert!(
             text.lines()
-                .any(|line| line.contains("gone, with no wait") && line.contains("--list")),
+                .any(|line| line.contains("gone (the code") && line.contains("--list")),
             "{text}"
         );
         // The tree: the test and its child.

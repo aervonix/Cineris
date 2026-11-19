@@ -7,7 +7,7 @@
 rule: A word of the list matches only as a whole word: `the desk` is not found in `the desktop`.
 file: xtask/src/rules/public_words.rs
 in: whole
-find: (!first || !before.is_some_and(word_char)) && (!last || !after.is_some_and(word_char))
+find: (!first || !before.is_some_and(word_char)) && (!last || ends)
 replace: true
 caught-by:
     rules::public_words::tests::words_are_whole_and_a_cased_word_keeps_its_case
@@ -170,17 +170,52 @@ caught-by:
 rule: A child's exit is marked on the child of that id that is not yet marked.
 file: crates/cineris-base/src/hook.rs
 in: children::reaped
-find: .find(|record| record.pid == pid && record.reaped.is_none())
-replace: .find(|record| record.reaped.is_none())
+find: let open = |record: &Record| record.pid == pid && record.reaped.is_none();
+replace: let open = |record: &Record| record.reaped.is_none();
 caught-by:
     cineris-base hook::children_tests::a_child_is_kept_and_its_exit_is_marked
+
+[break] children-reaped-marks-the-rolls-record
+rule: A child kept twice (by the tree that started it and by the roll it reported to) has its exit marked on the tree's record, whose wait it is.
+file: crates/cineris-base/src/hook.rs
+in: children::reaped
+find: .rposition(|record| open(record) && record.tracked)
+replace: .rposition(|record| open(record))
+caught-by:
+    cineris-sandbox tree::sys_a_command_runs_and_says_how_it_ended
+
+[break] children-tree-not-kept
+rule: The sandbox's tree keeps each command it starts for the timeout report, as one whose wait it marks.
+file: crates/cineris-sandbox/src/tree/mod.rs
+in: Tree::spawn_limited
+find: cineris_base::hook::spawned_tracked(inner.id(), described);
+replace: let _ = described;
+caught-by:
+    cineris-sandbox tree::sys_a_command_runs_and_says_how_it_ended
+
+[break] children-tree-wait-not-marked
+rule: The tree marks its command's exit when its wait returns.
+file: crates/cineris-sandbox/src/tree/mod.rs
+in: Tree::wait
+find: cineris_base::hook::reaped(self.inner.id());
+replace: let _ = self;
+caught-by:
+    cineris-sandbox tree::sys_a_command_runs_and_says_how_it_ended
+
+[break] children-git-not-kept
+rule: The harness's git is kept for the timeout report, with the command line that was started.
+file: crates/cineris-base/src/git.rs
+find: crate::hook::spawned(child.id(), described);
+replace: let _ = described;
+caught-by:
+    cineris-base git::tests::sys_git_is_started_as_its_confinement_says
 
 [break] children-running-said-gone
 rule: A child still running is said to be running: a late exit, not a missed wake.
 file: crates/cineris-testkit/src/watch.rs
 in: children_text
-find: (None, There::Running) => "still running, and nothing has seen it exit".to_owned(),
-replace: (None, There::Running) => "gone, with no wait".to_owned(),
+find: "still running".to_owned()
+replace: "gone, with no wait".to_owned()
 caught-by:
     cineris-testkit watch::tests::each_child_is_told_running_exited_or_gone
 
@@ -201,3 +236,122 @@ find: std::process::abort();
 replace: return;
 caught-by:
     cineris-base hook::refusal_tests::sys_a_test_not_named_sys_is_stopped_at_its_first_start
+
+# What the first round of review found.
+
+[break] worktree-include-folder-pattern-takes-a-file
+rule: A folder-only pattern (`/notes/`) ignores what is under the folder, not a file of its name.
+file: xtask/src/rules/worktree_include.rs
+in: matches
+find: if folder_only && length == parts.len() && !folder {
+replace: if false {
+caught-by:
+    rules::worktree_include::tests::a_folder_pattern_does_not_ignore_a_file_of_its_name
+
+[break] worktree-include-wildcard-entry-not-expanded
+rule: An entry with a wildcard is held to every tracked file it matches.
+file: xtask/src/rules/worktree_include.rs
+in: check
+find: matches(entry, file, false)
+replace: file == path
+caught-by:
+    rules::worktree_include::tests::a_wildcard_entry_may_match_no_tracked_file
+
+[break] worktree-include-never-anchored
+rule: A pattern with a `/` is anchored at the root.
+file: xtask/src/rules/worktree_include.rs
+in: matches
+find: let anchored = pattern.contains('/');
+replace: let anchored = false;
+caught-by:
+    rules::worktree_include::tests::an_anchored_pattern_matches_only_at_the_root
+
+[break] pty-keys-mark-on-the-line-before-ignored
+rule: A `// raw key:` mark on the line before the call counts too.
+file: xtask/src/rules/pty_keys.rs
+in: check_file
+find: if marked(line) || marked(line - 1) {
+replace: if marked(line) {
+caught-by:
+    rules::pty_keys::tests::what_is_not_a_key_and_a_marked_line_pass
+
+[break] pty-keys-string-runs-to-the-end
+rule: An answer's string (`OSC … BEL`) ends at its BEL or ST, and what follows it is read again.
+file: xtask/src/rules/pty_keys.rs
+in: keys_in
+find: match string_end(bytes, at + 2) {
+replace: match None::<usize> {
+caught-by:
+    rules::pty_keys::tests::what_is_not_a_key_and_a_marked_line_pass
+
+[break] pty-keys-byte-array-not-read
+rule: An array of bytes handed to a sender is read as the bytes it holds.
+file: xtask/src/rules/pty_keys.rs
+in: check_file
+find: array.push(byte);
+replace: let _ = byte;
+caught-by:
+    rules::pty_keys::tests::a_raw_key_sent_to_a_pty_fails
+
+[break] pty-keys-constant-not-read
+rule: A constant of the file handed to a sender is read as its literal.
+file: xtask/src/rules/pty_keys.rs
+in: check_file
+find: literal_bytes(token).or_else(|| constants.get(token).cloned())
+replace: literal_bytes(token)
+caught-by:
+    rules::pty_keys::tests::a_raw_key_sent_to_a_pty_fails
+
+[break] pty-keys-product-code-read
+rule: Product code is not read: its output has the same bytes as keys.
+file: xtask/src/rules/pty_keys.rs
+in: is_read
+find: (file.split('/').any(|part| part == "tests") || test_files.contains(file))
+replace: true
+caught-by:
+    rules::pty_keys::tests::product_code_and_a_senders_definition_are_not_read
+
+[break] key-shift-state-wrong
+rule: In a win32 record Shift is `SHIFT_PRESSED`, 0x10.
+file: crates/cineris-testkit/src/pty.rs
+in: key_bytes
+find: const SHIFT: u32 = 0x10;
+replace: const SHIFT: u32 = 0x04;
+caught-by:
+    cineris-testkit pty::tests::escape_and_the_modifiers_are_sent_as_a_terminal_sends_them
+
+[break] key-tilde-modifier-dropped
+rule: A modifier of a `CSI n ~` key goes after its number: `CSI 15 ; 5 ~`.
+file: crates/cineris-testkit/src/pty.rs
+in: key_bytes
+find: format!("\x1b[{number};{modifier}~")
+replace: format!("\x1b[{number}~")
+caught-by:
+    cineris-testkit pty::tests::escape_and_the_modifiers_are_sent_as_a_terminal_sends_them
+
+[break] public-words-plural-missed
+rule: A word with an `s` after it is found: `laptops`.
+file: xtask/src/rules/public_words.rs
+in: whole
+find: Some('s' | 'S') => !after.next().is_some_and(word_char)
+replace: Some('s' | 'S') => false
+caught-by:
+    rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found
+
+[break] public-words-lines-not-joined
+rule: A phrase broken across two lines of a paragraph is found.
+file: xtask/src/rules/public_words.rs
+in: paragraphs
+find: if line.trim().is_empty() {
+replace: if true {
+caught-by:
+    rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found
+
+[break] public-words-overlapping-hits-twice
+rule: Two words found over the same text are one hit.
+file: xtask/src/rules/public_words.rs
+in: hits
+find: .any(|&(start, end, _)| start < hit.1 && hit.0 < end)
+replace: .any(|&(start, end, _)| start <= hit.0 && hit.1 <= end)
+caught-by:
+    rules::public_words::tests::a_plural_a_broken_line_and_two_spaces_are_found

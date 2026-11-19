@@ -138,36 +138,96 @@ pub(crate) fn check(
             continue;
         }
         let strict = file == STRICT;
-        for (index, line) in text.lines().enumerate() {
-            for (word, _) in hits(line, words, strict) {
-                let excuse = if strict {
-                    format!(
-                        "{STRICT}, which every agent session loads, names none of these words, \
+        for (word, line) in paragraphs(text)
+            .iter()
+            .flat_map(|paragraph| paragraph.found(words, strict))
+        {
+            let excuse = if strict {
+                format!(
+                    "{STRICT}, which every agent session loads, names none of these words, \
                          not even in a product use."
-                    )
-                } else {
-                    format!(
-                        "If this is the product's own use of the word, add the longer phrase as an \
+                )
+            } else {
+                format!(
+                    "If this is the product's own use of the word, add the longer phrase as an \
                          `allow` line to {LIST}."
-                    )
-                };
-                violations.push(Violation::new(
-                    file.clone(),
-                    Some(index + 1),
-                    format!(
-                        "`{}` is a word of the maintainers' private setup, not of the product. \
+                )
+            };
+            violations.push(Violation::new(
+                file.clone(),
+                Some(line),
+                format!(
+                    "`{}` is a word of the maintainers' private setup, not of the product. \
                          Say {} instead. {excuse}",
-                        word.phrase, word.say
-                    ),
-                ));
-            }
+                    word.phrase, word.say
+                ),
+            ));
         }
     }
     violations
 }
 
+/// A paragraph: consecutive lines that are not blank, joined by one space
+/// with every run of white space made one space, so that a phrase broken
+/// across two lines, or written with two spaces, is found.
+struct Paragraph {
+    text: String,
+    /// Where each line's text starts in `text`, and its number.
+    lines: Vec<(usize, usize)>,
+}
+
+impl Paragraph {
+    /// The words found, each with the line it starts on.
+    fn found<'a>(&self, words: &'a Words, strict: bool) -> Vec<(&'a Word, usize)> {
+        hits(&self.text, words, strict)
+            .into_iter()
+            .map(|(word, at)| {
+                let line = self
+                    .lines
+                    .iter()
+                    .rev()
+                    .find(|(start, _)| *start <= at)
+                    .map_or(1, |(_, line)| *line);
+                (word, line)
+            })
+            .collect()
+    }
+}
+
+/// The paragraphs of a text.
+fn paragraphs(text: &str) -> Vec<Paragraph> {
+    let mut paragraphs = Vec::new();
+    let mut current: Option<Paragraph> = None;
+    for (index, line) in text.lines().enumerate() {
+        if line.trim().is_empty() {
+            paragraphs.extend(current.take());
+            continue;
+        }
+        let paragraph = current.get_or_insert_with(|| Paragraph {
+            text: String::new(),
+            lines: Vec::new(),
+        });
+        if !paragraph.text.is_empty() && !paragraph.text.ends_with(' ') {
+            paragraph.text.push(' ');
+        }
+        paragraph.lines.push((paragraph.text.len(), index + 1));
+        for c in line.chars() {
+            if c.is_whitespace() {
+                if !paragraph.text.is_empty() && !paragraph.text.ends_with(' ') {
+                    paragraph.text.push(' ');
+                }
+            } else {
+                paragraph.text.push(c);
+            }
+        }
+    }
+    paragraphs.extend(current);
+    paragraphs
+}
+
 /// The words found in `line`, each with where it starts: one hit for a
-/// place two words cover (`at the desk` and `the desk`), the longer one.
+/// place two words cover (`at the desk` and `the desk`, `` `rx `` and
+/// `rx test`), the one that starts first and, of those, the longer.
 fn hits<'a>(line: &str, words: &'a Words, strict: bool) -> Vec<(&'a Word, usize)> {
     let lower = line.to_ascii_lowercase();
     let mut found: Vec<(usize, usize, &Word)> = Vec::new();
@@ -188,13 +248,13 @@ fn hits<'a>(line: &str, words: &'a Words, strict: bool) -> Vec<(&'a Word, usize)
             found.push((start, end, word));
         }
     }
-    // Longest first at each place, then drop what an earlier hit covers.
+    // Longest first at each place, then drop what overlaps an earlier hit.
     found.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
     let mut kept: Vec<(usize, usize, &Word)> = Vec::new();
     for hit in found {
         if kept
             .iter()
-            .any(|&(start, end, _)| start <= hit.0 && hit.1 <= end)
+            .any(|&(start, end, _)| start < hit.1 && hit.0 < end)
         {
             continue;
         }
@@ -206,14 +266,19 @@ fn hits<'a>(line: &str, words: &'a Words, strict: bool) -> Vec<(&'a Word, usize)
 }
 
 /// Whether the phrase at `start..end` stands as whole words at whichever of
-/// its ends is a letter or digit.
+/// its ends is a letter or digit. An `s` may follow it (`laptops`), and so
+/// may `'s`, which is not part of a word anyway.
 fn whole(line: &str, start: usize, end: usize, phrase: &str) -> bool {
     let word_char = |c: char| c.is_alphanumeric() || c == '_';
     let first = phrase.chars().next().is_some_and(word_char);
     let last = phrase.chars().next_back().is_some_and(word_char);
     let before = line[..start].chars().next_back();
-    let after = line[end..].chars().next();
-    (!first || !before.is_some_and(word_char)) && (!last || !after.is_some_and(word_char))
+    let mut after = line[end..].chars();
+    let ends = match after.next() {
+        Some('s' | 'S') => !after.next().is_some_and(word_char),
+        next => !next.is_some_and(word_char),
+    };
+    (!first || !before.is_some_and(word_char)) && (!last || ends)
 }
 
 /// Whether an `allow` phrase covers `start..end` of the line.
@@ -237,6 +302,7 @@ word the desk => locally
 word at the desk => locally
 cased the coordinator => the maintainers
 word `rx  => the plain `cargo xtask` command
+word rx test => `cargo xtask test`
 word the desktop => the reference machine
 allow the desktop number -- the budgets' column
 history docs/steps/08/ -- before the rule
@@ -271,11 +337,32 @@ history docs/steps/08/ -- before the rule
     /// of a `cased` word decides: the product's Coordinator passes.
     #[test]
     fn words_are_whole_and_a_cased_word_keeps_its_case() {
-        assert!(run("docs/x.md", "the desktops of users\n").is_empty());
+        assert!(run("docs/x.md", "the desktop-class machines\n").len() == 1);
+        assert!(run("docs/x.md", "a deskside machine at the desks' end\n").len() == 1);
         assert!(run("docs/x.md", "The Coordinator runs a team.\n").is_empty());
         assert_eq!(run("docs/x.md", "Ask the coordinator's answer.\n").len(), 1);
         assert_eq!(run("docs/x.md", "Run `rx test`.\n").len(), 1);
         assert_eq!(run("docs/x.md", "AT THE DESK\n").len(), 1);
+    }
+
+    /// A plural, a phrase broken across two lines or written with two
+    /// spaces, and a word in capitals are found; a phrase across a blank
+    /// line is not; overlapping hits are one.
+    #[test]
+    fn a_plural_a_broken_line_and_two_spaces_are_found() {
+        assert_eq!(
+            run("docs/x.md", "two build sessions ran\n").len(),
+            0,
+            "not on the list"
+        );
+        assert_eq!(run("docs/x.md", "the desks of two\n").len(), 1);
+        let broken = run("docs/x.md", "It took 3 s at the\n  desk, as before.\n");
+        assert_eq!(broken.len(), 1, "{broken:?}");
+        assert!(broken[0].starts_with("docs/x.md:1:"), "{broken:?}");
+        assert_eq!(run("docs/x.md", "at  the\tdesk\n").len(), 1);
+        assert!(run("docs/x.md", "at the\n\ndesk\n").is_empty());
+        assert_eq!(run("docs/x.md", "Run `rx test`.\n").len(), 1);
+        assert!(run("docs/x.md", "the deskside view\n").is_empty());
     }
 
     /// An `allow` phrase excuses the hit inside it, and only that one; in

@@ -164,7 +164,7 @@ impl Tree {
         cineris_base::hook::started(command.get_program());
         let described = cineris_base::hook::describe(&command);
         let inner = imp::Inner::spawn(command, guard, limits)?;
-        cineris_base::hook::spawned(inner.id(), described);
+        cineris_base::hook::spawned_tracked(inner.id(), described);
         Ok(Self {
             inner: Arc::new(inner),
         })

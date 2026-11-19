@@ -19,7 +19,9 @@
 #                                 rule; its records keep their words
 #
 # A phrase that begins or ends with a letter or digit matches only as a
-# whole word there: `the desk` is not found in `the desktop`.
+# whole word there: `the desk` is not found in `the desktop`; an `s` after
+# it is taken (`laptops`). A phrase is found across a line break and across
+# runs of spaces, within a paragraph.
 
 word `rx` => the plain `cargo xtask` command
 word `rx  => the plain `cargo xtask` command
@@ -29,20 +31,25 @@ word rx test => `cargo xtask test`
 word rx busy => "when the machine is quieter"
 word rx throttle => the plain `cargo xtask` command
 word rx ab => `cargo xtask ab --base DIR`
+word rx copy => "a copy of the tree"
 word ci-wait => a CI wait (`gh run watch RUN`)
-cased the desktop => the reference machine
-cased The desktop => The reference machine
+word the desktop => the reference machine
+word desktop cores => the reference machine's cores
+word owner's desktop => the reference machine
 word laptop => the second machine
 word the desk => locally
 word at the desk => locally
+word at a desk => locally
 cased the coordinator => the maintainers
 cased The coordinator => The maintainers
 word shell guard => "a sandbox that refuses compound git commands"
+word shell-guard => "a sandbox that refuses compound git commands"
 word test lock => "on an otherwise idle machine"
 word side lock => "on an otherwise idle machine"
 word target/coordinator => target/review/
 word build session => a session
 
+allow the desktop column -- the Desktop column of the performance budgets
 allow the desktop number -- the Desktop column of the performance budgets: the class of machine users run on
 allow an 8-thread laptop -- the measurement pages describe the second machine's class, as they do the reference machine's
 

@@ -250,6 +250,12 @@ mod tests {
         }
         let recording = Recording::default();
         let child = start(&recording, &std::env::temp_dir(), &["status", "-z"]).unwrap();
+        // Kept for the timeout report, by its id and the command line that
+        // was started: the confinement's.
+        let pid = child.id();
+        let kept = crate::hook::spawned_children();
+        let mine = kept.iter().find(|kept| kept.pid == pid).unwrap();
+        assert!(mine.command.ends_with("hash-object --stdin"), "{mine:?}");
         let output = child.wait_with_output().unwrap();
         assert!(output.status.success());
         // What the confinement started, with the input it gave.
