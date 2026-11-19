@@ -62,6 +62,10 @@ use crate::view::{Hint, one_line};
 pub(super) enum Sent {
     /// The configuration read again after the file was written.
     Reload,
+    /// The configuration read again after a file was found at the name,
+    /// made meanwhile: what was chosen applies over it for the run (since
+    /// the short review of the fixes of the third pull request).
+    FoundRead,
     /// The project's commands, for the last step.
     Detect(SessionId),
     /// The commands picked, added to the profile.
@@ -662,17 +666,24 @@ impl App {
                         self.first_run_open(true);
                     }
                     // A file made meanwhile was found at the name, and left
-                    // as it is: it is the configuration from the next start,
-                    // and the set-up does not run again (the review of the
-                    // fixes: this was said to be nothing saved).
+                    // as it is, and the set-up does not run again (the
+                    // review of the fixes: this was said to be nothing
+                    // saved). It is read now, as the core's watch would read
+                    // it at the next key, and what was chosen applies over it
+                    // for the run (the short review of the fixes: it was
+                    // said to be in force only from the next start).
                     Err(NotWritten::Found(path)) => {
                         self.say(&format!(
                             "Mode: {mode}, for this run. {} was made meanwhile, not by the \
-                             set-up, and was left as it is: it is the configuration from the \
-                             next start. This run's sessions are opened with what was chosen.",
+                             set-up, and was left as it is: it is read now, and what was \
+                             chosen applies over it for this run.",
                             one_line(&path)
                         ));
-                        self.first_run_open(true);
+                        let ticket = self
+                            .link
+                            .send(Op::ConfigReload(ConfigReloadParams::default()));
+                        self.pending
+                            .insert(ticket, Pending::FirstRun(Sent::FoundRead));
                     }
                 }
             }
@@ -756,7 +767,8 @@ impl App {
     /// An operation the first run sent was answered.
     pub(super) fn first_run_done(&mut self, sent: Sent, result: Result<OpResult, ErrorData>) {
         match (sent, result) {
-            (Sent::Reload, result) => {
+            (sent @ (Sent::Reload | Sent::FoundRead), result) => {
+                let found = matches!(sent, Sent::FoundRead);
                 // A reload that failed, or found the files wrong, leaves the
                 // configuration in force as it was: the file written is not
                 // read, and the session carries what was chosen itself.
@@ -768,19 +780,25 @@ impl App {
                     Ok(_) => None,
                 };
                 if let Some(why) = &failed {
-                    let file = self
-                        .first_run
-                        .as_ref()
-                        .and_then(|run| run.written.clone())
-                        .and_then(Result::ok)
-                        .map_or_else(|| "The settings".to_owned(), |path| one_line(&path));
-                    self.say(&format!(
-                        "{file} was written, but the configuration could not be read again: {}. \
-                         This run's sessions are opened with what was chosen.",
-                        one_line(why)
-                    ));
+                    let file = match self.first_run.as_ref().and_then(|run| run.written.clone()) {
+                        Some(Ok(path) | Err(NotWritten::Found(path))) => one_line(&path),
+                        _ => "The settings".to_owned(),
+                    };
+                    self.say(&if found {
+                        format!(
+                            "{file} could not be read: {}. This run's sessions are opened with \
+                             what was chosen.",
+                            one_line(why)
+                        )
+                    } else {
+                        format!(
+                            "{file} was written, but the configuration could not be read \
+                             again: {}. This run's sessions are opened with what was chosen.",
+                            one_line(why)
+                        )
+                    });
                 }
-                self.first_run_open(failed.is_some());
+                self.first_run_open(failed.is_some() || found);
             }
             (Sent::Detect(session), Ok(OpResult::ProjectDetect(found))) => {
                 if self.session.as_ref().map(|state| &state.session_id) != Some(&session) {
@@ -1051,26 +1069,26 @@ impl App {
                     return Some(true);
                 }
                 // A key the step took: what comes next waits a key's
-                // repeat window after it.
+                // repeat window after it. Held down, it goes where its press
+                // went, nowhere, also once the step it answered has gone
+                // (the short review of the fixes: a held `s` that ended the
+                // last step typed `sss` into the input box), as a panel's.
                 self.taken = Some(at);
                 self.last_key = Some(LastKey { typing: false });
+                self.panel_held = Some((*key, at, false));
                 self.first_run_key(*key, at);
                 Some(true)
             }
             // A key held down never answers a step. The last step's goes
             // where its press went: to the input box when the step did not
-            // take it, and nowhere when it did, as a dialog's (the review of
-            // the fixes of the third pull request: held, `Down` recalled the
-            // history into the input box, and `space` typed spaces there).
+            // take it, and nowhere when it did, the press being marked held
+            // as a panel's is (`App::panel_holds`; the review of the fixes
+            // of the third pull request: held, `Down` recalled the history
+            // into the input box, and `space` typed spaces there).
             TermEvent::Repeat(_) => {
                 run.typed(at);
                 if matches!(run.step, Step::Commands(_)) {
-                    let pressed_here = self.last_key.is_some_and(|key| !key.typing);
-                    if !pressed_here {
-                        return None;
-                    }
-                    self.taken = Some(at);
-                    return Some(true);
+                    return None;
                 }
                 self.first_run_untaken(at);
                 Some(true)
@@ -1908,8 +1926,8 @@ fn saved(run: &FirstRun) -> String {
         // Found at the name, not written (the review of the fixes of the
         // third pull request).
         Some(Err(NotWritten::Found(path))) => format!(
-            "Nothing of the set-up's was saved: {}, made meanwhile, is the configuration from the \
-             next start, and the set-up does not run again.",
+            "Nothing of the set-up's was saved: {}, made meanwhile, is the configuration now, \
+             what was chosen applying over it for this run, and the set-up does not run again.",
             one_line(path)
         ),
         _ => "Nothing was saved, so the set-up runs again at the next start.".to_owned(),

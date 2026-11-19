@@ -265,7 +265,10 @@ impl Catalog {
     /// by field, so an overlaid entry says everything about its model. The
     /// version becomes `<this>+<other>`, because prices may now come from
     /// either. An overlaid entry marked [`default`](ModelEntry::default)
-    /// takes its provider's default from the entry that had it.
+    /// takes its provider's default from the entry that had it; one that
+    /// replaces the default entry, unmarked, keeps that place (since the
+    /// short review of the fixes of step 25's third pull request: it left
+    /// the provider with no default).
     pub fn overlay(&mut self, other: &Self) {
         for entry in &other.models {
             if entry.default {
@@ -280,7 +283,13 @@ impl Catalog {
                 .iter_mut()
                 .find(|existing| same_model(existing, entry))
             {
-                Some(existing) => *existing = Arc::clone(entry),
+                Some(existing) => {
+                    let was_default = existing.default;
+                    *existing = Arc::clone(entry);
+                    if was_default {
+                        Arc::make_mut(existing).default = true;
+                    }
+                }
                 None => self.models.push(Arc::clone(entry)),
             }
         }
@@ -1228,5 +1237,13 @@ mod tests {
         catalog.overlay(&user);
         assert_eq!(defaults(&catalog), ["p/two", "q/three"]);
         assert!(!entry("{}").default, "left out, it is not the default");
+        // An entry that replaces the default, unmarked, keeps its place.
+        let replaced = Catalog::from_json(&format!(
+            r#"{{"version": "r", "model": [{}]}}"#,
+            model("q", "three", false),
+        ))
+        .unwrap();
+        catalog.overlay(&replaced);
+        assert_eq!(defaults(&catalog), ["p/two", "q/three"]);
     }
 }
