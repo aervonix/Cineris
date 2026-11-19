@@ -145,6 +145,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-tools
 
+- [a-git-cap-of-zero-that-git-can-still-beat](a-git-cap-of-zero-that-git-can-still-beat.md): A test of git's time limit in the look for a command's changes passes only when git has not answered before its limit of zero is asked about; one CI flake. Owner: the coordinator, to a fix session.
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
 - [names-that-escape-to-the-same-text](names-that-escape-to-the-same-text.md): Two names that are one text once escaped are counted twice and shown once by `list`, and share their matches in `search`. Owner: a later `cineris-tools` step, or step 32.
 - [the-shell-version-probe-runs-unconfined-with-the-keys](the-shell-version-probe-runs-unconfined-with-the-keys.md): The shell's version is asked by starting the shell unconfined, with the harness's whole environment, and the shell may be a program inside a write root. Owner: the coordinator.
