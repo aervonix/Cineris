@@ -342,8 +342,8 @@ caught-by:
 rule: The history's file is written again past `COMPACT_BYTES` as well as past `COMPACT` lines.
 file: crates/cineris-cli/src/history.rs
 in: read
-find: if lines > COMPACT || size > COMPACT_BYTES {
-replace: if lines > COMPACT {
+find: if lines > limits.compact || size > limits.compact_bytes {
+replace: if lines > limits.compact {
 caught-by:
     cineris-cli::bin/cineris history::tests::a_file_past_its_bytes_is_written_again_within_them
 
@@ -351,7 +351,7 @@ caught-by:
 rule: A project holds at most `KEEP_BYTES` of its lines in memory.
 file: crates/cineris-cli/src/history.rs
 in: read
-find: if held > KEEP_BYTES {
+find: if held > limits.keep_bytes {
 replace: if held > usize::MAX - 1 {
 caught-by:
     cineris-cli::bin/cineris history::tests::a_file_past_its_bytes_is_written_again_within_them
@@ -360,7 +360,7 @@ caught-by:
 rule: A start reads at most the file's last `READ_LIMIT` bytes.
 file: crates/cineris-cli/src/history.rs
 in: read_end
-find: if size <= READ_LIMIT {
+find: if size <= read_limit {
 replace: if true {
 caught-by:
     cineris-cli::bin/cineris history::tests::a_file_past_the_read_limit_is_read_from_its_end
@@ -369,7 +369,7 @@ caught-by:
 rule: A file written again keeps every project's newest within `FILE_KEEP_BYTES`.
 file: crates/cineris-cli/src/history.rs
 in: compact
-find: if total + entry.size > FILE_KEEP_BYTES {
+find: if total + entry.size > limits.file_keep_bytes {
 replace: if false {
 caught-by:
     cineris-cli::bin/cineris history::tests::a_file_past_its_bytes_is_written_again_within_them
