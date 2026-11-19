@@ -23,18 +23,20 @@
 pub(crate) struct Merged {
     /// The merged text, with the line ends of `ours`.
     pub(crate) text: String,
-    /// Each place both sides added lines, both kept: its line in the merged
-    /// text (from 1), and the lines added there, ours then theirs.
+    /// Each place both sides' lines were put side by side ([`Union`]).
     pub(crate) unions: Vec<Union>,
 }
 
-/// One place both sides added lines, and both were kept.
+/// One place both sides added lines, and both were kept: both added at one
+/// place (ours first), or one side added lines just before or just after
+/// lines the other changed (in the order of the text).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Union {
-    /// The first added line's number in the merged text, from 1.
+    /// The first kept line's number in the merged text, from 1.
     pub(crate) line: usize,
-    pub(crate) ours: Vec<String>,
-    pub(crate) theirs: Vec<String>,
+    /// The lines put first, then the lines put after them.
+    pub(crate) first: Vec<String>,
+    pub(crate) second: Vec<String>,
 }
 
 /// Why a merge was not made: where, in the base, and what each side did.
@@ -278,7 +280,17 @@ pub(crate) fn merge(base: &str, ours: &str, theirs: &str) -> Result<Merged, Refu
         let ours_changed = i > first_i;
         let theirs_changed = j > first_j;
         if ours_changed && theirs_changed && ours_text != theirs_text {
-            if start != end {
+            let placed = if start == end {
+                Some((ours_text.clone(), theirs_text.clone()))
+            } else {
+                beside(
+                    (&mine[first_i..i], &ours, &ours_text),
+                    (&other[first_j..j], &theirs, &theirs_text),
+                    start,
+                    end,
+                )
+            };
+            let Some((first, second)) = placed else {
                 return Err(Refusal {
                     line: start + 1,
                     why: format!(
@@ -287,14 +299,14 @@ pub(crate) fn merge(base: &str, ours: &str, theirs: &str) -> Result<Merged, Refu
                         end
                     ),
                 });
-            }
+            };
             unions.push(Union {
                 line: out.len() + 1,
-                ours: ours_text.iter().map(|line| (*line).to_owned()).collect(),
-                theirs: theirs_text.iter().map(|line| (*line).to_owned()).collect(),
+                first: first.iter().map(|line| (*line).to_owned()).collect(),
+                second: second.iter().map(|line| (*line).to_owned()).collect(),
             });
-            out.extend(&ours_text);
-            out.extend(&theirs_text);
+            out.extend(&first);
+            out.extend(&second);
         } else if ours_changed {
             out.extend(&ours_text);
         } else {
@@ -327,4 +339,39 @@ fn span<'t>(text: &Lines<'t>, start: usize, end: usize, shift: isize, grew: isiz
     let from = (start as isize + shift) as usize;
     let to = (end as isize + shift + grew) as usize;
     text.lines[from..to].to_vec()
+}
+
+/// A side's changes at a place, its text, and its text for the place.
+type Side<'s, 't> = (&'s [Hunk], &'s Lines<'t>, &'s Vec<&'t str>);
+
+/// When one side's only change at the place `start..end` is lines it added
+/// at the place's start or its end, beside the other side's changes there:
+/// those lines, put before or after the other side's text for the place.
+/// git stops on an addition next to a changed line (a row added after a row
+/// the other side reworded); it is an addition all the same, and the
+/// other's change is kept whole.
+fn beside<'t>(
+    ours: Side<'_, 't>,
+    theirs: Side<'_, 't>,
+    start: usize,
+    end: usize,
+) -> Option<(Vec<&'t str>, Vec<&'t str>)> {
+    let addition = |side: &Side<'_, 't>| match side.0 {
+        [hunk] if hunk.is_addition() && (hunk.a_start == start || hunk.a_start == end) => Some((
+            hunk.a_start,
+            side.1.lines[hunk.b_start..hunk.b_end].to_vec(),
+        )),
+        _ => None,
+    };
+    let (at, added, other) = if let Some((at, added)) = addition(&theirs) {
+        (at, added, ours.2.clone())
+    } else {
+        let (at, added) = addition(&ours)?;
+        (at, added, theirs.2.clone())
+    };
+    Some(if at == end {
+        (other, added)
+    } else {
+        (added, other)
+    })
 }

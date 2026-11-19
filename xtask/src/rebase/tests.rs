@@ -92,8 +92,8 @@ fn rows_added_at_the_end_of_one_table_on_both_sides_are_both_kept() {
         let merged = unite(Kind::Markdown, &base, &ours, &theirs, &any_layout).unwrap();
         assert_eq!(merged.text, fixture(&format!("{case}.merged")), "{case}");
         assert_eq!(merged.unions.len(), 1, "{case}");
-        assert!(merged.unions[0].ours[0].starts_with("| Write the open items' index"));
-        assert!(merged.unions[0].theirs[0].starts_with("| Mark a test as a known flake"));
+        assert!(merged.unions[0].first[0].starts_with("| Write the open items' index"));
+        assert!(merged.unions[0].second[0].starts_with("| Mark a test as a known flake"));
     }
     // The CRLF case keeps its line ends.
     let (base, ours, theirs) = sides("table-rows-crlf.md");
@@ -117,6 +117,50 @@ fn tests_appended_to_one_module_on_both_sides_are_both_kept() {
     let (base, ours, theirs) = sides("tests-appended.rs");
     let merged = unite(Kind::Rust, &base, &ours, &theirs, &any_layout).unwrap();
     assert_eq!(merged.text, fixture("tests-appended.rs.merged"));
+}
+
+/// The shape the real rebase of this step met: main reworded a table's
+/// last row and added rows after it, and the branch added a row after it
+/// too. git stops there; main's rows and its wording are kept whole, and the
+/// branch's row after them.
+#[test]
+fn a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change() {
+    let header = "| To | Run |\n|---|---|\n";
+    let base = format!("{header}| a | b |\n| c | d |\n\nText.\n");
+    let ours = format!("{header}| a | b |\n| c | D, reworded |\n| e | f |\n\nText.\n");
+    let theirs = format!("{header}| a | b |\n| c | d |\n| g | h |\n\nText.\n");
+    let merged = unite(Kind::Markdown, &base, &ours, &theirs, &any_layout).unwrap();
+    assert_eq!(
+        merged.text,
+        format!("{header}| a | b |\n| c | D, reworded |\n| e | f |\n| g | h |\n\nText.\n")
+    );
+    assert_eq!(
+        merged.unions,
+        [Union {
+            line: 4,
+            first: strings(&["| c | D, reworded |", "| e | f |"]),
+            second: strings(&["| g | h |"]),
+        }]
+    );
+    // The same, sides the other way round: the addition is still after the
+    // change, and the change is whole.
+    let merged = unite(Kind::Markdown, &base, &theirs, &ours, &any_layout).unwrap();
+    assert_eq!(
+        merged.text,
+        format!("{header}| a | b |\n| c | D, reworded |\n| e | f |\n| g | h |\n\nText.\n")
+    );
+    // An addition before a changed line goes before it.
+    let before = format!("{header}| a | b |\n| x | y |\n| c | d |\n\nText.\n");
+    let reworded = format!("{header}| a | b |\n| c | D |\n\nText.\n");
+    let merged = unite(Kind::Markdown, &base, &reworded, &before, &any_layout).unwrap();
+    assert_eq!(
+        merged.text,
+        format!("{header}| a | b |\n| x | y |\n| c | D |\n\nText.\n")
+    );
+    // Both sides rewording the row is still a person's.
+    let other = format!("{header}| a | b |\n| c | d, otherwise |\n| g | h |\n\nText.\n");
+    let error = unite(Kind::Markdown, &base, &ours, &other, &any_layout).unwrap_err();
+    assert!(error.contains("both sides change line(s) 4..4"), "{error}");
 }
 
 #[test]
@@ -318,8 +362,8 @@ fn additions_are_pushed_down_past_the_lines_they_start_with() {
         merged.unions,
         [Union {
             line: 6,
-            ours: strings(&["", "    fn b() {", "        check();", "    }"]),
-            theirs: strings(&["", "    fn c() {", "        check();", "    }"]),
+            first: strings(&["", "    fn b() {", "        check();", "    }"]),
+            second: strings(&["", "    fn c() {", "        check();", "    }"]),
         }]
     );
     assert_eq!(balanced(&merged.text), Ok(()));
@@ -336,8 +380,15 @@ fn changes_apart_merge_and_one_sides_change_is_taken_whole() {
     // The same change on both sides is taken once.
     let merged = merge(base, ours, ours).unwrap();
     assert_eq!(merged.text, ours);
-    // A change and an addition that touch are not additions alone.
-    let error = merge(base, "a\nB\nc\nd\ne\n", "a\nx\nb\nc\nd\ne\n").unwrap_err();
+    // An addition just before a line the other side changed goes before
+    // the change, which is kept whole.
+    let merged = merge(base, "a\nB\nc\nd\ne\n", "a\nx\nb\nc\nd\ne\n").unwrap();
+    assert_eq!(merged.text, "a\nx\nB\nc\nd\ne\n");
+    // Two changes of one line are not additions.
+    let error = merge(base, "a\nB\nc\nd\ne\n", "a\nx\nc\nd\ne\n").unwrap_err();
+    assert_eq!(error.line, 2);
+    // Nor is a change beside a change and an addition of the other side.
+    let error = merge(base, "a\nB\nc\nd\ne\n", "a\ny\nb\nC\nd\ne\n").unwrap_err();
     assert_eq!(error.line, 2);
     // A last line with no line end keeps that.
     let merged = merge("a\nb", "a\nb\nc", "z\na\nb").unwrap();
