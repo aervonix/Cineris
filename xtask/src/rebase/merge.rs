@@ -318,19 +318,21 @@ pub(crate) fn merge(base: &str, ours: &str, theirs: &str) -> Result<Merged, Refu
     }
     out.extend(&base.lines[cursor..]);
 
+    // The union is written in ours' line ends, every line alike.
     let end = if ours.crlf { "\r\n" } else { "\n" };
     let mut text = out.join(end);
-    // The last line ends as ours' does, or as theirs' when only theirs
-    // changed the end.
-    let ends = if ours.lines.len() == base.lines.len() && ours.lines == base.lines {
-        theirs.ends_with_newline
-    } else {
-        ours.ends_with_newline
-    };
-    if ends && !out.is_empty() {
+    // The last line ends with a line end when either side's does: a row
+    // appended to a page whose last line has none must not leave the page
+    // with none.
+    if final_newline(&ours, &theirs) && !out.is_empty() {
         text.push_str(end);
     }
     Ok(Merged { text, unions })
+}
+
+/// Whether the merged text ends with a line end: when either side's does.
+pub(crate) fn final_newline(ours: &Lines<'_>, theirs: &Lines<'_>) -> bool {
+    ours.ends_with_newline || theirs.ends_with_newline
 }
 
 /// A side's lines for the base's `start..end`: shifted by what the side
@@ -345,11 +347,18 @@ fn span<'t>(text: &Lines<'t>, start: usize, end: usize, shift: isize, grew: isiz
 type Side<'s, 't> = (&'s [Hunk], &'s Lines<'t>, &'s Vec<&'t str>);
 
 /// When one side's only change at the place `start..end` is lines it added
-/// at the place's start or its end, beside the other side's changes there:
-/// those lines, put before or after the other side's text for the place.
-/// git stops on an addition next to a changed line (a row added after a row
-/// the other side reworded); it is an addition all the same, and the
-/// other's change is kept whole.
+/// at the place's end, just after lines the other side changed: those
+/// lines, after the other side's text for the place. git stops on an
+/// addition next to a changed line (a row added after a row the other side
+/// reworded); it is an addition all the same, and the other's change is
+/// kept whole.
+///
+/// Refused (`None`): an addition before the other side's change, and an
+/// addition beside lines the other side deleted, or deleted some of. What
+/// was added above an item (an attribute, `#[cfg(windows)]`, `#[test]`, a
+/// doc comment) or after lines (a `let` that uses them) belongs to those
+/// lines; with them gone, or changed under it, it would attach to whatever
+/// comes next, and every check would pass.
 fn beside<'t>(
     ours: Side<'_, 't>,
     theirs: Side<'_, 't>,
@@ -357,21 +366,21 @@ fn beside<'t>(
     end: usize,
 ) -> Option<(Vec<&'t str>, Vec<&'t str>)> {
     let addition = |side: &Side<'_, 't>| match side.0 {
-        [hunk] if hunk.is_addition() && (hunk.a_start == start || hunk.a_start == end) => Some((
-            hunk.a_start,
-            side.1.lines[hunk.b_start..hunk.b_end].to_vec(),
-        )),
+        [hunk] if hunk.is_addition() && hunk.a_start == end && hunk.a_start > start => {
+            Some(side.1.lines[hunk.b_start..hunk.b_end].to_vec())
+        }
         _ => None,
     };
-    let (at, added, other) = if let Some((at, added)) = addition(&theirs) {
-        (at, added, ours.2.clone())
-    } else {
-        let (at, added) = addition(&ours)?;
-        (at, added, theirs.2.clone())
+    // Every change of the other side there replaces lines with lines.
+    let replaces = |side: &Side<'_, 't>| {
+        side.0.iter().all(|hunk| {
+            !hunk.is_addition() && hunk.b_end - hunk.b_start >= hunk.a_end - hunk.a_start
+        })
     };
-    Some(if at == end {
-        (other, added)
+    if let Some(added) = addition(&theirs).filter(|_| replaces(&ours)) {
+        Some((ours.2.clone(), added))
     } else {
-        (added, other)
-    })
+        let added = addition(&ours).filter(|_| replaces(&theirs))?;
+        Some((theirs.2.clone(), added))
+    }
 }

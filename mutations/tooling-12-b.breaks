@@ -133,21 +133,12 @@ replace: let placed = if true {
 caught-by:
     rebase::tests::a_line_both_sides_changed_is_left_for_a_person
 
-[break] rebase-an-addition-beside-a-change-goes-before-it
-rule: An addition just after lines the other side changed goes after the change.
-file: xtask/src/rebase/merge.rs
-in: beside
-find: Some(if at == end {
-replace: Some(if at != end {
-caught-by:
-    rebase::tests::a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change
-
 [break] rebase-a-change-counts-as-an-addition
 rule: Only a side whose one change at the place is lines added is put beside the other's change.
 file: xtask/src/rebase/merge.rs
 in: beside
-find: [hunk] if hunk.is_addition() && (hunk.a_start == start || hunk.a_start == end) =>
-replace: [hunk] if hunk.a_start == start || hunk.a_start == end =>
+find: [hunk] if hunk.is_addition() && hunk.a_start == end && hunk.a_start > start =>
+replace: [hunk] if hunk.a_start == end && hunk.a_start > start =>
 caught-by:
     rebase::tests::a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change
 
@@ -167,15 +158,6 @@ rule: The open items' index is its own class, written again by `outstanding`.
 file: xtask/src/rebase/classify.rs
 in: classify
 find: if path == outstanding::INDEX {
-replace: if false {
-caught-by:
-    rebase::tests::each_file_is_put_in_its_class
-
-[break] rebase-recorded-fixtures-are-generated
-rule: A recorded provider fixture is never taken from one side and rebuilt.
-file: xtask/src/rebase/classify.rs
-in: classify
-find: if RECORDED.iter().any(|folder| path.starts_with(folder)) {
 replace: if false {
 caught-by:
     rebase::tests::each_file_is_put_in_its_class
@@ -205,7 +187,7 @@ caught-by:
 rule: What a stop settles is added, so that the rebase goes on.
 file: xtask/src/rebase/mod.rs
 in: settle
-find: git.run(&add)?;
+find: git.run_with(&add, &literal())?;
 replace:
 caught-by:
     rebase::tests::sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_end
@@ -278,3 +260,149 @@ replace: folder.to_owned()
 caught-by:
     records::tests::a_new_pages_heading_is_the_one_its_place_asks_for
     records::tests::a_write_makes_a_missing_page_and_adds_a_missing_section
+
+# The pre-push review's findings, each with its break.
+
+[break] rebase-an-addition-beside-a-deletion
+rule: An addition beside lines the other side deleted, or replaced with fewer, is left for a person (review finding 1).
+file: xtask/src/rebase/merge.rs
+in: beside
+find: !hunk.is_addition() && hunk.b_end - hunk.b_start >= hunk.a_end - hunk.a_start
+replace: !hunk.is_addition()
+caught-by:
+    rebase::tests::an_addition_beside_lines_the_other_side_deleted_is_left
+
+[break] rebase-an-addition-before-a-change
+rule: An addition just before lines the other side changed is left for a person (review finding 1).
+file: xtask/src/rebase/merge.rs
+in: beside
+find: [hunk] if hunk.is_addition() && hunk.a_start == end && hunk.a_start > start =>
+replace: [hunk] if hunk.is_addition() && (hunk.a_start == end || hunk.a_start == start) =>
+caught-by:
+    rebase::tests::an_addition_beside_lines_the_other_side_deleted_is_left
+    rebase::tests::a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change
+
+[break] rebase-go-on-skips-always
+rule: Only a commit this run settled to nothing is skipped (review findings 2 and 3).
+file: xtask/src/rebase/mod.rs
+in: go_on
+find: if settled && git.yes(&["diff", "--cached", "--quiet", "HEAD"])? {
+replace: if true || settled && git.yes(&["diff", "--cached", "--quiet", "HEAD"])? {
+caught-by:
+    rebase::tests::sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_end
+
+[break] rebase-a-commit-left-empty-not-named
+rule: A commit settled to nothing is skipped and named, not left to git's `--continue` to drop unsaid (review finding 3).
+file: xtask/src/rebase/mod.rs
+in: go_on
+find: if settled && git.yes(&["diff", "--cached", "--quiet", "HEAD"])? {
+replace: if false && settled && git.yes(&["diff", "--cached", "--quiet", "HEAD"])? {
+caught-by:
+    rebase::tests::sys_a_commit_left_empty_is_skipped_and_named_and_a_failed_end_keeps_the_report
+
+[break] rebase-a-rebase-that-does-not-go-on-loops
+rule: When `--continue` does not move the rebase on, the command stops with git's words (review finding 2).
+file: xtask/src/rebase/mod.rs
+in: go_on
+find: || step(dir) != before
+replace: || step(dir) == before
+caught-by:
+    rebase::tests::sys_a_file_not_tracked_in_the_way_stops_the_rebase_with_gits_words
+
+[break] rebase-take-theirs
+rule: A generated file takes the side rebased onto, `--ours` in a rebase.
+file: xtask/src/rebase/mod.rs
+in: settle
+find: let mut checkout = vec!["checkout", "--ours", "--"];
+replace: let mut checkout = vec!["checkout", "--theirs", "--"];
+caught-by:
+    rebase::tests::sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_end
+
+[break] rebase-names-are-patterns
+rule: The files a stop settles are named to git as paths, never as patterns (review finding 7).
+file: xtask/src/rebase/mod.rs
+in: settle
+find: env: vec![("GIT_LITERAL_PATHSPECS", "1".to_owned())]
+replace: env: Vec::new()
+caught-by:
+    rebase::tests::sys_a_commit_left_empty_is_skipped_and_named_and_a_failed_end_keeps_the_report
+
+[break] rebase-a-failed-end-loses-the-report
+rule: A failed end is said, and the report is kept with it (review finding 5).
+file: xtask/src/rebase/mod.rs
+in: rebase
+find: report.end_failed = true;
+replace:
+caught-by:
+    rebase::tests::sys_a_commit_left_empty_is_skipped_and_named_and_a_failed_end_keeps_the_report
+
+[break] rebase-a-hand-written-page-is-generated
+rule: Only the files a generator writes are generated; a page written by hand beside them is not (review finding 4).
+file: xtask/src/rebase/classify.rs
+find: ("docs/architecture/tui-look/", &[".ans", ".txt"], "screens")
+replace: ("docs/architecture/tui-look/", &[], "screens")
+caught-by:
+    rebase::tests::each_file_is_put_in_its_class
+
+[break] rebase-the-protocols-readme-is-generated
+rule: `docs/protocol/README.md` is written by hand, not by `schema` (review finding 4).
+file: xtask/src/rebase/classify.rs
+find: ("docs/protocol/schema/", &[], "protocol")
+replace: ("docs/protocol/", &[], "protocol")
+caught-by:
+    rebase::tests::each_file_is_put_in_its_class
+
+[break] rebase-git-and-this-merge-disagree-unsaid
+rule: A file git stopped on and this merge finds no union in is left, not written.
+file: xtask/src/rebase/classify.rs
+in: unite
+find: if merged.unions.is_empty() {
+replace: if false {
+caught-by:
+    rebase::tests::git_seeing_a_conflict_this_merge_does_not_is_left
+
+[break] rebase-the-last-line-end-from-ours-alone
+rule: The union's last line ends with a line end when either side's does (review finding 9).
+file: xtask/src/rebase/merge.rs
+in: final_newline
+find: ours.ends_with_newline || theirs.ends_with_newline
+replace: ours.ends_with_newline
+caught-by:
+    rebase::tests::the_last_lines_end_is_kept_when_either_side_has_it
+
+[break] rebase-a-lost-line-end-unchecked
+rule: `keeps_both` refuses a union whose last line lost the line end a side gave it (review finding 9).
+file: xtask/src/rebase/classify.rs
+in: keeps_both
+find: && !merged.ends_with('\n')
+replace: && false
+caught-by:
+    rebase::tests::the_last_lines_end_is_kept_when_either_side_has_it
+
+[break] git-a-names-tab-kept
+rule: The tab git puts after a name with a space is not part of the name (review finding 6).
+file: xtask/src/git_read.rs
+in: header_name
+find: return Some(text.strip_suffix('\t').unwrap_or(text).to_owned());
+replace: return Some(text.to_owned());
+caught-by:
+    git_read::tests::a_diffs_file_names_are_read_as_git_writes_them
+    git_read::tests::sys_the_three_questions_read_a_branch_its_changes_and_its_new_files
+
+[break] git-a-quoted-name-dropped
+rule: A name git quotes is read back, not dropped (review finding 6).
+file: xtask/src/git_read.rs
+in: header_name
+find: let Some(quoted) = text.strip_prefix('"') else {
+replace: let Some(quoted) = None::<&str> else {
+caught-by:
+    git_read::tests::a_diffs_file_names_are_read_as_git_writes_them
+
+[break] git-added-takes-a-flag-as-a-value
+rule: `added`'s `--grep` and `--against` refuse a value that starts with `-` (review finding 8).
+file: xtask/src/git_read.rs
+in: AddedRequest::parse
+find: .filter(|value| !value.starts_with('-'))
+replace: .filter(|_| true)
+caught-by:
+    git_read::tests::each_question_reads_its_arguments_and_refuses_what_it_cannot_use

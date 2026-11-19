@@ -15,10 +15,12 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use super::classify::{
-    Class, Kind, Resolution, Stages, balanced, classify, dividers, keeps_both, resolve, unite,
+    Class, GENERATED, Kind, Resolution, Stages, balanced, classify, dividers, keeps_both, resolve,
+    unite,
 };
 use super::merge::{Hunk, Union, hunks, merge};
 use super::{Hooks, How, Mode, Report, Request, State, describe, rebase, unmerged};
+use crate::regen::WRITERS;
 
 fn fixture(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -50,14 +52,35 @@ fn strings(words: &[&str]) -> Vec<String> {
 fn each_file_is_put_in_its_class() {
     for (path, class) in [
         ("docs/outstanding/README.md", Class::Index),
-        ("docs/protocol/schema.json", Class::Generated("protocol")),
+        (
+            "docs/protocol/schema/cineris-protocol.schema.json",
+            Class::Generated("protocol"),
+        ),
+        (
+            "docs/protocol/ts/cineris-protocol.d.ts",
+            Class::Generated("protocol"),
+        ),
         (
             "docs/configuration/reference.md",
             Class::Generated("configuration"),
         ),
         (
-            "docs/architecture/tui-look/screens.md",
+            "docs/configuration/schema.json",
+            Class::Generated("configuration"),
+        ),
+        (
+            "docs/architecture/tui-look/2c.txt",
             Class::Generated("screens"),
+        ),
+        (
+            "docs/architecture/tui-look/2c-dark.ans",
+            Class::Generated("screens"),
+        ),
+        // The pages written by hand beside the generated files.
+        ("docs/protocol/README.md", Class::Additions(Kind::Markdown)),
+        (
+            "docs/architecture/tui-look/README.md",
+            Class::Additions(Kind::Markdown),
         ),
         (
             "crates/cineris-tui/snapshots/view.txt",
@@ -82,6 +105,36 @@ fn each_file_is_put_in_its_class() {
         (".github/workflows/ci.yml", Class::Person),
     ] {
         assert_eq!(classify(path), class, "{path}");
+    }
+}
+
+/// Every file the list calls generated is under a place its generator
+/// writes, as `regen` has them, and every place of `regen`'s is reached by
+/// the list: the two cannot part.
+#[test]
+fn the_generated_files_are_the_places_regen_writes() {
+    for (place, _, writer) in GENERATED {
+        let places = WRITERS
+            .iter()
+            .find(|one| one.name == writer)
+            .map(|one| one.writes)
+            .unwrap_or_else(|| panic!("no generator `{writer}`"));
+        assert!(
+            places.iter().any(|written| place.starts_with(written)),
+            "`{place}` is not where `{writer}` writes: {places:?}"
+        );
+    }
+    for writer in &WRITERS {
+        for written in writer.writes {
+            assert!(
+                GENERATED
+                    .iter()
+                    .any(|(place, _, name)| *name == writer.name && place.starts_with(written))
+                    || *written == "crates/cineris-llm/fixtures/",
+                "`{written}` of `{}` is in no entry of GENERATED",
+                writer.name
+            );
+        }
     }
 }
 
@@ -149,18 +202,71 @@ fn a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change() {
         merged.text,
         format!("{header}| a | b |\n| c | D, reworded |\n| e | f |\n| g | h |\n\nText.\n")
     );
-    // An addition before a changed line goes before it.
+    // An addition before a changed line is a person's: what is added above
+    // lines belongs to them, and they changed.
     let before = format!("{header}| a | b |\n| x | y |\n| c | d |\n\nText.\n");
     let reworded = format!("{header}| a | b |\n| c | D |\n\nText.\n");
-    let merged = unite(Kind::Markdown, &base, &reworded, &before, &any_layout).unwrap();
-    assert_eq!(
-        merged.text,
-        format!("{header}| a | b |\n| x | y |\n| c | D |\n\nText.\n")
-    );
+    let error = unite(Kind::Markdown, &base, &reworded, &before, &any_layout).unwrap_err();
+    assert!(error.contains("both sides change line(s) 4..4"), "{error}");
     // Both sides rewording the row is still a person's.
     let other = format!("{header}| a | b |\n| c | d, otherwise |\n| g | h |\n\nText.\n");
     let error = unite(Kind::Markdown, &base, &ours, &other, &any_layout).unwrap_err();
     assert!(error.contains("both sides change line(s) 4..4"), "{error}");
+}
+
+/// The review's case: ours deletes `fn old() {}`, theirs puts
+/// `#[cfg(windows)]` above it. United, `fn b` would become Windows-only and
+/// every check would pass: an addition beside lines the other side deleted
+/// is a person's, above them or after them.
+#[test]
+fn an_addition_beside_lines_the_other_side_deleted_is_left() {
+    let (base, ours, theirs) = sides("deletion-beside.rs");
+    for (one, other) in [(&ours, &theirs), (&theirs, &ours)] {
+        let error = unite(Kind::Rust, &base, one, other, &any_layout).unwrap_err();
+        assert!(error.contains("both sides change line(s) 3..4"), "{error}");
+    }
+    // `#[test]` and a doc comment above it, the same.
+    for above in ["    #[test]", "    /// What it does."] {
+        let base = "mod m {\n    fn keep() {}\n\n    fn old() {}\n\n    fn b() {}\n}\n";
+        let ours = "mod m {\n    fn keep() {}\n\n    fn b() {}\n}\n";
+        let theirs = base.replace("    fn old() {}", &format!("{above}\n    fn old() {{}}"));
+        assert!(
+            unite(Kind::Rust, base, ours, &theirs, &any_layout).is_err(),
+            "{above}"
+        );
+    }
+    // A `let` added after lets the other side deleted.
+    let base = "fn f() {\n    let a = 1;\n    let b = 2;\n    done();\n}\n";
+    let ours = "fn f() {\n    done();\n}\n";
+    let theirs = "fn f() {\n    let a = 1;\n    let b = 2;\n    let c = a + b;\n    done();\n}\n";
+    let error = unite(Kind::Rust, base, ours, theirs, &any_layout).unwrap_err();
+    assert!(error.contains("both sides change line(s) 2..3"), "{error}");
+    // And after lines the other side changed into fewer.
+    let fewer = "fn f() {\n    let a = 3;\n    done();\n}\n";
+    assert!(unite(Kind::Rust, base, fewer, theirs, &any_layout).is_err());
+}
+
+/// A page whose last line has no line end, a row appended by each side, one
+/// of them with a line end: the union ends with one, and a union that lost
+/// it is refused.
+#[test]
+fn the_last_lines_end_is_kept_when_either_side_has_it() {
+    let header = "| To | Run |\n|---|---|\n";
+    let base = format!("{header}| a | b |");
+    let ours = format!("{header}| a | b |\n| c | d |");
+    let theirs = format!("{header}| a | b |\n| e | f |\n");
+    let merged = unite(Kind::Markdown, &base, &ours, &theirs, &any_layout).unwrap();
+    assert_eq!(
+        merged.text,
+        format!("{header}| a | b |\n| c | d |\n| e | f |\n")
+    );
+    let lost = merged.text.trim_end().to_owned();
+    let error = keeps_both(&base, &ours, &theirs, &lost).unwrap_err();
+    assert!(error.contains("lost the line end"), "{error}");
+    // Neither side has one: nor does the union.
+    let theirs = format!("{header}| a | b |\n| e | f |");
+    let merged = unite(Kind::Markdown, &base, &ours, &theirs, &any_layout).unwrap();
+    assert!(!merged.text.ends_with('\n'));
 }
 
 #[test]
@@ -380,10 +486,12 @@ fn changes_apart_merge_and_one_sides_change_is_taken_whole() {
     // The same change on both sides is taken once.
     let merged = merge(base, ours, ours).unwrap();
     assert_eq!(merged.text, ours);
-    // An addition just before a line the other side changed goes before
-    // the change, which is kept whole.
-    let merged = merge(base, "a\nB\nc\nd\ne\n", "a\nx\nb\nc\nd\ne\n").unwrap();
-    assert_eq!(merged.text, "a\nx\nB\nc\nd\ne\n");
+    // An addition just after a line the other side changed goes after the
+    // change, which is kept whole; one just before it is a person's.
+    let merged = merge(base, "a\nB\nc\nd\ne\n", "a\nb\nx\nc\nd\ne\n").unwrap();
+    assert_eq!(merged.text, "a\nB\nx\nc\nd\ne\n");
+    let error = merge(base, "a\nB\nc\nd\ne\n", "a\nx\nb\nc\nd\ne\n").unwrap_err();
+    assert_eq!(error.line, 2);
     // Two changes of one line are not additions.
     let error = merge(base, "a\nB\nc\nd\ne\n", "a\nx\nc\nd\ne\n").unwrap_err();
     assert_eq!(error.line, 2);
@@ -428,7 +536,7 @@ fn each_class_has_its_resolution() {
     let all = stages(Some("1"), Some("2"), Some("3"));
     assert_eq!(
         resolve(
-            "docs/protocol/schema.json",
+            "docs/protocol/schema/schema.json",
             Class::Generated("protocol"),
             &all,
             &any_layout
@@ -448,7 +556,7 @@ fn each_class_has_its_resolution() {
     );
     let deleted = stages(Some("1"), None, Some("3"));
     assert!(matches!(
-        resolve("docs/protocol/schema.json", Class::Generated("protocol"), &deleted, &any_layout),
+        resolve("docs/protocol/schema/schema.json", Class::Generated("protocol"), &deleted, &any_layout),
         Resolution::Left(why) if why.contains("deleted it")
     ));
     assert!(matches!(
@@ -549,7 +657,7 @@ fn the_report_says_what_was_settled_how_and_what_is_left() {
             files: vec![
                 ("AGENTS.md".to_owned(), How::United(1)),
                 (
-                    "docs/protocol/schema.json".to_owned(),
+                    "docs/protocol/schema/schema.json".to_owned(),
                     How::Taken("protocol"),
                 ),
                 (
@@ -569,7 +677,7 @@ fn the_report_says_what_was_settled_how_and_what_is_left() {
     for said in [
         "Stopped at abc1234 Add a row:",
         "united    AGENTS.md: both sides' additions at 1 place(s)",
-        "taken     docs/protocol/schema.json: the side rebased onto; `cargo xtask regen protocol`",
+        "taken     docs/protocol/schema/schema.json: the side rebased onto; `cargo xtask regen protocol`",
         "`cargo xtask outstanding` writes it at the end",
         "LEFT      Cargo.lock: settle it by hand",
         "`cargo xtask rebase --continue`",
@@ -620,14 +728,7 @@ fn isolated(dir: &Path) -> Git {
 /// module and a generated file from one base, in one `fast-import`; `work`
 /// checked out. `work_rust` is what `work` makes of the Rust file.
 fn repository(scratch: &Scratch, work_rust: &str) -> PathBuf {
-    let repo = scratch.git_init("repo");
-    let config = repo.join(".git").join("config");
-    let mut text = std::fs::read_to_string(&config).unwrap();
-    text.push_str(
-        "[user]\n\tname = Rebase Tester\n\temail = rebase@cineris.invalid\n\
-         [commit]\n\tgpgsign = false\n[core]\n\tautocrlf = false\n",
-    );
-    std::fs::write(&config, text).unwrap();
+    let repo = empty_repository(scratch);
 
     let (table, rows_main, rows_work) = sides("table-rows.md");
     let (rust, rust_main, _) = sides("tests-appended.rs");
@@ -635,29 +736,16 @@ fn repository(scratch: &Scratch, work_rust: &str) -> PathBuf {
         [
             ("docs/table.md", table.to_owned()),
             ("src/lib.rs", rust.to_owned()),
-            ("docs/protocol/schema.json", schema.to_owned()),
+            ("docs/protocol/schema/schema.json", schema.to_owned()),
         ]
     };
     let mut stream = String::new();
     let mut commit = |branch: &str, mark: u32, from: Option<u32>, files: &[(&str, String)]| {
-        let at = 1_700_000_000 + u64::from(mark) * 60;
-        let message = format!("Commit {mark}");
-        stream.push_str(&format!(
-            "commit refs/heads/{branch}\nmark :{mark}\n\
-             author Rebase Tester <rebase@cineris.invalid> {at} +0000\n\
-             committer Rebase Tester <rebase@cineris.invalid> {at} +0000\n\
-             data {}\n{message}\n",
-            message.len() + 1
-        ));
-        if let Some(from) = from {
-            stream.push_str(&format!("from :{from}\n"));
-        }
-        for (path, text) in files {
-            stream.push_str(&format!(
-                "M 100644 inline {path}\ndata {}\n{text}\n",
-                text.len()
-            ));
-        }
+        let files: Vec<(&str, Option<&str>)> = files
+            .iter()
+            .map(|(path, text)| (*path, Some(text.as_str())))
+            .collect();
+        stream.push_str(&commit_of(branch, mark, from, &files));
     };
     commit("main", 1, None, &files(&table, &rust, "{\"v\": 1}\n"));
     commit(
@@ -675,6 +763,47 @@ fn repository(scratch: &Scratch, work_rust: &str) -> PathBuf {
     import(&repo, &stream);
     git(&repo, &["checkout", "--quiet", "work"]);
     repo
+}
+
+/// An empty repository with an identity of its own, written into its
+/// configuration: each git costs tens of milliseconds on Windows.
+fn empty_repository(scratch: &Scratch) -> PathBuf {
+    let repo = scratch.git_init("repo");
+    let config = repo.join(".git").join("config");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str(
+        "[user]\n\tname = Rebase Tester\n\temail = rebase@cineris.invalid\n\
+         [commit]\n\tgpgsign = false\n[core]\n\tautocrlf = false\n",
+    );
+    std::fs::write(&config, text).unwrap();
+    repo
+}
+
+/// One commit of a `fast-import` stream on `branch`, its message `Commit
+/// <mark>`: each file written (`Some`) or deleted (`None`).
+fn commit_of(branch: &str, mark: u32, from: Option<u32>, files: &[(&str, Option<&str>)]) -> String {
+    let at = 1_700_000_000 + u64::from(mark) * 60;
+    let message = format!("Commit {mark}");
+    let mut stream = format!(
+        "commit refs/heads/{branch}\nmark :{mark}\n\
+         author Rebase Tester <rebase@cineris.invalid> {at} +0000\n\
+         committer Rebase Tester <rebase@cineris.invalid> {at} +0000\n\
+         data {}\n{message}\n",
+        message.len() + 1
+    );
+    if let Some(from) = from {
+        stream.push_str(&format!("from :{from}\n"));
+    }
+    for (path, text) in files {
+        match text {
+            Some(text) => stream.push_str(&format!(
+                "M 100644 inline {path}\ndata {}\n{text}\n",
+                text.len()
+            )),
+            None => stream.push_str(&format!("D {path}\n")),
+        }
+    }
+    stream
 }
 
 /// Makes the commits of a `git fast-import` stream, in one git.
@@ -700,13 +829,23 @@ fn import(repo: &Path, stream: &str) {
 /// The rebase onto `main`, with rustfmt as the command runs it and the end
 /// recorded.
 fn run(repo: &Path, mode: Mode) -> (crate::Result<Report>, Vec<BTreeSet<String>>) {
+    run_ending(repo, mode, Ok(()))
+}
+
+/// The same, with the end giving `end`'s error when it has one.
+fn run_ending(
+    repo: &Path,
+    mode: Mode,
+    end: Result<(), &str>,
+) -> (crate::Result<Report>, Vec<BTreeSet<String>>) {
     let git = isolated(repo);
     let root = crate::workspace::root();
     let formatted = |text: &str| super::rustfmt_leaves(&root, text);
     let mut ended = Vec::new();
     let mut finish = |generators: &BTreeSet<String>| {
         ended.push(generators.clone());
-        Ok(vec!["ended".to_owned()])
+        end.map(|()| vec!["ended".to_owned()])
+            .map_err(str::to_owned)
     };
     let request = Request {
         mode,
@@ -742,7 +881,7 @@ fn sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_e
         report.stops[0].files,
         [
             (
-                "docs/protocol/schema.json".to_owned(),
+                "docs/protocol/schema/schema.json".to_owned(),
                 How::Taken("protocol")
             ),
             ("docs/table.md".to_owned(), How::United(1)),
@@ -754,7 +893,7 @@ fn sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_e
     assert_eq!(read("docs/table.md"), fixture("table-rows.md.merged"));
     assert_eq!(read("src/lib.rs"), fixture("tests-appended.rs.merged"));
     assert_eq!(
-        read("docs/protocol/schema.json"),
+        read("docs/protocol/schema/schema.json"),
         "{\"v\": 2}\n",
         "main's side"
     );
@@ -800,7 +939,7 @@ fn sys_a_change_both_sides_made_is_left_and_continue_takes_it_up_after_a_person(
     assert_eq!(
         files[0],
         (
-            "docs/protocol/schema.json".to_owned(),
+            "docs/protocol/schema/schema.json".to_owned(),
             How::Taken("protocol")
         )
     );
@@ -873,4 +1012,118 @@ fn a_union_is_written_with_the_classes_own_check() {
     // The same lines in Markdown are refused as not rows.
     let error = unite(Kind::Markdown, base, ours, theirs, &any_layout).unwrap_err();
     assert!(error.contains("not a table's row"), "{error}");
+}
+
+/// A commit whose only change is a generated file both sides changed: once
+/// main's side is taken, nothing is left of it. It is skipped and named
+/// (git's own `--continue` would drop it unsaid), the commit after it goes
+/// on, and the file's name, `*.json`, is a path and not a pattern: a file
+/// git does not track beside it is not added. Then the end fails, and the
+/// report keeps the tip before and the way back to it.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "a file named `*.json` cannot be made on Windows, and git's own skip is the same \
+              on every system"
+)]
+fn sys_a_commit_left_empty_is_skipped_and_named_and_a_failed_end_keeps_the_report() {
+    let scratch = Scratch::outside("xtask-rebase", "empty");
+    let repo = empty_repository(&scratch);
+    let schema = "docs/protocol/schema/*.json";
+    let mut stream = commit_of(
+        "main",
+        1,
+        None,
+        &[(schema, Some("1\n")), ("keep.txt", Some("k\n"))],
+    );
+    stream.push_str(&commit_of("main", 2, Some(1), &[(schema, Some("2\n"))]));
+    stream.push_str(&commit_of("work", 3, Some(1), &[(schema, Some("3\n"))]));
+    stream.push_str(&commit_of("work", 4, Some(3), &[("new.txt", Some("n\n"))]));
+    import(&repo, &stream);
+    git(&repo, &["checkout", "--quiet", "work"]);
+    let before = git(&repo, &["rev-parse", "HEAD"]);
+    std::fs::write(
+        repo.join("docs/protocol/schema/scratch.json"),
+        "not tracked\n",
+    )
+    .unwrap();
+
+    let (report, ended) = run_ending(&repo, Mode::Start, Err("regen failed"));
+    let report = report.unwrap();
+    assert!(report.finished, "{}", describe(&report));
+    assert_eq!(
+        report.stops[0].files,
+        [(schema.to_owned(), How::Taken("protocol"))]
+    );
+    assert_eq!(report.dropped.len(), 1, "{}", describe(&report));
+    assert!(
+        report.dropped[0].ends_with("Commit 3"),
+        "{:?}",
+        report.dropped
+    );
+    assert_eq!(ended, [BTreeSet::from(["protocol".to_owned()])]);
+    assert!(report.end_failed);
+    let said = describe(&report);
+    assert!(said.contains("Dropped "), "{said}");
+    assert!(said.contains("the end failed: regen failed"), "{said}");
+    assert!(
+        said.contains(&format!("`git reset --keep {}`", &before[..12])),
+        "{said}"
+    );
+    // Commit 4 alone is on main; the file not tracked is still not.
+    assert_eq!(
+        git(&repo, &["log", "--format=%s", "main..work"]),
+        "Commit 4"
+    );
+    assert_eq!(
+        git(&repo, &["status", "--porcelain"]),
+        "?? docs/protocol/schema/scratch.json"
+    );
+}
+
+/// A file git does not track, in the way of a commit: git stops and will
+/// not go on. The command says so with git's words, which name the file,
+/// rather than going round for ever or skipping the commit.
+#[test]
+#[cfg_attr(
+    windows,
+    ignore = "git's own stop, the same on every system; on Windows it would cost seconds of the \
+              system tier"
+)]
+fn sys_a_file_not_tracked_in_the_way_stops_the_rebase_with_gits_words() {
+    let scratch = Scratch::outside("xtask-rebase", "untracked");
+    let repo = empty_repository(&scratch);
+    let mut stream = commit_of("main", 1, None, &[("keep.txt", Some("k\n"))]);
+    stream.push_str(&commit_of(
+        "main",
+        2,
+        Some(1),
+        &[("keep.txt", Some("main\n"))],
+    ));
+    stream.push_str(&commit_of(
+        "work",
+        3,
+        Some(1),
+        &[("x.txt", Some("added\n"))],
+    ));
+    stream.push_str(&commit_of("work", 4, Some(3), &[("x.txt", None)]));
+    import(&repo, &stream);
+    git(&repo, &["checkout", "--quiet", "work"]);
+    std::fs::write(repo.join("x.txt"), "mine, not tracked\n").unwrap();
+
+    let (report, ended) = run(&repo, Mode::Start);
+    let error = report.unwrap_err();
+    assert!(
+        error.contains("did not go on, and nothing was skipped"),
+        "{error}"
+    );
+    assert!(error.contains("x.txt"), "{error}");
+    assert!(ended.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(repo.join("x.txt")).unwrap(),
+        "mine, not tracked\n"
+    );
+    let (aborted, _) = run(&repo, Mode::Abort);
+    assert!(aborted.unwrap().finished);
+    assert_eq!(git(&repo, &["log", "--format=%s", "-1"]), "Commit 4");
 }

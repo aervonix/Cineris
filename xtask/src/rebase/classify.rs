@@ -5,7 +5,7 @@
 //!
 //! | Class | Files | Resolution |
 //! |---|---|---|
-//! | generated | what `regen` writes ([`crate::regen::WRITERS`]), but the recorded fixtures | the side rebased onto (either would do), then `regen` at the end |
+//! | generated | the files `regen` writes ([`GENERATED`]), not the pages written by hand beside them nor the recorded fixtures | the side rebased onto (either would do), then `regen` at the end |
 //! | the open items' index | `docs/outstanding/README.md` | the side rebased onto, then `outstanding` at the end |
 //! | additions | `.rs` and `.md` files | both sides' additions, when that is all they are, checked |
 //! | anything else | | left for a person |
@@ -23,11 +23,31 @@ use crate::outstanding;
 use crate::rebase::merge::{self, Merged};
 use crate::regen::WRITERS;
 
-/// Generated folders that hold files no generator writes: the provider
-/// fixtures recorded from the real APIs sit beside the hand-written ones
-/// `regen`'s snapshots step writes, and a recorded one is never taken from
-/// one side and rebuilt.
-pub(crate) const RECORDED: [&str; 1] = ["crates/cineris-llm/fixtures/"];
+/// The files each generator writes, as `regen` runs them: a path from the
+/// top of the repository, and the endings of the files under it that are
+/// its (empty: every file under it; a path that does not end in `/` is that
+/// file alone). Only these are taken and written again: a page written by
+/// hand beside them (`docs/protocol/README.md`,
+/// `docs/architecture/tui-look/README.md`) is not, and nor are the provider
+/// fixtures recorded from the real APIs, which sit beside the hand-written
+/// ones in `crates/cineris-llm/fixtures/`. A test holds each to a place of
+/// its generator in [`WRITERS`].
+pub(crate) const GENERATED: [(&str, &[&str], &str); 10] = [
+    ("docs/protocol/schema/", &[], "protocol"),
+    ("docs/protocol/ts/", &[], "protocol"),
+    ("docs/configuration/schema.json", &[], "configuration"),
+    ("docs/configuration/reference.md", &[], "configuration"),
+    ("docs/architecture/tui-look/", &[".ans", ".txt"], "screens"),
+    ("crates/cineris-tui/snapshots/", &[], "snapshots"),
+    ("crates/cineris-llm/tests/it/snapshots/", &[], "snapshots"),
+    ("crates/cineris-index/tests/it/snapshots/", &[], "snapshots"),
+    (
+        "crates/cineris-config/tests/it/snapshots/",
+        &[],
+        "snapshots",
+    ),
+    ("docs/outstanding/README.md", &[], "outstanding"),
+];
 
 /// What a conflicted file is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,21 +75,19 @@ pub(crate) fn classify(path: &str) -> Class {
     if path == outstanding::INDEX {
         return Class::Index;
     }
-    if RECORDED.iter().any(|folder| path.starts_with(folder)) {
-        return Class::Person;
-    }
-    let under = |place: &str| {
-        if place.ends_with('/') {
+    let generated = GENERATED.iter().find(|(place, endings, _)| {
+        let under = if place.ends_with('/') {
             path.starts_with(place)
         } else {
-            path == place
+            path == *place
+        };
+        under && (endings.is_empty() || endings.iter().any(|ending| path.ends_with(ending)))
+    });
+    if let Some((_, _, writer)) = generated {
+        // The name as `WRITERS` has it, for `regen`.
+        if let Some(writer) = WRITERS.iter().find(|one| one.name == *writer) {
+            return Class::Generated(writer.name);
         }
-    };
-    if let Some(writer) = WRITERS
-        .iter()
-        .find(|writer| writer.writes.iter().any(|place| under(place)))
-    {
-        return Class::Generated(writer.name);
     }
     if path.ends_with(".rs") {
         Class::Additions(Kind::Rust)
@@ -182,7 +200,17 @@ pub(crate) fn unite(
 ///   made alike counts twice, and so is refused too, and left to a person.
 /// - **Each side's added lines in their order.**
 /// - **The lines of the base that both sides kept, in their order.**
+///
+/// And the last line ends with a line end when either side's does. Line
+/// ends are otherwise read alike: the union is written in ours' (LF in this
+/// repository, whose text files are LF everywhere), every line alike.
 pub(crate) fn keeps_both(base: &str, ours: &str, theirs: &str, merged: &str) -> Result<(), String> {
+    if (ours.ends_with('\n') || theirs.ends_with('\n'))
+        && !merged.is_empty()
+        && !merged.ends_with('\n')
+    {
+        return Err("the union's last line lost the line end a side gave it".to_owned());
+    }
     let (base, ours, theirs, merged) = (
         merge::lines(base).lines,
         merge::lines(ours).lines,

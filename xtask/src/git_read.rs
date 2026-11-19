@@ -133,7 +133,13 @@ impl AddedRequest {
             let mut value = || {
                 words
                     .next()
-                    .ok_or_else(|| format!("`{word}` needs a value\n\n{USAGE}"))
+                    .filter(|value| !value.starts_with('-'))
+                    .ok_or_else(|| {
+                        format!(
+                            "`{word}` needs a value, which does not start with `-` (for a \
+                             pattern that does, `[-]`)\n\n{USAGE}"
+                        )
+                    })
             };
             match word.as_str() {
                 "--grep" => pattern = Some(Pattern::new(value()?)?),
@@ -279,6 +285,56 @@ pub(crate) struct Added {
     pub(crate) text: String,
 }
 
+/// The file a diff's `+++ ` line names, as git writes it: `b/a b.md` then a
+/// tab when the name holds a space, `"b/q\"x.md"` in C's quoting when it
+/// holds a quote, a backslash or a control character (or, without
+/// `core.quotePath=false`, a byte past ASCII, as `\303\251`). `None` for
+/// `/dev/null`, a deleted file's.
+pub(crate) fn header_name(text: &str) -> Option<String> {
+    if text == "/dev/null" {
+        return None;
+    }
+    let Some(quoted) = text.strip_prefix('"') else {
+        return Some(text.strip_suffix('\t').unwrap_or(text).to_owned());
+    };
+    let mut bytes = Vec::new();
+    let mut chars = quoted.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => return Some(String::from_utf8_lossy(&bytes).into_owned()),
+            '\\' => {
+                let escaped = chars.next()?;
+                let byte = match escaped {
+                    'a' => 7,
+                    'b' => 8,
+                    't' => b'\t',
+                    'n' => b'\n',
+                    'v' => 11,
+                    'f' => 12,
+                    'r' => b'\r',
+                    '0'..='7' => {
+                        let (Some(second), Some(third)) = (chars.next(), chars.next()) else {
+                            return None;
+                        };
+                        u8::from_str_radix(&format!("{escaped}{second}{third}"), 8).ok()?
+                    }
+                    other => {
+                        let mut buffer = [0; 4];
+                        bytes.extend(other.encode_utf8(&mut buffer).as_bytes());
+                        continue;
+                    }
+                };
+                bytes.push(byte);
+            }
+            other => {
+                let mut buffer = [0; 4];
+                bytes.extend(other.encode_utf8(&mut buffer).as_bytes());
+            }
+        }
+    }
+    None
+}
+
 /// The lines a `git diff -U0` adds, each with its file and its line in the
 /// new text: read from each hunk's `+start` and counted on.
 pub(crate) fn added_lines(diff: &str) -> Vec<Added> {
@@ -291,7 +347,7 @@ pub(crate) fn added_lines(diff: &str) -> Vec<Added> {
             path = None;
             in_hunk = false;
         } else if !in_hunk && let Some(new) = each.strip_prefix("+++ ") {
-            path = new.strip_prefix("b/").map(str::to_owned);
+            path = header_name(new).and_then(|name| name.strip_prefix("b/").map(str::to_owned));
         } else if let Some(header) = each.strip_prefix("@@ ") {
             in_hunk = true;
             // `-a,b +c,d @@`: the new text's lines start at c.
@@ -368,7 +424,7 @@ mod tests {
 
     use super::{
         Added, AddedRequest, Against, CommitsRequest, added, added_lines, changed, changed_lines,
-        commits, name_status,
+        commits, header_name, name_status,
     };
     use crate::branch::Git;
 
@@ -413,6 +469,13 @@ mod tests {
                 .contains("--grep RE")
         );
         assert!(AddedRequest::parse(&strings(&["--grep", "(?=x)"])).is_err());
+        for words in [&["--grep", "-x"][..], &["--grep", "x", "--against", "-n"]] {
+            let error = AddedRequest::parse(&strings(words)).unwrap_err();
+            assert!(
+                error.contains("does not start with `-`"),
+                "{words:?}: {error}"
+            );
+        }
     }
 
     #[test]
@@ -460,6 +523,44 @@ new file mode 100644
         );
     }
 
+    /// What git 2.53 printed (`git -c core.quotePath=false diff -U0
+    /// --src-prefix=a/ --dst-prefix=b/ HEAD`) for three files of a line each
+    /// with a line added: a name with a space, which git ends with a tab; one
+    /// with a double quote, which git quotes; and one past ASCII, which
+    /// `core.quotePath=false` leaves as it is.
+    #[test]
+    fn a_diffs_file_names_are_read_as_git_writes_them() {
+        let diff = "diff --git a/a b.md b/a b.md\nindex 587be6b..0ba55de 100644\n--- a/a b.md\t\n\
+                    +++ b/a b.md\t\n@@ -1,0 +2 @@ x\n+TODO one\n\
+                    diff --git \"a/q\\\"x.md\" \"b/q\\\"x.md\"\nindex 975fbec..9343793 100644\n\
+                    --- \"a/q\\\"x.md\"\n+++ \"b/q\\\"x.md\"\n@@ -1,0 +2 @@ y\n+TODO two\n\
+                    diff --git a/\u{e9}t\u{e9}.md b/\u{e9}t\u{e9}.md\nindex b680253..8f4da85 100644\n\
+                    --- a/\u{e9}t\u{e9}.md\n+++ b/\u{e9}t\u{e9}.md\n@@ -1,0 +2 @@ z\n+TODO three\n";
+        let found: Vec<(String, usize)> = added_lines(diff)
+            .into_iter()
+            .map(|added| (added.path, added.line))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("a b.md".to_owned(), 2),
+                ("q\"x.md".to_owned(), 2),
+                ("\u{e9}t\u{e9}.md".to_owned(), 2)
+            ]
+        );
+        // Without `core.quotePath=false`, a byte past ASCII is an octal escape.
+        assert_eq!(
+            header_name("\"b/\\303\\251t\\303\\251.md\"").as_deref(),
+            Some("b/\u{e9}t\u{e9}.md")
+        );
+        assert_eq!(
+            header_name("\"b/tab\\there\"").as_deref(),
+            Some("b/tab\there")
+        );
+        assert_eq!(header_name("/dev/null"), None);
+        assert_eq!(header_name("\"b/unclosed"), None);
+    }
+
     #[test]
     fn changed_files_are_listed_with_what_is_not_committed_marked() {
         let listed = "M\0src/a.rs\0A\0docs/b c.md\0D\0old.rs\0";
@@ -500,18 +601,18 @@ new file mode 100644
         let scratch = Scratch::outside("xtask-git-read", "three");
         let repo = scratch.git_init("repo");
         scratch.file("repo/src/a.rs", "fn a() {}\n");
-        scratch.file("repo/docs/page.md", "# A page\n");
+        scratch.file("repo/docs/a page.md", "# A page\n");
         scratch.git_commit_all("repo", "Start");
         git(&repo, &["checkout", "--quiet", "-b", "work"]);
         scratch.file("repo/src/a.rs", "fn a() {}\n// TODO: one\n");
         scratch.git_commit_all("repo", "Add a note to a");
-        scratch.file("repo/docs/page.md", "# A page\n\nTODO: two\n");
+        scratch.file("repo/docs/a page.md", "# A page\n\nTODO: two\n");
         scratch.file("repo/src/b.rs", "// TODO: three\n");
         let here = isolated(&repo);
 
         let text = changed(&here, &Against("main".into())).unwrap();
         assert!(
-            text.contains("M docs/page.md   (not committed)\n"),
+            text.contains("M docs/a page.md   (not committed)\n"),
             "{text}"
         );
         assert!(text.contains("M src/a.rs\n"), "{text}");
@@ -538,7 +639,7 @@ new file mode 100644
         .unwrap();
         let text = added(&here, &repo, &request).unwrap();
         for said in [
-            "docs/page.md:3: TODO: two\n",
+            "docs/a page.md:3: TODO: two\n",
             "src/a.rs:2: // TODO: one\n",
             "src/b.rs:1: // TODO: three\n",
             "3 added line(s) match, against main",
