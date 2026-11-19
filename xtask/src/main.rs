@@ -26,6 +26,7 @@ mod branch;
 mod checkout_dates;
 mod checks;
 mod ci_log;
+mod clippy;
 mod combine;
 mod compare;
 mod corpus;
@@ -90,6 +91,11 @@ in, which differs when checkouts share a target folder.
 Checks and tests
   check [STEP...]   Static checks (tier 0): fmt, rules, breaks, generated, clippy,
                     deny. With step names, only those steps.
+  clippy -p CRATE... [-- CLIPPY ARGS]
+                    The crates' lints as `check` lints the workspace: with
+                    the features the workspace's build turns on for what
+                    they reach (a plain `cargo clippy -p` builds fewer, and
+                    code used only under another member's feature is dead).
   test [ARGS...]    All tests, with nextest. Arguments go to `cargo nextest run`,
                     for example: test --profile fast     (tiers 1 and 2 only)
                                  test -p cineris-agent    (one crate, and only it)
@@ -471,6 +477,7 @@ fn choose_root(arguments: &mut Vec<String>) -> Result<()> {
 fn run(command: &str, rest: &[String]) -> Result<()> {
     match command {
         "check" => checks::check(rest),
+        "clippy" => clippy::run(rest),
         "test" => checks::test(rest),
         "ci" => checks::ci(rest),
         "ci-times" => runs::ci_times(rest),

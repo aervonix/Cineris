@@ -1087,7 +1087,10 @@ mod tests {
         assert!(table.contains("30.0 (2/3)"), "{table}");
         assert!(table.contains("-20.0"), "{table}");
         // The clean took 1.0 s on both sides: no change, and no minus sign.
-        let clean = table.lines().find(|line| line.starts_with("clean")).unwrap();
+        let clean = table
+            .lines()
+            .find(|line| line.starts_with("clean"))
+            .unwrap();
         assert!(clean.trim_end().ends_with(" +0.0"), "{clean}");
     }
 
