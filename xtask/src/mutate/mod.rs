@@ -26,7 +26,7 @@
 //! outside, carries on from there the next time. The budget is there so that
 //! a run through `rx` gives the shared test lock back between slices.
 
-mod budget;
+pub(crate) mod budget;
 mod changed;
 mod drive;
 mod fix;
@@ -640,6 +640,9 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     let (all, from_files) = if request.one_off.is_given() {
         (vec![request.one_off.to_break()?], Vec::new())
     } else {
+        // `mutate --check` and a run of the lists say it too, not only the
+        // `breaks` step of `check`.
+        say_rename_warnings(&root);
         let mut all = list::load_all(&root)?;
         let from_files = load_files(&all, &request.files)?;
         all.extend(from_files.iter().cloned());
@@ -722,9 +725,9 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     // `--budget`: the most relevant first, stable within a class.
     let class_of = |one: &Break| classes.get(&one.id).copied().unwrap_or(budget::Class::Rest);
     if let Some(time) = &request.by_relevance {
-        let ordered = budget::ordered(chosen, class_of);
-        println!("{}", budget::order_text(&ordered, time));
-        chosen = ordered.into_iter().map(|(one, _)| one).collect();
+        let (ordered, said) = budget_order(chosen, class_of, time);
+        println!("{said}");
+        chosen = ordered;
     }
     if request.mode == Mode::List {
         for chosen in &chosen {
@@ -799,7 +802,7 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         again: request.again,
         // With `--budget` the breaks are compiled as each is run: compiling
         // every one first would spend the budget on breaks never reached.
-        compile_check: request.compile_check && request.by_relevance.is_none(),
+        compile_check: compile_check(request.compile_check, request.by_relevance.is_some()),
         pause: None,
         flaky,
     };
@@ -854,6 +857,31 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         );
     }
     finished
+}
+
+/// `--budget`'s order of `chosen` (`class_of` gives a break's class), and the
+/// line that says it. The classes are counted over the breaks run on this
+/// system alone, as the run counts them: a break of the other system's code
+/// is left to a run there, and said so, and is not in what the budget runs.
+fn budget_order(
+    chosen: Vec<Break>,
+    class_of: impl Fn(&Break) -> budget::Class,
+    time: &str,
+) -> (Vec<Break>, String) {
+    let ordered = budget::ordered(chosen, class_of);
+    let here: Vec<(Break, budget::Class)> = ordered
+        .iter()
+        .filter(|(one, _)| one.runs_here())
+        .cloned()
+        .collect();
+    let said = budget::order_text(&here, time);
+    (ordered.into_iter().map(|(one, _)| one).collect(), said)
+}
+
+/// Whether every break is compiled before any is run: as asked, but never
+/// under `--budget`, which would spend its time on breaks it never reaches.
+fn compile_check(asked: bool, budget: bool) -> bool {
+    asked && !budget
 }
 
 /// `arguments` as they would be typed again: a word with a space or a quote
@@ -964,11 +992,17 @@ fn choose(all: &[Break], names: &[String]) -> Result<Vec<Break>> {
 /// the breaks name and runs and builds nothing.
 pub(crate) fn check_breaks_apply() -> Result<()> {
     let root = workspace::root();
-    for warning in rename_warnings(&list_files(&root)) {
-        println!("warning: {warning}");
-    }
+    say_rename_warnings(&root);
     let all = list::load_all(&root)?;
     report_check(&root, &all, &Names::Kept)
+}
+
+/// Prints a warning for each list in `mutations/` whose name the rename's
+/// rules would rewrite ([`rename_warnings`]).
+fn say_rename_warnings(root: &Path) {
+    for warning in rename_warnings(&list_files(root)) {
+        println!("warning: {warning}");
+    }
 }
 
 /// The break lists' paths, `mutations/<name>.breaks`, in name order; none
@@ -1571,6 +1605,32 @@ mod tests {
 
     pub(super) fn breaks(list: &str, text: &str) -> Vec<Break> {
         list::parse(&format!("mutations/{list}.breaks"), text).unwrap()
+    }
+
+    #[test]
+    fn the_lists_on_disk_are_the_ones_warned_of() {
+        let root = std::env::temp_dir().join(format!("xtask-list-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("mutations")).unwrap();
+        let alias = ["c", "x"].concat();
+        for name in [
+            format!("{alias}-labels.breaks"),
+            "step-12.breaks".to_owned(),
+        ] {
+            std::fs::write(root.join("mutations").join(name), "").unwrap();
+        }
+        std::fs::write(root.join("mutations").join("notes.txt"), "").unwrap();
+        let files = super::list_files(&root);
+        assert_eq!(
+            files,
+            [
+                format!("mutations/{alias}-labels.breaks"),
+                "mutations/step-12.breaks".to_owned()
+            ]
+        );
+        assert_eq!(super::rename_warnings(&files).len(), 1);
+        assert!(super::list_files(&root.join("nowhere")).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
@@ -2220,6 +2280,33 @@ replace: 5
             Request::parse(&strings(&["--check"])).unwrap().mode,
             Mode::Check
         );
+    }
+
+    #[test]
+    fn a_budget_orders_the_breaks_and_counts_only_those_run_here() {
+        use super::budget::Class;
+        let text = "[break] all\nrule: r\nfile: src/lib.rs\nfind: a\nreplace: b\n\n\
+                    [break] win\nrule: r\nfile: src/lib.rs\nfind: a\nreplace: b\nos: windows\n\n\
+                    [break] lin\nrule: r\nfile: src/lib.rs\nfind: a\nreplace: b\nos: linux\n\n\
+                    [break] near\nrule: r\nfile: src/lib.rs\nfind: a\nreplace: b\n";
+        let chosen = breaks("demo", text);
+        let class_of = |one: &Break| match one.id.as_str() {
+            "demo/near" => Class::Touched,
+            _ => Class::Rest,
+        };
+        let (ordered, said) = super::budget_order(chosen, class_of, "30m");
+        let ids: Vec<&str> = ordered.iter().map(|one| one.id.as_str()).collect();
+        assert_eq!(ids, ["demo/near", "demo/all", "demo/win", "demo/lin"]);
+        // Of the four, one is the other system's, and not counted.
+        assert!(
+            said.starts_with("--budget 30m: 3 break(s), run in this order: 1 touched"),
+            "{said}"
+        );
+        assert!(said.contains("2 the rest"), "{said}");
+        // A budget compiles each break as it runs it.
+        assert!(super::compile_check(true, false));
+        assert!(!super::compile_check(true, true));
+        assert!(!super::compile_check(false, false));
     }
 
     #[test]

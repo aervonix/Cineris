@@ -83,6 +83,18 @@ fn names_or_holds(named: &str, path: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// A format string's text after its last hole, read as a path from where
+/// the hole leaves it: `{}/../../docs/a.txt` (with `env!("CARGO_MANIFEST_DIR")`
+/// in the hole, as `cineris-tui`'s view tests write it) is `../../docs/a.txt`.
+/// Text with no hole is as it is; a hole that is not closed leaves `{` in
+/// it, which no path has.
+pub(crate) fn format_tail(text: &str) -> &str {
+    match text.rfind('}') {
+        Some(at) if text[..at].contains('{') => text[at + 1..].trim_start_matches(['/', '\\']),
+        _ => text,
+    }
+}
+
 /// Whether the string literal `text`, of the Rust file `source` of the
 /// crate in `crate_folder`, names `path` (a repository path): see the
 /// module's rules.
@@ -93,8 +105,8 @@ pub(crate) fn literal_names(text: &str, source: &str, crate_folder: &str, path: 
         Some((_, rest)) => (rest, true),
         None => (text, false),
     };
-    let text = text.trim();
-    // A format string's hole, or more than one line, is no path.
+    let text = format_tail(text.trim());
+    // More than one line, or a hole left, is no path.
     if text.is_empty() || text.contains(['{', '}', '\n', '\0']) {
         return false;
     }
@@ -301,7 +313,42 @@ pub(crate) fn readers<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{literal_names, literals, normalise, readers, test_modules};
+    use super::{format_tail, literal_names, literals, normalise, readers, test_modules};
+
+    #[test]
+    fn a_format_strings_path_is_read_after_its_last_hole() {
+        assert_eq!(format_tail("{}/../../look/x/4.txt"), "../../look/x/4.txt");
+        assert_eq!(format_tail("{a}{b}\\tables\\r.toml"), "tables\\r.toml");
+        assert_eq!(format_tail("plain/x.txt"), "plain/x.txt");
+        assert_eq!(
+            format_tail("{open"),
+            "{open",
+            "a hole not closed is no path"
+        );
+        // `format!("{}/../../look/x/4.txt", env!("CARGO_MANIFEST_DIR"))` in a
+        // crate's test: the crate's folder, then up to the top.
+        assert!(literal_names(
+            "{}/../../look/x/4.txt",
+            "crates/demo/src/view.rs",
+            "crates/demo",
+            "look/x/4.txt"
+        ));
+        assert!(!literal_names(
+            "{}/{}.txt",
+            "crates/demo/src/view.rs",
+            "crates/demo",
+            "look/x/4.txt"
+        ));
+        assert!(
+            !literal_names(
+                "{}/look",
+                "crates/demo/src/view.rs",
+                "crates/demo",
+                "look/x/4.txt"
+            ),
+            "one name is too common to mean this file"
+        );
+    }
 
     #[test]
     fn a_path_is_resolved_and_one_that_climbs_out_is_none() {
