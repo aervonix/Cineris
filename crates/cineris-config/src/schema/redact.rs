@@ -21,7 +21,7 @@
 
 use toml::Value;
 
-use super::{Kind, Lookup, Node, lookup};
+use super::{Kind, Lookup, Node, lookup, table_of};
 use crate::key::KeyPath;
 
 /// What a literal that may be a secret is shown as.
@@ -45,12 +45,11 @@ pub(crate) fn redact(key: &KeyPath, value: &Value) -> Value {
             _ => value.clone(),
         },
         Lookup::Table { .. } => match value {
-            Value::Table(table) => Value::Table(
-                table
-                    .iter()
-                    .map(|(name, entry)| (name.clone(), redact(&key.child(name), entry)))
-                    .collect(),
-            ),
+            Value::Table(table) => {
+                Value::Table(table_of(table.iter().map(|(name, entry)| {
+                    (name.clone(), redact(&key.child(name), entry))
+                })))
+            }
             _ => value.clone(),
         },
         Lookup::Reserved { .. } => redact_reserved(key, value),
@@ -99,12 +98,11 @@ pub(crate) fn may_hold_secret(kind: &Kind) -> bool {
 pub(crate) fn redact_kind(kind: &Kind, value: &Value) -> Value {
     match (kind, value) {
         (Kind::EnvText, Value::String(_)) => redacted(),
-        (Kind::Map(inner), Value::Table(table)) => Value::Table(
+        (Kind::Map(inner), Value::Table(table)) => Value::Table(table_of(
             table
                 .iter()
-                .map(|(name, entry)| (name.clone(), redact_kind(inner, entry)))
-                .collect(),
-        ),
+                .map(|(name, entry)| (name.clone(), redact_kind(inner, entry))),
+        )),
         (Kind::List(inner), Value::Array(items)) => {
             Value::Array(items.iter().map(|item| redact_kind(inner, item)).collect())
         }
@@ -119,12 +117,11 @@ fn redact_reserved(key: &KeyPath, value: &Value) -> Value {
         return redact_all(value);
     }
     match value {
-        Value::Table(table) => Value::Table(
-            table
-                .iter()
-                .map(|(name, entry)| (name.clone(), redact_reserved(&key.child(name), entry)))
-                .collect(),
-        ),
+        Value::Table(table) => {
+            Value::Table(table_of(table.iter().map(|(name, entry)| {
+                (name.clone(), redact_reserved(&key.child(name), entry))
+            })))
+        }
         _ => value.clone(),
     }
 }
@@ -133,12 +130,11 @@ fn redact_reserved(key: &KeyPath, value: &Value) -> Value {
 fn redact_all(value: &Value) -> Value {
     match value {
         Value::String(_) => redacted(),
-        Value::Table(table) => Value::Table(
+        Value::Table(table) => Value::Table(table_of(
             table
                 .iter()
-                .map(|(name, entry)| (name.clone(), redact_all(entry)))
-                .collect(),
-        ),
+                .map(|(name, entry)| (name.clone(), redact_all(entry))),
+        )),
         Value::Array(items) => Value::Array(items.iter().map(redact_all).collect()),
         _ => value.clone(),
     }
@@ -176,12 +172,11 @@ fn hide_url_users(value: &Value) -> Value {
             Some(hidden) => Value::String(hidden),
             None => value.clone(),
         },
-        Value::Table(table) => Value::Table(
+        Value::Table(table) => Value::Table(table_of(
             table
                 .iter()
-                .map(|(name, entry)| (name.clone(), hide_url_users(entry)))
-                .collect(),
-        ),
+                .map(|(name, entry)| (name.clone(), hide_url_users(entry))),
+        )),
         Value::Array(items) => Value::Array(items.iter().map(hide_url_users).collect()),
         _ => value.clone(),
     }

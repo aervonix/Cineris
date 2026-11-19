@@ -8,7 +8,7 @@ use cineris_protocol::lease::{NetworkAccess, Rule};
 use cineris_protocol::{Level, Speed};
 use toml::Value;
 
-use super::{Kind, Node, Setting, choice};
+use super::{Kind, Node, Setting, choice, table_of};
 use crate::duration::{format_duration, parse_duration};
 use crate::env::Env;
 
@@ -378,12 +378,9 @@ impl Setting for Headers {
         if self.0.is_empty() {
             return None;
         }
-        Some(Value::Table(
-            self.0
-                .iter()
-                .filter_map(|(name, value)| Some((name.clone(), value.write()?)))
-                .collect(),
-        ))
+        Some(Value::Table(table_of(self.0.iter().filter_map(
+            |(name, value)| Some((name.clone(), value.write()?)),
+        ))))
     }
 }
 
@@ -675,12 +672,9 @@ impl Setting for Bindings {
         if self.0.is_empty() {
             return None;
         }
-        Some(Value::Table(
-            self.0
-                .iter()
-                .filter_map(|(action, keys)| Some((action.clone(), keys.write()?)))
-                .collect(),
-        ))
+        Some(Value::Table(table_of(self.0.iter().filter_map(
+            |(action, keys)| Some((action.clone(), keys.write()?)),
+        ))))
     }
 }
 

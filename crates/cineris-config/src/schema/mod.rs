@@ -656,6 +656,19 @@ pub(crate) fn names(node: &Node) -> Vec<&'static str> {
     }
 }
 
+/// A TOML table of `entries`.
+///
+/// Collected through a `Vec`, and never straight into the table: the map's
+/// own `FromIterator` sorts what it is given with a closure that names the
+/// iterator's type, so each kind of iterator collected into a table builds
+/// the standard library's sort again, about 4 KB of the shipped binary
+/// each. Twelve such collects in this crate had a sort each
+/// (`docs/measurements/binary-size.md`, "The size step").
+pub(crate) fn table_of(entries: impl IntoIterator<Item = (String, Value)>) -> toml::Table {
+    let entries: Vec<(String, Value)> = entries.into_iter().collect();
+    entries.into_iter().collect()
+}
+
 /// The default of every setting that has one, as a table.
 #[must_use]
 pub fn defaults() -> toml::Table {
@@ -702,10 +715,10 @@ impl<T: Setting> Setting for BTreeMap<String, T> {
         if self.is_empty() {
             return None;
         }
-        let table = self
-            .iter()
-            .filter_map(|(name, entry)| Some((name.clone(), entry.write()?)))
-            .collect();
+        let table = table_of(
+            self.iter()
+                .filter_map(|(name, entry)| Some((name.clone(), entry.write()?))),
+        );
         Some(Value::Table(table))
     }
 }
