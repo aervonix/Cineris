@@ -2656,8 +2656,8 @@ caught-by:
 rule: A configuration that could not be read again leaves the choices in force for the run: its sessions carry them as their own.
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: App::first_run_done
-find: self.first_run_open(failed.is_some());
-replace: self.first_run_open(false);
+find: self.first_run_open(failed.is_some() || found);
+replace: self.first_run_open(found);
 caught-by:
     cineris-tui app::tests::first_run::a_configuration_that_could_not_be_read_again_opens_the_session_with_what_was_chosen
 
@@ -3036,8 +3036,8 @@ caught-by:
 rule: A row wider than the window is cut, and is not whole.
 file: crates/cineris-tui/src/view/setup.rs
 in: fitted
-find: !label_cut && lines.iter().all(|line| line.width() <= rows_width)
-replace: !label_cut
+find: .map(|lines| lines.iter().all(|line| line.width() <= width))
+replace: .map(|_| true)
 caught-by:
     cineris-tui view::setup::tests::a_window_too_narrow_for_a_rows_detail_is_not_whole
 
@@ -3178,13 +3178,14 @@ caught-by:
     cineris-core::it start::the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks
 
 [break] a-credential-word-is-found-inside-a-word
-rule: A name says it is a credential's only by a whole word of it: `--author`, `--keyboard` and `--tokenizer` do not (M-B, settled by the coordinator).
+rule: A name says it is a credential's by its words, not by a part of one: `--author`, `--keyboard` and `--tokenizer` do not (M-B, settled by the coordinator).
 file: crates/cineris-config/src/import.rs
 in: names_a_secret
-find: words.iter().any(|word| SECRET_WORDS.contains(&word.as_str()))
-replace: SECRET_WORDS.iter().any(|word| name.to_ascii_lowercase().contains(word))
+find: words.iter().any(|word| a_credentials_word(word))
+replace: SECRET_ENDINGS.iter().chain(SECRET_WORDS).any(|word| name.to_ascii_lowercase().contains(word))
 caught-by:
     cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+    cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
 
 [break] a-command-named-for-a-credential-is-hidden
 rule: The value of a name that ends in command, cmd, hook, script, file or path is shown (M-B).
@@ -3224,14 +3225,22 @@ caught-by:
     cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
     cineris-cli::bin/cineris setup::tests::a_loose_value_under_a_credentials_name_says_to_move_it
 
-[break] a-path-is-a-token
-rule: A value with a path separator is not a token (M-B).
+[break] a-place-name-hides-its-value
+rule: The value of a name that ends in url or dir names a place, and is shown (settled by the coordinator, after the review of the fixes).
 file: crates/cineris-config/src/import.rs
-in: token_shaped
-find: character.is_whitespace() || matches!(character, '/' | '\\')
-replace: character.is_whitespace()
+find: "file", "path", "url", "dir"
+replace: "file", "path"
 caught-by:
-    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
+    cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
+
+[break] an-arguments-address-shows-its-query-credential
+rule: An address in an argument shows its host and path, and a credential in its query is masked, as in a server's own address (settled by the coordinator, after the review of the fixes).
+file: crates/cineris-config/src/import.rs
+in: launch_view
+find: } else if arg.contains("://") {
+replace: } else if false {
+caught-by:
+    cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
 [break] a-loose-value-does-not-say-to-move-it
 rule: The row of a server refused for a loose value under a credential's name says to move it into a variable (M-B).
@@ -3297,13 +3306,13 @@ caught-by:
     cineris-cli::bin/cineris setup::tests::a_file_found_at_the_name_is_not_a_failure
 
 [break] a-file-found-is-said-to-be-nothing-saved
-rule: The last line says a file found at the name is the configuration from the next start, and the set-up does not run again (L-3).
+rule: The last line says a file found at the name is the configuration now, what was chosen applying over it for the run, and the set-up does not run again (L-3, S-L4).
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: saved
 find: Some(Err(NotWritten::Found(path))) =>
 replace: Some(Err(NotWritten::Found(path))) if false =>
 caught-by:
-    cineris-tui app::tests::first_run::a_file_found_at_the_name_is_said_to_be_in_force_from_the_next_start
+    cineris-tui app::tests::first_run::a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it
 
 [break] a-step-that-fits-by-height-is-said-whole
 rule: A step that fits the window by height is whole only when its selected row is drawn whole by width too (L-4).
@@ -3314,34 +3323,148 @@ replace: let Fitted { lines: all, .. } = fitted(&view, width, look, usize::MAX);
 caught-by:
     cineris-tui app::tests::first_run::a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height
 
-[break] a-label-cut-by-its-column-is-whole
-rule: A row whose label its column cuts is not drawn whole (L-4).
+[break] a-long-label-is-cut
+rule: A label longer than its column wraps in it, so that its row is drawn whole and can be accepted at 80 columns (settled by the coordinator, after the review of the fixes).
 file: crates/cineris-tui/src/view/setup.rs
-in: fitted
-find: !label_cut && lines.iter().all(|line| line.width() <= rows_width)
-replace: lines.iter().all(|line| line.width() <= rows_width)
+in: row_lines
+find: let label = wrap(&[Span::new(one_line(&row.label), label_style)], column);
+replace: let label = vec![cut(&Line::styled(one_line(&row.label), label_style), column, look.glyphs.ellipsis)];
 caught-by:
-    cineris-tui view::setup::tests::a_label_cut_by_its_column_is_not_whole_and_a_wider_window_shows_it
-    cineris-tui app::tests::first_run::a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height
+    cineris-tui view::setup::tests::a_label_longer_than_its_column_wraps_and_the_row_is_whole
+    cineris-tui app::tests::first_run::a_long_label_wraps_and_is_accepted_at_80_columns
 
-[break] a-long-label-keeps-to-the-prose-width
-rule: A step's rows take more than the prose width, up to the window's, when a label needs it, so that a larger window shows it whole (L-4).
-file: crates/cineris-tui/src/view/setup.rs
-in: fitted
-find: let rows_width = window_width.min(width.max(labels_need(step, look)));
-replace: let rows_width = width;
+
+# ------------- the short review (Opus) of this review's fixes, and the
+# coordinator's answers (docs/steps/25/parts/pr3-first-run.md, "The review of
+# the fixes (Opus)", settled by the coordinator)
+
+[break] a-semicolon-is-a-token-character
+rule: A token is ASCII letters and digits and `-._~+=:%@`: a `;` is a shell's, and its value refuses its server (Medium 1).
+file: crates/cineris-config/src/import.rs
+in: token_character
+find: '%' | '@'
+replace: '%' | '@' | ';'
 caught-by:
-    cineris-tui view::setup::tests::a_label_cut_by_its_column_is_not_whole_and_a_wider_window_shows_it
-    cineris-tui app::tests::first_run::a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height
+    cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
+    cineris-config import::tests::only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses
 
-[break] a-held-key-the-last-step-took-types-into-the-input-box
-rule: At the last step, the repeats of a press the step took go nowhere, as a dialog's (L-5).
+[break] a-token-may-hold-any-character-but-white-space
+rule: A token is made of a token's characters only: a script with no white space is not one (Medium 1).
+file: crates/cineris-config/src/import.rs
+in: token_shaped
+find: value.chars().all(token_character)
+replace: !value.chars().any(char::is_whitespace)
+caught-by:
+    cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
+
+[break] a-name-with-white-space-names-a-credential
+rule: A name that holds white space is part of a script, not a credential's name (Medium 1).
+file: crates/cineris-config/src/import.rs
+in: names_a_secret
+find: if name.chars().any(char::is_whitespace) {
+replace: if false {
+caught-by:
+    cineris-config import::tests::a_script_is_not_a_token_and_a_name_with_white_space_is_not_one
+
+[break] a-compound-credential-word-is-shown
+rule: A word that ends in a credential's word is a credential's: `PGPASSWORD`, `NGROK_AUTHTOKEN` (Medium 2).
+file: crates/cineris-config/src/import.rs
+in: a_credentials_word
+find: stem.ends_with(ending)
+replace: stem == *ending
+caught-by:
+    cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
+
+[break] a-credential-words-digits-are-kept
+rule: A word's last digits are left off before it is matched: `API_KEY2`, `TOKEN1` (Medium 2).
+file: crates/cineris-config/src/import.rs
+in: a_credentials_word
+find: let stem = word.trim_end_matches(|character: char| character.is_ascii_digit());
+replace: let stem = word;
+caught-by:
+    cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
+
+[break] pwd-is-a-credential-word
+rule: `PWD` is the shell's working directory, not a password (Medium 2).
+file: crates/cineris-config/src/import.rs
+find: &["auth", "authorization"]
+replace: &["auth", "authorization", "pwd"]
+caught-by:
+    cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
+
+[break] a-uri-endpoint-or-directory-hides-its-value
+rule: The value of a name that ends in uri, endpoint or directory names a place, and is shown (the coordinator's answer).
+file: crates/cineris-config/src/import.rs
+find: "dir", "uri", "endpoint", "directory"
+replace: "dir"
+caught-by:
+    cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
+
+[break] a-path-under-a-key-name-is-refused
+rule: A path under a key's name is a place, and is shown (the coordinator's answer).
+file: crates/cineris-config/src/import.rs
+in: Masked::of
+find: } else if path_shaped(value) {
+replace: } else if false {
+caught-by:
+    cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
+
+[break] a-held-key-that-ends-a-step-types-into-the-input-box
+rule: A key a step took, held down, goes where its press went, nowhere, at the last step and once the step has gone (L-5, S-L3).
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: App::first_run_event
-find: if !pressed_here {
-replace: if true {
+find: self.panel_held = Some((*key, at, false));
+replace:
 caught-by:
+    cineris-tui app::tests::first_run::a_held_key_that_ends_the_last_step_types_nothing
     cineris-tui app::tests::first_run::a_held_key_the_last_step_took_types_nothing_into_the_input_box
+
+[break] a-file-found-is-not-read-now
+rule: A file found at the configuration's name is read at once (Low 4).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_answer
+find: self.pending.insert(ticket, Pending::FirstRun(Sent::FoundRead));
+replace: self.first_run_open(true);
+caught-by:
+    cineris-tui app::tests::first_run::a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it
+
+[break] a-file-found-puts-what-was-chosen-aside
+rule: What was chosen applies over a file found at the name, for the run (Low 4).
+file: crates/cineris-tui/src/app/state/first_run.rs
+in: App::first_run_done
+find: self.first_run_open(failed.is_some() || found);
+replace: self.first_run_open(failed.is_some());
+caught-by:
+    cineris-tui app::tests::first_run::a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it
+
+[break] two-user-defaults-of-a-provider-are-read
+rule: Two of the user's entries marked as one provider's default stop the core (Low 5).
+file: crates/cineris-core/src/provider.rs
+in: catalog
+find: if let Some(first) = defaults.insert(provider.clone(), name.clone()) {
+replace: if let Some(first) = defaults.insert(provider.clone(), name.clone()).filter(|_| false) {
+caught-by:
+    cineris-core::it start::the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks
+
+[break] an-unmarked-replacement-drops-the-default
+rule: An entry that replaces a provider's default, unmarked, keeps that place (Low 5).
+file: crates/cineris-llm/src/catalog.rs
+packages: cineris-llm, cineris-core
+in: Catalog::overlay
+find: if was_default {
+replace: if false {
+caught-by:
+    cineris-llm catalog::tests::a_provider_has_one_default_and_an_overlay_takes_it
+    cineris-core::it start::the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks
+
+[break] the-program-says-no-model-is-shared
+rule: The program says a provider's model is shared when the core's catalog has another provider's model of its id (Low 6).
+file: crates/cineris-cli/src/setup.rs
+in: ProgramSetup::providers
+find: .is_some_and(|model| self.core.model_shared(model))
+replace: .is_some_and(|_| false)
+caught-by:
+    cineris-cli::bin/cineris setup::tests::a_providers_model_is_shared_when_another_provider_has_its_id
 
 # From mutations/step-25-detect.breaks (part `detect`).
 # Step 25's third pull request, the fixes of its full review in one group:
