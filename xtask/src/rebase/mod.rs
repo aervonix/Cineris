@@ -171,6 +171,8 @@ pub(crate) struct Report {
     pub(crate) after: Vec<String>,
     /// Whether the end (the index, a generator) failed.
     pub(crate) end_failed: bool,
+    /// Whether this run was `--abort`.
+    pub(crate) aborted: bool,
 }
 
 /// What a run keeps between a stop and `--continue`, in the git directory:
@@ -315,6 +317,7 @@ pub(crate) fn rebase(
                 .after
                 .push("The rebase was aborted: the branch is as it was.".to_owned());
             report.finished = true;
+            report.aborted = true;
             return Ok(report);
         }
         Mode::Continue => {
@@ -554,6 +557,13 @@ pub(crate) fn describe(report: &Report) -> String {
         .old
         .as_deref()
         .map(|hash| hash.get(..12).unwrap_or(hash));
+    if report.aborted {
+        return report
+            .after
+            .iter()
+            .map(|line| format!("{line}\n"))
+            .collect();
+    }
     if report.stops.is_empty() && report.finished {
         text.push_str(&format!(
             "Rebased {} onto {} with no conflict.\n",
