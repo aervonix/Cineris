@@ -615,6 +615,16 @@ impl Parser<'_> {
     }
 }
 
+/// Whether `shown` is `source` byte for byte, a tab or a line feed of the
+/// source shown as a space: so that a place inside it maps back to the
+/// source at the same distance ([`Piece::linear`]).
+fn shows_its_source(shown: &str, source: &str) -> bool {
+    shown.len() == source.len()
+        && shown.bytes().zip(source.bytes()).all(|(shown, source)| {
+            shown == source || (shown == b' ' && matches!(source, b'\t' | b'\n'))
+        })
+}
+
 /// Turns the nodes into pieces, and finds the first place still open.
 fn finish(src: &str, nodes: Vec<Node>) -> Parsed {
     let mut out = Out::default();
@@ -630,7 +640,12 @@ fn finish(src: &str, nodes: Vec<Node>) -> Parsed {
             Node::Text { src: range, text } => {
                 let (shown, linear) = match text {
                     Some(text) => {
-                        let linear = text.len() == range.len();
+                        // Linear only where each shown byte is its source
+                        // byte (a soft line break shown as a space). Being as
+                        // long is not enough: `&#xFE0F;` is shown as
+                        // `\u{fe0f}`, eight bytes for eight, and a row that
+                        // began inside it was cut at the entity's `;`.
+                        let linear = shows_its_source(&text, &src[range.clone()]);
                         (text, linear)
                     }
                     None => (src[range.clone()].replace('\t', " "), true),

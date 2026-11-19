@@ -141,7 +141,11 @@ fn every_piece_knows_its_source() {
 
 /// Text that is mostly markup.
 fn markdownish(rng: &mut cineris_base::SeededRng) -> String {
-    const PARTS: [&str; 22] = [
+    const PARTS: [&str; 24] = [
+        // Entities shown as an escape exactly as long as they are, which
+        // is not their source byte for byte.
+        "&#x200B;",
+        "&#xFE0F;",
         "*",
         "**",
         "_",

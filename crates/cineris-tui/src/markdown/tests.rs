@@ -414,6 +414,130 @@ fn token_by_token_commits_what_all_at_once_does_split_at_every_point() {
     }
 }
 
+/// `document` laid out at every width in `widths`, all at once and in two
+/// pieces split at every place, commits the lines the document laid out
+/// whole shows. For documents with no mark a row is held for, so that no
+/// row is committed early with its marks frozen.
+fn commits_what_the_whole_shows(document: &str, widths: std::ops::Range<usize>) {
+    let look = look();
+    for width in widths {
+        let expected = whole(document, width, &look);
+        let all = at_once(document, width, &look);
+        assert_eq!(
+            texts(&all),
+            texts(&expected),
+            "all at once, at {width}: {document:?}"
+        );
+        assert_eq!(all, expected, "styles differ, at {width}: {document:?}");
+        for split in (0..=document.len()).filter(|&at| document.is_char_boundary(at)) {
+            let (lines, stream) = streamed(
+                Flavor::Answer,
+                &[&document[..split], &document[split..]],
+                width,
+                &look,
+            );
+            assert_eq!(stream.forced(), 0, "a row was held: {document:?}");
+            assert_eq!(
+                texts(&lines),
+                texts(&expected),
+                "split at {split}, at {width}: {document:?}"
+            );
+            assert_eq!(
+                lines, expected,
+                "styles differ: split at {split}, at {width}"
+            );
+        }
+    }
+}
+
+/// The nightly's failing case (seed 3436097759410096234), shrunk: a row
+/// that begins inside the escape an entity is shown as. `&#xFE0F;` and
+/// `\u{fe0f}` are eight bytes each, and the escape was taken for its
+/// source byte for byte: the row was cut from the source at the entity's
+/// `;`, and the rest parsed alone showed `;` where the whole paragraph
+/// shows `}`.
+#[test]
+fn a_row_that_begins_inside_an_entitys_shown_escape_shows_what_the_whole_does() {
+    let look = look();
+    let document = "x&#x200B;&#xFE0F; ";
+    assert_eq!(
+        texts(&at_once(document, 18, &look)),
+        ["◇ x\\u{200b}\\u{fe0f", "  }"]
+    );
+    commits_what_the_whole_shows(document, 4..30);
+}
+
+/// An entity cut mid-way, by the stream's pieces and by a row's end, at
+/// every place: one whose escape is as long as it is, three in a row, and
+/// one whose character is shown as it is.
+#[test]
+fn an_entity_cut_anywhere_commits_what_the_whole_shows() {
+    for document in [
+        "a x&#x200B;&#xFE0F; y z\n",
+        "&#x200B;&#x200B;&#x200B; y\n",
+        "a &#x202E;b &#x41;&#x42;c &amp;&amp; d\n",
+    ] {
+        commits_what_the_whole_shows(document, 4..34);
+    }
+}
+
+/// A character that acts unseen, written out, is shown as its escape: cut
+/// mid-way by a row's end, and with the stream's pieces split around it,
+/// it commits what the whole shows. The escape is in the paragraph's source
+/// as text, so a cut inside it is at the same place in the source: also
+/// where its word comes after a construct, and so does not begin the
+/// source (found by the review of these fixes).
+#[test]
+fn a_shown_escape_cut_anywhere_commits_what_the_whole_shows() {
+    for document in [
+        "a x\u{200b}\u{fe0f} y z\n",
+        "\u{200b}\u{200b}\u{200b} y\n",
+        "a \u{202e}b\u{fe0f} c\n",
+        "`c` x\u{200b}\u{fe0f}\u{200b}\u{fe0f}yz y\n",
+        "*a* x\u{200b}\u{fe0f}\u{200b}\u{fe0f}yz y\n",
+    ] {
+        commits_what_the_whole_shows(document, 4..34);
+    }
+}
+
+/// A row that ends just before or just after a shown escape, from an
+/// entity or from the character itself, with white space or none beside it.
+#[test]
+fn a_wrap_on_either_side_of_a_shown_escape_commits_what_the_whole_shows() {
+    let look = look();
+    for document in [
+        "ab &#x200B; cd &#xFE0F; ef\n",
+        "ab&#x200B;cd&#xFE0F;ef gh\n",
+        "ab \u{200b} cd \u{fe0f}ef\n",
+    ] {
+        // Some width ends a row just before an escape, and some just after
+        // one: the rows' text after their two columns of marks.
+        let rows = |width: usize| -> Vec<String> {
+            texts(&whole(document, width, &look))
+                .into_iter()
+                .map(|row| row.chars().skip(2).collect())
+                .collect()
+        };
+        let before = (4..40).any(|width| {
+            rows(width)
+                .iter()
+                .skip(1)
+                .any(|row| row.starts_with("\\u{"))
+        });
+        let after = (4..40).any(|width| {
+            let rows = rows(width);
+            rows.iter()
+                .take(rows.len().saturating_sub(1))
+                .any(|row| row.ends_with("\\u{200b}") || row.ends_with("\\u{fe0f}"))
+        });
+        assert!(
+            before && after,
+            "no width wraps at both sides of an escape: {document:?}"
+        );
+        commits_what_the_whole_shows(document, 4..40);
+    }
+}
+
 /// Where two runs' lines first differ, for a failure message.
 fn difference(a: &[Line], b: &[Line]) -> String {
     let at = a
