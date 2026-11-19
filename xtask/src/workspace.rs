@@ -70,7 +70,7 @@ pub(crate) fn choose_root(
     built: &Path,
 ) -> Result<Option<String>> {
     let chosen = pick_root(given, here)?;
-    let note = (normalised(&chosen) != normalised(built)).then(|| {
+    let note = (!same_tree(&chosen, built)).then(|| {
         format!(
             "xtask: working on {}; this xtask was built from the source in {}",
             chosen.display(),
@@ -127,6 +127,23 @@ pub(crate) fn normalised(path: &Path) -> PathBuf {
         }
     }
     out
+}
+
+/// Whether two checkouts' paths name the same folder, read as the system
+/// reads them: `.` and `..` taken out, and on Windows the `\\?\` prefix a
+/// canonical path has taken off and the case folded, as NTFS does (the
+/// current directory may be `c:\…` where cargo wrote `C:\…`).
+pub(crate) fn same_tree(one: &Path, other: &Path) -> bool {
+    let spelled = |path: &Path| {
+        let text = normalised(path).to_string_lossy().into_owned();
+        if cfg!(windows) {
+            let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+            text.replace('/', "\\").to_lowercase()
+        } else {
+            text
+        }
+    };
+    spelled(one) == spelled(other)
 }
 
 /// Takes a leading `--root DIR` (or `--root=DIR`) off the arguments, before
@@ -805,6 +822,31 @@ mod tests {
         let plain = scratch.dir("plain");
         let error = super::pick_root(Some(&plain), &one).unwrap_err();
         assert!(error.contains("not a checkout"), "{error}");
+    }
+
+    #[test]
+    fn two_spellings_of_one_checkout_are_one_tree() {
+        use std::path::Path;
+        assert!(super::same_tree(
+            Path::new("/a/b/../c/."),
+            Path::new("/a/c")
+        ));
+        assert!(!super::same_tree(Path::new("/a/c"), Path::new("/a/d")));
+        if cfg!(windows) {
+            assert!(super::same_tree(
+                Path::new(r"c:\Work\Repo"),
+                Path::new(r"C:\work\repo")
+            ));
+            assert!(super::same_tree(
+                Path::new(r"\\?\C:\Work\Repo"),
+                Path::new(r"c:\work\repo")
+            ));
+        } else {
+            assert!(!super::same_tree(
+                Path::new("/Work/Repo"),
+                Path::new("/work/repo")
+            ));
+        }
     }
 
     /// The xtask binary, as it runs when it was built in one checkout and is
