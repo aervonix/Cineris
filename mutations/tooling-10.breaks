@@ -590,7 +590,7 @@ caught-by:
     try_result::tests::an_unfinished_run_says_so_and_names_a_run_that_sat_queued_too_long
 
 [break] try-result-has-no-queued-limit-alias
-rule: try-result takes --queued-limit as another name for --queued-warn, as ci-wait does.
+rule: try-result takes --queued-limit as another name for --queued-warn.
 file: xtask/src/try_result.rs
 in: Request::parse
 find: "--queued-warn" | "--queued-limit"

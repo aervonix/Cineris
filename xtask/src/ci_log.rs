@@ -8,8 +8,7 @@
 //! pattern with a little around them. Nothing here writes to GitHub.
 //!
 //! The repository is `gh`'s own: `{owner}/{repo}` of the directory it is run
-//! in, or `GH_REPO` when that is set, which is how it works in a tree with no `.git`,
-//! whose copy of the tree has no `.git`.
+//! in, or `GH_REPO` when that is set, which is how it works in a tree with no `.git`.
 
 use std::fmt::Write as _;
 

@@ -122,7 +122,7 @@ pub const fn point(_name: &'static str) {}
 
 /// Marks the start of a process: called by every place in the workspace
 /// that starts one, with the program it starts, just before it does
-/// (`docs/testing-and-ci.md`, "What a runner would say, from a desk").
+/// (`docs/testing-and-ci.md`, "What a runner would say, from a local run").
 /// Without the `test-hooks` feature this is nothing at all.
 ///
 /// A start is what a hosted Windows runner charges most for (a PowerShell

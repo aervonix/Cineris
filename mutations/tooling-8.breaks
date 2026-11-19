@@ -813,7 +813,7 @@ caught-by:
     mutate::changed::tests::sys_a_real_repository_gives_the_files_a_diff_touches_with_both_names_of_a_move
 
 [break] changed-needs-no-git-directory
-rule: A tree with no `.git` is told how to have one (`rx --git`), not given a git error.
+rule: A tree with no `.git` is told how to have one (run it in a git checkout), not given a git error.
 file: xtask/src/mutate/changed.rs
 in: open
 find: if !root.join(".git").exists() {

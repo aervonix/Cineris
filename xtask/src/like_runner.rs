@@ -312,7 +312,7 @@ pub(crate) fn windows_seconds(case: &TestCase, start: f64, counts: &Counts) -> f
     work * work_factor(krate, tier) + on_the_runner(counts)
 }
 
-/// Each tier's estimate on the Windows runner, from a desk's run and the
+/// Each tier's estimate on the Windows runner, from a local run and the
 /// starts its tests wrote down; and each test's, for a comparison.
 pub(crate) struct WindowsEstimate {
     pub(crate) tiers: [f64; 3],

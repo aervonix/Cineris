@@ -1176,6 +1176,7 @@ mod tests {
 
         assert!(error.contains("has no `.git`"), "{error}");
         assert!(error.contains("run it in a git checkout"), "{error}");
+        assert!(error.contains("`--changed origin/main`"), "{error}");
         let _ = std::fs::remove_dir_all(&root);
     }
 }
