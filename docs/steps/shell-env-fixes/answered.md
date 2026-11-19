@@ -129,4 +129,14 @@ What is left untested, as the early review found: `ShellTool::new` reading the h
 
 ## The breaks
 
-`mutations/shell-env-fixes.breaks` holds this fix's breaks; `step-13a/provider-key-variables-left-in` and `step-13a/path-keeps-relative-entries` were moved to the code as it is now. TO COME: the verdicts.
+Run with `cargo xtask mutate` at the desk (a side run), and the breaks of Windows-only code on a hosted Windows runner. **Every break was caught by the tests it names.**
+
+| List | Breaks | Verdict |
+|---|---|---|
+| `mutations/shell-env-fixes.breaks` | 13: the key variables' two paths and the reload's hand-over (3); the `PATH` left empty, left out, replaced when it had an absolute entry, passed on twice, given a directory a command could write, and made on Windows (6); the description not told, told from the wrong environment, without the removal list, or by the value's text (4) | 13 caught |
+| `step-13a.breaks`, as moved | `provider-key-variables-left-in`, now at `provider::key_variables`; `path-keeps-relative-entries`, now in `env::assemble` | both caught; the first by the two core system tests that print a command's environment |
+| `mutations/shell-env-fixes-windows.breaks` (the Windows commit's) | 5: the variable not given, given under another name (a Linux and a Windows form), the user's own spelling kept, and the description not telling the model | 5 caught: three at the desk, and on Windows `cmd-told-a-name-it-does-not-read` (try run 44434602555, by four tests, the three shells' system tests among them) and `the-model-not-told-how-a-batch-file-calls-another` (try run 44435269780) |
+
+Two breaks are caught only by a unit test, and say why in the list. `a-second-path-passed-on`: std's `Command` keeps the last value of a name, and `assemble` puts the chosen `PATH` last, so no child can see it. `windows-given-the-unix-path`: no Windows test starts a shell with no `PATH`.
+
+**Stress:** `cargo xtask stress -p cineris-tools -p cineris-core --count 50` at the desk: 895 tests, 50 times each, seeds 0 to 49, every test passed every time.
