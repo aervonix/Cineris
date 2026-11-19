@@ -2769,8 +2769,8 @@ caught-by:
 rule: A query field of an address whose name says it is a credential is shown masked.
 file: crates/cineris-config/src/import.rs
 in: masked_fields
-find: if names_a_secret(name) && Masked::in_address(value) != Masked::No =>
-replace: if false && names_a_secret(name) && Masked::in_address(value) != Masked::No =>
+find: if names_a_secret(name) && Masked::in_address(value, percent) != Masked::No =>
+replace: if false && names_a_secret(name) && Masked::in_address(value, percent) != Masked::No =>
 caught-by:
     cineris-config import::tests::a_value_named_as_a_credential_is_shown_masked_and_imported_as_it_is
 
@@ -3347,7 +3347,7 @@ caught-by:
 # the fixes (Opus)", settled by the coordinator)
 
 [break] a-semicolon-is-a-token-character
-rule: A token is ASCII letters and digits and `-._~+=:%@`: a `;` is a shell's, and its value refuses its server (Medium 1).
+rule: A token is ASCII letters and digits and `-._~+=:@` (and `%` only in a server's own address): a `;` is a shell's, and its value refuses its server (Medium 1).
 file: crates/cineris-config/src/import.rs
 in: token_character
 find: ':' | '@'
@@ -3506,10 +3506,10 @@ caught-by:
     cineris-config import::tests::a_percent_is_a_tokens_only_in_an_address
 
 [break] mysql-pwd-is-shown
-rule: `pwd` is a credential's word as the last of two or more: `MYSQL_PWD` (the final review).
+rule: `pwd` is a credential's word as the last of two or more, or as a flag: `MYSQL_PWD`, `--pwd` (the final review, the narrow check).
 file: crates/cineris-config/src/import.rs
 in: names_a_secret
-find: (words.len() > 1 && last == "pwd") || words.iter()
+find: (pwd && (words.len() > 1 || name.starts_with('-'))) || words.iter()
 replace: words.iter()
 caught-by:
     cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
@@ -3518,8 +3518,8 @@ caught-by:
 rule: `PWD` alone is the shell's working directory, not a password (the final review).
 file: crates/cineris-config/src/import.rs
 in: names_a_secret
-find: words.len() > 1 && last == "pwd"
-replace: last == "pwd"
+find: pwd && (words.len() > 1 || name.starts_with('-'))
+replace: pwd
 caught-by:
     cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
 
@@ -3527,8 +3527,8 @@ caught-by:
 rule: A credential in an address's fragment is masked as one in its query: `#access_token=…` (the final review).
 file: crates/cineris-config/src/import.rs
 in: masked_query
-find: let (fields, masked) = masked_fields(part);
-replace: let (fields, masked) = if mark == '#' { (part.to_owned(), Masked::No) } else { masked_fields(part) };
+find: let (fields, masked) = masked_fields(part, percent, nested);
+replace: let (fields, masked) = if mark == '#' { (part.to_owned(), Masked::No) } else { masked_fields(part, percent, nested) };
 caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
@@ -3542,11 +3542,11 @@ caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
 [break] a-semicolon-does-not-separate-fields
-rule: A query's or a fragment's fields are separated by `&` or `;` (the final review).
+rule: A query's or a fragment's fields are separated by `&`, or by `;` where a field follows it (the final review).
 file: crates/cineris-config/src/import.rs
-in: masked_fields
-find: rest.find(['&', ';'])
-replace: rest.find('&')
+in: fields
+find: (character == ';' &&
+replace: (false &&
 caught-by:
     cineris-config import::tests::a_place_named_by_url_or_dir_is_shown_with_its_credentials_masked
 
@@ -3594,6 +3594,137 @@ find: self.run_config = chosen_config(&run.chosen, found);
 replace: self.run_config = chosen_config(&run.chosen, false);
 caught-by:
     cineris-tui app::tests::first_run::a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it
+
+# ------------- the narrow check (Opus) of the final review's fixes, and the
+# coordinator's time limit (docs/steps/25/parts/pr3-first-run.md, "The
+# review of the fixes (Opus)")
+
+[break] a-share-is-asked-about
+rule: A value that begins with two separators, before or after `~`, is never a place and never asked about: on Windows its metadata opens a share with the person's credentials (N-M1).
+file: crates/cineris-config/src/import.rs
+in: path_form
+find: if !shaped || doubled(value) || value.strip_prefix('~').is_some_and(doubled) {
+replace: if !shaped {
+caught-by:
+    cineris-config import::tests::the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share
+
+[break] the-programs-disk-asks-about-a-shared-home
+rule: The program's disk never asks about a path that begins with two separators once `~` is expanded: a home on a share (N-M1).
+file: crates/cineris-config/src/import.rs
+in: OnDisk::local_path
+find: if doubled(&real.to_string_lossy()) {
+replace: if false {
+caught-by:
+    cineris-config import::tests::the_programs_disk_never_asks_about_a_share_or_a_home_it_has_not
+
+[break] a-non-credential-flags-value-is-asked-about
+rule: The disk is asked only about a value judged by its name: not one after a flag that is not a credential's (N-M1).
+file: crates/cineris-config/src/import.rs
+in: server
+find: after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
+replace: after_flag = arg.starts_with('-') && !arg.contains('=');
+caught-by:
+    cineris-config import::tests::the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share
+
+[break] a-non-credential-names-value-is-asked-about
+rule: The disk is asked only about a value judged by its name: not a `NAME=value` whose name is not a credential's (N-M1).
+file: crates/cineris-config/src/import.rs
+in: server
+find: .filter(|(name, _)| !name.contains("://") && names_a_secret(name))
+replace: .filter(|(name, _)| !name.contains("://"))
+caught-by:
+    cineris-config import::tests::the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share
+
+[break] a-credential-names-value-is-not-asked-about
+rule: A credential's `NAME=value` with a rooted path is asked about: `--key=<path>`, `KEY=<path>` (N-L5).
+file: crates/cineris-config/src/import.rs
+in: server
+find: .map(|(_, value)| value)
+replace: .map(|_| "")
+caught-by:
+    cineris-config import::tests::a_rooted_path_is_a_place_only_where_it_exists
+    cineris-config import::tests::the_disk_is_asked_only_about_a_credentials_rooted_value_and_never_a_share
+
+[break] a-homeless-tilde-is-a-place
+rule: With no home, no `~` path is asked about, nor a place (N-L5).
+file: crates/cineris-config/src/import.rs
+in: OnDisk::local_path
+find: Some(rest) => self.home.as_ref()?.join(rest)
+replace: Some(rest) => self.home.clone().unwrap_or_default().join(rest)
+caught-by:
+    cineris-config import::tests::the_programs_disk_never_asks_about_a_share_or_a_home_it_has_not
+
+[break] the-disk-is-waited-for-without-a-limit
+rule: A path's metadata is waited for at most a short limit: past it, the path is not a place (the coordinator's time limit).
+file: crates/cineris-config/src/import.rs
+in: OnDisk::exists
+find: match answered.recv_timeout(self.limit) {
+replace: match answered.recv().map_err(|_| std::sync::mpsc::RecvTimeoutError::Disconnected) {
+caught-by:
+    cineris-config import::tests::a_disk_that_does_not_answer_in_time_gives_no_place_and_is_asked_nothing_more
+
+[break] a-disk-that-did-not-answer-is-asked-again
+rule: Once a path did not answer in time, the rest of the file's reading asks the disk nothing more (the coordinator's time limit).
+file: crates/cineris-config/src/import.rs
+in: OnDisk::exists
+find: self.given_up.set(true);
+replace:
+caught-by:
+    cineris-config import::tests::a_disk_that_does_not_answer_in_time_gives_no_place_and_is_asked_nothing_more
+
+[break] an-arguments-address-takes-a-percent
+rule: `%` is a token's only in a server's own address, not in an address inside an argument, which `cmd /c` expands (N-L2).
+file: crates/cineris-config/src/import.rs
+in: launch_view
+find: masked_query(arg, false, false)
+replace: masked_query(arg, true, false)
+caught-by:
+    cineris-config import::tests::a_percent_is_a_tokens_only_in_an_address
+
+[break] a-semicolon-in-a-value-splits-it
+rule: A `;` with no field after it stays in its value, which then refuses: `password=pa;ss` (N-L3).
+file: crates/cineris-config/src/import.rs
+in: fields
+find: after[..next].contains('=')
+replace: true
+caught-by:
+    cineris-config import::tests::a_semicolon_in_a_value_stays_there_and_an_address_in_a_value_is_masked
+
+[break] an-address-in-a-value-is-not-looked-into
+rule: A field whose value is an address has that address's fields masked too, once: `?next=…?api_key=…` (N-L3).
+file: crates/cineris-config/src/import.rs
+in: masked_fields
+find: Some((name, value)) if !nested && value.contains(['?', '#']) =>
+replace: Some((name, value)) if false && value.contains(['?', '#']) =>
+caught-by:
+    cineris-config import::tests::a_semicolon_in_a_value_stays_there_and_an_address_in_a_value_is_masked
+
+[break] white-space-at-a-break-ends-its-piece
+rule: White space that would end a label's piece at a break begins the next one, where it shows (N-L4).
+file: crates/cineris-tui/src/view/setup.rs
+in: hard_wrap
+find: carried.extend(piece.pop());
+replace: break;
+caught-by:
+    cineris-tui view::setup::tests::a_wrapped_labels_white_space_is_drawn_at_the_break
+
+[break] a-pwd-flag-is-shown
+rule: A `--pwd` flag's value is a password's (N-L6).
+file: crates/cineris-config/src/import.rs
+in: names_a_secret
+find: || name.starts_with('-')
+replace:
+caught-by:
+    cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
+
+[break] pwd-digits-are-kept
+rule: `pwd`'s last digits are left off before it is matched: `MYSQL_PWD2` (N-L6).
+file: crates/cineris-config/src/import.rs
+in: names_a_secret
+find: last.trim_end_matches(|character: char| character.is_ascii_digit()) == "pwd"
+replace: last == "pwd"
+caught-by:
+    cineris-config import::tests::a_compound_credential_name_hides_its_value_and_pwd_does_not
 
 # From mutations/step-25-detect.breaks (part `detect`).
 # Step 25's third pull request, the fixes of its full review in one group:
