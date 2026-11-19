@@ -60,7 +60,8 @@
 //!   its query or its fragment, separated by `&`, or by `;` where a field
 //!   follows it, whose name says it is a credential's (`?api_key=…`,
 //!   `#access_token=…`), by the rules above; an address inside such a
-//!   field's value has its own fields masked too, once (`?next=…?api_key=…`).
+//!   field's value has its own fields masked too (`?next=…?api_key=…`), to
+//!   a depth of three, and one deeper is masked whole and refuses.
 //! - **Only a token is masked and imported:** ASCII letters and digits and
 //!   `-._~+=:@`, and `%` only in a server's own address's query or
 //!   fragment, where it is percent-encoding (`cmd /c` expands `%NAME%` in
@@ -531,11 +532,18 @@ fn quoted(part: &str) -> String {
     shown
 }
 
+/// How deep an address inside a field's value is looked into: one deeper
+/// is masked whole and refused, never drawn (the session's own read of the
+/// narrow check's fixes: looking in once drew a second address's
+/// `api_key`). A limit, so that an argument of addresses inside addresses
+/// cannot run the reader's stack out.
+const ADDRESS_DEPTH: usize = 3;
+
 /// `url` with the value of each field of its query and its fragment whose
 /// name says it is a credential masked, and what was. `percent`: `url` is a
-/// server's own, where `%` is percent-encoding. `nested`: `url` is a
-/// field's value, whose own address is not looked into again.
-fn masked_query(url: &str, percent: bool, nested: bool) -> (String, Masked) {
+/// server's own, where `%` is percent-encoding. `depth`: how many field
+/// values `url` is inside, 0 for an address of its own.
+fn masked_query(url: &str, percent: bool, depth: usize) -> (String, Masked) {
     let (before, fragment) = match url.split_once('#') {
         Some((before, fragment)) => (before, Some(fragment)),
         None => (url, None),
@@ -548,7 +556,7 @@ fn masked_query(url: &str, percent: bool, nested: bool) -> (String, Masked) {
     let mut shown = base.to_owned();
     for (mark, part) in [('?', query), ('#', fragment)] {
         if let Some(part) = part {
-            let (fields, masked) = masked_fields(part, percent, nested);
+            let (fields, masked) = masked_fields(part, percent, depth);
             hidden = hidden.and(masked);
             shown.push(mark);
             shown.push_str(&fields);
@@ -561,8 +569,9 @@ fn masked_query(url: &str, percent: bool, nested: bool) -> (String, Masked) {
 /// credential's with its value masked, and what was (the final review:
 /// `#access_token=…` and `;`-separated fields were shown). A field whose
 /// value is itself an address (`?next=https://o/cb?api_key=…`) has that
-/// address's fields masked too, unless `nested` (the narrow check).
-fn masked_fields(text: &str, percent: bool, nested: bool) -> (String, Masked) {
+/// address's fields masked too (the narrow check), to [`ADDRESS_DEPTH`];
+/// one deeper is masked whole and refuses.
+fn masked_fields(text: &str, percent: bool, depth: usize) -> (String, Masked) {
     let mask = cineris_base::redact::MASK;
     let mut hidden = Masked::No;
     let mut shown = String::with_capacity(text.len());
@@ -576,12 +585,19 @@ fn masked_fields(text: &str, percent: bool, nested: bool) -> (String, Masked) {
                 shown.push('=');
                 shown.push_str(mask);
             }
-            Some((name, value)) if !nested && value.contains(['?', '#']) => {
-                let (inner, masked) = masked_query(value, percent, true);
-                hidden = hidden.and(masked);
+            Some((name, value)) if value.contains(['?', '#']) => {
                 shown.push_str(name);
                 shown.push('=');
-                shown.push_str(&inner);
+                if depth < ADDRESS_DEPTH {
+                    let (inner, masked) = masked_query(value, percent, depth + 1);
+                    hidden = hidden.and(masked);
+                    shown.push_str(&inner);
+                } else {
+                    // Deeper than is looked into: masked whole, and the
+                    // server refused, never drawn.
+                    hidden = hidden.and(Masked::Loose);
+                    shown.push_str(mask);
+                }
             }
             _ => shown.push_str(field),
         }
@@ -644,7 +660,8 @@ pub enum Refusal {
     /// place (it holds white space, a shell's metacharacter, or a path
     /// separator where no path that exists is): it would be imported unseen,
     /// and belongs in a variable (since the review of the fixes of step
-    /// 25's third pull request).
+    /// 25's third pull request). An address inside a field's value deeper
+    /// than is looked into is refused as one too.
     NamedValue,
     /// It is neither a command nor an address this version reads.
     NotUnderstood,
@@ -740,7 +757,7 @@ fn launch_view(launch: &Launch, places: &[String]) -> (String, Masked) {
                         // shown, and a credential in its query masked, as in a
                         // server's own address; its user part was masked as it
                         // was read.
-                        let (shown, masked) = masked_query(arg, false, false);
+                        let (shown, masked) = masked_query(arg, false, 0);
                         hidden = hidden.and(masked);
                         shown
                     } else {
@@ -751,7 +768,7 @@ fn launch_view(launch: &Launch, places: &[String]) -> (String, Masked) {
             }
             (parts.join(" "), hidden)
         }
-        Launch::Remote { url } => masked_query(url, true, false),
+        Launch::Remote { url } => masked_query(url, true, 0),
     }
 }
 
@@ -1504,8 +1521,8 @@ mod tests {
 
     /// A `;` separates fields only where a field follows it: one inside a
     /// value stays there, and the value, no token, refuses its server; and
-    /// an address in a field's value has its own fields masked, once (the
-    /// narrow check).
+    /// an address in a field's value has its own fields masked (the narrow
+    /// check).
     #[test]
     fn a_semicolon_in_a_value_stays_there_and_an_address_in_a_value_is_masked() {
         let servers = servers_in(
@@ -1529,6 +1546,37 @@ mod tests {
         );
         assert_eq!(next.refused, None);
         assert!(next.hidden());
+    }
+
+    /// An address inside a field's value is looked into to a depth of
+    /// three, a credential's there masked; one deeper is masked whole and
+    /// refused, never drawn (the session's own read of the narrow check's
+    /// fixes: looking in once drew a second address's `api_key`).
+    #[test]
+    fn an_address_too_deep_to_look_into_is_masked_whole_and_refused() {
+        let servers = servers_in(
+            r#"{"mcpServers": {
+                "two": {"url": "https://h.example.com/mcp?a=https://o.example.com/?b=https://p.example.com/?api_key=S2"},
+                "deep": {"url": "https://h.example.com/mcp?a=https://o/?b=https://p/?c=https://q/?d=https://r/?api_key=S4"}
+            }}"#,
+            false,
+        )
+        .unwrap();
+        let two = by_name(&servers, "two");
+        assert_eq!(
+            two.shown(),
+            format!(
+                "https://h.example.com/mcp?a=https://o.example.com/?b=https://p.example.com/?api_key={MASK}"
+            )
+        );
+        assert_eq!(two.refused, None);
+        assert!(two.hidden());
+        let deep = by_name(&servers, "deep");
+        assert_eq!(
+            deep.shown(),
+            format!("https://h.example.com/mcp?a=https://o/?b=https://p/?c=https://q/?d={MASK}")
+        );
+        assert_eq!(deep.refused, Some(Refusal::NamedValue));
     }
 
     /// `%` is a token's only in an address's query or fragment, where it is
