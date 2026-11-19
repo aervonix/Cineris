@@ -583,10 +583,12 @@ impl<'a> Crates<'a> {
             return None;
         }
         // A file of the crates that is not Rust (a fixture, a snapshot, what
-        // a test reads) can change what a test sees: chosen to be safe.
+        // a test reads), or is Rust the crate holds as data and does not build
+        // (a fixture of Rust), can change what a test sees: chosen to be safe,
+        // whether or not a literal names it.
         if let Some(file) = touched
             .iter()
-            .find(|path| in_directories(path) && !path.ends_with(".rs"))
+            .find(|path| in_directories(path) && (!path.ends_with(".rs") || rust_as_data(path)))
         {
             return Some(Reason::Unplaced(file.clone()));
         }
@@ -1399,6 +1401,25 @@ mod tests {
             .map(|(one, _)| one.id.as_str())
             .collect();
         assert_eq!(by_data, ["demo/a", "demo/b", "demo/base", "demo/tester"]);
+    }
+
+    #[test]
+    fn a_crates_own_rust_fixture_chooses_its_breaks_though_no_literal_names_it() {
+        let (files, breaks) = data_tree();
+        // `crates/base/fixtures/sample.rs`: named by no literal anywhere.
+        let files = files.same("crates/base/fixtures/sample.rs", "fn shown() {}\n");
+        let changed = ["crates/base/fixtures/sample.rs".to_owned()];
+        let got = select(&breaks, &breaks, &changed, &files);
+        let ids: Vec<&str> = got.chosen.iter().map(|(one, _)| one.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["demo/base"],
+            "base's own break, as for any file of it"
+        );
+        assert!(matches!(
+            &got.chosen[0].1,
+            Reason::Unplaced(file) if file == "crates/base/fixtures/sample.rs"
+        ));
     }
 
     #[test]
