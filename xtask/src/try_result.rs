@@ -1486,6 +1486,11 @@ mod tests {
             stopped: Some("Stopped before round 2 of 4".to_owned()),
         };
         keep(&dir, "work/repo/target/ab/job-ab.json", &to_json(&record));
+        keep(
+            &dir,
+            "tmp/try-output.log",
+            "$ cargo xtask ab --job --count 4\n",
+        );
         let result = job_result(
             5,
             &job("try-windows", "failure"),
