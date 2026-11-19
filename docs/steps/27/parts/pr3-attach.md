@@ -70,7 +70,7 @@ It read the whole pull request, and then the fix of the line's class. Every find
 ## Open items
 
 - **Settled:** [prompt delivery at a turn's edges](../answered.md) (the item's file is gone).
-- **Opened:** [json-floats-read-within-a-few-units](../../../outstanding/json-floats-read-within-a-few-units.md) (the owner's: floats from a client are read to within a couple of units in their last place) and [the-fuzz-package-has-no-blocking-check](../../../outstanding/the-fuzz-package-has-no-blocking-check.md) (a tooling step's); and, for the coordinator, [a-verify-test-waits-on-a-timer-nothing-advances](../../../outstanding/a-verify-test-waits-on-a-timer-nothing-advances.md): step 26's test of a managed `ask` rule's check timed out once in this pull request's Windows CI, waiting on a fake timer nothing advances; not fixed here.
+- **Opened:** [json-floats-read-within-a-few-units](../../../outstanding/json-floats-read-within-a-few-units.md) (the owner's: floats from a client are read to within a couple of units in their last place) and [the-fuzz-package-has-no-blocking-check](../../../outstanding/the-fuzz-package-has-no-blocking-check.md) (a tooling step's); and, for the coordinator, `a-verify-test-waits-on-a-timer-nothing-advances` (settled by [the flaky-test fixes](../../flaky-test-fixes/answered.md)): step 26's test of a managed `ask` rule's check timed out once in this pull request's Windows CI, waiting on a fake timer nothing advances; not fixed here.
 - **Shared, step 27's part said in [answered.md](../answered.md):** `headless-details-left-open` (its (6) left to step 32: the test would cost Windows' tier 3 about 3 s) and `waits-on-the-statistics-without-a-limit` (the server's end bounded).
 
 ## Public API
