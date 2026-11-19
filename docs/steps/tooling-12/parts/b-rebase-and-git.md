@@ -147,6 +147,30 @@ The tip before was a260b8c90fb5: `git reset --keep a260b8c90fb5` takes the branc
 
 **`try` run 44607742443** (`test -p xtask`, both systems, at d4c5c848, before the last two commits): every test passed but `rules::tests::sys_the_repository_follows_its_own_rules`, on both systems, for the one reason above (the record not yet linked). This part's tests: Linux 58 in 0.90 s; Windows 54 in 2.70 s, the cross-system rebase test 1.44 s and the questions for git 0.71 s. **`try` run 44610050146**, at 6410f868 with every fix: the same, on both systems: 787 and 788 tests of tiers 1 and 2 passed, and of the system tests only the rules test failed, for the record's link alone.
 
+### Second round
+
+The review read the fixes once more. Each finding is fixed with a test on the review's own inputs, and a break.
+
+| # | Finding | Verdict | Fix | Test and break |
+|---|---|---|---|---|
+| 1a | Additions at one place, ours first: ours put `#[cfg(windows)]` (or `/// Two.`, or `#[ignore]` under `#[test]`) above `fn two`, theirs put `fn new` there; the union made `new` Windows-only, documented as two, or ignored, and every check passed (`git merge-file` conflicts) | Confirmed, high | For Rust, a union is refused when the line just before its place, or the last line of its first part, attaches to what follows it: it starts with `#[`, `#!`, `///`, `/**` or `//` (`classify::nothing_put_after_a_line_that_attaches`). Chosen over the stricter rule (that line blank or ending in `}`, `;` or `,`), which would refuse the fields both sides add to a `Debug`, after a line ending in `)`, the shape of the `struct-fields` fixture | `nothing_is_put_after_an_attribute_or_a_doc_comment_of_the_other_side` (the attribute, the doc comment, `#[ignore]`, and two items after one doc comment; it shows the merge alone would have united each). Breaks `rebase-a-line-that-attaches-is-not-asked`, `rebase-nothing-attaches`, `rebase-the-joint-is-not-looked-at`, `rebase-the-line-before-is-not-looked-at` |
+| 1b | After a replacement, defeated by the push down: ours replaced the second `#[test]` with `#[tokio::test]`, theirs put a test before it, which the diff reads as after it; `#[tokio::test]` moved to `new` | Confirmed, high | The same rule: the replacement's last line, `#[tokio::test]`, attaches | `a_replaced_attribute_is_not_put_before_the_other_sides_lines`. The same breaks |
+| 2 | A `let` after lines the other side renamed one for one is kept, and does not build | Confirmed, low; kept | The docs say so: not silent, as the build names what is gone. A check of the words a replacement removed would be a guess at Rust's names | `a_let_after_lines_the_other_side_renamed_is_kept_for_the_build_to_judge` |
+| 3 | Lines neither side touched were written with the first line's end: a base of CRLF and LF rows, a row appended on each side, came out all CRLF | Confirmed, low | Three texts whose line ends are not one kind (a text that mixes them, or sides that differ) are left; every file under a `fixtures/` folder is a person's, as fixtures are kept byte for byte (`**/fixtures/** -text`) | `texts_whose_line_ends_are_not_one_kind_are_left` (the review's base, and sides that differ); `each_file_is_put_in_its_class` (three fixture paths). Breaks `rebase-line-ends-of-any-kind`, `rebase-mixed-line-ends-unseen`, `rebase-fixtures-are-merged` |
+| 4 | A commit a person settled to nothing is dropped unnamed | Plausible; documented | The docs say "a commit the command settled to nothing". The check the review offered, `REBASE_HEAD` with nothing staged, would skip a commit git could not apply at all: with a file in the way, git keeps `REBASE_HEAD` too (seen with git 2.53), and the commit would be lost | The docs; the untracked-file `sys_` test holds that such a commit is never skipped |
+| 5 | Stale comments in `merge.rs` (the module's and `Union`'s) | Confirmed, trivial | Rewritten to what is united | |
+
+**`cargo xtask rebase` on case 1a, a throwaway real rebase** (a commit making `fn two` Windows-only on one branch, one adding `fn new` before it on the other; the branches deleted after):
+
+```text
+Stopped at 7cbcf09b Demo: add fn new before fn two:
+  LEFT      scratch-demo/attach.rs: line 4: `#[cfg(windows)]` attaches to what follows it, and the other side's lines would follow it
+The rebase is stopped. Settle each file LEFT above, `git add` it, then run `cargo xtask rebase --continue` (or `--abort`).
+The tip before the rebase was 7cbcf09b9a8f.
+xtask: the rebase stopped on files left for a person
+```
+
+
 ## Open
 
 - **A change both sides made alike, in a file with a union,** is refused by the count (it is taken once and counted twice). Rare in a file git stopped on; a person settles it (review finding 10, kept).
