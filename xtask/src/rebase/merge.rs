@@ -1,13 +1,18 @@
-//! A three-way merge of lines that settles one kind of conflict alone: both
-//! sides adding lines at the same place, and nothing else.
+//! A three-way merge of lines that settles two kinds of conflict alone:
+//! both sides adding lines at the same place, and one side adding lines just
+//! after lines the other replaced with as many or more ([`beside`]).
 //!
 //! git stops a rebase where both sides changed the same place. When both only
 //! **added** lines there (a test appended to the same module, a row added to
 //! the end of the same table, a field added to the same struct) the answer is
 //! both additions, the side being rebased onto first. When either side
-//! changed or removed a line of the base there, no such answer is safe: two
-//! edits of one line kept side by side compile and read, and say the wrong
-//! thing. That is a person's.
+//! changed or removed a line of the base there in any other way, no such
+//! answer is safe: two edits of one line kept side by side compile and read,
+//! and say the wrong thing. That is a person's. The checks of the text a
+//! union makes are `classify`'s: what a line that attaches to what follows
+//! it may not be put before, among them. Line ends must be one kind in all
+//! three texts, or the merge is refused, so that no line keeps an end it did
+//! not have.
 //!
 //! The diff is this file's own (Myers', on whole lines), so that the merge is
 //! a pure function of the three texts, and so that an addition is placed as
@@ -27,9 +32,9 @@ pub(crate) struct Merged {
     pub(crate) unions: Vec<Union>,
 }
 
-/// One place both sides added lines, and both were kept: both added at one
-/// place (ours first), or one side added lines just before or just after
-/// lines the other changed (in the order of the text).
+/// One place both sides' lines were put side by side: both added at one
+/// place (ours first), or one side added lines just after lines the other
+/// replaced (the replacement first).
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct Union {
     /// The first kept line's number in the merged text, from 1.
@@ -75,11 +80,19 @@ pub(crate) struct Lines<'a> {
     pub(crate) lines: Vec<&'a str>,
     pub(crate) crlf: bool,
     pub(crate) ends_with_newline: bool,
+    /// Whether some lines end `\r\n` and others `\n`.
+    pub(crate) mixed: bool,
 }
 
 pub(crate) fn lines(text: &str) -> Lines<'_> {
     let crlf = text.find('\n').is_some_and(|at| text[..at].ends_with('\r'));
     let ends_with_newline = text.ends_with('\n');
+    let ends: Vec<bool> = text
+        .split_inclusive('\n')
+        .filter(|line| line.ends_with('\n'))
+        .map(|line| line.ends_with("\r\n"))
+        .collect();
+    let mixed = ends.iter().any(|crlf| *crlf) && ends.iter().any(|crlf| !*crlf);
     let lines = text
         .split_inclusive('\n')
         .map(|line| {
@@ -91,6 +104,7 @@ pub(crate) fn lines(text: &str) -> Lines<'_> {
         lines,
         crlf,
         ends_with_newline,
+        mixed,
     }
 }
 
@@ -233,6 +247,17 @@ pub(crate) fn merge(base: &str, ours: &str, theirs: &str) -> Result<Merged, Refu
              additions"
         ),
     };
+    // One kind of line end in all three, or a line neither side touched
+    // could be written with an end it did not have.
+    if let Some(side) = line_ends_differ(&base, &ours, &theirs) {
+        return Err(Refusal {
+            line: 1,
+            why: format!(
+                "{side}: the union would write every line with one kind of line end, and \
+                 change the ends of lines neither side touched"
+            ),
+        });
+    }
     let mine = hunks(&base.lines, &ours.lines).ok_or_else(|| too_far("ours"))?;
     let other = hunks(&base.lines, &theirs.lines).ok_or_else(|| too_far("theirs"))?;
 
@@ -328,6 +353,31 @@ pub(crate) fn merge(base: &str, ours: &str, theirs: &str) -> Result<Merged, Refu
         text.push_str(end);
     }
     Ok(Merged { text, unions })
+}
+
+/// Why the three texts' line ends are not one kind: a text that mixes
+/// `\r\n` and `\n`, or texts that use different ones. A text of one line
+/// with no line end has none to differ.
+pub(crate) fn line_ends_differ(
+    base: &Lines<'_>,
+    ours: &Lines<'_>,
+    theirs: &Lines<'_>,
+) -> Option<&'static str> {
+    let named = [("the base", base), ("ours", ours), ("theirs", theirs)];
+    if let Some((name, _)) = named.iter().find(|(_, text)| text.mixed) {
+        return Some(match *name {
+            "the base" => "the base mixes CRLF and LF line ends",
+            "ours" => "ours mixes CRLF and LF line ends",
+            _ => "theirs mixes CRLF and LF line ends",
+        });
+    }
+    let kinds: Vec<bool> = named
+        .iter()
+        .filter(|(_, text)| text.lines.len() > 1 || text.ends_with_newline)
+        .map(|(_, text)| text.crlf)
+        .collect();
+    (kinds.iter().any(|crlf| *crlf) && kinds.iter().any(|crlf| !*crlf))
+        .then_some("the sides use different line ends (CRLF and LF)")
 }
 
 /// Whether the merged text ends with a line end: when either side's does.

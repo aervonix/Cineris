@@ -397,3 +397,71 @@ find: .filter(|value| !value.starts_with('-'))
 replace: .filter(|_| true)
 caught-by:
     git_read::tests::each_question_reads_its_arguments_and_refuses_what_it_cannot_use
+
+# The second round of the review.
+
+[break] rebase-a-line-that-attaches-is-not-asked
+rule: A Rust union with a line that attaches to what follows it before the other side's lines is left (second round, finding 1).
+file: xtask/src/rebase/classify.rs
+in: unite
+find: nothing_put_after_a_line_that_attaches(&merged)?;
+replace:
+caught-by:
+    rebase::tests::nothing_is_put_after_an_attribute_or_a_doc_comment_of_the_other_side
+    rebase::tests::a_replaced_attribute_is_not_put_before_the_other_sides_lines
+
+[break] rebase-nothing-attaches
+rule: An attribute, a doc comment and a comment attach to what follows them (second round, finding 1).
+file: xtask/src/rebase/classify.rs
+in: attaches
+find: ATTACHES.iter().any(|start| line.starts_with(start))
+replace: ATTACHES.iter().any(|start| line.starts_with(start) && false)
+caught-by:
+    rebase::tests::nothing_is_put_after_an_attribute_or_a_doc_comment_of_the_other_side
+    rebase::tests::a_replaced_attribute_is_not_put_before_the_other_sides_lines
+
+[break] rebase-the-joint-is-not-looked-at
+rule: The last line of a union's first part may not attach to the second (second round, finding 1).
+file: xtask/src/rebase/classify.rs
+in: nothing_put_after_a_line_that_attaches
+find: (union.line - 1 + union.first.len(), joint)
+replace: (union.line - 1 + union.first.len(), None)
+caught-by:
+    rebase::tests::nothing_is_put_after_an_attribute_or_a_doc_comment_of_the_other_side
+    rebase::tests::a_replaced_attribute_is_not_put_before_the_other_sides_lines
+
+[break] rebase-the-line-before-is-not-looked-at
+rule: The line just before a union's place may not attach to what both sides put there (second round, finding 1).
+file: xtask/src/rebase/classify.rs
+in: nothing_put_after_a_line_that_attaches
+find: (union.line.saturating_sub(1), before)
+replace: (union.line.saturating_sub(1), None)
+caught-by:
+    rebase::tests::nothing_is_put_after_an_attribute_or_a_doc_comment_of_the_other_side
+
+[break] rebase-line-ends-of-any-kind
+rule: Three texts whose line ends are not one kind are not merged (second round, finding 3).
+file: xtask/src/rebase/merge.rs
+in: merge
+find: if let Some(side) = line_ends_differ(&base, &ours, &theirs) {
+replace: if let Some(side) = None::<&str> {
+caught-by:
+    rebase::tests::texts_whose_line_ends_are_not_one_kind_are_left
+
+[break] rebase-mixed-line-ends-unseen
+rule: A text that mixes CRLF and LF line ends is seen as mixed (second round, finding 3).
+file: xtask/src/rebase/merge.rs
+in: lines
+find: let mixed = ends.iter().any(|crlf| *crlf) && ends.iter().any(|crlf| !*crlf);
+replace: let mixed = false;
+caught-by:
+    rebase::tests::texts_whose_line_ends_are_not_one_kind_are_left
+
+[break] rebase-fixtures-are-merged
+rule: A file under a `fixtures/` folder is a person's: it is kept byte for byte (second round, finding 3).
+file: xtask/src/rebase/classify.rs
+in: classify
+find: if path.starts_with("fixtures/") || path.contains("/fixtures/") {
+replace: if false {
+caught-by:
+    rebase::tests::each_file_is_put_in_its_class

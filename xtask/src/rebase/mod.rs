@@ -61,8 +61,11 @@ settled by its class:
                 put side by side is a table's row with the shape of its
                 table (Markdown).
   anything else left conflicted, for a person: two changes of one line,
-                an addition before a change or beside a deletion, a change
-                both sides made alike beside a union.
+                an addition before a change or beside a deletion, a Rust
+                line that attaches to what follows (#[, ///, //) put before
+                the other side's lines, line ends not of one kind, a file
+                under a fixtures/ folder, a change both sides made alike
+                beside a union.
 
 When every file is settled the rebase goes on. When one is left, it stops
 there and names it, with the reason; settle it, `git add` it, and run

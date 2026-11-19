@@ -7,15 +7,20 @@
 //! |---|---|---|
 //! | generated | the files `regen` writes ([`GENERATED`]), not the pages written by hand beside them nor the recorded fixtures | the side rebased onto (either would do), then `regen` at the end |
 //! | the open items' index | `docs/outstanding/README.md` | the side rebased onto, then `outstanding` at the end |
-//! | additions | `.rs` and `.md` files | both sides' additions, when that is all they are, checked |
+//! | additions | `.rs` and `.md` files, not under a `fixtures/` folder | both sides' additions at one place, or one side's additions just after lines the other replaced with as many or more; checked |
 //! | anything else | | left for a person |
 //!
 //! **No side is lost silently.** A union is kept only when every line of
 //! each side is in it, as many times as the sides' changes come to and in
-//! its order ([`keeps_both`]), and it checks: a Rust
-//! file's brackets balance and rustfmt leaves it as it is; a Markdown file's
-//! added lines are table rows with their table's shape. Anything less is
-//! left conflicted, and named, with the reason.
+//! its order ([`keeps_both`]), and it checks: in a Rust file no line that
+//! attaches to what follows it (an attribute, a doc comment, a comment) is
+//! just before the place or between the two parts
+//! ([`nothing_put_after_a_line_that_attaches`]), the brackets balance and
+//! rustfmt leaves it as it is; in a Markdown file every line put side by
+//! side is a table's row with its table's shape. The three texts' line ends
+//! must be one kind. Anything less is left conflicted, and named, with the
+//! reason. A union can still fail to build (a `let` added after lines the
+//! other side renamed): that is not silent, and the build says so.
 
 use std::collections::BTreeMap;
 
@@ -74,6 +79,11 @@ pub(crate) enum Kind {
 pub(crate) fn classify(path: &str) -> Class {
     if path == outstanding::INDEX {
         return Class::Index;
+    }
+    // A fixture is kept byte for byte (`**/fixtures/** -text`): its line
+    // ends are what it tests, and no merge of it is a machine's.
+    if path.starts_with("fixtures/") || path.contains("/fixtures/") {
+        return Class::Person;
     }
     let generated = GENERATED.iter().find(|(place, endings, _)| {
         let under = if place.ends_with('/') {
@@ -182,6 +192,7 @@ pub(crate) fn unite(
     keeps_both(base, ours, theirs, &merged.text)?;
     match kind {
         Kind::Rust => {
+            nothing_put_after_a_line_that_attaches(&merged)?;
             balanced(&merged.text)?;
             formatted(&merged.text).map_err(|why| format!("rustfmt: {why}"))?;
         }
@@ -265,6 +276,47 @@ pub(crate) fn keeps_both(base: &str, ours: &str, theirs: &str, merged: &str) -> 
 fn in_order(lines: &[&str], text: &[&str]) -> bool {
     let mut rest = text.iter();
     lines.iter().all(|line| rest.any(|each| each == line))
+}
+
+/// What a Rust line that attaches to the item after it starts with: an
+/// attribute (`#[cfg(windows)]`, `#[test]`, `#[ignore]`), an inner one, a
+/// doc comment, a comment.
+pub(crate) const ATTACHES: [&str; 5] = ["#[", "#!", "///", "/**", "//"];
+
+/// Whether a line of Rust attaches to what follows it ([`ATTACHES`]).
+pub(crate) fn attaches(line: &str) -> bool {
+    let line = line.trim_start();
+    ATTACHES.iter().any(|start| line.starts_with(start))
+}
+
+/// Whether each place a Rust union put lines side by side starts after a
+/// line that attaches to nothing, and its second part does too: an
+/// attribute or a doc comment one side put above an item, with the other
+/// side's lines put after it, would attach to them (`#[cfg(windows)]` above
+/// `fn two`, and `fn new` put between: `new` becomes Windows-only), and
+/// every other check would pass. The line before the place, and the last
+/// line of the first part, may not be one ([`attaches`]). Chosen over
+/// "blank, or ending in `}`, `;` or `,`", which would refuse fields added to
+/// a `Debug` on both sides, after a line ending in `)`.
+pub(crate) fn nothing_put_after_a_line_that_attaches(merged: &Merged) -> Result<(), String> {
+    let lines = merge::lines(&merged.text).lines;
+    for union in &merged.unions {
+        let before = (union.line >= 2).then(|| lines[union.line - 2]);
+        let joint = union.first.last().map(String::as_str);
+        for (at, line) in [
+            (union.line.saturating_sub(1), before),
+            (union.line - 1 + union.first.len(), joint),
+        ] {
+            if let Some(line) = line.filter(|line| attaches(line)) {
+                return Err(format!(
+                    "line {at}: `{}` attaches to what follows it, and the other side's lines \
+                     would follow it",
+                    line.trim()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Whether the brackets of a Rust text balance: each `(`, `[` and `{`
