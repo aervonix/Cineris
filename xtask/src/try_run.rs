@@ -65,6 +65,7 @@ COMMAND is one of:
                                    a list or the end of a name) on the runner,
                                    run to its end in one job (--minutes 0);
                                    the results and logs are kept; --jobs N,
+                                   --budget TIME (the nearest breaks first),
                                    --again, --no-compile-check and --file PATH
                                    pass; --count, --load, --cores, --filter
                                    and --against are refused with it
@@ -998,7 +999,7 @@ impl Inputs {
                             .to_owned(),
                     );
                 }
-                "--jobs" | "-j" | "--file" => {
+                "--jobs" | "-j" | "--file" | "--budget" => {
                     command.push(word.clone());
                     command.push(
                         words
@@ -1011,7 +1012,8 @@ impl Inputs {
                 "--again" | "--no-compile-check" => command.push(word.clone()),
                 option if option.starts_with('-') => {
                     return Err(format!(
-                        "`{option}` is not an option a try run gives `mutate`: --jobs, --again,                          --no-compile-check and --file"
+                        "`{option}` is not an option a try run gives `mutate`: --jobs, --budget, \
+                         --again, --no-compile-check and --file"
                     ));
                 }
                 name => {
@@ -2680,6 +2682,12 @@ mod tests {
         assert_eq!(
             try_command(&["--command", "mutate -j 3 --file mutations/x.breaks"]),
             Ok("mutate --minutes 0 -j 3 --file mutations/x.breaks".to_owned())
+        );
+        // A budget stops starting breaks within the job; `--minutes 0` beside
+        // it is what `mutate` takes.
+        assert_eq!(
+            try_command(&["--command", "mutate step-12 --budget 30m"]),
+            Ok("mutate --minutes 0 step-12 --budget 30m".to_owned())
         );
         for (arguments, expected) in [
             (
