@@ -356,18 +356,18 @@ caught-by:
 [break] review-job-keep-build-starts-warm
 rule: Both sides start cold in the first round, whatever --keep-build says.
 file: xtask/src/job_ab.rs
-in: cleans
-find: !keep_build || round == 1
-replace: !keep_build
+in: side_plan
+find: !request.keep_build || round <= COLD_ROUNDS
+replace: !request.keep_build
 caught-by:
-    job_ab::tests::both_sides_start_cold_and_keep_build_keeps_only_later_rounds
+    job_ab::tests::each_side_has_its_own_setup_and_the_first_two_rounds_are_cold_under_keep_build
 
 [break] review-job-failed-build-goes-on
 rule: A failed build ends the side's round: what would follow would measure something else.
 file: xtask/src/job_ab.rs
 in: drive_side
-find: if !phase(&mut side, "build", took, outcome) {
-replace: if !phase(&mut side, "build", took, outcome) && false {
+find: if !phase(&mut side, &named("build"), took, outcome) {
+replace: if !phase(&mut side, &named("build"), took, outcome) && false {
 caught-by:
     job_ab::tests::a_side_times_each_phase_and_a_failed_build_ends_its_round
 
@@ -375,8 +375,8 @@ caught-by:
 rule: A failed run of the tests does not end the side's round: the job's next run is still made.
 file: xtask/src/job_ab.rs
 in: drive_side
-find: runs_passed &= phase(&mut side, &run_name(index, runs), took, outcome);
-replace: runs_passed &= phase(&mut side, &run_name(index, runs), took, outcome); if !runs_passed { break; }
+find: runs_passed &= phase(&mut side, &named(&run_name(index, runs)), took, outcome);
+replace: runs_passed &= phase(&mut side, &named(&run_name(index, runs)), took, outcome); if !runs_passed { break; }
 caught-by:
     job_ab::tests::a_failed_run_of_the_tests_does_not_end_the_round
 
@@ -451,3 +451,96 @@ find: .strip_prefix("not read:")
 replace: .strip_prefix("never read:")
 caught-by:
     try_result::tests::a_size_against_main_that_read_no_main_is_a_problem_of_the_run
+
+# The second round of the pre-push review.
+
+[break] review2-keep-build-cold-in-one-order
+rule: Under --keep-build the first two rounds build cold, one in each order.
+file: xtask/src/job_ab.rs
+in: side_plan
+find: round <= COLD_ROUNDS
+replace: round == 1
+caught-by:
+    job_ab::tests::each_side_has_its_own_setup_and_the_first_two_rounds_are_cold_under_keep_build
+    job_ab::tests::under_keep_build_cold_and_warm_rounds_are_paired_and_marked_apart
+
+[break] review2-cold-and-warm-one-name
+rule: A cold round's phases are named apart from a warm one's, so that one median never takes both.
+file: xtask/src/job_ab.rs
+in: marked
+find: Some(temperature) => format!("{name} ({temperature})")
+replace: Some(_) => name.to_owned()
+caught-by:
+    job_ab::tests::under_keep_build_cold_and_warm_rounds_are_paired_and_marked_apart
+
+[break] review2-setup-of-the-other-side
+rule: Each side runs its own setup.
+file: xtask/src/job_ab.rs
+in: side_plan
+find: setup: request.setup[which as usize].clone()
+replace: setup: request.setup[1 - which as usize].clone()
+caught-by:
+    job_ab::tests::each_side_has_its_own_setup_and_the_first_two_rounds_are_cold_under_keep_build
+
+[break] review2-environment-not-applied
+rule: What a side's setup set reaches its build and its runs.
+file: xtask/src/job_ab.rs
+in: nextest_command
+find: command.envs(environment.iter().map(|(key, value)| (key, value)));
+replace:
+caught-by:
+    job_ab::tests::the_sides_environment_reaches_its_build_and_its_runs
+
+[break] review2-keep-build-with-two-rounds
+rule: --keep-build needs four rounds or more: two cold, then warm ones.
+file: xtask/src/job_ab.rs
+in: parse
+find: if request.keep_build && request.rounds < 2 * COLD_ROUNDS {
+replace: if false {
+caught-by:
+    job_ab::tests::each_side_has_its_own_setup_and_the_first_two_rounds_are_cold_under_keep_build
+
+[break] review2-no-warm-up-fetch
+rule: Each tree's crates are fetched before the first round, untimed.
+file: xtask/src/job_ab.rs
+in: warm_up_commands
+find: vec!["fetch".to_owned(), "--locked".to_owned()]
+replace: vec!["--version".to_owned()]
+caught-by:
+    job_ab::tests::both_trees_are_warmed_before_the_first_round
+
+[break] review2-one-order-passes
+rule: A run stopped with one order measured fails, and try-result names it.
+file: xtask/src/job_ab.rs
+in: one_order_only
+find: (first != [true; 2]).then
+replace: (false).then
+caught-by:
+    job_ab::tests::a_run_stopped_with_one_order_measured_fails
+    try_result::tests::a_job_ab_stopped_with_one_order_measured_is_a_problem_of_the_run
+
+[break] review2-try-result-one-order-unsaid
+rule: try-result names a job A/B stopped with one order measured as a problem of the run.
+file: xtask/src/try_result.rs
+in: job_result
+find: && let Some(said) = crate::job_ab::one_order_only(&record)
+replace: && let Some(said) = crate::job_ab::one_order_only(&record).filter(|_| false)
+caught-by:
+    try_result::tests::a_job_ab_stopped_with_one_order_measured_is_a_problem_of_the_run
+
+[break] review2-own-rust-fixture-skipped
+rule: A crate's own Rust fixture chooses its breaks, though no literal names it.
+file: xtask/src/mutate/changed.rs
+in: touched_by
+find: (!path.ends_with(".rs") || rust_as_data(path))
+replace: !path.ends_with(".rs")
+caught-by:
+    mutate::changed::tests::a_crates_own_rust_fixture_chooses_its_breaks_though_no_literal_names_it
+
+[break] review2-budget-room-short
+rule: A try run's mutate budget leaves 30 minutes of its step for the class under way.
+file: xtask/src/try_run.rs
+find: const MUTATE_BUDGET_ROOM: u64 = 30;
+replace: const MUTATE_BUDGET_ROOM: u64 = 20;
+caught-by:
+    try_run::tests::mutate_runs_the_breaks_to_the_end_with_the_options_it_may_have
