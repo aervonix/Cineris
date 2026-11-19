@@ -171,6 +171,10 @@ pub(crate) fn run_in_order(
     Ok(Finished::Complete { flagged })
 }
 
+/// The most breaks left that the command to run them alone names: past it,
+/// the same command again is the one to give.
+const MOST_NAMED: usize = 40;
+
 /// What a budgeted run reached and what it left: for each class how many of
 /// its breaks have a result, then each break left, by name, and how to run
 /// them. `reached[i]` is whether `ordered[i]` has a result now. Empty when
@@ -215,9 +219,15 @@ pub(crate) fn reached_text(ordered: &[(Break, Class)], reached: &[bool], command
     let _ = write!(
         text,
         "Run the same command again to carry on from here (what was found is kept):\n  \
-         {command}\nor the breaks left alone:\n  cargo xtask mutate {}",
-        names.join(" ")
+         {command}"
     );
+    if names.len() <= MOST_NAMED {
+        let _ = write!(
+            text,
+            "\nor the breaks left alone:\n  cargo xtask mutate {}",
+            names.join(" ")
+        );
+    }
     text
 }
 
@@ -372,5 +382,13 @@ mod tests {
         assert!(said.ends_with("cargo xtask mutate demo/c"), "{said}");
         // All reached: nothing to say.
         assert_eq!(reached_text(&classed, &[true; 3], command), "");
+        // Too many left for one line: each is named, and only the same
+        // command is given to run them.
+        let many: Vec<String> = (0..=super::MOST_NAMED).map(|at| format!("b{at}")).collect();
+        let many: Vec<&str> = many.iter().map(String::as_str).collect();
+        let classed = ordered(breaks(&many), |_| Class::Rest);
+        let said = reached_text(&classed, &vec![false; many.len()], command);
+        assert!(said.contains("  demo/b40  (the rest)"), "{said}");
+        assert!(said.ends_with(command), "{said}");
     }
 }
