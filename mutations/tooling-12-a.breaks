@@ -99,11 +99,12 @@ caught-by:
     rules::pty_keys::tests::each_sequence_is_told_key_or_not
 
 [break] pty-keys-mouse-is-a-key
-rule: The mouse's SGR reports are not keys, and pass.
+rule: The mouse's SGR reports are not keys, and pass. Two guards hold it: the `<` that opens the report, which this break takes away, and its final `M` or `m`, which no key ends with; the second still lets the report pass, so the break survives.
 file: xtask/src/rules/pty_keys.rs
 in: csi_is_key
 find: .is_some_and(|byte| matches!(byte, b'?' | b'<' | b'>' | b'='))
 replace: .is_some_and(|byte| matches!(byte, b'?' | b'>' | b'='))
+expect: survives
 caught-by:
     rules::pty_keys::tests::what_is_not_a_key_and_a_marked_line_pass
 
@@ -184,3 +185,21 @@ find: (None, There::Running) => "still running, and nothing has seen it exit".to
 replace: (None, There::Running) => "gone, with no wait".to_owned(),
 caught-by:
     cineris-testkit watch::tests::each_child_is_told_running_exited_or_gone
+
+[break] start-rule-not-at-a-start
+rule: Every marked start stops a test not named `sys_…` or `perf_…`.
+file: crates/cineris-base/src/hook.rs
+in: starts::started
+find: super::children::refuse_outside_a_system_test(program);
+replace: let _ = program;
+caught-by:
+    cineris-base hook::refusal_tests::sys_a_test_not_named_sys_is_stopped_at_its_first_start
+
+[break] start-rule-goes-on
+rule: A refused start stops the test's process: an error could be taken for a failed command and passed.
+file: crates/cineris-base/src/hook.rs
+in: children::refuse_outside_a_system_test
+find: std::process::abort();
+replace: return;
+caught-by:
+    cineris-base hook::refusal_tests::sys_a_test_not_named_sys_is_stopped_at_its_first_start
