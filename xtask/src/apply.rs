@@ -59,7 +59,8 @@ A check is one line outside a change, and they run in the order written:
     @@ check: check STEP...          cargo xtask check of those steps (`breaks`,
                                      `generated`, ...)
     @@ check: build -p CRATE...      cargo check --all-targets of the crates
-    @@ check: clippy -p CRATE...     clippy of the crates' targets, warnings denied
+    @@ check: clippy -p CRATE...     clippy of the crates' targets, warnings denied,
+                                     as `cargo xtask clippy -p` runs it
     @@ check: test ARGUMENT...       cargo xtask test with these arguments, such as
                                      test -p cineris-tui -E 'test(/dialog/)'
 
@@ -486,6 +487,12 @@ fn run_check(check: &Check, touched: &[PathBuf]) -> Result<()> {
             let mut arguments = vec!["check".to_owned(), "--all-targets".to_owned()];
             arguments.extend(words.iter().cloned());
             crate::steps::cargo(&arguments)
+        }
+        // Crates alone: linted with the workspace's features, as
+        // `cargo xtask clippy -p` lints them (a crate alone can fail on code
+        // the workspace's check passes). Other words: cargo's own clippy.
+        Check::Clippy(words) if crate::clippy::Request::parse(words).is_ok() => {
+            crate::clippy::run(words)
         }
         Check::Clippy(words) => {
             let mut arguments = vec!["clippy".to_owned(), "--all-targets".to_owned()];
