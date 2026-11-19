@@ -110,6 +110,15 @@ The whole diff, against this record's design and [security.md](../../security.md
 | Info: this record's list of tests left out five of them. | Listed. |
 | Info: an empty Windows `Path` reaching Git for Windows' `sh`; a `PATH` entry under `/proc/self/cwd`; DLL search from the workspace; git looked up at every start. | An empty `Path` cannot reach git: git is found on an absolute entry outside the avoided roots, which stays. The others are noted, not changed: `/proc/self/cwd` in a user's `PATH` is the user's own; the DLL search is Windows' own for every program the user starts; a look-up costs a few metadata calls beside git's own start. |
 
+### The narrow check of the review's fixes (Opus, 2026-11-19)
+
+The same reviewer, on the commit that fixed its findings. Each is fixed; the shell's call site in the core stays untested, as this record says.
+
+| Finding | Fix |
+|---|---|
+| **Medium, confirmed:** `expect: survives` on `step-13a-fixes/harness-starts-git-by-name` hid a break the core's tests see: where commands are confined, the program `git::start` starts is the launcher, and a bare `git` in its place runs unconfined. | The break names the core's confined test that catches it, and runs there. |
+| Info: the rule of `step-13a-fixes/program-search-looks-in-relative-entries` still said the shell's search was `find`. | Said which search it is. |
+
 **The window between the look and the start.** The shell is found once a session, and git at each start. Nothing on the way to the program chosen can be written by a confined command, so a swap between the look and the start needs a writer the look has already ruled out. A command that is not confined can write anything the user can, which section 12 of [security.md](../../security.md) leaves open on purpose.
 
 ## The breaks
@@ -121,7 +130,7 @@ Run with `cargo xtask mutate` on the reference machine, beside other work: verdi
 | `mutations/harness-process-fixes.breaks` | 21: git's environment cleared, built, told the withheld list, the reload's and the start's keys, the roots avoided, the call site's roots (6); its `PATH` without relative entries, without avoided ones, and told the avoided roots; Windows' variable; the known keys (5); the probe's environment cleared, built, and its `PATH` (3); the search's relative entries, a shell in a root, a configured one in a write root, a link in a root that leads out, a git in the workspace, the workspace avoided without a sandbox (6); a reload's look at any provider (1) | 21 caught |
 | Moved, in the shell environment's fixes' lists (11), `step-13a.breaks` (3), `step-13a-fixes.breaks` (1), `step-25-pathfix.breaks` (4) and `step-26-fixes.breaks` (3) | The code they break moved into `cineris_base::child_env` and `program`; each names the tests of `cineris-base` that catch it there too | Every one caught by the tests it names |
 | `step-13a-fixes/program-search-looks-in-relative-entries` | The shell's search is `find_outside` now, so the shell's test no longer reaches `find`: the line is taken out, and `program-search-outside-looks-in-relative-entries` breaks the same rule in `find_outside` | Caught by `cineris-base`'s test |
-| `step-13a-fixes/harness-starts-git-by-name` | Git's `PATH` holds no relative entry now, so a bare `git` finds what the search found, and the test cannot tell them apart | `expect: survives`, with the reason in its rule; the `PATH` is pinned by `harness-path-keeps-relative-entries` |
+| `step-13a-fixes/harness-starts-git-by-name` | Git's `PATH` holds no relative entry now, so in the session store's test a bare `git` finds what the search found. In a session that confines, though, the program started is the sandbox's launcher, and a bare `git` in its place runs outside the sandbox | Caught by the core's `harness_git::sys_a_filter_a_confined_command_plants_runs_inside_the_sandbox`, which it names now (the narrow check found that `expect: survives` was wrong) |
 | Every other break `mutate --changed` chose for the files this fix touched (200 in all) | | As their lists expect, but five below |
 
 **Five breaks that do not bite on `main` either**, found by `mutate --changed` because they break code in `assemble.rs`, and run again on a copy of `main` as it was (`6c43dfb1`) with the same verdicts. This fix does not touch the code they break, so they are reported, not changed:
@@ -129,4 +138,4 @@ Run with `cargo xtask mutate` on the reference machine, beside other work: verdi
 - `step-13a/repository-trust-not-given-to-the-shell` and `step-13a/shell-given-rules-trust`: they break `ShellConfig::repository_trusted`, which `ShellLive`'s trust overrides since step 24.
 - `step-13a/engine-told-every-projects-rules-are-approved`: expected to survive, and caught.
 
-**Stress:** to come.
+**Stress:** `cargo xtask stress -p cineris-base -p cineris-tools -p cineris-core --count 50` at the desk, on the side: 1,226 tests, 50 times each, seeds 0 to 49; every test passed every time.

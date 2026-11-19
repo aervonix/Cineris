@@ -314,7 +314,7 @@ caught-by:
 # ------------------------- from the independent review of these fixes
 
 [break] program-search-looks-in-relative-entries
-rule: A program the harness starts by name (its shell, git) is looked for in the absolute directories of PATH only. The search checks twice, the directory and then the path a name makes with it (a name with a drive and no root replaces the directory), so the break takes both checks out.
+rule: A program the harness starts by name (git, where nothing is avoided; the shell's search is `find_outside`, with a break of its own) is looked for in the absolute directories of PATH only. The search checks twice, the directory and then the path a name makes with it (a name with a drive and no root replaces the directory), so the break takes both checks out.
 file: crates/cineris-base/src/program.rs
 in: find
 find:
@@ -329,12 +329,13 @@ caught-by:
     cineris-base program::tests::a_relative_path_entry_does_not_make_a_file_there_the_program
 
 [break] harness-starts-git-by-name
-rule: The harness starts git by the path found in an absolute directory of PATH, never by its bare name. Since the fixes of step 26 the session store and the shell tool start git through one function, `cineris_base::git::start`. The test kit's rerun helper gives a child a PATH with a relative entry, which is the one thing a test cannot give its own process (Linux only: the planted git is a shell script). Since the harness's own processes' fixes git is given a PATH of absolute directories only, so a bare name finds what the search found and the test cannot tell the two apart: each covers the other. The PATH alone is pinned by `harness-process-fixes/harness-path-keeps-relative-entries`.
+rule: The harness starts git by the path found in an absolute directory of PATH, never by its bare name. Since the fixes of step 26 the session store and the shell tool start git through one function, `cineris_base::git::start`. The test kit's rerun helper gives a child a PATH with a relative entry, which is the one thing a test cannot give its own process (Linux only: the planted git is a shell script). Since the harness's own processes' fixes git is given a PATH of absolute directories only, so in the session store's test a bare name finds what the search found; but in a session that confines, the program started is the sandbox's launcher, and a bare `git` in its place runs outside the sandbox with the launcher's arguments, which the core's confined tests see (found by the review of those fixes).
 file: crates/cineris-base/src/git.rs
 find: let mut command = Command::new(&started.program);
 replace: let _ = &started.program; let mut command = Command::new("git");
-packages: cineris-base, cineris-session
-expect: survives
+packages: cineris-base, cineris-core
+caught-by:
+    cineris-core::it harness_git::sys_a_filter_a_confined_command_plants_runs_inside_the_sandbox
 
 [break] drive-relative-shell-looked-up-as-a-name
 rule: On Windows a configured shell with a drive and no root (`C:bash.exe`) is a relative path, refused. Its test is Windows-only (`shell_search::on_windows_a_shell_named_with_a_drive_and_no_root_is_refused`, run in CI and windows-try), and on Linux such a name is one plain file name, so a run of the breaks at a Linux desk sees nothing.
