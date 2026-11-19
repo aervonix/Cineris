@@ -22,6 +22,8 @@ mod alias;
 mod api_diff;
 mod apply;
 mod branch;
+#[cfg(test)]
+mod checkout_dates;
 mod checks;
 mod ci_log;
 mod combine;
