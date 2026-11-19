@@ -144,11 +144,16 @@ impl Request {
         }
         request.base = base.ok_or_else(|| format!("say which tree is the base\n\n{USAGE}"))?;
         for file in request.setup.iter().flatten() {
-            if file.is_absolute()
-                || file
-                    .components()
-                    .any(|part| matches!(part, std::path::Component::ParentDir))
-            {
+            // A root alone (`/x.sh`) is not absolute on Windows, which wants
+            // a drive too: any root, drive or `..` is refused, on both.
+            if file.components().any(|part| {
+                matches!(
+                    part,
+                    std::path::Component::ParentDir
+                        | std::path::Component::RootDir
+                        | std::path::Component::Prefix(_)
+                )
+            }) {
                 return Err(format!(
                     "`{}`: a setup script is a path inside this tree, so that each side's \
                      setup is part of what was committed",
