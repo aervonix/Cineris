@@ -173,9 +173,9 @@ pub(crate) struct Kept {
     pub(crate) why: &'static str,
 }
 
-/// The allow-list: the tool itself, the two history records and the two
-/// records of the rename, and three comments where `cx` is a variable.
-pub(crate) const KEPT: [Kept; 10] = [
+/// The allow-list: the tool itself, the two history records, the two
+/// records of the rename and the record of the labels renamed after it, and three comments where `cx` is a variable.
+pub(crate) const KEPT: [Kept; 11] = [
     Kept {
         path: "xtask/src/rename.rs",
         line: None,
@@ -200,6 +200,11 @@ pub(crate) const KEPT: [Kept; 10] = [
         path: "docs/steps/rename-cineris/",
         line: None,
         why: "the rename's own record: its inventory lists the old forms",
+    },
+    Kept {
+        path: "docs/steps/old-alias-labels/",
+        line: None,
+        why: "the record of the labels renamed after the rename: its table lists the old forms",
     },
     Kept {
         path: "docs/decisions/README.md",
@@ -467,11 +472,13 @@ pub(crate) fn is_alias(text: &str, at: usize) -> bool {
 /// words), so `--check` finds them and they are renamed by hand, `cx` to
 /// `cin` as step 25 did (`cintui-signals=`, `CINTUI_SIGNALS_REPORT`).
 ///
-/// A label starts a word. In lower case it is `cx` and letters, then `-`, `=`
-/// or `{` (a name or a mark being made); in upper case it is `CX`, capitals
-/// and an underscore. `cxx` (C++), a `CX` inside a longer word
-/// (`s_01JCX4T9Q2`), a path (`cx::it`) and `cx-z` in a character class (a
-/// single letter and a range) are not labels.
+/// A label starts a word and goes on as a word: `cx` and a lower-case letter,
+/// or `CX` and an underscore or a capital. Bare `cx` and `CX` (a variable, a
+/// path `cx::it`, `cx.paths`, `cx-z` in a character class, "a CX of two"),
+/// `cxx` and `CXX` (C++), a `CX` inside a longer word (`s_01JCX4T9Q2`) and a
+/// camel-case field (`cxScreen`) are not labels. The snake-case `cx_…` is not
+/// one either: the rename's own test names are built on it, and such a name
+/// is a variable of a tool's context.
 pub(crate) fn is_label(text: &str, at: usize) -> bool {
     let bytes = text.as_bytes();
     let rest = &text[at + 2..];
@@ -490,16 +497,14 @@ pub(crate) fn is_label(text: &str, at: usize) -> bool {
         return false;
     }
     match bytes.get(at..at + 2) {
-        Some(b"cx") => {
-            let letters = rest.bytes().take_while(u8::is_ascii_lowercase).count();
-            letters > 0
-                && !rest.starts_with('x')
-                && matches!(rest.as_bytes().get(letters), Some(b'-' | b'=' | b'{'))
-        }
-        Some(b"CX") => {
-            let capitals = rest.bytes().take_while(u8::is_ascii_uppercase).count();
-            !rest.starts_with('X') && rest.as_bytes().get(capitals) == Some(&b'_')
-        }
+        Some(b"cx") => rest
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase() && byte != b'x'),
+        Some(b"CX") => rest
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte == b'_' || (byte.is_ascii_uppercase() && byte != b'X')),
         _ => false,
     }
 }
