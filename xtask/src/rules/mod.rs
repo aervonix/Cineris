@@ -136,10 +136,16 @@ pub(crate) fn check_docs(
     let mut violations = links::check(&texts, &names);
     violations.extend(layout::check(&texts, &names));
 
+    // In a copy of the tree with no repository, the files are a walk of
+    // the folder: what git ignores is among them, and is not public text.
+    let checkout = root.join(".git").exists();
+    let ignore = read_text(root, worktree_include::IGNORE).unwrap_or_default();
+
     // Public text: the words of the maintainers' private setup.
     let mut public = BTreeMap::new();
     for file in files {
-        if public_words::is_read(file) {
+        if public_words::is_read(file) && (checkout || !worktree_include::ignored_by(file, &ignore))
+        {
             let text = match texts.get(file) {
                 Some(text) => text.clone(),
                 None => read_text(root, file)?,
@@ -152,11 +158,12 @@ pub(crate) fn check_docs(
     violations.extend(problems);
     violations.extend(public_words::check(&public, &words, &names));
 
-    // What an agent tool copies into each worktree is ignored by git.
-    if files.iter().any(|file| file == worktree_include::FILE) {
+    // What an agent tool copies into each worktree is ignored by git. Only
+    // a checkout says what git tracks.
+    if checkout && files.iter().any(|file| file == worktree_include::FILE) {
         violations.extend(worktree_include::check(
             &read_text(root, worktree_include::FILE)?,
-            &read_text(root, worktree_include::IGNORE).unwrap_or_default(),
+            &ignore,
             files,
         ));
     }

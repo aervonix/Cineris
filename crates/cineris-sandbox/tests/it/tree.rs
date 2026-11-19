@@ -35,7 +35,19 @@ fn sys_a_command_runs_and_says_how_it_ended() {
     let child = roll.next(LIMIT);
     assert_eq!(child.name(), "only");
     assert_eq!(child.pid(), tree.id());
+    // Kept for the timeout report, as a child whose wait is marked.
+    let kept = |pid| {
+        cineris_base::hook::spawned_children()
+            .into_iter()
+            .find(|kept| kept.pid == pid && kept.tracked)
+            .unwrap_or_else(|| panic!("the tree's command was not kept"))
+    };
+    assert!(kept(tree.id()).reaped_after.is_none());
     assert_eq!(tree.wait().expect("wait"), Exit::Code(3));
+    assert!(
+        kept(tree.id()).reaped_after.is_some(),
+        "its exit was not marked"
+    );
     // Asking again gives the same answer.
     assert_eq!(tree.wait().expect("wait again"), Exit::Code(3));
     assert!(!Exit::Code(3).success());

@@ -99,7 +99,7 @@ Not commands, and so not clashes: the `cin` crate (a library), PyPI's `cin` (no 
 
 ## What is given up
 
-- Anyone who had the old folders, variables or credential entries on a machine (the owner and the build sessions) moves or recreates them by hand.
+- Anyone who had the old folders, variables or credential entries on a machine (the owner, and the sessions that build it) moves or recreates them by hand.
 - The pull requests, records and links before the rename read with the old names. GitHub redirects the old repository's address.
 
 ## Revisit when

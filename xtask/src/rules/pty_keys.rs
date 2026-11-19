@@ -22,9 +22,10 @@
 //! It cannot see a sequence built at run time (`format!`), which is how a
 //! test writes the win32 records it checks; that is a test of the decoder.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use super::Violation;
+use super::rust_source::test_module_files;
 use crate::mutate::lex;
 
 /// What marks a raw key as meant, with the reason after it.
@@ -33,19 +34,32 @@ const ALLOW: &str = "// raw key:";
 /// The file that defines `send_key`, whose own sequences are the point.
 const DEFINER: &str = "crates/cineris-testkit/src/pty.rs";
 
-/// Whether the rule reads a file: the crates' Rust files.
-pub(super) fn is_read(file: &str) -> bool {
-    file.starts_with("crates/") && file.ends_with(".rs") && file != DEFINER
+/// The calls that type what they are given into a pseudo-terminal: the
+/// method `send`, and the tests' helpers that hand their text to it.
+const SENDERS: [&str; 2] = ["send", "type_text"];
+
+/// Whether the rule reads a file: the crates' test code, a file under a
+/// `tests` folder or a module under `#[cfg(test)]` in a file of its own
+/// (`test_files`). Product code writes the same bytes to a terminal as
+/// output (`CSI H` is the cursor's home and the Home key), and is not read;
+/// nor is a test module written inside a product file.
+fn is_read(file: &str, test_files: &BTreeSet<String>) -> bool {
+    file.starts_with("crates/")
+        && file.ends_with(".rs")
+        && file != DEFINER
+        && (file.split('/').any(|part| part == "tests") || test_files.contains(file))
 }
 
 /// Checks every file of `sources` the rule reads.
 pub(super) fn check(sources: &BTreeMap<String, String>) -> Vec<Violation> {
+    let test_files = test_module_files(sources);
     let mut violations = Vec::new();
     for (file, source) in sources {
-        // Only a file that sends something and writes an escape is lexed.
-        if is_read(file)
-            && source.contains(".send(")
-            && (source.contains("\\x1b") || source.contains("\\x1B") || source.contains("\\u{1b}"))
+        // Only a file that calls a sender is lexed.
+        if is_read(file, &test_files)
+            && SENDERS
+                .iter()
+                .any(|sender| source.contains(&format!("{sender}(")))
         {
             violations.extend(check_file(file, source));
         }
@@ -53,38 +67,108 @@ pub(super) fn check(sources: &BTreeMap<String, String>) -> Vec<Violation> {
     violations
 }
 
+/// The bytes a literal token stands for, if it is a string or byte-string
+/// literal.
+fn literal_bytes(literal: &str) -> Option<Vec<u8>> {
+    let content = lex::string_content(literal)?;
+    let raw = literal.starts_with("br") || literal.starts_with('r');
+    Some(if raw {
+        literal[content].as_bytes().to_vec()
+    } else {
+        unescape(&literal[content])
+    })
+}
+
+/// A byte a token stands for in an array: `0x1b`, `27`, `27u8`, `b'['`.
+fn byte_of(token: &str) -> Option<u8> {
+    if let Some(inner) = token.strip_prefix("b'").and_then(|t| t.strip_suffix('\'')) {
+        let bytes = unescape(inner);
+        return (bytes.len() == 1).then(|| bytes[0]);
+    }
+    let number = token.trim_end_matches("u8").replace('_', "");
+    match number
+        .strip_prefix("0x")
+        .or_else(|| number.strip_prefix("0X"))
+    {
+        Some(hex) => u8::from_str_radix(hex, 16).ok(),
+        None => number.parse().ok(),
+    }
+}
+
+/// The file's constants whose value is a literal: `const UP: &[u8] =
+/// b"\x1b[A";`, by name.
+fn constants<'a>(source: &'a str, all: &[lex::Token]) -> HashMap<&'a str, Vec<u8>> {
+    let text = |index: usize| all[index].text(source);
+    let mut found = HashMap::new();
+    for index in 0..all.len().saturating_sub(2) {
+        if !matches!(text(index), "const" | "static") {
+            continue;
+        }
+        let name = text(index + 1);
+        let Some(equals) = (index..all.len())
+            .take_while(|&at| text(at) != ";")
+            .find(|&at| text(at) == "=")
+        else {
+            continue;
+        };
+        let value: Vec<&str> = (equals + 1..all.len())
+            .map(text)
+            .take_while(|token| *token != ";")
+            .collect();
+        if let [literal] | ["&", literal] = value.as_slice()
+            && let Some(bytes) = literal_bytes(literal)
+        {
+            found.insert(name, bytes);
+        }
+    }
+    found
+}
+
 fn check_file(file: &str, source: &str) -> Vec<Violation> {
     let all = lex::tokens(source);
     let text = |index: usize| all[index].text(source);
     let lines: Vec<&str> = source.lines().collect();
+    let constants = constants(source, &all);
     let mut violations = Vec::new();
-    for index in 0..all.len().saturating_sub(3) {
-        if text(index) != "." || text(index + 1) != "send" || text(index + 2) != "(" {
+    for index in 0..all.len().saturating_sub(2) {
+        // A call of a sender: `.send(`, or `type_text(` not being defined.
+        let before = index.checked_sub(1).map(text);
+        if !SENDERS.contains(&text(index))
+            || text(index + 1) != "("
+            || before == Some("fn")
+            || (text(index) == "send" && before != Some("."))
+        {
             continue;
         }
-        // The argument's literals: `b"…"`, `&b"…"`, `"…".as_bytes()`.
-        let mut at = index + 3;
+        // The arguments: each literal (`b"…"`, `&b"…"`, `"…".as_bytes()`),
+        // each constant of the file by its name, and an array of bytes
+        // (`&[0x1b, b'[', b'A']`), all together.
+        let mut at = index + 2;
         let mut depth = 0usize;
         let mut keys = Vec::new();
+        let mut array: Vec<u8> = Vec::new();
         while at < all.len() {
-            match text(at) {
+            let token = text(at);
+            match token {
                 "(" | "[" | "{" => depth += 1,
                 ")" | "]" | "}" if depth == 0 => break,
                 ")" | "]" | "}" => depth -= 1,
-                literal => {
-                    if let Some(content) = lex::string_content(literal) {
-                        let raw = literal.starts_with("br") || literal.starts_with('r');
-                        let bytes = if raw {
-                            literal[content].as_bytes().to_vec()
-                        } else {
-                            unescape(&literal[content])
-                        };
+                "," | "&" | "." | ":" => {}
+                _ => {
+                    if let Some(bytes) =
+                        literal_bytes(token).or_else(|| constants.get(token).cloned())
+                    {
                         keys.extend(keys_in(&bytes));
+                    } else if depth > 0
+                        && let Some(byte) = byte_of(token)
+                    {
+                        array.push(byte);
                     }
                 }
             }
             at += 1;
         }
+        keys.extend(keys_in(&array));
         if keys.is_empty() {
             continue;
         }
@@ -189,11 +273,15 @@ fn keys_in(bytes: &[u8]) -> Vec<String> {
                 let end = (end + 1).min(bytes.len());
                 (end, csi_is_key(body, last))
             }
-            // SS3 and its letter: F1 to F4, and keypad keys.
-            Some(b'O') => ((at + 3).min(bytes.len()), bytes.len() > at + 2),
-            // OSC and the other strings: answers, not keys. They end at
-            // BEL or ST; the rest of the literal is passed over.
-            Some(b']' | b'P' | b'_' | b'^') => (bytes.len(), false),
+            // SS3 and its letter: F1 to F4, and keypad keys; alone at the
+            // end, Alt with `O`.
+            Some(b'O') => ((at + 3).min(bytes.len()), true),
+            // OSC and the other strings: answers, not keys, up to their BEL
+            // or ST. With no end, the Escape and the letter are Alt with it.
+            Some(b']' | b'P' | b'_' | b'^') => match string_end(bytes, at + 2) {
+                Some(end) => (end, false),
+                None => (at + 2, true),
+            },
             // Alt with a character.
             Some(_) => (at + 2, true),
         };
@@ -203,6 +291,16 @@ fn keys_in(bytes: &[u8]) -> Vec<String> {
         at = end;
     }
     keys
+}
+
+/// Where a string that starts at `from` ends: after its BEL, or after its
+/// ST (`ESC \\`).
+fn string_end(bytes: &[u8], from: usize) -> Option<usize> {
+    (from..bytes.len()).find_map(|at| match bytes[at] {
+        0x07 => Some(at + 1),
+        0x1b if bytes.get(at + 1) == Some(&b'\\') => Some(at + 2),
+        _ => None,
+    })
 }
 
 /// Whether a CSI sequence with these parameters and final byte is a key.
@@ -270,13 +368,40 @@ mod tests {
             r#"session.send(b"abc\x1b[1;5A");"#,
             r#"session.send("\u{1b}x".as_bytes());"#,
             r#"session.send(&b"\x1B[D"[..]);"#,
+            r#"session.send("\u{1B}[A".as_bytes());"#,
+            r#"session.send("\u{001b}[A".as_bytes());"#,
+            "session.send(&[0x1b, b'[', b'A']);",
+            "session.send(&[27u8, 91, 65]);",
+            "const UP: &[u8] = b\"\\x1b[A\";\nsession.send(UP);",
+            r#"type_text(&mut session, "\x1b[A");"#,
+            r#"session.send(b"\x1b]0;t\x07\x1b[A");"#,
+            r#"session.send(b"\x1bO");"#,
+            r#"session.send(b"\x1bP");"#,
         ] {
             let found = found(planted);
             assert_eq!(found.len(), 1, "{planted}: {found:?}");
             assert!(found[0].contains("send_key"), "{found:?}");
-            assert!(found[0].starts_with("crates/cineris-cli/tests/system/tui.rs:1:"));
+            assert!(found[0].starts_with("crates/cineris-cli/tests/system/tui.rs:"));
         }
         assert!(found(r#"session.send_key("pageup"); session.send(b"\x03");"#).is_empty());
+    }
+
+    /// Product code is not read, nor a sender being defined, nor a `send`
+    /// that is not a method: a terminal's output has the same bytes as keys.
+    #[test]
+    fn product_code_and_a_senders_definition_are_not_read() {
+        let sources = BTreeMap::from([(
+            "crates/cineris-term/src/inline.rs".to_owned(),
+            r#"out.send(b"\x1b[2J\x1b[H".to_vec());"#.to_owned(),
+        )]);
+        assert!(check(&sources).is_empty());
+        assert!(
+            found(
+                "fn type_text(session: &mut Session, text: &str) { session.send(text.as_bytes()); }"
+            )
+            .is_empty()
+        );
+        assert!(found(r#"let ok = send(1); let x = "\x1b[A";"#).is_empty());
     }
 
     /// The mouse, bracketed paste, focus and a terminal's answers are not
