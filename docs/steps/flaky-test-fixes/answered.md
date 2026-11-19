@@ -19,7 +19,7 @@ A small fix outside the numbered steps, given by the coordinator: two tests that
 - **The other uses of `linear`:** `Laid::source_after`, `first_word_end` and `forced_break` read it, and each is right once it is true only of pieces that are their source.
 - **What the property test could not see:** `inline::tests::pieces_are_in_order_and_linear_ones_are_their_source` states the rule, but its generator never made an entity whose escape is as long as it is. Its parts now include `&#x200B;` and `&#xFE0F;`, and it catches the fault.
 
-**Tests**, in `markdown::tests`. Each lays its documents out at every width in a range, all at once and in two pieces split at every place, and holds the lines to the document laid out whole:
+**Tests**, in `markdown::tests`. Each lays its documents out at every width in a range, all at once and in two pieces split at every place, and holds the lines to the document laid out whole. A pull request checks the splits at every third width, and the nightly checks them at every width (below, "Its cost"):
 
 - `a_row_that_begins_inside_an_entitys_shown_escape_shows_what_the_whole_does`: the shrunk case, and its rows.
 - `an_entity_cut_anywhere_commits_what_the_whole_shows`: an entity cut mid-way by the pieces and by a row's end; three in a row; one shown as its character.
@@ -71,4 +71,32 @@ The three breaks of [`mutations/tooling-10-decisions.breaks`](../../../mutations
 
 **Is the mechanism elsewhere.** The mechanism is a test not named `sys_` whose turn starts a command. A search of the text cannot tell a call that runs from one a rule refuses, so it was looked for at run time. With a line added for the run alone, the process runner aborted any test not named `sys_` or `perf_` that started a command. Every such test of the workspace was then run at the desk (4,477 tests). One aborted: this one. 23 tests timed out in the run, all in `cineris-base` and `cineris-llm` while the desk's disk stalled. Those crates sit below `cineris-tools` and cannot start a command through it. Windows-only tests did not run there. The line was taken out again.
 
-**Measured.** STRESS-NUMBERS
+**Measured.**
+
+- **At the desk** (Linux), `cargo xtask stress -p cineris-core --strict --count 500 --cores 2 --load 6 -E 'test(/^verify::/)'`:
+  - before the fix, the 42 tests of the checks passed in all 500 repeats;
+  - after it, all 43 passed in all 500 repeats.
+
+  The test never failed on Linux, where `sh` starts in milliseconds.
+- **On Windows, before the fix** (`main`, try 44441142003, the same command): the test timed out in each of the 152 repeats the job reached.
+- **On Windows, after it** (try 44449545615, the same command): all 34 tests of the checks that Windows runs passed in each of the 166 repeats the job reached before its 40-minute limit. A repeat takes 13 s there, most of it the Windows system tests' shells under that load.
+- **The changed test alone, after the fix:** WINDOWS-200.
+
+## The review before the first push
+
+An independent review of the whole change, on Opus, read the code and ran nothing. It found:
+
+1. **The open items' index was not written again.** Fixed: `cargo xtask outstanding`.
+2. **A line was over the formatter's width.** Fixed: `cargo xtask fmt`.
+3. **A break that would survive its test.** `a-break-inside-a-run-cut-at-its-pieces-start` would have passed `a_shown_escape_cut_anywhere_commits_what_the_whole_shows`. Every document there was one piece from the source's first byte, so the broken offset was still right. Confirmed: `mutate` said "not caught by its own tests". Fixed: two documents where the escape's word follows a code span or an emphasis. The break is now caught.
+4. **The runner's test claimed more than it shows.** It holds the wake, not the order inside `Waits::poll`, nor `Run::step`. The test's comment and this record now say so.
+5. **A break named a Unix-only test with no `os:` line.** That is `any-ask-holds-the-users-line-back` in `tooling-10-decisions.breaks`. Fixed: `os: linux`. What Windows loses is said above.
+6. **No break covered `shows_its_source`'s length guard.** Added: `a-shorter-piece-taken-as-its-source`, caught by the inline parser's properties.
+7. **No path where an exit or an end is missed.** The review found none in reading. It noted the Job Object's lag (above), and that a launcher's standard input is written before the waiting thread waits. That writing ends when the pipe closes, or when the launcher reads it.
+8. **The split keeps what the old test proved, and checks more.**
+
+It also noted that [the tenth tooling step's record](../tooling-10/parts/decisions.md) still names the old test. That record is history, and is left as it was.
+
+## Its cost
+
+A one-runner A/B on Linux (try 44451657672, three rounds each, 5 ms a process start) gave tier 1 +1.3 s, and nothing else moved past a round's spread. The three new markdown tests that check every split took 1.1 s of that. A pull request now splits at every third width and the nightly at every width, as the existing every-split test does. That took the four tests from 0.42 s to 0.17 s at the desk in the `ci` profile.
