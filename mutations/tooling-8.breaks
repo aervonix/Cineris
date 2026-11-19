@@ -677,8 +677,8 @@ caught-by:
 rule: A break whose `file` the diff touches is chosen by `--changed`.
 file: xtask/src/mutate/changed.rs
 in: select
-find: } else if touched.contains(&one.file) {
-replace: } else if false {
+find: let file = touched.contains(&one.file);
+replace: let file = false;
 caught-by:
     mutate::changed::tests::a_break_is_chosen_by_its_file_and_only_that_break
 
@@ -686,8 +686,8 @@ caught-by:
 rule: A break that is new or changed in its list is chosen by `--changed`, whatever the diff touches.
 file: xtask/src/mutate/changed.rs
 in: select
-find: } else if !before.contains(&one.definition()) {
-replace: } else if false {
+find: let itself = !before.contains(&one.definition());
+replace: let itself = false;
 caught-by:
     mutate::changed::tests::a_break_is_chosen_when_it_is_new_or_changed_in_its_list_and_not_when_only_its_rule_is
 
@@ -695,7 +695,7 @@ caught-by:
 rule: A change to the workspace's manifest, lock file or nextest configuration chooses every break.
 file: xtask/src/mutate/changed.rs
 in: select
-find: let settings = touched.iter().find(|file| touches_every_build(file));
+find: let settings = touched.iter().find(|file| SETTINGS.contains(&file.as_str()));
 replace: let settings: Option<&String> = None;
 caught-by:
     mutate::changed::tests::a_change_to_the_builds_settings_chooses_every_break
@@ -1052,11 +1052,11 @@ caught-by:
     mutate::changed::tests::a_name_that_ends_in_a_star_is_placed_nowhere_and_chosen_by_any_file_of_its_crates
 
 [break] changed-a-file-outside-the-known-folders-chooses-nothing
-rule: A touched file outside the folders the rule reads one by one, and not Markdown (the model catalog a build script embeds), chooses every break.
+rule: A touched file outside the folders the rule reads one by one, and not Markdown, that no crate's Rust names (Rust outside the crates), chooses every break.
 file: xtask/src/mutate/changed.rs
-in: touches_every_build
-find: || (!KNOWN.iter().any(|folder| path.starts_with(folder))
-replace: || (false
+in: Data::read
+find: if outside_known(path) && data.every.is_none() {
+replace: if false {
 caught-by:
     mutate::changed::tests::a_change_to_the_builds_settings_chooses_every_break
 

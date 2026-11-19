@@ -1,0 +1,116 @@
+# The twelfth tooling step, pull request C: `mutate --changed` and data
+# files, and `mutate --budget`.
+
+# A data file's readers (`mutate::readers`).
+
+[break] data-reader-from-the-crates-folder
+rule: A path a build script or `CARGO_MANIFEST_DIR` joins is read from the crate's folder.
+file: xtask/src/mutate/readers.rs
+in: literal_names
+find: if let Some(named) = from(crate_folder)
+replace: if let Some(named) = None::<String>
+caught-by:
+    mutate::readers::tests::a_build_scripts_paths_are_from_the_crates_folder
+
+[break] data-reader-a-climb-names-nothing
+rule: A literal that climbs past the name it gives (`a/../..`) names nothing, and is no reader of every file above it.
+file: xtask/src/mutate/readers.rs
+in: literal_names
+find: joined(folder, text).filter(|named| !names_or_holds(named, folder))
+replace: joined(folder, text)
+caught-by:
+    mutate::readers::tests::a_literal_that_only_climbs_names_nothing
+
+[break] data-reader-a-bare-file-name
+rule: A file's name alone is not a reader: the end of a path names a file only by two names or more.
+file: xtask/src/mutate/readers.rs
+in: literal_names
+find: tail.len() < 2
+replace: tail.is_empty()
+caught-by:
+    mutate::readers::tests::the_end_of_a_path_of_two_names_names_the_file_wherever_it_is
+
+[break] data-reader-in-tests-alone
+rule: A reader in its crate's tests alone is seen by that crate only, not by the crates built on it.
+file: xtask/src/mutate/readers.rs
+in: readers
+find: readers.tests.insert(name.to_owned());
+replace: readers.built.insert(name.to_owned());
+caught-by:
+    mutate::readers::tests::each_wanted_file_gets_the_crates_that_name_it_and_whose_tests_alone_do
+
+# What `--changed` chooses by them (`mutate::changed`).
+
+[break] data-file-not-the-crates-built-on-the-reader
+rule: A data file chooses the breaks of the crates built on its reader, and of those whose tests use it, too.
+file: xtask/src/mutate/changed.rs
+in: Data::read
+find: seen_from(&readers.built)
+replace: readers.built.clone()
+caught-by:
+    mutate::changed::tests::a_data_file_chooses_the_breaks_of_the_crates_that_read_it_and_those_built_on_them
+
+[break] data-file-no-reader-chooses-nothing
+rule: A file outside the folders read one by one that no crate names chooses every break: what reads it cannot be known.
+file: xtask/src/mutate/changed.rs
+in: Data::read
+find: if outside_known(&path) && !markdown(&path) && data.every.is_none() {
+replace: if false {
+caught-by:
+    mutate::changed::tests::a_file_no_crate_names_chooses_every_break_outside_the_folders_read_one_by_one
+
+[break] data-file-reader-removed-by-the-diff
+rule: A reader the diff took away still counts: a touched Rust file is read as it was too.
+file: xtask/src/mutate/changed.rs
+in: Data::read
+find: sources.old(&path)
+replace: None::<String>
+caught-by:
+    mutate::changed::tests::a_reader_the_diff_took_away_still_counts
+
+[break] manifest-not-the-crates-built-on-it
+rule: A crate's manifest or build script chooses the breaks of the crates built on it, not only its own.
+file: xtask/src/mutate/changed.rs
+in: Data::read
+find: seen_from(&BTreeSet::from([name]))
+replace: BTreeSet::from([name])
+caught-by:
+    mutate::changed::tests::a_crates_manifest_chooses_the_breaks_of_the_crates_built_on_it
+
+[break] class-of-a-named-test
+rule: A break whose named test was touched is of the second class, before those chosen by their crate.
+file: xtask/src/mutate/changed.rs
+in: select
+find: (Some(Reason::Test(_)), _) => Class::Test,
+replace: (Some(Reason::Test(_)), _) => Class::Crate,
+caught-by:
+    mutate::changed::tests::each_chosen_break_is_classed_by_how_near_the_diff_came_to_it
+
+# `--budget` (`mutate::budget`).
+
+[break] budget-order-by-class
+rule: A budget runs the breaks by class, the nearest first, and in the lists' order within one.
+file: xtask/src/mutate/budget.rs
+in: ordered
+find: classed.sort_by_key(|(_, class)| *class);
+replace: classed.reverse();
+caught-by:
+    mutate::budget::tests::the_breaks_are_ordered_by_class_and_by_their_lists_within_one
+
+[break] budget-no-class-begun-once-spent
+rule: No class is begun once the budget is spent, and the breaks of it and after it are left.
+file: xtask/src/mutate/budget.rs
+in: run_in_order
+find: if started && out_of_time() {
+replace: if started && false {
+caught-by:
+    mutate::budget::tests::each_class_is_run_in_turn_and_none_is_begun_once_the_time_is_spent
+
+[break] budget-names-what-it-left
+rule: A budgeted run names each break it left, not those it reached.
+file: xtask/src/mutate/budget.rs
+in: reached_text
+find: .filter(|(_, reached)| !**reached)
+replace: .filter(|(_, reached)| **reached)
+caught-by:
+    mutate::budget::tests::what_was_reached_is_counted_by_class_and_what_was_left_is_named
