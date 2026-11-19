@@ -101,6 +101,10 @@ fn each_file_is_put_in_its_class() {
             Class::Additions(Kind::Markdown),
         ),
         ("Cargo.lock", Class::Person),
+        // A fixture is kept byte for byte, its line ends among it.
+        ("xtask/fixtures/rebase/table-rows.md.base", Class::Person),
+        ("crates/cineris-llm/fixtures/notes.md", Class::Person),
+        ("fixtures/a.rs", Class::Person),
         ("mutations/step-24.breaks", Class::Person),
         (".github/workflows/ci.yml", Class::Person),
     ] {
@@ -267,6 +271,108 @@ fn the_last_lines_end_is_kept_when_either_side_has_it() {
     let theirs = format!("{header}| a | b |\n| e | f |");
     let merged = unite(Kind::Markdown, &base, &ours, &theirs, &any_layout).unwrap();
     assert!(!merged.text.ends_with('\n'));
+}
+
+/// The second review's cases, with its inputs: a line that attaches to
+/// what follows it, put before the other side's lines, would attach to them.
+#[test]
+fn nothing_is_put_after_an_attribute_or_a_doc_comment_of_the_other_side() {
+    let base = "mod t {\n    fn one() {}\n\n    fn two() {}\n}\n";
+    let theirs = "mod t {\n    fn one() {}\n\n    fn new() {}\n\n    fn two() {}\n}\n";
+    for above in ["    #[cfg(windows)]", "    /// Two."] {
+        let ours = base.replace("    fn two", &format!("{above}\n    fn two"));
+        // The merge alone would put `fn new` under it.
+        let merged = merge(base, &ours, theirs).unwrap();
+        assert!(
+            merged.text.contains(&format!("{above}\n    fn new() {{}}")),
+            "{}",
+            merged.text
+        );
+        let error = unite(Kind::Rust, base, &ours, theirs, &any_layout).unwrap_err();
+        assert!(
+            error.contains(&format!("`{}` attaches to what follows it", above.trim())),
+            "{error}"
+        );
+    }
+    // `#[ignore]` between `#[test]` and `fn two`, and a test put before it.
+    let base = "mod t {\n    #[test]\n    fn one() {}\n\n    #[test]\n    fn two() {}\n}\n";
+    let ours = base.replace(
+        "    #[test]\n    fn two",
+        "    #[test]\n    #[ignore]\n    fn two",
+    );
+    let theirs = base.replace(
+        "    #[test]\n    fn two",
+        "    #[test]\n    fn new() {}\n\n    #[test]\n    fn two",
+    );
+    let error = unite(Kind::Rust, base, &ours, &theirs, &any_layout).unwrap_err();
+    assert!(
+        error.contains("`#[test]` attaches to what follows it"),
+        "{error}"
+    );
+    // Two items put after one doc comment: the line before the place.
+    let base = "mod t {\n    /// Two.\n    fn two() {}\n}\n";
+    let ours = base.replace("    fn two", "    fn x() {}\n    fn two");
+    let theirs = base.replace("    fn two", "    fn y() {}\n    fn two");
+    let error = unite(Kind::Rust, base, &ours, &theirs, &any_layout).unwrap_err();
+    assert!(error.contains("line 2: `/// Two.` attaches"), "{error}");
+}
+
+/// The after-a-replacement rule, with push-down: ours replaces the second
+/// `#[test]` with `#[tokio::test]`, theirs puts a test before it, which the
+/// diff reads as after it. United, `#[tokio::test]` would go to `new`.
+#[test]
+fn a_replaced_attribute_is_not_put_before_the_other_sides_lines() {
+    let base = "mod t {\n    #[test]\n    fn one() {}\n\n    #[test]\n    fn two() {}\n}\n";
+    let ours = "mod t {\n    #[test]\n    fn one() {}\n\n    #[tokio::test]\n    fn two() {}\n}\n";
+    let theirs = "mod t {\n    #[test]\n    fn one() {}\n\n    #[test]\n    fn new() {}\n\n    #[test]\n    fn two() {}\n}\n";
+    let merged = merge(base, ours, theirs).unwrap();
+    assert!(
+        merged.text.contains("    #[tokio::test]\n    fn new() {}"),
+        "{}",
+        merged.text
+    );
+    let error = unite(Kind::Rust, base, ours, theirs, &any_layout).unwrap_err();
+    assert!(
+        error.contains("`#[tokio::test]` attaches to what follows it"),
+        "{error}"
+    );
+}
+
+/// The second review's rename: kept, and the build says what is wrong
+/// (`a` and `b` are gone): not silent, so not refused. The docs say so.
+#[test]
+fn a_let_after_lines_the_other_side_renamed_is_kept_for_the_build_to_judge() {
+    let base = "fn f() {\n    let a = 1;\n    let b = 2;\n    done();\n}\n";
+    let ours = "fn f() {\n    let x = 1;\n    let y = 2;\n    done();\n}\n";
+    let theirs = "fn f() {\n    let a = 1;\n    let b = 2;\n    let c = a + b;\n    done();\n}\n";
+    let merged = unite(Kind::Rust, base, ours, theirs, &any_layout).unwrap();
+    assert_eq!(
+        merged.text,
+        "fn f() {\n    let x = 1;\n    let y = 2;\n    let c = a + b;\n    done();\n}\n"
+    );
+}
+
+/// The second review's line ends: a base with CRLF and LF lines, a row
+/// appended on each side. United, the LF line would be written CRLF.
+#[test]
+fn texts_whose_line_ends_are_not_one_kind_are_left() {
+    let base = "| h | h |\r\n|---|---|\n| a | b |\r\n";
+    let ours = format!("{base}| c | d |\r\n");
+    let theirs = format!("{base}| e | f |\r\n");
+    let error = unite(Kind::Markdown, base, &ours, &theirs, &any_layout).unwrap_err();
+    assert!(error.contains("the base mixes CRLF and LF"), "{error}");
+    // Sides of one kind each, but not the same kind.
+    let lf = "| h | h |\n|---|---|\n";
+    let crlf = lf.replace('\n', "\r\n");
+    let error = unite(
+        Kind::Markdown,
+        lf,
+        &format!("{lf}| c | d |\n"),
+        &format!("{crlf}| e | f |\r\n"),
+        &any_layout,
+    )
+    .unwrap_err();
+    assert!(error.contains("different line ends"), "{error}");
 }
 
 #[test]
