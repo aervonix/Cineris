@@ -1087,6 +1087,25 @@ gh workflow run try --ref <branch> -f command="stress -p cineris-testkit" -f cou
   The run just dispatched is minutes old; an earlier one that waits that long says the new one may wait as long.
   `try-result RUN` says the same of a run that has not finished, below its line that the run is not finished.
   The rule is a function of the run's status, the time it was made, the time now, the jobs started and the limit, unit-tested at fixed times (`runs::sat_queued`).
+- **The checks before a pull request, as one run** (since the twelfth tooling step). `cargo xtask try --final --dispatch BRANCH` dispatches `command=final`, and the run is three jobs, whatever `os` says:
+
+  ```text
+  cargo xtask try --final --dry-run
+  cargo xtask try --final --dispatch <branch> [--against REF] [--count N] [--commit SHA]
+  cargo xtask try-result <run id>
+  ```
+
+  | Job | Part | Runs |
+  |---|---|---|
+  | `try-windows` | `ab` | The Windows A/B, `ab --base ../ab-base --label main --top 20 --keep-going [--count N]` |
+  | `try-linux-22.04` | `tests` | The tests on the kernel with Landlock ABI 4, `ci --tiers --top 20` |
+  | `try-linux` | `size` | `size --check --against-main --target x86_64-unknown-linux-musl` |
+
+  - `--against` is `main` when not given, and resolved to its commit at the dispatch as for any run. `--count` is the A/B's rounds. `--commit` is every job's commit. `--os`, `--profile`, `--filter`, `--load`, `--cores`, `--capture no`, `--testkit` and words after `final` are refused: each part is fixed.
+  - The workflow's matrix for `command=final` gives each job its part, which it passes to `try` as `--part`; `try` makes the part's command, and refuses a part that is not its runner's system (the A/B is Windows'). Only the A/B's job checks the base out, and only the size job is given the token that reads `main`'s size record. A test reads `try.yml` and holds its matrix to `try`'s list of parts.
+  - The jobs are named as any `try` job is, so `try-result RUN` reads the three as it reads any run, and `--os` picks one. Its limit is 60 minutes, for the A/B's base built without the cache.
+  - `--dry-run` prints each job's command, checked as that job will check it.
+- **`try-result` of a run of several jobs** (since the twelfth tooling step) ends with each job's conclusion and the command it ran, from its log, together. A job that ran no tests and passed (a `size` check, a start-up measurement) shows its log's last lines, `--tail N` of them, where it showed nothing.
 - **`commit`:** the workflow checks the given commit out in place of the ref's head (`actions/checkout`'s `ref`, empty for none, which is the ref the run was dispatched on), after a step that reads the input from the environment and refuses anything but 40 lower-case hexadecimal digits; `cargo xtask try` checks the form again and that `HEAD` is that commit. The workflow file stays the one of `--ref`. The checked-out commit's own `xtask` runs the command, so **the commit must contain this `try`**: a commit from before the seventh tooling step has no `--commit`, and the job fails at its start with "unknown flag". A commit that no pushed branch reaches cannot be fetched by hash: push it first.
 - **The inputs reach the command as arguments, through the environment, never as text in the script.** `cargo xtask rules` refuses any workflow whose `run:` script has an input or a part of the event pasted into it.
 - **The output** goes to the log, its last 80 lines to the run's summary page, and the log and any JUnit report are kept as the artifact `try-linux` or `try-windows`, for 14 days.
@@ -1102,6 +1121,8 @@ A question a local run cannot answer (does it pass on Windows, on the kernel wit
 - **The partial Landlock:** `-f os=linux-22.04 -f command=partial-landlock` is the nightly's job; `-f os=linux-22.04 -f command="test -p cineris-sandbox"` is the crate's tests there, with `backends` turned on ("A crate alone", below).
 - **Many times over:** `-f count=200` makes `test` a stress run; `-f load=6 -f cores=2` squeezes it onto two cores beside six busy loops. A race that shows once in a thousand runs locally often shows in a few hundred there.
 - **A change's cost, apart from the runner:** `-f against=main -f count=5` builds both refs and runs them in turn on one runner ("Two trees on one runner", below).
+- **A change to how the job builds:** `-f command="test --job --setup-head FILE" -f against=main -f count=3` runs the whole job of both refs each round, each with its own setup, and prints each phase's median ("A whole job two ways on one runner", below).
+- **Before opening a pull request:** `cargo xtask try --final --dispatch <branch>` runs the Windows A/B, the tests on Linux 22.04 and the size check in one run (above).
 - **A variant without a branch of its own** (since the seventh tooling step). Wave 10 made twelve throwaway branches to try variants, because a force-push to one is refused. Commit each variant on one branch instead, each on top of the last (a commit that reverts the previous variant and makes the next), push normally, and dispatch each commit by its hash:
 
   ```text
@@ -1173,6 +1194,24 @@ gh workflow run try --ref <branch> -f os=windows -f command=test -f against=main
 ```
 
 What it showed when it was built is in [steps/tooling-3/ci.md](steps/tooling-3/ci.md).
+
+### A whole job two ways on one runner
+
+`ab` builds each tree once and times the tests. A change to how the job builds (a cache, a linker, a profile, a variable in the environment) is in the build, which `ab` does not time. `cargo xtask ab --job` (since the twelfth tooling step) makes every round a whole job on each side, each phase timed:
+
+```text
+cargo xtask ab --job --base ../other-checkout --count 3 --setup-head scripts/no-debug.sh
+gh workflow run try --ref <branch> -f os=windows -f command="test --job --setup-head scripts/no-debug.sh" -f against=main -f count=3
+```
+
+- **Each side's round:** its build of the tests is removed (`target/ci` and `target/tmp`; `--keep-build` leaves them, and then only the first round builds from cold); its setup script runs, if it has one; its tests are built as the blocking job builds them; and the job's runs of them are made, tiers 1 and 2 then tier 3. Each is timed, and so is each tier's tests' time summed above their processes' start, from the report. `the job` is the setup, the build and the runs together. The rounds alternate the sides' order, as `ab`'s do. `--count N` is 1 to 20 rounds, 3 when not given.
+- **Each way has its own setup.** `--setup-base FILE` and `--setup-head FILE` name scripts in this tree (the head's commit: both setups are part of what was committed), each run in its side's tree by `bash` (Git's own on Windows; a `.ps1` by `pwsh`), with `CINERIS_AB_SIDE` (`base` or `head`) and `CINERIS_AB_ROUND`. A script may write `KEY=VALUE` lines to the file `$CINERIS_AB_ENV`, which are set for that side's build and tests: `echo CARGO_PROFILE_CI_DEBUG=false >> "$CINERIS_AB_ENV"` builds one side without debug info. The base may be the same commit as the head, checked out beside it, for the same code two ways.
+- **A failed round is recorded, and the run goes on.** A phase that fails (a setup, a build, a run of tests, the report) ends that side's round, and is kept with the time it took and what it said; the other side, and the next rounds, run as planned. A throwaway harness for this measurement in wave 14 failed four times, at about 45 minutes a round. Everything measured is written to `target/ab/job-ab.json` after every side, so that a run that is stopped keeps what it made, and each side's report to `target/ab/<side>-job-<round>.xml`.
+- **`--minutes M`** starts no round that the longest round so far would carry past `M` minutes from the start, and says where it stopped. `try` gives it `--minutes 200` within the job's limit of 240 minutes for a job A/B.
+- **What it prints:** a line for each side's round, its phases with a failed one marked `!`; then each phase's median on each side over the rounds it passed in, with how many that was (`110.0 (3/3)`), and the change. A failed phase is left out of its median, and so is every phase after it in that round. The command fails at the end when a side's round failed, after the medians. `try-result RUN` prints the same from the kept record, and each failed test with its message.
+- **On a runner:** `test --job` with `against` is `ab --job --base ../ab-base --label REF --minutes 200 [--count N] [--setup-base FILE] [--setup-head FILE] [--keep-build] [-p CRATE]…`. `--job` and its options without `against` are refused before anything is built.
+- **Why `ab --job` and not a `try` command of its own:** it is the same two trees, order, label and base checkout as `ab`, and the same artifact that `try-result` reads, and it runs locally as well as on a runner, where a `try`-only command could be tried nowhere but on a runner.
+- Tested as pure functions (`xtask/src/job_ab.rs`): the request, each phase's median over the rounds it passed in, a phase no round passed, a failed side shown and failing the run, the rule that starts a round, the record kept and read back, the setup's environment file, and the reports' names.
 
 ### Two trees' performance tests on one runner
 
@@ -1531,6 +1570,20 @@ With the `dev` profile's optimised dependencies the cold Windows column would be
 - `unsafe` is denied by default and allowed per module in `cineris-sandbox` and `cineris-term`, where the OS interfaces need it, and in one Windows-only module of `cineris-base`, `private::windows`, which creates files with an access list of their own and reads a file's reparse tag ([decision 0029](decisions/0029-owner-only-files-on-windows.md)), and in one Windows-only module of `cineris-rpc`, `socket::windows`, which makes the named pipe with its security and checks each client's token ([decision 0037](decisions/0037-the-named-pipe-is-served-from-cineris-rpc-in-one-windows-only-module-that-may-use-unsafe.md)). Every block has a safety comment. A new place needs a decision record.
 - Public items are documented (`missing_docs`).
 - Clippy runs on Linux and on Windows, so that code compiled only for Windows is linted.
+
+### One crate's lints
+
+`cargo xtask check` lints the whole workspace in one build, and cargo builds each crate there with every feature any member asks of it. A plain `cargo clippy -p cineris-cli` builds only what the CLI asks for, and fails on code the workspace's check passes: `cineris-tui` reads its `clock` field only under its `test-kit` feature, which its own dev-dependency on itself turns on in a workspace build and nothing turns on in a build of the CLI alone, so the field is "never read" there. `cargo xtask clippy -p CRATE…` (since the twelfth tooling step) lints the crates named as the check does:
+
+```text
+cargo xtask clippy -p cineris-cli
+cargo xtask clippy -p cineris-tui -p cineris-core -- -W clippy::pedantic
+```
+
+- **The features are the workspace build's,** worked out from the manifests: each member's `default`, every feature a member's dependency of any kind names on another member, and what each of those turns on, in the crate and in its workspace dependencies, to a fixed point. A `dep?/feature` counts as `dep/feature`, and a dependency under a `[target.…]` table counts on every system: more than the workspace may turn on, never less.
+- **Cargo takes `CRATE/FEATURE` only for a crate named and its direct dependencies** ("the package does not contain these features" for any other). Those are passed as `--features`; the others the crates' build reaches are named in a note, and left off. A lint in one of those crates that differs from the check's is found by naming that crate with `-p` too.
+- The rest is the check's: `--all-targets --locked`, and `-D warnings` after any arguments given after `--`. Tested on manifests written for the purpose (`xtask/src/clippy.rs`).
+- `cargo xtask apply`'s `@@ check: clippy -p CRATE…` runs it, when its words are crates alone; with other words it is cargo's own `clippy --all-targets`, as before.
 
 **The repo rules** are the checks no off-the-shelf tool does. `cargo xtask rules` runs them, and a test runs them again on both OSes:
 
