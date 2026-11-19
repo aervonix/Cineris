@@ -206,7 +206,7 @@ impl ShellTool {
     /// ([`ShellSearch::find`], [`Shell::probe_version`]).
     #[must_use]
     pub fn new(shell: Shell, config: ShellConfig) -> Self {
-        let spec = spec(&shell, &config);
+        let spec = described(&shell, &config, None);
         Self {
             spec,
             shell,
@@ -294,7 +294,9 @@ impl ShellTool {
         mut self,
         inherited: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
     ) -> Self {
-        self.inherited = Some(inherited.into_iter().collect());
+        let inherited: Vec<_> = inherited.into_iter().collect();
+        self.spec = described(&self.shell, &self.config, Some(&inherited));
+        self.inherited = Some(inherited);
         self
     }
 
@@ -325,7 +327,32 @@ impl ShellTool {
 }
 
 /// The tool's definition: fixed for as long as the tool exists.
-fn spec(shell: &Shell, config: &ShellConfig) -> ToolSpec {
+/// The tool's description and arguments for commands that inherit
+/// `inherited`, or the harness's own environment: whether it says that
+/// `PATH` was replaced is read from the environment a command is built
+/// with ([`env::path_replaced`]).
+fn described(
+    shell: &Shell,
+    config: &ShellConfig,
+    inherited: Option<&[(std::ffi::OsString, std::ffi::OsString)]>,
+) -> ToolSpec {
+    let own: Vec<_>;
+    let inherited = match inherited {
+        Some(inherited) => inherited,
+        None => {
+            own = std::env::vars_os().collect();
+            &own
+        }
+    };
+    let replaced = env::path_replaced(inherited, &config.env_remove, cfg!(windows));
+    spec(shell, config, replaced)
+}
+
+/// The tool's description and arguments. `path_replaced`: the harness's
+/// `PATH` names no absolute directory, so a command is given
+/// [`env::NO_ABSOLUTE_PATH`] in its place, and the model is told why a
+/// program it names is not found.
+fn spec(shell: &Shell, config: &ShellConfig, path_replaced: bool) -> ToolSpec {
     let system = if cfg!(windows) {
         "Windows"
     } else if cfg!(target_os = "macos") {
@@ -360,6 +387,18 @@ fn spec(shell: &Shell, config: &ShellConfig) -> ToolSpec {
             )
         }
     };
+    // Said only when it holds, so that the text, and the request's cache,
+    // is what it always was otherwise.
+    let path = if path_replaced {
+        format!(
+            " The harness was started with no absolute directory in `PATH`, so a command is \
+             given `PATH={}` in its place: a program elsewhere must be run by its full \
+             path.",
+            env::NO_ABSOLUTE_PATH
+        )
+    } else {
+        String::new()
+    };
     ToolSpec::new(
         "shell",
         format!(
@@ -369,7 +408,7 @@ fn spec(shell: &Shell, config: &ShellConfig) -> ToolSpec {
              input, so it cannot ask a question: pass the flags that make a tool run without \
              one. It is stopped when it runs longer than `timeout_ms`. Nothing is left running: \
              a process the command starts in the background is stopped when the command exits, \
-             because background processes are not supported yet.",
+             because background processes are not supported yet.{path}",
             shell.name()
         ),
         json!({
@@ -979,13 +1018,37 @@ mod tests {
         );
     }
 
+    /// A harness with no absolute directory in its `PATH` gives commands
+    /// one that finds nothing, and the model is told so, and to name a
+    /// program by its full path; otherwise the text says nothing of it.
+    #[test]
+    fn the_model_is_told_when_path_is_replaced() {
+        let told = |path: Option<&str>| {
+            let inherited: Vec<(std::ffi::OsString, std::ffi::OsString)> = path
+                .map(|path| ("PATH".into(), path.into()))
+                .into_iter()
+                .collect();
+            ShellTool::new(Shell::new("bash"), ShellConfig::default())
+                .with_inherited_env(inherited)
+                .spec()
+                .description
+                .contains(&format!("`PATH={}`", env::NO_ABSOLUTE_PATH))
+        };
+        let windows = cfg!(windows);
+        for path in [Some("."), Some(""), Some("bin:./x"), None] {
+            assert_eq!(told(path), !windows, "{path:?}");
+        }
+        let absolute = if windows { "C:\\Windows" } else { ".:/usr/bin" };
+        assert!(!told(Some(absolute)));
+    }
+
     /// Started at the root, the tool's text is what it always was, to the
     /// byte (the request's prefix and its cache); started below it, the
     /// text and `cwd`'s say where a command runs (the follow-ups of step
     /// 23).
     #[test]
     fn the_tools_text_names_where_commands_start_only_below_the_root() {
-        let at_root = spec(&Shell::new("bash"), &ShellConfig::default());
+        let at_root = spec(&Shell::new("bash"), &ShellConfig::default(), false);
         assert!(
             at_root.description.contains(
                 "The command runs in the workspace root unless `cwd` names another directory."
@@ -1003,6 +1066,7 @@ mod tests {
                 start: Some("src/deep".to_owned()),
                 ..ShellConfig::default()
             },
+            false,
         );
         assert!(
             below.description.contains(

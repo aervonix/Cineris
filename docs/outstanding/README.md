@@ -35,6 +35,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cineris-base
 
 - [log-crate-bridge](log-crate-bridge.md): The logging subscriber has no bridge for dependencies that log through the `log` crate at `warn` and above. Owner: step 32, or the first step whose dependency needs it.
+- [the-harness-git-is-given-the-provider-keys](the-harness-git-is-given-the-provider-keys.md): The harness's own git is started with the harness's whole environment: the providers' key variables, and `PATH` as it came, relative entries and all. Owner: the coordinator.
 
 ### cineris-cli
 
@@ -56,7 +57,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
 - [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is accepted and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
 - [a-file-held-open-on-ntfs-and-its-stamp](a-file-held-open-on-ntfs-and-its-stamp.md): NTFS updates a directory entry's stamp lazily while a writer holds a file open, so the index may read it every pass or keep an old outline. Owner: a later index step, or step 33.
-- [a-provider-key-break-no-longer-bites](a-provider-key-break-no-longer-bites.md): The step 13a break `provider-key-variables-left-in` no longer fails any test: the providers' key variables reach the shell tool's list of what to remove by two paths, and the break empties only one. Owner: the coordinator.
 - [a-supervisor-lowering-a-wait](a-supervisor-lowering-a-wait.md): A client that is not a `user` is refused every tighten-only key in `session/new`'s overrides, a shorter value too; taking a lower one needs a comparison with a second load. Owner: step 37.
 - [a-verify-test-waits-on-a-timer-nothing-advances](a-verify-test-waits-on-a-timer-nothing-advances.md): A test of the checks after a turn waited once on Windows for a turn's end that never came, its core on a fake timer the test does not advance; one CI flake. Owner: the coordinator, who gives it to a small fix session after step 27's third pull request.
 - [log-level-from-configuration-in-headless-mode](log-level-from-configuration-in-headless-mode.md): A headless run starts the log before configuration is read, so `log.level` is ignored there (the interactive half is done). Owner: step 32.
@@ -146,9 +146,9 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cineris-tools
 
 - [a-git-look-too-slow-on-a-loaded-windows-runner](a-git-look-too-slow-on-a-loaded-windows-runner.md): The shell's look at changes gave up as too slow on a loaded Windows runner, failing one system test once. Owner: the next step that changes the look, or step 32.
-- [an-empty-path-runs-the-workspaces-files](an-empty-path-runs-the-workspaces-files.md): When no inherited `PATH` entry is absolute, the shell tool gives a command an empty `PATH`, and an empty `PATH` makes Unix shells look in the current directory. Owner: the coordinator.
 - [cmd-searches-the-current-directory](cmd-searches-the-current-directory.md): `cmd.exe` finds a program in the working directory before `PATH`, so a workspace `git.bat` runs as `git`. Owner: the owner.
 - [names-that-escape-to-the-same-text](names-that-escape-to-the-same-text.md): Two names that are one text once escaped are counted twice and shown once by `list`, and share their matches in `search`. Owner: a later `cineris-tools` step, or step 32.
+- [the-shell-version-probe-runs-unconfined-with-the-keys](the-shell-version-probe-runs-unconfined-with-the-keys.md): The shell's version is asked by starting the shell unconfined, with the harness's whole environment, and the shell may be a program inside a write root. Owner: the coordinator.
 
 ### cineris-tui
 

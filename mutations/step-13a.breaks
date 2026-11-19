@@ -177,18 +177,24 @@ caught-by:
 [break] path-keeps-relative-entries
 rule: `PATH` keeps only its absolute directories.
 file: crates/cineris-tools/src/shell/env.rs
-find: *value = absolute_entries(value, windows);
-replace: let _ = absolute_entries(value, windows);
+in: assemble
+find: (name.clone(), absolute_entries(value, windows))
+replace: (name.clone(), value.clone())
 packages: cineris-core, cineris-tools
 caught-by:
     cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
     cineris-tools shell::env::tests::on_windows_path_is_found_under_any_spelling_and_read_as_windows_reads_it
 
+# Broken at the source since the shell environment's fixes: the core
+# gives the key variables to the shell by two paths (the removal list and
+# what a reload changes), and a break of one alone left the other to remove
+# them. Each path has a break of its own in `shell-env-fixes.breaks`.
 [break] provider-key-variables-left-in
 rule: The key variable of every configured provider is removed from what a shell command is given.
-file: crates/cineris-core/src/assemble.rs
-find: let mut env_remove = provider::key_variables(settings);
-replace: let mut env_remove: Vec<String> = Vec::new();
+file: crates/cineris-core/src/provider.rs
+in: key_variables
+find: variables }
+replace: Vec::new() }
 caught-by:
     cineris-core::it shell::sys_a_command_is_given_the_environment_the_command_analysis_relies_on
 

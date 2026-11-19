@@ -35,7 +35,11 @@
 //!   command runs in", which is the workspace: a file the model wrote
 //!   there and named `ls` would run in place of the real one, as a command
 //!   the engine had passed as `ls`. Such entries are dropped, and the rest
-//!   keep their order.
+//!   keep their order. On Unix a `PATH` with none left, or none at all, is
+//!   not passed on empty or left out: an empty one is the same "here", and
+//!   with none a shell takes a default of its own, which upstream bash
+//!   ends with `.`. The command is given [`NO_ABSOLUTE_PATH`] in its place,
+//!   and the tool's description says so ([`path_replaced`]).
 
 use std::ffi::OsString;
 
@@ -97,6 +101,18 @@ pub(crate) fn build(
     removed: &[String],
     windows: bool,
 ) -> Vec<(OsString, OsString)> {
+    assemble(inherited, removed, windows).0
+}
+
+/// [`build`]'s environment, and whether its `PATH` is [`NO_ABSOLUTE_PATH`]
+/// in place of the harness's own: told by the code that decides it, so
+/// that a harness whose own `PATH` happens to be that text is not told it
+/// was replaced.
+fn assemble(
+    inherited: impl IntoIterator<Item = (OsString, OsString)>,
+    removed: &[String],
+    windows: bool,
+) -> (Vec<(OsString, OsString)>, bool) {
     let same = |name: &str, pattern: &str| {
         let (pattern, prefix) = match pattern.strip_suffix('*') {
             Some(prefix) => (prefix, true),
@@ -132,16 +148,51 @@ pub(crate) fn build(
             .map(|(name, value)| (OsString::from(name), OsString::from(value))),
     );
     no_fsmonitor(&mut env, &same);
-    for (name, value) in &mut env {
-        if name.to_str().is_some_and(|name| same(name, PATH)) {
-            *value = absolute_entries(value, windows);
-        }
+    // One `PATH`, of absolute directories only. An environment may hold
+    // the name twice: the harness reads the first (as `getenv` does, and so
+    // the shell was found by it), and a child would be given the last, so
+    // every one goes and the first comes back without its relative entries.
+    let is_path = |name: &OsString| name.to_str().is_some_and(|name| same(name, PATH));
+    let first = env
+        .iter()
+        .find(|(name, _)| is_path(name))
+        .map(|(name, value)| (name.clone(), absolute_entries(value, windows)));
+    env.retain(|(name, _)| !is_path(name));
+    let replaced = !windows && first.as_ref().is_none_or(|(_, value)| value.is_empty());
+    match first {
+        Some((name, value)) if windows || !value.is_empty() => env.push((name, value)),
+        // On Windows the `PATH` is passed on as it is left.
+        _ if windows => {}
+        _ => env.push((OsString::from(PATH), OsString::from(NO_ABSOLUTE_PATH))),
     }
-    env
+    (env, replaced)
 }
 
 /// The variable programs are looked up through.
 const PATH: &str = "PATH";
+
+/// The `PATH` a command is given on Unix when the harness's own names no
+/// absolute directory, or there is none: the system's own directories,
+/// which root writes and a command does not. The smallest standard set: the
+/// directories `getconf PATH` gives, with `/usr/bin` first because a
+/// merged-`/usr` system links `/bin` to it. An empty `PATH` would be the
+/// directory the command runs in, the workspace; and with no `PATH` a shell
+/// takes a default of its own, which upstream bash ends with `.`.
+pub(crate) const NO_ABSOLUTE_PATH: &str = "/usr/bin:/bin";
+
+/// Whether a command built from `inherited` and `removed` is given
+/// [`NO_ABSOLUTE_PATH`] ([`build`]): on Unix, when the `PATH` names no
+/// absolute directory, when there is none, or when the removal list names
+/// it. Told by the code that builds the environment, so the two cannot
+/// disagree. On Windows the `PATH` is passed on as it is left, and never
+/// replaced.
+pub(crate) fn path_replaced<'a>(
+    inherited: impl IntoIterator<Item = &'a (OsString, OsString)>,
+    removed: &[String],
+    windows: bool,
+) -> bool {
+    assemble(inherited.into_iter().cloned(), removed, windows).1
+}
 
 /// `path` without its empty and its relative entries, which both name the
 /// directory a command runs in.
@@ -386,9 +437,82 @@ mod tests {
             ["/usr/local/bin:/usr/bin:/opt/my tools/bin"]
         );
         // Nothing but entries that name where the command runs: nothing is
-        // left, and the variable stays, empty.
-        let built = build(env(&[("PATH", ".::bin")]), &defaults(), false);
-        assert_eq!(get(&built, "PATH"), [""]);
+        // left, and an empty `PATH` would be the same "here". It is one that
+        // finds nothing, once.
+        for nothing in [".::bin", "", ".", "./bin:sub"] {
+            let built = build(env(&[("PATH", nothing), ("KEPT", "1")]), &defaults(), false);
+            assert_eq!(get(&built, "PATH"), [NO_ABSOLUTE_PATH], "{nothing:?}");
+            assert_eq!(get(&built, "KEPT"), ["1"]);
+        }
+        // Which is the system's own directories, root's to write: a
+        // directory such as `/tmp` would be one a command could put an `ls`
+        // in.
+        assert_eq!(NO_ABSOLUTE_PATH, "/usr/bin:/bin");
+        // With no `PATH` at all a shell would take its own default; another
+        // variable that holds an absolute directory is not a `PATH`.
+        let built = build(env(&[("HOME", "/srv/x")]), &defaults(), false);
+        assert_eq!(get(&built, "PATH"), [NO_ABSOLUTE_PATH]);
+        // Nor is a `PATH` the configuration removes left out.
+        let built = build(env(&[("PATH", "/usr/bin")]), &["PATH".to_owned()], false);
+        assert_eq!(get(&built, "PATH"), [NO_ABSOLUTE_PATH]);
+        // Named twice, the first is the one the harness read, and a child
+        // would be given the last: one `PATH` is passed on, the first's
+        // absolute directories.
+        let twice = env(&[("PATH", "/usr/bin:/bin"), ("PATH", ".")]);
+        assert_eq!(
+            get(&build(twice, &defaults(), false), "PATH"),
+            ["/usr/bin:/bin"]
+        );
+        let twice = env(&[("PATH", "."), ("PATH", "/usr/bin")]);
+        assert_eq!(
+            get(&build(twice, &defaults(), false), "PATH"),
+            [NO_ABSOLUTE_PATH]
+        );
+
+        // The description is told what `build` does, and a `PATH` that
+        // was the replacement's own text is not said to be replaced.
+        assert!(!path_replaced(&env(&[("PATH", ".:/usr/bin")]), &[], false));
+        assert!(!path_replaced(
+            &env(&[("PATH", NO_ABSOLUTE_PATH)]),
+            &[],
+            false
+        ));
+        for nothing in [
+            &env(&[("PATH", ".::bin")])[..],
+            &env(&[("PATH", "")]),
+            &env(&[]),
+            &env(&[("HOME", "/srv/x")]),
+            &env(&[("PATH", "."), ("PATH", "/usr/bin")]),
+        ] {
+            assert!(path_replaced(nothing, &[], false), "{nothing:?}");
+        }
+        assert!(path_replaced(
+            &env(&[("PATH", "/usr/bin")]),
+            &["P*".to_owned()],
+            false
+        ));
+        // Never on Windows, where the `PATH` is passed on as it is left,
+        // and none is made where there was none.
+        assert!(!path_replaced(&env(&[("Path", ".")]), &[], true));
+        let built = build(env(&[("Path", ".")]), &defaults(), true);
+        assert_eq!(get(&built, "Path"), [""]);
+        assert!(!path_replaced(&env(&[("KEPT", "1")]), &[], true));
+        let built = build(env(&[("KEPT", "1")]), &defaults(), true);
+        assert!(
+            !built
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case("PATH")),
+            "{built:?}"
+        );
+        // Two spellings of one name on Windows: one is passed on, the
+        // first's.
+        let built = build(
+            env(&[("Path", "C:\\Windows"), ("PATH", ".")]),
+            &defaults(),
+            true,
+        );
+        assert_eq!(get(&built, "Path"), ["C:\\Windows"]);
+        assert!(get(&built, "PATH").is_empty());
         // A quote is a character of a name on Linux, not a way to write an
         // entry: `"/usr/bin"` is relative, and goes.
         let built = build(

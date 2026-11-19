@@ -297,6 +297,26 @@ impl Bench {
         Self { ws, tool, timer }
     }
 
+    /// A bench whose commands inherit `inherited`, in place of the test
+    /// process's own environment: what the harness would pass on had it
+    /// been started with it. Unix only: a Windows shell needs more of the
+    /// machine's environment to start than a test can list.
+    #[cfg(unix)]
+    pub(crate) fn inheriting(
+        test: &str,
+        shell: Shell,
+        inherited: Vec<(std::ffi::OsString, std::ffi::OsString)>,
+    ) -> Self {
+        let mut bench = Self::new(test, shell);
+        let Self { ws, tool, timer } = bench;
+        bench = Self {
+            ws,
+            tool: tool.with_inherited_env(inherited),
+            timer,
+        };
+        bench
+    }
+
     pub(crate) fn shell(&self) -> &Shell {
         self.tool.shell()
     }
