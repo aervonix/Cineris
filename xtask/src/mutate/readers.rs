@@ -17,9 +17,10 @@
 //! - **from the top of the repository,** as `xtask` names its files
 //!   (`"docs/outstanding"`).
 //!
-//! Each way, it names the file, or a folder the file is in; from the top, a
-//! folder only by two names or more (`"docs"` alone is too common a word to
-//! read every file under `docs/`). And a literal of two names or more that
+//! Each way, it names the file, or a folder the file is in; from the top,
+//! only by two names or more (`"docs"` alone is too common a word to read
+//! every file under `docs/`, and `"AGENTS.md"` names a project's own file
+//! as often as this repository's). And a literal of two names or more that
 //! ends the file's path (`"catalog/models.toml"`) names it from anywhere.
 //! A file's name alone (`"request.json"`) does not: many crates name files
 //! of that name, and it would make a reader of each.
@@ -124,9 +125,12 @@ pub(crate) fn literal_names(text: &str, source: &str, crate_folder: &str, path: 
     {
         return true;
     }
-    // From the top: the file itself, or a folder of two names or more.
+    // From the top, by two names or more: the file, or a folder it is in.
+    // One name alone (`"AGENTS.md"`) is as common as a file's name: a crate
+    // that reads a project's file of that name is no reader of this one's.
     if let Some(named) = normalise(text)
-        && (named == path || (named.contains('/') && names_or_holds(&named, path)))
+        && named.contains('/')
+        && names_or_holds(&named, path)
     {
         return true;
     }
@@ -382,7 +386,8 @@ mod tests {
             folder,
             "docs/outstanding/an-item.md"
         ));
-        assert!(literal_names("NOTICE-X", source, folder, "NOTICE-X"));
+        // One name from the top is too common a word, a file's or a folder's.
+        assert!(!literal_names("NOTICE-X", source, folder, "NOTICE-X"));
         // One word is not a folder of everything under it.
         assert!(!literal_names("docs", source, folder, "docs/vision.md"));
         // A folder is not a file whose name starts with it.

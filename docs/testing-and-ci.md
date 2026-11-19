@@ -674,7 +674,7 @@ A full run stays the default, and is what a step's report rests on; `--changed` 
 
 **It combines** with the break and list names given (it narrows them), `--file` (the lists' breaks, narrowed), `--flagged` (the breaks of the narrowed set that were left without a verdict), `--again` (forgets the results of the narrowed set only), `--list` (which breaks, each with why), `--report`, `--jobs`, `--minutes` and `--budget`. **It is refused** beside `--break` (one break of its own: nothing to choose among), `--merge`, and `--check` (a check reads every list whole, since a break that does not apply is wrong whether or not it is run today). A `REF` that is not a commit is an error that names it, never "nothing changed", and a `REF` that begins with `-` is refused as an option. A diff that touches nothing any break depends on says "Nothing to run" and exits 0.
 
-**Data files** (since the twelfth tooling step). A file that is not Rust is read by the crates whose Rust names it in a string literal: an `include_str!` or `include_bytes!` path (from the source file's folder), a build script's `cargo::rerun-if-changed=PATH` or a path joined to `CARGO_MANIFEST_DIR` (from the crate's folder), or a path from the top of the repository (`"docs/outstanding"`). Each names the file, or a folder it is in; from the top a folder counts only by two names or more, and a literal that only climbs (`..`, `a/../..`) names nothing. A literal of two names or more that ends the file's path (`"catalog/models.toml"`) names it from anywhere; a file's name alone (`"request.json"`) does not, since many crates name files of that name. A reader in its crate's tests alone (a file under the crate's `tests/`, `benches/` or `examples/`, or inside a `#[cfg(test)] mod … { }`) is seen by that crate's breaks only; any other is seen by the breaks of every crate built on it or whose tests use it, as `test --dependents` counts them. The rule reads every crate's Rust, as it is and, for a file the diff touches, as it was at `REF`: a reader the diff removed still counts. The summary names each data file's readers and the crates that can see it:
+**Data files** (since the twelfth tooling step). A file that is not Rust is read by the crates whose Rust names it in a string literal: an `include_str!` or `include_bytes!` path (from the source file's folder), a build script's `cargo::rerun-if-changed=PATH` or a path joined to `CARGO_MANIFEST_DIR` (from the crate's folder), or a path from the top of the repository (`"docs/outstanding"`). Each names the file, or a folder it is in; from the top only by two names or more (`"AGENTS.md"` alone names a project's own file as often as this repository's), and a literal that only climbs (`..`, `a/../..`) names nothing. A literal of two names or more that ends the file's path (`"catalog/models.toml"`) names it from anywhere; a file's name alone (`"request.json"`) does not, since many crates name files of that name. A reader in its crate's tests alone (a file under the crate's `tests/`, `benches/` or `examples/`, or inside a `#[cfg(test)] mod … { }`) is seen by that crate's breaks only; any other is seen by the breaks of every crate built on it or whose tests use it, as `test --dependents` counts them. The rule reads every crate's Rust, as it is and, for a file the diff touches, as it was at `REF`: a reader the diff removed still counts. The summary names each data file's readers and the crates that can see it:
 
 ```text
 --changed HEAD: the diff touches 1 file(s). 3161 of 3208 break(s) chosen (3161 by a data file a crate they run reads); 47 skipped: …
@@ -695,16 +695,25 @@ The catalog is compiled into `cineris-llm` by its build script, and most crates 
 Each class is a run of its own: the tests with nothing broken for the crates its breaks run, then each break. No new break is started once `TIME` is spent; those under way finish and are kept, so the same command run again carries on. The compile of every break before the first is left out (it would spend the budget on breaks never reached): a break that does not compile is found when it runs. At the end it says how many of each class it reached, names each break it left, and gives the commands that run them:
 
 ```text
-cargo xtask mutate --changed main --budget 20m
---budget 20m: 41 break(s), run in this order: 6 touched (its file, or the break itself), then 3 by a test it names, then 32 by its crate (a file of it, or a data file it reads).
+$ cargo xtask mutate --changed 6806291f --budget 4m --jobs 2
+--budget 4m: 1862 break(s), run in this order: 80 touched (its file, or the break itself), then 12 by a test it names, then 1770 by its crate (a file of it, or a data file it reads).
 …
-The budget was spent: 17 of 41 break(s) reached.
-  touched (its file, or the break itself): 6 of 6 reached
-  by a test it names: 3 of 3 reached
-  by its crate (a file of it, or a data file it reads): 8 of 32 reached
-Left (24):
+== 80 break(s) touched (its file, or the break itself) ==
+…
+== 12 break(s) by a test it names ==
+…
+The budget was spent: 92 of 1836 break(s) reached.
+  touched (its file, or the break itself): 80 of 80 reached
+  by a test it names: 12 of 12 reached
+  by its crate (a file of it, or a data file it reads): 0 of 1744 reached
+Left (1744):
+  flaky-test-fixes/the-threads-do-not-wake-the-run  (by its crate (a file of it, or a data file it reads))
   …
+Run the same command again to carry on from here (what was found is kept):
+  cargo xtask mutate --changed 6806291f --budget 4m --jobs 2
 ```
+
+That is this change's own first run on the reference machine: its diff touched `xtask`'s `mutate`, `AGENTS.md` and this page, which `xtask`'s code names, so the third class is every break of `xtask` and of the crates that named those pages (then also the crates that name a project's `AGENTS.md`, which one name from the top no longer counts for). The 26 breaks of code only Windows builds were left to a run there, as in any run. Past 40 breaks left, the command that would name each is not printed: the same command carries on.
 
 `--budget` is the run's time limit, so it is refused beside `--minutes N` (`--minutes 0`, no limit of its own, which `try` gives a `mutate` command, may stand beside it), and beside `--check` and `--merge`, which run no break. `--list --budget TIME` prints the order, each break with its class, and runs nothing. A run that stops for the time exits 2, as `--minutes` does.
 
