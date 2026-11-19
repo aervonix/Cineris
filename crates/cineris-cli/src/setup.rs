@@ -239,8 +239,8 @@ fn shown_server(server: &ImportedServer) -> McpServer {
                 Refusal::Unseen => "holds a character that acts unseen",
                 Refusal::Name => "has a name that cannot be a setting's",
                 Refusal::NamedValue => {
-                    "passes a value named as a credential that is neither one token nor a \
-                     relative path (move it into a variable)"
+                    "passes a value named as a credential that cannot be imported unseen \
+                     (move it into a variable)"
                 }
                 Refusal::NotUnderstood => "is not a server this version reads",
             }
@@ -406,11 +406,11 @@ mod tests {
         );
     }
 
-    /// A server whose value under a credential's name is neither one token
-    /// nor a relative path is refused with a row saying to move it into a
-    /// variable (the review of the fixes of the third pull request; the
-    /// words since the coordinator's settlement after the narrow check,
-    /// which judges a value by its text alone).
+    /// A server whose value under a credential's name cannot be imported
+    /// unseen is refused with a row saying to move it into a variable (the
+    /// review of the fixes of the third pull request; the words since the
+    /// short read of B, under which a token can refuse too, after a name
+    /// with a shell's character or in an argument of `cmd`).
     #[test]
     fn a_loose_value_under_a_credentials_name_says_to_move_it() {
         let servers = cineris_config::import::servers_in(
@@ -422,8 +422,8 @@ mod tests {
         assert_eq!(
             shown.refused.as_deref(),
             Some(
-                "passes a value named as a credential that is neither one token nor a relative \
-                 path (move it into a variable)"
+                "passes a value named as a credential that cannot be imported unseen \
+                 (move it into a variable)"
             )
         );
         assert!(!shown.shown.contains("a b c"), "{}", shown.shown);

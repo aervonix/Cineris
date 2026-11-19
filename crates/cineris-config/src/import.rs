@@ -48,12 +48,14 @@
 //!   space (`mcp --key=…` inside a script) is not a name, and shows its
 //!   value.
 //! - **Never one that ends in** [`SHOWN_ENDINGS`] (`command`, `cmd`, `hook`,
-//!   `script`, `file`, `path`, and since the coordinator's answers `url`,
-//!   `uri`, `endpoint`, `dir` and `directory`): its value says where a
-//!   credential comes from, or names a place, not the credential, and is
-//!   shown (`--password-command …`, `--auth-hook=…`, `--auth-url https://…`,
-//!   `--secrets-dir …`). Nor a switch turned off (`--no-auth`), which takes
-//!   no value.
+//!   `script`, `file`, `path`, since the coordinator's answers `url`,
+//!   `uri`, `endpoint`, `dir` and `directory`, and since the short read of
+//!   B `helper`, `exec`, `program` and `plugin`): its value says where a
+//!   credential comes from, names a program that gives it, or names a
+//!   place, not the credential, and is shown (`--password-command …`,
+//!   `--auth-hook=…`, `--auth-url https://…`, `--secrets-dir …`,
+//!   `--api-key-helper …`). Nor a switch turned off (`--no-auth`), which
+//!   takes no value.
 //! - **An address in an argument shows its host and path,** and what in it
 //!   is a credential is masked as in a server's own address: its user part
 //!   (as it is read, by 08's rule, which refuses the server) and a field of
@@ -72,6 +74,16 @@
 //!   (`/K7MDENG/bPxRfiCYzEXAMPLEKEY`) are masked and imported, which
 //!   [`ImportedServer::hidden`] says, never drawn and never refused. `\`
 //!   and every character a shell reads as more than a letter stay out.
+//!   **Not a token, since the short read of B:** a value that holds `://`,
+//!   so that an address is never hidden whole and where a server connects
+//!   shows or refuses it (`--auth-server https://…`, `API_KEY=https://…`,
+//!   `?auth=https://…`); a token under a name that is not plain, ASCII
+//!   letters, digits, `-`, `_` and `.` alone (`--api-key;`, `--api-key&`,
+//!   `$API_KEY=`, `?x;$api_key=`: the name is a script's text, and what it
+//!   hides could be run); and, in an argument of `cmd` or `cmd.exe` (any
+//!   case, any directory), a token that holds a `/`, which `cmd` reads as a
+//!   switch wherever it is before its `/c` or `/k` (`/v:on` turns on its
+//!   `!NAME!` expansion).
 //! - **A relative path is a place, and is shown,** by its text alone: it
 //!   begins with `./`, `../`, `.\` or `..\` and holds only a token's
 //!   characters and `\` (`--key ./client.key`). A value in an address's
@@ -81,25 +93,21 @@
 //!   read. (A rooted path was a place for a while where it named a file
 //!   that existed; asking could reach the network, through an automounted
 //!   `/net/<host>`, an NFS mount or an SMB share, and hold the set-up's
-//!   worker, so the coordinator settled that it goes.)
+//!   worker, so the coordinator settled that it goes.) Clippy holds it: the
+//!   file-system calls it refuses are allowed only on the function that
+//!   opens the file and on the tests, so that any other call here fails
+//!   `cargo xtask check`.
 //! - **Anything else under such a name** (white space, a shell's
 //!   metacharacter, a `\` outside a relative path: `x;curl…|sh`,
-//!   `C:\certs\k.pem`) is masked and its server refused
-//!   ([`Refusal::NamedValue`]): it would be imported unseen, and a
-//!   credential that is neither one token nor a relative path belongs in a
-//!   variable.
+//!   `C:\certs\k.pem`; and what is not a token by the rules above) is
+//!   masked and its server refused ([`Refusal::NamedValue`]): it would be
+//!   imported unseen, and such a credential belongs in a variable.
 //!
 //! The files read: `~/.claude.json`, Cursor's `~/.cursor/mcp.json` and
 //! Claude Desktop's file (`mcpServers`, each server a `command` with
 //! `args` and `env`, or a `url` with `headers`), and Codex's
 //! `~/.codex/config.toml` (`[mcp_servers.<name>]` tables of the same
 //! keys).
-
-#![allow(
-    clippy::disallowed_methods,
-    clippy::disallowed_types,
-    reason = "reads one file the person asked to see inside, on the setup's worker"
-)]
 
 use std::io::Read as _;
 use std::path::Path;
@@ -137,9 +145,9 @@ pub const SECRET_ENDINGS: &[&str] = &[
 pub const SECRET_WORDS: &[&str] = &["auth", "authorization"];
 
 /// The last words of a name whose value is never masked: it says where a
-/// credential comes from, or names a place, not the credential
-/// (`--password-command`, `--auth-hook`, `--token-file`, `--auth-url`,
-/// `--secrets-dir`).
+/// credential comes from, names a program that gives it, or names a place,
+/// not the credential (`--password-command`, `--auth-hook`, `--token-file`,
+/// `--auth-url`, `--secrets-dir`, `--api-key-helper`, `--auth-exec`).
 pub const SHOWN_ENDINGS: &[&str] = &[
     "command",
     "cmd",
@@ -152,6 +160,10 @@ pub const SHOWN_ENDINGS: &[&str] = &[
     "uri",
     "endpoint",
     "directory",
+    "helper",
+    "exec",
+    "program",
+    "plugin",
 ];
 
 /// The words of a name, in lower case: split at `-`, `_`, `.` and where the
@@ -233,12 +245,34 @@ fn token_character(character: char, in_address: bool) -> bool {
         || (in_address && character == '%')
 }
 
-/// Whether `value` is a token: one or more of [`token_character`]'s.
+/// Whether `value` is a token: one or more of [`token_character`]'s, and
+/// no `://`: an address is never hidden whole, so that where a server
+/// connects shows, or refuses it (the short read of B, M2).
 fn token_shaped(value: &str, in_address: bool) -> bool {
     !value.is_empty()
+        && !value.contains("://")
         && value
             .chars()
             .all(|character| token_character(character, in_address))
+}
+
+/// Whether a credential's `name` is plain: ASCII letters, digits, `-`, `_`
+/// and `.` alone, leading dashes among them. One that is not (`--api-key;`,
+/// `--api-key&`, `$API_KEY`) is a script's text, and a value hidden after
+/// it could be run: `pwsh -Command tool "--api-key;" C:/x.exe` runs the
+/// path as a second statement (the short read of B, M1).
+fn plain_name(name: &str) -> bool {
+    name.chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.'))
+}
+
+/// Whether `program` is Windows' `cmd`: its file name, after any
+/// directory, is `cmd` or `cmd.exe` in any case. `cmd` reads a `/` in its
+/// arguments as a switch wherever it is before its `/c` or `/k`, and
+/// `/v:on` turns on its `!NAME!` expansion (the short read of B, L4).
+fn runs_cmd(program: &str) -> bool {
+    let file = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    file.eq_ignore_ascii_case("cmd") || file.eq_ignore_ascii_case("cmd.exe")
 }
 
 /// Whether `value` is a relative path, by its text alone: it begins with
@@ -260,8 +294,9 @@ enum Masked {
     No,
     /// Masked, and imported as it is: a token.
     Token,
-    /// Masked, and its server refused: neither one token nor a relative
-    /// path.
+    /// Masked, and its server refused: it cannot be imported unseen.
+    /// Neither one token nor a relative path; or a token under a name that
+    /// is not plain, or with a `/` that `cmd` reads.
     Loose,
 }
 
@@ -292,6 +327,18 @@ impl Masked {
             Self::Token
         } else {
             Self::Loose
+        }
+    }
+
+    /// `self` for `value` under the credential's `name`, read by `cmd` or
+    /// not: a token is loose under a name that is not plain (M1), and where
+    /// `cmd` reads it and it holds a `/`, which `cmd` would take for a
+    /// switch (L4; the short read of B).
+    fn under(self, name: &str, value: &str, cmd: bool) -> Self {
+        if self == Self::Token && (!plain_name(name) || (cmd && value.contains('/'))) {
+            Self::Loose
+        } else {
+            self
         }
     }
 
@@ -343,9 +390,10 @@ const ADDRESS_DEPTH: usize = 3;
 
 /// `url` with the value of each field of its query and its fragment whose
 /// name says it is a credential masked, and what was. `percent`: `url` is a
-/// server's own, where `%` is percent-encoding. `depth`: how many field
-/// values `url` is inside, 0 for an address of its own.
-fn masked_query(url: &str, percent: bool, depth: usize) -> (String, Masked) {
+/// server's own, where `%` is percent-encoding. `cmd`: `url` is an argument
+/// of `cmd` ([`runs_cmd`]). `depth`: how many field values `url` is
+/// inside, 0 for an address of its own.
+fn masked_query(url: &str, percent: bool, cmd: bool, depth: usize) -> (String, Masked) {
     let (before, fragment) = match url.split_once('#') {
         Some((before, fragment)) => (before, Some(fragment)),
         None => (url, None),
@@ -358,7 +406,7 @@ fn masked_query(url: &str, percent: bool, depth: usize) -> (String, Masked) {
     let mut shown = base.to_owned();
     for (mark, part) in [('?', query), ('#', fragment)] {
         if let Some(part) = part {
-            let (fields, masked) = masked_fields(part, percent, depth);
+            let (fields, masked) = masked_fields(part, percent, cmd, depth);
             hidden = hidden.and(masked);
             shown.push(mark);
             shown.push_str(&fields);
@@ -373,7 +421,7 @@ fn masked_query(url: &str, percent: bool, depth: usize) -> (String, Masked) {
 /// value is itself an address (`?next=https://o/cb?api_key=…`) has that
 /// address's fields masked too (the narrow check), to [`ADDRESS_DEPTH`];
 /// one deeper is masked whole and refuses.
-fn masked_fields(text: &str, percent: bool, depth: usize) -> (String, Masked) {
+fn masked_fields(text: &str, percent: bool, cmd: bool, depth: usize) -> (String, Masked) {
     let mask = cineris_base::redact::MASK;
     let mut hidden = Masked::No;
     let mut shown = String::with_capacity(text.len());
@@ -382,7 +430,7 @@ fn masked_fields(text: &str, percent: bool, depth: usize) -> (String, Masked) {
             Some((name, value))
                 if names_a_secret(name) && Masked::in_address(value, percent) != Masked::No =>
             {
-                hidden = hidden.and(Masked::in_address(value, percent));
+                hidden = hidden.and(Masked::in_address(value, percent).under(name, value, cmd));
                 shown.push_str(name);
                 shown.push('=');
                 shown.push_str(mask);
@@ -391,7 +439,7 @@ fn masked_fields(text: &str, percent: bool, depth: usize) -> (String, Masked) {
                 shown.push_str(name);
                 shown.push('=');
                 if depth < ADDRESS_DEPTH {
-                    let (inner, masked) = masked_query(value, percent, depth + 1);
+                    let (inner, masked) = masked_query(value, percent, cmd, depth + 1);
                     hidden = hidden.and(masked);
                     shown.push_str(&inner);
                 } else {
@@ -458,14 +506,17 @@ pub enum Refusal {
     Unseen,
     /// Its name cannot be a setting's: empty, or longer than [`MAX_NAME`].
     Name,
-    /// A value whose name says it is a credential is neither one token nor
-    /// a relative path (it holds white space, a shell's metacharacter, or a
-    /// `\` outside a relative path, as in `C:\certs\k.pem`): it would be
-    /// imported unseen, and belongs in a variable (since the review of the
-    /// fixes of step 25's third pull request; judged by its text alone,
-    /// since the coordinator's settlement after the narrow check). An
-    /// address inside a field's value deeper than is looked into is refused
-    /// as one too.
+    /// A value whose name says it is a credential cannot be imported
+    /// unseen, and belongs in a variable (since the review of the fixes of
+    /// step 25's third pull request; judged by its text alone, since the
+    /// coordinator's settlement after the narrow check): it is neither one
+    /// token nor a relative path (it holds white space, a shell's
+    /// metacharacter, a `\` outside a relative path, as in
+    /// `C:\certs\k.pem`, or an address's `://`); or it is a token under a
+    /// name with a shell's character (`--api-key;`, `$API_KEY=`), or one
+    /// with a `/` that `cmd` would read as a switch (the short read of B).
+    /// An address inside a field's value deeper than is looked into is
+    /// refused as one too.
     NamedValue,
     /// It is neither a command nor an address this version reads.
     NotUnderstood,
@@ -534,12 +585,15 @@ fn launch_view(launch: &Launch) -> (String, Masked) {
         Launch::Command { program, args } => {
             let mut hidden = Masked::No;
             let mut parts = vec![quoted(program)];
-            // The value after a flag whose name says it is a credential.
+            let cmd = runs_cmd(program);
+            // The value after a flag whose name says it is a credential, and
+            // the argument before this one: that flag, when `after_flag`.
             let mut after_flag = false;
+            let mut before = "";
             for arg in args {
                 let shown = if after_flag && !arg.starts_with('-') && Masked::of(arg) != Masked::No
                 {
-                    hidden = hidden.and(Masked::of(arg));
+                    hidden = hidden.and(Masked::of(arg).under(before, arg, cmd));
                     mask.to_owned()
                 } else if let Some((name, value)) = arg.split_once('=')
                         // An address's first `=` is in its query or fragment,
@@ -548,25 +602,26 @@ fn launch_view(launch: &Launch) -> (String, Masked) {
                         && names_a_secret(name)
                         && Masked::of(value) != Masked::No
                 {
-                    hidden = hidden.and(Masked::of(value));
+                    hidden = hidden.and(Masked::of(value).under(name, value, cmd));
                     format!("{name}={mask}")
                 } else if arg.contains("://") {
                     // An address (`--auth-url https://…`): its host and path
                     // shown, and a credential in its query masked, as in a
                     // server's own address; its user part was masked as it
                     // was read.
-                    let (shown, masked) = masked_query(arg, false, 0);
+                    let (shown, masked) = masked_query(arg, false, cmd, 0);
                     hidden = hidden.and(masked);
                     shown
                 } else {
                     arg.clone()
                 };
                 after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
+                before = arg;
                 parts.push(quoted(&shown));
             }
             (parts.join(" "), hidden)
         }
-        Launch::Remote { url } => masked_query(url, true, 0),
+        Launch::Remote { url } => masked_query(url, true, false, 0),
     }
 }
 
@@ -597,6 +652,12 @@ pub fn read_servers(path: &Path) -> Result<Vec<ImportedServer>, ImportError> {
 }
 
 /// [`read_servers`] with `limit` in [`MAX_FILE`]'s place, for its test.
+#[allow(
+    clippy::disallowed_types,
+    reason = "opens the one file the person asked to see inside, on the setup's worker; the only \
+              call of the file system in this module, so that clippy refuses any other, such as \
+              a question about a value (the short read of B, L5)"
+)]
 fn read_servers_within(path: &Path, limit: u64) -> Result<Vec<ImportedServer>, ImportError> {
     let file =
         std::fs::File::open(path).map_err(|error| ImportError::Unreadable(error.to_string()))?;
@@ -737,6 +798,11 @@ fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> Impor
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the tests write files of their own, and ask whether paths of their own exist"
+)]
 mod tests {
     use cineris_base::redact::MASK;
 
@@ -1167,28 +1233,28 @@ mod tests {
         assert_eq!(relative.refused, None);
     }
 
-    /// No value is asked of the disk: a file and a directory the test makes,
-    /// and paths that name nothing, are judged alike under `--key`,
-    /// `--key=`, `KEY=` and an address's `?api_key=`, each masked and
-    /// imported (the coordinator's settlement after the narrow check: the
-    /// existence rule reached the network through automounted and shared
-    /// paths). The judging takes text alone; a break that asks the disk
-    /// again tells the two apart.
+    /// No value is asked of the disk: a file and a directory that exist, and
+    /// paths that name nothing, are judged alike under `--key`, `--key=`,
+    /// `KEY=` and an address's `?api_key=`, each masked and imported (the
+    /// coordinator's settlement after the narrow check: the existence rule
+    /// reached the network through automounted and shared paths). The
+    /// judging takes text alone; a break that asks the disk again tells the
+    /// two apart. The paths are the crate's own, from the folder nextest runs
+    /// a crate's tests in, so that no temporary folder's name (a space, a
+    /// letter that is not ASCII) can make one more than a token (the short
+    /// read of B, L7).
     #[test]
     fn a_value_is_judged_by_its_text_and_never_asked_of_the_disk() {
-        let scratch = cineris_testkit::Scratch::outside("cineris-config-unit", "import_no_disk");
-        // Written with `/`, which Windows takes as a separator too, so that
-        // the path is a token on both systems: a `\` would refuse.
-        let written = |path: std::path::PathBuf| path.to_str().unwrap().replace('\\', "/");
-        let file = written(scratch.file("keys/client.key", "not read"));
-        let dir = written(scratch.dir("keys/store"));
-        let gone_file = written(scratch.join("keys/missing.key"));
-        let gone_dir = written(scratch.join("keys/missing"));
-        for path in [&file, &dir, &gone_file, &gone_dir] {
+        let (file, dir) = ("src/import.rs", "src");
+        let (gone_file, gone_dir) = ("src/missing.rs", "src/missing");
+        for there in [file, dir] {
             assert!(
-                token_shaped(path, false),
-                "the scratch folder's path is a token: {path}"
+                std::path::Path::new(there).exists(),
+                "{there} is where the tests run"
             );
+        }
+        for gone in [gone_file, gone_dir] {
+            assert!(!std::path::Path::new(gone).exists(), "{gone} is not");
         }
         // Each server's row, by its name: what is shown, whether it hides a
         // value, and why it is refused.
@@ -1222,9 +1288,154 @@ mod tests {
         .into_iter()
         .map(|(name, shown)| (name.to_owned(), (shown, true, None)))
         .collect();
-        for (there, gone) in [(&file, &gone_file), (&dir, &gone_dir)] {
+        for (there, gone) in [(file, gone_file), (dir, gone_dir)] {
             assert_eq!(judged(there), expected, "{there}, which exists");
             assert_eq!(judged(gone), expected, "{gone}, which does not");
+        }
+    }
+
+    /// A credential's name that holds anything but ASCII letters, digits,
+    /// `-`, `_` and `.` is a script's text, and a token after it is masked
+    /// and refuses its server, a flag's name, a `NAME=value`'s and an address
+    /// field's alike: `pwsh -Command tool "--api-key;" C:/x.exe` runs the
+    /// hidden path as a second statement, `cmd /c tool --api-key& calc` runs
+    /// `calc`, and PowerShell runs `$API_KEY=…`'s right-hand side (the short
+    /// read of B, M1, settled by the session: what refused before B).
+    #[test]
+    fn a_token_under_a_name_with_a_shells_character_refuses() {
+        let servers = servers_in(
+            r#"{"mcpServers": {
+                "semicolon": {"command": "pwsh", "args": ["-Command", "tool", "--api-key;",
+                    "C:/Tools/x.exe"]},
+                "ampersand": {"command": "cmd", "args": ["/c", "tool", "--api-key&", "calc"]},
+                "dollar": {"command": "pwsh", "args": ["-c", "$API_KEY=C:/Tools/x.exe"]},
+                "field": {"url": "https://h.example.com/mcp?x;$api_key=C:/x.exe"},
+                "argument": {"command": "pwsh", "args": ["-c", "start",
+                    "https://h.example.com/?x;$api_key=C:/x.exe"]},
+                "plain": {"command": "tool", "args": ["--api-key", "C:/Tools/x.exe",
+                    "API_KEY=C:/x.exe", "https://h.example.com/?api_key=C:/x.exe"]}
+            }}"#,
+            false,
+        )
+        .unwrap();
+        for (name, shown) in [
+            ("semicolon", format!("pwsh -Command tool --api-key; {MASK}")),
+            ("ampersand", format!("cmd /c tool --api-key& {MASK}")),
+            ("dollar", format!("pwsh -c $API_KEY={MASK}")),
+            (
+                "field",
+                format!("https://h.example.com/mcp?x;$api_key={MASK}"),
+            ),
+            (
+                "argument",
+                format!("pwsh -c start https://h.example.com/?x;$api_key={MASK}"),
+            ),
+        ] {
+            let server = by_name(&servers, name);
+            assert_eq!(server.shown(), shown, "{name}");
+            assert_eq!(server.refused, Some(Refusal::NamedValue), "{name}");
+        }
+        let plain = by_name(&servers, "plain");
+        assert_eq!(
+            plain.refused,
+            None,
+            "a plain name's token: {}",
+            plain.shown()
+        );
+        assert!(plain.hidden());
+    }
+
+    /// A value that holds `://` is never hidden whole, so that where a
+    /// server connects shows, or refuses it: an address after a credential's
+    /// flag, in its `NAME=value` and in a server's own address's field is
+    /// masked and refuses (the short read of B, M2, settled by the session:
+    /// what refused before B).
+    #[test]
+    fn an_address_under_a_credentials_name_refuses() {
+        let servers = servers_in(
+            r#"{"mcpServers": {
+                "flag": {"command": "x-mcp", "args": ["--auth-server", "https://evil.example.com/collect"]},
+                "named": {"command": "env", "args": ["API_KEY=https://h/x", "x-mcp"]},
+                "own": {"url": "https://h.example.com/mcp?auth=https://evil.example.com/x"}
+            }}"#,
+            false,
+        )
+        .unwrap();
+        for (name, shown) in [
+            ("flag", format!("x-mcp --auth-server {MASK}")),
+            ("named", format!("env API_KEY={MASK} x-mcp")),
+            ("own", format!("https://h.example.com/mcp?auth={MASK}")),
+        ] {
+            let server = by_name(&servers, name);
+            assert_eq!(server.shown(), shown, "{name}");
+            assert_eq!(server.refused, Some(Refusal::NamedValue), "{name}");
+        }
+    }
+
+    /// A name that ends in `helper`, `exec`, `program` or `plugin` names a
+    /// program that gives a credential, and its value is shown (the short
+    /// read of B, L3).
+    #[test]
+    fn a_program_named_by_helper_exec_program_or_plugin_is_shown() {
+        let servers = servers_in(
+            r#"{"mcpServers": {"x": {"command": "x-mcp", "args": [
+                "--api-key-helper", "/tmp/get-key.sh", "--auth-helper", "/tmp/a.sh",
+                "--token-helper", "/tmp/t.sh", "--auth-exec", "/usr/bin/get-token",
+                "--auth-plugin", "gcp", "--key-program", "/opt/key"]}}}"#,
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            servers[0].shown(),
+            "x-mcp --api-key-helper /tmp/get-key.sh --auth-helper /tmp/a.sh --token-helper \
+             /tmp/t.sh --auth-exec /usr/bin/get-token --auth-plugin gcp --key-program /opt/key"
+        );
+        assert!(!servers[0].hidden());
+        assert_eq!(servers[0].refused, None);
+    }
+
+    /// In an argument of `cmd`, known by its file name in any case and any
+    /// directory, a hidden token that holds a `/` is masked and refuses:
+    /// `cmd` reads a switch wherever it is before its `/c` (`cmd --api-key
+    /// /c start x` showed `cmd --api-key [redacted] start x`, and `/v:on`
+    /// turns on `!NAME!` expansion). A token without one is imported, and
+    /// under another program a `/` is a token's (the short read of B, L4).
+    #[test]
+    fn a_hidden_slash_in_an_argument_of_cmd_refuses() {
+        let servers = servers_in(
+            r#"{"mcpServers": {
+                "switch": {"command": "cmd", "args": ["--api-key", "/c", "start", "x"]},
+                "path": {"command": "C:\\Windows\\System32\\CMD.EXE", "args": ["--api-key", "/v:on",
+                    "/c", "tool"]},
+                "inside": {"command": "cmd.exe", "args": ["/c", "tool", "API_KEY=a/ccalc"]},
+                "address": {"command": "Cmd", "args": ["/c", "start",
+                    "https://h.example.com/?api_key=a/c"]},
+                "plain": {"command": "cmd", "args": ["/c", "tool", "--api-key", "x7Kq9mPz2Lw4"]},
+                "other": {"command": "/usr/local/bin/cmdx", "args": ["--api-key", "/c"]}
+            }}"#,
+            false,
+        )
+        .unwrap();
+        for (name, shown) in [
+            ("switch", format!("cmd --api-key {MASK} start x")),
+            (
+                "path",
+                format!(r"C:\Windows\System32\CMD.EXE --api-key {MASK} /c tool"),
+            ),
+            ("inside", format!("cmd.exe /c tool API_KEY={MASK}")),
+            (
+                "address",
+                format!("Cmd /c start https://h.example.com/?api_key={MASK}"),
+            ),
+        ] {
+            let server = by_name(&servers, name);
+            assert_eq!(server.shown(), shown, "{name}");
+            assert_eq!(server.refused, Some(Refusal::NamedValue), "{name}");
+        }
+        for name in ["plain", "other"] {
+            let server = by_name(&servers, name);
+            assert_eq!(server.refused, None, "{name}: {}", server.shown());
+            assert!(server.hidden(), "{name}");
         }
     }
 
