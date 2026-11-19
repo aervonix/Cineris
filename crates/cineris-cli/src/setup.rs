@@ -141,7 +141,15 @@ impl Setup for ProgramSetup {
             .cloned()
             .ok_or_else(|| "it was not among the files found".to_owned())?;
         let servers =
-            cineris_config::import::read_servers(&real).map_err(|error| error.to_string())?;
+            // A rooted path is a place only where it exists: asked of the
+            // disk's metadata as the file is read, here on the worker.
+            cineris_config::import::read_servers(
+                &real,
+                &cineris_config::import::OnDisk {
+                    home: self.env.home(),
+                },
+            )
+            .map_err(|error| error.to_string())?;
         let shown = servers.iter().map(shown_server).collect();
         self.read
             .lock()

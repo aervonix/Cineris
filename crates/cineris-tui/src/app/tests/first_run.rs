@@ -2266,20 +2266,38 @@ fn a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_f
 }
 
 /// A file that appears at the configuration's name before it is written is
-/// left as it is, read now, and said so: what was chosen applies over it
-/// for the run, which the session carries; not that nothing was saved and
-/// the set-up runs again (L-3, and the short review of the fixes: it was
-/// said to be in force only from the next start, though the core's watch
-/// reads it at the next key).
+/// left as it is, read now, and said so: the session opens once it is read,
+/// not beside the reload, and what was chosen applies over it for the run,
+/// the provider named beside the model so that the file's own role
+/// provider does not hold it; not that nothing was saved and the set-up
+/// runs again (L-3; the short review of the fixes: it was said to be in
+/// force only from the next start; the final review: the open's order, and
+/// the found file's provider).
 #[test]
 fn a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it() {
     let mut setup = fake();
     setup.file_appears = true;
     let mut run = Run::new(setup);
-    skip_three(&mut run);
-    let (reload, _) = run
-        .sent(|op| matches!(op, Op::ConfigReload(_)))
+    // The provider from the environment, with its model; the imports and
+    // the mode skipped.
+    let _ = run.ready();
+    run.key("enter");
+    run.answer();
+    let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let sent = run.link.take_sent();
+    let reload = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::ConfigReload(_)))
+        .map(|(ticket, _)| *ticket)
         .expect("the file found is read now");
+    assert!(
+        !sent.iter().any(|(_, op)| matches!(op, Op::SessionNew(_))),
+        "the session opens once the file is read, not beside the reload"
+    );
     run.give(
         reload,
         OpResult::ConfigReload(ConfigReloadResult::default()),
@@ -2287,8 +2305,11 @@ fn a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it() {
     let config = run.opened(TrustStanding::Trusted);
     assert_eq!(
         serde_json::Value::Object(config),
-        serde_json::json!({ "compat": { "instructions": false, "skills": false } }),
-        "what was chosen applies over it"
+        serde_json::json!({
+            "compat": { "instructions": false, "skills": false },
+            "model": { "main": MODEL, "roles": { "main": { "provider": "anthropic" } } },
+        }),
+        "what was chosen applies over it, its provider named"
     );
     let _ = run.frame();
     run.detect(Vec::new());
@@ -2306,6 +2327,47 @@ fn a_file_found_at_the_name_is_read_now_and_what_was_chosen_applies_over_it() {
         assert!(said.contains(line), "{line}: {said}");
     }
     assert!(!said.contains("runs again at the next start"), "{said}");
+}
+
+/// A file found at the name that cannot be read is said by its path, as
+/// not read, and the last line does not say it is in force: this run's
+/// sessions carry what was chosen (the final review).
+#[test]
+fn a_file_found_that_cannot_be_read_is_said_so() {
+    let mut setup = fake();
+    setup.file_appears = true;
+    let mut run = Run::new(setup);
+    skip_three(&mut run);
+    let (reload, _) = run
+        .sent(|op| matches!(op, Op::ConfigReload(_)))
+        .expect("the file found is read now");
+    run.link.give(Inbound::Done(
+        reload,
+        Ok(OpResult::ConfigReload(ConfigReloadResult {
+            errors: vec!["config.toml: an unknown key".to_owned()],
+            ..ConfigReloadResult::default()
+        })),
+    ));
+    drain(&mut run.app, run.now);
+    let config = run.opened(TrustStanding::Trusted);
+    assert_eq!(
+        serde_json::Value::Object(config),
+        serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+    );
+    let _ = run.frame();
+    run.detect(Vec::new());
+    let _ = run.frame();
+    let said = squash(&run.scrollback.join(" "));
+    for line in [
+        "· ~/.config/cineris/config.toml could not be read: config.toml: an unknown key. This \
+         run's sessions are opened with what was chosen.",
+        "Nothing of the set-up's was saved: ~/.config/cineris/config.toml, made meanwhile, could \
+         not be read, so this run's sessions carry what was chosen; the next start reads it again, \
+         and the set-up does not run again.",
+    ] {
+        assert!(said.contains(line), "{line}: {said}");
+    }
+    assert!(!said.contains("is the configuration now"), "{said}");
 }
 
 /// "Drawn whole" holds by width as by height (L-4): in a window 8 columns
