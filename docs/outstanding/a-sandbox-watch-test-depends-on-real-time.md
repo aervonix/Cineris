@@ -1,7 +1,7 @@
 A test of the sandbox's watch of protected paths fails when its walk takes longer than the watch's 250 ms of real time, which a loaded runner can; one CI flake.
 
 - Area: cineris-sandbox
-- Owner: the maintainers, through the coordinator, who queues the fix
+- Owner: the maintainers, who queue the fix
 - Flaky: `cineris-sandbox protect::tests::a_cargo_made_as_a_link_is_found`
 
 | Item | Who | When |
