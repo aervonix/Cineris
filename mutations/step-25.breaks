@@ -2835,6 +2835,24 @@ replace: if false {
 caught-by:
     cineris-config write::tests::the_mcp_table_is_checked_as_the_loader_does_not
 
+[break] the-mcp-table-read-back-takes-any-name
+rule: A server's name read back must be a settable name.
+file: crates/cineris-config/src/write.rs
+in: check_mcp
+find: if !settable_name(name) {
+replace: if false {
+caught-by:
+    cineris-config write::tests::the_mcp_table_is_checked_as_the_loader_does_not
+
+[break] the-mcp-table-read-back-takes-too-many
+rule: The [mcp] table read back holds at most MAX_SERVERS servers.
+file: crates/cineris-config/src/write.rs
+in: check_mcp
+find: if servers.len() > MAX_SERVERS {
+replace: if false {
+caught-by:
+    cineris-config write::tests::the_mcp_table_is_checked_as_the_loader_does_not
+
 [break] the-mcp-table-read-back-takes-any-key
 rule: The [mcp] table read back holds only what 13-mcp's form has.
 file: crates/cineris-config/src/write.rs
