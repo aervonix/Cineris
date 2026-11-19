@@ -1,0 +1,65 @@
+# The flaky-test fixes (docs/steps/flaky-test-fixes/answered.md): a row of
+# markdown that begins inside the escape an entity is shown as, and why a
+# check's run cannot miss its command's exit.
+
+# ----------------------------------------- an entity's escape is not its source
+
+[break] entity-escape-taken-as-its-source
+rule: A decoded piece maps back to its source byte for byte only where it is its source, not where it is only as long: `&#xFE0F;` is shown as `\u{fe0f}`.
+file: crates/cineris-tui/src/markdown/inline.rs
+in: finish
+find: let linear = shows_its_source(&text, &src[range.clone()]);
+replace: let linear = text.len() == range.len();
+caught-by:
+    cineris-tui markdown::tests::a_row_that_begins_inside_an_entitys_shown_escape_shows_what_the_whole_does
+    cineris-tui markdown::tests::an_entity_cut_anywhere_commits_what_the_whole_shows
+    cineris-tui markdown::tests::a_wrap_on_either_side_of_a_shown_escape_commits_what_the_whole_shows
+    cineris-tui markdown::inline::tests::pieces_are_in_order_and_linear_ones_are_their_source
+
+[break] a-shorter-piece-taken-as-its-source
+rule: A piece shorter than its source is never its source byte for byte, whatever its first bytes are: a soft line break with a space before it is shown as one space.
+file: crates/cineris-tui/src/markdown/inline.rs
+in: shows_its_source
+find: shown.len() == source.len() &&
+replace:
+caught-by:
+    cineris-tui markdown::inline::tests::pieces_are_in_order_and_linear_ones_are_their_source
+
+[break] a-break-inside-a-piece-that-is-not-its-source-is-clean
+rule: A row that begins inside a piece that is not its source byte for byte is not a clean place to cut the paragraph's text.
+file: crates/cineris-tui/src/markdown/rows.rs
+in: Laid::clean_break
+find: placed.piece.linear && placed.piece.depth == 0
+replace: placed.piece.depth == 0
+caught-by:
+    cineris-tui markdown::tests::a_row_that_begins_inside_an_entitys_shown_escape_shows_what_the_whole_does
+    cineris-tui markdown::tests::an_entity_cut_anywhere_commits_what_the_whole_shows
+
+[break] a-break-inside-a-run-cut-at-its-pieces-start
+rule: A clean break inside a run of text is at the source byte the row begins with, inside its piece: a shown escape of a character written out is its source, and is cut where the row begins.
+file: crates/cineris-tui/src/markdown/rows.rs
+in: Laid::clean_break
+find: return Some(after.piece.src.start + (gap.start - after.at.start));
+replace: return Some(after.piece.src.start);
+caught-by:
+    cineris-tui markdown::tests::a_shown_escape_cut_anywhere_commits_what_the_whole_shows
+
+# ------------------------------------------ a command's exit is never missed
+
+[break] the-threads-do-not-wake-the-run
+rule: What a command's threads tell (its exit, the end of its output) wakes the run that waits for it.
+file: crates/cineris-tools/src/process/mod.rs
+in: Shared::update
+find: waker.wake();
+replace:
+caught-by:
+    cineris-tools process::tests::an_exit_or_an_end_told_after_the_run_went_to_wait_wakes_it
+
+[break] the-run-waits-with-no-waker-stored
+rule: The run stores its waker, under the lock the threads tell under, before it looks at what they told and goes to wait.
+file: crates/cineris-tools/src/process/mod.rs
+in: Waits::poll
+find: state.waker = Some(cx.waker().clone());
+replace:
+caught-by:
+    cineris-tools process::tests::an_exit_or_an_end_told_after_the_run_went_to_wait_wakes_it
