@@ -406,14 +406,15 @@ fn is_divider_row(line: &str) -> bool {
         && line.contains('-')
 }
 
-/// Whether each line both sides added in a Markdown text is a row of a
-/// table, with as many cells as the table's header: rows added at the end of
-/// one table on both sides. Prose added on both sides at one place is not
-/// put together by machine.
+/// Whether each line of each place both sides' lines were put side by side
+/// in a Markdown text is a row of a table, with as many cells as the table's
+/// header: rows added at the end of one table on both sides, or a row added
+/// after one the other side reworded. Prose added on both sides at one place
+/// is not put together by machine.
 pub(crate) fn rows_keep_their_tables(merged: &Merged) -> Result<(), String> {
     let lines = merge::lines(&merged.text).lines;
     for union in &merged.unions {
-        let added = union.ours.len() + union.theirs.len();
+        let added = union.first.len() + union.second.len();
         for offset in 0..added {
             let at = union.line - 1 + offset;
             let row = lines.get(at).copied().unwrap_or_default();
