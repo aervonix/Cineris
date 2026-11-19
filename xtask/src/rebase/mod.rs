@@ -245,34 +245,29 @@ fn quiet<'a>() -> Call<'a> {
     }
 }
 
-/// The path git names in its directory, as a path from `top`.
-fn git_path(git: &Git, top: &Path, name: &str) -> Result<PathBuf> {
-    Ok(top.join(git.run(&["rev-parse", "--git-path", name])?))
+/// Whether a rebase is in progress in the git directory `dir` (this
+/// working tree's own, where git keeps a rebase's state).
+fn in_progress(dir: &Path) -> bool {
+    dir.join("rebase-merge").is_dir() || dir.join("rebase-apply").is_dir()
 }
 
-/// Whether a rebase is in progress.
-fn in_progress(git: &Git, top: &Path) -> Result<bool> {
-    Ok(
-        git_path(git, top, "rebase-merge")?.is_dir()
-            || git_path(git, top, "rebase-apply")?.is_dir(),
-    )
+/// Where a run keeps its [`State`].
+fn state_file(dir: &Path) -> PathBuf {
+    dir.join("xtask-rebase")
 }
 
-fn read_state(git: &Git, top: &Path) -> Result<State> {
-    let path = git_path(git, top, "xtask-rebase")?;
-    Ok(State::parse(
-        &std::fs::read_to_string(path).unwrap_or_default(),
-    ))
+fn read_state(dir: &Path) -> State {
+    State::parse(&std::fs::read_to_string(state_file(dir)).unwrap_or_default())
 }
 
-fn write_state(git: &Git, top: &Path, state: &State) -> Result<()> {
-    let path = git_path(git, top, "xtask-rebase")?;
+fn write_state(dir: &Path, state: &State) -> Result<()> {
+    let path = state_file(dir);
     std::fs::write(&path, state.text())
         .map_err(|error| format!("could not write {}: {error}", path.display()))
 }
 
-fn forget_state(git: &Git, top: &Path) -> Result<()> {
-    let path = git_path(git, top, "xtask-rebase")?;
+fn forget_state(dir: &Path) -> Result<()> {
+    let path = state_file(dir);
     match std::fs::remove_file(&path) {
         Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
             Err(format!("could not remove {}: {error}", path.display()))
@@ -288,18 +283,25 @@ pub(crate) fn rebase(
     request: &Request,
     hooks: &mut Hooks<'_>,
 ) -> Result<Report> {
+    // The branch and this working tree's git directory, in one git.
+    let asked = git.run(&["rev-parse", "--abbrev-ref", "HEAD", "--git-dir"])?;
+    let mut asked = asked.lines();
+    let (Some(branch), Some(dir)) = (asked.next(), asked.next()) else {
+        return Err("git named no branch or no git directory".to_owned());
+    };
+    let dir = &top.join(dir);
     let mut report = Report {
-        branch: git.run(&["rev-parse", "--abbrev-ref", "HEAD"])?,
+        branch: branch.to_owned(),
         onto: request.onto.clone(),
         ..Report::default()
     };
     let mut state = match request.mode {
         Mode::Abort => {
-            if !in_progress(git, top)? {
+            if !in_progress(dir) {
                 return Err("no rebase is in progress".to_owned());
             }
             git.run(&["rebase", "--abort"])?;
-            forget_state(git, top)?;
+            forget_state(dir)?;
             report
                 .after
                 .push("The rebase was aborted: the branch is as it was.".to_owned());
@@ -307,12 +309,12 @@ pub(crate) fn rebase(
             return Ok(report);
         }
         Mode::Continue => {
-            if !in_progress(git, top)? {
+            if !in_progress(dir) {
                 return Err(
                     "no rebase is in progress: start one with `cargo xtask rebase`".to_owned(),
                 );
             }
-            let state = read_state(git, top)?;
+            let state = read_state(dir);
             report.onto = state
                 .onto
                 .clone()
@@ -320,7 +322,7 @@ pub(crate) fn rebase(
             state
         }
         Mode::Start => {
-            if in_progress(git, top)? {
+            if in_progress(dir) {
                 return Err(
                     "a rebase is in progress: `cargo xtask rebase --continue` or `--abort`"
                         .to_owned(),
@@ -340,10 +342,10 @@ pub(crate) fn rebase(
                 onto: Some(request.onto.clone()),
                 generators: BTreeSet::new(),
             };
-            write_state(git, top, &state)?;
+            write_state(dir, &state)?;
             let started = git.output(&["rebase", &request.onto], &quiet())?;
-            if !started.status.success() && !in_progress(git, top)? {
-                forget_state(git, top)?;
+            if !started.status.success() && !in_progress(dir) {
+                forget_state(dir)?;
                 return Err(format!(
                     "`git rebase {}` failed: {}",
                     request.onto,
@@ -355,14 +357,14 @@ pub(crate) fn rebase(
     };
     report.old.clone_from(&state.old);
 
-    while in_progress(git, top)? {
+    while in_progress(dir) {
         let files = unmerged(&git.raw(&["ls-files", "-u", "-z"], &Call::default())?)?;
         if files.is_empty() {
-            go_on(git, top, &mut report)?;
+            go_on(git, dir, &mut report)?;
             continue;
         }
         let stop = settle(git, top, &files, &mut state, hooks)?;
-        write_state(git, top, &state)?;
+        write_state(dir, &state)?;
         let left = stop
             .files
             .iter()
@@ -371,12 +373,13 @@ pub(crate) fn rebase(
         if left {
             return Ok(report);
         }
-        go_on(git, top, &mut report)?;
+        go_on(git, dir, &mut report)?;
     }
 
     report.finished = true;
-    report.after = (hooks.finish)(&state.generators)?;
-    forget_state(git, top)?;
+    let after = (hooks.finish)(&state.generators)?;
+    report.after.extend(after);
+    forget_state(dir)?;
     Ok(report)
 }
 
@@ -398,10 +401,9 @@ fn fetch(git: &Git, onto: &str, report: &mut Report) -> Result<()> {
 /// `git rebase --continue` once no file is conflicted: it goes on to the
 /// next commit, which may stop again. A commit left with no change once its
 /// conflicts were settled is dropped (`--skip`), and named.
-fn go_on(git: &Git, top: &Path, report: &mut Report) -> Result<()> {
-    let commit = stopped_commit(git);
+fn go_on(git: &Git, dir: &Path, report: &mut Report) -> Result<()> {
     let went = git.output(&["rebase", "--continue"], &quiet())?;
-    if went.status.success() || !in_progress(git, top)? {
+    if went.status.success() || !in_progress(dir) {
         return Ok(());
     }
     let still = unmerged(&git.raw(&["ls-files", "-u", "-z"], &Call::default())?)?;
@@ -410,6 +412,7 @@ fn go_on(git: &Git, top: &Path, report: &mut Report) -> Result<()> {
         return Ok(());
     }
     if git.yes(&["diff", "--cached", "--quiet"])? {
+        let commit = stopped_commit(git);
         git.output(&["rebase", "--skip"], &quiet())?;
         report.dropped.push(commit.unwrap_or_default());
         return Ok(());
