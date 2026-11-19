@@ -21,9 +21,10 @@ const PROFILE: &str = shipped::PROFILE;
 const MEBIBYTE: f64 = 1024.0 * 1024.0;
 
 /// The size budget for a target, in bytes, from docs/performance-budgets.md
-/// ("Binary size"): 16 MB on Linux, 18 MB on Windows.
+/// ("Binary size"): 20 MB on Linux, 25 MB on Windows, since the size step
+/// (docs/decisions/0039-the-binary-s-budgets-are-20-mib-on-linux-and-25-on-windows.md).
 fn budget(target: &str) -> u64 {
-    let megabytes: u64 = if target.contains("windows") { 18 } else { 16 };
+    let megabytes: u64 = if target.contains("windows") { 25 } else { 20 };
     megabytes * 1024 * 1024
 }
 
@@ -1211,7 +1212,7 @@ cineris-protocol v0.0.0 (/repo/crates/cineris-protocol) (*)
         assert!(
             report
                 .summary
-                .contains("| `x86_64-unknown-linux-musl` | `dist` | 12000000 | 11.44 | 16 MB | 4.56 MB left | 180 |"),
+                .contains("| `x86_64-unknown-linux-musl` | `dist` | 12000000 | 11.44 | 20 MB | 8.56 MB left | 180 |"),
             "{}",
             report.summary
         );
@@ -1224,7 +1225,7 @@ cineris-protocol v0.0.0 (/repo/crates/cineris-protocol) (*)
         let report = report(WINDOWS, PROFILE, limit + 351_744, 180, None);
         let over = report.over.expect("over the budget");
         assert!(
-            over.starts_with("the x86_64-pc-windows-msvc binary is 19226112 bytes (18.34 MB), over its budget of 18 MB by 351744 bytes"),
+            over.starts_with("the x86_64-pc-windows-msvc binary is 26566144 bytes (25.34 MB), over its budget of 25 MB by 351744 bytes"),
             "{over}"
         );
         assert!(
@@ -1296,9 +1297,9 @@ cineris-protocol v0.0.0 (/repo/crates/cineris-protocol) (*)
 
     #[test]
     fn the_budgets_are_the_ones_in_the_performance_page() {
-        assert_eq!(budget("x86_64-unknown-linux-musl"), 16 * 1024 * 1024);
-        assert_eq!(budget("aarch64-unknown-linux-musl"), 16 * 1024 * 1024);
-        assert_eq!(budget("x86_64-pc-windows-msvc"), 18 * 1024 * 1024);
+        assert_eq!(budget("x86_64-unknown-linux-musl"), 20 * 1024 * 1024);
+        assert_eq!(budget("aarch64-unknown-linux-musl"), 20 * 1024 * 1024);
+        assert_eq!(budget("x86_64-pc-windows-msvc"), 25 * 1024 * 1024);
     }
 
     fn strings(words: &[&str]) -> Vec<String> {
@@ -1408,7 +1409,7 @@ cineris-protocol v0.0.0 (/repo/crates/cineris-protocol) (*)
         assert_eq!(report.over, None);
         assert!(
             report.summary.contains(
-                "| `x86_64-pc-windows-msvc` | `release` | 18874369 | 18.00 | - | no budget | 180 |"
+                "| `x86_64-pc-windows-msvc` | `release` | 26214401 | 25.00 | - | no budget | 180 |"
             ),
             "{}",
             report.summary

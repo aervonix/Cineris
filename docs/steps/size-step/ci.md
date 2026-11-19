@@ -12,7 +12,7 @@ The step changes no test's tiers: its cuts are in shipped code paths that the ex
 | 44590207285 | The core's handler built once | 14,739,880 | 17,777,664 |
 | 44593577843 | The configuration's tables through one helper | 14,686,632 | 17,775,104 |
 | 44593583082 | Blocking work as one type | 14,506,408 | 17,478,144 |
-| 44594463308 | "z" for ten crates (the droppable commit) | 14,191,016 | 16,974,336 |
+| 44594463308 | "z" for ten crates (a commit of its own, dropped) | 14,191,016 | 16,974,336 |
 | 44594737129 | `panic = "abort"`, on a branch never merged | 12,466,600 | 11,093,504 |
 | 44595120646 | QuickJS linked through `rquickjs`, on a branch never merged | 15,330,008 | 18,241,024 |
 | 44598003525 | `opt-level = "z"` for the whole profile, on a branch never merged | 13,363,656 | 15,753,728 |
@@ -25,8 +25,8 @@ On the branch as it stands, rebased onto `main` at `bd3adf5d` (the shell environ
 
 | Run | What it built | Linux musl | Windows |
 |---|---|---:|---:|
-| `try` 44622406622 | The cuts, the records and the breaks, without the two droppable commits | 14,522,792 | 17,502,720 |
-| `main` workflow 44622410782, started by hand on the branch | The final head, with both droppable commits ("z" for ten crates; the budgets) | 14,207,400 | 16,994,816 |
+| `try` 44622406622 | The cuts, the records and the breaks, without the budgets' commit or "z" for ten crates | 14,522,792 | 17,502,720 |
+| `main` workflow 44622410782, started by hand on the branch | That head with "z" for ten crates and the budgets' commit, as the branch then was | 14,207,400 | 16,994,816 |
 
 Against `main` at `bd3adf5d`, the three cuts save the same to the byte as they did on step 25's head: 499,712 bytes on Linux and 732,672 on Windows. **The `main` workflow's release start-up step passed on both systems** (`cargo xtask startup` on the `dist` binary, median / 95th percentile; the step records against the budgets and fails on none). Run 44622410782 is the final head; run 44620318897 is the branch before its last rebase, whose shipped code differs only by the security fix:
 

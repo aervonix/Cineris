@@ -11,9 +11,9 @@ A step outside the numbered plan, made to give step 28 room. After step 25 the s
 
 ## For the owner: "z" for ten crates off the hot paths
 
-The step's last commit but one, droppable: `opt-level = "z"` for `cineris-agent`, `-base`, `-config`, `-core`, `-knowledge`, `-policy`, `-rpc`, `-sandbox`, `-session` and `-stats`, set on `release` so that the perf tools measure it. **Linux −315,392, Windows −503,808.** Its speed, against the tree without it, on the reference machine, otherwise idle (the table is on the measurement page, "What costs speed"): **a third to five-sixths slower** on the session store (opening a long session +36%, listing sessions +37%), the permission engine (+38 to +39% a decision, +35% to make it) and choosing a round's checks (+84%); a year's usage report +16%; the redaction filter's throughput 15% higher; the server's round trip and the loop's verification stage unchanged. The five crates whose paths did not slow save only 32,768 bytes of the 315,392.
+Built as a commit of its own, to be taken or dropped: `opt-level = "z"` for `cineris-agent`, `-base`, `-config`, `-core`, `-knowledge`, `-policy`, `-rpc`, `-sandbox`, `-session` and `-stats`, set on `release` so that the perf tools measure it. **Linux −315,392, Windows −503,808.** Its speed, against the tree without it, on the reference machine, otherwise idle (the table is on the measurement page, "What costs speed"): **a third to five-sixths slower** on the session store (opening a long session +36%, listing sessions +37%), the permission engine (+38 to +39% a decision, +35% to make it) and choosing a round's checks (+84%); a year's usage report +16%; the redaction filter's throughput 15% higher; the server's round trip and the loop's verification stage unchanged. The five crates whose paths did not slow save only 32,768 bytes of the 315,392.
 
-**The step's recommendation: drop it.** The bytes are in the crates that run on every turn, and two of the paths it slows have little room on Windows already (the usage report is over its budget on a runner; choosing the checks is most of the verification stage's 50 µs there). It stays in the branch, last but one, so that the owner can take it with the numbers in hand.
+**The step's recommendation: drop it.** The bytes are in the crates that run on every turn, and two of the paths it slows have little room on Windows already (the usage report is over its budget on a runner; choosing the checks is most of the verification stage's 50 µs there). The maintainers dropped it, on these numbers (below).
 
 ## For the owner: the budgets
 
@@ -25,7 +25,7 @@ The step's last commit but one, droppable: `opt-level = "z"` for `cineris-agent`
 |---|---:|---:|---|
 | An MCP client of our own at step 30, in place of `rmcp` | about −0.8 to −1.5 MB of step 30, a guess | more | Tracking both protocol eras by hand ([architecture/13-mcp.md](../../architecture/13-mcp.md)); a design decision for step 30, and no cost in speed |
 | "z" for the whole profile | −1,142,752 | −1,724,416 | The ten crates' costs above, and the study's on rendering, highlighting and the map ("z" +100%, +80% and +55% against `opt-level = 3`, where "s" was +50%, +30% and +10%) |
-| "z" for ten crates (the droppable commit) | −315,392 | −503,808 | Above; not recommended |
+| "z" for ten crates | −315,392 | −503,808 | Above; dropped |
 | `panic = "abort"` | −2,039,808 | −6,384,640 | A panic anywhere ends the session, which [decision 0012](../../decisions/0012-release-profile.md) chose unwinding to prevent; steps 28 and 30 are where data the harness did not write meets its parsers |
 
 **Three ways to set the budgets,** each with what is left at step 34 at the low and the high end of the outlook:
@@ -38,7 +38,7 @@ The step's last commit but one, droppable: `opt-level = "z"` for `cineris-agent`
 
 **Why A.** The budget is there for the vision's footprint: near-instant start, small memory, smooth rendering. Size moves start-up, but by little: when step 33's fix took 4.4 MB off the binary, its first frame on the reference machine went from 1.89 to 1.55 ms, against a budget of 20 ms, and a few megabytes more would cost a few tenths of a millisecond. Unwinding is worth most at steps 28 and 30, which bring scripts and MCP servers whose data the harness did not write. The outlook's spread is mostly steps 28 and 30's dependencies, which those steps will measure. So A sets budgets that leave room at the high end, keeps every reserve, and asks for the size to be looked at again at two points: **when step 28 merges**, with the engine and its bindings measured, and **when step 30's design chooses its MCP client**, where an SDK at the top of its range is the moment to weigh a client of our own against it.
 
-**The order of the reserves** (it replaces decision 0036's "`panic = "abort"` is the reserve"): first, at step 30, an MCP client of our own, which costs no speed; then "z" for the whole profile, whose cost in speed is measured above; then `panic = "abort"`, last, because it is the one that changes what a bug does to a session. The step's last commit, droppable, sets A's budgets in [performance-budgets.md](../../performance-budgets.md) and in `xtask` (which the `pr-size` job and the `main` workflow check against), and records this order as a proposed decision record of its own (0039), so that dropping the commit drops the record with it.
+**The order of the reserves** (it replaces decision 0036's "`panic = "abort"` is the reserve"): first, at step 30, an MCP client of our own, which costs no speed; then "z" for the whole profile, whose cost in speed is measured above; then `panic = "abort"`, last, because it is the one that changes what a bug does to a session. The step's last commit sets A's budgets in [performance-budgets.md](../../performance-budgets.md) and in `xtask` (which the `pr-size` job and the `main` workflow check against), and records them and this order in [decision 0039](../../decisions/0039-the-binary-s-budgets-are-20-mib-on-linux-and-25-on-windows.md).
 
 ## The independent review
 
@@ -61,4 +61,7 @@ Before the first push, a reviewer who had not seen the step's reasoning read the
 
 ## The owner's answers
 
-To come.
+- **The budgets: option A.** 20 MiB on Linux (both targets) and 25 MiB on Windows, set in `xtask` and in [performance-budgets.md](../../performance-budgets.md), and accepted as [decision 0039](../../decisions/0039-the-binary-s-budgets-are-20-mib-on-linux-and-25-on-windows.md).
+- **The order of the reserves, the owner's:** an MCP client of our own at step 30; then `opt-level = "z"` for the whole profile; then `panic = "abort"`, last. The size is looked at again when step 28 merges and when step 30 chooses its MCP client.
+- **"z" for ten crates: dropped,** the maintainers' call on the measured costs: 36 to 84% slower on listing and opening sessions, choosing a round's checks and the permission engine is not worth 315 KB on Linux.
+- **The Windows start-up figure** (headless, 241.8 ms at the 95th percentile on one run, against 100: [ci.md](ci.md)) is noted for the change that settles how the start-up budget is checked in CI.
