@@ -27,7 +27,7 @@ use cineris_testkit::role::{Role, write_terminal};
 
 /// This binary as a child that plays one case: `drain`, `undrained`,
 /// `guarded`, `grace` or `no-grace`.
-const SIGNALS: Role = Role::new("cxterm-signals=");
+const SIGNALS: Role = Role::new("cinterm-signals=");
 
 /// What a child prints when it is still alive at the end of its case.
 const SURVIVED: &str = "the interrupt passed over";

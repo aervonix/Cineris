@@ -10,7 +10,7 @@ use cineris_testkit::role::{Report, Role};
 use crate::{clock, recorder, request, scratch, tool};
 
 /// A child that makes a recorder and says its id.
-pub(crate) const WRITER: Role = Role::new("cxstats-writer=");
+pub(crate) const WRITER: Role = Role::new("cinstats-writer=");
 
 fn day() -> LocalDate {
     LocalDate::parse("2026-11-15").unwrap()

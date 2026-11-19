@@ -294,9 +294,9 @@ mod tests {
             Topic::Serve,
             Topic::Attach,
         ] {
-            let as_cx = help(topic, "cin");
-            assert!(as_cx.contains("Usage: cin "), "{topic:?}");
-            assert!(!as_cx.contains("cineris "), "{topic:?}: {as_cx}");
+            let as_cin = help(topic, "cin");
+            assert!(as_cin.contains("Usage: cin "), "{topic:?}");
+            assert!(!as_cin.contains("cineris "), "{topic:?}: {as_cin}");
             assert!(
                 help(topic, "cineris").contains("Usage: cineris "),
                 "{topic:?}"

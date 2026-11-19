@@ -377,8 +377,8 @@ fn on_windows_only_an_exe_is_taken_for_a_shell() {
 #[test]
 fn sys_a_relative_comspec_or_system_root_is_not_believed() {
     if rerun::is_child() {
-        let empty = PathBuf::from(std::env::var_os("CX_EMPTY").expect("CX_EMPTY"));
-        let system = PathBuf::from(std::env::var_os("CX_SYSTEM").expect("CX_SYSTEM"));
+        let empty = PathBuf::from(std::env::var_os("CIN_EMPTY").expect("CIN_EMPTY"));
+        let system = PathBuf::from(std::env::var_os("CIN_SYSTEM").expect("CIN_SYSTEM"));
         let mut found = search(true, &[&empty]);
         found.comspec = Some(PathBuf::from("planted/System32/cmd.exe"));
         found.system_root = Some(system);
@@ -412,8 +412,8 @@ fn sys_a_relative_comspec_or_system_root_is_not_believed() {
     let real_cmd = program(&system.join("System32"), "cmd.exe");
     let ran = Rerun::this_test()
         .cwd(&ws.dir)
-        .env("CX_EMPTY", ws.dir.join("empty"))
-        .env("CX_SYSTEM", &system)
+        .env("CIN_EMPTY", ws.dir.join("empty"))
+        .env("CIN_SYSTEM", &system)
         .run();
     assert_eq!(
         ran.said("with a relative comspec"),

@@ -15,7 +15,7 @@ use cineris_testkit::role::Role;
 
 /// This binary as a child that plays one case: `watchdog`, `second`,
 /// `sighup-twice`, `eof` or `race`.
-const HANDOFF: Role = Role::new("cxterm-handoff=");
+const HANDOFF: Role = Role::new("cinterm-handoff=");
 
 /// The live region's rows the child draws, the cursor left on the last.
 #[cfg(unix)]
@@ -33,7 +33,7 @@ const HANDED: &str = "handed over";
 /// The variable that names the file a child with no terminal left says
 /// what happened in.
 #[cfg(unix)]
-const REPORT: &str = "CXTERM_HANDOFF_REPORT";
+const REPORT: &str = "CINTERM_HANDOFF_REPORT";
 
 /// Says `line` in the report file the test named.
 #[cfg(unix)]

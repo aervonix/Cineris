@@ -5,7 +5,7 @@
 //!
 //! - **A crate's integration binary has one entry test,** [`ENTRY`], which
 //!   passes at once under the test runner. A [`Role`] is a mark, such as
-//!   `cxterm-demo=`: [`Role::command`] starts this binary with the entry
+//!   `cinterm-demo=`: [`Role::command`] starts this binary with the entry
 //!   test and the mark with the role's options after it, and in the child
 //!   [`Role::options`] gives them back, so the entry test knows which part
 //!   to play.
@@ -55,7 +55,7 @@ pub struct Role {
 }
 
 impl Role {
-    /// The role marked `mark`, such as `cxterm-demo=`.
+    /// The role marked `mark`, such as `cinterm-demo=`.
     #[must_use]
     pub const fn new(mark: &'static str) -> Self {
         Self { mark }

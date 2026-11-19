@@ -1,0 +1,56 @@
+# The leftover test labels of the old short name, and the check that keeps
+# them out: `cargo xtask rename --check`.
+
+[break] an-upper-case-label-passes-the-check
+rule: A label of capitals and an underscore built on the old alias (an environment variable of a test) fails the check.
+file: xtask/src/rename.rs
+in: is_label
+find: !rest.starts_with('X') && rest.as_bytes().get(capitals) == Some(&b'_')
+replace: !rest.starts_with('X') && rest.as_bytes().get(capitals) == Some(&b'#')
+caught-by:
+    rename::tests::the_check_finds_a_label_built_on_the_old_alias
+
+[break] a-lower-case-label-passes-the-check
+rule: A mark or a name built on the old alias (a test kit role's mark, a name being made) fails the check.
+file: xtask/src/rename.rs
+in: is_label
+find: matches!(rest.as_bytes().get(letters), Some(b'-' | b'=' | b'{'))
+replace: matches!(rest.as_bytes().get(letters), Some(b'#'))
+caught-by:
+    rename::tests::the_check_finds_a_label_built_on_the_old_alias
+
+[break] the-variable-as-cx-passes-the-check
+rule: The variable that means "run as the alias" fails the check.
+file: xtask/src/rename.rs
+in: is_label
+find: && word_start
+replace: && !word_start
+caught-by:
+    rename::tests::the_check_finds_a_label_built_on_the_old_alias
+
+[break] cxx-is-a-label
+rule: The C++ extension and the compiler's variables are not labels of the old alias.
+file: xtask/src/rename.rs
+in: is_label
+find: && !rest.starts_with('x')
+replace: && true
+caught-by:
+    rename::tests::words_that_only_look_like_a_label_are_not_one
+
+[break] the-middle-of-a-word-is-a-label
+rule: The two capitals inside a longer word (a session id) are not a label.
+file: xtask/src/rename.rs
+in: is_label
+find: .is_some_and(|before| is_word_byte(bytes[before]))
+replace: .is_some_and(|before| !is_word_byte(bytes[before]) && false)
+caught-by:
+    rename::tests::words_that_only_look_like_a_label_are_not_one
+
+[break] the-check-ignores-labels
+rule: The check reports a label on its line, not only the old names and the alias.
+file: xtask/src/rename.rs
+in: violations
+find: for at in label_positions(text) {
+replace: for at in label_positions(text).into_iter().take(0) {
+caught-by:
+    rename::tests::the_check_finds_a_label_built_on_the_old_alias

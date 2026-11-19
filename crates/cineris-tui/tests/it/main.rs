@@ -109,4 +109,4 @@ fn child_entry() {
 
 /// This binary as the editor demo, with its options, separated by commas.
 pub(crate) const DEMO: cineris_testkit::role::Role =
-    cineris_testkit::role::Role::new("cxtui-demo=");
+    cineris_testkit::role::Role::new("cintui-demo=");

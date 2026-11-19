@@ -25,10 +25,10 @@ pub fn install_alias(machine: &Machine) -> PathBuf {
 fn assert_same_under_both_names(machine: &Machine, args: &[&str], expected_code: i32) {
     let alias = install_alias(machine);
     let as_cineris = crate::Run::of(machine.command(args).output().unwrap());
-    let as_cx = crate::Run::of(machine.command_as(&alias, args).output().unwrap());
+    let as_cin = crate::Run::of(machine.command_as(&alias, args).output().unwrap());
 
     as_cineris.expect_code(expected_code);
-    as_cx.expect_code(expected_code);
+    as_cin.expect_code(expected_code);
 
     // The only permitted difference is the name the program echoes back:
     // "cineris" as a whole word in usage and error text. The product name
@@ -40,12 +40,12 @@ fn assert_same_under_both_names(machine: &Machine, args: &[&str], expected_code:
             .replace("'cineris ", "'cin ")
     };
     assert_eq!(
-        as_cx.stdout,
+        as_cin.stdout,
         swap(&as_cineris.stdout),
         "standard output of cin {args:?}"
     );
     assert_eq!(
-        as_cx.stderr,
+        as_cin.stderr,
         swap(&as_cineris.stderr),
         "standard error of cin {args:?}"
     );
@@ -56,16 +56,16 @@ fn sys_version_is_byte_identical_under_both_names() {
     let machine = Machine::new("sys_version");
     let alias = install_alias(&machine);
     let as_cineris = machine.command(&["--version"]).output().unwrap();
-    let as_cx = machine.command_as(&alias, &["--version"]).output().unwrap();
+    let as_cin = machine.command_as(&alias, &["--version"]).output().unwrap();
 
     assert!(as_cineris.status.success());
-    assert!(as_cx.status.success());
-    assert_eq!(as_cineris.stdout, as_cx.stdout);
+    assert!(as_cin.status.success());
+    assert_eq!(as_cineris.stdout, as_cin.stdout);
     assert_eq!(
         String::from_utf8(as_cineris.stdout).unwrap().trim_end(),
         concat!("cineris ", env!("CARGO_PKG_VERSION"))
     );
-    assert!(as_cineris.stderr.is_empty() && as_cx.stderr.is_empty());
+    assert!(as_cineris.stderr.is_empty() && as_cin.stderr.is_empty());
 }
 
 #[test]
