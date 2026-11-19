@@ -373,6 +373,25 @@ pub(crate) fn command_of(lines: &[String]) -> Option<String> {
     })
 }
 
+/// What a `size --against-main` job's log says when it could not read
+/// `main`'s size (`  main     not read: …`): the reason. `None` for any other
+/// command, or when it read it.
+pub(crate) fn unread_main(command: &str, lines: &[String]) -> Option<String> {
+    if !command
+        .split_whitespace()
+        .any(|word| word == "--against-main")
+    {
+        return None;
+    }
+    lines.iter().find_map(|line| {
+        line.trim_start()
+            .strip_prefix("main")?
+            .trim_start()
+            .strip_prefix("not read:")
+            .map(|why| why.trim().to_owned())
+    })
+}
+
 /// One line for each job a run had: its name, how it ended, and the
 /// command it ran; what the run came to, read together, below each job's
 /// own sections.
@@ -490,6 +509,16 @@ pub(crate) fn job_result(
     };
     let log_text = log_lines.as_deref().map(|lines| lines.join("\n"));
     result.command = log_lines.as_deref().and_then(command_of);
+    // A size checked against main's that could not read main's: `size`
+    // says so and passes, and the check it was asked for did not happen.
+    if let (Some(command), Some(lines)) = (&result.command, log_lines.as_deref())
+        && let Some(said) = unread_main(command, lines)
+    {
+        result.problems.push(format!(
+            "`{name}`: main's size was not read, so the comparison with it asked for did not \
+             happen ({said})"
+        ));
+    }
     if directory.is_none() {
         let _ = writeln!(
             result.text,
@@ -1353,6 +1382,47 @@ mod tests {
         assert_eq!(
             result.command.as_deref(),
             Some("size --check --against-main")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_size_against_main_that_read_no_main_is_a_problem_of_the_run() {
+        let dir = scratch("size-main");
+        keep(
+            &dir,
+            "tmp/try-output.log",
+            "$ cargo xtask size --check --against-main --target x86_64-unknown-linux-musl\n\
+             x86_64-unknown-linux-musl, `dist` profile\n  binary   15006120 bytes\n  \
+             main     not read: no run of main kept size-x86_64-unknown-linux-musl\n",
+        );
+        let result = job_result(
+            5,
+            &job("try-linux", "success"),
+            Os::Linux,
+            Some(&dir),
+            &|| Err("not asked".to_owned()),
+            &request(),
+        )
+        .unwrap();
+        assert_eq!(
+            result.problems,
+            [
+                "`try-linux`: main's size was not read, so the comparison with it asked for did \
+              not happen (no run of main kept size-x86_64-unknown-linux-musl)"
+            ]
+        );
+        let lines = strings(&["  main     15006120 bytes (run 1): +0 bytes"]);
+        assert_eq!(super::unread_main("size --against-main", &lines), None);
+        let lines = strings(&["  main     not read: gone"]);
+        assert_eq!(
+            super::unread_main("size --check", &lines),
+            None,
+            "not asked for"
+        );
+        assert_eq!(
+            super::unread_main("size --check --against-main", &lines).as_deref(),
+            Some("gone")
         );
         let _ = std::fs::remove_dir_all(dir);
     }
