@@ -30,11 +30,11 @@ use cineris_base::Secret;
 use cineris_config::discover::{FoundKind, Scope};
 use cineris_config::import::{ImportedServer, Refusal};
 use cineris_config::schema::CompatSettings;
-use cineris_config::write::{FirstRunChoices, Imports};
+use cineris_config::write::{FirstRunChoices, Imports, WriteError};
 use cineris_config::{CredentialSource, Env, StoreKind};
 use cineris_core::Core;
 use cineris_tui::app::setup::{
-    Chosen, Found, KeyStore, McpFile, McpServer, Provider, Providers, Setup,
+    Chosen, Found, KeyStore, McpFile, McpServer, NotWritten, Provider, Providers, Setup,
 };
 
 /// Whether the first run is due: the user's configuration file, the one
@@ -96,8 +96,12 @@ impl Setup for ProgramSetup {
                     ),
                     Err(_) => (None, false),
                 };
+                let model = self.core.default_model(&credential.provider);
                 Provider {
-                    model: self.core.default_model(&credential.provider),
+                    model_shared: model
+                        .as_deref()
+                        .is_some_and(|model| self.core.model_shared(model)),
+                    model,
                     name: credential.provider,
                     variable,
                     stored,
@@ -146,12 +150,24 @@ impl Setup for ProgramSetup {
         Ok(shown)
     }
 
-    fn write_config(&self, chosen: &Chosen) -> Result<String, String> {
+    fn write_config(&self, chosen: &Chosen) -> Result<String, NotWritten> {
         let read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
         let choices = choices(chosen, &read);
+        let shown = self.env.display_path(&self.user_config);
         cineris_config::write::write_user_config(&self.user_config, &choices)
-            .map_err(|error| error.to_string())?;
-        Ok(self.env.display_path(&self.user_config))
+            .map_err(|error| not_written(error, &shown))?;
+        Ok(shown)
+    }
+}
+
+/// Why the file was not written, as the first run tells it: a file found
+/// at its name apart from every other failure (since the review of the
+/// fixes of step 25's third pull request: it was said to be nothing saved,
+/// and the first run to run again, though the file found stops it).
+fn not_written(error: WriteError, shown: &str) -> NotWritten {
+    match error {
+        WriteError::Exists(_) => NotWritten::Found(shown.to_owned()),
+        other => NotWritten::Failed(other.to_string()),
     }
 }
 
@@ -222,6 +238,10 @@ fn shown_server(server: &ImportedServer) -> McpServer {
                 Refusal::HoldsCredential => "holds a credential in its command",
                 Refusal::Unseen => "holds a character that acts unseen",
                 Refusal::Name => "has a name that cannot be a setting's",
+                Refusal::NamedValue => {
+                    "passes a value named as a credential that is not one token (move it into a \
+                     variable)"
+                }
                 Refusal::NotUnderstood => "is not a server this version reads",
             }
             .to_owned()
@@ -235,6 +255,7 @@ fn choices(chosen: &Chosen, read: &BTreeMap<String, Vec<ImportedServer>>) -> Fir
     FirstRunChoices {
         provider: chosen.provider.clone(),
         model: chosen.model.clone(),
+        model_shared: chosen.model_shared,
         imports: chosen.imports.as_ref().map(|imports| Imports {
             instructions: imports.instructions,
             skills: imports.skills,
@@ -327,7 +348,8 @@ mod tests {
         read.insert("~/.claude.json".to_owned(), servers);
         let chosen = Chosen {
             provider: Some("anthropic".to_owned()),
-            model: Some("claude-opus-5-5".to_owned()),
+            model: Some("claude-sonnet-5-5".to_owned()),
+            model_shared: true,
             imports: Some(Imported {
                 instructions: true,
                 skills: false,
@@ -343,8 +365,12 @@ mod tests {
         assert_eq!(written.provider.as_deref(), Some("anthropic"));
         assert_eq!(
             written.model.as_deref(),
-            Some("claude-opus-5-5"),
+            Some("claude-sonnet-5-5"),
             "the model chosen with the provider is written"
+        );
+        assert!(
+            written.model_shared,
+            "and whether the provider is named beside it"
         );
         let imports = written.imports.unwrap();
         assert!(imports.instructions);
@@ -354,6 +380,51 @@ mod tests {
             .map(|server| server.name.as_str())
             .collect();
         assert_eq!(names, ["docs"]);
+    }
+
+    /// A file found at the name is told apart from a write that failed:
+    /// the first run says it is in force from the next start (the review
+    /// of the fixes of the third pull request).
+    #[test]
+    fn a_file_found_at_the_name_is_not_a_failure() {
+        let shown = "~/.config/cineris/config.toml";
+        assert_eq!(
+            not_written(WriteError::Exists("config.toml".to_owned()), shown),
+            NotWritten::Found(shown.to_owned())
+        );
+        assert!(matches!(
+            not_written(WriteError::NotRead("no".to_owned()), shown),
+            NotWritten::Failed(_)
+        ));
+        let scratch = cineris_testkit::Scratch::outside("cineris-cli-unit", "first_run_found_file");
+        let path = scratch.file("config.toml", "# the person's own\n");
+        let error = cineris_config::write::write_user_config(&path, &FirstRunChoices::default())
+            .unwrap_err();
+        assert_eq!(
+            not_written(error, shown),
+            NotWritten::Found(shown.to_owned())
+        );
+    }
+
+    /// A server whose value under a credential's name is not one token is
+    /// refused with a row saying to move it into a variable (the review of
+    /// the fixes of the third pull request).
+    #[test]
+    fn a_loose_value_under_a_credentials_name_says_to_move_it() {
+        let servers = cineris_config::import::servers_in(
+            r#"{"mcpServers": {"db": {"command": "db-mcp", "args": ["--password", "a b c"]}}}"#,
+            false,
+        )
+        .unwrap();
+        let shown = shown_server(&servers[0]);
+        assert_eq!(
+            shown.refused.as_deref(),
+            Some(
+                "passes a value named as a credential that is not one token (move it into a \
+                 variable)"
+            )
+        );
+        assert!(!shown.shown.contains("a b c"), "{}", shown.shown);
     }
 
     #[test]

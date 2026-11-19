@@ -179,9 +179,12 @@ impl Core {
     }
 
     /// The model the first run writes as `model.main` when `provider` is
-    /// chosen: the first the model catalog lists for it, the user's own
-    /// entries included (since the full review of step 25's third pull
-    /// request). `None` when it lists none.
+    /// chosen: the one the model catalog marks as the provider's default,
+    /// a user's own `[models.*]` entry marked so in place of the built-in
+    /// one (since the review of the fixes of step 25's third pull request;
+    /// before it, the first the catalog listed, which for Anthropic was its
+    /// dearest). `None` when none is marked, as for a local server, whose
+    /// models the catalog does not know.
     #[must_use]
     pub fn default_model(&self, provider: &str) -> Option<String> {
         self.inner
@@ -189,8 +192,27 @@ impl Core {
             .catalog
             .models()
             .iter()
-            .find(|entry| entry.info.provider.as_str() == provider)
+            .find(|entry| entry.default && entry.info.provider.as_str() == provider)
             .map(|entry| entry.info.id.as_str().to_owned())
+    }
+
+    /// Whether more than one provider has a model of the id `model` in the
+    /// catalog, the user's own entries included: the provider must then be
+    /// named beside it (`model.roles.<role>.provider`), and the first run
+    /// writes it only then (since the review of the fixes of step 25's third
+    /// pull request).
+    #[must_use]
+    pub fn model_shared(&self, model: &str) -> bool {
+        let mut providers = self
+            .inner
+            .providers
+            .catalog
+            .models()
+            .iter()
+            .filter(|entry| entry.info.id.as_str() == model)
+            .map(|entry| &entry.info.provider);
+        let first = providers.next();
+        providers.any(|other| Some(other) != first)
     }
 
     /// Removes the stored key of `provider`. Says whether there was one.

@@ -32,6 +32,13 @@
 //! selected row would not fit beside them. A selected row taller than the
 //! window is cut, and [`Fitted::whole`] says so: the application then
 //! takes no key that would accept it.
+//!
+//! **A label its column cuts is not drawn whole** (since the review of the
+//! fixes of the third pull request): a server's name longer than the room
+//! the prose width leaves it. So that a larger window can show it, a
+//! step's rows take more than the prose width, up to the window's, when a
+//! label needs it; the title, the sentence and the note keep to the prose
+//! width.
 
 use cineris_term::{Line, Span, Style};
 
@@ -180,8 +187,13 @@ pub fn step(step: &Step, width: usize, look: &Look) -> Vec<Line> {
 /// room is cut, and said not whole.
 #[must_use]
 pub fn fitted(step: &Step, width: usize, look: &Look, room: usize) -> Fitted {
+    let window_width = width;
     // A step reads as prose does: at the prose width, on a wide window.
     let width = width.min(look.prose_width.max(40));
+    // Its rows, wider when a label needs it and the window has the room, so
+    // that no label is cut that a larger window could show whole (the
+    // review of the fixes of the third pull request).
+    let rows_width = window_width.min(width.max(labels_need(step, look)));
     let theme = &look.theme;
     let title = cut(
         &Line::from(Span::new(look.glyphs.answer, theme.style(Token::Accent)))
@@ -195,14 +207,16 @@ pub fn fitted(step: &Step, width: usize, look: &Look, room: usize) -> Fitted {
         look.glyphs.ellipsis,
     );
     let sentence = paragraph(&step.sentence, INDENT, width, theme.style(Token::Text));
-    let rows = row_lines(step, width, look);
+    let (rows, labels_cut) = row_lines(step, rows_width, look);
     // A window too narrow for a row's label column and its detail (eleven
     // columns or fewer) gives lines wider than it: each is cut to the
     // width, and that row is not whole (the early review of the third pull
-    // request's fixes).
+    // request's fixes); nor is a row whose label its column cut (the review
+    // of those fixes).
     let rows_whole: Vec<bool> = rows
         .iter()
-        .map(|lines| lines.iter().all(|line| line.width() <= width))
+        .zip(&labels_cut)
+        .map(|(lines, label_cut)| !label_cut && lines.iter().all(|line| line.width() <= rows_width))
         .collect();
     let rows: Vec<Vec<Line>> = rows
         .into_iter()
@@ -210,8 +224,8 @@ pub fn fitted(step: &Step, width: usize, look: &Look, room: usize) -> Fitted {
             lines
                 .into_iter()
                 .map(|line| {
-                    if line.width() > width {
-                        cut(&line, width, look.glyphs.ellipsis)
+                    if line.width() > rows_width {
+                        cut(&line, rows_width, look.glyphs.ellipsis)
                     } else {
                         line
                     }
@@ -290,10 +304,9 @@ fn selection_width(look: &Look) -> usize {
     cineris_base::text::width(look.glyphs.user) + 1
 }
 
-/// The lines of each of a step's rows.
-fn row_lines(step: &Step, width: usize, look: &Look) -> Vec<Vec<Line>> {
-    let theme = &look.theme;
-    let mark_width = [
+/// Columns of a row's mark and the space after it.
+fn mark_width(look: &Look) -> usize {
+    [
         look.glyphs.plan_todo,
         look.glyphs.plan_done,
         look.glyphs.folded,
@@ -303,9 +316,43 @@ fn row_lines(step: &Step, width: usize, look: &Look) -> Vec<Vec<Line>> {
     .map(|glyph| cineris_base::text::width(glyph))
     .max()
     .unwrap_or(1)
-        + 1;
+        + 1
+}
+
+/// Columns before a row's label: the indent, the selection mark, its
+/// depth's and its own mark.
+fn prefix(row: &Row, look: &Look) -> usize {
+    INDENT
+        + selection_width(look)
+        + row.depth * 2
+        + if row.mark == Mark::None {
+            0
+        } else {
+            mark_width(look)
+        }
+}
+
+/// The columns a step's rows need for no label to be cut: the widest row's
+/// prefix, label, gap and least detail.
+fn labels_need(step: &Step, look: &Look) -> usize {
+    step.rows
+        .iter()
+        .filter(|row| !row.heading)
+        .map(|row| {
+            prefix(row, look) + cineris_base::text::width(&one_line(&row.label)) + GAP + DETAIL_MIN
+        })
+        .max()
+        .unwrap_or(0)
+}
+
+/// The lines of each of a step's rows, and whether its label was cut by
+/// its column.
+fn row_lines(step: &Step, width: usize, look: &Look) -> (Vec<Vec<Line>>, Vec<bool>) {
+    let theme = &look.theme;
     let selection = selection_width(look);
+    let mark_width = mark_width(look);
     let mut all = Vec::with_capacity(step.rows.len());
+    let mut labels_cut = Vec::with_capacity(step.rows.len());
     for (index, row) in step.rows.iter().enumerate() {
         let mut lines = Vec::new();
         if row.heading {
@@ -313,18 +360,10 @@ fn row_lines(step: &Step, width: usize, look: &Look) -> Vec<Vec<Line>> {
                 .with(Span::new(one_line(&row.label), theme.style(Token::Muted)));
             lines.push(cut(&line, width, look.glyphs.ellipsis));
             all.push(lines);
+            labels_cut.push(false);
             continue;
         }
-        let prefix = |row: &Row| {
-            INDENT
-                + selection
-                + row.depth * 2
-                + if row.mark == Mark::None {
-                    0
-                } else {
-                    mark_width
-                }
-        };
+        let prefix = |row: &Row| prefix(row, look);
         // The label's column: the widest label of the rows of this depth
         // and kind, leaving the detail its least.
         let widest = step
@@ -365,11 +404,9 @@ fn row_lines(step: &Step, width: usize, look: &Look) -> Vec<Vec<Line>> {
         } else {
             theme.style(Token::Text)
         };
-        let label = cut(
-            &Line::styled(one_line(&row.label), label_style),
-            column,
-            look.glyphs.ellipsis,
-        );
+        let whole_label = Line::styled(one_line(&row.label), label_style);
+        labels_cut.push(whole_label.width() > column);
+        let label = cut(&whole_label, column, look.glyphs.ellipsis);
         let label_width = label.width();
         line = line.with_line(&label);
         let detail_column = start + column + GAP;
@@ -397,7 +434,7 @@ fn row_lines(step: &Step, width: usize, look: &Look) -> Vec<Vec<Line>> {
         }
         all.push(lines);
     }
-    all
+    (all, labels_cut)
 }
 
 /// The rows that fit in `room` lines around row `at`, with a dim row in
@@ -628,15 +665,49 @@ mod tests {
     #[test]
     fn a_window_too_narrow_for_a_rows_detail_is_not_whole() {
         let look = look();
-        let shown = ten("npx -y server-6");
-        // The detail's column is nine in: the mark, the label cut to one
-        // column, the gap.
+        let mut shown = ten("npx -y server-6");
+        // A label of one character, which its column of one does not cut:
+        // only the detail runs past the edge (since the review of the
+        // fixes, a label cut is not whole by itself).
+        shown.rows[6].label = "x".to_owned();
+        // The detail's column is nine in: the mark, the label's column of
+        // one, the gap.
         for width in [6, 9] {
             let drawn = fitted(&shown, width, &look, usize::MAX);
             assert!(!drawn.whole, "{width}");
             assert_eq!(problems(&drawn.lines, width), Vec::<String>::new());
         }
         assert!(fitted(&shown, 60, &look, usize::MAX).whole);
+    }
+
+    /// A label its column cuts is not whole: a server's name longer than
+    /// the room the prose width leaves it. A window wide enough gives the
+    /// rows the room, and draws it whole; the sentence keeps to the prose
+    /// width (the review of the fixes of the third pull request).
+    #[test]
+    fn a_label_cut_by_its_column_is_not_whole_and_a_wider_window_shows_it() {
+        let look = look();
+        let name = "a-server-with-a-name-longer-than-its-column-leaves";
+        let mut shown = ten("npx -y server-6");
+        shown.rows[6] = Row::new(1, Mark::Picked(false), name, vec!["npx -y it".to_owned()]);
+        shown.sentence = "word ".repeat(40);
+        let narrow = fitted(&shown, 80, &look, usize::MAX);
+        assert!(!narrow.whole, "{:#?}", text(&narrow.lines));
+        assert!(!text(&narrow.lines).iter().any(|row| row.contains(name)));
+        assert_eq!(problems(&narrow.lines, 80), Vec::<String>::new());
+        let wide = fitted(&shown, 120, &look, usize::MAX);
+        let rows = text(&wide.lines);
+        assert!(wide.whole, "{rows:#?}");
+        assert!(rows.iter().any(|row| row.contains(name)), "{rows:#?}");
+        assert!(
+            rows.iter()
+                .filter(|row| row.starts_with("  word"))
+                .all(|row| row.chars().count() <= 80),
+            "the sentence keeps to the prose width: {rows:#?}"
+        );
+        // A row not selected may be cut, and the selected one is whole.
+        shown.selected = Some(5);
+        assert!(fitted(&shown, 80, &look, usize::MAX).whole);
     }
 
     /// A step taller than its room keeps its title, its sentence, its note

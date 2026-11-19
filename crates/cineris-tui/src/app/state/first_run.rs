@@ -47,13 +47,14 @@ use cineris_protocol::{ErrorData, SessionId};
 use cineris_term::{Event as TermEvent, Key, KeyCode, Line, Mods};
 
 use super::{App, LastKey, Pending};
+use crate::app::Open;
 use crate::app::ready::{REPEAT, Readiness};
 use crate::app::setup::{
-    Answer, Chosen, Found, Imported, Job, KeyStore, McpServer, Providers, Setup, Worker,
+    Answer, Chosen, Found, Imported, Job, KeyStore, McpServer, NotWritten, Providers, Setup, Worker,
 };
 use crate::keys::{Action, Context};
 use crate::secret::{KEYS as KEY_KEYS, KeyEdit, KeyInput, key_box};
-use crate::view::setup::{Mark, Row, Step as StepView, card, fitted, step};
+use crate::view::setup::{Fitted, Mark, Row, Step as StepView, card, fitted};
 use crate::view::{Hint, one_line};
 
 /// What an operation the first run sent is for.
@@ -79,12 +80,16 @@ pub(super) struct FirstRun {
     chosen: Chosen,
     providers: Option<Providers>,
     /// The configuration file, as the person reads its path, once written;
-    /// why it was not, when it could not be.
-    written: Option<Result<String, String>>,
+    /// why it was not, when it was not.
+    written: Option<Result<String, NotWritten>>,
     /// `x` was pressed: the steps left take their defaults.
     skipped: bool,
     /// The configuration was read again: the session may open.
     released: bool,
+    /// The first run's own session is being opened: an open that fails
+    /// ends the first run only then, not a later `/new`'s, `/resume`'s or
+    /// fork's (since the review of the fixes of the third pull request).
+    opening: bool,
     /// A frame has drawn the step's keys, which it shows once it is ready,
     /// as a dialog shows its answers: it takes keys only then.
     keys_drawn: bool,
@@ -250,6 +255,7 @@ impl FirstRun {
             written: None,
             skipped: false,
             released: false,
+            opening: false,
             keys_drawn: false,
             seeded: false,
             whole: false,
@@ -313,18 +319,19 @@ impl FirstRun {
         }
     }
 
-    /// `provider` is chosen, and with it its model: the first the catalog
-    /// lists for it, written as `model.main` (since the full review of the
-    /// third pull request).
+    /// `provider` is chosen, and with it its model: the one the catalog
+    /// marks as its default, written as `model.main` (since the full review
+    /// of the third pull request), and whether another provider has a
+    /// model of its id, which names the provider beside it (since the
+    /// review of the fixes).
     fn choose(&mut self, provider: &str) {
+        let known = self
+            .providers
+            .as_ref()
+            .and_then(|found| found.providers.iter().find(|known| known.name == provider));
         self.chosen.provider = Some(provider.to_owned());
-        self.chosen.model = self.providers.as_ref().and_then(|found| {
-            found
-                .providers
-                .iter()
-                .find(|known| known.name == provider)
-                .and_then(|known| known.model.clone())
-        });
+        self.chosen.model = known.and_then(|known| known.model.clone());
+        self.chosen.model_shared = known.is_some_and(|known| known.model_shared);
     }
 
     fn levels(&self) -> Vec<(&'static str, &'static str)> {
@@ -645,12 +652,25 @@ impl App {
                     // next time (the full review of the third pull request:
                     // the line said "for this session" of a mode the session
                     // never had).
-                    Err(why) => {
+                    Err(NotWritten::Failed(why)) => {
                         self.say(&format!(
                             "Mode: {mode}, for this run. Nothing was saved: {}. This run's \
                              sessions are opened with what was chosen, and the set-up runs \
                              again at the next start.",
                             one_line(&why)
+                        ));
+                        self.first_run_open(true);
+                    }
+                    // A file made meanwhile was found at the name, and left
+                    // as it is: it is the configuration from the next start,
+                    // and the set-up does not run again (the review of the
+                    // fixes: this was said to be nothing saved).
+                    Err(NotWritten::Found(path)) => {
+                        self.say(&format!(
+                            "Mode: {mode}, for this run. {} was made meanwhile, not by the \
+                             set-up, and was left as it is: it is the configuration from the \
+                             next start. This run's sessions are opened with what was chosen.",
+                            one_line(&path)
                         ));
                         self.first_run_open(true);
                     }
@@ -675,14 +695,51 @@ impl App {
         // The session made with what was chosen: its header is the one
         // card from now on.
         if let Some(open) = self.open.take() {
+            run.opening = true;
+            let open = if own { self.own_open(open) } else { open };
             self.send_open(open);
+        }
+    }
+
+    /// The session the run opens, when what was chosen is this run's own
+    /// configuration (`App::run_config`) and not in force from a file: one
+    /// resumed, forked or continued is opened with the configuration in
+    /// force, which `session/open` cannot change, so a new session, which
+    /// carries it, is opened in its place, and that is said (the review of
+    /// the fixes of the third pull request: the defaults applied, and an
+    /// `AGENTS.md` left unpicked could reach the prompt).
+    fn own_open(&mut self, open: Open) -> Open {
+        if matches!(open, Open::New { .. }) {
+            return open;
+        }
+        self.say(
+            "This is a new session, not the one asked for: a session resumed, forked or continued \
+             opens with the configuration in force, without what this run's sessions carry. \
+             `/resume` opens the other as it is.",
+        );
+        let (settings, ephemeral) = self.fresh.clone();
+        Open::New {
+            workspace: self.workspace.clone(),
+            settings,
+            ephemeral,
+        }
+    }
+
+    /// The first run's own session is open (since the review of the fixes
+    /// of the third pull request): an open that fails after it is not the
+    /// first run's.
+    pub(super) fn first_run_session_opened(&mut self) {
+        if let Some(run) = self.first_run.as_mut() {
+            run.opening = false;
         }
     }
 
     /// The first run could not start, its worker refused: said, and this
     /// run's sessions read nothing of other tools', as a skipped set-up
     /// leaves them (the full review of the third pull request: it was
-    /// dropped without a word, and the defaults read `AGENTS.md`).
+    /// dropped without a word, and the defaults read `AGENTS.md`); a
+    /// session to be resumed or continued is a new one, which can carry
+    /// that (the review of its fixes).
     pub(super) fn first_run_unstarted(&mut self, error: &std::io::Error) {
         self.run_config = chosen_config(&Chosen::default());
         self.say(&format!(
@@ -691,6 +748,9 @@ impl App {
              a key meanwhile.",
             one_line(&error.to_string())
         ));
+        if let Some(open) = self.open.take() {
+            self.open = Some(self.own_open(open));
+        }
     }
 
     /// An operation the first run sent was answered.
@@ -847,10 +907,16 @@ impl App {
         ));
     }
 
-    /// The session could not be opened: the first run ends there, saying
-    /// what was saved (the full review of the third pull request: it waited
-    /// for good, and its last line never came).
+    /// The session could not be opened: when it was the first run's own,
+    /// the first run ends there, saying what was saved (the full review of
+    /// the third pull request: it waited for good, and its last line never
+    /// came). A later open's failure, `/new`'s at the last step say, is not
+    /// the first run's: it waits on for a session (the review of the
+    /// fixes).
     pub(super) fn first_run_open_failed(&mut self) {
+        if !self.first_run.as_ref().is_some_and(|run| run.opening) {
+            return;
+        }
         let Some(run) = self.first_run.take() else {
             return;
         };
@@ -991,12 +1057,20 @@ impl App {
                 self.first_run_key(*key, at);
                 Some(true)
             }
-            // A key held down never answers a step; the last step's goes
-            // where its press went.
+            // A key held down never answers a step. The last step's goes
+            // where its press went: to the input box when the step did not
+            // take it, and nowhere when it did, as a dialog's (the review of
+            // the fixes of the third pull request: held, `Down` recalled the
+            // history into the input box, and `space` typed spaces there).
             TermEvent::Repeat(_) => {
                 run.typed(at);
                 if matches!(run.step, Step::Commands(_)) {
-                    return None;
+                    let pressed_here = self.last_key.is_some_and(|key| !key.typing);
+                    if !pressed_here {
+                        return None;
+                    }
+                    self.taken = Some(at);
+                    return Some(true);
                 }
                 self.first_run_untaken(at);
                 Some(true)
@@ -1448,20 +1522,24 @@ impl App {
         } else {
             Vec::new()
         };
-        let all = step(&view, width, look);
+        // Drawn whole by height is not drawn whole by width: a row cut to
+        // the window's width, or whose label its column cuts, is not (the
+        // review of the fixes of the third pull request: a step that fitted
+        // by height was said whole).
+        let Fitted { lines: all, whole } = fitted(&view, width, look, usize::MAX);
         let mut lines = Vec::new();
         let whole = if lead + set_up.len() + all.len() <= room {
             lines.extend((lead == 1).then(Line::new));
             lines.extend(set_up);
             lines.extend(all);
-            true
+            whole
         } else if lead + all.len() <= room {
             lines.extend((lead == 1).then(Line::new));
             lines.extend(all);
-            true
+            whole
         } else if all.len() <= room {
             lines.extend(all);
-            true
+            whole
         } else {
             let fitted = fitted(&view, width, look, room);
             lines.extend(fitted.lines);
@@ -1827,6 +1905,13 @@ fn saved(run: &FirstRun) -> String {
             "{} holds the settings, and a change there is kept.",
             one_line(path)
         ),
+        // Found at the name, not written (the review of the fixes of the
+        // third pull request).
+        Some(Err(NotWritten::Found(path))) => format!(
+            "Nothing of the set-up's was saved: {}, made meanwhile, is the configuration from the \
+             next start, and the set-up does not run again.",
+            one_line(path)
+        ),
         _ => "Nothing was saved, so the set-up runs again at the next start.".to_owned(),
     }
 }
@@ -1834,8 +1919,10 @@ fn saved(run: &FirstRun) -> String {
 /// What was chosen as a session's own configuration (`session/new`'s
 /// `config`, which ranks as the command line does), for when the file
 /// written is not in force: the instructions and the skills as picked, off
-/// unless picked; the mode; the model and its provider. The servers picked
-/// are not among them: this version runs no MCP server.
+/// unless picked; the mode; the model, and its provider beside it only when
+/// another provider has a model of its id, as the file has them (the review
+/// of the fixes of the third pull request). The servers picked are not
+/// among them: this version runs no MCP server.
 fn chosen_config(chosen: &Chosen) -> serde_json::Map<String, serde_json::Value> {
     use serde_json::{Value, json};
     let imports = chosen.imports.clone().unwrap_or_default();
@@ -1847,17 +1934,17 @@ fn chosen_config(chosen: &Chosen) -> serde_json::Map<String, serde_json::Value> 
     if let Some(mode) = &chosen.mode {
         config.insert("permissions".to_owned(), json!({ "mode": mode }));
     }
-    let mut model = serde_json::Map::new();
     if let Some(main) = &chosen.model {
+        let mut model = serde_json::Map::new();
         model.insert("main".to_owned(), Value::String(main.clone()));
-    }
-    if let Some(provider) = &chosen.provider {
-        model.insert(
-            "roles".to_owned(),
-            json!({ "main": { "provider": provider } }),
-        );
-    }
-    if !model.is_empty() {
+        if chosen.model_shared
+            && let Some(provider) = &chosen.provider
+        {
+            model.insert(
+                "roles".to_owned(),
+                json!({ "main": { "provider": provider } }),
+            );
+        }
         config.insert("model".to_owned(), Value::Object(model));
     }
     config

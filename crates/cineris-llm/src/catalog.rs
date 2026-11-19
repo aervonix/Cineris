@@ -142,6 +142,11 @@ pub struct ModelEntry {
     pub flags: Flags,
     /// Where the entry's facts were read, and when.
     pub source: Option<String>,
+    /// Whether it is its provider's default: the model the first run writes
+    /// as `model.main` when that provider is chosen (since the review of
+    /// the fixes of step 25's third pull request). A catalog has at most
+    /// one for a provider.
+    pub default: bool,
 }
 
 /// The models the harness knows.
@@ -214,6 +219,18 @@ impl Catalog {
                     message: format!("{name}: is listed twice"),
                 });
             }
+            if entry.default
+                && models
+                    .iter()
+                    .any(|other| other.default && other.info.provider == entry.info.provider)
+            {
+                return Err(CatalogError {
+                    message: format!(
+                        "{name}: is a second default of the provider `{}`, which has one",
+                        entry.info.provider
+                    ),
+                });
+            }
             models.push(Arc::new(entry));
         }
         Ok(Self {
@@ -247,9 +264,17 @@ impl Catalog {
     /// catalog already has **replaces** it whole: nothing is merged field
     /// by field, so an overlaid entry says everything about its model. The
     /// version becomes `<this>+<other>`, because prices may now come from
-    /// either.
+    /// either. An overlaid entry marked [`default`](ModelEntry::default)
+    /// takes its provider's default from the entry that had it.
     pub fn overlay(&mut self, other: &Self) {
         for entry in &other.models {
+            if entry.default {
+                for existing in &mut self.models {
+                    if existing.default && existing.info.provider == entry.info.provider {
+                        Arc::make_mut(existing).default = false;
+                    }
+                }
+            }
             match self
                 .models
                 .iter_mut()
@@ -301,6 +326,8 @@ struct RawModel {
     #[serde(default)]
     speed: Vec<RawSpeed>,
     source: Option<String>,
+    #[serde(default)]
+    default: bool,
 }
 
 #[derive(Deserialize)]
@@ -640,6 +667,7 @@ impl RawModel {
             variants,
             flags: self.flags,
             source: self.source,
+            default: self.default,
         })
     }
 }
@@ -1112,5 +1140,93 @@ mod tests {
                 .get(&ProviderId::new("local"), &ModelId::new("one"))
                 .is_none()
         );
+    }
+
+    /// Every provider the built-in catalog lists has exactly one default,
+    /// the model the first run writes for it, and it is never the one
+    /// dearest model of its provider: another of its models costs at least
+    /// as much an output token (since the review of the fixes of step 25's
+    /// third pull request).
+    #[test]
+    fn each_provider_of_the_built_in_catalog_has_one_default_and_not_its_dearest() {
+        let catalog = Catalog::builtin().unwrap();
+        let mut providers: Vec<&ProviderId> = Vec::new();
+        for model in catalog.models() {
+            if !providers.contains(&&model.info.provider) {
+                providers.push(&model.info.provider);
+            }
+        }
+        for provider in providers {
+            let models: Vec<&Arc<ModelEntry>> = catalog
+                .models()
+                .iter()
+                .filter(|model| model.info.provider == *provider)
+                .collect();
+            let defaults: Vec<&&Arc<ModelEntry>> =
+                models.iter().filter(|model| model.default).collect();
+            assert_eq!(defaults.len(), 1, "{provider}: {defaults:?}");
+            if models.len() > 1 {
+                let output = |model: &ModelEntry| model.info.prices.as_ref().unwrap().output;
+                let chosen = output(defaults[0]);
+                assert!(
+                    models
+                        .iter()
+                        .any(|model| !model.default && output(model) >= chosen),
+                    "{provider}: {} is its dearest",
+                    defaults[0].info.id
+                );
+            }
+        }
+        let anthropic = catalog
+            .models()
+            .iter()
+            .find(|model| model.default && model.info.provider.as_str() == "anthropic")
+            .unwrap();
+        assert_eq!(anthropic.info.id.as_str(), "claude-sonnet-5-5");
+    }
+
+    /// A file may mark one default for a provider; an overlaid entry marked
+    /// default takes it from the one that had it.
+    #[test]
+    fn a_provider_has_one_default_and_an_overlay_takes_it() {
+        let model = |provider: &str, id: &str, default: bool| {
+            format!(
+                r#"{{"provider": "{provider}", "id": "{id}", "name": "{id}", "protocol": "t",
+                    "context_window": 100, "max_output": 10, "default": {default}}}"#
+            )
+        };
+        let two = Catalog::from_json(&format!(
+            r#"{{"version": "1", "model": [{}, {}]}}"#,
+            model("p", "one", true),
+            model("p", "two", true),
+        ));
+        assert!(
+            two.unwrap_err().message.contains("second default"),
+            "two defaults of one provider are refused"
+        );
+        let mut catalog = Catalog::from_json(&format!(
+            r#"{{"version": "1", "model": [{}, {}, {}]}}"#,
+            model("p", "one", true),
+            model("p", "two", false),
+            model("q", "three", true),
+        ))
+        .unwrap();
+        let defaults = |catalog: &Catalog| -> Vec<String> {
+            catalog
+                .models()
+                .iter()
+                .filter(|model| model.default)
+                .map(|model| format!("{}/{}", model.info.provider, model.info.id))
+                .collect()
+        };
+        assert_eq!(defaults(&catalog), ["p/one", "q/three"]);
+        let user = Catalog::from_json(&format!(
+            r#"{{"version": "u", "model": [{}]}}"#,
+            model("p", "two", true),
+        ))
+        .unwrap();
+        catalog.overlay(&user);
+        assert_eq!(defaults(&catalog), ["p/two", "q/three"]);
+        assert!(!entry("{}").default, "left out, it is not the default");
     }
 }

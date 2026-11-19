@@ -38,7 +38,8 @@ fn setup(windows: bool) -> FakeSetup {
                     variable: (*name == "anthropic" && !windows)
                         .then(|| "ANTHROPIC_API_KEY".to_owned()),
                     stored: false,
-                    model: (*name == "anthropic").then(|| "claude-opus-5-5".to_owned()),
+                    model: (*name == "anthropic").then(|| "claude-sonnet-5-5".to_owned()),
+                    model_shared: false,
                 })
                 .collect(),
             store: if windows {

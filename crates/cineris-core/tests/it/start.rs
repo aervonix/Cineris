@@ -83,11 +83,13 @@ fn an_invalid_entry_of_the_users_catalog_stops_the_core_and_says_where_and_what(
     );
 }
 
-/// The model the first run writes for a provider is the first the catalog
-/// lists for it, the user's own entries included, and none for a provider
-/// it lists nothing of (the full review of step 25's third pull request).
+/// The model the first run writes for a provider is the one the catalog
+/// marks as its default, not the first it lists (Anthropic's dearest); a
+/// user's entry marked so takes its provider's; a provider with none
+/// marked has none; and a model is shared when another provider has one of
+/// its id (the review of the fixes of step 25's third pull request).
 #[test]
-fn the_first_runs_model_for_a_provider_is_the_first_the_catalog_lists() {
+fn the_first_runs_model_for_a_provider_is_the_one_the_catalog_marks() {
     let world = World::new("first_run_model", []);
     world.raw_user_config(LOCAL_MODEL);
     let core = world.core();
@@ -97,10 +99,146 @@ fn the_first_runs_model_for_a_provider_is_the_first_the_catalog_lists() {
         .iter()
         .find(|entry| entry.info.provider.as_str() == "anthropic")
         .map(|entry| entry.info.id.as_str().to_owned());
-    assert!(first.is_some());
-    assert_eq!(core.default_model("anthropic"), first);
-    assert_eq!(core.default_model("local").as_deref(), Some("house-model"));
+    assert_eq!(
+        core.default_model("anthropic").as_deref(),
+        Some("claude-sonnet-5-5")
+    );
+    assert_ne!(
+        core.default_model("anthropic"),
+        first,
+        "not the first listed"
+    );
+    assert_eq!(core.default_model("local"), None, "none is marked");
     assert_eq!(core.default_model("nobody"), None);
+    assert!(!core.model_shared("claude-sonnet-5-5"));
+    assert!(!core.model_shared("house-model"));
+
+    // The user's own entries: one marked default for its provider, one
+    // taking Anthropic's from the built-in one, and one of an id Anthropic
+    // has.
+    let entry = |name: &str, provider: &str, id: &str, default: bool| {
+        format!(
+            "[models.{name}]\nprovider = \"{provider}\"\nid = \"{id}\"\nname = \"{name}\"\n\
+             protocol = \"anthropic-messages\"\ncontext_window = 100000\nmax_output = 8000\n\
+             default = {default}\n\n"
+        )
+    };
+    world.raw_user_config(&format!(
+        "{}{}{}[providers.local]\nprotocol = \"anthropic-messages\"\nbase_url = \
+         \"http://127.0.0.1:9\"\n",
+        entry("house", "local", "house-model", true),
+        entry("mine", "anthropic", "claude-haiku-5-5", true),
+        entry("twin", "local", "claude-sonnet-5-5", false),
+    ));
+    let core = world.core();
+    assert_eq!(core.default_model("local").as_deref(), Some("house-model"));
+    assert_eq!(
+        core.default_model("anthropic").as_deref(),
+        Some("claude-haiku-5-5")
+    );
+    assert!(core.model_shared("claude-sonnet-5-5"));
+    assert!(!core.model_shared("house-model"));
+}
+
+/// Every provider the first run offers (the core's, as `credentials`
+/// lists them) has exactly one default in the built-in catalog, but for a
+/// server on the person's own machine, whose models the catalog cannot
+/// know (the review of the fixes of step 25's third pull request).
+#[test]
+fn every_provider_the_first_run_offers_has_one_default_unless_it_is_local() {
+    let world = World::new("first_run_defaults", []);
+    world.user_config("");
+    let core = world.core();
+    let catalog = cineris_llm::Catalog::builtin().unwrap();
+    let offered = core.credentials();
+    assert!(offered.len() > 5, "{}", offered.len());
+    for credential in offered {
+        let name = credential.provider.as_str();
+        let defaults: Vec<&str> = catalog
+            .models()
+            .iter()
+            .filter(|entry| entry.default && entry.info.provider.as_str() == name)
+            .map(|entry| entry.info.id.as_str())
+            .collect();
+        let local =
+            cineris_llm::openai_chat::providers::builtin(name).is_some_and(|builtin| builtin.local);
+        if local {
+            assert!(defaults.is_empty(), "{name}: {defaults:?}");
+            assert_eq!(core.default_model(name), None, "{name}");
+        } else {
+            assert_eq!(defaults.len(), 1, "{name}: {defaults:?}");
+            assert_eq!(core.default_model(name).as_deref(), Some(defaults[0]));
+        }
+    }
+}
+
+/// After a first run, `--model` and a hand edit of `model.main` can name
+/// another provider's model, and the session runs it: the first run names
+/// its provider beside the model only when another provider has a model of
+/// that id (the review of the fixes of step 25's third pull request:
+/// `model.roles.main.provider` held every lookup to the provider chosen).
+#[test]
+fn another_providers_model_can_be_named_after_a_first_run() {
+    let world = World::new("after_first_run", []);
+    world.user_config("");
+    let core = world.core();
+    let model = core.default_model("anthropic");
+    let choices = cineris_config::write::FirstRunChoices {
+        provider: Some("anthropic".to_owned()),
+        model_shared: model
+            .as_deref()
+            .is_some_and(|model| core.model_shared(model)),
+        model,
+        ..cineris_config::write::FirstRunChoices::default()
+    };
+    drop(core);
+    let written = cineris_config::write::user_config_text(&choices).unwrap();
+    assert!(
+        written.contains("main = \"claude-sonnet-5-5\""),
+        "{written}"
+    );
+    // The test's own: nothing kept, and the keys in a file of its own.
+    let file = format!(
+        "{written}\n[session]\ndurability = \"never\"\n\n[credentials]\nstore = \"file\"\n"
+    );
+    let main_of = |core: &Core| {
+        world.run(async {
+            let front = Front::start(&world, core).await;
+            let main = &front.state.roles[&ModelRole::Main];
+            let model = (
+                main.model.as_str().to_owned(),
+                main.provider.as_str().to_owned(),
+            );
+            front.close().await;
+            model
+        })
+    };
+    world.raw_user_config(&file);
+    assert_eq!(
+        main_of(&world.core()),
+        ("claude-sonnet-5-5".to_owned(), "anthropic".to_owned())
+    );
+    // `--model`.
+    let core = world.core_with(|options| {
+        options.overrides.push(cineris_config::Override {
+            key: "model.main".to_owned(),
+            value: "deepseek-flash".to_owned(),
+            flag: Some("--model".to_owned()),
+        });
+    });
+    assert_eq!(
+        main_of(&core),
+        ("deepseek-flash".to_owned(), "deepseek".to_owned())
+    );
+    // A hand edit of the file.
+    world.raw_user_config(&file.replace(
+        "main = \"claude-sonnet-5-5\"",
+        "main = \"openai/gpt-6-luna\"",
+    ));
+    assert_eq!(
+        main_of(&world.core()),
+        ("openai/gpt-6-luna".to_owned(), "openrouter".to_owned())
+    );
 }
 
 #[test]

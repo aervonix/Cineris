@@ -48,10 +48,16 @@ pub struct Provider {
     pub variable: Option<String>,
     /// Whether the credential store holds a key for it already.
     pub stored: bool,
-    /// The model written as `model.main` when it is chosen: the first the
-    /// model catalog lists for it. `None` when it lists none (since the
-    /// full review of step 25's third pull request).
+    /// The model written as `model.main` when it is chosen: the one the
+    /// model catalog marks as its default. `None` when it marks none (since
+    /// the full review of step 25's third pull request).
     pub model: Option<String>,
+    /// Whether another provider has a model of [`model`](Self::model)'s id
+    /// too: the provider is then named beside it as the main role's,
+    /// `model.roles.main.provider`, and otherwise not (since the review of
+    /// the fixes of step 25's third pull request: named always, it held a
+    /// later `model.main` to this provider's models).
+    pub model_shared: bool,
 }
 
 /// Where a key typed at the first run is kept: the credential store
@@ -146,6 +152,9 @@ pub struct Chosen {
     pub provider: Option<String>,
     /// Its model, written as `model.main` ([`Provider::model`]).
     pub model: Option<String>,
+    /// Whether another provider has a model of its model's id too
+    /// ([`Provider::model_shared`]): the provider is then named beside it.
+    pub model_shared: bool,
     /// What the imports picked; `None`, the step was skipped.
     pub imports: Option<Imported>,
     /// `permissions.mode`; `None`, skipped (supervised holds).
@@ -198,8 +207,22 @@ pub trait Setup: Send + Sync {
     ///
     /// # Errors
     ///
-    /// A sentence: a file is there already, or the disk refused.
-    fn write_config(&self, chosen: &Chosen) -> Result<String, String>;
+    /// [`NotWritten`]: a file is there already, which was left as it is,
+    /// or it could not be written.
+    fn write_config(&self, chosen: &Chosen) -> Result<String, NotWritten>;
+}
+
+/// Why the configuration file was not written (since the review of the
+/// fixes of step 25's third pull request: a file found at its name was
+/// said to be nothing saved, and the first run to run again).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotWritten {
+    /// A file was at its name when it came to be written, made meanwhile:
+    /// it was left as it is, and it is the configuration from the next
+    /// start. Its path, as the person reads it.
+    Found(String),
+    /// It could not be written: a sentence saying why.
+    Failed(String),
 }
 
 /// A call for the worker.
@@ -218,7 +241,7 @@ pub(crate) enum Answer {
     Stored(String, Result<(), String>),
     Found(Found),
     Servers(String, Result<Vec<McpServer>, String>),
-    Written(Result<String, String>),
+    Written(Result<String, NotWritten>),
 }
 
 /// The thread [`Setup`]'s calls run on, one at a time in the order asked.
@@ -295,7 +318,9 @@ impl Worker {
                             Answer::Servers(path, read)
                         }
                         Job::Write(chosen) => Answer::Written(
-                            guarded(|| setup.write_config(&chosen)).and_then(|got| got),
+                            guarded(|| setup.write_config(&chosen))
+                                .map_err(NotWritten::Failed)
+                                .and_then(|got| got),
                         ),
                     };
                     if outbox.send(answer).is_err() {
