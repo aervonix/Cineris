@@ -21,11 +21,11 @@ use super::{key, text, type_text};
 use crate::app::setup::{
     Chosen, Found, Imported, KeyStore, McpFile, McpServer, Provider, Providers,
 };
-use crate::app::{Inbound, Setup, Ticket};
+use crate::app::{Inbound, Open, Setup, Ticket};
 use crate::testing::{TRICKY, problems};
 use crate::testkit::{
-    FakeSetup, Scripted, app_first_run, app_first_run_on, app_first_run_prompted, approval, ask,
-    drain, event, session,
+    FakeSetup, Scripted, app_first_run, app_first_run_on, app_first_run_opening,
+    app_first_run_prompted, approval, ask, drain, event, session,
 };
 
 const KEY: &str = "sk-ant-api03-Zq7XfirstrunKEYw9";
@@ -41,12 +41,14 @@ fn providers() -> Providers {
                 variable: Some("ANTHROPIC_API_KEY".to_owned()),
                 stored: false,
                 model: Some(MODEL.to_owned()),
+                model_shared: false,
             },
             Provider {
                 name: "openai".to_owned(),
                 variable: None,
                 stored: false,
                 model: None,
+                model_shared: false,
             },
         ],
         store: KeyStore::File("~/.config/cineris/credentials.toml".to_owned()),
@@ -127,6 +129,36 @@ impl Run {
             Some(prompt) => app_first_run_prompted(now, &setup, 100, rows, prompt),
             None => app_first_run(now, &setup, 100, rows),
         };
+        let mut run = Self {
+            app,
+            link,
+            setup,
+            now,
+            scrollback: Vec::new(),
+            drawn: Vec::new(),
+        };
+        run.frame();
+        run.answer();
+        run
+    }
+
+    /// A first run in a window of `columns` by `rows`.
+    fn sized(setup: FakeSetup, columns: usize, rows: usize) -> Self {
+        let now = Instant::now();
+        let (app, link) = app_first_run(now, &setup, columns, rows);
+        Self::begun(app, link, setup, now)
+    }
+
+    /// A first run that the command line asked to `open` a session of its
+    /// own.
+    fn opening(setup: FakeSetup, open: Open) -> Self {
+        let now = Instant::now();
+        let (app, link) = app_first_run_opening(now, &setup, 100, 40, open);
+        Self::begun(app, link, setup, now)
+    }
+
+    /// Its first frame, and the program's first answer.
+    fn begun(app: crate::app::App, link: Scripted, setup: FakeSetup, now: Instant) -> Self {
         let mut run = Self {
             app,
             link,
@@ -393,6 +425,7 @@ fn the_first_run_reaches_a_session_made_with_what_was_chosen() {
         [Chosen {
             provider: Some("anthropic".to_owned()),
             model: Some(MODEL.to_owned()),
+            model_shared: false,
             imports: Some(Imported {
                 instructions: false,
                 skills: false,
@@ -1205,7 +1238,7 @@ impl Setup for Held {
         self.setup.read_servers(path)
     }
 
-    fn write_config(&self, chosen: &Chosen) -> Result<String, String> {
+    fn write_config(&self, chosen: &Chosen) -> Result<String, crate::app::setup::NotWritten> {
         self.setup.write_config(chosen)
     }
 }
@@ -1372,7 +1405,7 @@ fn in_a_short_window_the_step_keeps_its_title_and_the_selected_row_whole() {
 }
 
 /// A server whose command is taller than the window is cut, the hint row
-/// says a taller window shows it whole, and `space` does not pick it:
+/// says a larger window shows it whole, and `space` does not pick it:
 /// what is accepted has been drawn whole.
 #[test]
 fn a_row_the_window_cannot_show_whole_is_not_accepted() {
@@ -1428,10 +1461,12 @@ fn a_file_that_could_not_be_written_opens_the_session_with_what_was_chosen() {
     run.moves("up");
     run.key("enter");
     run.answer();
+    // The model alone: no other provider has one of its id (the review of
+    // the fixes).
     let chosen = serde_json::json!({
         "compat": { "instructions": true, "skills": false },
         "permissions": { "mode": "read-only" },
-        "model": { "main": MODEL, "roles": { "main": { "provider": "anthropic" } } },
+        "model": { "main": MODEL },
     });
     let sent = run.link.take_sent();
     assert!(
@@ -2085,4 +2120,271 @@ fn a_first_run_that_cannot_start_is_said() {
         "{:#?}",
         run.scrollback
     );
+}
+
+// ------------------------------------------------ the review of the fixes
+// of the third pull request (Opus)
+
+/// The run's own configuration names the provider beside its model when
+/// another provider has a model of that id, as the file does, and only
+/// then (M-A, settled by the coordinator).
+#[test]
+fn a_model_another_provider_has_too_names_its_provider_in_the_runs_configuration() {
+    let mut setup = fake();
+    setup.providers.providers[0].model_shared = true;
+    setup.write_fails = Some("the disk is full".to_owned());
+    let mut run = Run::new(setup);
+    let _ = run.ready();
+    run.key("enter");
+    run.answer();
+    let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let config = run.opened(TrustStanding::Trusted);
+    assert_eq!(
+        config["model"],
+        serde_json::json!({ "main": MODEL, "roles": { "main": { "provider": "anthropic" } } })
+    );
+}
+
+/// A `/new` whose open fails once the first run's own session is open does
+/// not end the first run, nor say that its session could not be opened:
+/// the first run waits on, and its last step comes with the next session
+/// (L-1).
+#[test]
+fn an_open_that_fails_after_the_first_runs_own_does_not_end_it() {
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    let _ = run.open(TrustStanding::Trusted);
+    // At `Opened`, before a frame asks for the project's commands.
+    type_text(&mut run.app, "/new", run.now);
+    run.key("enter");
+    run.key("enter");
+    let (open, _) = run
+        .sent(|op| matches!(op, Op::SessionNew(_)))
+        .expect("a new session");
+    run.link.give(Inbound::Done(
+        open,
+        Err(cineris_protocol::ErrorData::new(
+            cineris_protocol::ErrorKind::Usage,
+            "no_workspace",
+            "The workspace is gone.",
+        )),
+    ));
+    drain(&mut run.app, run.now);
+    let _ = run.frame();
+    assert!(run.app.in_first_run(), "it waits on for a session");
+    let said = squash(&run.scrollback.join(" "));
+    assert!(!said.contains("Set-up ended"), "{said}");
+    type_text(&mut run.app, "/new", run.now);
+    run.key("enter");
+    run.key("enter");
+    let _ = run.opened(TrustStanding::Trusted);
+    let _ = run.frame();
+    run.detect(two_commands());
+    let live = run.ready();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+}
+
+/// A first run asked to resume or continue a session, whose choices are
+/// not in force from a file (not written, or its worker never started),
+/// opens a new session with them in its place and says so; with the file
+/// in force it resumes as asked (L-2).
+#[test]
+fn a_first_run_asked_to_resume_opens_a_new_session_when_its_choices_are_not_in_force() {
+    let resume = || Open::Resume(cineris_protocol::SessionId::from("s_old"));
+    let continuing = || Open::Continue {
+        workspace: crate::testkit::WORKSPACE.to_owned(),
+        settings: cineris_protocol::session::SessionSettings::default(),
+        ephemeral: false,
+    };
+    let instead = "This is a new session, not the one asked for";
+    for open in [resume(), continuing()] {
+        let mut setup = fake();
+        setup.write_fails = Some("the disk is full".to_owned());
+        let mut run = Run::opening(setup, open);
+        skip_three(&mut run);
+        let sent = run.link.take_sent();
+        assert!(
+            !sent
+                .iter()
+                .any(|(_, op)| matches!(op, Op::SessionOpen(_) | Op::SessionList(_))),
+            "{sent:?}"
+        );
+        let Some((_, Op::SessionNew(params))) = sent
+            .into_iter()
+            .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+        else {
+            panic!("no new session");
+        };
+        assert_eq!(
+            serde_json::Value::Object(params.config),
+            serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+        );
+        let _ = run.frame();
+        assert!(
+            squash(&run.scrollback.join(" ")).contains(instead),
+            "{:#?}",
+            run.scrollback
+        );
+    }
+    // The file in force: resumed as asked.
+    let mut run = Run::opening(fake(), resume());
+    skip_three(&mut run);
+    let (reload, _) = run
+        .sent(|op| matches!(op, Op::ConfigReload(_)))
+        .expect("read again");
+    run.give(
+        reload,
+        OpResult::ConfigReload(ConfigReloadResult::default()),
+    );
+    assert!(
+        run.sent(|op| matches!(op, Op::SessionOpen(_))).is_some(),
+        "resumed"
+    );
+    // The worker that never started: nothing of other tools' is read, in a
+    // new session.
+    crate::app::setup::REFUSE_THREAD.with(|refuse| refuse.set(true));
+    let mut run = Run::opening(fake(), resume());
+    assert!(!run.app.in_first_run());
+    let config = run.opened(TrustStanding::Trusted);
+    assert_eq!(
+        serde_json::Value::Object(config),
+        serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+    );
+    let _ = run.frame();
+    assert!(
+        squash(&run.scrollback.join(" ")).contains(instead),
+        "{:#?}",
+        run.scrollback
+    );
+}
+
+/// A file that appears at the configuration's name before it is written is
+/// left as it is and said to be the configuration from the next start, not
+/// that nothing was saved and the set-up runs again; the session carries
+/// what was chosen (L-3).
+#[test]
+fn a_file_found_at_the_name_is_said_to_be_in_force_from_the_next_start() {
+    let mut setup = fake();
+    setup.file_appears = true;
+    let mut run = Run::new(setup);
+    skip_three(&mut run);
+    let sent = run.link.take_sent();
+    assert!(
+        !sent.iter().any(|(_, op)| matches!(op, Op::ConfigReload(_))),
+        "the file found is not read now"
+    );
+    let Some((open, Op::SessionNew(params))) = sent
+        .into_iter()
+        .find(|(_, op)| matches!(op, Op::SessionNew(_)))
+    else {
+        panic!("no session opened");
+    };
+    assert_eq!(
+        serde_json::Value::Object(params.config),
+        serde_json::json!({ "compat": { "instructions": false, "skills": false } })
+    );
+    run.give(
+        open,
+        OpResult::SessionNew(SessionResult {
+            session: session().trust(TrustStanding::Trusted).build(),
+        }),
+    );
+    let _ = run.frame();
+    run.detect(Vec::new());
+    let _ = run.frame();
+    assert!(!run.app.in_first_run());
+    let said = squash(&run.scrollback.join(" "));
+    for line in [
+        "· Mode: supervised, for this run. ~/.config/cineris/config.toml was made meanwhile, not \
+         by the set-up, and was left as it is: it is the configuration from the next start.",
+        "Nothing of the set-up's was saved: ~/.config/cineris/config.toml, made meanwhile, is the \
+         configuration from the next start, and the set-up does not run again.",
+    ] {
+        assert!(said.contains(line), "{line}: {said}");
+    }
+    assert!(!said.contains("runs again at the next start"), "{said}");
+}
+
+/// "Drawn whole" holds by width as by height (L-4): in a window 11 columns
+/// wide, where the step fits by height, a provider whose name its column
+/// cuts is not chosen; at 80 columns a server whose name is longer than its
+/// column is not picked, and the hint row says a larger window shows it
+/// whole, which at 100 it does, and it is picked.
+#[test]
+fn a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height() {
+    let mut run = Run::sized(fake(), 11, 400);
+    let _ = run.ready();
+    run.key("enter");
+    let _ = run.frame();
+    assert!(run.scrollback.is_empty(), "no provider chosen");
+    let name = "a-server-with-a-name-longer-than-its-column-leaves";
+    let mut setup = fake();
+    setup.servers.insert(
+        "~/.claude.json".to_owned(),
+        vec![server(name, "npx -y @example/long-mcp", None)],
+    );
+    let mut run = Run::sized(setup.clone(), 81, 60);
+    to_the_servers(&mut run);
+    run.moves("down");
+    let live = run.frame();
+    assert!(
+        live.iter()
+            .any(|row| row.contains("a larger window shows this row whole")),
+        "{live:#?}"
+    );
+    run.key("space");
+    let live = run.frame();
+    assert!(!live.iter().any(|row| row.contains('☑')), "{live:#?}");
+    let mut run = Run::sized(setup, 100, 60);
+    to_the_servers(&mut run);
+    run.moves("down");
+    run.key("space");
+    let live = run.frame();
+    assert!(
+        live.iter().any(|row| row.contains(&format!("☑ {name}"))),
+        "{live:#?}"
+    );
+}
+
+/// At the last step a key held down goes where its press went (L-5): the
+/// repeats of a `space` the step took type nothing into the input box, and
+/// those of a key it did not take go on to it.
+#[test]
+fn a_held_key_the_last_step_took_types_nothing_into_the_input_box() {
+    let repeat = |run: &mut Run, character: char| {
+        for _ in 0..3 {
+            run.app.terminal(
+                &cineris_term::Event::Repeat(cineris_term::Key::plain(
+                    cineris_term::KeyCode::Char(character),
+                )),
+                run.now,
+            );
+            run.now += Duration::from_millis(30);
+        }
+    };
+    let mut run = Run::new(fake());
+    let _ = commands_step(&mut run);
+    run.key("space");
+    repeat(&mut run, ' ');
+    assert_eq!(run.app.input().editor().text(), "");
+    let live = run.frame();
+    assert!(Run::shows_commands(&live), "{live:#?}");
+    assert!(
+        live.iter().any(|row| row.contains("☑ build")),
+        "the press picked: {live:#?}"
+    );
+    // A key the step did not take yet: its repeats go where it went.
+    let mut run = Run::new(fake());
+    skip_three(&mut run);
+    let _ = run.open(TrustStanding::Trusted);
+    let _ = run.frame();
+    run.detect(two_commands());
+    let _ = run.frame();
+    run.key("a");
+    repeat(&mut run, 'a');
+    assert_eq!(run.app.input().editor().text(), "aaaa");
 }

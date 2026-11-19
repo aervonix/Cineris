@@ -17,10 +17,14 @@
 //!
 //! **Since the full review of step 25's third pull request:**
 //!
-//! - **The model is written:** the chosen provider's model, the first the
-//!   model catalog lists for it, as `model.main`, and the provider as the
-//!   main role's (`model.roles.main.provider`), so that the first prompt
-//!   has a model with no other setting.
+//! - **The model is written:** the chosen provider's model, the one the
+//!   model catalog marks as its default, as `model.main`, so that the first
+//!   prompt has a model with no other setting. *Since the review of the
+//!   fixes:* the provider is written as the main role's
+//!   (`model.roles.main.provider`) only beside a model whose id another
+//!   provider has too, which needs it, and never without a model: written
+//!   always, it held every later `model.main` (`--model`, a hand edit) to
+//!   that provider's models.
 //! - **`[mcp]` is checked as the loader does not check it:** the section is
 //!   reserved in this version, so the strict read-back passes over it. A
 //!   server's name must be settable ([`settable_name`]), two servers picked
@@ -58,12 +62,18 @@ use crate::validate::{Checked, validate};
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FirstRunChoices {
     /// The provider whose key was stored or found, `None` when the step was
-    /// skipped: written as the main role's provider.
+    /// skipped: written as the main role's provider beside a model whose id
+    /// another provider has too ([`model_shared`](Self::model_shared)), and
+    /// otherwise only said in the file's comment.
     pub provider: Option<String>,
-    /// The provider's model, the first the catalog lists for it: written as
-    /// `model.main`. `None` when no provider was chosen, or the catalog
-    /// knows none of its models.
+    /// The provider's model, the one the catalog marks as its default:
+    /// written as `model.main`. `None` when no provider was chosen, or the
+    /// catalog marks none of its models.
     pub model: Option<String>,
+    /// Whether another provider has a model of [`model`](Self::model)'s id
+    /// too: the provider is then named beside it, as the main role's (since
+    /// the review of the fixes of step 25's third pull request).
+    pub model_shared: bool,
     /// What the imports step picked, `None` when it was skipped: then
     /// nothing was picked, and the file says so as it says a choice.
     pub imports: Option<Imports>,
@@ -129,9 +139,15 @@ pub fn user_config_text(choices: &FirstRunChoices) -> Result<String, WriteError>
             text.push_str("# No model of the provider chosen is known: model.main names one.\n")
         }
         (Some(_), Some(_)) => text.push_str(
-            "# model.main is the first model the catalog lists for the provider chosen:\n\
-             # `/model` chooses another for a session, and a change here keeps one.\n",
+            "# model.main is the model the catalog marks as the default of the provider\n\
+             # chosen: `/model` chooses another for a session, and a change here keeps one.\n",
         ),
+    }
+    if choices.model.is_some() && choices.model_shared {
+        text.push_str(
+            "# Another provider has a model of that id too, so model.roles.main.provider\n\
+             # names the one chosen: change or remove it with model.main.\n",
+        );
     }
     if choices.imports.is_none() {
         text.push_str(
@@ -252,18 +268,23 @@ fn table(choices: &FirstRunChoices) -> Result<Table, WriteError> {
         "config_version".to_owned(),
         Value::Integer(i64::from(CONFIG_VERSION)),
     );
-    // The model of the provider chosen, and the provider as the main
-    // role's (since the full review of step 25's third pull request).
+    // The model of the provider chosen (since the full review of step 25's
+    // third pull request), and the provider as the main role's only beside
+    // a model whose id another provider has too: named always, it held a
+    // later `model.main` to that provider's models (the review of the
+    // fixes).
     let mut model = Table::new();
     if let Some(main) = &choices.model {
         model.insert("main".to_owned(), Value::String(main.clone()));
-    }
-    if let Some(provider) = &choices.provider {
-        let mut main = Table::new();
-        main.insert("provider".to_owned(), Value::String(provider.clone()));
-        let mut roles = Table::new();
-        roles.insert("main".to_owned(), Value::Table(main));
-        model.insert("roles".to_owned(), Value::Table(roles));
+        if choices.model_shared
+            && let Some(provider) = &choices.provider
+        {
+            let mut main = Table::new();
+            main.insert("provider".to_owned(), Value::String(provider.clone()));
+            let mut roles = Table::new();
+            roles.insert("main".to_owned(), Value::Table(main));
+            model.insert("roles".to_owned(), Value::Table(roles));
+        }
     }
     if !model.is_empty() {
         root.insert("model".to_owned(), Value::Table(model));
@@ -487,7 +508,8 @@ mod tests {
         tracker.headers = vec!["Authorization".to_owned()];
         FirstRunChoices {
             provider: Some("anthropic".to_owned()),
-            model: Some("claude-opus-5-5".to_owned()),
+            model: Some("claude-sonnet-5-5".to_owned()),
+            model_shared: false,
             imports: Some(Imports {
                 instructions: true,
                 skills: false,
@@ -501,12 +523,13 @@ mod tests {
     fn the_choices_are_written_as_settings_that_read_back_strictly() {
         let text = user_config_text(&chosen()).unwrap();
         let parsed: Table = text.parse().unwrap();
-        assert_eq!(parsed["model"]["main"].as_str(), Some("claude-opus-5-5"));
-        assert_eq!(
-            parsed["model"]["roles"]["main"]["provider"].as_str(),
-            Some("anthropic")
+        assert_eq!(parsed["model"]["main"].as_str(), Some("claude-sonnet-5-5"));
+        assert!(
+            parsed["model"].get("roles").is_none(),
+            "a model no other provider has is named alone: {text}"
         );
         assert!(text.contains("`/model` chooses another"), "{text}");
+        assert!(!text.contains("model.roles.main.provider"), "{text}");
         assert_eq!(parsed["permissions"]["mode"].as_str(), Some("read-only"));
         assert_eq!(parsed["compat"]["instructions"].as_bool(), Some(true));
         assert_eq!(parsed["compat"]["skills"].as_bool(), Some(false));
@@ -545,22 +568,44 @@ mod tests {
         assert!(parsed.get("model").is_none());
     }
 
-    /// A provider the catalog knows no model of is still written as the
-    /// main role's, and the file says model.main names one.
+    /// A provider the catalog marks no model of writes no model, nor the
+    /// provider without one, and the file says model.main names one (the
+    /// review of the fixes of the third pull request: the provider alone
+    /// held a model given on the command line to its models).
     #[test]
-    fn a_provider_with_no_model_known_is_written_and_said() {
-        let choices = FirstRunChoices {
-            provider: Some("internal".to_owned()),
-            ..FirstRunChoices::default()
-        };
+    fn a_provider_with_no_model_known_writes_no_model_and_says_so() {
+        for model_shared in [false, true] {
+            let choices = FirstRunChoices {
+                provider: Some("internal".to_owned()),
+                model_shared,
+                ..FirstRunChoices::default()
+            };
+            let text = user_config_text(&choices).unwrap();
+            let parsed: Table = text.parse().unwrap();
+            assert!(parsed.get("model").is_none(), "{text}");
+            assert!(text.contains("model.main names one"), "{text}");
+        }
+    }
+
+    /// The provider is named beside the model, as the main role's, only
+    /// when another provider has a model of that id: then the model would
+    /// not be found without it (the review of the fixes of the third pull
+    /// request).
+    #[test]
+    fn the_provider_is_named_only_beside_a_model_of_an_id_another_has() {
+        let mut choices = chosen();
+        choices.model_shared = true;
         let text = user_config_text(&choices).unwrap();
         let parsed: Table = text.parse().unwrap();
-        assert!(parsed["model"].get("main").is_none());
+        assert_eq!(parsed["model"]["main"].as_str(), Some("claude-sonnet-5-5"));
         assert_eq!(
             parsed["model"]["roles"]["main"]["provider"].as_str(),
-            Some("internal")
+            Some("anthropic")
         );
-        assert!(text.contains("model.main names one"), "{text}");
+        assert!(text.contains("model.roles.main.provider"), "{text}");
+        choices.model_shared = false;
+        let parsed: Table = user_config_text(&choices).unwrap().parse().unwrap();
+        assert!(parsed["model"].get("roles").is_none());
     }
 
     /// A name from another tool's file cannot leave its table: whatever it

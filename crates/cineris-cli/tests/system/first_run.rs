@@ -155,8 +155,14 @@ fn sys_the_first_run_in_an_empty_home_reaches_a_working_session() {
     let written = std::fs::read_to_string(&user_config).unwrap();
     assert!(written.contains("instructions = false"), "{written}");
     assert!(written.contains("mode = \"supervised\""), "{written}");
-    assert!(written.contains("main = \"claude-"), "{written}");
-    assert!(written.contains("provider = \"anthropic\""), "{written}");
+    // The model the catalog marks as Anthropic's default, named alone: no
+    // other provider has a model of its id (the review of the fixes of the
+    // third pull request).
+    assert!(
+        written.contains("main = \"claude-sonnet-5-5\""),
+        "{written}"
+    );
+    assert!(!written.contains("[model.roles"), "{written}");
     // The key in the environment was offered by its name, never its value.
     assert!(
         !raw(&session).contains(KEY),

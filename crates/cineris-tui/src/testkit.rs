@@ -23,7 +23,7 @@
 //! | [`approval`] | A request to run `cargo build`, with three answers |
 //! | [`ask`] | A request given, and its dialog's first frame drawn |
 //! | [`shown_dialog`] | An approval given and drawn until it is ready: the time a key answers it |
-//! | [`FakeSetup`], [`app_first_run`], [`app_first_run_prompted`], [`app_first_run_on`] | The first run's program in a test: providers, what other tools left, servers, and what it was asked to store and write (since step 25); a first run with a prompt on the command line, or on a program of the test's own |
+//! | [`FakeSetup`], [`app_first_run`], [`app_first_run_prompted`], [`app_first_run_on`], [`app_first_run_opening`] | The first run's program in a test: providers, what other tools left, servers, and what it was asked to store and write (since step 25); a first run with a prompt on the command line, on a program of the test's own, or asked to open a session of its own |
 //!
 //! Time is the test's: every call that draws or reads input takes the
 //! [`Instant`] it happens at, and nothing waits.
@@ -374,6 +374,10 @@ pub struct FakeSetup {
     /// Why writing the configuration fails, when it does (since the same
     /// review).
     pub write_fails: Option<String>,
+    /// A file is found at the configuration's name when it is written,
+    /// made meanwhile, and left as it is (since the review of that review's
+    /// fixes).
+    pub file_appears: bool,
     /// What it was asked.
     pub log: Arc<Mutex<SetupLog>>,
 }
@@ -417,12 +421,19 @@ impl crate::app::Setup for FakeSetup {
             .ok_or_else(|| "it is not there".to_owned())
     }
 
-    fn write_config(&self, chosen: &crate::app::setup::Chosen) -> Result<String, String> {
+    fn write_config(
+        &self,
+        chosen: &crate::app::setup::Chosen,
+    ) -> Result<String, crate::app::setup::NotWritten> {
+        let path = "~/.config/cineris/config.toml".to_owned();
         if let Some(why) = &self.write_fails {
-            return Err(why.clone());
+            return Err(crate::app::setup::NotWritten::Failed(why.clone()));
+        }
+        if self.file_appears {
+            return Err(crate::app::setup::NotWritten::Found(path));
         }
         self.log().written.push(chosen.clone());
-        Ok("~/.config/cineris/config.toml".to_owned())
+        Ok(path)
     }
 }
 
@@ -466,6 +477,20 @@ pub fn app_first_run_on(
     first_run_app(now, setup, columns, rows, None)
 }
 
+/// As [`app_first_run`], the command line having asked to `open` a
+/// session of its own: one to resume, fork or continue (since the review
+/// of the fixes of step 25's third pull request).
+#[must_use]
+pub fn app_first_run_opening(
+    now: Instant,
+    setup: &FakeSetup,
+    columns: usize,
+    rows: usize,
+    open: Open,
+) -> (App, Scripted) {
+    first_run_app_opening(now, Arc::new(setup.clone()), columns, rows, None, open)
+}
+
 fn first_run_app(
     now: Instant,
     setup: Arc<dyn crate::app::Setup>,
@@ -473,17 +498,29 @@ fn first_run_app(
     rows: usize,
     prompt: Option<&str>,
 ) -> (App, Scripted) {
+    let open = Open::New {
+        workspace: WORKSPACE.to_owned(),
+        settings: SessionSettings::default(),
+        ephemeral: false,
+    };
+    first_run_app_opening(now, setup, columns, rows, prompt, open)
+}
+
+fn first_run_app_opening(
+    now: Instant,
+    setup: Arc<dyn crate::app::Setup>,
+    columns: usize,
+    rows: usize,
+    prompt: Option<&str>,
+    open: Open,
+) -> (App, Scripted) {
     let link = Scripted::default();
     let start = Start {
         version: "0.1.0".to_owned(),
         folder: "~/src/parser".to_owned(),
         cwd: None,
         workspace: WORKSPACE.to_owned(),
-        open: Open::New {
-            workspace: WORKSPACE.to_owned(),
-            settings: SessionSettings::default(),
-            ephemeral: false,
-        },
+        open,
         prompt: prompt.map(str::to_owned),
         settings: Settings::default(),
         keymap: KeyMap::defaults(),

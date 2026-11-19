@@ -28,6 +28,15 @@
 #   reads_reasoning_from  Ids of other models whose opaque reasoning this
 #                       model can read back. Left out when not documented.
 #   source              Where the entry's facts were read, and when.
+#   default             true on the one model of its provider that the first
+#                       run writes as model.main when that provider is chosen
+#                       (docs/architecture/08-configuration.md, "First run"):
+#                       the provider's general model at a middle price, never
+#                       its dearest unless it is the only one listed. Left
+#                       out on every other model. Each provider listed here
+#                       has exactly one, which a test checks. In a user's
+#                       [models.<name>] entry it makes that model its
+#                       provider's default in place of this file's.
 #
 # [model.prices]        US dollars per million tokens, at standard speed.
 #   input, output       Required when there is a prices table at all.
@@ -252,6 +261,7 @@ max_output = 128_000
 input = ["text", "image"]
 reads_reasoning_from = ["claude-haiku-5-5"]
 source = "platform.claude.com/docs/en/models/sonnet-5-5/overview, about-claude/pricing, build-with-claude/preserved-thinking; read 2026-11-13"
+default = true
 
 [model.prices]
 input = 2.00
@@ -378,6 +388,7 @@ context_window = 1_050_000
 max_output = 128_000
 input = ["text", "image"]
 source = "developers.openai.com/api/docs/models/gpt-6-luna, pricing, guides/fast-mode, guides/flex-processing; read 2026-11-13; documentation only"
+default = true
 
 [model.prices]
 input = 0.10
@@ -479,6 +490,7 @@ context_window = 1_050_000
 max_output = 128_000
 input = ["text", "image"]
 source = "openrouter.ai/api/v1/models, api/v1/models/openai/gpt-6-luna/endpoints, docs/guides/features/service-tiers; read 2026-11-13"
+default = true
 
 [model.prices]
 input = 0.10
@@ -577,6 +589,7 @@ context_window = 1_000_000
 max_output = 393_216
 input = ["text", "image"]
 source = "api-docs.deepseek.com/quick_start/pricing, api/create-chat-completion, guides/thinking_mode; read 2026-11-13; peak prices"
+default = true
 
 [model.prices]
 input = 0.30
@@ -636,6 +649,7 @@ context_window = 1_000_000
 max_output = 262_144
 input = ["text"]
 source = "api.venice.ai/api/v1/models, docs.venice.ai/overview/pricing, api-reference/rate-limiting; read 2026-11-13"
+default = true
 
 [model.prices]
 input = 0.13

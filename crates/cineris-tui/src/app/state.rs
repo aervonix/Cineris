@@ -2127,6 +2127,9 @@ impl App {
     /// resume, a switch, a fork), whose history is then drawn.
     fn opened(&mut self, state: SessionState, stored: bool, now: Instant) {
         self.opening = false;
+        // The first run's own session, when it was opening (since the
+        // review of the fixes of step 25's third pull request).
+        self.first_run_session_opened();
         if let Some(original) = self.forked_from.take() {
             let ticket = self.link.send(Op::SessionClose(SessionRef {
                 session_id: original,
