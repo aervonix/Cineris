@@ -12,6 +12,7 @@ On Windows, a pseudo-terminal is a pseudo-console (ConPTY): the console host wit
 ## What the program must do
 
 - **Turn virtual-terminal processing on.** A pseudo-console starts with `ENABLE_VIRTUAL_TERMINAL_PROCESSING` off, as the old console host has it. Without it the program's escape sequences are text, and the first frame never shows: that is what failed all three system tests when the break was made by hand ([steps/20/ci.md](steps/20/ci.md)). The system tests turn it off before they start the demo, on purpose.
+- **Wait for the rest of a reply.** The terminal's replies to the queries the program sends at its start come back through the console as input, about a key at a time, and on a loaded runner a reply's ESC came more than the 50 ms the decoder gives a lone ESC before its `[`: the ESC was taken as the Escape key and `[?0u` typed into the input box (`cineris-cli`'s trust-dialog test, try run 44623384932). While the replies are due (the device attributes, the last of them, have not come, and for an ESC within 3 s of the queries), a lone ESC waits 500 ms for the rest of a sequence (`REPLY_ESCAPE_WAIT` in `cineris-term`; [steps/ci-budgets/answered.md](steps/ci-budgets/answered.md)).
 - **Put the console back on every way out,** both modes and both code pages. When the input half was not put back, the shell child saw input mode `1f7` before and `3e8` after, on a normal exit, a panic and a Ctrl+Break event alike.
 
 ## What the driver must do
