@@ -63,6 +63,26 @@ replace: cineris_base::program::find(&path, "git", cfg!(windows))
 caught-by:
     cineris-core sandbox::tests::the_harness_git_is_never_one_inside_the_workspace
 
+# The core's tests run where the sandbox enforces, and there the write
+# roots hold the workspace already: the test turns the sandbox off.
+[break] git-given-only-the-write-roots-to-avoid
+rule: The session's git keeps out of the workspace whether commands are confined or not, not only out of the write roots of a session that confines.
+file: crates/cineris-core/src/assemble.rs
+in: assemble
+find: avoid.clone()
+replace: confine_roots.clone()
+caught-by:
+    cineris-core::it harness_git::sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace
+
+[break] probe-searches-the-workspace
+rule: The shell asked its version does not search a directory of `PATH` inside the workspace.
+file: crates/cineris-tools/src/shell/kind.rs
+in: probe_version_from
+find: cineris_base::child_env::keep_out_of(&mut env, avoid, cfg!(windows));
+replace:
+caught-by:
+    cineris-tools::it shell_search::sys_the_probe_is_given_no_key_variable
+
 [break] workspace-not-avoided-without-a-sandbox
 rule: The workspace is avoided for the shell and the harness's git whether commands are confined or not.
 file: crates/cineris-core/src/assemble.rs
@@ -142,8 +162,8 @@ caught-by:
 rule: The shell asked its version is given what a command is given, not the environment it inherits.
 file: crates/cineris-tools/src/shell/kind.rs
 in: probe_version_from
-find: let env = super::env::build(inherited, removed, cfg!(windows));
-replace: let env: Vec<(std::ffi::OsString, std::ffi::OsString)> = inherited.into_iter().collect(); let _ = removed;
+find: let mut env = super::env::build(inherited, removed, cfg!(windows));
+replace: let mut env: Vec<(std::ffi::OsString, std::ffi::OsString)> = inherited.into_iter().collect(); let _ = removed;
 caught-by:
     cineris-tools::it shell_search::sys_the_probe_is_given_no_key_variable
 
@@ -159,15 +179,24 @@ packages: cineris-base
 caught-by:
     cineris-base program::tests::a_link_into_or_out_of_an_avoided_root_is_passed_over
 
-[break] a-link-only-followed-to-its-end
-rule: A link outside the roots that leads through a link inside one, and out again, is passed over: each link on the way is a place a command could change.
+[break] program-search-outside-looks-in-relative-entries
+rule: The shell, found outside the avoided roots, is looked for in the absolute directories of `PATH` only: an empty or relative entry names the directory the harness started in. The search checks the directory and then the path a name makes with it, so the break takes both checks out.
 file: crates/cineris-base/src/program.rs
-in: places_on_the_way
-find: places.push(directory.join(&name));
-replace: if !std::fs::symlink_metadata(&next).is_ok_and(|metadata| metadata.file_type().is_symlink()) { places.push(directory.join(&name)); }
-packages: cineris-base
+in: find_outside
+find:
+    .filter(|directory| directory.is_absolute())
+    .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+    .find(|candidate| {
+        candidate.is_absolute()
+            && is_program(candidate, windows)
+replace:
+    .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+    .find(|candidate| {
+        is_program(candidate, windows)
+os: linux
+packages: cineris-tools
 caught-by:
-    cineris-base program::tests::a_link_into_or_out_of_an_avoided_root_is_passed_over
+    cineris-tools::it shell_search::sys_a_relative_path_entry_does_not_make_a_file_there_the_shell
 
 [break] shell-found-inside-a-write-root
 rule: A shell on `PATH` inside the workspace or a write root is never chosen: the search goes on to the next.

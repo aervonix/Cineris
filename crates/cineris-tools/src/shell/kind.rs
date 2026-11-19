@@ -413,8 +413,18 @@ impl Shell {
     /// absolute directories. It runs unconfined, so it is never given more
     /// than a confined command would be. Before the harness's own
     /// processes' fixes it had the harness's whole environment.
-    pub fn probe_version(&mut self, limit: std::time::Duration, removed: &[String]) {
-        self.probe_version_from(limit, std::env::vars_os(), removed);
+    ///
+    /// Its `PATH` leaves out the directories of `avoid` (the workspace, and
+    /// the write roots while commands are confined), as the harness's git's
+    /// does: a shell that is a wrapper (a version manager's shim, an `env
+    /// bash` script) looks its real program up there, unconfined.
+    pub fn probe_version(
+        &mut self,
+        limit: std::time::Duration,
+        removed: &[String],
+        avoid: &[PathBuf],
+    ) {
+        self.probe_version_from(limit, std::env::vars_os(), removed, avoid);
     }
 
     /// [`Shell::probe_version`], with the environment it is built from in
@@ -425,12 +435,14 @@ impl Shell {
         limit: std::time::Duration,
         inherited: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
         removed: &[String],
+        avoid: &[PathBuf],
     ) {
         let arguments: &[&str] = match self.kind {
             ShellKind::Bash | ShellKind::Pwsh => &["--version"],
             ShellKind::Posix | ShellKind::WindowsPowerShell | ShellKind::Cmd => return,
         };
-        let env = super::env::build(inherited, removed, cfg!(windows));
+        let mut env = super::env::build(inherited, removed, cfg!(windows));
+        cineris_base::child_env::keep_out_of(&mut env, avoid, cfg!(windows));
         cineris_base::hook::probed(self.program.as_os_str());
         let Ok(said) = crate::process::brief::run(&self.program, arguments, None, &env, limit)
         else {

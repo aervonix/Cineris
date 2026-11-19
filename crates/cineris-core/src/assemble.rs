@@ -1784,6 +1784,7 @@ fn find_shell(
     // inherit from, without the keys and the removal list.
     let inherited = inner.options.shell_env.clone();
     let removed = removed.to_vec();
+    let avoided = avoid.to_vec();
     // The description the model is given names the shell and its version.
     // Asking for it starts the shell, which for PowerShell is most of a
     // headless run's start-up on Windows (step 13b). So the answer is kept
@@ -1807,7 +1808,7 @@ fn find_shell(
                 let probe = std::thread::Builder::new()
                     .name("cineris-shell-version".to_owned())
                     .spawn(move || {
-                        probe(&mut asked, inherited, &removed);
+                        probe(&mut asked, inherited, &removed, &avoided);
                         if let Some(version) = asked.version()
                             && state.ensure().is_ok()
                         {
@@ -1832,7 +1833,7 @@ fn find_shell(
             if asks {
                 cineris_base::hook::starting(shell.program().as_os_str());
             }
-            probe(&mut shell, inherited, &removed);
+            probe(&mut shell, inherited, &removed, &avoided);
         }
     }
     inner
@@ -1844,12 +1845,18 @@ fn find_shell(
 }
 
 /// Asks `shell` its version, from `inherited` (the options' environment
-/// for commands) or this process's own, kept from what `removed` names.
-fn probe(shell: &mut Shell, inherited: Option<Vec<(OsString, OsString)>>, removed: &[String]) {
+/// for commands) or this process's own, kept from what `removed` names and
+/// with no directory of `avoid` on its `PATH`.
+fn probe(
+    shell: &mut Shell,
+    inherited: Option<Vec<(OsString, OsString)>>,
+    removed: &[String],
+    avoid: &[PathBuf],
+) {
     let limit = std::time::Duration::from_secs(2);
     match inherited {
-        Some(inherited) => shell.probe_version_from(limit, inherited, removed),
-        None => shell.probe_version(limit, removed),
+        Some(inherited) => shell.probe_version_from(limit, inherited, removed, avoid),
+        None => shell.probe_version(limit, removed, avoid),
     }
 }
 

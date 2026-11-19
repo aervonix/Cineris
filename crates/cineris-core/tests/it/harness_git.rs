@@ -352,6 +352,9 @@ fn sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace() {
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    // With no sandbox, as on Windows: the workspace is kept out of all the
+    // same, not only where the write roots hold it.
+    world.user_config("[sandbox]\nenabled = false\n");
     let core = world.core_with(|options| {
         options.trust_project = true;
         options.shell_env = Some(world.shell_env(&[("PATH", &path)]));
