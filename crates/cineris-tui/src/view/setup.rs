@@ -34,7 +34,7 @@
 //! takes no key that would accept it.
 //!
 //! **A label longer than its column wraps in it** (since the review of the
-//! fixes of the third pull request, the coordinator's answer): a server's
+//! fixes of the third pull request, the maintainers' answer): a server's
 //! name of up to 64 characters, or Claude Desktop's file on Windows, is
 //! drawn whole at the prose width of 80, its detail beside its first line,
 //! so that such a row can be accepted on a small terminal. Before, it was
@@ -422,7 +422,7 @@ fn row_lines(step: &Step, width: usize, look: &Look) -> Vec<Vec<Line>> {
         };
         // A label longer than its column wraps in it, never cut: the row
         // is drawn whole at the prose width (the review of the fixes of the
-        // third pull request, the coordinator's answer), a character at a
+        // third pull request, the maintainers' answer), a character at a
         // time, so that its white space is drawn too (the final review: a
         // break at a space dropped it, as in a Windows path with a space in
         // a folder's name).
@@ -706,7 +706,7 @@ mod tests {
     /// A label longer than its column wraps in it, its detail beside its
     /// first line, and the row is drawn whole at the prose width: a server's
     /// name of 60 characters at 80 columns, and on a wider window too (the
-    /// review of the fixes of the third pull request, the coordinator's
+    /// review of the fixes of the third pull request, the maintainers'
     /// answer: it was cut, and so could not be accepted).
     #[test]
     fn a_label_longer_than_its_column_wraps_and_the_row_is_whole() {

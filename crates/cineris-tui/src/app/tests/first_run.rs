@@ -2127,7 +2127,7 @@ fn a_first_run_that_cannot_start_is_said() {
 
 /// The run's own configuration names the provider beside its model when
 /// another provider has a model of that id, as the file does, and only
-/// then (M-A, settled by the coordinator).
+/// then (M-A, settled by the maintainers).
 #[test]
 fn a_model_another_provider_has_too_names_its_provider_in_the_runs_configuration() {
     let mut setup = fake();
@@ -2391,7 +2391,7 @@ fn a_row_cut_by_width_is_not_accepted_where_the_step_fits_by_height() {
 
 /// A label longer than its column wraps in it, and its row is drawn whole
 /// and accepted at 80 columns: Claude Desktop's file on Windows is read,
-/// and a server named in 60 characters is picked (the coordinator's answer
+/// and a server named in 60 characters is picked (the maintainers' answer
 /// to the review of the fixes: such a row could not be accepted on a small
 /// terminal).
 #[test]

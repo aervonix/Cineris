@@ -33,7 +33,7 @@
 //! space or a `"`, is shown in double quotes, its `"` and `\` escaped.
 //!
 //! **Which names, and which values** (since the review of the fixes of the
-//! third pull request, the coordinator's decision; the substring rule
+//! third pull request, the maintainers' decision; the substring rule
 //! before it hid `--author`'s value and a password command's whole line):
 //!
 //! - **A name says it is a credential's** when one of its words, split at
@@ -48,7 +48,7 @@
 //!   space (`mcp --key=…` inside a script) is not a name, and shows its
 //!   value.
 //! - **Never one that ends in** [`SHOWN_ENDINGS`] (`command`, `cmd`, `hook`,
-//!   `script`, `file`, `path`, since the coordinator's answers `url`,
+//!   `script`, `file`, `path`, since the maintainers' answers `url`,
 //!   `uri`, `endpoint`, `dir` and `directory`, and since the short read of
 //!   B `helper`, `exec`, `program` and `plugin`): its value says where a
 //!   credential comes from, names a program that gives it, or names a
@@ -68,7 +68,7 @@
 //!   `-._~+=:@/`, and `%` only in a server's own address's query or
 //!   fragment, where it is percent-encoding (`cmd /c` expands `%NAME%` in
 //!   an argument, an address in one included). **`/` is a token's**, in an
-//!   argument and in an address's field alike (the coordinator's
+//!   argument and in an address's field alike (the maintainers'
 //!   settlement after the narrow check): a rooted path
 //!   (`/etc/ssl/client.key`), a `~/` path and a base64 secret with a `/`
 //!   (`/K7MDENG/bPxRfiCYzEXAMPLEKEY`) are masked and imported, which
@@ -93,7 +93,7 @@
 //!   read. (A rooted path was a place for a while where it named a file
 //!   that existed; asking could reach the network, through an automounted
 //!   `/net/<host>`, an NFS mount or an SMB share, and hold the set-up's
-//!   worker, so the coordinator settled that it goes.) Clippy holds it: the
+//!   worker, so the maintainers settled that it goes.) Clippy holds it: the
 //!   file-system calls it refuses are allowed only on the function that
 //!   opens the file and on the tests, so that any other call here fails
 //!   `cargo xtask check`.
@@ -235,7 +235,7 @@ fn names_a_secret(name: &str) -> bool {
 /// value, where it is percent-encoding: `cmd /c` expands `%NAME%` in an
 /// argument, the final review). Nothing a shell reads as more than a
 /// letter: `/` is a path's separator and a base64 secret's character (the
-/// coordinator's settlement after the narrow check), and `\` is not one.
+/// maintainers' settlement after the narrow check), and `\` is not one.
 fn token_character(character: char, in_address: bool) -> bool {
     character.is_ascii_alphanumeric()
         || matches!(
@@ -277,7 +277,7 @@ fn runs_cmd(program: &str) -> bool {
 
 /// Whether `value` is a relative path, by its text alone: it begins with
 /// `./`, `../`, `.\` or `..\` and holds only a token's characters and `\`.
-/// A place, and shown (the coordinator's answers); nothing asks the disk.
+/// A place, and shown (the maintainers' answers); nothing asks the disk.
 fn relative_path(value: &str) -> bool {
     ["./", "../", ".\\", "..\\"]
         .iter()
@@ -509,7 +509,7 @@ pub enum Refusal {
     /// A value whose name says it is a credential cannot be imported
     /// unseen, and belongs in a variable (since the review of the fixes of
     /// step 25's third pull request; judged by its text alone, since the
-    /// coordinator's settlement after the narrow check): it is neither one
+    /// maintainers' settlement after the narrow check): it is neither one
     /// token nor a relative path (it holds white space, a shell's
     /// metacharacter, a `\` outside a relative path, as in
     /// `C:\certs\k.pem`, or an address's `://`); or it is a token under a
@@ -951,12 +951,12 @@ mod tests {
     }
 
     /// Which names hide their values (the review of the fixes of the third
-    /// pull request, the coordinator's decision): a credential's words, as
+    /// pull request, the maintainers' decision): a credential's words, as
     /// whole words of the name; never a name that ends in a command, a
     /// hook, a script, a file or a path, nor a switch turned off. A token
     /// under such a name is masked and imported, which `hidden` says, an
     /// address's `token=a/b` among them since `/` is a token's (the
-    /// coordinator's settlement after the narrow check); a value under one
+    /// maintainers' settlement after the narrow check); a value under one
     /// that is not a token is masked and refuses its server.
     #[test]
     fn only_a_token_under_a_credentials_name_is_hidden_and_any_other_value_refuses() {
@@ -1021,8 +1021,8 @@ mod tests {
     /// shell reads as more: a script after a credential's name refuses its
     /// server, however few its spaces; and a `NAME=value` whose name holds
     /// white space is part of a script, and shown (the short review of the
-    /// fixes, Medium 1, settled by the coordinator). A base64 key with a
-    /// `/` is a token, masked and imported (the coordinator's settlement
+    /// fixes, Medium 1, settled by the maintainers). A base64 key with a
+    /// `/` is a token, masked and imported (the maintainers' settlement
     /// after the narrow check).
     #[test]
     fn a_script_is_not_a_token_and_a_name_with_white_space_is_not_one() {
@@ -1065,7 +1065,7 @@ mod tests {
     /// A word that ends in a credential's word, its last digits left off,
     /// is a credential's, as the substring rule had it; `PWD` is the shell's
     /// working directory, not a password (the short review of the fixes,
-    /// Medium 2, settled by the coordinator).
+    /// Medium 2, settled by the maintainers).
     #[test]
     fn a_compound_credential_name_hides_its_value_and_pwd_does_not() {
         for name in [
@@ -1111,7 +1111,7 @@ mod tests {
     }
 
     /// A name that ends in `url` or `dir` names a place, and its value is
-    /// shown (settled by the coordinator, after the review of the fixes):
+    /// shown (settled by the maintainers, after the review of the fixes):
     /// an address's host and path show, and its user part and a credential
     /// in its query are masked; a user part still refuses its server, by
     /// 08's rule.
@@ -1156,7 +1156,7 @@ mod tests {
         assert_eq!(open.refused, None, "a place is not a credential");
         // `uri`, `endpoint` and `directory` name places too, a relative path
         // under a key's name is a place (the short review of the fixes,
-        // settled by the coordinator), and a token under a `dir` name is
+        // settled by the maintainers), and a token under a `dir` name is
         // shown (the final review).
         let places = by_name(&servers, "places");
         assert_eq!(
@@ -1189,7 +1189,7 @@ mod tests {
     /// a `~/` path are masked and imported, the row saying a value is
     /// imported unseen, never drawn and never refused; a shell's character
     /// and a `\` refuse, the row saying to move the value into a variable;
-    /// a relative path is shown, by its text alone (the coordinator's
+    /// a relative path is shown, by its text alone (the maintainers'
     /// settlement after the narrow check, in place of the existence rule).
     #[test]
     fn a_slash_is_a_tokens_and_a_rooted_path_is_masked_and_imported() {
@@ -1236,7 +1236,7 @@ mod tests {
     /// No value is asked of the disk: a file and a directory that exist, and
     /// paths that name nothing, are judged alike under `--key`, `--key=`,
     /// `KEY=` and an address's `?api_key=`, each masked and imported (the
-    /// coordinator's settlement after the narrow check: the existence rule
+    /// maintainers' settlement after the narrow check: the existence rule
     /// reached the network through automounted and shared paths). The
     /// judging takes text alone; a break that asks the disk again tells the
     /// two apart. The paths are the crate's own, from the folder nextest runs

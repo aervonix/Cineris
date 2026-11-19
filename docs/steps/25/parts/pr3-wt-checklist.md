@@ -1,8 +1,8 @@
 # Step 25, its third pull request: the Windows Terminal checklist, with the real interface
 
-The checklist step 20's prototypes went through ([measurements/windows-terminal-checklist.md](../../../measurements/windows-terminal-checklist.md)), run again on the real interface: the `dist` build of `main` once step 25's third pull request has merged, in a fresh Windows Terminal window of 120 by 40 on the desktop's interactive Windows session, against the test kit's scripted provider on the loopback, so that no paid call is made. The design is [answered.md](../answered.md), "The design, before building", point 8; the first run and `auth login` it checks are [pr3-first-run.md](pr3-first-run.md).
+The checklist step 20's prototypes went through ([measurements/windows-terminal-checklist.md](../../../measurements/windows-terminal-checklist.md)), run again on the real interface: the `dist` build of `main` once step 25's third pull request has merged, in a fresh Windows Terminal window of 120 by 40 on the reference machine's interactive Windows session, against the test kit's scripted provider on the loopback, so that no paid call is made. The design is [answered.md](../answered.md), "The design, before building", point 8; the first run and `auth login` it checks are [pr3-first-run.md](pr3-first-run.md).
 
-The owner chose the scripted route: the coordinator drives every row marked *script* from a one-off scheduled task with `/IT` in that session ([conpty.md](../../../conpty.md)), following the steps in part 5, and a person does only the rows marked *person*. The row K1, the open check `key-latency-over-conpty`, is done in the same sitting. It has not been run yet: [the-windows-terminal-check-of-step-25](../../../outstanding/the-windows-terminal-check-of-step-25.md) stays open until it has.
+The owner chose the scripted route: the maintainers drive every row marked *script* from a one-off scheduled task with `/IT` in that session ([conpty.md](../../../conpty.md)), following the steps in part 5, and a person does only the rows marked *person*. The row K1, the open check `key-latency-over-conpty`, is done in the same sitting. It has not been run yet: [the-windows-terminal-check-of-step-25](../../../outstanding/the-windows-terminal-check-of-step-25.md) stays open until it has.
 
 **Time:** the build, 10 to 20 minutes; the script's rows, about 15; the person's, about 15.
 
@@ -22,7 +22,7 @@ Write down for all of them: the Windows Terminal version (Settings, About), the 
 
 ## 2. Building and copying
 
-**What it needs:** the desktop, logged on and unlocked; Windows Terminal; PowerShell 7 (`pwsh`); Rust for Windows (`rustup` with the MSVC toolchain: the repository's `rust-toolchain.toml` picks the version) and Git; a clone of the repository on Windows' own disk, not under `\\wsl$`. Below it is `$HOME\src\cineris`. No key of a real provider is needed or read.
+**What it needs:** the reference machine, or any Windows machine, logged on and unlocked; Windows Terminal; PowerShell 7 (`pwsh`); Rust for Windows (`rustup` with the MSVC toolchain: the repository's `rust-toolchain.toml` picks the version) and Git; a clone of the repository on Windows' own disk, not under `\\wsl$`. Below it is `$HOME\src\cineris`. No key of a real provider is needed or read.
 
 In Windows Terminal, a tab of PowerShell 7 (tab A), in the repository's folder:
 
@@ -210,7 +210,7 @@ The rows run in that window, in its folder `$HOME\cineris-check\work`, with `Inv
 
 ## 4. The rows
 
-*Script*: the coordinator's script runs the row by the steps in part 5 and records the result; *person*: the person does it; *script, person*: the script runs it and the person judges what the shots show. Every row of a presenter runs in the check window at 120 by 40 with `config.toml` unless it says otherwise.
+*Script*: the maintainers' script runs the row by the steps in part 5 and records the result; *person*: the person does it; *script, person*: the script runs it and the person judges what the shots show. Every row of a presenter runs in the check window at 120 by 40 with `config.toml` unless it says otherwise.
 
 ### The inline presenter (run 1)
 
@@ -295,7 +295,7 @@ The rows run in that window, in its folder `$HOME\cineris-check\work`, with `Inv
 
 | Step | How |
 |---|---|
-| The session | A one-off scheduled task in the logged-on user's interactive session: `schtasks /Create /TN cineris-check /SC ONCE /ST 23:59 /IT /TR "pwsh -NoLogo -File <the script>"`, then `schtasks /Run /TN cineris-check`. The desktop stays unlocked, and nothing else takes the focus while it runs: keys go to the window in front. The script itself, which holds the keys of R2 and L1, is kept outside `$HOME\cineris-check`. |
+| The session | A one-off scheduled task in the logged-on user's interactive session: `schtasks /Create /TN cineris-check /SC ONCE /ST 23:59 /IT /TR "pwsh -NoLogo -File <the script>"`, then `schtasks /Run /TN cineris-check`. The machine stays unlocked, and nothing else takes the focus while it runs: keys go to the window in front. The script itself, which holds the keys of R2 and L1, is kept outside `$HOME\cineris-check`. |
 | The window | Started as part 3 says; found by its title (`EnumWindows`, `GetWindowText`) and brought to the front (`SetForegroundWindow`) before each step. The old console host: `Start-Process conhost.exe 'cmd.exe /k "%USERPROFILE%\cineris-check\tab.cmd"'`, found by its process. |
 | `type`, `key` | `SendInput` from PowerShell (`Add-Type` over `user32.dll`): `KEYEVENTF_UNICODE` with each character for text; virtual keys for named keys, with the modifier held down around the key. Windows Terminal turns them into win32 input records, as it does a keyboard's. |
 | `wheel`, `drag`, `right-click` | `SendInput` mouse input at a cell's pixel (the client rectangle divided into its columns and rows): `MOUSEEVENTF_WHEEL` (120 a notch); `LEFTDOWN`, `MOVE`, `LEFTUP`, with `VK_SHIFT` down around them where the step says `Shift`; `RIGHTDOWN`, `RIGHTUP`. |
