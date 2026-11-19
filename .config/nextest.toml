@@ -40,12 +40,18 @@ nextest-version = "0.9.100"
 # the integration tier and 31% off the unit tier, for about 6 s more of the
 # run's wall time (docs/testing-and-ci.md, "Each tier is measured under its
 # own load").
+#
+# `tiers-linux` does the same on Linux, by the owner's decision of
+# 2026-11-19 (docs/steps/ci-budgets/answered.md): on one runner two at a time
+# took 33% off the unit tier and 29% off the integration tier, for about 6 s
+# more of the test runs' wall time (`try` 44634574569).
 [test-groups]
 process = { max-threads = 2 }
 system = { max-threads = 3 }
 system-windows = { max-threads = 1 }
 system-windows-shells = { max-threads = 1 }
 tiers-windows = { max-threads = 2 }
+tiers-linux = { max-threads = 2 }
 
 # The limits on one test come from the tier budgets in docs/testing-and-ci.md
 # and hold in every profile. After a CI run, `cargo xtask ci test` also checks
@@ -116,12 +122,17 @@ test-group = 'system-windows'
 filter = 'test(/(^|::)sys_/)'
 test-group = 'system'
 
-# Tiers 1 and 2 on Windows, two at a time; elsewhere as many as there are
-# cores.
+# Tiers 1 and 2 on Windows, two at a time, and on Linux two at a time too;
+# elsewhere as many as there are cores.
 [[profile.ci.overrides]]
 platform = 'cfg(windows)'
 filter = 'not test(/(^|::)sys_/)'
 test-group = 'tiers-windows'
+
+[[profile.ci.overrides]]
+platform = 'cfg(target_os = "linux")'
+filter = 'not test(/(^|::)sys_/)'
+test-group = 'tiers-linux'
 
 # Measurements: a crate's ignored `perf_` tests, one at a time, as
 # `try -f command="perf -p CRATE"` runs them. A measurement takes as long as
