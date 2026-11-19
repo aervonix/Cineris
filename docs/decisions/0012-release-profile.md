@@ -80,7 +80,7 @@ So there is a fifth profile:
 | `ci` | The blocking CI test jobs, and `cargo xtask ci` | Inherits `dev`; dependencies at `opt-level = 0` |
 
 - **`dev` is unchanged.** On a developer's machine, dependencies are built once and kept, and optimising them makes tests and the debug binary faster.
-- **Our own crates keep line tables in `ci`,** so a failing test's backtrace has line numbers. Measured on the same runners, that costs between nothing and 8% of a cold build.
+- **Our own crates kept line tables in `ci`,** so that a failing test's backtrace had line numbers; measured on the same runners then, that cost between nothing and 8% of a cold build. **Amended in the CI-budgets fix (2026-11-19), by the maintainers' decision:** `ci` has no debug info for any crate. With the workspace grown, the line tables cost a Windows runner's cold build 19.7 s of 187 in a job A/B of two rounds, one in each order (`try` 44634824935). A failing test's panic still names its file and line; a backtrace loses its line numbers, which `CARGO_PROFILE_CI_DEBUG=line-tables-only` gives back ([steps/ci-budgets/answered.md](../steps/ci-budgets/answered.md)).
 - **What is given up:** tests in CI run against unoptimised dependencies, so a test that spends its time inside one runs slower there than on a developer's machine. If that shows in a tier's budget, that crate gets `opt-level = 1` in the `ci` profile.
 
 The measurements and their method are in [testing-and-ci.md](../testing-and-ci.md).
