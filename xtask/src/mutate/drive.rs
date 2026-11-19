@@ -1379,6 +1379,23 @@ pub(crate) fn without_a_verdict(
     Ok(chosen)
 }
 
+/// Whether each of `breaks` has a result kept for the tree as it is: a
+/// verdict, or what stopped one being given (it does not compile, it could
+/// not be judged). What `--budget` counts as reached. Nothing is run.
+pub(crate) fn with_result(root: &Path, scratch: &Path, breaks: &[Break]) -> Result<Vec<bool>> {
+    let files = tree_files(root)?;
+    let code = code_hash(root, &files)?;
+    let results = Results::load(&scratch.join("results.jsonl"));
+    let keys = Keys::all(code, breaks)?;
+    Ok(keys
+        .iter()
+        .map(|keys| {
+            matches!(results.compiled(&keys.compile), Some(Some(_)))
+                || results.outcome(&keys.run).is_some()
+        })
+        .collect())
+}
+
 /// `--report`: what is known for the tree as it is, without running
 /// anything.
 pub(crate) fn report_only(

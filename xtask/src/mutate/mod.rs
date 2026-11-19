@@ -26,6 +26,7 @@
 //! outside, carries on from there the next time. The budget is there so that
 //! a run through `rx` gives the shared test lock back between slices.
 
+mod budget;
 mod changed;
 mod drive;
 mod fix;
@@ -34,6 +35,7 @@ pub(crate) mod lex;
 mod list;
 mod merge;
 mod names;
+mod readers;
 
 pub(crate) use drive::{sync, tree_files};
 
@@ -117,7 +119,12 @@ Without one, every break.
                  a tag or a commit; new files count) can affect: one whose
                  file the diff touches, or a test its `caught-by` names, or
                  that is new or changed in its list, or the build's settings
-                 changed. Says how many it left and why, and chooses a break
+                 changed, or a file that is not Rust that a crate it runs (or
+                 one they are built on) names in a string of its Rust (the
+                 model catalog: an include_str!, a build script's
+                 rerun-if-changed, a path). A file outside the crates, docs/,
+                 mutations/ and .github/ that no crate names chooses every
+                 break. Says how many it left and why, and chooses a break
                  when it cannot tell (a test name no file has). Needs git's
                  history (a `.git`: run it in a git
                  checkout). Narrows names, --file and --flagged; not
@@ -127,6 +134,18 @@ Without one, every break.
   --report       Print what is known so far for the tree as it is. Runs nothing.
   --minutes N    Stop starting new work after N minutes, and carry on from
                  there the next time (5 when not given; 0 for no limit).
+  --budget TIME  Run the most relevant breaks first, and start no new one once
+                 TIME (90s, 30m, 1h, 1h30m) is spent; those under way finish.
+                 With --changed the order is: a break whose file, or whose own
+                 text, the diff touched; then one a test it names was touched;
+                 then one a file of a crate it runs was (or a data file such a
+                 crate reads); then the rest; each in the lists' order.
+                 Without --changed every break is of the last. Each class is a
+                 run of its own (its tests with nothing broken, then its
+                 breaks), and the compile of every break first is left out.
+                 Says how many of each class it reached, and names the breaks
+                 it left, with the commands that run them. In place of
+                 --minutes, not beside it; with --list, prints the order.
   --jobs N       Run N breaks at a time, each in a copy of the tree and a build
                  directory of its own (2 when not given). Each copy's first
                  build is a whole build. The time budget is for all of them
@@ -193,6 +212,11 @@ struct Request {
     merge: Option<String>,
     /// `--dry-run`, with `--merge`.
     dry_run: bool,
+    /// `--budget TIME`, as it was given: the breaks run by relevance, and
+    /// the time budget is this (`budget`).
+    by_relevance: Option<String>,
+    /// `--minutes` was given: it and `--budget` are the same limit.
+    minutes_given: bool,
 }
 
 /// The breaks of the lists `--file` names, each read as a list of
@@ -298,6 +322,8 @@ impl Request {
             changed: None,
             merge: None,
             dry_run: false,
+            by_relevance: None,
+            minutes_given: false,
         };
         let mut rest = arguments.iter();
         while let Some(argument) = rest.next() {
@@ -395,7 +421,15 @@ impl Request {
                             format!("`{argument} {text}`: a number from 1 to {MOST_JOBS}")
                         })?;
                 }
+                "--budget" => {
+                    let text = rest.next().ok_or_else(|| {
+                        format!("`--budget` needs a length of time (30m, 90s, 1h)\n\n{USAGE}")
+                    })?;
+                    request.budget = Some(budget::parse_time(text)?);
+                    request.by_relevance = Some(text.trim().to_owned());
+                }
                 "--minutes" => {
+                    request.minutes_given = true;
                     let text = rest
                         .next()
                         .ok_or_else(|| format!("`--minutes` needs a number\n\n{USAGE}"))?;
@@ -498,6 +532,20 @@ impl Request {
                     "`--changed` is for a run, `--list` or `--report`: a check reads every list \
                      whole, since a break that does not apply is wrong whether or not it is run \
                      today\n\n{USAGE}"
+                ));
+            }
+        }
+        if self.by_relevance.is_some() {
+            if self.minutes_given {
+                return Err(format!(
+                    "`--budget` and `--minutes` do not go together: both are the run's time \
+                     limit (`--budget` also runs the most relevant breaks first)\n\n{USAGE}"
+                ));
+            }
+            if matches!(self.mode, Mode::Check | Mode::Merge) {
+                return Err(format!(
+                    "`--budget` is for a run, or `--list` to see its order: a check and a merge \
+                     run no break\n\n{USAGE}"
                 ));
             }
         }
@@ -624,12 +672,14 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     // Narrowed to what the diff can affect, before anything asks which of
     // the rest were left without a verdict.
     let mut reasons = BTreeMap::new();
+    let mut classes = BTreeMap::new();
     if let Some(reference) = &request.changed {
         let known = list::load_all(&root)?;
         let selection = changed::since(&root, reference, &known, &chosen)
             .map_err(|why| format!("{NO_DIFF_MARK}{why}"))?;
         println!("{}", selection.summary(reference));
         reasons = selection.reasons();
+        classes = selection.classes.clone();
         chosen = selection.breaks();
         if chosen.is_empty() {
             println!("Nothing to run: no break is affected by the diff.");
@@ -661,6 +711,13 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         }
         chosen = picked.into_iter().map(|(one, _)| one).collect();
     }
+    // `--budget`: the most relevant first, stable within a class.
+    let class_of = |one: &Break| classes.get(&one.id).copied().unwrap_or(budget::Class::Rest);
+    if let Some(time) = &request.by_relevance {
+        let ordered = budget::ordered(chosen, class_of);
+        println!("{}", budget::order_text(&ordered, time));
+        chosen = ordered.into_iter().map(|(one, _)| one).collect();
+    }
     if request.mode == Mode::List {
         for chosen in &chosen {
             let only = chosen
@@ -674,6 +731,9 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
             );
             if let Some(why) = reasons.get(&chosen.id) {
                 println!("    chosen: {why}");
+            }
+            if request.by_relevance.is_some() {
+                println!("    class: {}", class_of(chosen).said());
             }
         }
         println!("{} break(s)", chosen.len());
@@ -729,19 +789,55 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
     }
     let options = drive::Options {
         again: request.again,
-        compile_check: request.compile_check,
+        // With `--budget` the breaks are compiled as each is run: compiling
+        // every one first would spend the budget on breaks never reached.
+        compile_check: request.compile_check && request.by_relevance.is_none(),
         pause: None,
         flaky,
     };
-    let finished = drive::drive_jobs(
-        &root,
-        &scratch,
-        &chosen,
-        &options,
-        &mut runners,
-        &mut || budget.is_some_and(|budget| started.elapsed() >= budget),
-        &mut say,
-    );
+    let out_of_time = || budget.is_some_and(|budget| budget::spent(started.elapsed(), budget));
+    let finished = if request.by_relevance.is_some() {
+        let ordered: Vec<(Break, budget::Class)> = chosen
+            .iter()
+            .map(|one| (one.clone(), class_of(one)))
+            .collect();
+        let finished =
+            budget::run_in_order(&ordered, &mut || out_of_time(), &mut |class, breaks| {
+                say(&format!(
+                    "\n== {} break(s) {} ==",
+                    breaks.len(),
+                    class.said()
+                ));
+                drive::drive_jobs(
+                    &root,
+                    &scratch,
+                    breaks,
+                    &options,
+                    &mut runners,
+                    &mut || out_of_time(),
+                    &mut say,
+                )
+            });
+        if finished.is_ok() {
+            let reached = drive::with_result(&root, &scratch, &chosen)?;
+            let command = format!("cargo xtask mutate {}", shown_arguments(arguments));
+            let said = budget::reached_text(&ordered, &reached, &command);
+            if !said.is_empty() {
+                println!("{said}");
+            }
+        }
+        finished
+    } else {
+        drive::drive_jobs(
+            &root,
+            &scratch,
+            &chosen,
+            &options,
+            &mut runners,
+            &mut || out_of_time(),
+            &mut say,
+        )
+    };
     if !elsewhere.is_empty() && finished.is_ok() {
         println!(
             "\n{} break(s) were left to a run on the other system, as listed above: they are \
@@ -750,6 +846,22 @@ fn run(arguments: &[String]) -> Result<drive::Finished> {
         );
     }
     finished
+}
+
+/// `arguments` as they would be typed again: a word with a space or a quote
+/// in it is quoted.
+fn shown_arguments(arguments: &[String]) -> String {
+    arguments
+        .iter()
+        .map(|word| {
+            if word.is_empty() || word.contains([' ', '\'', '"']) {
+                format!("'{}'", word.replace('\'', "'\\''"))
+            } else {
+                word.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// The refusal of a run whose every chosen break is of code only the other
@@ -2082,6 +2194,8 @@ replace: 5
                 changed: None,
                 merge: None,
                 dry_run: false,
+                by_relevance: None,
+                minutes_given: true,
             }
         );
         assert_eq!(
@@ -2098,6 +2212,32 @@ replace: 5
             Request::parse(&strings(&["--check"])).unwrap().mode,
             Mode::Check
         );
+    }
+
+    #[test]
+    fn a_budget_is_the_time_limit_and_orders_the_breaks_and_is_not_given_twice() {
+        let request =
+            Request::parse(&strings(&["--changed", "main", "--budget", "1h30m"])).unwrap();
+        assert_eq!(request.budget, Some(Duration::from_secs(5400)));
+        assert_eq!(request.by_relevance.as_deref(), Some("1h30m"));
+        // `--list` shows its order.
+        assert!(Request::parse(&strings(&["--budget", "90s", "--list"])).is_ok());
+        for (arguments, said) in [
+            (
+                &["--budget", "30m", "--minutes", "5"][..],
+                "do not go together",
+            ),
+            (
+                &["--minutes", "5", "--budget", "30m"][..],
+                "do not go together",
+            ),
+            (&["--budget", "30m", "--check"][..], "run no break"),
+            (&["--budget", "30"][..], "with its unit"),
+            (&["--budget"][..], "needs a length of time"),
+        ] {
+            let error = Request::parse(&strings(arguments)).unwrap_err();
+            assert!(error.contains(said), "{arguments:?}: {error}");
+        }
     }
 
     #[test]

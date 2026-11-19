@@ -13,16 +13,20 @@
 //!
 //! 1. touches the build's own settings (the workspace's `Cargo.toml`,
 //!    `Cargo.lock`, `.config/nextest.toml`, `rust-toolchain.toml`,
-//!    `.cargo/config.toml`: what every break's build reads), or any file
+//!    `.cargo/config.toml`: what every break's build reads), or a file
 //!    outside `crates/`, `xtask/`, `docs/`, `mutations/` and `.github/` that
-//!    is not Markdown (a file a build script embeds, such as the model
-//!    catalog: what is not known is taken to touch every break), or the
-//!    `Cargo.toml` or `build.rs` of a crate the break runs; or
+//!    is not Markdown and that no crate's Rust names (what is not known is
+//!    taken to touch every break), or the `Cargo.toml` or `build.rs` of a
+//!    crate the break runs or of one it is built on; or
 //! 2. adds or changes the break itself: its text, by what decides what it
 //!    does ([`Break::definition`]), is not that of any break of the lists at
 //!    `REF` (a reworded `rule` is not a change); or
 //! 3. touches its `file`; or
-//! 4. touches a test its `caught-by` names, as [`placed`] reads it.
+//! 4. touches a test its `caught-by` names, as [`placed`] reads it; or
+//! 5. touches a file that is not Rust (a data file, such as the model
+//!    catalog, wherever it is) that a crate's Rust names, and the break runs
+//!    that crate or one built on it ([`super::readers`] has how a reader is
+//!    found, and what it cannot see).
 //!
 //! **Which test a name is** is the hard part: a test's path comes from `mod`
 //! lines across files, macros make tests no `#[test]` names, and a `*` ends
@@ -41,15 +45,19 @@
 //! or `include_str!` takes) chooses the break too, counted the same way.
 //! What the rule does not see: a change to Rust code a test calls that is
 //! not the break's file nor names a test it names (a helper elsewhere in the
-//! crate, the test kit), and a break that names no test (it is chosen by its
-//! file, its text and the settings only). A full run is for those.
+//! crate, the test kit), a break that names no test (it is chosen by its
+//! file, its text and the settings only), and a data file read by a path no
+//! string of Rust names ([`super::readers`]). A full run is for those.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
+use super::budget::Class;
 use super::lex;
 use super::list::{self, Break};
+use super::readers;
 use crate::Result;
+use crate::workspace::Package;
 
 /// The files whose change touches every break: what each break's build
 /// reads.
@@ -67,14 +75,16 @@ const SETTINGS: [&str; 7] = [
 /// not Markdown is taken to touch every break's build.
 const KNOWN: [&str; 5] = ["crates/", "xtask/", "docs/", "mutations/", ".github/"];
 
-/// A touched file the rule cannot place, which chooses every break: a
-/// build's settings, or a file outside [`KNOWN`] that is not Markdown.
-fn touches_every_build(path: &str) -> bool {
-    SETTINGS.contains(&path)
-        || (!KNOWN.iter().any(|folder| path.starts_with(folder))
-            && !Path::new(path)
-                .extension()
-                .is_some_and(|extension| extension == "md"))
+/// Whether `path` is outside the folders the rule reads one by one.
+fn outside_known(path: &str) -> bool {
+    !KNOWN.iter().any(|folder| path.starts_with(folder))
+}
+
+/// Whether `path` is Markdown.
+fn markdown(path: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|extension| extension == "md")
 }
 
 /// The text of the files the rule reads: now, at the reference, and which
@@ -86,13 +96,20 @@ pub(crate) trait Sources {
     fn now(&self, path: &str) -> Option<String>;
     /// The Rust files now under `directory`, as paths of the repository.
     fn rust_files(&self, directory: &str) -> Vec<String>;
+    /// The workspace's packages, with their dependencies: asked only when
+    /// the diff touches a file that is not Rust, or a crate's manifest.
+    fn packages(&self) -> Result<Vec<Package>>;
 }
 
-/// Why a break was chosen: the first of the rule's four that holds.
+/// Why a break was chosen: the first of the rule's reasons that holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Reason {
-    /// The build's settings changed (the file).
+    /// The build's settings changed (the file), every break's or those of a
+    /// crate the break runs or is built on.
     Settings(String),
+    /// A file no crate's Rust names changed, outside the folders read one by
+    /// one: what reads it cannot be known (the file, and why).
+    Unread(String, String),
     /// The break is new or changed in its list.
     Itself,
     /// The break's `file` was touched.
@@ -102,13 +119,19 @@ pub(crate) enum Reason {
     /// A test its `caught-by` names could not be placed in any file, and a
     /// file of the crates it runs was touched (the entry).
     Unplaced(String),
+    /// A data file a crate it runs, or one they are built on, reads (the
+    /// file).
+    Data(String),
 }
 
 impl Reason {
     /// In a sentence, for `--list`.
     fn said(&self) -> String {
         match self {
-            Self::Settings(file) => format!("`{file}` changed, and every break's build reads it"),
+            Self::Settings(file) => {
+                format!("`{file}` changed, and the build of the crates it runs reads it")
+            }
+            Self::Unread(file, why) => format!("`{file}` changed: {why}"),
             Self::Itself => "the break is new or changed in its list".to_owned(),
             Self::File => "its file was touched".to_owned(),
             Self::Test(entry) => format!("a test it names was touched: `{entry}`"),
@@ -116,6 +139,9 @@ impl Reason {
                 "`{entry}` could not be placed in any file, and a file of the crates it runs was \
                  touched"
             ),
+            Self::Data(file) => {
+                format!("`{file}` changed, and a crate it runs, or one they are built on, reads it")
+            }
         }
     }
 }
@@ -125,10 +151,14 @@ impl Reason {
 pub(crate) struct Selection {
     /// The breaks chosen, in the order given, each with why.
     pub(crate) chosen: Vec<(Break, Reason)>,
+    /// How relevant each chosen break is, for `--budget`: by its id.
+    pub(crate) classes: BTreeMap<String, Class>,
     /// How many breaks were given.
     pub(crate) given: usize,
     /// How many files the diff touches.
     pub(crate) files: usize,
+    /// What was found of the data files the diff touches: who reads each.
+    pub(crate) notes: Vec<String>,
 }
 
 impl Selection {
@@ -146,7 +176,7 @@ impl Selection {
     }
 
     /// What to say of it: how many were chosen, by what, and how many were
-    /// left and why.
+    /// left and why; then what was found of each data file.
     pub(crate) fn summary(&self, reference: &str) -> String {
         let count = |wanted: fn(&Reason) -> bool| {
             self.chosen
@@ -168,6 +198,10 @@ impl Selection {
                     "by a change to the build's settings",
                 ),
                 (
+                    count(|r| matches!(r, Reason::Unread(..))),
+                    "by a file whose reader cannot be known, chosen to be safe",
+                ),
+                (
                     count(|r| *r == Reason::Itself),
                     "new or changed in their lists",
                 ),
@@ -180,6 +214,10 @@ impl Selection {
                     count(|r| matches!(r, Reason::Unplaced(_))),
                     "whose test names could not be placed in any file, chosen to be safe",
                 ),
+                (
+                    count(|r| matches!(r, Reason::Data(_))),
+                    "by a data file a crate they run reads",
+                ),
             ];
             let parts: Vec<String> = parts
                 .iter()
@@ -190,9 +228,12 @@ impl Selection {
         }
         said.push_str(&format!(
             "; {skipped} skipped: the diff touches neither their file, nor a test they name, nor \
-             their text, nor the build's settings. A full run (no `--changed`) is what a \
-             report rests on."
+             their text, nor the build's settings, nor a data file a crate they run reads. A \
+             full run (no `--changed`) is what a report rests on."
         ));
+        for note in &self.notes {
+            said.push_str(&format!("\n  {note}"));
+        }
         said
     }
 }
@@ -210,28 +251,216 @@ pub(crate) fn select(
     sources: &dyn Sources,
 ) -> Selection {
     let touched: BTreeSet<String> = changed.iter().map(|path| path.replace('\\', "/")).collect();
-    let settings = touched.iter().find(|file| touches_every_build(file));
+    let settings = touched
+        .iter()
+        .find(|file| SETTINGS.contains(&file.as_str()));
+    let data = Data::read(&touched, sources);
+    let every = data.every.clone();
     let before = definitions_before(known, &touched, sources);
     let mut crates = Crates::new(&touched, sources);
+    let mut classes = BTreeMap::new();
     let chosen = given
         .iter()
         .filter_map(|one| {
+            let itself = !before.contains(&one.definition());
+            let file = touched.contains(&one.file);
+            let near = crates.touched_by(one);
+            let seen = data.seen_by(one);
             let reason = if let Some(file) = settings {
                 Some(Reason::Settings(file.clone()))
-            } else if !before.contains(&one.definition()) {
+            } else if let Some((file, why)) = &every {
+                Some(Reason::Unread(file.clone(), why.clone()))
+            } else if itself {
                 Some(Reason::Itself)
-            } else if touched.contains(&one.file) {
+            } else if file {
                 Some(Reason::File)
             } else {
-                crates.touched_by(one)
+                near.clone().or_else(|| seen.clone())
             };
-            reason.map(|reason| (one.clone(), reason))
+            let reason = reason?;
+            let runs_a_crate = one.test_packages().is_ok();
+            let class = match (&near, &seen) {
+                _ if itself || file => Class::Touched,
+                (Some(Reason::Test(_)), _) => Class::Test,
+                (Some(_), _) | (None, Some(_)) if runs_a_crate => Class::Crate,
+                _ => Class::Rest,
+            };
+            classes.insert(one.id.clone(), class);
+            Some((one.clone(), reason))
         })
         .collect();
     Selection {
         chosen,
+        classes,
         given: given.len(),
         files: touched.len(),
+        notes: data.notes,
+    }
+}
+
+/// What the files of the diff that are not Rust, and the crates' manifests,
+/// come to: the crates that can see each.
+#[derive(Debug, Default)]
+struct Data {
+    /// A file that chooses every break: no crate names it and it is outside
+    /// the folders read one by one, or the workspace's crates could not be
+    /// read. The file, and why.
+    every: Option<(String, String)>,
+    /// For each file a crate reads, or crate manifest, the crates that can
+    /// see it: those that read it (or whose manifest it is), and every
+    /// crate built on them or whose tests use them. With the reason a break
+    /// of one of them is given.
+    seen: Vec<(BTreeSet<String>, Reason)>,
+    /// What was found, to be said.
+    notes: Vec<String>,
+}
+
+impl Data {
+    fn read(touched: &BTreeSet<String>, sources: &dyn Sources) -> Self {
+        let mut data = Data::default();
+        let mut wanted = Vec::new();
+        let mut manifests = Vec::new();
+        for path in touched {
+            if SETTINGS.contains(&path.as_str()) {
+                continue;
+            }
+            let name = path.rsplit('/').next().unwrap_or(path);
+            if path.ends_with(".rs") && name != "build.rs" {
+                // Rust outside the crates is in no break's build that the
+                // rule can tell of.
+                if outside_known(path) && data.every.is_none() {
+                    data.every = Some((
+                        path.clone(),
+                        "it is Rust in no crate the rule reads, so every break is chosen"
+                            .to_owned(),
+                    ));
+                }
+                continue;
+            }
+            if name == "Cargo.toml" || name == "build.rs" {
+                manifests.push(path.clone());
+            } else {
+                wanted.push(path.clone());
+            }
+        }
+        if wanted.is_empty() && manifests.is_empty() {
+            return data;
+        }
+        let packages = match sources.packages() {
+            Ok(packages) => packages,
+            Err(error) => {
+                // Without the crates, a file no folder rule covers is taken
+                // to touch every break, as it always was.
+                if data.every.is_none()
+                    && let Some(path) = wanted
+                        .iter()
+                        .find(|path| outside_known(path) && !markdown(path))
+                {
+                    data.every = Some((
+                        path.clone(),
+                        format!(
+                            "the workspace's crates could not be read ({error}), so who reads \
+                             it cannot be told, and every break is chosen"
+                        ),
+                    ));
+                }
+                return data;
+            }
+        };
+        let folders = readers::folders(&packages);
+        let crate_of = |path: &str| {
+            folders
+                .iter()
+                .filter(|(_, folder)| {
+                    path.strip_prefix(folder.as_str())
+                        .is_some_and(|rest| rest.starts_with('/'))
+                })
+                .max_by_key(|(_, folder)| folder.len())
+                .map(|(name, folder)| (name.clone(), folder.clone()))
+        };
+        let seen_from = |readers: &BTreeSet<String>| -> BTreeSet<String> {
+            let names: Vec<String> = readers.iter().cloned().collect();
+            crate::dependents::dependents(&packages, &names)
+                .map(|all| all.into_iter().collect())
+                .unwrap_or_else(|_| readers.clone())
+        };
+        for manifest in &manifests {
+            if let Some((name, folder)) = crate_of(manifest)
+                && folder == readers::normalise(&format!("{manifest}/..")).unwrap_or_default()
+            {
+                let seen = seen_from(&BTreeSet::from([name]));
+                data.seen.push((seen, Reason::Settings(manifest.clone())));
+            } else {
+                wanted.push(manifest.clone());
+            }
+        }
+        if wanted.is_empty() {
+            return data;
+        }
+        // Every Rust file of the crates, as it is, and as it was where the
+        // diff touches it: a reader the diff took away still saw the file.
+        let mut texts: Vec<(String, String, String, String)> = Vec::new();
+        for (name, folder) in &folders {
+            let mut files = sources.rust_files(folder);
+            for path in touched {
+                if path.ends_with(".rs") && !files.contains(path) {
+                    files.push(path.clone());
+                }
+            }
+            for path in files {
+                // A file of a crate inside this one's folder is that crate's.
+                if crate_of(&path).is_none_or(|(owner, _)| &owner != name) {
+                    continue;
+                }
+                if let Some(text) = sources.now(&path) {
+                    texts.push((name.clone(), folder.clone(), path.clone(), text));
+                }
+                if touched.contains(&path)
+                    && let Some(text) = sources.old(&path)
+                {
+                    texts.push((name.clone(), folder.clone(), path.clone(), text));
+                }
+            }
+        }
+        let found = readers::readers(
+            &wanted,
+            texts.iter().map(|(name, folder, path, text)| {
+                (name.as_str(), folder.as_str(), path.as_str(), text.as_str())
+            }),
+        );
+        for (path, readers) in found {
+            if readers.is_empty() {
+                if outside_known(&path) && !markdown(&path) && data.every.is_none() {
+                    data.every = Some((
+                        path.clone(),
+                        "no string of any crate's Rust names it, so what reads it cannot be \
+                         known, and every break is chosen"
+                            .to_owned(),
+                    ));
+                }
+                continue;
+            }
+            let seen = seen_from(&readers);
+            let names: Vec<&str> = readers.iter().map(String::as_str).collect();
+            data.notes.push(format!(
+                "`{path}` is named by the Rust of {}: the breaks that run {} crate(s) (those and \
+                 the crates built on them, or whose tests use them) can see it",
+                names.join(", "),
+                seen.len()
+            ));
+            data.seen.push((seen, Reason::Data(path)));
+        }
+        data
+    }
+
+    /// Why `one` can see a file of the diff that is not Rust, or a crate's
+    /// manifest, if it can: a crate it runs is among those that can.
+    fn seen_by(&self, one: &Break) -> Option<Reason> {
+        let packages = one.test_packages().ok()?;
+        self.seen
+            .iter()
+            .find(|(crates, _)| packages.iter().any(|name| crates.contains(name)))
+            .map(|(_, reason)| reason.clone())
     }
 }
 
@@ -555,6 +784,10 @@ impl Sources for Git<'_> {
             .cloned()
             .collect()
     }
+
+    fn packages(&self) -> Result<Vec<Package>> {
+        crate::workspace::metadata(self.root).map(|metadata| metadata.packages)
+    }
 }
 
 #[cfg(test)]
@@ -562,13 +795,42 @@ mod tests {
     use std::collections::BTreeMap;
 
     use super::{Placed, Reason, Sources, placed, select};
+    use crate::mutate::budget::Class;
     use crate::mutate::list::{self, Break};
+    use crate::workspace::{DepKind, Dependency, Package};
 
     /// Files as they are, and as they were, in memory.
     #[derive(Default)]
     struct Files {
         now: BTreeMap<String, String>,
         was: BTreeMap<String, String>,
+        /// The workspace's crates; none: they cannot be read.
+        packages: Option<Vec<Package>>,
+    }
+
+    /// A crate in `crates/<name>`, built on `normal` and whose tests use
+    /// `dev`.
+    fn package(name: &str, normal: &[&str], dev: &[&str]) -> Package {
+        let edge = |to: &&str, kind| Dependency {
+            name: (*to).to_owned(),
+            kind,
+            in_workspace: true,
+            default_features: true,
+            features: Vec::new(),
+            optional: false,
+        };
+        Package {
+            name: name.to_owned(),
+            manifest: format!("crates/{name}/Cargo.toml"),
+            publish_disabled: true,
+            dependencies: normal
+                .iter()
+                .map(|to| edge(to, DepKind::Normal))
+                .chain(dev.iter().map(|to| edge(to, DepKind::Dev)))
+                .collect(),
+            targets: Vec::new(),
+            features: Vec::new(),
+        }
     }
 
     impl Files {
@@ -606,6 +868,12 @@ mod tests {
                 .filter(|path| path.starts_with(&format!("{directory}/")) && path.ends_with(".rs"))
                 .cloned()
                 .collect()
+        }
+
+        fn packages(&self) -> crate::Result<Vec<Package>> {
+            self.packages
+                .clone()
+                .ok_or_else(|| "no workspace in this test".to_owned())
         }
     }
 
@@ -944,14 +1212,23 @@ mod tests {
             "Cargo.toml",
             ".config/nextest.toml",
             ".cargo/config.toml",
-            "catalog/models.toml",
-            "rustfmt.toml",
         ] {
             let got = chosen(&tree(), &[file], &all());
             assert_eq!(got.len(), 3, "{file}");
             assert!(
                 got.iter()
                     .all(|(_, reason)| matches!(reason, Reason::Settings(_)))
+            );
+        }
+        // A file outside the folders read one by one, when the crates that
+        // could read it cannot be read: every break.
+        for file in ["tables/rates.toml", "rustfmt.toml", "fuzz/src/lib.rs"] {
+            let got = chosen(&tree(), &[file], &all());
+            assert_eq!(got.len(), 3, "{file}");
+            assert!(
+                got.iter()
+                    .all(|(_, reason)| matches!(reason, Reason::Unread(..))),
+                "{got:?}"
             );
         }
         // A crate's manifest chooses the breaks that run that crate.
@@ -978,6 +1255,180 @@ mod tests {
                 Reason::Test("tests::first_test".to_owned())
             )]
         );
+    }
+
+    /// A workspace of four crates: `demo` is built on `base`, `tester`'s
+    /// tests use `base`, and `other` stands alone. `base`'s build script
+    /// reads `tables/rates.toml`; each crate has a break.
+    fn data_tree() -> (Files, Vec<Break>) {
+        const BASE: &str = "[break] base\nrule: r\nfile: crates/base/src/lib.rs\nfind: x\n\
+                            replace: y\n";
+        const TESTER: &str = "[break] tester\nrule: r\nfile: crates/tester/src/lib.rs\nfind: x\n\
+                              replace: y\n";
+        let text = format!("{A}\n{B}\n{BASE}\n{TESTER}");
+        let files = tree()
+            .same("mutations/demo.breaks", &text)
+            .same(
+                "crates/base/build.rs",
+                "fn main() { let p = dir.join(\"../../tables/rates.toml\"); }",
+            )
+            .same("crates/base/src/lib.rs", "pub fn base() {}")
+            .same("crates/tester/src/lib.rs", "pub fn tester() {}")
+            .same("tables/rates.toml", "rate = 1\n");
+        let files = Files {
+            packages: Some(vec![
+                package("base", &[], &[]),
+                package("demo", &["base"], &[]),
+                package("tester", &[], &["base"]),
+                package("other", &[], &[]),
+            ]),
+            ..files
+        };
+        let breaks = lists(&[("demo", &text), ("other", OTHER)]);
+        (files, breaks)
+    }
+
+    #[test]
+    fn a_data_file_chooses_the_breaks_of_the_crates_that_read_it_and_those_built_on_them() {
+        let (files, breaks) = data_tree();
+        let changed = ["tables/rates.toml".to_owned()];
+
+        let got = select(&breaks, &breaks, &changed, &files);
+
+        let ids: Vec<&str> = got.chosen.iter().map(|(one, _)| one.id.as_str()).collect();
+        // `base` reads it, `demo` is built on it, `tester`'s tests use it;
+        // `other` cannot see it.
+        assert_eq!(ids, ["demo/a", "demo/b", "demo/base", "demo/tester"]);
+        assert!(
+            got.chosen
+                .iter()
+                .all(|(_, reason)| *reason == Reason::Data("tables/rates.toml".to_owned()))
+        );
+        assert!(got.classes.values().all(|class| *class == Class::Crate));
+        let said = got.summary("main");
+        assert!(
+            said.contains("4 by a data file a crate they run reads"),
+            "{said}"
+        );
+        assert!(
+            said.contains("`tables/rates.toml` is named by the Rust of base"),
+            "{said}"
+        );
+    }
+
+    #[test]
+    fn a_file_no_crate_names_chooses_every_break_outside_the_folders_read_one_by_one() {
+        let (files, breaks) = data_tree();
+        // Outside them, and not Markdown: every break, with why.
+        let got = select(&breaks, &breaks, &["assets/logo.png".to_owned()], &files);
+        assert_eq!(got.chosen.len(), breaks.len());
+        assert!(got.chosen.iter().all(|(_, reason)| matches!(
+            reason,
+            Reason::Unread(file, why) if file == "assets/logo.png" && why.contains("no string")
+        )));
+        assert!(got.classes.values().all(|class| *class == Class::Rest));
+        // Markdown, or a file of the folders read one by one: nothing by
+        // itself.
+        for file in ["NOTES.md", "docs/table.csv", ".github/data.json"] {
+            assert_eq!(chosen(&files, &[file], &breaks), [], "{file}");
+        }
+        // Unless a crate names it: then that crate's breaks.
+        let files = files.same(
+            "crates/other/src/c.rs",
+            "pub fn c() { read(\"docs/tables\"); }",
+        );
+        assert_eq!(
+            chosen(&files, &["docs/tables/one.csv"], &breaks),
+            [(
+                "other/c".to_owned(),
+                Reason::Data("docs/tables/one.csv".to_owned())
+            )]
+        );
+    }
+
+    #[test]
+    fn a_reader_the_diff_took_away_still_counts() {
+        let (files, breaks) = data_tree();
+        // Only `tester` names the file, and the diff takes that away.
+        let files = files.same("crates/base/build.rs", "fn main() {}").edited(
+            "crates/tester/src/data.rs",
+            Some("const T: &str = include_str!(\"../../../tables/rates.toml\");"),
+            Some("const T: &str = \"\";"),
+        );
+        assert_eq!(
+            chosen(
+                &files,
+                &["tables/rates.toml", "crates/tester/src/data.rs"],
+                &breaks
+            ),
+            [(
+                "demo/tester".to_owned(),
+                Reason::Data("tables/rates.toml".to_owned())
+            )]
+        );
+        // Not taken away by the diff, and named by no crate now: unread.
+        let files = files.same("crates/tester/src/data.rs", "const T: &str = \"\";");
+        let got = chosen(&files, &["tables/rates.toml"], &breaks);
+        assert_eq!(got.len(), breaks.len());
+        assert!(
+            got.iter()
+                .all(|(_, reason)| matches!(reason, Reason::Unread(..))),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn a_crates_manifest_chooses_the_breaks_of_the_crates_built_on_it() {
+        let (files, breaks) = data_tree();
+        let got = chosen(&files, &["crates/base/Cargo.toml"], &breaks);
+        assert_eq!(
+            got.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            ["demo/a", "demo/b", "demo/base", "demo/tester"]
+        );
+        assert!(
+            got.iter()
+                .all(|(_, reason)| *reason == Reason::Settings("crates/base/Cargo.toml".to_owned()))
+        );
+    }
+
+    #[test]
+    fn each_chosen_break_is_classed_by_how_near_the_diff_came_to_it() {
+        let (files, breaks) = data_tree();
+        // `demo/a`'s file; `demo/b`'s test (in a file of its own); the data
+        // file for the rest.
+        let files = files
+            .same("crates/demo/src/tests.rs", "fn first_test() {}\n")
+            .same("crates/demo/src/more.rs", "fn second_test() {}\n");
+        let changed: Vec<String> = [
+            "crates/demo/src/a.rs",
+            "crates/demo/src/more.rs",
+            "tables/rates.toml",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+
+        let got = select(&breaks, &breaks, &changed, &files);
+
+        let classes: Vec<(&str, Class)> = got
+            .classes
+            .iter()
+            .map(|(id, class)| (id.as_str(), *class))
+            .collect();
+        assert_eq!(
+            classes,
+            [
+                ("demo/a", Class::Touched),
+                ("demo/b", Class::Test),
+                ("demo/base", Class::Crate),
+                ("demo/tester", Class::Crate),
+            ]
+        );
+        // The build's settings: every break, of the last class unless the
+        // diff came nearer.
+        let changed = ["Cargo.lock".to_owned(), "crates/demo/src/a.rs".to_owned()];
+        let got = select(&breaks, &breaks, &changed, &files);
+        assert_eq!(got.classes["demo/a"], Class::Touched);
+        assert_eq!(got.classes["other/c"], Class::Rest);
     }
 
     #[test]
