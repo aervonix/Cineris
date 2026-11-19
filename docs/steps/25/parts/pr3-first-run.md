@@ -258,7 +258,8 @@ OpenRouter lists no Sonnet: of its three, GPT-6 Luna is the middle by the whole 
 ## Open
 
 - `reading-a-key-at-a-terminal` is **closed** (its file deleted, the index written by `cargo xtask outstanding`); the two links in `answered.md` are plain text now.
-- **Five older breaks are not caught,** on this branch and on the code before the review's second half alike, and are outside the first run: `step-13a/protected-directory-unresolved` and `configuration-directory-not-closed` (`cineris-core`'s `assemble.rs`), `step-23/a-failed-open-shows-anothers-events` and `an-update-of-another-session-taken`, and `step-25/the-full-screen-keeps-the-plain-rows`. For the coordinator.
+- **Four older breaks are not caught,** on this branch and on the code before the review's second half alike, and are outside the first run: `step-13a/protected-directory-unresolved` and `configuration-directory-not-closed` (`cineris-core`'s `assemble.rs`), and `step-23/a-failed-open-shows-anothers-events` and `an-update-of-another-session-taken`. For the coordinator.
+- A fifth, `step-25/the-full-screen-keeps-the-plain-rows` (the first part's), was not caught either: its test let the colours be drained before the frame, so the full screen's own frame was never what took them. The test is split in two, one drained and one taken by the frame (`code_coloured_while_a_frame_is_made_is_drawn_in_that_frame`), and the break names the second, which catches it.
 - Nothing else is left open by this part. The Windows checks below are a person's.
 
 ## For a person at a real Windows Terminal
