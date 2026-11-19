@@ -1,0 +1,280 @@
+# The twelfth tooling step's second part: `cargo xtask rebase`, the
+# questions for git in one command, and `ci-times --write` making a page.
+
+# Never dropping a side: each test of `keeps_both`, and the checks after it.
+
+[break] rebase-a-lost-line-is-not-counted
+rule: A union is refused when a line is there fewer (or more) times than the two sides' changes come to: a lost `}` with another `}` left to stand in for it.
+file: xtask/src/rebase/classify.rs
+in: keeps_both
+find: if *merged != expected {
+replace: if false {
+caught-by:
+    rebase::tests::a_union_that_lost_a_brace_is_refused_by_each_check
+    rebase::tests::a_change_both_sides_made_alike_beside_a_union_is_left
+
+[break] rebase-a-sides-additions-out-of-order
+rule: A union is refused when a side's added lines are not there in their order.
+file: xtask/src/rebase/classify.rs
+in: keeps_both
+find: if !in_order(&added, &merged) {
+replace: if false {
+caught-by:
+    rebase::tests::a_union_that_lost_a_brace_is_refused_by_each_check
+
+[break] rebase-the-base-out-of-order
+rule: A union is refused when the lines of the base both sides kept are not there in their order.
+file: xtask/src/rebase/classify.rs
+in: keeps_both
+find: if !in_order(&kept, &merged) {
+replace: if false {
+caught-by:
+    rebase::tests::a_union_that_lost_a_brace_is_refused_by_each_check
+
+[break] rebase-no-side-check
+rule: Every union is held to `keeps_both` before it is written.
+file: xtask/src/rebase/classify.rs
+in: unite
+find: keeps_both(base, ours, theirs, &merged.text)?;
+replace:
+caught-by:
+    rebase::tests::a_change_both_sides_made_alike_beside_a_union_is_left
+
+[break] rebase-rust-brackets-unchecked
+rule: A Rust union whose brackets do not balance is refused.
+file: xtask/src/rebase/classify.rs
+in: unite
+find: balanced(&merged.text)?;
+replace:
+caught-by:
+    rebase::tests::a_union_is_written_with_the_classes_own_check
+
+[break] rebase-rustfmt-unasked
+rule: A Rust union that rustfmt would lay out otherwise is refused.
+file: xtask/src/rebase/classify.rs
+in: unite
+find: formatted(&merged.text)
+replace: Ok::<(), String>(())
+caught-by:
+    rebase::tests::a_rust_union_that_rustfmt_would_lay_out_otherwise_is_left
+
+[break] rebase-markdown-unchecked
+rule: A Markdown union is held to its tables.
+file: xtask/src/rebase/classify.rs
+in: unite
+find: Kind::Markdown => rows_keep_their_tables(&merged)?
+replace: Kind::Markdown => ()
+caught-by:
+    rebase::tests::prose_added_at_one_place_on_both_sides_is_left_for_a_person
+    rebase::tests::a_row_of_another_shape_than_its_table_is_left_for_a_person
+
+[break] rebase-prose-is-a-row
+rule: Only table rows are put side by side in Markdown; prose is a person's.
+file: xtask/src/rebase/classify.rs
+in: rows_keep_their_tables
+find: if !is_row(row) {
+replace: if false {
+caught-by:
+    rebase::tests::prose_added_at_one_place_on_both_sides_is_left_for_a_person
+
+[break] rebase-a-row-of-any-shape
+rule: A row put side by side has as many cell dividers as its table's header.
+file: xtask/src/rebase/classify.rs
+in: rows_keep_their_tables
+find: if dividers(row) != dividers(header) {
+replace: if false {
+caught-by:
+    rebase::tests::a_row_of_another_shape_than_its_table_is_left_for_a_person
+
+[break] rebase-rows-with-no-table
+rule: Rows put side by side must be in a table with a header and its divider.
+file: xtask/src/rebase/classify.rs
+in: rows_keep_their_tables
+find: .is_some_and(|line| is_divider_row(line))
+replace: .is_none_or(|line| !is_divider_row(line))
+caught-by:
+    rebase::tests::rows_added_where_there_is_no_table_are_left_for_a_person
+
+[break] rebase-an-escaped-divider-counts
+rule: A `|` after a backslash divides no cells.
+file: xtask/src/rebase/classify.rs
+in: dividers
+find: escaped = c == '\\' && !escaped;
+replace: escaped = false;
+caught-by:
+    rebase::tests::a_rows_cells_are_its_dividers_that_no_backslash_escapes
+
+[break] rebase-brackets-in-comments-count
+rule: Brackets in a line comment are not counted.
+file: xtask/src/rebase/classify.rs
+in: balanced
+find: '/' if next == Some('/') => {
+replace: '/' if false => {
+caught-by:
+    rebase::tests::brackets_are_counted_outside_comments_strings_and_characters
+
+[break] rebase-brackets-in-characters-count
+rule: A bracket in a character literal is not counted.
+file: xtask/src/rebase/classify.rs
+in: balanced
+find: } else if chars.get(at + 2) == Some(&'\'') {
+replace: } else if false {
+caught-by:
+    rebase::tests::brackets_are_counted_outside_comments_strings_and_characters
+
+# The merge: what is put side by side, and what is refused.
+
+[break] rebase-changes-on-both-sides-united
+rule: Two changes of the same lines are refused, not put side by side.
+file: xtask/src/rebase/merge.rs
+in: merge
+find: let placed = if start == end {
+replace: let placed = if true {
+caught-by:
+    rebase::tests::a_line_both_sides_changed_is_left_for_a_person
+
+[break] rebase-an-addition-beside-a-change-goes-before-it
+rule: An addition just after lines the other side changed goes after the change.
+file: xtask/src/rebase/merge.rs
+in: beside
+find: Some(if at == end {
+replace: Some(if at != end {
+caught-by:
+    rebase::tests::a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change
+
+[break] rebase-a-change-counts-as-an-addition
+rule: Only a side whose one change at the place is lines added is put beside the other's change.
+file: xtask/src/rebase/merge.rs
+in: beside
+find: [hunk] if hunk.is_addition() && (hunk.a_start == start || hunk.a_start == end) =>
+replace: [hunk] if hunk.a_start == start || hunk.a_start == end =>
+caught-by:
+    rebase::tests::a_row_added_after_one_the_other_side_reworded_is_kept_after_its_change
+
+[break] rebase-additions-not-pushed-down
+rule: A run of added lines is pushed down past the lines it starts with.
+file: xtask/src/rebase/merge.rs
+in: push_down
+find: while hunk.a_start < next
+replace: while false && hunk.a_start < next
+caught-by:
+    rebase::tests::additions_are_pushed_down_past_the_lines_they_start_with
+
+# The classes.
+
+[break] rebase-the-index-is-generated-by-regen
+rule: The open items' index is its own class, written again by `outstanding`.
+file: xtask/src/rebase/classify.rs
+in: classify
+find: if path == outstanding::INDEX {
+replace: if false {
+caught-by:
+    rebase::tests::each_file_is_put_in_its_class
+
+[break] rebase-recorded-fixtures-are-generated
+rule: A recorded provider fixture is never taken from one side and rebuilt.
+file: xtask/src/rebase/classify.rs
+in: classify
+find: if RECORDED.iter().any(|folder| path.starts_with(folder)) {
+replace: if false {
+caught-by:
+    rebase::tests::each_file_is_put_in_its_class
+
+[break] rebase-generated-files-are-a-persons
+rule: A file a generator writes is taken and written again.
+file: xtask/src/rebase/classify.rs
+in: classify
+find: return Class::Generated(writer.name);
+replace: return Class::Person;
+caught-by:
+    rebase::tests::each_file_is_put_in_its_class
+    rebase::tests::sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_end
+
+[break] rebase-take-a-side-that-deleted-it
+rule: A generated file the side rebased onto deleted is a person's, not taken.
+file: xtask/src/rebase/classify.rs
+in: take
+find: match &stages.ours {
+replace: match &stages.theirs {
+caught-by:
+    rebase::tests::each_class_has_its_resolution
+
+# The command.
+
+[break] rebase-settled-files-not-added
+rule: What a stop settles is added, so that the rebase goes on.
+file: xtask/src/rebase/mod.rs
+in: settle
+find: git.run(&add)?;
+replace:
+caught-by:
+    rebase::tests::sys_a_rebase_settles_rows_tests_and_a_generated_file_and_regenerates_at_the_end
+
+[break] rebase-continue-forgets-the-first-stop
+rule: `--continue` keeps the generators of the stops before it, and runs them at the end.
+file: xtask/src/rebase/mod.rs
+in: rebase
+find: let state = read_state(dir);
+replace: let state = State::default();
+caught-by:
+    rebase::tests::sys_a_change_both_sides_made_is_left_and_continue_takes_it_up_after_a_person
+
+# The questions for git.
+
+[break] git-added-numbered-by-the-old-text
+rule: An added line is numbered as the file has it now, from the hunk's `+start`.
+file: xtask/src/git_read.rs
+in: added_lines
+find: .find_map(|word| word.strip_prefix('+'))
+replace: .find_map(|word| word.strip_prefix('-'))
+caught-by:
+    git_read::tests::an_added_line_is_numbered_as_the_file_has_it_now
+
+[break] git-changed-unmarked
+rule: A change not all in HEAD is marked `(not committed)`.
+file: xtask/src/git_read.rs
+in: changed_lines
+find: let mark = if not_committed.contains(path) {
+replace: let mark = if false {
+caught-by:
+    git_read::tests::changed_files_are_listed_with_what_is_not_committed_marked
+    git_read::tests::sys_the_three_questions_read_a_branch_its_changes_and_its_new_files
+
+# ci-times --write makes a page.
+
+[break] ci-times-a-missing-page-fails
+rule: `--write` makes a page that is not there, rather than failing.
+file: xtask/src/records.rs
+in: write_sections
+find: Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+replace: Err(error) if false => {
+caught-by:
+    records::tests::a_write_makes_a_missing_page_and_adds_a_missing_section
+
+[break] ci-times-an-empty-page-has-no-heading
+rule: An empty page is given its heading.
+file: xtask/src/records.rs
+in: write_sections
+find: Ok(text) if text.trim().is_empty() =>
+replace: Ok(text) if false =>
+caught-by:
+    records::tests::a_write_makes_a_missing_page_and_adds_a_missing_section
+
+[break] ci-times-the-folder-is-not-made
+rule: A missing page's folder is made with it.
+file: xtask/src/records.rs
+in: write_sections
+find: std::fs::create_dir_all(folder)
+replace: Ok::<(), std::io::Error>(())
+caught-by:
+    records::tests::a_write_makes_a_missing_page_and_adds_a_missing_section
+
+[break] ci-times-a-step-named-by-its-folder
+rule: A numbered step's page is headed `After step N`, as the records' rule asks.
+file: xtask/src/records.rs
+in: step_named
+find: format!("step {number}{}", &folder[2..])
+replace: folder.to_owned()
+caught-by:
+    records::tests::a_new_pages_heading_is_the_one_its_place_asks_for
+    records::tests::a_write_makes_a_missing_page_and_adds_a_missing_section
