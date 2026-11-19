@@ -316,6 +316,11 @@ Not blocking (the `main` and `nightly` workflows run these)
                     than 6, failing unless the run showed that partial case.
                     `try` runs it, and advisories and unused, as named jobs.
   advisories        Check the lockfile against the advisory database.
+  git-tests-on-windows
+                    The git-heavy tests of tools run locally or on Linux CI,
+                    which the blocking job runs on Linux alone, by name:
+                    failing unless each ran and passed (the nightly, on
+                    Windows).
   fuzz [--seconds N] [TARGET...]
                     Fuzz the decoders, each target for N seconds
                     (60 when not given). Needs a nightly toolchain and
@@ -500,6 +505,7 @@ fn run(command: &str, rest: &[String]) -> Result<()> {
         "unused" => nonblocking::unused(),
         "partial-landlock" => nonblocking::partial_landlock(),
         "advisories" => nonblocking::advisories(),
+        "git-tests-on-windows" => nonblocking::git_tests_on_windows(),
         "alias" => alias::run(rest),
         "corpus" => corpus::run(rest),
         "stress" => stress::run(rest),

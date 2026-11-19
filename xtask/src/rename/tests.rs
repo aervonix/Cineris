@@ -639,6 +639,10 @@ fn the_pieces_of_a_branch_rewrite_read_and_write_gits_formats() {
 /// by name); one it would change, a sample of odd code, is left as the
 /// names leave it.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_a_rust_file_is_formatted_again_only_when_it_was_formatted() {
     let formatter = Formatter::at(&crate::workspace::root()).unwrap();
     let formatted = "use clap_like::y;\nuse cortex_base::x;\n\nfn f() {\n    \
@@ -717,6 +721,10 @@ fn write(repo: &Path, file: &str, text: &str) {
 /// on it, made by one `fast-import`, made again in the new names, with a
 /// file whose lines end in CR LF kept byte for byte but for the name.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_a_branch_is_made_again_in_the_new_names_on_every_system() {
     let scratch = Scratch::outside("xtask-rename", "every-system");
     let repo = scratch.git_init("repo");

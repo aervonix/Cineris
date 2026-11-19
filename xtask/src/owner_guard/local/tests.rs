@@ -350,6 +350,10 @@ impl Drop for Repo {
 /// A term in each place a push can carry one, each found and named
 /// without the term.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_a_push_is_searched_in_every_place_it_can_carry_a_term() {
     let repo = Repo::new("places");
     let base = repo.head();
@@ -428,6 +432,10 @@ fn sys_a_push_is_searched_in_every_place_it_can_carry_a_term() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_a_clean_push_and_what_the_remote_has_find_nothing() {
     let repo = Repo::new("clean");
     // What the remote has already is not searched again, even when it
@@ -453,6 +461,10 @@ fn sys_a_clean_push_and_what_the_remote_has_find_nothing() {
 /// What a push to a URL, a root commit under `log.showRoot=false`, a
 /// replaced commit and a local branch's name could hide.
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_what_the_machine_or_another_remote_could_hide_is_still_read() {
     let repo = Repo::new("hidden");
     let short = |hash: &str| hash[..12].to_owned();
@@ -532,6 +544,10 @@ fn sys_what_the_machine_or_another_remote_could_hide_is_still_read() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_a_repository_that_requires_the_file_refuses_a_push_without_it() {
     let repo = Repo::new("required");
     assert!(!required(&repo.dir));
@@ -561,6 +577,10 @@ fn sys_a_repository_that_requires_the_file_refuses_a_push_without_it() {
 }
 
 #[test]
+#[cfg_attr(
+    windows,
+    ignore = "starts git dozens of times, seconds on a Windows runner, for a tool run locally or on Linux CI: the nightly runs it on Windows"
+)]
 fn sys_a_failing_git_is_an_error_not_a_pass() {
     let repo = Repo::new("broken");
     let update = repo.update("refs/heads/main", &"e".repeat(40), "refs/heads/main");
