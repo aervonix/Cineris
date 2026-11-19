@@ -2024,6 +2024,47 @@ mod tests {
         );
     }
 
+    /// A terminal entered again, as the external editor gives it back (a new
+    /// `Terminal`, `Terminal::enter`), sends the queries again and waits for
+    /// its own replies, whatever the first one's did: the split reply types
+    /// nothing there either (`cineris-tui`'s failing-editor test, whose
+    /// child ended at the first key it read after the editor).
+    #[test]
+    fn a_terminal_entered_again_waits_for_its_own_replies() {
+        let first = script(&[(Ready::Input, LAST_REPLY)]);
+        let mut terminal = Terminal::with_device(first, caps()).unwrap();
+        answered(&mut terminal);
+        terminal.leave().unwrap();
+        let again = script(&[
+            (Ready::Input, b"\x1b"),
+            (Ready::Woken, b""),
+            (Ready::Woken, b""),
+            (Ready::Woken, b""),
+            (Ready::Woken, b""),
+            (Ready::Woken, b""),
+            (Ready::Input, b"[?0u"),
+        ]);
+        let written = Arc::clone(&again.written);
+        let mut terminal = Terminal::with_device(again, caps()).unwrap();
+        assert!(
+            written
+                .lock()
+                .unwrap()
+                .windows(Capabilities::QUERIES.len())
+                .any(|w| w == Capabilities::QUERIES),
+            "the queries are sent again"
+        );
+        let mut events = Vec::new();
+        for _ in 0..5 {
+            events.extend(terminal.next(Some(Duration::from_millis(16))).unwrap());
+        }
+        assert_eq!(events, []);
+        assert_eq!(
+            terminal.next(Some(Duration::from_millis(16))).unwrap(),
+            Some(Event::Reply(Reply::Keyboard(0)))
+        );
+    }
+
     /// Once the last reply has come, the same split is the Escape key and
     /// typed text, as it always was: the longer wait ends with the replies.
     #[test]

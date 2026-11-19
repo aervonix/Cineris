@@ -13,6 +13,7 @@ find: let due = !self.answered && since < self.queried + REPLIES_DUE;
 replace: let due = false;
 caught-by:
     cineris-term terminal::tests::a_reply_split_after_its_escape_while_the_replies_are_due_types_nothing
+    cineris-term terminal::tests::a_terminal_entered_again_waits_for_its_own_replies
     cineris-term terminal::tests::with_no_last_reply_the_longer_wait_ends_when_the_replies_are_no_longer_due
 
 [break] escape-wait-outlives-the-last-reply
