@@ -218,7 +218,7 @@ fn cache_writes(file: &str, text: &str) -> Vec<Violation> {
         {
             Some(format!(
                 "a step that saves a cache runs only on the main branch: its `if:` has \
-                 `{MAIN_ONLY}` as one of the conditions it joins with `&&`, and no `||` or `!`"
+                 `{MAIN_ONLY}` as one of the conditions it joins with `&&` outside parentheses, and no `||`"
             ))
         } else if rust_cache_saves && !input("save-if:").is_some_and(holds_to_main) {
             Some(format!(
@@ -270,9 +270,9 @@ fn cache_writes(file: &str, text: &str) -> Vec<Violation> {
 }
 
 /// Whether a condition holds to the main branch and nothing else: one of
-/// the conditions it joins with `&&` is exactly `github.ref ==
-/// 'refs/heads/main'`, and it has no `||` that lets another branch in and
-/// no `!` that turns a test round.
+/// the conditions it joins with `&&`, outside any parentheses, is exactly
+/// `github.ref == 'refs/heads/main'`, and it has no `||` that lets another
+/// branch in.
 fn holds_to_main(condition: &str) -> bool {
     let bare: String = condition.chars().filter(|c| !c.is_whitespace()).collect();
     // A whole value YAML quoted, and nothing inside it.
@@ -288,7 +288,37 @@ fn holds_to_main(condition: &str) -> bool {
         .and_then(|inner| inner.strip_suffix("}}"))
         .unwrap_or(bare);
     let main: String = MAIN_ONLY.chars().filter(|c| !c.is_whitespace()).collect();
-    !bare.contains("||") && !bare.contains('!') && bare.split("&&").any(|part| part == main)
+    // `a && main || b` is `(a && main) || b`, true on any branch when `b`
+    // is. A `!`, or a comparison, can only take in the test inside
+    // parentheses or as a part of a longer conjunct, which is then not it.
+    !bare.contains("||") && top_level_conjuncts(bare).any(|part| part == main)
+}
+
+/// The conditions an expression joins with `&&` outside parentheses and
+/// quoted strings: `(a && b) && c` is `(a && b)` and `c`, and
+/// `format('{0}', a && b)` one condition.
+fn top_level_conjuncts(text: &str) -> impl Iterator<Item = &str> {
+    let mut parts = Vec::new();
+    let (mut depth, mut quoted, mut start) = (0_i32, false, 0);
+    let bytes = text.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        match bytes[at] {
+            b'\'' => quoted = !quoted,
+            b'(' if !quoted => depth += 1,
+            b')' if !quoted => depth -= 1,
+            b'&' if !quoted && depth == 0 && bytes.get(at + 1) == Some(&b'&') => {
+                parts.push(&text[start..at]);
+                start = at + 2;
+                at += 2;
+                continue;
+            }
+            _ => {}
+        }
+        at += 1;
+    }
+    parts.push(&text[start..]);
+    parts.into_iter()
 }
 
 /// Whether `word` is in `line` as a word of its own.
@@ -634,9 +664,19 @@ mod tests {
             format!(
                 "      - uses: Swatinem/rust-cache@{HASH} # v2.9.3\n        with:\n          save-if: ${{{{ true }}}}\n"
             ),
-            // The test turned round without a `!`.
+            // The test turned round without a `!`, or taken in by
+            // parentheses or a function, or made true by an `||` after it.
             format!(
                 "      - if: ({main}) == false\n        uses: actions/cache/save@{HASH} # v6.1.0\n"
+            ),
+            format!(
+                "      - if: (success() && {main} && true) == false\n        uses: actions/cache/save@{HASH} # v6.1.0\n"
+            ),
+            format!(
+                "      - if: format('{{0}}', success() && {main} && 'x')\n        uses: actions/cache/save@{HASH} # v6.1.0\n"
+            ),
+            format!(
+                "      - if: {main} && success() || true\n        uses: actions/cache/save@{HASH} # v6.1.0\n"
             ),
             // The condition only in an input's text, not the step's `if:`.
             format!(
