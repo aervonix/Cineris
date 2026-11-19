@@ -370,6 +370,16 @@ fn spec(shell: &Shell, config: &ShellConfig, path_replaced: bool) -> ToolSpec {
         }
         _ => "",
     };
+    // Every command is given `NoDefaultCurrentDirectoryInExePath` on
+    // Windows (`env::NO_CURRENT_DIRECTORY`), so a file of the directory a
+    // command runs in is found only by its path, from a batch file too.
+    let here = if cfg!(windows) {
+        " A program or batch file in the directory the command runs in is found only by its \
+         path (`.\\build.cmd`), not by its name alone; a batch file calls another of its own \
+         folder as `call \"%~dp0other.cmd\"`."
+    } else {
+        ""
+    };
     let default_ms = millis(config.timeout);
     let max_ms = millis(config.max_timeout).max(1);
     // Started at the root, the text is what it always was: the request's
@@ -408,7 +418,7 @@ fn spec(shell: &Shell, config: &ShellConfig, path_replaced: bool) -> ToolSpec {
              input, so it cannot ask a question: pass the flags that make a tool run without \
              one. It is stopped when it runs longer than `timeout_ms`. Nothing is left running: \
              a process the command starts in the background is stopped when the command exits, \
-             because background processes are not supported yet.{path}",
+             because background processes are not supported yet.{here}{path}",
             shell.name()
         ),
         json!({
@@ -1040,6 +1050,19 @@ mod tests {
         }
         let absolute = if windows { "C:\\Windows" } else { ".:/usr/bin" };
         assert!(!told(Some(absolute)));
+    }
+
+    /// On Windows the model is told that a file of the directory a command
+    /// runs in is found only by its path, and how a batch file calls
+    /// another; elsewhere the text says nothing of it.
+    #[test]
+    fn the_model_is_told_how_a_file_where_the_command_runs_is_found() {
+        let described = spec(&Shell::new("bash"), &ShellConfig::default(), false).description;
+        assert_eq!(
+            described.contains("call \"%~dp0other.cmd\""),
+            cfg!(windows),
+            "{described}"
+        );
     }
 
     /// Started at the root, the tool's text is what it always was, to the

@@ -68,7 +68,16 @@ The command runs `hostname`, `git --version`, `.\hostname.bat`, `.\outer.cmd` an
 - **`cmd.exe` shadows real programs.** Through the shell tool, `cmd.exe` runs a workspace file named like a program on `PATH` in that program's place: a `git.cmd` beat the real git. It does so whatever `PATH` holds.
 - **PowerShell never looks in the current directory for a command.** But a batch file it starts runs in `cmd.exe`, and there the batch file's own calls by bare name look in the current directory.
 - **What the variable costs.** With it, a file named by its path still runs, from either shell. A batch file that calls another of its directory by its bare name no longer finds it, and one that calls it through `%~dp0` does.
-- **The decision is the Windows commit's** (below, and [cmd-searches-the-current-directory.md](../../outstanding/cmd-searches-the-current-directory.md) while that commit is not merged).
+- **The decision is the Windows commit's** (below).
+
+**Settled by the coordinator, on the owner's delegation, on 2026-11-19: the variable is set.** The owner's item `cmd-searches-the-current-directory` was left to the coordinator, with this default: if the runner showed a workspace file shadowing a program on `PATH`, set the variable, because shadowing a real tool is worse than making batch files call each other with `.\` or `%~dp0`. It did (`git.cmd` over git), so every command on Windows is given `NoDefaultCurrentDirectoryInExePath=1`, and the item is closed. It is the last commit of the pull request, so that it can still be dropped. Step 13a's recommendation, to leave the search on, is reversed.
+
+- **The workaround is told.** It is in [05-tools.md](../../architecture/05-tools.md) ("`cmd.exe` and the directory a command runs in"). The tool's description on Windows tells the model too: a program or batch file where the command runs is found only by its path (`.\build.cmd`), and a batch file calls another of its folder as `call "%~dp0other.cmd"`.
+- **Tests.**
+  - `env::tests::on_windows_cmd_is_told_not_to_look_where_the_command_runs`: the variable is given once, under Windows' spelling, and not on Linux.
+  - `shell::tests::the_model_is_told_how_a_file_where_the_command_runs_is_found`: the description.
+  - The system test above, on each Windows shell.
+- **Breaks:** `mutations/shell-env-fixes-windows.breaks`, a list of its own so that the commit can be dropped without touching the fix's other list.
 
 ## Every other place a process is started
 
