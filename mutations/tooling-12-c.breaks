@@ -1,0 +1,188 @@
+# The twelfth tooling step's third part: CI and measurement.
+
+# `try --final`: one run of three jobs.
+
+[break] final-tests-part-compares-too
+rule: A final run's Linux 22.04 job runs the tests alone: only the Windows job is an A/B.
+file: xtask/src/try_run.rs
+in: for_part
+find: "tests" => inputs.words = vec!["test".to_owned()],
+replace: "tests" => { inputs.words = vec!["test".to_owned()]; inputs.against = self.against.clone(); }
+caught-by:
+    try_run::tests::a_final_runs_job_runs_the_part_it_is_given_and_nothing_else
+    try_run::tests::a_final_dry_run_shows_each_of_its_three_jobs_and_what_it_runs
+
+[break] final-ab-loses-its-count
+rule: A final run's count is the rounds of its A/B.
+file: xtask/src/try_run.rs
+in: for_part
+find: inputs.count = self.count;
+replace:
+caught-by:
+    try_run::tests::a_final_runs_job_runs_the_part_it_is_given_and_nothing_else
+    try_run::tests::a_final_dry_run_shows_each_of_its_three_jobs_and_what_it_runs
+
+[break] final-against-not-main-by-default
+rule: A final run compares with main when --against does not say.
+file: xtask/src/try_run.rs
+in: parse
+find: .get_or_insert_with(|| FINAL_AGAINST.to_owned());
+replace: .get_or_insert_with(|| "origin/main".to_owned());
+caught-by:
+    try_run::tests::a_final_dry_run_shows_each_of_its_three_jobs_and_what_it_runs
+    try_run::tests::a_final_dispatch_sends_final_and_main_resolved_and_no_os
+
+[break] final-takes-an-os
+rule: A final run refuses --os: each part has its own runner.
+file: xtask/src/try_run.rs
+in: check_final
+find: self.os.is_some()
+replace: false
+caught-by:
+    try_run::tests::a_final_run_refuses_the_inputs_that_would_change_a_part
+
+[break] final-part-runs-anywhere
+rule: A final run's part runs only on its own system: the A/B on Windows, the others on Linux.
+file: xtask/src/try_run.rs
+in: check_runner
+find: if windows == on_windows {
+replace: if true {
+caught-by:
+    try_run::tests::a_final_part_runs_only_on_its_own_system
+
+[break] final-runs-with-no-part
+rule: A final run that is not a dry run or a dispatch needs the part its job is.
+file: xtask/src/try_run.rs
+in: plan
+find: if !inputs.dry_run {
+replace: if false {
+caught-by:
+    try_run::tests::a_final_runs_job_runs_the_part_it_is_given_and_nothing_else
+
+# `ab --job`: a whole job two ways.
+
+[break] job-options-pass-without-job
+rule: An option of a job A/B without --job is refused, not passed to nextest.
+file: xtask/src/try_run.rs
+in: job_words
+find: if !asked {
+replace: if false {
+caught-by:
+    try_run::tests::a_job_ab_is_test_job_with_against_and_its_options_go_to_ab_job
+
+[break] job-ab-without-minutes
+rule: A job A/B on a runner is given --minutes, so that it starts no round past the job's limit.
+file: xtask/src/try_run.rs
+in: job_ab
+find: &JOB_AB_MINUTES.to_string()
+replace: "0"
+caught-by:
+    try_run::tests::a_job_ab_is_test_job_with_against_and_its_options_go_to_ab_job
+
+[break] job-round-starts-past-the-budget
+rule: A round starts only when the longest round so far fits in the minutes left.
+file: xtask/src/job_ab.rs
+in: round_fits
+find: spent_seconds + longest <= minutes as f64 * 60.0
+replace: spent_seconds <= minutes as f64 * 60.0
+caught-by:
+    job_ab::tests::a_round_starts_only_when_the_longest_so_far_fits_in_what_is_left
+
+[break] job-median-takes-failed-phases
+rule: A failed phase is left out of its median.
+file: xtask/src/job_ab.rs
+in: medians
+find: .filter(|phase| phase.name == name && phase.passed)
+replace: .filter(|phase| phase.name == name)
+caught-by:
+    job_ab::tests::each_phase_takes_its_median_over_the_rounds_it_passed_in
+    job_ab::tests::a_phase_no_round_passed_has_no_median_and_no_change
+
+[break] job-failed-side-passes-the-run
+rule: A side that failed fails the run, after the medians.
+file: xtask/src/job_ab.rs
+in: conclusion
+find: if failed.is_empty() {
+replace: if true {
+caught-by:
+    job_ab::tests::a_failed_side_is_shown_and_fails_the_run_and_a_clean_run_passes
+
+[break] job-env-comments-are-variables
+rule: A comment in the setup's environment file is passed over.
+file: xtask/src/job_ab.rs
+in: read_env
+find: || line.trim_start().starts_with('#')
+replace:
+caught-by:
+    job_ab::tests::a_setups_environment_is_key_value_lines
+
+# `try-result`: several jobs read together.
+
+[break] try-result-no-tail-for-a-passed-job
+rule: A job that ran no tests and passed shows its log's last lines.
+file: xtask/src/try_result.rs
+in: job_result
+find: if ended == "success"
+replace: if ended == "never"
+caught-by:
+    try_result::tests::a_job_that_ran_no_tests_and_passed_shows_the_end_of_its_log_and_its_command
+
+[break] try-result-command-of-another-line
+rule: A job's command is the `$ cargo xtask` line its log has, without the prefix.
+file: xtask/src/try_result.rs
+in: command_of
+find: .strip_prefix("$ cargo xtask ")
+replace: .strip_prefix("$ cargo ")
+caught-by:
+    try_result::tests::a_run_of_several_jobs_ends_with_each_jobs_end_and_command_together
+    try_result::tests::a_job_that_ran_no_tests_and_passed_shows_the_end_of_its_log_and_its_command
+
+# `cargo xtask clippy -p`: the workspace's features.
+
+[break] clippy-no-member-defaults
+rule: Every member is built with its defaults in the workspace's build.
+file: xtask/src/clippy.rs
+in: workspace_features
+find: if declared(&package.name, "default") {
+replace: if false {
+caught-by:
+    clippy::tests::the_workspaces_features_are_every_members_defaults_and_what_any_member_names
+    clippy::tests::a_crate_is_linted_with_the_features_the_workspace_gives_what_it_reaches
+
+[break] clippy-features-not-followed
+rule: A feature's own features are on too, to a fixed point.
+file: xtask/src/clippy.rs
+in: workspace_features
+find: None => to_do.push((crate_name.clone(), entry.clone()))
+replace: None => ()
+caught-by:
+    clippy::tests::the_workspaces_features_are_every_members_defaults_and_what_any_member_names
+
+[break] clippy-every-dev-dependency-built
+rule: Only the named crates' dev-dependencies are built, not their dependencies'.
+file: xtask/src/clippy.rs
+in: reached
+find: let built = as_named || dependency.kind != DepKind::Dev;
+replace: let built = true;
+caught-by:
+    clippy::tests::a_build_reaches_the_named_crates_dev_dependencies_and_no_one_elses
+
+[break] clippy-asks-cargo-for-what-it-refuses
+rule: A feature of a dependency of a dependency is not passed to cargo, which refuses it.
+file: xtask/src/clippy.rs
+in: features_for
+find: let list = if nameable.contains(crate_name.as_str()) {
+replace: let list = if true {
+caught-by:
+    clippy::tests::a_crate_is_linted_with_the_features_the_workspace_gives_what_it_reaches
+
+# `mutate --check`: a list's name the rename would rewrite.
+
+[break] list-name-warning-never
+rule: A break list whose name the rename's rules would rewrite is warned of.
+file: xtask/src/mutate/mod.rs
+in: rename_warnings
+find: let first = found.first()?;
+replace: let first = found.first().filter(|_| false)?;
+caught-by:
+    mutate::tests::a_lists_name_the_rename_would_rewrite_is_warned_of
