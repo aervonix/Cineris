@@ -86,6 +86,24 @@ pub(crate) struct ExecParts {
     /// changed so that undo puts it back. `None` for a session kept in
     /// memory.
     pub(crate) rounds: Option<Arc<Rounds>>,
+    /// Whether write roots hold the harness's own files, judged as the
+    /// session's own roots are.
+    pub(crate) harness_files: HarnessFiles,
+}
+
+/// Whether write roots hold the harness's own files: its configuration,
+/// its state and data, or the launcher's program
+/// (`assemble::holds_harness_files`).
+#[derive(Clone)]
+pub(crate) struct HarnessFiles(pub(crate) Arc<HoldsHarnessFiles>);
+
+/// The judgement [`HarnessFiles`] holds.
+pub(crate) type HoldsHarnessFiles = dyn Fn(&[PathBuf]) -> bool + Send + Sync;
+
+impl std::fmt::Debug for HarnessFiles {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HarnessFiles")
+    }
 }
 
 /// Runs `request` for the call `host` serves.
@@ -102,18 +120,50 @@ pub(crate) async fn run(
         .inherited
         .clone()
         .unwrap_or_else(|| std::env::vars_os().collect());
+    // The write roots as the launcher is given them: the workspace's real
+    // path (the resolver's root is resolved) joined with each root's own
+    // names, never resolved. A link on the way to one, there now or made
+    // later, is then refused by the launcher's open rather than followed to
+    // wherever it leads (the early review of step 28: `build -> ~` granted
+    // writing the home folder).
+    let workspace = cx.paths.root();
     let write_roots: Vec<PathBuf> = request
         .write_roots
         .iter()
-        .map(cineris_base::AbsPath::to_fs_path)
-        .collect();
+        .map(|root| {
+            let names = root.strip_prefix(workspace).ok_or_else(|| {
+                HostError::Failed(format!(
+                    "a write root is outside the workspace: {}",
+                    root.to_native_string()
+                ))
+            })?;
+            let mut path = workspace.to_fs_path();
+            path.extend(names.names());
+            Ok(path)
+        })
+        .collect::<Result<_, HostError>>()?;
+    if (parts.harness_files.0)(&write_roots) {
+        return Err(HostError::Failed(
+            "the extension's write roots hold the harness's own files (its configuration, its \
+             state or its launcher): no program of it is run"
+                .to_owned(),
+        ));
+    }
+
+    // Where no program is taken from, by the search below or by the
+    // program's own lookups: the workspace, the session's write roots as
+    // the sandbox holds them now, and the extension's own.
+    let avoid = {
+        let mut avoid = parts.sandbox.avoiding_roots_now(&parts.avoid);
+        avoid.extend(write_roots.iter().cloned());
+        avoid
+    };
 
     // 1. The program, and on Windows the `cmd.exe` a script needs.
     let found = {
         let program = request.program.clone();
         let path = path_of(&inherited);
-        let mut avoid = parts.avoid.clone();
-        avoid.extend(write_roots.iter().cloned());
+        let avoid = avoid.clone();
         let confined_roots = if parts.sandbox.confines() {
             avoid.clone()
         } else {
@@ -282,9 +332,14 @@ pub(crate) async fn run(
     let mut removed = parts.env_remove.clone();
     removed.extend(parts.withheld.get());
     let directory: PathBuf = cwd.abs().to_native_string().into();
+    let mut env = cineris_tools::shell::command_env(inherited, &removed, directory.as_os_str());
+    // The program's own lookups (`#!/usr/bin/env node`, a shim's `node`)
+    // find nothing where a program could have been planted, as the
+    // harness's git's do (the early review of step 28).
+    cineris_base::child_env::keep_out_of(&mut env, &avoid, cfg!(windows));
     let start = Start {
         launch,
-        env: cineris_tools::shell::command_env(inherited, &removed, directory.as_os_str()),
+        env,
         cwd: directory,
         timeout: request.timeout,
         label: String::new(),

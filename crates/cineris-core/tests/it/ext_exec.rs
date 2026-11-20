@@ -244,6 +244,41 @@ fn sys_a_provider_key_and_a_removed_variable_do_not_reach_the_program() {
     });
 }
 
+/// A program's own `PATH` holds no folder of the workspace, though the
+/// harness's had one (an activated `.venv/bin`, direnv's `node_modules/.bin`):
+/// a wrapper outside it (`#!/usr/bin/env node`) would otherwise find a
+/// program a command planted there (the early review of step 28).
+#[test]
+fn sys_a_programs_own_path_holds_no_folder_of_the_workspace() {
+    let world = World::new("exec_path", []);
+    let planted = world.workspace.join("node_modules").join(".bin");
+    std::fs::create_dir_all(&planted).unwrap();
+    let probe = extension(&world, "probe", "exec = [\"probe-echo\"]");
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "probe-echo", "args": echo_args(&[])}),
+    ));
+    world.provider.push(says("Done."));
+    let dir = world.dir.join("tools");
+    place_echo(&dir, "probe-echo");
+    let env = path_with(&world, &[&planted, &dir], &[("PROBE_PATH", "1")]);
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.shell_env = Some(env);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.answering(Answering::allow_all());
+        front.turn("run it").await;
+        let report = report(&ran(&answered(&front, 0)));
+        let names = report["path"].as_array().expect("the folders of PATH");
+        assert!(!names.contains(&json!(".bin")), "{report}");
+        assert!(names.contains(&json!("tools")), "{report}");
+        front.close().await;
+    });
+}
+
 /// A program named by its bare name is never one in the workspace, nor one
 /// behind a relative entry of `PATH`: neither is found, and nothing runs.
 #[test]
@@ -476,6 +511,43 @@ fn a_program_is_not_run_outside_the_workspace() {
     });
 }
 
+/// A manifest whose write roots hold the harness's own files (here its
+/// configuration, kept inside the workspace) runs no program, before
+/// anyone is asked: a program could change what it is allowed.
+#[cfg(unix)]
+#[test]
+fn a_write_root_that_holds_the_harness_files_runs_nothing() {
+    let mut world = World::new("exec_harness_files", []);
+    let config = world.workspace.join(".settings");
+    std::fs::create_dir_all(config.join("cineris")).unwrap();
+    world.env = world
+        .env
+        .clone()
+        .with("XDG_CONFIG_HOME", config.to_str().unwrap());
+    world.user_config("");
+    let probe = extension(&world, "probe", "exec = [\"probe-echo\"]\nwrite = [\"**\"]");
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "probe-echo", "args": echo_args(&[])}),
+    ));
+    world.provider.push(says("Done."));
+    let env = echo_on_path(&world);
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.shell_env = Some(env);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.answering(Answering::allow_all());
+        front.turn("run it").await;
+        let answer = answered(&front, 0);
+        assert!(answer.contains("harness's own files"), "{answer}");
+        assert_eq!(front.approvals().len(), 1, "{:?}", front.approvals());
+        front.close().await;
+    });
+}
+
 #[cfg(target_os = "linux")]
 mod confined {
     //! Where the sandbox enforces: a launcher of the extension's own.
@@ -545,6 +617,99 @@ mod confined {
             assert_eq!(world.read("out/from-tmp.txt").as_deref(), Some("t\n"));
             assert!(world.read("root.txt").is_none(), "{ran}");
             assert!(!outside.join("far.txt").exists(), "{ran}");
+            front.close().await;
+        });
+    }
+
+    /// A write root that is a link grants nothing where the link leads: the
+    /// root is handed to the launcher as the workspace's real path joined
+    /// with its names, never resolved, and the launcher refuses a link on
+    /// the way (the early review of step 28: `build -> ~` granted writing
+    /// the home folder). A confined command can make such a link unasked,
+    /// and a cloned repository can hold one.
+    #[test]
+    fn sys_a_write_root_that_is_a_link_grants_nothing_where_it_leads() {
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_root_link", []);
+        let outside = world.dir.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, world.workspace.join("out")).unwrap();
+        let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\"out/**\"]");
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": "sh", "args": ["-c", "echo x > out/x; echo done"]}),
+        ));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Supervised).await;
+            front.turn("run it").await;
+            let answer = answered(&front, 0);
+            assert!(!answer.contains("done"), "{answer}");
+            front.close().await;
+        });
+        assert!(!outside.join("x").exists(), "the link's target was written");
+    }
+
+    /// A folder a reload makes writable is passed over by the next search
+    /// for a program: a confined command could have planted one there
+    /// (the early review of step 28: the folders avoided were the ones the
+    /// session started with).
+    #[test]
+    fn sys_a_folder_a_reload_makes_writable_is_passed_over_by_the_search() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        use cineris_protocol::methods::{ConfigReloadParams, Op, OpResult};
+
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_reload_avoid", []);
+        let script = |dir: &Path, says: &str| {
+            std::fs::create_dir_all(dir).unwrap();
+            let path = dir.join("probe-sh");
+            std::fs::write(&path, format!("#!/bin/sh\necho {says}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        let planted = world.dir.join("planted");
+        let real = world.dir.join("real");
+        script(&planted, "planted");
+        script(&real, "real");
+        let probe = extension(&world, "probe", "exec = [\"probe-sh\"]");
+        world
+            .provider
+            .push(run_call("c1", "probe", &json!({"program": "probe-sh"})));
+        world.provider.push(says("Done."));
+        let env = path_with(&world, &[&planted, &real], &[]);
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+            options.shell_env = Some(env);
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Supervised).await;
+            world.user_config(&format!("[sandbox]\nwrite = [\"{}\"]\n", planted.display()));
+            let reloaded = front
+                .op(Op::ConfigReload(ConfigReloadParams::default()))
+                .await
+                .expect("the reload answers");
+            let OpResult::ConfigReload(reloaded) = reloaded else {
+                panic!("not the result of config/reload");
+            };
+            assert!(reloaded.errors.is_empty(), "{reloaded:?}");
+            front.turn("run it").await;
+            let ran = ran(&answered(&front, 0));
+            let stdout = ran["stdout"].as_str().unwrap();
+            assert!(
+                stdout.contains("real") && !stdout.contains("planted"),
+                "{ran}"
+            );
             front.close().await;
         });
     }

@@ -269,6 +269,27 @@ impl SessionSandbox {
         self.confine.load(Ordering::Acquire)
     }
 
+    /// `avoid` with the write roots the launcher's policy gives now, which
+    /// a reload may have widened since `avoid` was made: where a program
+    /// the harness looks up by name is never taken from, as a confined
+    /// command could have planted it there (the early review of step 28).
+    pub(crate) fn avoiding_roots_now(&self, avoid: &[PathBuf]) -> Vec<PathBuf> {
+        let mut all = avoid.to_vec();
+        let now = self
+            .launcher
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|launcher| launcher.policy().write.clone())
+            .unwrap_or_default();
+        for root in now {
+            if !all.contains(&root) {
+                all.push(root);
+            }
+        }
+        all
+    }
+
     /// The launcher as it is now, while commands are confined.
     fn launcher(&self) -> Option<SandboxLauncher> {
         if !self.confines() {
@@ -344,7 +365,11 @@ impl SessionSandbox {
             .policy()
             .read
             .clone();
-        let mut write: Vec<PathBuf> = write_roots.iter().map(|root| resolve_root(root)).collect();
+        // As the caller gives them: the workspace's real path joined with
+        // each root's names, never resolved here, so that the launcher's
+        // open refuses a link on the way to one instead of granting where
+        // it leads.
+        let mut write: Vec<PathBuf> = write_roots.to_vec();
         // The session's own, made with no link on the way (`make_temp`); one
         // that was not made is not written to, as for the shell's commands.
         let temp = self.temp.made.then(|| resolve_root(&self.temp.path));
@@ -507,7 +532,7 @@ impl Confinement for SessionGit {
                 .unwrap_or_default(),
             None => cineris_base::program::path_directories(),
         };
-        cineris_base::program::find_outside(&path, "git", cfg!(windows), &self.avoid)
+        cineris_base::program::find_outside(&path, "git", cfg!(windows), &self.avoid())
     }
 
     fn withheld(&self) -> Vec<String> {
@@ -516,8 +541,13 @@ impl Confinement for SessionGit {
         withheld
     }
 
+    /// The directories the session started with, and the write roots a
+    /// reload has added since.
     fn avoid(&self) -> Vec<PathBuf> {
-        self.avoid.clone()
+        match self.sandbox.get() {
+            Some(sandbox) => sandbox.avoiding_roots_now(&self.avoid),
+            None => self.avoid.clone(),
+        }
     }
 
     fn inherited(&self) -> Vec<(OsString, OsString)> {
