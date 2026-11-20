@@ -1,7 +1,7 @@
-An extension's tool that declares itself read-only or keyed and makes a link runs beside later calls, which were decided before it ended.
+A tool from an MCP server that declares itself read-only or keyed and makes a link runs beside later calls, which were decided before it ended. Closed for extensions by step 28: an extension's tool always runs alone.
 
 - Area: cineris-agent
-- Owner: step 28
+- Owner: step 30
 
 | Item | Who | When |
 |---|---|---|
