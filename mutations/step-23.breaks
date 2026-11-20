@@ -600,7 +600,7 @@ rule: "Never for this project" is kept in the trust store, so that later starts 
 file: crates/cineris-core/src/assemble.rs
 in: answer_trust
 find: .refuse(&question.key, &question.root)
-replace: .forget(&question.key)
+replace: .forget(&question.key).map(|_| ())
 caught-by:
     cineris-core::it trusting::never_is_kept_across_starts_until_the_project_is_trusted
 
@@ -786,11 +786,11 @@ caught-by:
     screens::the_views_draw_the_reference_screens
 
 [break] the-rounds-not-kept-as-rounds
-rule: A finished round is committed apart, with the round, so that the viewer can draw it again as a box.
-file: crates/cineris-tui/src/transcript.rs
-in: Transcript::commit_parts
-find: Some(round) => out.push(Committed::Round(round, lines)),
-replace: Some(_) => push_lines(&mut out, lines),
+rule: A finished round is kept as a round, so that the viewer can draw it again as a box. Since step 25 the viewer draws the kept blocks (`transcript::Kept`), and the round that step 23's `Transcript::commit_parts` gave with its lines was read by nothing, so breaking it changed nothing; the small fixes took that out and moved the break to where a kept round is counted as one.
+file: crates/cineris-tui/src/transcript/kept.rs
+in: Kept::push
+find: if matches!(kept.piece, Piece::Block(Block::Round(_))) {
+replace: if false {
 packages: cineris-tui
 caught-by:
     app::tests::the_viewer_moves_between_boxes_and_opens_the_selected_one
