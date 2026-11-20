@@ -10,6 +10,10 @@
 //! - **A bounded buffer.** The beginning and the end of the output are
 //!   kept, and once it passes the buffer all of it also goes to an
 //!   artifact ([`Captured`]).
+//! - **Or two pipes, kept in memory.** [`Runner::run_apart`] runs a command
+//!   the same way with a pipe for each stream, for a caller that reads
+//!   what a program answers apart from what it says about its progress,
+//!   and keeps the first bytes of each up to a limit ([`FinishedApart`]).
 //! - **Stopping is staged.** On the time limit or on cancellation the tree
 //!   is asked politely, then told, then killed, with a grace between the
 //!   stages ([`Stop`]).
@@ -20,10 +24,11 @@
 //! # Threads
 //!
 //! Reading a pipe and waiting for a process both block, so each command
-//! has two threads of its own for them, and the future that runs the
-//! command only waits. They are plain threads, not the blocking pool's: a
-//! long command would otherwise take two of the pool's few threads for as
-//! long as it runs. Both end when the tree does.
+//! has two threads of its own for them (three when its streams are read
+//! apart, a reader for each), and the future that runs the command only
+//! waits. They are plain threads, not the blocking pool's: a long command
+//! would otherwise take two of the pool's few threads for as long as it
+//! runs. All of them end when the tree does.
 //!
 //! The command is started from the thread that polls the future, never
 //! from a pool: on Linux the kernel's death signal is tied to the thread
@@ -40,13 +45,14 @@
               starting one takes well under a millisecond, and the waiting is on threads"
 )]
 
+mod apart;
 pub(crate) mod brief;
 mod capture;
 mod decode;
 
 use std::ffi::OsString;
 use std::future::{Future, poll_fn};
-use std::io::Write;
+use std::io::{PipeWriter, Write};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -58,6 +64,7 @@ use std::time::Duration;
 use cineris_base::{AbsPath, CancelToken, SharedClock, SystemClock};
 use cineris_sandbox::tree::{Output, OutputStop, ReadOutcome, Tree};
 
+pub use apart::{FinishedApart, KeptStream};
 pub use capture::{Captured, KeptText};
 pub use cineris_sandbox::tree::{Exit, Guard};
 
@@ -444,8 +451,49 @@ impl Runner {
         let started = self.clock.monotonic();
         let shared = Arc::new(Shared::default());
         let running = self.start(&start, store, &shared)?;
+        let ended = self
+            .drive(&start, &running, &shared, cancel, kill_now, out)
+            .await;
+        let (rest, captured) = {
+            let mut state = shared.lock();
+            (std::mem::take(&mut state.pending), state.captured.take())
+        };
+        if !rest.is_empty() {
+            out.output(&rest);
+        }
+        Ok(Finished {
+            exit: ended.exit,
+            ending: ended.ending,
+            stopped_with: ended.stopped_with,
+            left_running: ended.left_running,
+            outlived: ended.outlived,
+            escaped: ended.escaped,
+            duration: self.clock.monotonic().saturating_sub(started),
+            // A reader that did not finish, or whose store failed under
+            // it, has nothing to hand over, and the result says so.
+            output_lost: captured.is_none(),
+            output: captured.unwrap_or_else(|| Capture::new(&start.label).finish()),
+        })
+    }
+
+    /// Runs a started command to the end of its tree: what
+    /// [`run_until`](Self::run_until) and [`run_apart`](Self::run_apart)
+    /// share. It stops the tree on the time limit, on `cancel` and on
+    /// `kill_now`, gives what the command left running its grace, ends the
+    /// tree, and lets the readers go. Text the readers leave for the live
+    /// view goes to `out`; what they collected is the caller's to take once
+    /// this returns.
+    async fn drive(
+        &self,
+        start: &Start,
+        running: &Running,
+        shared: &Shared,
+        cancel: &CancelToken,
+        kill_now: &CancelToken,
+        out: &mut dyn ToolOutput,
+    ) -> Ended {
         let mut waits = Waits {
-            shared: &shared,
+            shared,
             cancelled: Box::pin(cancel.cancelled()),
             kill_now: Box::pin(kill_now.cancelled()),
             timeout: Some(self.timer.sleep(start.timeout)),
@@ -517,26 +565,14 @@ impl Runner {
             })
             .await;
         }
-        let (rest, captured) = {
-            let mut state = shared.lock();
-            (std::mem::take(&mut state.pending), state.captured.take())
-        };
-        if !rest.is_empty() {
-            out.output(&rest);
-        }
-        Ok(Finished {
+        Ended {
             exit: run.exit.and_then(Result::ok),
             ending: run.ending,
             stopped_with: run.stopped_with,
             left_running: run.left_running,
             outlived: run.outlived,
             escaped,
-            duration: self.clock.monotonic().saturating_sub(started),
-            // A reader that did not finish, or whose store failed under
-            // it, has nothing to hand over, and the result says so.
-            output_lost: captured.is_none(),
-            output: captured.unwrap_or_else(|| Capture::new(&start.label).finish()),
-        })
+        }
     }
 
     /// Starts the command and its two threads.
@@ -546,51 +582,9 @@ impl Runner {
         store: Arc<dyn ContentStore>,
         shared: &Arc<Shared>,
     ) -> Result<Running, StartError> {
-        let launch = &start.launch;
-        let mut command = Command::new(&launch.command.program);
-        for argument in &launch.command.arguments {
-            match argument {
-                Argument::Exact(text) => {
-                    command.arg(text);
-                }
-                Argument::Verbatim(text) => {
-                    #[cfg(windows)]
-                    {
-                        use std::os::windows::process::CommandExt;
-                        command.raw_arg(text);
-                    }
-                    #[cfg(not(windows))]
-                    command.arg(text);
-                }
-            }
-        }
-        command.current_dir(&start.cwd).env_clear().envs(
-            start
-                .env
-                .iter()
-                .map(|(name, value)| (name.as_os_str(), value.as_os_str())),
-        );
-        // No input: the command sees the end of its input at once. Input
-        // for a launcher goes through a pipe that is closed behind it.
-        let input = match &launch.stdin {
-            None => {
-                command.stdin(Stdio::null());
-                None
-            }
-            Some(bytes) => {
-                let (reader, writer) = std::io::pipe().map_err(StartError::Setup)?;
-                command.stdin(reader);
-                Some((writer, bytes.clone()))
-            }
-        };
+        let (mut command, input) = build_command(start)?;
         let (output, stop) = Output::attach(&mut command).map_err(StartError::Setup)?;
-        let tree =
-            Tree::spawn(command, self.guard.as_ref()).map_err(|source| StartError::Spawn {
-                program: launch.command.program.display().to_string(),
-                source,
-            })?;
-        // From here on, dropping `running` kills the tree.
-        let running = Running { tree, stop };
+        let running = self.spawn(command, start, Stops(vec![stop]))?;
 
         let reader = {
             let shared = Arc::clone(shared);
@@ -599,34 +593,127 @@ impl Runner {
                 .name("cineris-command-output".to_owned())
                 .spawn(move || read_output(output, capture, store.as_ref(), &shared))
         };
-        let waiter = {
-            let shared = Arc::clone(shared);
-            let tree = running.tree.clone();
-            std::thread::Builder::new()
-                .name("cineris-command-wait".to_owned())
-                .spawn(move || {
-                    if let Some((mut writer, bytes)) = input {
-                        // A launcher that does not read its input is the
-                        // launcher's mistake, and shows as a broken pipe.
-                        let _ = writer.write_all(&bytes);
-                        drop(writer);
-                    }
-                    let exit = tree.wait().map_err(|error| error.to_string());
-                    shared.update(|state| state.exit = Some(exit));
-                })
-        };
+        let waiter = waiter(&running, input, shared);
         match (reader, waiter) {
             (Ok(_), Ok(_)) => Ok(running),
             (Err(error), _) | (_, Err(error)) => Err(StartError::Setup(error)),
         }
     }
+
+    /// Starts `command`, whose output is attached, as a process tree. From
+    /// here on, dropping what this returns kills the tree and lets the
+    /// readers go.
+    fn spawn(&self, command: Command, start: &Start, stop: Stops) -> Result<Running, StartError> {
+        let tree =
+            Tree::spawn(command, self.guard.as_ref()).map_err(|source| StartError::Spawn {
+                program: start.launch.command.program.display().to_string(),
+                source,
+            })?;
+        Ok(Running { tree, stop })
+    }
+}
+
+/// The input a launcher asked for: the writing end of the command's
+/// standard input, and the bytes to write to it.
+type Input = Option<(PipeWriter, Vec<u8>)>;
+
+/// The command `start` describes, with its arguments, its directory, its
+/// whole environment and its standard input; its output is the caller's
+/// to attach. The input a launcher asked for comes back beside it, for the
+/// waiter to write.
+fn build_command(start: &Start) -> Result<(Command, Input), StartError> {
+    let launch = &start.launch;
+    let mut command = Command::new(&launch.command.program);
+    for argument in &launch.command.arguments {
+        match argument {
+            Argument::Exact(text) => {
+                command.arg(text);
+            }
+            Argument::Verbatim(text) => {
+                #[cfg(windows)]
+                {
+                    use std::os::windows::process::CommandExt;
+                    command.raw_arg(text);
+                }
+                #[cfg(not(windows))]
+                command.arg(text);
+            }
+        }
+    }
+    command.current_dir(&start.cwd).env_clear().envs(
+        start
+            .env
+            .iter()
+            .map(|(name, value)| (name.as_os_str(), value.as_os_str())),
+    );
+    // No input: the command sees the end of its input at once. Input
+    // for a launcher goes through a pipe that is closed behind it.
+    let input = match &launch.stdin {
+        None => {
+            command.stdin(Stdio::null());
+            None
+        }
+        Some(bytes) => {
+            let (reader, writer) = std::io::pipe().map_err(StartError::Setup)?;
+            command.stdin(reader);
+            Some((writer, bytes.clone()))
+        }
+    };
+    Ok((command, input))
+}
+
+/// Starts the thread that writes the command's input, if a launcher asked
+/// for some, and then waits for the command to exit.
+fn waiter(
+    running: &Running,
+    input: Input,
+    shared: &Arc<Shared>,
+) -> std::io::Result<std::thread::JoinHandle<()>> {
+    let shared = Arc::clone(shared);
+    let tree = running.tree.clone();
+    std::thread::Builder::new()
+        .name("cineris-command-wait".to_owned())
+        .spawn(move || {
+            if let Some((mut writer, bytes)) = input {
+                // A launcher that does not read its input is the
+                // launcher's mistake, and shows as a broken pipe.
+                let _ = writer.write_all(&bytes);
+                drop(writer);
+            }
+            let exit = tree.wait().map_err(|error| error.to_string());
+            shared.update(|state| state.exit = Some(exit));
+        })
+}
+
+/// How a run ended: everything [`Finished`] says but the time and the
+/// output, which are the caller's.
+struct Ended {
+    exit: Option<Exit>,
+    ending: Ending,
+    stopped_with: Option<Stop>,
+    left_running: bool,
+    outlived: bool,
+    escaped: bool,
 }
 
 /// A started command. Dropping it kills what is left of the tree and lets
-/// the reader go, so that a run that is given up leaves nothing behind.
+/// the readers go, so that a run that is given up leaves nothing behind.
 struct Running {
     tree: Tree,
-    stop: OutputStop,
+    stop: Stops,
+}
+
+/// What stops the reads of a command's output: of its one pipe, or of each
+/// of its two.
+struct Stops(Vec<OutputStop>);
+
+impl Stops {
+    /// Stops every read, as [`OutputStop::stop`] does.
+    fn stop(&self) {
+        for stop in &self.0 {
+            stop.stop();
+        }
+    }
 }
 
 impl Drop for Running {
@@ -636,7 +723,7 @@ impl Drop for Running {
     }
 }
 
-/// What the two threads tell the future.
+/// What the command's threads tell the future.
 #[derive(Default)]
 struct Shared {
     state: Mutex<State>,
@@ -650,7 +737,8 @@ struct State {
     pending_cut: bool,
     /// How the command itself ended, once it has.
     exit: Option<Result<Exit, String>>,
-    /// Whether the reader thread has ended.
+    /// Whether the reader thread has ended: both of them, when the streams
+    /// are read apart.
     reader_done: bool,
     /// What the reader collected, once it has ended.
     captured: Option<Captured>,
@@ -852,7 +940,7 @@ enum Phase {
 struct Run<'a> {
     runner: &'a Runner,
     tree: &'a Tree,
-    stop: &'a OutputStop,
+    stop: &'a Stops,
     phase: Phase,
     ending: Ending,
     stopped_with: Option<Stop>,
