@@ -368,6 +368,7 @@ file: crates/cineris-ext/src/engine/mod.rs
 in: ScriptRuntime::call
 find: Ok(Err(HostError::Stopped(reason))) => {
 replace: Ok(Err(HostError::Stopped(reason))) if reason.is_empty() => {
+packages: cineris-ext,cineris-core
 caught-by:
     cineris-ext::it engine::a_host_call_in_a_stopped_turn_ends_the_scripts_call
     cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call

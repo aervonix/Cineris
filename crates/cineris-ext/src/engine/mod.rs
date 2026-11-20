@@ -44,6 +44,11 @@ use thread::{FromThread, Invocation, Loaded, ToThread};
 
 /// The engine's stack limit for a script's calls.
 pub const STACK_BYTES: usize = 256 * 1024;
+/// A point of the runtime's thread just after it told a call's end, before
+/// it takes the next call or ends: a test holds it to look at the runtime
+/// as whoever heard of the end sees it.
+pub const AFTER_A_CALLS_END_IS_TOLD: &str = "cineris-ext: after a call's end is told";
+
 /// The longest the main module's first evaluation may take.
 pub const EVALUATION_TIME: Duration = Duration::from_secs(10);
 /// How long a call is given to stop after its deadline before its thread
