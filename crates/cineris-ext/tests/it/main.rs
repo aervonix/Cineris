@@ -23,7 +23,10 @@ use std::sync::{Arc, Mutex};
 
 use cineris_base::path::{PathOptions, PathResolver, ResolvedPath};
 use cineris_ext::folder::Snapshot;
-use cineris_ext::host::{Entry, ExecOutput, ExecRequest, Host, HostError, HostFuture, Scope};
+use cineris_ext::host::{
+    ExecOutput, ExecRequest, Host, HostError, HostFuture, Listing, ManifestGate, Scope,
+};
+use cineris_tools::OpenGate;
 use serde_json::Value as Json;
 
 /// A manifest with the given capabilities table, and `main.js`.
@@ -171,22 +174,28 @@ impl Host for FakeHost {
         &self,
         path: ResolvedPath,
         _glob: Option<String>,
-    ) -> HostFuture<'_, Result<Vec<Entry>, HostError>> {
+        gate: ManifestGate,
+    ) -> HostFuture<'_, Result<Listing, HostError>> {
         Box::pin(async move {
             self.note(format!("list {}", path.shown()));
-            // Two entries of the workspace, one inside the manifest's
-            // globs and one outside them, whatever was listed.
+            // A walk as the session's would make it: each entry of the
+            // workspace put to the gate, the manifest's over an open one.
             let Some(resolver) = &self.resolver else {
-                return Ok(Vec::new());
+                return Ok(Listing {
+                    text: String::new(),
+                    payload: Json::Null,
+                });
             };
-            let entry = |relative: &str| Entry {
-                path: resolver.root().join(relative).unwrap(),
-                shown: relative.to_owned(),
-                folder: false,
-                line: None,
-                text: None,
-            };
-            Ok(vec![entry("src/a.rs"), entry("notes.md")])
+            let gate = gate.over(Arc::new(OpenGate));
+            let text = ["src", "src/a.rs", "notes.md", "out", "out/old.txt"]
+                .into_iter()
+                .filter(|relative| gate.may_read(&resolver.root().join(relative).unwrap()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Ok(Listing {
+                text,
+                payload: Json::Null,
+            })
         })
     }
 
@@ -195,10 +204,14 @@ impl Host for FakeHost {
         pattern: String,
         path: ResolvedPath,
         _glob: Option<String>,
-    ) -> HostFuture<'_, Result<Vec<Entry>, HostError>> {
+        _gate: ManifestGate,
+    ) -> HostFuture<'_, Result<Listing, HostError>> {
         Box::pin(async move {
             self.note(format!("search {pattern} {}", path.shown()));
-            Ok(Vec::new())
+            Ok(Listing {
+                text: String::new(),
+                payload: Json::Null,
+            })
         })
     }
 

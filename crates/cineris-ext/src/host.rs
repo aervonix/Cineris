@@ -11,9 +11,11 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use cineris_base::path::{AbsPath, ResolvedPath};
+use cineris_tools::ReadGate;
 use serde_json::Value as Json;
 
 use crate::capability::{Capabilities, Refusal};
@@ -94,19 +96,66 @@ pub struct ExecOutput {
     pub timed_out: bool,
 }
 
-/// One entry of a listing or a search.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Entry {
-    /// Where it is, resolved.
-    pub path: AbsPath,
-    /// How it is shown to the script: relative to the workspace, with `/`.
-    pub shown: String,
-    /// Whether it is a folder.
-    pub folder: bool,
-    /// For a search: the line's number, from 1.
-    pub line: Option<u64>,
-    /// For a search: the line's text.
-    pub text: Option<String>,
+/// What the `list` or `search` tool gave: its text, as the model would be
+/// given it, and its payload.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listing {
+    /// The tool's text.
+    pub text: String,
+    /// The tool's payload: counts, and whether it was cut.
+    pub payload: Json,
+}
+
+/// The manifest's `read` globs as a gate for a walk: every entry a listing
+/// or a search meets is put to it before it is read, so that a walk of a
+/// folder the manifest allows never reaches a file it does not.
+///
+/// It is made by [`serve`] and handed to the host, which puts it over the
+/// session's own gate ([`ManifestGate::over`]): the host cannot walk for a
+/// script without it.
+#[derive(Debug, Clone)]
+pub struct ManifestGate {
+    capabilities: Capabilities,
+}
+
+impl ManifestGate {
+    /// The manifest's gate, in front of `inner`, the session's own: an
+    /// entry is read only when both allow it.
+    #[must_use]
+    pub fn over(self, inner: Arc<dyn ReadGate>) -> Arc<dyn ReadGate> {
+        Arc::new(Both {
+            manifest: self,
+            inner,
+        })
+    }
+
+    /// Whether the manifest lets a walk read or enter `path`: a folder a
+    /// `read` glob can reach under, or a file it names. Whether `path` is
+    /// a folder is asked of the entry itself: a walk follows no link.
+    #[must_use]
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a walk's gate is asked on the walk's own threads, which block"
+    )]
+    pub fn allows(&self, path: &AbsPath) -> bool {
+        let folder = std::fs::symlink_metadata(path.to_fs_path()).is_ok_and(|meta| meta.is_dir());
+        if folder {
+            self.capabilities.reaches_under(path) || self.capabilities.reads(path)
+        } else {
+            self.capabilities.reads(path)
+        }
+    }
+}
+
+struct Both {
+    manifest: ManifestGate,
+    inner: Arc<dyn ReadGate>,
+}
+
+impl ReadGate for Both {
+    fn may_read(&self, path: &AbsPath) -> bool {
+        self.inner.may_read(path) && self.manifest.allows(path)
+    }
 }
 
 /// Which store a value is kept in.
@@ -146,22 +195,24 @@ pub trait Host: Send + Sync {
     /// Writes a file's text, through the `write` tool's code.
     fn write(&self, path: ResolvedPath, text: String) -> HostFuture<'_, Result<(), HostError>>;
 
-    /// Lists a folder, following no link; `glob` keeps the entries it
-    /// matches.
+    /// Lists a folder through the `list` tool, its walk gated by `gate`
+    /// over the session's own; `glob` keeps the entries it matches.
     fn list(
         &self,
         path: ResolvedPath,
         glob: Option<String>,
-    ) -> HostFuture<'_, Result<Vec<Entry>, HostError>>;
+        gate: ManifestGate,
+    ) -> HostFuture<'_, Result<Listing, HostError>>;
 
-    /// Searches files under a folder for a regular expression, following
-    /// no link.
+    /// Searches files under a folder for a regular expression through the
+    /// `search` tool, its walk gated by `gate` over the session's own.
     fn search(
         &self,
         pattern: String,
         path: ResolvedPath,
         glob: Option<String>,
-    ) -> HostFuture<'_, Result<Vec<Entry>, HostError>>;
+        gate: ManifestGate,
+    ) -> HostFuture<'_, Result<Listing, HostError>>;
 
     /// Puts a question to the user. `None`: nobody answered, or nobody
     /// could be asked.
@@ -398,8 +449,10 @@ pub async fn serve<H: Host + ?Sized>(
         HostCall::List { path, glob } => {
             let resolved = host.resolve(&path).await?;
             capabilities.read(&resolved)?;
-            let entries = host.list(resolved, glob).await?;
-            Ok(entries_json(capabilities, entries))
+            let gate = ManifestGate {
+                capabilities: capabilities.clone(),
+            };
+            Ok(listing_json(host.list(resolved, glob, gate).await?))
         }
         HostCall::Search {
             pattern,
@@ -408,8 +461,12 @@ pub async fn serve<H: Host + ?Sized>(
         } => {
             let resolved = host.resolve(&path).await?;
             capabilities.read(&resolved)?;
-            let entries = host.search(pattern, resolved, glob).await?;
-            Ok(entries_json(capabilities, entries))
+            let gate = ManifestGate {
+                capabilities: capabilities.clone(),
+            };
+            Ok(listing_json(
+                host.search(pattern, resolved, glob, gate).await?,
+            ))
         }
         HostCall::Ask { question, choices } => {
             if phase == Phase::Hook {
@@ -444,27 +501,9 @@ pub async fn serve<H: Host + ?Sized>(
     }
 }
 
-/// The entries the manifest lets the script read, each checked on its own:
-/// a walk can reach a file the glob of its folder does not name.
-fn entries_json(capabilities: &Capabilities, entries: Vec<Entry>) -> Json {
-    Json::Array(
-        entries
-            .into_iter()
-            .filter(|entry| capabilities.reads(&entry.path))
-            .map(|entry| {
-                let mut object = serde_json::Map::new();
-                object.insert("path".to_owned(), Json::String(entry.shown));
-                object.insert("folder".to_owned(), Json::Bool(entry.folder));
-                if let Some(line) = entry.line {
-                    object.insert("line".to_owned(), Json::from(line));
-                }
-                if let Some(text) = entry.text {
-                    object.insert("text".to_owned(), Json::String(text));
-                }
-                Json::Object(object)
-            })
-            .collect(),
-    )
+/// A listing as the script is given it: the tool's text, and its payload.
+fn listing_json(listing: Listing) -> Json {
+    serde_json::json!({ "text": listing.text, "details": listing.payload })
 }
 
 fn check_key(key: &str) -> Result<(), HostError> {
