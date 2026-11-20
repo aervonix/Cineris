@@ -20,6 +20,13 @@ pub const MAX_HOOKS: usize = 32;
 pub const MAX_DESCRIPTION: usize = 2048;
 /// The largest schema of a tool's arguments, as JSON.
 pub const MAX_SCHEMA_BYTES: usize = 16 * 1024;
+/// The most arguments a command names.
+pub const MAX_ARGUMENTS: usize = 16;
+/// The most tool names a hook's filter lists.
+pub const MAX_HOOK_TOOLS: usize = 64;
+/// The longest tool name a hook's filter lists: a registry name, or a
+/// source's names (`source/*`).
+pub const MAX_FILTER_ENTRY: usize = 129;
 
 /// One tool a script registered.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
