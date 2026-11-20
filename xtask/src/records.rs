@@ -1207,7 +1207,9 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("| Tier 1, unit (20 s) | 1.0 s | 1.5 s | 2.0 s |"),
+            text.contains(
+                "| Tier 1, unit (20 s on Linux, 25 s on Windows) | 1.0 s | 1.5 s | 2.0 s |"
+            ),
             "{text}"
         );
         assert!(
@@ -1253,7 +1255,7 @@ mod tests {
         );
         // The median, not the mean: base's 9 s round is passed over.
         assert!(
-            section.contains("| 1, unit | 1.5 s (101 tests) | 1.0 s (101) | +0.5 s | 20 s |"),
+            section.contains("| 1, unit | 1.5 s (101 tests) | 1.0 s (101) | +0.5 s | 25 s |"),
             "{section}"
         );
         assert!(

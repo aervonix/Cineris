@@ -7,7 +7,7 @@ The test suite and CI are designed for speed from the first commit. The rule tha
 | Tier | What | Where it runs | Blocking? | Time budget |
 |---|---|---|---|---|
 | **0. Static** | Formatting, lints, licence and source checks, generated-file freshness, repo rules (no home-directory paths, dependency list in sync, crate dependency rules). | Every pull request. | Yes | Under 2 min on a warm cache. |
-| **1. Unit** | Pure logic inside each crate: parsers, decoders, mappers, policy evaluation, text layout, view functions. Property tests. Snapshot tests. | Every pull request, both OSes. | Yes | The whole tier in under 20 s of test time above the start of its processes ("Budgets are enforced", below). |
+| **1. Unit** | Pure logic inside each crate: parsers, decoders, mappers, policy evaluation, text layout, view functions. Property tests. Snapshot tests. | Every pull request, both OSes. | Yes | The whole tier in under 20 s of test time above the start of its processes on Linux, 25 s on Windows ("Budgets are enforced", below). |
 | **2. Integration** | Several crates together, in-process, with the scripted provider, fake tools or real tools on a temporary workspace, the fake clock and the virtual terminal. The agent loop, sessions, context, permissions, the RPC conformance scenarios, the TUI against the virtual terminal. | Every pull request, both OSes. | Yes | Under 40 s of test time above the start of its processes. |
 | **3. System** | The real binary as a process: headless runs against the scripted SSE server, the TUI under a pseudo-terminal, process-tree and sandbox behaviour, extension scripts and MCP fake servers. | Every pull request, both OSes. | Yes | Under 60 s of test time above the start of its processes on Linux, 90 s on Windows. |
 | **4. Performance** | The budgets in [performance-budgets.md](performance-budgets.md). | Main branch after merge, nightly, and on request. | No | 10 min. |
@@ -57,7 +57,7 @@ cineris test hooks: the test `verify::a_check` started `powershell`, and only a 
 
 | Tier | A test is reported as slow at | A test is stopped, and fails, at | The tier's tests together |
 |---|---|---|---|
-| 1. Unit | 2 s | 10 s | 20 s |
+| 1. Unit | 2 s | 10 s | 20 s on Linux, 25 s on Windows (since the owner's decision of 2026-11-20, in the small fixes; [steps/small-fixes/answered.md](steps/small-fixes/answered.md)) |
 | 2. Integration | 2 s | 10 s | 40 s |
 | 3. System | 10 s | 60 s | 60 s on Linux, 90 s on Windows |
 
