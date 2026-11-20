@@ -263,6 +263,7 @@ dependencies = [
  "idna_adapter",
  "reqwest",
  "rustls",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "thiserror",
