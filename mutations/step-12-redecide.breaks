@@ -253,7 +253,7 @@ caught-by:
 [break] an-answer-recorded-round-the-lock
 rule: A person's answer is recorded through the engine in force, under the lock a change of level holds.
 file: crates/cineris-core/src/policy.rs
-in: Policy::ask
+in: EnginePolicy::ask_with
 find: in_force.record(&question, &choice)
 replace: in_force.get().record(&question, &choice)
 caught-by:

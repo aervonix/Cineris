@@ -193,14 +193,39 @@ impl ExtensionTool {
     /// point 6). `readOnly` is shown to the user and decides nothing.
     fn new(definition: &ToolDef, extension: Arc<LoadedExtension>) -> Self {
         Self {
-            spec: ToolSpec::new(
-                definition.name.clone(),
-                definition.description.clone(),
-                definition.input.clone(),
-            )
-            .permission(RuleAction::Ask)
-            .concurrency(ConcurrencyClass::Exclusive),
+            spec: spec_of(definition),
             extension,
+        }
+    }
+}
+
+/// The spec of an extension's tool: its name, description and schema as
+/// registered; it asks, and it runs alone, whatever it says of itself.
+fn spec_of(definition: &ToolDef) -> ToolSpec {
+    ToolSpec::new(
+        definition.name.clone(),
+        definition.description.clone(),
+        definition.input.clone(),
+    )
+    .permission(RuleAction::Ask)
+    .concurrency(ConcurrencyClass::Exclusive)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_extensions_tool_asks_and_runs_alone_whatever_it_says_of_itself() {
+        for read_only in [false, true] {
+            let spec = spec_of(&ToolDef {
+                name: "find".to_owned(),
+                description: "Finds".to_owned(),
+                input: serde_json::json!({"type": "object"}),
+                read_only,
+            });
+            assert_eq!(spec.permission, RuleAction::Ask);
+            assert_eq!(spec.concurrency, ConcurrencyClass::Exclusive);
         }
     }
 }

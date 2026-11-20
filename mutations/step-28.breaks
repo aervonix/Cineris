@@ -239,3 +239,46 @@ find: if !entry.contains('/') && !entry.contains('\\') {
 replace: if !entry.starts_with('/') {
 caught-by:
     cineris-ext::it manifest::programs_are_bare_names_or_absolute_paths
+
+[break] a-host-calls-question-keeps-a-rule
+rule: A question a host call puts offers only allow once and deny, and no answer to it keeps a rule.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: question.lifts.clear();
+replace: question.lifts.truncate(usize::MAX);
+caught-by:
+    cineris-core::it extensions::a_host_write_of_a_protected_path_asks_once_only_and_keeps_no_rule
+
+[break] a-host-read-is-not-shown-to-the-engine
+rule: A script's read is decided by the permission engine as a read of its path.
+file: crates/cineris-core/src/ext/host.rs
+find: vec![Effect::Read(path.clone())]
+replace: Vec::new()
+caught-by:
+    cineris-core::it extensions::a_rule_that_denies_a_path_refuses_the_scripts_read_of_it
+
+[break] a-scripts-write-is-judged-by-the-models-reads
+rule: A script overwrites a file only after its own script read it as it is.
+file: crates/cineris-core/src/ext/host.rs
+find: cx.files = std::sync::Arc::clone(self.files);
+replace: let _ = self.files;
+caught-by:
+    cineris-core::it extensions::a_script_overwrites_a_file_only_after_reading_it_as_it_is
+
+[break] an-extensions-tool-runs-unasked
+rule: An extension's tool asks unless a rule allows it.
+file: crates/cineris-core/src/ext/tools.rs
+in: spec_of
+find: .permission(RuleAction::Ask)
+replace: .permission(RuleAction::Allow)
+caught-by:
+    ext::tools::tests::an_extensions_tool_asks_and_runs_alone_whatever_it_says_of_itself
+
+[break] an-extensions-tool-runs-beside-others
+rule: An extension's tool always runs alone, whatever it says of itself.
+file: crates/cineris-core/src/ext/tools.rs
+in: spec_of
+find: .concurrency(ConcurrencyClass::Exclusive)
+replace: .concurrency(ConcurrencyClass::ReadOnly)
+caught-by:
+    ext::tools::tests::an_extensions_tool_asks_and_runs_alone_whatever_it_says_of_itself
