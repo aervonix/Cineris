@@ -12,7 +12,7 @@ The second of step 28's pull requests: `cineris.http.fetch`, an extension's HTTP
 
 | Budget | Measured | Where |
 |---|---|---|
-| Binary size | The client adds no package: `reqwest` and `rustls` were linked for the providers, `rustls-native-certs` was in the lock under the platform's verifier, and `cineris-llm` turns on `tokio`'s `rt`, which the workspace already builds | [dependencies.md](../../../dependencies.md) |
+| Binary size | On Linux the client adds no package: `reqwest` and `rustls` were linked for the providers, and `rustls-native-certs` was built under the platform's verifier. On Windows it adds `rustls-native-certs` and `schannel`, which were in the lock and not in that build. `cineris-llm` turns on `tokio`'s `rt`, which the workspace already builds. The pull request's `pr-size` gives the bytes | [dependencies.md](../../../dependencies.md) |
 | The Windows verifier | A fixture certificate whose issuer, OCSP responder and revocation list name a local port: with the platform's verifier, the Windows runner's fetch connected to that port; with rustls over the system's roots, nothing did | Try runs 44832771217 (before) and 44833232058 (after) |
 | Start-up | Untouched: the client is made only when a script fetches | `cineris-core::it extensions` |
 
@@ -35,3 +35,20 @@ One reviewer, who had not seen the author's reasoning, read the whole diff again
 | The docs and the code disagreed on the time, and claimed more than held. | 30 s at most, less if the script asks or its call has less left, and the docs say what holds now. |
 
 The reviewer also found holding: one lookup, the pinned resolver, no proxy, no redirect, the header checks, the response's cap, cancellation and the time limit, and no URL in any error. Two breaks the reviewer found missing were added: the client's pinned resolver, and the core's passing of the checked host.
+
+## The review of the changes since
+
+A second reviewer, who had not seen the author's reasoning either, read the changes after the full review (`d2fb7cd2` onwards) with the whole pull request for context. It found no high finding, and found each of the full review's fixes holding: its probe of `url_host` against the `url` crate found, of 2,000,000 generated URLs, 173,412 taken and none read as another host. Two of the new breaks could never fail their tests (the IPv6 host's character check refused nothing its parse did not, and a host's one form was tested only with `::1`), which the breaks' own run had found too and a commit had fixed. Each finding below was fixed with a test and a break, but the second, which the maintainers settled.
+
+| Finding | Fixed by |
+|---|---|
+| One root certificate rustls cannot read made every `https` fetch fail: `reqwest::Certificate::from_der` takes any bytes, and the client's building refuses the store. | The roots are those a rustls store takes; with none, an `https` fetch says so. |
+| The fetch does not refuse the machine's own addresses, or its network's, when they are addresses of the internet (a dual-stack network's IPv6 ones), and `security.md` claimed it did. A name a pattern allows can be pointed at one: over `https` most local services do not answer it, but a script can try the ports. | As the maintainers settled: the claim says what holds and what stays reachable, a failure to connect reads the same whatever its cause, and [an item](../../../outstanding/a-fetch-reaches-the-machines-own-and-its-networks-public-addresses.md) for step 32 has the check of the machine's interfaces and their networks, and the words a wildcard in `net` is to be approved with. |
+| The question hid a query's size, showed the path whole, and capped nothing; no URL was too long. | The question names the query's size and the headers' count and size, cuts the URL and the headers' names at 200 bytes, and says a path is shown; a URL over 8 KiB is refused before anyone is asked; what prints shows a URL's scheme and host only. |
+| The extension page said a host named literally may be reached over `http`; the host trait's documentation still named every literal entry. | An address, or `localhost`. |
+| The `rustls-native-certs` row said a clean build compiles nothing more, which is so on Linux and not on Windows; the variables that name the roots apply on every system; the Windows store read is the current user's. | The row, and this record's size. |
+| What the roots read as they stand give up on Windows was not written: a root not yet downloaded, the `Disallowed` store. | `security.md`, the providers page and the row. |
+| IANA's `100:0:0:1::/64` (a dummy prefix) was missing. | It is in the list. |
+| `RANGES`' fields were public, and a range alone does not see an IPv6 form of an address. | The fields are the list's own, and the list says to decide with `classify`. |
+| A response's `Debug` printed header values, and the extension side's its body. | Names and sizes. |
+

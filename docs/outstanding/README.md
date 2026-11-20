@@ -88,6 +88,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-llm
 
+- [a-fetch-reaches-the-machines-own-and-its-networks-public-addresses](a-fetch-reaches-the-machines-own-and-its-networks-public-addresses.md): An extension's fetch does not refuse the machine's own addresses, or its network's, when they are addresses of the internet: a name a wildcard in `net` allows can be pointed at one. Owner: step 32 (hardening pass).
 - [a-price-that-depends-on-the-time-of-day](a-price-that-depends-on-the-time-of-day.md): The catalog's single rate card records DeepSeek's off-peak requests at the peak price, an upper bound. Owner: the owner, with step 16.
 - [account-in-the-replay-rule](account-in-the-replay-rule.md): Whether a request carries its account, so a provider tying reasoning to an account never gets another's. Owner: the first step that adds such a provider, or step 53.
 - [fuzz-targets-for-later-decoders](fuzz-targets-for-later-decoders.md): Each later provider protocol's decoder needs a fuzz target in `fuzz/` and a line in `xtask/src/outside.rs`. Owner: steps 31, 35 and 36.
