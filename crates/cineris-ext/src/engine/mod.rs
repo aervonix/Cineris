@@ -241,6 +241,12 @@ pub enum CallError {
     /// The runtime is gone: torn down by a limit, or its thread ended.
     #[error("the extension's runtime is not running")]
     Gone,
+    /// Another runtime of the extension left its thread running.
+    #[error(
+        "the extension is disabled: its script did not stop when its time was up, and its thread \
+         was left running. It is started again after the harness restarts"
+    )]
+    Disabled,
 }
 
 /// What a runtime is made from.
@@ -462,6 +468,12 @@ impl ScriptRuntime {
     ) -> Result<Json, CallError> {
         if !self.is_alive() {
             return Err(CallError::Gone);
+        }
+        // Another runtime of this extension left its thread running: this
+        // one takes no more calls either (the review of step 28's fixes:
+        // each live runtime could leave one more).
+        if is_disabled(&self.loaded.hash) {
+            return Err(CallError::Disabled);
         }
         let phase = match target {
             Target::Tool(_) => Phase::Tool,

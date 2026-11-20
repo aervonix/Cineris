@@ -1806,3 +1806,30 @@ replace: text.chars().any(|character| !matches!(character, '\n' | '\t') && ciner
 caught-by:
     cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
 
+[break] a-live-runtime-of-a-disabled-extension-takes-calls
+rule: A runtime of an extension whose other runtime left its thread running takes no more calls.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::call_to_its_end
+find: if is_disabled(&self.loaded.hash) {
+replace: if is_disabled(&self.loaded.hash) && false {
+caught-by:
+    cineris-ext::it engine::a_live_runtime_of_a_disabled_extension_takes_no_more_calls
+
+[break] a-program-is-dropped-at-the-calls-deadline
+rule: A program's host call is followed to its end when the call's time is up, as on a cancel.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::call_to_its_end
+find: ending = Some(CallError::TimedOut);
+replace: { ending = Some(CallError::TimedOut); return std::task::Poll::Ready(None); }
+caught-by:
+    cineris-ext::it engine::a_call_out_of_time_follows_its_program_to_the_end
+
+[break] a-call-the-thread-took-is-withdrawn-anyway
+rule: A call the thread took before its cancel is stopped as a started call is, its grace and the count of threads left running applying.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::call_to_its_end
+find: .is_ok() =>
+replace: .is_ok() || true =>
+caught-by:
+    cineris-ext::it engine::a_call_the_thread_took_before_its_cancel_is_stopped_and_counted
+

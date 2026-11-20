@@ -303,17 +303,26 @@ pub(crate) async fn run(
     // up, and an open question with it: the engine follows a program's
     // host call to its end, and a question nobody answers would hold the
     // call, and the turn, for ever (the review of step 28's fixes).
-    let decided = {
+    // Its time is reckoned from when the program was asked for, the steps
+    // before the decision included, and a call already over or cancelled
+    // is put no question at all (the review of step 28's fixes: one could
+    // be put and withdrawn at once).
+    let left = request
+        .call_left
+        .saturating_sub(host.parts.clock.monotonic().saturating_sub(arrived));
+    let decided = if left.is_zero() || cx.cancel.is_cancelled() {
+        None
+    } else {
         let mut decision = std::pin::pin!(decision);
         let mut cancelled = std::pin::pin!(cx.cancel.cancelled());
-        let mut over = host.parts.timer.sleep(request.call_left);
+        let mut over = host.parts.timer.sleep(left);
         std::future::poll_fn(|context| {
-            if let std::task::Poll::Ready(decided) = decision.as_mut().poll(context) {
-                return std::task::Poll::Ready(Some(decided));
-            }
             if cancelled.as_mut().poll(context).is_ready() || over.as_mut().poll(context).is_ready()
             {
                 return std::task::Poll::Ready(None);
+            }
+            if let std::task::Poll::Ready(decided) = decision.as_mut().poll(context) {
+                return std::task::Poll::Ready(Some(decided));
             }
             std::task::Poll::Pending
         })
