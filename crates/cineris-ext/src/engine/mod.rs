@@ -530,9 +530,12 @@ impl ScriptRuntime {
                     let answer = {
                         let mut served = pin!(serve(call, cx.capabilities, cx.host, phase, left));
                         poll_fn(|context| {
-                            if let Poll::Ready(answer) = served.as_mut().poll(context) {
-                                return Poll::Ready(Some(answer));
-                            }
+                            // The call's end is looked at before the host
+                            // call's answer: an answer that comes at the
+                            // same moment (a program's own limit, which is
+                            // the call's) does not let the script go on
+                            // past its time (the stress run of step 28's
+                            // fixes).
                             if ending.is_none() {
                                 if let Some(deadline) = &mut deadline
                                     && deadline.as_mut().poll(context).is_ready()
@@ -544,6 +547,9 @@ impl ScriptRuntime {
                                 if ending.is_some() && !to_its_end {
                                     return Poll::Ready(None);
                                 }
+                            }
+                            if let Poll::Ready(answer) = served.as_mut().poll(context) {
+                                return Poll::Ready(Some(answer));
                             }
                             Poll::Pending
                         })
