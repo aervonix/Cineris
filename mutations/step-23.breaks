@@ -420,20 +420,20 @@ caught-by:
     app::tests::a_fork_that_fails_closes_its_original_and_takes_nothing_of_it
 
 [break] a-failed-open-shows-anothers-events
-rule: Of the events held while a session was being opened, a failed open shows only the notices: the rest are of a session that is not this client's.
+rule: Of the events held while a session was being opened, a failed open shows only the notices: the rest are of a session that is not this client's. Since the small fixes the one gate is `App::event`'s, for every event that comes with no session open; `open_failed` checked it a second time, which no break could reach (a session is only opened with none open), and no longer does.
 file: crates/cineris-tui/src/app/state.rs
-in: App::open_failed
-find: if matches!(event.event, Event::Notice(_)) {
-replace: if true {
+in: App::event
+find: None if !matches!(event.event, Event::Notice(_)) => return,
+replace: None => {}
 caught-by:
     app::tests::a_fork_that_fails_closes_its_original_and_takes_nothing_of_it
 
 [break] an-update-of-another-session-taken
-rule: With no session open on this client, an update of another session is not taken for one.
+rule: With no session open on this client, an update of another session is not taken for one. Since the small fixes the gate at the head of `App::event` is the one check (the update's own arm checked again, which no break could reach); this break lets an update through it.
 file: crates/cineris-tui/src/app/state.rs
 in: App::event
-find: if self.session.is_some() {
-replace: if true {
+find: None if !matches!(event.event, Event::Notice(_)) => return,
+replace: None if !matches!(event.event, Event::Notice(_) | Event::SessionUpdated(_)) => return,
 caught-by:
     app::tests::a_fork_that_fails_closes_its_original_and_takes_nothing_of_it
 
