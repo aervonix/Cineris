@@ -1,5 +1,5 @@
-//! The lock that keeps two writers of a stored file apart: the trust store
-//! and a project's stored approvals.
+//! The lock that keeps two writers of a stored file apart: the trust store,
+//! the user's pins and a project's stored approvals.
 //!
 //! Each change to one of those files reads it, changes it and writes it
 //! whole. Two sessions doing that at once would each write what they read

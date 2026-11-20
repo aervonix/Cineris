@@ -77,6 +77,15 @@
 //!   that reads only version 1 refuses a version 2 file whole, by its
 //!   version (decision 0028's rule: a file a build cannot read in full is
 //!   not read in part), and so trusts nothing until it is updated.
+//!
+//! # The user's own pins
+//!
+//! What runs code and is the user's own, not a project's, belongs to no
+//! project, and is pinned in a file of its own beside this one (since step
+//! 28): `pins.toml`, the [`PinStore`], whose module documentation says why it
+//! is not a version 3 of this file. The user's own extensions are pinned
+//! there; a [`Definition`] stands with it as with a trusted project
+//! ([`UserPins::standing`]), never `Untrusted`.
 
 #![allow(
     clippy::disallowed_methods,
@@ -96,6 +105,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::store_lock;
 
+mod pins;
+
+pub use pins::{PinError, PinStore, UserPin, UserPins};
+
 /// The version of the file's format this build writes.
 const VERSION: u32 = 2;
 
@@ -106,8 +119,10 @@ const OLDEST: u32 = 1;
 /// The largest file read.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-/// One thing in a project that can run code or grant permissions, as it is
-/// now: what kind of thing, its name, and the hash of its definition.
+/// One thing in a project that can run code or grant permissions, or one of
+/// the user's own that runs code (an extension in the user's configuration
+/// directory, since step 28), as it is now: what kind of thing, its name,
+/// and the hash of its definition.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Definition {
     /// What kind of thing it is.
@@ -249,8 +264,10 @@ pub enum Standing {
     /// approve the change.
     Changed,
     /// The project is trusted, and this was not among what the user saw.
+    /// Of the user's own ([`UserPins`]): nothing of its kind and name is
+    /// pinned.
     New,
-    /// The project is not trusted.
+    /// The project is not trusted. Never said of the user's own.
     Untrusted,
 }
 
