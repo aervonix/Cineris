@@ -435,6 +435,56 @@ fn a_question_about_a_program_shows_the_quoted_line_and_offers_only_once_or_deny
     });
 }
 
+/// In a PowerShell session a program's line is judged by PowerShell's own
+/// commands and aliases, which are not the program that runs: `write` is
+/// `Write-Output` there, read-only, and the program is not. What that
+/// shell calls read-only is asked about (the early review of step 28).
+#[test]
+fn sys_in_powershell_a_program_the_shell_calls_read_only_is_asked_about() {
+    let world = World::new("exec_pwsh_alias", []);
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let probe = extension(&world, "probe", "exec = [\"write\"]");
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "write", "args": echo_args(&[])}),
+    ));
+    world.provider.push(says("Done."));
+    let dir = world.dir.join("tools");
+    place_echo(&dir, "write");
+    let env = path_with(&world, &[&dir], &[]);
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.shell_env = Some(env);
+        options.shell = Some(cineris_tools::Shell::of_kind(
+            cineris_tools::ShellKind::Pwsh,
+            "pwsh",
+        ));
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let asked = front.turn_denying("run it").await;
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        let approval = &front.approvals()[0];
+        assert!(
+            approval
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("whose own commands and aliases")),
+            "{approval:?}"
+        );
+        assert_eq!(
+            approval.choices,
+            [ApprovalChoice::AllowOnce, ApprovalChoice::Deny]
+        );
+        let answer = answered(&front, 0);
+        assert!(answer.starts_with("refused:"), "{answer}");
+        front.close().await;
+    });
+}
+
 /// With `exec_network` the program is decided as reaching the network
 /// too: a session whose rules allow the line but say nothing of the
 /// network asks about it.
@@ -710,6 +760,45 @@ mod confined {
                 stdout.contains("real") && !stdout.contains("planted"),
                 "{ran}"
             );
+            front.close().await;
+        });
+    }
+
+    /// At `unrestricted` the shell's commands run unconfined and an
+    /// extension's programs do not: a question about one says it is
+    /// confined (by the extension's own launcher), not the session's word.
+    #[test]
+    fn sys_a_question_about_a_program_at_unrestricted_says_it_is_confined() {
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_confined_detail", []);
+        world.user_config(
+            "[[permissions.rules]]\neffect = \"exec\"\nmatch = \"sh *\"\naction = \"ask\"\n",
+        );
+        let probe = extension(&world, "probe", "exec = [\"sh\"]");
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": "sh", "args": ["-c", "echo hi"]}),
+        ));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Unrestricted).await;
+            front.turn("run it").await;
+            let asked = front
+                .approvals()
+                .into_iter()
+                .find(|approval| approval.tool == "probe/run")
+                .expect("the program was asked about");
+            let ApprovalDetail::Command(detail) = &asked.detail else {
+                panic!("not a command: {:?}", asked.detail);
+            };
+            assert!(!detail.outside_sandbox, "{detail:?}");
             front.close().await;
         });
     }

@@ -1060,7 +1060,7 @@ impl Policy for EnginePolicy {
     }
 
     fn ask<'a>(&'a self, call: PlannedCall<'a>) -> BoxFuture<'a, Verdict> {
-        self.ask_with(call, false)
+        self.ask_with(call, None)
     }
 
     /// Whether an answer may be to stop the turn. A person's choices have
@@ -1156,6 +1156,11 @@ impl EnginePolicy {
     }
 
     /// Puts a planned call's question, as [`Policy::ask`] does. With
+    /// `host`, the call is an extension's host call (step 28): only "allow
+    /// once" and "deny" are offered, and what it shows and asks is as
+    /// `host` says.
+    ///
+    /// With
     /// `once_only` the question offers only "allow once" and "deny", and
     /// no answer records a rule: what an extension's host call asks (a
     /// rule kept from it would reach past the extension: an
@@ -1164,8 +1169,9 @@ impl EnginePolicy {
     pub(crate) fn ask_with<'a>(
         &'a self,
         call: PlannedCall<'a>,
-        once_only: bool,
+        host: Option<HostQuestion>,
     ) -> BoxFuture<'a, Verdict> {
+        let once_only = host.is_some();
         Box::pin(async move {
             if let Some(reason) = self.stopped(&call) {
                 return Verdict::Stop { reason };
@@ -1173,6 +1179,16 @@ impl EnginePolicy {
             // Decided again: an answer to an earlier question of the round
             // may have settled this one.
             let mut question = match self.outcome(&call) {
+                Outcome::Allow { read_only: true }
+                    if host.is_some_and(|host| host.read_only_asks) =>
+                {
+                    Question {
+                        reasons: vec![READ_ONLY_IN_ANOTHER_SHELL.to_owned()],
+                        lifts: Vec::new(),
+                        storable: false,
+                        managed: false,
+                    }
+                }
                 Outcome::Allow { .. } => return Verdict::Allow,
                 Outcome::Deny { reason } => return Verdict::Deny { note: Some(reason) },
                 Outcome::Ask(question) => question,
@@ -1203,7 +1219,9 @@ impl EnginePolicy {
                 summary: call.plan.summary.clone(),
                 detail: detail(
                     &call,
-                    self.sandboxed.load(std::sync::atomic::Ordering::Acquire),
+                    host.and_then(|host| host.confined).unwrap_or_else(|| {
+                        self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
+                    }),
                 ),
                 choices: question.choices(),
                 reasons: question.reasons.clone(),
@@ -1337,6 +1355,26 @@ impl EnginePolicy {
         })
     }
 }
+
+/// How an extension's host call is put to a person (step 28).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct HostQuestion {
+    /// For a program: whether the extension's own launcher confines it.
+    /// Its question says so, whatever the session's commands do: at
+    /// `unrestricted` the shell's commands run unconfined and an
+    /// extension's programs do not.
+    pub(crate) confined: Option<bool>,
+    /// Whether a call the engine allows as read-only is asked all the same:
+    /// a program's line judged in a shell whose own commands and aliases
+    /// are not the program that runs (in PowerShell `write` is
+    /// `Write-Output`; the program is `write.exe`).
+    pub(crate) read_only_asks: bool,
+}
+
+/// Why a program the engine judged read-only is asked about.
+pub(crate) const READ_ONLY_IN_ANOTHER_SHELL: &str = "The program's line was judged in the \
+     session's shell, whose own commands and aliases are not the program that runs, so what that \
+     shell calls read-only is asked about.";
 
 /// What a directory walk may read, entry by entry: the engine's read rules.
 struct EngineGate(Arc<Engine>);

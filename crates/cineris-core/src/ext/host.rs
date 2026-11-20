@@ -15,6 +15,8 @@ use std::io::Read as _;
 use std::sync::Mutex;
 
 use cineris_agent::{Decision, PlannedCall, Policy as _, Verdict};
+
+pub(crate) use crate::policy::HostQuestion;
 use cineris_base::path::ResolvedPath;
 use cineris_ext::host::{
     ExecOutput, ExecRequest, FS_MAX_BYTES, Host, HostError, HostFuture, Listing, ManifestGate,
@@ -47,13 +49,14 @@ pub(crate) struct CallHost<'a> {
 
 impl CallHost<'_> {
     /// Decides one host call: the policy's answer, or the person's when it
-    /// asks. `Ok` when it may run.
+    /// asks, as `how` says it is put. `Ok` when it may run.
     pub(crate) async fn decide(
         &self,
         summary: String,
         arguments: Json,
         effects: Vec<Effect>,
         preview: Option<&cineris_tools::ChangePreview>,
+        how: HostQuestion,
     ) -> Result<(), HostError> {
         let Some(call) = &self.cx.call else {
             return Err(HostError::NotHere(
@@ -82,29 +85,33 @@ impl CallHost<'_> {
             preview,
         };
         match self.parts.policy.decide(&planned) {
-            Decision::Allow | Decision::AllowReadOnly => Ok(()),
+            // What the session's shell calls read-only may not be the
+            // program that runs: asked, as `how` says.
+            Decision::AllowReadOnly if how.read_only_asks => {}
+            Decision::Allow | Decision::AllowReadOnly => return Ok(()),
             Decision::Deny { reason } => {
-                Err(HostError::Denied(reason.unwrap_or_else(|| {
-                    "the permission rules refuse it".to_owned()
-                })))
+                return Err(HostError::Denied(
+                    reason.unwrap_or_else(|| "the permission rules refuse it".to_owned()),
+                ));
             }
-            Decision::Stop { reason } => Err(HostError::Stopped(reason)),
-            Decision::Ask => match self.parts.policy.ask_with(planned, true).await {
-                Verdict::Allow => Ok(()),
-                Verdict::Deny { note } => Err(HostError::Denied(
-                    note.unwrap_or_else(|| "the user refused it".to_owned()),
-                )),
-                Verdict::Stop { reason } => {
-                    // The turn stops here, as it would have at a call of
-                    // the round's own: every call of it not yet started is
-                    // decided again and answered with the stop. (A stop
-                    // already in force is what this one says, if there was
-                    // one: its reason is the same.)
-                    self.parts.policy.stop_turn(self.cx.turn, reason.clone());
-                    Err(HostError::Stopped(reason))
-                }
-                _ => Err(HostError::Denied("it was not allowed".to_owned())),
-            },
+            Decision::Stop { reason } => return Err(HostError::Stopped(reason)),
+            Decision::Ask => {}
+            _ => return Err(HostError::Denied("it was not allowed".to_owned())),
+        }
+        match self.parts.policy.ask_with(planned, Some(how)).await {
+            Verdict::Allow => Ok(()),
+            Verdict::Deny { note } => Err(HostError::Denied(
+                note.unwrap_or_else(|| "the user refused it".to_owned()),
+            )),
+            Verdict::Stop { reason } => {
+                // The turn stops here, as it would have at a call of
+                // the round's own: every call of it not yet started is
+                // decided again and answered with the stop. (A stop
+                // already in force is what this one says, if there was
+                // one: its reason is the same.)
+                self.parts.policy.stop_turn(self.cx.turn, reason.clone());
+                Err(HostError::Stopped(reason))
+            }
             _ => Err(HostError::Denied("it was not allowed".to_owned())),
         }
     }
@@ -146,6 +153,7 @@ impl Host for CallHost<'_> {
                 json!({"path": path.data()}),
                 vec![Effect::Read(path.clone())],
                 None,
+                HostQuestion::default(),
             )
             .await?;
             // The decision may have waited on a person: the path must still
@@ -219,6 +227,7 @@ impl Host for CallHost<'_> {
                 arguments,
                 plan.effects.clone(),
                 preview.as_ref(),
+                HostQuestion::default(),
             )
             .await?;
             let result =
@@ -358,6 +367,7 @@ impl CallHost<'_> {
             arguments,
             plan.effects.clone(),
             None,
+            HostQuestion::default(),
         )
         .await?;
         let result = cineris_tools::execute(tool.as_ref(), plan, &cx, &mut NoOutput).await;

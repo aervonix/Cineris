@@ -93,6 +93,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-policy
 
+- [an-extensions-program-is-judged-by-the-sessions-shell](an-extensions-program-is-judged-by-the-sessions-shell.md): The permission engine judges an extension's program by a line in the session's shell, whose own commands and aliases are not the program that runs; step 28 asks about what PowerShell and `cmd` call read-only rather than allow it. Owner: step 32 (hardening pass).
 - [cd-readings-the-analysis-does-not-share](cd-readings-the-analysis-does-not-share.md): The command analysis reads `cd` differently from bash (mode-000 directories) and probably from Git for Windows. Owner: step 32, with a Windows run.
 - [false-asks-from-the-pattern-and-word-checks](false-asks-from-the-pattern-and-word-checks.md): The pattern and word checks ask or refuse needlessly for several link, quoting, set and heredoc forms. Owner: step 32.
 - [git-forms-the-command-analysis-misreads](git-forms-the-command-analysis-misreads.md): The command analysis misses `git config` run through an alias, and misreads `git diff` outside a repository. Owner: step 32.
