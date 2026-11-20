@@ -1,0 +1,242 @@
+# Step 28: extensions. The rules of `cineris-ext` and of the core's side of
+# its host functions, broken one at a time, with the tests that must fail.
+# Written with the code (docs/steps/28/answered.md).
+
+[break] a-host-read-skips-the-manifest
+rule: A host read is checked against the manifest's `read` globs before the host is asked.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find:
+            let resolved = host.resolve(&path).await?;
+            capabilities.read(&resolved)?;
+            let text = host.read(resolved, offset, limit).await?;
+replace:
+            let resolved = host.resolve(&path).await?;
+            let text = host.read(resolved, offset, limit).await?;
+caught-by:
+    cineris-ext::it capability::a_read_is_judged_where_its_path_leads_however_it_is_written
+
+[break] a-host-write-skips-the-manifest
+rule: A host write is checked against the manifest's `write` globs before the host is asked.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: capabilities.write(&resolved)?;
+replace: let _ = &resolved;
+caught-by:
+    cineris-ext::it capability::a_write_is_judged_the_same_way
+
+[break] an-unlisted-program-reaches-the-host
+rule: A program runs only when the manifest lists it exactly as the script names it.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: let program = capabilities.exec(&program)?.clone();
+replace: let program = crate::manifest::Program::Name(program);
+caught-by:
+    cineris-ext::it engine::a_program_the_manifest_does_not_list_never_reaches_the_host
+    cineris-ext::it serve::the_manifest_is_asked_before_the_host
+
+[break] a-walks-entries-are-not-checked
+rule: Each entry a listing or a search reaches is checked against the manifest on its own.
+file: crates/cineris-ext/src/host.rs
+in: entries_json
+find: .filter(|entry| capabilities.reads(&entry.path))
+replace: .filter(|_| true)
+caught-by:
+    cineris-ext::it capability::each_entry_a_walk_reaches_is_checked_on_its_own
+
+[break] a-hook-may-write
+rule: `cineris.fs.write` works only in a tool call, whose round records the change.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: if phase != Phase::Tool {
+replace: if phase == Phase::Evaluation {
+caught-by:
+    cineris-ext::it serve::a_hook_cannot_put_a_question_and_only_a_tool_call_writes
+
+[break] a-hook-may-ask
+rule: A hook cannot put a question: it decides by its answer.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: if phase == Phase::Hook {
+replace: if phase == Phase::Evaluation {
+caught-by:
+    cineris-ext::it serve::a_hook_cannot_put_a_question_and_only_a_tool_call_writes
+
+[break] host-calls-during-the-first-evaluation
+rule: Nothing but registering happens while the main module is first evaluated.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: if phase == Phase::Evaluation {
+replace: if phase == Phase::Hook && false {
+caught-by:
+    cineris-ext::it serve::nothing_but_registering_happens_while_the_main_module_is_first_evaluated
+
+[break] a-programs-time-outlasts-its-call
+rule: A program's time is never longer than its call has left.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: timeout: asked.min(time_left)
+replace: timeout: asked
+caught-by:
+    cineris-ext::it serve::a_programs_time_is_never_longer_than_the_call_has_left
+
+[break] programs-reach-the-network-unasked
+rule: A program an extension runs reaches the network only when its manifest says `exec_network`.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: network: capabilities.declared().exec_network
+replace: network: true
+caught-by:
+    cineris-ext::it engine::an_async_tool_awaits_host_functions_the_manifest_allows
+
+[break] programs-write-wherever-the-session-may
+rule: A program's write roots are made from the manifest's `write` globs.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: write_roots: capabilities.write_roots()
+replace: write_roots: Vec::new()
+caught-by:
+    cineris-ext::it serve::the_manifest_is_asked_before_the_host
+
+[break] the-native-entry-points-stay-on-the-global-object
+rule: The prelude takes the two native entry points off the global object.
+file: crates/cineris-ext/src/engine/prelude.js
+find: delete globalThis.__cineris_host;
+replace: void 0;
+caught-by:
+    cineris-ext::it engine::nothing_ambient_is_on_the_global_object
+    cineris-ext::it engine::code_made_by_eval_and_by_function_reaches_no_more
+
+[break] the-context-has-a-high-resolution-clock
+rule: The context has no `Performance` object.
+file: crates/cineris-ext/src/engine/thread.rs
+find: intrinsic::WeakRef
+replace: intrinsic::WeakRef, intrinsic::Performance
+caught-by:
+    cineris-ext::it engine::nothing_ambient_is_on_the_global_object
+
+[break] the-context-has-proxy
+rule: The context has no `Proxy`.
+file: crates/cineris-ext/src/engine/thread.rs
+find: intrinsic::MapSet
+replace: intrinsic::MapSet, intrinsic::Proxy
+caught-by:
+    cineris-ext::it engine::nothing_ambient_is_on_the_global_object
+
+[break] registering-after-the-first-evaluation
+rule: An extension registers only while its main module is first evaluated.
+file: crates/cineris-ext/src/engine/thread.rs
+in: register
+find: if shared.phase != Phase::Evaluation {
+replace: if shared.phase == Phase::Hook {
+caught-by:
+    cineris-ext::it engine::registering_after_the_first_evaluation_is_refused
+
+[break] a-hook-on-an-event-the-manifest-does-not-list
+rule: A script hooks only the events its manifest lists.
+file: crates/cineris-ext/src/engine/thread.rs
+in: register
+find: if !shared.hooks_allowed.contains(&event) {
+replace: if shared.hooks_allowed.contains(&event) && false {
+caught-by:
+    cineris-ext::it engine::a_hook_on_an_event_the_manifest_does_not_list_refuses_the_extension
+
+[break] a-changed-folder-is-evaluated
+rule: A runtime is made only from a snapshot whose hash is the pinned one.
+file: crates/cineris-ext/src/engine/thread.rs
+in: body
+find: Ok(snapshot) if snapshot.hash() == pinned => Arc::new(snapshot),
+replace: Ok(snapshot) => Arc::new(snapshot),
+caught-by:
+    cineris-ext::it engine::a_changed_folder_is_never_evaluated
+
+[break] another-registration-is-accepted
+rule: A live runtime must register what the extension registered when it was approved.
+file: crates/cineris-ext/src/engine/thread.rs
+in: body
+find: Some(expected) if expected != registration => Err(LoadError::Mismatch),
+replace: Some(expected) if expected != registration && false => Err(LoadError::Mismatch),
+caught-by:
+    cineris-ext::it engine::a_registration_other_than_the_approved_one_refuses_the_extension
+
+[break] the-memory-limit-is-not-the-manifests
+rule: A runtime's memory limit is the one its manifest sets.
+file: crates/cineris-ext/src/engine/thread.rs
+in: body
+find: manifest.limits.memory_mib * 1024 * 1024
+replace: manifest.limits.memory_mib * 1024 * 1024 * 4
+caught-by:
+    cineris-ext::it engine::the_memory_limit_is_the_one_the_manifest_sets
+
+[break] a-result-past-its-cap
+rule: A call's result is at most 1 MiB of JSON.
+file: crates/cineris-ext/src/engine/thread.rs
+in: from_js
+find: if text.len() > MAX_RESULT_BYTES {
+replace: if text.len() > MAX_RESULT_BYTES * 8 {
+caught-by:
+    cineris-ext::it engine::a_result_larger_than_its_cap_is_refused
+
+[break] a-torn-down-runtime-says-so-late
+rule: A runtime torn down by a limit says so before the call's end is told.
+file: crates/cineris-ext/src/engine/thread.rs
+in: run
+find:
+        if let After::TornDown = after {
+            self.alive.store(false, Ordering::SeqCst);
+        }
+replace:
+        if let After::TornDown = after {
+            let _ = &self.alive;
+        }
+caught-by:
+    cineris-ext::it engine::a_memory_bomb_is_stopped_by_the_memory_limit
+
+[break] a-link-in-the-folder-is-followed
+rule: An extension's folder holds no link: a link anywhere in it refuses the extension.
+file: crates/cineris-ext/src/folder.rs
+in: read_into
+find:
+        if kind.is_symlink() {
+            return Err(FolderError::Link(relative));
+        }
+replace:
+        if kind.is_symlink() && false {
+            return Err(FolderError::Link(relative));
+        }
+caught-by:
+    cineris-ext::it folder::a_link_anywhere_in_the_folder_refuses_it
+
+[break] an-import-climbs-out-of-the-folder
+rule: An import resolves only inside the extension's folder.
+file: crates/cineris-ext/src/engine/loader.rs
+find: names.pop()?;
+replace: names.pop();
+caught-by:
+    engine::loader::tests::imports_resolve_by_their_text_within_the_folder
+
+[break] a-domain-pattern-matches-its-own-name
+rule: `*.example.com` names hosts under the domain, never the domain itself or a name that ends with it.
+file: crates/cineris-ext/src/manifest.rs
+in: matches
+find: .is_some_and(|rest| !rest.is_empty())
+replace: .is_some()
+caught-by:
+    cineris-ext::it manifest::hosts_are_names_addresses_or_wildcards_and_nothing_more
+
+[break] an-unknown-manifest-key-is-passed-over
+rule: The manifest is read strictly: an unknown key refuses it.
+file: crates/cineris-ext/src/manifest.rs
+find: #[serde(deny_unknown_fields)] struct Raw {
+replace: struct Raw {
+caught-by:
+    cineris-ext::it manifest::an_unknown_key_anywhere_refuses_it
+
+[break] a-relative-program-is-taken
+rule: A program is a bare name or an absolute path; a relative path is refused.
+file: crates/cineris-ext/src/manifest.rs
+in: program
+find: if !entry.contains('/') && !entry.contains('\\') {
+replace: if !entry.starts_with('/') {
+caught-by:
+    cineris-ext::it manifest::programs_are_bare_names_or_absolute_paths
