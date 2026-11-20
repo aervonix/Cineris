@@ -4,25 +4,27 @@
 
 <!-- written by cargo xtask ci-times, section "The first pull request: the engine": it replaces this up to the end mark -->
 Pull request 117, on `main` at `119f09c`. "Main" is main's own run at `119f09c` (run 44791484182).
-The PR's run is 44822683826, at `9f88e66`.
+The PR's run is 44824670735, at `96bd8b2`.
 
-| Job | Main, `119f09c` | The PR at `9f88e66` |
+| Job | Main, `119f09c` | The PR at `96bd8b2` |
 |---|---|---|
-| `lint-linux` | 55 s | 98 s |
-| `test-linux` | 149 s | 151 s |
-| `lint-windows` | 108 s | 127 s |
-| `test-windows` | 175 s | 302 s |
-| `ts-client` (blocks nothing) | 0 s | 0 s |
+| `lint-linux` | 55 s | 88 s |
+| `test-linux` | 149 s | 171 s |
+| `lint-windows` | 108 s | 109 s |
+| `test-windows` | 175 s | 230 s |
+| `pr-size-linux` (blocks nothing) | — | 427 s |
+| `ts-client` (blocks nothing) | 0 s | 6 s |
+| `pr-size-windows` (blocks nothing) | — | 306 s |
 
-| Time above process start, against the budget | Linux, main (4 ms) | Linux, `9f88e66` (3 ms) | Windows, main (5 ms) | Windows, `9f88e66` (8 ms) |
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `96bd8b2` (4 ms) | Windows, main (5 ms) | Windows, `96bd8b2` (6 ms) |
 |---|---|---|---|---|
-| Tier 1, unit (20 s on Linux, 25 s on Windows) | 16.4 s | 14.9 s | 10.1 s | 23.9 s |
-| Tier 2, integration (40 s) | 22.2 s | 23.3 s | 21.4 s | 48.9 s |
-| Tier 3, system (60 s on Linux, 90 s on Windows) | 38.1 s | 35.5 s | 61.4 s | 95.9 s |
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 16.4 s | 18.8 s | 10.1 s | 17.7 s |
+| Tier 2, integration (40 s) | 22.2 s | 25.5 s | 21.4 s | 36.3 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 38.1 s | 41.8 s | 61.4 s | 76.3 s |
 
 <!-- end of what cargo xtask ci-times wrote, section "The first pull request: the engine" -->
 
-The PR's `test-windows` ran on a slow runner (a process start of 8 ms, against 5 ms for main's run) and from a cold build, `rquickjs` having changed the lock file. Every test passed, and the job's tier check warned at 122% of the integration tier's budget and 107% of the system tier's, under the failure at 150%; the job was then stopped at its five-minute limit after the line "Every test passed". The unit tier, which this pull request hardly touches, took 23.9 s against main's 10.1 s on that runner, about 2.4 times as long, and `cineris-core`'s share of the integration tier was the same as on the runner below (19.1 s of 48.9 s, against 9.5 s of 23.9 s). Two runs on runners of different speeds are not compared, so the change is the one both trees show on one runner.
+The pull request's first run (44822683826, at `9f88e66`, the commit before this page) passed `lint-linux`, `lint-windows` and `test-linux`, and its `test-windows`, on a slow runner (a process start of 8 ms) and from a cold build (`rquickjs` changed the lock file), passed every test and was stopped at its five-minute limit after the line "Every test passed"; its tier check had warned at 122% of the integration tier's budget and 107% of the system tier's, under the failure at 150%. The unit tier, which this pull request hardly touches, took 23.9 s there against main's 10.1 s, and `cineris-core`'s share of the integration tier was the one both trees show on one runner below (19.1 s of 48.9 s, against 9.5 s of 23.9 s): the runner, not the change. The run above, at `96bd8b2`, is the second, every job of it passed, and two runs on runners of different speeds are not compared: the change is the one both trees show on one runner.
 
 ## The first pull request, both trees on one runner
 
@@ -38,7 +40,7 @@ The crates that moved: in the integration tier `cineris-core` 8.54 s to 9.51 s a
 
 ## The first pull request: the binary's size
 
-The PR's `pr-size` jobs wait for its tests, and were not run once `test-windows` was stopped at its time limit, so the size was measured by `try` runs of `cargo xtask size --check --against-main`: Linux in run 44819307542 (at `5d72474`), Windows in run 44823536457 (at `9f88e66`), each against main's own size record at `119f09c` (run 44791484279). The shipped `dist` build:
+The pull request's `pr-size` jobs in run 44824670735 (at `96bd8b2`, whose code is `9f88e66`'s: it changed only the step's records), each against main's own size record at `119f09c` (run 44791484279), and the same numbers from `try` runs of `cargo xtask size --check --against-main` before them (Linux 44819307542, Windows 44823536457). The shipped `dist` build:
 
 | System | The PR | Main | Change | Budget |
 |---|---|---|---|---|
