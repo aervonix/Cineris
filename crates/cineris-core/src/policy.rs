@@ -992,7 +992,15 @@ fn detail(call: &PlannedCall<'_>, sandboxed: bool) -> ApprovalDetail {
     let target = |effect: EffectKind, target: String| {
         ApprovalDetail::Target(TargetDetail { effect, target })
     };
-    match effects.first() {
+    // What the call touches, wherever it stands among the effects: an
+    // `ext` effect names the tool, not a place (step 28 found a host call's
+    // question showing its arguments because its `ext` effect came first,
+    // and `tool_call`'s plan, which MCP's tools reach through too, puts it
+    // first as well).
+    let touched = effects
+        .iter()
+        .find(|effect| !matches!(effect, Effect::Ext { .. }));
+    match touched {
         Some(Effect::Write(path)) => target(EffectKind::Write, path.abs().to_native_string()),
         Some(Effect::Read(path) | Effect::ReadTree(path)) => {
             target(EffectKind::Read, path.abs().to_native_string())
@@ -1370,6 +1378,60 @@ mod tests {
     use cineris_policy::{Access, Outcome, Request};
 
     use super::*;
+
+    /// An approval names what a call touches wherever its `ext` effect
+    /// stands: a host call's plan, and `tool_call`'s, which MCP's tools
+    /// reach through too, put one beside the place (step 28).
+    #[test]
+    fn an_approval_names_what_a_call_touches_wherever_its_ext_effect_stands() {
+        let (session, turn) = (cineris_protocol::SessionId::new("s_1"), TurnId::new("t_1"));
+        let (call_id, item) = (CallId::new("c_1"), ItemId::new("i_1"));
+        let spec = cineris_tools::ToolSpec::new("probe/get", "", serde_json::json!({}));
+        let arguments = serde_json::json!({"url": "https://api.example/x"});
+        let ext = Effect::Ext {
+            tool: "probe/get".to_owned(),
+        };
+        let host = Effect::Network(NetworkTarget::Host("api.example".to_owned()));
+        for effects in [vec![ext.clone(), host.clone()], vec![host, ext.clone()]] {
+            let mut plan = cineris_tools::Plan::new("get", ());
+            plan.effects = effects;
+            let call = PlannedCall {
+                session: &session,
+                turn: &turn,
+                call_id: &call_id,
+                item: &item,
+                spec: &spec,
+                arguments: &arguments,
+                plan: &plan,
+                preview: None,
+            };
+            assert_eq!(
+                detail(&call, false),
+                ApprovalDetail::Target(TargetDetail {
+                    effect: EffectKind::Network,
+                    target: "api.example".to_owned(),
+                })
+            );
+        }
+        // A call of a tool that touches nothing it declares is shown by
+        // its arguments.
+        let mut plan = cineris_tools::Plan::new("get", ());
+        plan.effects = vec![ext];
+        let call = PlannedCall {
+            session: &session,
+            turn: &turn,
+            call_id: &call_id,
+            item: &item,
+            spec: &spec,
+            arguments: &arguments,
+            plan: &plan,
+            preview: None,
+        };
+        assert_eq!(
+            detail(&call, false),
+            ApprovalDetail::Tool(ToolDetail { arguments })
+        );
+    }
 
     /// The index's gate takes what is in force once for a pass, which then
     /// answers by it alone, and the next pass by what replaced it (the

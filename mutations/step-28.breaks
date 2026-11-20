@@ -282,3 +282,12 @@ find: .concurrency(ConcurrencyClass::Exclusive)
 replace: .concurrency(ConcurrencyClass::ReadOnly)
 caught-by:
     ext::tools::tests::an_extensions_tool_asks_and_runs_alone_whatever_it_says_of_itself
+
+[break] an-approval-names-its-first-effect-whatever-it-is
+rule: An approval names what a call touches, the first effect that is not `ext`, wherever the `ext` effect stands.
+file: crates/cineris-core/src/policy.rs
+in: detail
+find: .find(|effect| !matches!(effect, Effect::Ext { .. }))
+replace: .find(|_| true)
+caught-by:
+    policy::tests::an_approval_names_what_a_call_touches_wherever_its_ext_effect_stands
