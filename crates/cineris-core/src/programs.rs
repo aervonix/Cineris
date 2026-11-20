@@ -364,16 +364,27 @@ mod tests {
     /// any argument, naming which and the character.
     #[test]
     fn each_character_cmd_cannot_carry_is_refused_with_its_name() {
-        for (character, name) in REFUSED {
+        // Written out here, not taken from the list the code refuses by: a
+        // character dropped from that list must fail this test.
+        for (character, name) in [
+            ('"', "a double quote"),
+            ('%', "a percent sign"),
+            ('!', "an exclamation mark"),
+            ('\r', "a carriage return"),
+            ('\n', "a line feed"),
+            ('\0', "a NUL character"),
+        ] {
             let bad = format!("a{character}b");
             let refused = batch_line(r"C:\t\x.cmd", &args(&["ok", &bad])).unwrap_err();
-            assert_eq!(
-                refused,
-                BatchRefusal::Character {
-                    which: "argument 2".to_owned(),
-                    character: name,
-                }
-            );
+            let BatchRefusal::Character {
+                which,
+                character: named,
+            } = &refused
+            else {
+                panic!("not refused for its character: {refused}");
+            };
+            assert_eq!(which, "argument 2");
+            assert!(named.starts_with(name), "{named}");
             assert!(refused.to_string().contains("argument 2"), "{refused}");
             let script = format!(r"C:\t{character}\x.cmd");
             let refused = batch_line(&script, &[]).unwrap_err();

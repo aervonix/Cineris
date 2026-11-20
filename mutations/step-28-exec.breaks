@@ -15,12 +15,14 @@
 
 # ------------------------------------------------------------ the lookup
 
+# Two guards hold the rule: the directories are filtered, and each
+# candidate must be absolute. Both are broken.
 [break] runnable-taken-from-a-relative-path-entry
 rule: A program is looked for only in the absolute directories of PATH: a relative entry names wherever the harness was started.
 file: crates/cineris-base/src/program.rs
 in: find_runnable_outside
-find: .filter(|directory| directory.is_absolute())
-replace: .filter(|_| true)
+find: .filter(|directory| directory.is_absolute()) .flat_map(|directory| names.iter().map(move |name| directory.join(name))) .find(|candidate| { candidate.is_absolute()
+replace: .filter(|_| true) .flat_map(|directory| names.iter().map(move |name| directory.join(name))) .find(|candidate| { true
 caught-by:
     cineris-base program::tests::a_runnable_inside_an_avoided_root_or_a_relative_directory_is_passed_over
 
