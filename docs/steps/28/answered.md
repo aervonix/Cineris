@@ -4,7 +4,7 @@ Step 28 builds `cineris-ext`, the extension system of the first usable release: 
 
 | Question | The answer | Recorded in |
 |---|---|---|
-| **The engine check:** does QuickJS (`rquickjs`) build and pass its tests with the Windows toolchain, or does the step switch to Lua? | **QuickJS stays** (2026-11-20): it builds with MSVC on the hosted runner and passes there and at a desk, and its size matches the size step's measurement. | "The engine check", below |
+| **The engine check:** does QuickJS (`rquickjs`) build and pass its tests with the Windows toolchain, or does the step switch to Lua? | **QuickJS stays** (2026-11-20): it builds with MSVC on the hosted runner and passes there and locally, and its size matches the size step's measurement. | "The engine check", below |
 | **The paths of the build machine in QuickJS's C code** (its asserts' `__FILE__`). | **The shipped build gives the C compiler `-ffile-prefix-map` for the folders it already remaps, and QuickJS keeps its asserts** (the maintainers, 2026-11-20): an abort on a broken engine invariant is the safer failure. Windows desk builds are left to step 34. | "The engine check", below |
 | **The design, before building** (below), and its calls that change what a page says. | **Settled by the maintainers, 2026-11-20,** on condition that an independent reviewer reads it first. Accepted as written: an extension's tool always exclusive; hooks only narrow; failures deny where a hook gates; a thread for each runtime; `exec_network`, programs confined at every level, `api = 1`, unknown keys refusing; `pins.toml`; `console.*`; the deferrals; the shims' rules; the cut. **With changes:** a hook's replacement of the arguments is always shown to the user, even when the policy allows the new ones unasked; the project's `state` file has a version and a cap. **Provisionally, for the owner:** the read rule for skill folders, as a commit of its own, last in the second pull request. | Points 1 to 10 |
 
@@ -14,11 +14,11 @@ Step 28 builds `cineris-ext`, the extension system of the first usable release: 
 
 | Check | Result |
 |---|---|
-| Tests at a desk (Linux) | 6 of 6: a script runs; nothing ambient is on the global object (`require`, `process`, `std`, `os`, `print`, `console`, `setTimeout`, `fetch`, `XMLHttpRequest`, `performance`, `Proxy` and others); a dynamic `import()` loads nothing; an endless loop is stopped by the interrupt check, a memory bomb by the memory limit, endless recursion by the stack limit, and the runtime is usable after it. Lints clean for Linux and, cross-checked, Windows. |
+| Tests on a local machine (Linux) | 6 of 6: a script runs; nothing ambient is on the global object (`require`, `process`, `std`, `os`, `print`, `console`, `setTimeout`, `fetch`, `XMLHttpRequest`, `performance`, `Proxy` and others); a dynamic `import()` loads nothing; an endless loop is stopped by the interrupt check, a memory bomb by the memory limit, endless recursion by the stack limit, and the runtime is usable after it. Lints clean for Linux and, cross-checked, Windows. |
 | Tests on the Windows runner (`try`, `test -p cineris-ext`) | 6 of 6. `rquickjs-sys` compiled with MSVC in about 5.4 s of the job's `ci` build. |
 | Size, linked into the shipped binary (`try`, `size --check --against-main`, on a commit that is never merged, with the engine called from a hidden argument) | Linux musl 15,342,296 bytes, **+815,408** over `main`; Windows 18,279,424 bytes, **+775,168**. The size step measured +823,600 and +762,880 ([measurements/binary-size.md](../../measurements/binary-size.md)): within 1.0% and 1.6%, so [decision 0005](../../decisions/0005-extension-mechanism.md)'s figures hold. |
 | Paths of the build machine | The Linux binary held its target folder four times: QuickJS's asserts name their source file, which the binding copies into its build folder. Fixed in the first pull request (above). |
-| Clean build at a desk, 4 cores, with and without the engine | To be measured on an otherwise idle machine; [dependencies.md](../../dependencies.md) gets the figure. |
+| Clean build on a local machine, 4 cores, with and without the engine | Measured on an otherwise idle machine: the `rquickjs` row of [dependencies.md](../../dependencies.md). |
 
 ## The design, before building
 
