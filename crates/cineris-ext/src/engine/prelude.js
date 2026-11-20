@@ -52,6 +52,25 @@
     },
   });
 
+  const pairs = (headers) => {
+    if (headers === undefined || headers === null) return [];
+    if (Array.isArray(headers)) return headers.map(([name, value]) => [String(name), String(value)]);
+    return Object.keys(headers).map((name) => [name, String(headers[name])]);
+  };
+
+  const http = Object.freeze({
+    fetch(url, opts) {
+      const o = options(opts);
+      return call("fetch", {
+        url,
+        method: o.method,
+        headers: pairs(o.headers),
+        body: o.body,
+        timeout: o.timeout,
+      });
+    },
+  });
+
   const log = (...parts) => {
     call("log", text(parts));
   };
@@ -81,6 +100,7 @@
       });
     },
     fs,
+    http,
     ask(question, choices) {
       return call("ask", { question, choices: choices === undefined ? [] : choices });
     },

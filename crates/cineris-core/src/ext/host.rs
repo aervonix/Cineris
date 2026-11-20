@@ -19,13 +19,13 @@ use cineris_agent::{Decision, PlannedCall, Policy as _, Verdict};
 pub(crate) use crate::policy::HostQuestion;
 use cineris_base::path::ResolvedPath;
 use cineris_ext::host::{
-    ExecOutput, ExecRequest, FS_MAX_BYTES, Host, HostError, HostFuture, Listing, ManifestGate,
-    Scope,
+    ExecOutput, ExecRequest, FS_MAX_BYTES, FetchOutput, FetchRequest, Host, HostError, HostFuture,
+    Listing, ManifestGate, Scope,
 };
 use cineris_protocol::lease::RuleAction;
 use cineris_tools::{
-    Effect, FileSnapshot, FileTable, Json, LineRanges, NoOutput, Plan, RunCx, Shown, ToolSpec,
-    run_blocking,
+    Effect, FileSnapshot, FileTable, Json, LineRanges, NetworkTarget, NoOutput, Plan, RunCx, Shown,
+    ToolSpec, run_blocking,
 };
 use serde_json::json;
 
@@ -270,6 +270,59 @@ impl Host for CallHost<'_> {
             }
             self.through(&self.parts.search, arguments, &path, gate)
                 .await
+        })
+    }
+
+    fn fetch(
+        &self,
+        request: FetchRequest,
+        host: String,
+        literal: Vec<String>,
+    ) -> HostFuture<'_, Result<FetchOutput, HostError>> {
+        Box::pin(async move {
+            let method = cineris_llm::FetchMethod::parse(&request.method)
+                .map_err(|refusal| HostError::Failed(refusal.to_string()))?;
+            self.decide(
+                format!("{}: {} `{}`", self.full_name, method.as_str(), request.url),
+                json!({"url": request.url, "method": method.as_str()}),
+                vec![Effect::Network(NetworkTarget::Host(host))],
+                None,
+                HostQuestion::default(),
+            )
+            .await?;
+            // Only what the manifest names literally may be a loopback or
+            // a private address; a name or a `*` never reaches one.
+            let mut allowance = cineris_llm::AddressAllowance::none();
+            for name in &literal {
+                allowance.add_host(name);
+            }
+            let response = self
+                .parts
+                .fetcher
+                .fetch(
+                    cineris_llm::FetchRequest {
+                        method,
+                        url: request.url,
+                        headers: request.headers,
+                        body: request.body,
+                    },
+                    &allowance,
+                    request.timeout,
+                    self.cx.cancel.clone(),
+                )
+                .await
+                .map_err(|error| match error {
+                    cineris_llm::FetchError::Refused(refusal) => {
+                        HostError::Denied(refusal.to_string())
+                    }
+                    other => HostError::Failed(other.to_string()),
+                })?;
+            Ok(FetchOutput {
+                status: response.status,
+                headers: response.headers,
+                body: response.body,
+                cut: response.cut,
+            })
         })
     }
 

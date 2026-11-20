@@ -29,6 +29,82 @@ fn exec(program: &str) -> HostCall {
     }
 }
 
+fn fetch(url: &str) -> HostCall {
+    HostCall::Fetch {
+        url: url.to_owned(),
+        method: "GET".to_owned(),
+        headers: Vec::new(),
+        body: None,
+        timeout_ms: Some(120_000),
+    }
+}
+
+#[test]
+fn a_fetch_reaches_the_host_only_for_a_host_the_manifest_names() {
+    let host = FakeHost::new();
+    let capabilities =
+        capabilities("net = [\"api.example.com\", \"*.cdn.example\", \"127.0.0.1\"]");
+    for refused in [
+        "https://example.com/x",
+        "https://evil.com/?q=api.example.com",
+        "https://api.example.com.evil.com/",
+        "https://cdn.example/",
+        "http://127.0.0.2:8080/",
+    ] {
+        let result = block_on(serve(
+            fetch(refused),
+            &capabilities,
+            &host,
+            Phase::Tool,
+            Duration::from_secs(5),
+        ));
+        assert!(
+            matches!(result, Err(HostError::Refused(_))),
+            "{refused}: {result:?}"
+        );
+    }
+    assert!(host.asked().is_empty(), "{:?}", host.asked());
+    let fetched = block_on(serve(
+        fetch("https://API.Example.com:443/issues?q=1"),
+        &capabilities,
+        &host,
+        Phase::Tool,
+        Duration::from_secs(5),
+    ))
+    .unwrap();
+    assert_eq!(fetched["status"], 200);
+    assert_eq!(fetched["body"], "fetched");
+    // Only the hosts named literally go with it, and its time is the
+    // call's at most.
+    assert_eq!(
+        host.asked(),
+        [
+            "fetch GET https://API.Example.com:443/issues?q=1 host=api.example.com literal=api.example.com,127.0.0.1 timeout=5000"
+        ]
+    );
+}
+
+#[test]
+fn a_urls_host_is_read_without_its_port_user_or_brackets() {
+    use cineris_ext::host::url_host;
+    assert_eq!(
+        url_host("https://Example.COM:8443/a").unwrap(),
+        "example.com"
+    );
+    assert_eq!(url_host("http://[::1]:80/x").unwrap(), "::1");
+    assert_eq!(url_host("https://a.b?x=1").unwrap(), "a.b");
+    assert_eq!(url_host("https://a.b#frag").unwrap(), "a.b");
+    for refused in [
+        "https://user@api.example.com/",
+        "https://api.example.com@evil.com/",
+        "no-scheme.example.com",
+        "https:///path",
+        "http://[::1/x",
+    ] {
+        assert!(url_host(refused).is_err(), "{refused}");
+    }
+}
+
 #[test]
 fn the_manifest_is_asked_before_the_host() {
     let host = FakeHost::new();

@@ -167,6 +167,35 @@ impl ReadGate for Both {
     }
 }
 
+/// An HTTP request a script asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchRequest {
+    /// The method, as the script wrote it: the host refuses one it does
+    /// not make.
+    pub method: String,
+    /// The URL.
+    pub url: String,
+    /// The headers, each a name and a value.
+    pub headers: Vec<(String, String)>,
+    /// The body.
+    pub body: Vec<u8>,
+    /// How long it may take.
+    pub timeout: Duration,
+}
+
+/// What an HTTP request gave.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchOutput {
+    /// The status code.
+    pub status: u16,
+    /// The response's headers.
+    pub headers: Vec<(String, String)>,
+    /// The body, up to the cap.
+    pub body: Vec<u8>,
+    /// Whether the body was cut at the cap.
+    pub cut: bool,
+}
+
 /// Which store a value is kept in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
@@ -222,6 +251,17 @@ pub trait Host: Send + Sync {
         glob: Option<String>,
         gate: ManifestGate,
     ) -> HostFuture<'_, Result<Listing, HostError>>;
+
+    /// Makes an HTTP request for the script. `host` is the URL's host, which
+    /// the manifest named; `literal` is every host the manifest names
+    /// literally (not through a `*`): only those may be a loopback or
+    /// private address.
+    fn fetch(
+        &self,
+        request: FetchRequest,
+        host: String,
+        literal: Vec<String>,
+    ) -> HostFuture<'_, Result<FetchOutput, HostError>>;
 
     /// Puts a question to the user. `None`: nobody answered, or nobody
     /// could be asked.
@@ -305,6 +345,19 @@ pub enum HostCall {
         /// Which files.
         glob: Option<String>,
     },
+    /// `cineris.http.fetch(url, {method, headers, body, timeout})`.
+    Fetch {
+        /// The URL.
+        url: String,
+        /// The method; `GET` unless given.
+        method: String,
+        /// The headers.
+        headers: Vec<(String, String)>,
+        /// The body, as text.
+        body: Option<String>,
+        /// `options.timeout`, in milliseconds.
+        timeout_ms: Option<u64>,
+    },
     /// `cineris.ask(question, choices)`.
     Ask {
         /// The question.
@@ -365,6 +418,40 @@ pub const ASK_MAX: usize = 1024;
 pub const ASK_MAX_CHOICES: usize = 8;
 /// The longest choice.
 pub const ASK_CHOICE_MAX: usize = 80;
+/// A fetch's time unless the script says otherwise.
+pub const FETCH_DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// The host of a URL, in lower case, as the manifest's `net` patterns are
+/// matched against it: the part after `scheme://` and before the first `/`,
+/// `?` or `#`, without its port, and an IPv6 address without its brackets.
+/// A URL with a user part is refused here: the host it names is not
+/// plain to read.
+///
+/// # Errors
+///
+/// When the URL has no `scheme://`, no host, or a user part.
+pub fn url_host(url: &str) -> Result<String, HostError> {
+    let refused = |why: &str| HostError::Failed(format!("`{url}` cannot be fetched: {why}"));
+    let (_, rest) = url
+        .split_once("://")
+        .ok_or_else(|| refused("it has no scheme"))?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return Err(refused("it names a user"));
+    }
+    let host = if let Some(inside) = authority.strip_prefix('[') {
+        inside
+            .split_once(']')
+            .map(|(address, _)| address)
+            .ok_or_else(|| refused("its address is not closed"))?
+    } else {
+        authority.split(':').next().unwrap_or_default()
+    };
+    if host.is_empty() {
+        return Err(refused("it has no host"));
+    }
+    Ok(host.to_ascii_lowercase())
+}
 
 /// Serves one call a script made: the manifest first, then the host.
 ///
@@ -479,6 +566,45 @@ pub async fn serve<H: Host + ?Sized>(
             Ok(listing_json(
                 host.search(pattern, resolved, glob, gate).await?,
             ))
+        }
+        HostCall::Fetch {
+            url,
+            method,
+            headers,
+            body,
+            timeout_ms,
+        } => {
+            let host_name = url_host(&url)?;
+            capabilities.host(&host_name)?;
+            let literal = capabilities
+                .declared()
+                .net
+                .iter()
+                .filter_map(|pattern| match pattern {
+                    crate::manifest::HostPattern::Exact(name) => Some(name.clone()),
+                    _ => None,
+                })
+                .collect();
+            let asked = timeout_ms.map_or(FETCH_DEFAULT_TIMEOUT, Duration::from_millis);
+            let output = host
+                .fetch(
+                    FetchRequest {
+                        method,
+                        url,
+                        headers,
+                        body: body.map(String::into_bytes).unwrap_or_default(),
+                        timeout: asked.min(time_left),
+                    },
+                    host_name,
+                    literal,
+                )
+                .await?;
+            Ok(serde_json::json!({
+                "status": output.status,
+                "headers": output.headers.iter().map(|(name, value)| [name, value]).collect::<Vec<_>>(),
+                "body": String::from_utf8_lossy(&output.body),
+                "cut": output.cut,
+            }))
         }
         HostCall::Ask { question, choices } => {
             if phase == Phase::Hook {

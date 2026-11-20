@@ -291,6 +291,10 @@ pub struct CoreOptions {
     /// own finding of extensions, with their pins, is step 28's second
     /// pull request; until then only a test hands any in.
     pub extensions: Vec<crate::ext::ApprovedExtension>,
+    /// What an extension's `cineris.http.fetch` makes its requests with:
+    /// a test's, whose names resolve as it says. `None`: the system's
+    /// resolver, on the core's timer.
+    pub fetcher: Option<cineris_llm::Fetcher>,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -354,6 +358,7 @@ impl CoreOptions {
             keep_sessions: false,
             allow_unrestricted: true,
             extensions: Vec::new(),
+            fetcher: None,
         }
     }
 }
