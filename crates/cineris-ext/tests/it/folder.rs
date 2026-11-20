@@ -110,4 +110,40 @@ fn a_folder_past_its_caps_is_refused() {
         Snapshot::read(&scratch.join("deep")),
         Err(FolderError::TooDeep(_))
     ));
+    // Folders count as well as files: a folder of empty folders is bounded.
+    for index in 0..=cineris_ext::folder::MAX_ENTRIES {
+        scratch.dir(format!("empty/d{index}"));
+    }
+    assert_eq!(
+        Snapshot::read(&scratch.join("empty")),
+        Err(FolderError::TooManyEntries)
+    );
+}
+
+/// A junction is the folder link any Windows account can make, so the one
+/// a repository is likeliest to plant: one in an extension's folder refuses
+/// it, as a symbolic link does. It is made with `mklink`, a process: hence
+/// the `sys_` name.
+#[cfg(windows)]
+#[test]
+fn sys_on_windows_a_junction_in_the_folder_refuses_it() {
+    let scratch = scratch!("sys_on_windows_a_junction_in_the_folder_refuses_it");
+    scratch.file("outside/secret.js", "stolen");
+    scratch.file("ext/extension.toml", crate::manifest(""));
+    scratch.file("ext/main.js", "1");
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(scratch.join("ext").join("lib"))
+        .arg(scratch.join("outside"))
+        .output()
+        .expect("run mklink");
+    assert!(
+        made.status.success(),
+        "mklink failed: {}",
+        String::from_utf8_lossy(&made.stderr)
+    );
+    assert_eq!(
+        Snapshot::read(&scratch.join("ext")),
+        Err(FolderError::Link("lib".to_owned()))
+    );
 }

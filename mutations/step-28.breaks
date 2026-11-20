@@ -1533,3 +1533,12 @@ replace: || glob.contains('\\') && glob.is_empty()
 caught-by:
     cineris-ext::it manifest::globs_are_relative_to_the_workspace
 
+[break] a-folder-of-empty-folders-is-unbounded
+rule: Every entry of an extension's folder, folders as well as files, counts toward its cap.
+file: crates/cineris-ext/src/folder.rs
+in: read_into
+find: if *entries_seen > MAX_ENTRIES {
+replace: if *entries_seen > MAX_ENTRIES * 100 {
+caught-by:
+    cineris-ext::it folder::a_folder_past_its_caps_is_refused
+
