@@ -404,6 +404,7 @@ impl Work<'_> {
             self.alive.store(false, Ordering::SeqCst);
         }
         let _ = outbox.send(FromThread::Done(result));
+        cineris_base::hook::point(super::AFTER_A_CALLS_END_IS_TOLD);
         after
     }
 

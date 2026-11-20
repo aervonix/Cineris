@@ -395,9 +395,15 @@ fn a_memory_bomb_is_stopped_by_the_memory_limit() {
         ),
     ]);
     let runtime = start(&snapshot, &timer).unwrap();
+    // The thread is held just after it told the call's end, before it
+    // ends: whoever heard of the end already sees the runtime gone, and
+    // hands it no other call.
+    let hold = cineris_testkit::Hold::new(cineris_ext::engine::AFTER_A_CALLS_END_IS_TOLD);
     let error = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap_err();
     assert_eq!(error, CallError::Failed(Failure::Limit(Limit::Memory)));
+    hold.reach();
     assert!(!runtime.is_alive());
+    hold.release();
 }
 
 #[test]
