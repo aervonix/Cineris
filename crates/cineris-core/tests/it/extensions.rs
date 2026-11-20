@@ -95,6 +95,91 @@ fn a_fetch_is_judged_by_the_manifest_then_the_engine_then_the_address() {
     );
 }
 
+/// A fetch the client would refuse puts no question; one it would make is
+/// asked about with its URL's query left out, and with what it sends
+/// besides its URL named, a header's value never (the full review of step
+/// 28's fetch).
+#[test]
+fn a_fetch_is_asked_about_only_when_it_could_be_made_and_shows_no_credential() {
+    let many: Vec<_> = (0..65)
+        .map(|index| json!([format!("x-{index}"), "1"]))
+        .collect();
+    let world = World::new(
+        "ext_fetch_question",
+        [
+            call_tool(
+                "c1",
+                "get",
+                json!({"url": "https://inside.example/x", "headers": many}),
+            ),
+            call_tool(
+                "c2",
+                "get",
+                json!({
+                    "url": "https://inside.example/x?token=s3cret",
+                    "headers": [["authorization", "Bearer s3cret"]],
+                    "body": "{}"
+                }),
+            ),
+            says("Done."),
+        ],
+    );
+    let extension = approve(
+        &world.dir.join("ext"),
+        "net = [\"*.example\"]",
+        "cineris.tool({ name: 'get', input: { type: 'object' }, run: async (args) => { \
+           try { const r = await cineris.http.fetch(args.url, { method: args.body ? 'POST' : \
+           'GET', headers: args.headers, body: args.body }); return 'status ' + r.status } \
+           catch (e) { return 'refused: ' + e.message } } });",
+    );
+    let resolver = Arc::new(OneAddress::default());
+    let fetcher = cineris_llm::Fetcher::new(
+        Arc::clone(&resolver) as Arc<dyn cineris_llm::Resolve>,
+        Arc::new(world.timer.clone()),
+    );
+    let core = world.core_with(|options| {
+        options.extensions = vec![extension];
+        options.fetcher = Some(fetcher);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("get them").await;
+        // The first call of the tool is asked about, and its fetch is not:
+        // the client refuses its headers before anyone is asked.
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        // The second call of the tool, then its fetch.
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        let (id, request) = front.approval().await;
+        let printed = format!("{request:?}");
+        assert!(!printed.contains("s3cret"), "{printed}");
+        assert!(
+            request.summary.contains("`https://inside.example/x?…`"),
+            "{}",
+            request.summary
+        );
+        assert!(
+            request
+                .reasons
+                .iter()
+                .any(|reason| reason.contains("2 bytes") && reason.contains("authorization")),
+            "{:?}",
+            request.reasons
+        );
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        let results = front.results();
+        assert!(
+            results[0].2.contains("refused") && results[0].2.contains("65 headers"),
+            "{results:?}"
+        );
+        assert!(results[1].2.contains("refused"), "{results:?}");
+        front.close().await;
+    });
+    assert!(resolver.asked.lock().unwrap().is_empty());
+}
+
 /// Writes an extension called `probe` in `folder`, with these
 /// capabilities and this script, and approves it as it is.
 fn approve(folder: &Path, capabilities: &str, script: &str) -> ApprovedExtension {
