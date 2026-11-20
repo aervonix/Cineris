@@ -307,6 +307,7 @@ caught-by:
 [break] approval-time-limit-not-applied
 rule: An approval nobody answers within the time limit is a denial.
 file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
 find: let mut limit = self.timeout.map(|limit| self.timer.sleep(limit));
 replace: let mut limit: Option<cineris_base::Sleep> = None;
 caught-by:

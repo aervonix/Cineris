@@ -17,7 +17,7 @@ caught-by:
 [break] a-question-with-no-client-is-refused-at-once
 rule: With `keep_sessions`, an approval in a session with no client at all waits for a `user` client to open it.
 file: crates/cineris-core/src/policy.rs
-in: ask
+in: EnginePolicy::ask_with
 find: let waits = self.waits_for_a_client && subscribers.is_empty();
 replace: let waits = false;
 caught-by:
@@ -27,7 +27,7 @@ caught-by:
 [break] a-client-that-answers-no-approvals-makes-a-question-wait
 rule: With `keep_sessions`, a session whose clients are there and answer no approvals still gets the default at once.
 file: crates/cineris-core/src/policy.rs
-in: ask
+in: EnginePolicy::ask_with
 find: let waits = self.waits_for_a_client && subscribers.is_empty();
 replace: let waits = self.waits_for_a_client;
 caught-by:
@@ -154,7 +154,7 @@ caught-by:
 [break] a-supervisors-answer-is-recorded
 rule: A supervisor's answer never reaches `Engine::record`.
 file: crates/cineris-core/src/policy.rs
-in: ask
+in: EnginePolicy::ask_with
 find: if by_supervisor {
 replace: if by_supervisor && response.note.as_deref() == Some("never") {
 caught-by:
@@ -315,7 +315,7 @@ caught-by:
 [break] a-client-that-opens-while-an-approval-is-put-is-never-put-it
 rule: Once an approval's request is open, every client of the session that may answer and was not asked is put it: one that opened the session between the look at who may answer and the request being open included.
 file: crates/cineris-core/src/policy.rs
-in: EnginePolicy::ask
+in: EnginePolicy::ask_with
 find: if !asked.contains(&client) {
 replace: if false && !asked.contains(&client) {
 caught-by:
