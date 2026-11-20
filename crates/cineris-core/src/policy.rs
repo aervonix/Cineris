@@ -347,7 +347,9 @@ impl EnginePolicy {
     }
 
     /// Stops turn `turn` at its next call: a confined command changed
-    /// protected paths, and the user is to look before anything else runs.
+    /// protected paths, and the user is to look before anything else runs;
+    /// or (since step 28) an extension's host call was answered with a stop,
+    /// which a call of the round's own would have ended the turn with.
     /// Every call of it that has not started is decided again, and is
     /// answered with the stop.
     pub(crate) fn stop_turn(&self, turn: u32, reason: String) {

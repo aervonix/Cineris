@@ -94,7 +94,15 @@ impl CallHost<'_> {
                 Verdict::Deny { note } => Err(HostError::Denied(
                     note.unwrap_or_else(|| "the user refused it".to_owned()),
                 )),
-                Verdict::Stop { reason } => Err(HostError::Stopped(reason)),
+                Verdict::Stop { reason } => {
+                    // The turn stops here, as it would have at a call of
+                    // the round's own: every call of it not yet started is
+                    // decided again and answered with the stop. (A stop
+                    // already in force is what this one says, if there was
+                    // one: its reason is the same.)
+                    self.parts.policy.stop_turn(self.cx.turn, reason.clone());
+                    Err(HostError::Stopped(reason))
+                }
                 _ => Err(HostError::Denied("it was not allowed".to_owned())),
             },
             _ => Err(HostError::Denied("it was not allowed".to_owned())),
