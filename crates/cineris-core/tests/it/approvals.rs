@@ -207,7 +207,15 @@ fn only_a_user_client_is_asked_and_only_its_answer_counts() {
     let core = world.core();
     world.run(async {
         let front = Front::start(&world, &core).await;
-        let observer = front.join(ClientInfo::observer()).await;
+        // An observer that says it answers everything: its role decides,
+        // not what it declares (`ClientInfo::observer` declares nothing,
+        // which hid a break of the role's check; found by the small fixes).
+        let observer = front
+            .join(ClientInfo {
+                role: ClientRole::Observer,
+                ..ClientInfo::user()
+            })
+            .await;
         let supervisor = front
             .join(ClientInfo {
                 role: ClientRole::Supervisor,

@@ -738,8 +738,33 @@ mod tests {
             None,
         );
 
+        // An observer is never asked anything, even one that declares it
+        // answers every kind of request: its role decides, not what it
+        // says it does (`ClientInfo::observer` declares nothing, so without
+        // this one a break of the role's check went unseen; found by the
+        // small fixes).
+        let (eager_observer, _) = clients.connect(
+            ClientInfo {
+                role: ClientRole::Observer,
+                ..ClientInfo::user()
+            },
+            None,
+        );
+        for kind in [Kind::Approval, Kind::Question, Kind::Trust] {
+            assert!(
+                clients.askable(&[eager_observer.0], kind).is_empty(),
+                "{kind:?}"
+            );
+        }
+
         // Only user clients that answer approvals are approvers.
-        let everyone = [user.0, other_user.0, observer.0, supervisor.0];
+        let everyone = [
+            user.0,
+            other_user.0,
+            observer.0,
+            eager_observer.0,
+            supervisor.0,
+        ];
         assert_eq!(clients.approvers(&everyone), [user.0, other_user.0]);
         let (headless, _) = clients.connect(ClientInfo::headless(), None);
         assert!(clients.approvers(&[headless.0]).is_empty());
