@@ -739,7 +739,7 @@ impl RecordingShell {
 /// Tells the table of seen files which files a command changed, for what a
 /// compaction carries across (`docs/architecture/07-sessions-and-context.md`,
 /// "Compaction").
-fn note_changed(changes: &Json, cx: &RunCx) {
+pub(crate) fn note_changed(changes: &Json, cx: &RunCx) {
     let root = cx.paths.root();
     for list in ["created", "modified", "deleted"] {
         let paths = changes.get(list).and_then(Json::as_array);

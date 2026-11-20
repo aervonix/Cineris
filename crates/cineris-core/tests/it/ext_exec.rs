@@ -561,6 +561,122 @@ fn a_program_is_not_run_outside_the_workspace() {
     });
 }
 
+/// What a program changed in the workspace is in the round's checkpoint, as
+/// a shell command's is: undo puts a tracked file back from git and takes
+/// away a file it made.
+#[cfg(unix)]
+#[test]
+fn sys_undo_puts_back_what_a_program_changed() {
+    use cineris_protocol::Item;
+    use cineris_protocol::methods::{Op, SessionRewindParams};
+    use cineris_testkit::scratch::git;
+
+    let world = World::new("exec_undo", [says("Ready.")]);
+    world.put("tracked.txt", "committed\n");
+    git(
+        &world.workspace,
+        &["init", "--quiet", "--initial-branch=main"],
+    );
+    git(&world.workspace, &["add", "--all"]);
+    git(
+        &world.workspace,
+        &["commit", "--quiet", "--message", "first"],
+    );
+    let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\"**\"]");
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "sh", "args": ["-c", "echo changed > tracked.txt; echo new > created.txt"]}),
+    ));
+    world.provider.push(says("Changed."));
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.trust_project = true;
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("hello").await;
+        let keep = front
+            .items()
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                Item::AssistantMessage(message) => Some(message.id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        front.answering(Answering::allow_all());
+        front.turn("change things").await;
+        assert_eq!(world.read("tracked.txt").as_deref(), Some("changed\n"));
+        assert_eq!(world.read("created.txt").as_deref(), Some("new\n"));
+        front
+            .op(Op::SessionRewind(SessionRewindParams {
+                session_id: front.session.clone(),
+                to: Some(keep),
+                before: None,
+                restore_files: true,
+                plan: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(
+            world.read("tracked.txt").as_deref(),
+            Some("committed\n"),
+            "the file git still had was not put back"
+        );
+        assert!(
+            world.read("created.txt").is_none(),
+            "the file the program made is still there"
+        );
+        front.close().await;
+    });
+}
+
+/// A file a program changed is not overwritten by the model's write from
+/// what it read before: the model reads it again first, as after a shell
+/// command's change.
+#[cfg(unix)]
+#[test]
+fn sys_a_file_a_program_changed_is_not_overwritten_from_an_older_read() {
+    let world = World::new(
+        "exec_noted",
+        [
+            calls(&[("c1", "read", json!({"path": "notes.txt"}))]),
+            says("Read."),
+        ],
+    );
+    world.put("notes.txt", "first\n");
+    let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\"**\"]");
+    world.provider.push(run_call(
+        "c2",
+        "probe",
+        &json!({"program": "sh", "args": ["-c", "echo program > notes.txt"]}),
+    ));
+    world.provider.push(calls(&[(
+        "c3",
+        "write",
+        json!({"path": "notes.txt", "content": "model\n"}),
+    )]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.answering(Answering::allow_all());
+        front.turn("read the notes").await;
+        front.turn("change them").await;
+        let results = front.results();
+        let write = results
+            .iter()
+            .find(|result| result.0 == "write")
+            .expect("the write's result");
+        assert_ne!(write.1, "success", "{results:?}");
+        front.close().await;
+    });
+    assert_eq!(world.read("notes.txt").as_deref(), Some("program\n"));
+}
+
 /// A manifest whose write roots hold the harness's own files (here its
 /// configuration, kept inside the workspace) runs no program, before
 /// anyone is asked: a program could change what it is allowed.
