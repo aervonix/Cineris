@@ -1467,8 +1467,21 @@ caught-by:
 rule: The thread does not run a call that was withdrawn before it started.
 file: crates/cineris-ext/src/engine/thread.rs
 in: Work::run
-find: .compare_exchange(QUEUED, STARTED, Ordering::SeqCst, Ordering::SeqCst)
-replace: .compare_exchange(claim.load(Ordering::SeqCst), STARTED, Ordering::SeqCst, Ordering::SeqCst)
+find:
+        if claim
+            .compare_exchange(QUEUED, STARTED, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return After::Goes;
+        }
+        cineris_base::hook::point(super::AFTER_A_CALL_IS_CLAIMED);
+        if outbox.send(FromThread::Started).is_err() {
+            return After::Goes;
+        }
+replace:
+        claim.store(STARTED, Ordering::SeqCst);
+        cineris_base::hook::point(super::AFTER_A_CALL_IS_CLAIMED);
+        let _ = outbox.send(FromThread::Started);
 caught-by:
     cineris-ext::it engine::a_call_cancelled_before_its_turn_is_withdrawn_and_never_runs
 
