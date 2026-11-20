@@ -41,6 +41,8 @@ pub trait Transport: Send + Sync + std::fmt::Debug {
 
 #[cfg(feature = "http")]
 pub use real::{HttpOptions, HttpTransport};
+#[cfg(feature = "http")]
+pub(crate) use real::{describe, install_tls_provider};
 
 #[cfg(feature = "http")]
 mod real {
@@ -134,10 +136,15 @@ mod real {
         }
     }
 
-    fn create(options: &HttpOptions) -> Result<reqwest::Client, TransportError> {
-        // The process-wide TLS provider. An error means one is installed
-        // already, which is what is wanted.
+    /// Installs the process-wide TLS provider, which a client built with
+    /// `rustls-no-provider` needs before it is made. An error means one is
+    /// installed already, which is what is wanted.
+    pub(crate) fn install_tls_provider() {
         let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+
+    fn create(options: &HttpOptions) -> Result<reqwest::Client, TransportError> {
+        install_tls_provider();
 
         let mut builder = reqwest::Client::builder()
             .connect_timeout(options.connect_timeout)
@@ -265,7 +272,7 @@ mod real {
 
     /// The error and its causes in one line, without the URL: a URL can
     /// carry a credential in its query.
-    fn describe(error: &reqwest::Error) -> String {
+    pub(crate) fn describe(error: &reqwest::Error) -> String {
         use std::error::Error as _;
 
         let mut text = if error.is_builder() {

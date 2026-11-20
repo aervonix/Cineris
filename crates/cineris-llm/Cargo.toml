@@ -1,6 +1,6 @@
 [package]
 name = "cineris-llm"
-description = "The provider abstraction: model requests and events, the protocol and transport traits, the SSE parser, retries, usage normalisation and the model catalog."
+description = "The provider abstraction: model requests and events, the protocol and transport traits, the SSE parser, retries, usage normalisation, the model catalog, and the fetch client behind extensions' fetch."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -31,7 +31,9 @@ reqwest = { workspace = true, optional = true }
 # (root Cargo.toml).
 idna_adapter = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true, features = ["time"] }
+# `rt`: the fetch client looks names up, and makes its HTTP clients, on the
+# blocking pool (src/fetch.rs).
+tokio = { workspace = true, optional = true, features = ["rt", "time"] }
 
 [build-dependencies]
 # The catalog is written in TOML and embedded as JSON (build.rs).
