@@ -846,7 +846,13 @@ mod tests {
                 made: false,
             },
             root.to_fs_path().as_path(),
-            Limits::default(),
+            // A time no machine reaches: the standard quarter of a second
+            // of real time, reached on a loaded machine, would leave the
+            // hooks unlooked at by chance.
+            Limits {
+                time: std::time::Duration::from_secs(3600),
+                ..Limits::default()
+            },
         );
         // Nothing to compare with yet: the close re-check finds nothing.
         assert!(sandbox.continuity_at_close().is_none());

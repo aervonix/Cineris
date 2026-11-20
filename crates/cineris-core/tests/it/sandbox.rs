@@ -540,7 +540,7 @@ fn sys_past_its_bound_the_look_at_protected_paths_warns_and_does_not_stop() {
         options.launcher = Some(launcher());
         options.protect_limits = Some(cineris_sandbox::protect::Limits {
             directories: 1,
-            ..cineris_sandbox::protect::Limits::default()
+            ..crate::protect_limits()
         });
     });
     world.run(async {
@@ -843,7 +843,7 @@ fn sys_a_command_that_makes_the_look_stop_short_stops_the_turn() {
         options.launcher = Some(launcher());
         options.protect_limits = Some(cineris_sandbox::protect::Limits {
             directories: 40,
-            ..cineris_sandbox::protect::Limits::default()
+            ..crate::protect_limits()
         });
     });
     world.run(async {

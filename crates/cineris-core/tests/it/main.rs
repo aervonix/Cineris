@@ -314,6 +314,11 @@ impl World {
         // the developer's.
         options.shell_env = Some(self.shell_env(&[]));
         options.cancel = CancelToken::new();
+        // The look at protected paths around a confined command, with a
+        // time no machine reaches: its standard quarter of a second of real
+        // time, reached on a loaded machine, would warn of a look made in
+        // part, or stop the turn, by chance.
+        options.protect_limits = Some(protect_limits());
         options
     }
 
@@ -483,6 +488,18 @@ pub async fn not_now(
         .await
     };
     (result, read)
+}
+
+/// The standard bounds of the look at protected paths, with a time no
+/// machine reaches, so that whether a look is whole depends on the
+/// workspace and not on how busy the machine is. Every core of
+/// [`World::options`] has them; a test that sets bounds of its own starts
+/// from these.
+pub fn protect_limits() -> cineris_sandbox::protect::Limits {
+    cineris_sandbox::protect::Limits {
+        time: Duration::from_secs(3600),
+        ..cineris_sandbox::protect::Limits::default()
+    }
 }
 
 /// The shell the harness picks on this machine when nothing is
