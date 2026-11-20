@@ -1140,6 +1140,34 @@ fn a_call_the_thread_took_before_its_cancel_is_stopped_and_counted() {
     assert_eq!(cineris_ext::engine::abandoned_threads(), before + 1);
 }
 
+/// A runtime of an extension whose other runtime left its thread running
+/// takes no more calls: each live runtime could otherwise leave one more
+/// (the review of step 28's fixes).
+#[test]
+fn a_live_runtime_of_a_disabled_extension_takes_no_more_calls() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "() => Array.prototype.reverse.call({ length: 2 ** 53 - 1 })",
+    );
+    let first = start(&snapshot, &timer).unwrap();
+    let second = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let (result, ()) = block_on(join(call_async(&first, &snapshot, &host, &timer), async {
+        timer.sleeping_for(TIME).await;
+        timer.advance(TIME);
+        timer.sleeping_for(cineris_ext::engine::GRACE).await;
+        timer.advance(cineris_ext::engine::GRACE);
+    }));
+    assert_eq!(result, Err(CallError::TimedOut));
+    let before = cineris_ext::engine::abandoned_threads();
+    assert_eq!(
+        block_on(call_async(&second, &snapshot, &host, &timer)),
+        Err(CallError::Disabled)
+    );
+    assert_eq!(cineris_ext::engine::abandoned_threads(), before);
+}
+
 /// A call whose future is given up while it waits its turn is withdrawn:
 /// the call the runtime is serving goes on (the review of step 28's fixes:
 /// it stopped the runtime under the running call).
