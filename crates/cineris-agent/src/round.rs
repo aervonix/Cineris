@@ -93,8 +93,8 @@ use cineris_protocol::event::{
 use cineris_protocol::item::{ToolOutcome, ToolResultItem};
 use cineris_protocol::{CallId, Item, ItemId, Part, SessionId, TurnId};
 use cineris_tools::{
-    BlockingError, Concurrency, Effect, Json, Plan, RunCx, Tool, ToolError, ToolOutput, ToolResult,
-    bound, execute, run_blocking,
+    BlockingError, CallRef, Concurrency, Effect, Json, Plan, RunCx, Tool, ToolError, ToolOutput,
+    ToolResult, bound, execute, run_blocking,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::AbortHandle;
@@ -1355,7 +1355,15 @@ impl Round {
         let call = &self.calls[position];
         self.emit_started(call);
 
-        let cx = self.run_cx(call.cancel.clone());
+        // The run names its call, for a tool that puts questions on its
+        // own account (an extension's host calls). No built-in tool reads
+        // it, so for them the run is as it was.
+        let cx = self.run_cx(call.cancel.clone()).with_call(CallRef {
+            session: self.env.session.clone(),
+            turn: self.turn.clone(),
+            call_id: call.call_id.clone(),
+            item: call.item_id.clone(),
+        });
         let clock = Arc::clone(&self.env.clock);
         let mut out = OutputDeltas {
             emitter: Arc::clone(&self.env.emitter),
