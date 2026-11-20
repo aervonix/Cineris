@@ -219,11 +219,11 @@ A pattern that ends in `/**`, or in a separator, matches the directory itself as
 | The configuration directory (configuration, and credentials on Linux) | Reading and writing. |
 | The user's configuration file, wherever `CINERIS_CONFIG` puts it | Reading and writing. |
 | The credentials file and its lock, wherever they are kept, and on Windows their own folder (`%LOCALAPPDATA%\cineris\credentials`), with any temporary file a write left there | Reading and writing. |
-| The state directory (trust, stored approvals, what was learned) | Reading and writing. |
+| The state directory (trust, the user's own pins, stored approvals, what was learned) | Reading and writing. |
 | The data directory | Writing. |
 | The session directories of other projects | Reading. This project's own are outside the workspace, so reading one asks. |
 
-Closing the state directory to writing is what makes trust and approvals mean something: a model that could write `trust.toml` could trust its own project.
+Closing the state directory to writing is what makes trust and approvals mean something: a model that could write `trust.toml` could trust its own project, and one that could write `pins.toml` could approve its own change to an extension of the user's.
 
 Where each of these is on each system is one table, beside what is closed in it: [08-configuration.md](08-configuration.md), "Where each system keeps the harness's files". The credentials file has a row of its own because on Windows it is not in the configuration directory, and before the review of step 13a nothing closed it to reading there.
 
@@ -492,6 +492,8 @@ Opening a project for the first time asks one question before anything from the 
 
 - **The file is `trust.toml` in the state directory:** one `[[project]]` table per trusted project with its key, its root as it should be shown, the time, and a `[[project.pinned]]` table per definition. It is written owner-only and atomically, under a lock held from the read to the write (`trust.toml.lock`), so that a `trust` and a `revoke` at the same moment cannot undo each other, and read strictly: a key this build does not know or a newer `version` refuses the whole file, and then **nothing is trusted**.
 - **Nothing a tool does can write it.** The state directory is closed to every tool by the built-in protection, at every level.
+
+**As built in step 28: the user's own pins** (`cineris-policy`, `trust::PinStore`). The user's own extensions, in the configuration directory's `extensions/`, belong to no project, and are pinned in a file of their own beside `trust.toml`: `pins.toml` in the state directory, `version = 1` and one `[[pin]]` table for each kind and name, with its `kind` (`extension`; step 30 adds the user's MCP servers' pins of each tool), `name`, `hash` and `at`, when it was pinned. Pinning again replaces the pin of the same kind and name. A definition stands with it as with a trusted project (approved, changed or new; never untrusted). It is written owner-only and atomically under a lock held from the read to the write (`pins.toml.lock`), and read strictly, as `trust.toml` is: an unknown key, a value of the wrong type, another `version`, a hash that is not one, or two pins of one kind and name refuse the whole file, and then nothing is taken as pinned, and the error says why. A kind the build does not know is kept and written back. **It is a file of its own, not a version 3 of `trust.toml`,** because a build that reads `trust.toml` up to version 2 refuses a version 3 whole, and would then trust no project at all for the sake of pins it has no use for. Like `trust.toml`, no tool can read or write it: the state directory is closed (`start::the_state_directory_is_closed_whole_to_every_tool` in `cineris-core`).
 
 **As wired in step 13a** (`cineris-core`, `assemble::trust`). The core works trust out once for a session, and gives it to four places, the engine twice. It is two answers, because trust lets a project do two different kinds of thing.
 
