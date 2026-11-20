@@ -25,7 +25,7 @@ mod thread;
 use std::future::poll_fn;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::task::Poll;
 use std::time::Duration;
@@ -36,7 +36,7 @@ use tokio::sync::{mpsc as async_mpsc, oneshot};
 
 use crate::capability::Capabilities;
 use crate::folder::{FolderError, Snapshot};
-use crate::host::{Host, HostError, Phase, serve};
+use crate::host::{Host, HostCall, HostError, Phase, serve};
 use crate::manifest::{Manifest, ManifestError};
 use crate::registration::Registration;
 
@@ -60,6 +60,23 @@ pub const GRACE: Duration = Duration::from_secs(2);
 #[must_use]
 pub fn runtimes_made() -> usize {
     thread::RUNTIMES_MADE.load(Ordering::SeqCst)
+}
+
+/// The most threads of this process left running because their script did
+/// not stop when told to. A native function of the engine that loops
+/// without looking at the interrupt (`Array.prototype.reverse` over an
+/// object whose length is huge) cannot be stopped, and its thread runs on
+/// until the process ends: past this many, no extension is started at
+/// all (the review of step 28).
+pub const MAX_ABANDONED: usize = 4;
+
+/// The threads this process abandoned, of every extension.
+static ABANDONED: AtomicUsize = AtomicUsize::new(0);
+
+/// How many extension threads this process has abandoned.
+#[must_use]
+pub fn abandoned_threads() -> usize {
+    ABANDONED.load(Ordering::SeqCst)
 }
 
 /// What a call runs.
@@ -142,6 +159,19 @@ pub enum LoadError {
     /// The engine could not be made.
     #[error("the script engine failed: {0}")]
     Engine(String),
+    /// The main module did not stop when its time was up, and its thread
+    /// was left running.
+    #[error(
+        "the extension's main module did not stop when its time was up, and its thread was left \
+         running: it is not started again until the harness restarts or it is approved again"
+    )]
+    Abandoned,
+    /// Too many extension threads did not stop when told to.
+    #[error(
+        "{0} extension threads did not stop when told to and are still running, so no extension \
+         is started until the harness restarts"
+    )]
+    TooManyAbandoned(usize),
 }
 
 /// Why a call did not give a result.
@@ -212,6 +242,8 @@ pub struct ScriptRuntime {
     inbox: mpsc::Sender<ToThread>,
     stop: Arc<AtomicBool>,
     alive: Arc<AtomicBool>,
+    /// Whether its thread was left running: told to stop, it did not.
+    abandoned: AtomicBool,
     loaded: Loaded,
 }
 
@@ -239,6 +271,10 @@ impl ScriptRuntime {
         expected: Option<Registration>,
         timer: &dyn Timer,
     ) -> Result<Self, LoadError> {
+        let abandoned = ABANDONED.load(Ordering::SeqCst);
+        if abandoned >= MAX_ABANDONED {
+            return Err(LoadError::TooManyAbandoned(abandoned));
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
         let (ready, readied) = oneshot::channel();
@@ -282,11 +318,25 @@ impl ScriptRuntime {
                 inbox,
                 stop,
                 alive,
+                abandoned: AtomicBool::new(false),
                 loaded,
             }),
             Some(Err(error)) => Err(error),
+            // Its grace passed: the thread is left running.
+            None if grace.is_some() => {
+                ABANDONED.fetch_add(1, Ordering::SeqCst);
+                Err(LoadError::Abandoned)
+            }
             None => Err(LoadError::Limit(Limit::Time)),
         }
+    }
+
+    /// Whether this runtime's thread was left running: told to stop, it
+    /// did not within its grace. An extension whose thread was abandoned is
+    /// not given another in this process.
+    #[must_use]
+    pub fn was_abandoned(&self) -> bool {
+        self.abandoned.load(Ordering::SeqCst)
     }
 
     /// The extension's manifest, as the snapshot holds it.
@@ -326,6 +376,20 @@ impl ScriptRuntime {
     ///
     /// [`CallError`] says why there is no result.
     pub async fn call<H: Host + ?Sized>(
+        &self,
+        target: Target,
+        input: Json,
+        cx: CallContext<'_, H>,
+    ) -> Result<Json, CallError> {
+        // A call whose future is dropped before it ends (its task given
+        // up) stops the runtime: nothing else would.
+        let guard = StopIfDropped(Some(self));
+        let result = self.call_to_its_end(target, input, cx).await;
+        guard.disarm();
+        result
+    }
+
+    async fn call_to_its_end<H: Host + ?Sized>(
         &self,
         target: Target,
         input: Json,
@@ -376,43 +440,52 @@ impl ScriptRuntime {
                     let left = cx
                         .time
                         .saturating_sub(cx.clock.monotonic().saturating_sub(started));
-                    // The host call runs under the same deadline and
+                    // A program is followed to its end: what it changed is
+                    // looked at and recorded after it stops, which the
+                    // runner does on the call's cancellation and at its
+                    // time (the review of step 28: dropped, its look and
+                    // its record were skipped).
+                    let to_its_end = matches!(call, HostCall::Exec { .. });
+                    // Any other host call runs under the same deadline and
                     // cancellation: dropped when either fires.
-                    let served = {
+                    let mut ending: Option<CallError> = None;
+                    let answer = {
                         let mut served = pin!(serve(call, cx.capabilities, cx.host, phase, left));
                         poll_fn(|context| {
                             if let Poll::Ready(answer) = served.as_mut().poll(context) {
-                                return Poll::Ready(Ok(answer));
+                                return Poll::Ready(Some(answer));
                             }
-                            if let Some(deadline) = &mut deadline
-                                && deadline.as_mut().poll(context).is_ready()
-                            {
-                                return Poll::Ready(Err(Event::Deadline));
-                            }
-                            if cancelled.as_mut().poll(context).is_ready() {
-                                return Poll::Ready(Err(Event::Cancelled));
+                            if ending.is_none() {
+                                if let Some(deadline) = &mut deadline
+                                    && deadline.as_mut().poll(context).is_ready()
+                                {
+                                    ending = Some(CallError::TimedOut);
+                                } else if cancelled.as_mut().poll(context).is_ready() {
+                                    ending = Some(CallError::Cancelled);
+                                }
+                                if ending.is_some() && !to_its_end {
+                                    return Poll::Ready(None);
+                                }
                             }
                             Poll::Pending
                         })
                         .await
                     };
-                    match served {
+                    if let Some(error) = ending {
+                        return Err(self.stopped(&mut replies, cx.timer, error).await);
+                    }
+                    match answer {
                         // Nothing more of a stopped turn runs, the
                         // script's code included.
-                        Ok(Err(HostError::Stopped(reason))) => {
+                        Some(Err(HostError::Stopped(reason))) => {
                             return Err(self
                                 .stopped(&mut replies, cx.timer, CallError::Stopped(reason))
                                 .await);
                         }
-                        Ok(answer) => {
+                        Some(answer) => {
                             let _ = self.inbox.send(ToThread::Answer { id, answer });
                         }
-                        Err(Event::Cancelled) => {
-                            return Err(self
-                                .stopped(&mut replies, cx.timer, CallError::Cancelled)
-                                .await);
-                        }
-                        Err(_) => {
+                        None => {
                             return Err(self
                                 .stopped(&mut replies, cx.timer, CallError::TimedOut)
                                 .await);
@@ -431,6 +504,22 @@ impl ScriptRuntime {
                 Event::Deadline => {
                     return Err(self
                         .stopped(&mut replies, cx.timer, CallError::TimedOut)
+                        .await);
+                }
+                // Cancelled before its turn came: withdrawn, and the call
+                // the runtime is serving goes on. One that started after
+                // all is stopped as any other.
+                Event::Cancelled if deadline.is_none() => {
+                    replies.close();
+                    let mut begun = false;
+                    while let Ok(reply) = replies.try_recv() {
+                        begun |= matches!(reply, FromThread::Started);
+                    }
+                    if !begun {
+                        return Err(CallError::Cancelled);
+                    }
+                    return Err(self
+                        .stopped(&mut replies, cx.timer, CallError::Cancelled)
                         .await);
                 }
                 Event::Cancelled => {
@@ -465,8 +554,12 @@ impl ScriptRuntime {
                 }
             }
             if grace.as_mut().poll(context).is_ready() {
-                // Abandoned: it counts as torn down.
+                // Abandoned: it counts as torn down, and as one of the
+                // process's threads that would not stop.
                 self.alive.store(false, Ordering::SeqCst);
+                if !self.abandoned.swap(true, Ordering::SeqCst) {
+                    ABANDONED.fetch_add(1, Ordering::SeqCst);
+                }
                 return Poll::Ready(());
             }
             Poll::Pending
@@ -478,7 +571,28 @@ impl ScriptRuntime {
 
 impl Drop for ScriptRuntime {
     fn drop(&mut self) {
+        // A script running when its runtime goes is stopped, not left to
+        // run on with no deadline.
+        self.stop.store(true, Ordering::SeqCst);
         let _ = self.inbox.send(ToThread::Shutdown);
+    }
+}
+
+/// Stops a runtime whose call's future was dropped before the call ended.
+struct StopIfDropped<'a>(Option<&'a ScriptRuntime>);
+
+impl StopIfDropped<'_> {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for StopIfDropped<'_> {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0 {
+            runtime.stop.store(true, Ordering::SeqCst);
+            let _ = runtime.inbox.send(ToThread::Shutdown);
+        }
     }
 }
 

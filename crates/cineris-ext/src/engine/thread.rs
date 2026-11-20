@@ -392,7 +392,11 @@ impl Work<'_> {
             let _ = outbox.send(FromThread::Done(Err(Failure::Limit(Limit::Time))));
             return After::TornDown;
         }
-        let _ = outbox.send(FromThread::Started);
+        // A call withdrawn before it started (its caller was cancelled
+        // while it waited its turn) is not run: nobody waits for it.
+        if outbox.send(FromThread::Started).is_err() {
+            return After::Goes;
+        }
         self.shared
             .borrow_mut()
             .begin(outbox.clone(), phase_of(&target));

@@ -356,7 +356,7 @@ caught-by:
 [break] a-programs-time-is-the-calls-whole-time
 rule: A program is given at most what is left of the call's time when it is asked for.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::call
+in: ScriptRuntime::call_to_its_end
 find: pin!(serve(call, cx.capabilities, cx.host, phase, left))
 replace: pin!(serve(call, cx.capabilities, cx.host, phase, cx.time.max(left)))
 caught-by:
@@ -365,9 +365,9 @@ caught-by:
 [break] a-script-goes-on-in-a-stopped-turn
 rule: A host call that finds its turn stopped ends the script's call there.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::call
-find: Ok(Err(HostError::Stopped(reason))) => {
-replace: Ok(Err(HostError::Stopped(reason))) if reason.is_empty() => {
+in: ScriptRuntime::call_to_its_end
+find: Some(Err(HostError::Stopped(reason))) => {
+replace: Some(Err(HostError::Stopped(reason))) if reason.is_empty() => {
 packages: cineris-ext,cineris-core
 caught-by:
     cineris-ext::it engine::a_host_call_in_a_stopped_turn_ends_the_scripts_call
@@ -1413,3 +1413,78 @@ find: '\u{20A9}'
 replace: '\u{1}'
 caught-by:
     cineris-core programs::tests::a_lookalike_of_a_quote_or_a_backslash_is_refused_on_every_system
+
+# The full review before the first pull request (step 28): the engine.
+
+[break] a-thread-left-running-is-not-counted
+rule: A runtime's thread that does not stop within its grace is counted among the process's threads left running.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::stopped
+find: if !self.abandoned.swap(true, Ordering::SeqCst) {
+replace: if self.abandoned.swap(true, Ordering::SeqCst) {
+caught-by:
+    cineris-ext::it engine::a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted
+
+[break] a-main-module-that-will-not-stop-is-not-counted
+rule: A main module that does not stop within its grace is said so, and counted.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::start
+find: None if grace.is_some() => {
+replace: None if grace.is_some() && false => {
+caught-by:
+    cineris-ext::it engine::past_the_cap_of_threads_left_running_no_extension_starts
+
+[break] the-cap-of-threads-left-running-is-not-held
+rule: Past the cap of threads left running, no extension is started.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::start
+find: if abandoned >= MAX_ABANDONED {
+replace: if abandoned >= MAX_ABANDONED * 100 {
+caught-by:
+    cineris-ext::it engine::past_the_cap_of_threads_left_running_no_extension_starts
+
+[break] an-extension-whose-thread-was-left-is-started-again
+rule: An extension whose thread was left running is not started again in the process.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::runtime
+find: if self.abandoned.load(Ordering::SeqCst) {
+replace: if self.abandoned.load(Ordering::SeqCst) && self.name().is_empty() {
+caught-by:
+    cineris-core::it extensions::an_extension_whose_thread_would_not_stop_is_not_started_again
+
+[break] a-call-cancelled-before-its-turn-stops-the-runtime
+rule: A call cancelled before its turn is withdrawn, and the runtime's running call goes on.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::call_to_its_end
+find: Event::Cancelled if deadline.is_none() => {
+replace: Event::Cancelled if deadline.is_none() && false => {
+caught-by:
+    cineris-ext::it engine::a_call_cancelled_before_its_turn_leaves_the_running_call_alone
+
+[break] a-withdrawn-call-is-run
+rule: The thread does not run a call that was withdrawn before it started.
+file: crates/cineris-ext/src/engine/thread.rs
+in: Work::run
+find: if outbox.send(FromThread::Started).is_err() {
+replace: if outbox.send(FromThread::Started).is_err() && false {
+caught-by:
+    cineris-ext::it engine::a_call_cancelled_before_its_turn_leaves_the_running_call_alone
+
+[break] a-call-given-up-leaves-its-script-running
+rule: A call whose future is dropped before it ends stops its runtime.
+file: crates/cineris-ext/src/engine/mod.rs
+in: StopIfDropped::drop
+find: runtime.stop.store(true, Ordering::SeqCst);
+replace: let _ = &runtime.stop;
+caught-by:
+    cineris-ext::it engine::a_call_given_up_before_its_end_stops_its_runtime
+
+[break] a-program-is-dropped-at-the-calls-end
+rule: A program's host call is followed to its end when the call is cancelled or out of time.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::call_to_its_end
+find: let to_its_end = matches!(call, HostCall::Exec { .. });
+replace: let to_its_end = matches!(call, HostCall::Log(_));
+caught-by:
+    cineris-ext::it engine::a_cancelled_call_follows_its_program_to_the_end
+
