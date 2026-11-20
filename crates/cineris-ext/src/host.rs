@@ -73,8 +73,13 @@ pub struct ExecRequest {
     pub cwd: Option<String>,
     /// Bytes for its standard input. `None`: none.
     pub stdin: Option<Vec<u8>>,
-    /// How long it may run.
+    /// How long it may run: what it asked for, at most what was left of
+    /// the call's time when it was asked for.
     pub timeout: Duration,
+    /// What was left of the call's time when the program was asked for:
+    /// its decision, which may wait on a person, and its run are held to
+    /// it.
+    pub call_left: Duration,
     /// Whether the manifest lets its programs reach the network.
     pub network: bool,
     /// The folders it may write where the sandbox confines it: made from
@@ -415,6 +420,7 @@ pub async fn serve<H: Host + ?Sized>(
                     cwd,
                     stdin: stdin.map(String::into_bytes),
                     timeout: asked.min(time_left),
+                    call_left: time_left,
                     network: capabilities.declared().exec_network,
                     write_roots: capabilities.write_roots(),
                 })

@@ -660,8 +660,8 @@ caught-by:
 rule: A program starts only when the permission engine, or the person it asks, allows the line.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: }, ).await?;
-replace: }, ).await.ok();
+find: decided.ok_or_else(not_started)??;
+replace: let _ = decided;
 caught-by:
     cineris-core::it ext_exec::a_program_a_rule_denies_is_refused
     cineris-core::it ext_exec::a_question_about_a_program_shows_the_quoted_line_and_offers_only_once_or_deny
@@ -1445,30 +1445,32 @@ caught-by:
 
 [break] an-extension-whose-thread-was-left-is-started-again
 rule: An extension whose thread was left running is not started again in the process.
-file: crates/cineris-core/src/ext/tools.rs
-in: LoadedExtension::runtime
-find: if self.abandoned.load(Ordering::SeqCst) {
-replace: if self.abandoned.load(Ordering::SeqCst) && self.name().is_empty() {
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::start
+find: if is_disabled(&hash) {
+replace: if is_disabled(&hash) && name.is_empty() {
+packages: cineris-ext,cineris-core
 caught-by:
+    cineris-ext::it engine::a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted
     cineris-core::it extensions::an_extension_whose_thread_would_not_stop_is_not_started_again
 
 [break] a-call-cancelled-before-its-turn-stops-the-runtime
 rule: A call cancelled before its turn is withdrawn, and the runtime's running call goes on.
 file: crates/cineris-ext/src/engine/mod.rs
 in: ScriptRuntime::call_to_its_end
-find: Event::Cancelled if deadline.is_none() => {
-replace: Event::Cancelled if deadline.is_none() && false => {
+find: .compare_exchange(QUEUED, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
+replace: .compare_exchange(QUEUED + 7, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
 caught-by:
-    cineris-ext::it engine::a_call_cancelled_before_its_turn_leaves_the_running_call_alone
+    cineris-ext::it engine::a_call_cancelled_before_its_turn_is_withdrawn_and_never_runs
 
 [break] a-withdrawn-call-is-run
 rule: The thread does not run a call that was withdrawn before it started.
 file: crates/cineris-ext/src/engine/thread.rs
 in: Work::run
-find: if outbox.send(FromThread::Started).is_err() {
-replace: if outbox.send(FromThread::Started).is_err() && false {
+find: .compare_exchange(QUEUED, STARTED, Ordering::SeqCst, Ordering::SeqCst)
+replace: .compare_exchange(claim.load(Ordering::SeqCst), STARTED, Ordering::SeqCst, Ordering::SeqCst)
 caught-by:
-    cineris-ext::it engine::a_call_cancelled_before_its_turn_leaves_the_running_call_alone
+    cineris-ext::it engine::a_call_cancelled_before_its_turn_is_withdrawn_and_never_runs
 
 [break] a-call-given-up-leaves-its-script-running
 rule: A call whose future is dropped before it ends stops its runtime.
@@ -1612,19 +1614,20 @@ caught-by:
 rule: A program decided after a person was asked is given no more than what is left of the call's time.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: let timeout = request.timeout.min(left);
-replace: let timeout = request.timeout; let _ = left;
+find: let left = request.call_left.saturating_sub(spent);
+replace: let left = request.call_left; let _ = spent;
 caught-by:
     cineris-core::it ext_exec::sys_a_program_decided_late_is_given_only_what_is_left_of_the_calls_time
 
-[break] the-calls-deadline-is-not-its-time
-rule: A call's deadline is its start on the session's clock and the manifest's time.
-file: crates/cineris-core/src/ext/tools.rs
-in: LoadedExtension::call_tool
-find: .saturating_add(self.approved.manifest.limits.time);
-replace: .saturating_add(self.approved.manifest.limits.time.saturating_mul(2));
+[break] a-programs-question-holds-the-call
+rule: A program's decision is given up when the call is cancelled or its time is up, and its open question with it.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: if cancelled.as_mut().poll(context).is_ready() || over.as_mut().poll(context).is_ready()
+replace: if cancelled.as_mut().poll(context).is_ready() && over.as_mut().poll(context).is_ready()
 caught-by:
-    cineris-core::it ext_exec::sys_a_program_decided_late_is_given_only_what_is_left_of_the_calls_time
+    cineris-core::it ext_exec::an_interrupt_withdraws_a_programs_open_question
+    cineris-core::it ext_exec::a_programs_open_question_is_withdrawn_when_the_calls_time_is_up
 
 [break] a-run-ended-early-is-not-looked-at
 rule: What a program did is looked at whatever ended its run: its own time, the call's cancellation, or a start that failed once the process was made.
@@ -1775,3 +1778,31 @@ find: '\u{FF0D}'
 replace: '\u{1}'
 caught-by:
     cineris-core programs::tests::a_lookalike_of_a_quote_or_a_backslash_is_refused_on_every_system
+
+[break] a-queued-call-given-up-stops-the-runtime
+rule: A call whose future is given up before its turn is withdrawn, and the call the runtime serves goes on.
+file: crates/cineris-ext/src/engine/mod.rs
+in: StopIfDropped::drop
+find: .compare_exchange(QUEUED, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
+replace: .compare_exchange(QUEUED + 7, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
+caught-by:
+    cineris-ext::it engine::a_call_given_up_before_its_turn_leaves_the_running_call_alone
+
+[break] a-thread-left-running-disables-nothing
+rule: An extension whose thread was left running is marked so for the whole process.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::stopped
+find: disable(self.loaded.hash);
+replace: let _ = self.loaded.hash;
+caught-by:
+    cineris-ext::it engine::a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted
+
+[break] a-run-of-selectors-is-shown-as-written
+rule: Text a script registers is refused when anything in it would be escaped to be shown: a control, a format character, a run of variation selectors.
+file: crates/cineris-ext/src/engine/thread.rs
+in: hides_something
+find: cineris_base::visible_keeping(text, &['\n', '\t']) != text
+replace: text.chars().any(|character| !matches!(character, '\n' | '\t') && cineris_base::acts_unseen(character))
+caught-by:
+    cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
+

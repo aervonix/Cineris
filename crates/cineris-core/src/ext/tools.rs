@@ -51,9 +51,6 @@ pub(crate) struct LoadedExtension {
     /// overwritten only after the script read it as it is.
     files: Arc<FileTable>,
     runtime: tokio::sync::Mutex<Option<Arc<ScriptRuntime>>>,
-    /// Whether one of its threads was left running: it is not started
-    /// again in this process.
-    abandoned: std::sync::atomic::AtomicBool,
     parts: Arc<HostParts>,
 }
 
@@ -80,7 +77,7 @@ impl LoadedExtension {
             capabilities,
             files: Arc::new(FileTable::new()),
             runtime: tokio::sync::Mutex::new(None),
-            abandoned: std::sync::atomic::AtomicBool::new(false),
+
             parts,
         })
     }
@@ -92,22 +89,9 @@ impl LoadedExtension {
     /// The live runtime, made when there is none or the last was torn
     /// down.
     async fn runtime(&self) -> Result<Arc<ScriptRuntime>, String> {
-        use std::sync::atomic::Ordering;
-
         let mut slot = self.runtime.lock().await;
-        // A script that would not stop when told to left its thread
-        // running; another would do the same (the review of step 28).
-        if slot.as_ref().is_some_and(|runtime| runtime.was_abandoned()) {
-            self.abandoned.store(true, Ordering::SeqCst);
-        }
-        if self.abandoned.load(Ordering::SeqCst) {
-            return Err(format!(
-                "The extension `{}` is disabled: its script did not stop when its time was up, \
-                 and its thread was left running. It is started again after the harness \
-                 restarts, or once it is approved again.",
-                self.name()
-            ));
-        }
+        // An extension whose thread was left running is not started again
+        // in this process: the engine refuses it, for every session.
         if let Some(runtime) = slot.as_ref().filter(|runtime| runtime.is_alive()) {
             return Ok(Arc::clone(runtime));
         }
@@ -121,12 +105,7 @@ impl LoadedExtension {
             self.parts.timer.as_ref(),
         )
         .await
-        .map_err(|error| {
-            if matches!(error, cineris_ext::engine::LoadError::Abandoned) {
-                self.abandoned.store(true, Ordering::SeqCst);
-            }
-            format!("The extension `{}` could not start: {error}", self.name())
-        })?;
+        .map_err(|error| format!("The extension `{}` could not start: {error}", self.name()))?;
         // The capabilities and the time were taken from the approved
         // manifest: the snapshot whose hash was checked must hold that one
         // (the review of step 28: the two are separate fields).
@@ -155,13 +134,7 @@ impl LoadedExtension {
         };
         let full_name = format!("{}/{tool}", self.name());
         let progress = Mutex::new(Vec::new());
-        // The call's time runs from here, on the clock the engine reads it
-        // by: no later than the engine's own start of it.
-        let deadline = self
-            .parts
-            .clock
-            .monotonic()
-            .saturating_add(self.approved.manifest.limits.time);
+
         let host = host::CallHost {
             parts: &self.parts,
             cx,
@@ -169,7 +142,6 @@ impl LoadedExtension {
             full_name: &full_name,
             extension: self.name(),
             progress: &progress,
-            deadline,
         };
         let result = runtime
             .call(

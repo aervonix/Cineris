@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 
 use cineris_base::ContentHash;
@@ -101,7 +101,20 @@ pub(crate) struct Invocation {
     pub(crate) target: Target,
     pub(crate) input: Json,
     pub(crate) outbox: async_mpsc::UnboundedSender<FromThread>,
+    /// Who has the call: [`QUEUED`] until the thread starts it
+    /// ([`STARTED`]) or its caller gives it up first ([`WITHDRAWN`]). Each
+    /// side takes it with one compare-and-swap, so exactly one of them
+    /// does (the review of step 28's fixes: a withdrawal told by closing
+    /// the channel could miss a start already under way).
+    pub(crate) claim: Arc<AtomicU8>,
 }
+
+/// A call waiting its turn.
+pub(crate) const QUEUED: u8 = 0;
+/// A call the thread has started.
+pub(crate) const STARTED: u8 = 1;
+/// A call its caller gave up before it started.
+pub(crate) const WITHDRAWN: u8 = 2;
 
 /// What the thread says about a call.
 #[derive(Debug)]
@@ -386,6 +399,7 @@ impl Work<'_> {
             target,
             input,
             outbox,
+            claim,
         } = invocation;
         if self.stop.load(Ordering::SeqCst) {
             self.alive.store(false, Ordering::SeqCst);
@@ -394,6 +408,13 @@ impl Work<'_> {
         }
         // A call withdrawn before it started (its caller was cancelled
         // while it waited its turn) is not run: nobody waits for it.
+        if claim
+            .compare_exchange(QUEUED, STARTED, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return After::Goes;
+        }
+        cineris_base::hook::point(super::AFTER_A_CALL_IS_CLAIMED);
         if outbox.send(FromThread::Started).is_err() {
             return After::Goes;
         }
@@ -1083,8 +1104,10 @@ fn shown(text: &str) -> String {
 /// character such as a direction override), a line break and a tab apart:
 /// text a script registers is shown to the model and the user as written.
 fn hides_something(text: &str) -> bool {
-    text.chars()
-        .any(|character| !matches!(character, '\n' | '\t') && cineris_base::acts_unseen(character))
+    // Shown as written only if nothing would be escaped: a control, a
+    // format character, and a run of variation selectors, which hide data
+    // past the first (the review of step 28's fixes).
+    cineris_base::visible_keeping(text, &['\n', '\t']) != text
 }
 
 fn check_description(description: &str) -> Result<(), String> {

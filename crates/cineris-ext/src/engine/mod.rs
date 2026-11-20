@@ -25,7 +25,7 @@ mod thread;
 use std::future::poll_fn;
 use std::path::PathBuf;
 use std::pin::pin;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::task::Poll;
 use std::time::Duration;
@@ -40,7 +40,7 @@ use crate::host::{Host, HostCall, HostError, Phase, serve};
 use crate::manifest::{Manifest, ManifestError};
 use crate::registration::Registration;
 
-use thread::{FromThread, Invocation, Loaded, ToThread};
+use thread::{FromThread, Invocation, Loaded, QUEUED, ToThread, WITHDRAWN};
 
 /// The engine's stack limit for a script's calls.
 pub const STACK_BYTES: usize = 256 * 1024;
@@ -72,6 +72,46 @@ pub const MAX_ABANDONED: usize = 4;
 
 /// The threads this process abandoned, of every extension.
 static ABANDONED: AtomicUsize = AtomicUsize::new(0);
+
+/// The extensions, by their snapshot's hash, whose thread this process
+/// left running: none is started again until the harness restarts or it
+/// is approved again ([`forget_abandoned`]). Kept for the process, not a
+/// session: each session's start of it would leave another thread (the
+/// review of step 28's fixes).
+static DISABLED: std::sync::Mutex<Vec<ContentHash>> = std::sync::Mutex::new(Vec::new());
+
+/// Marks the extension of `hash` as one whose thread was left running.
+fn disable(hash: ContentHash) {
+    let mut disabled = DISABLED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !disabled.contains(&hash) {
+        disabled.push(hash);
+    }
+}
+
+/// Whether the extension of `hash` had a thread left running in this
+/// process.
+#[must_use]
+pub fn is_disabled(hash: &ContentHash) -> bool {
+    DISABLED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .contains(hash)
+}
+
+/// Lets the extension of `hash` be started again: the user approved it
+/// anew, knowing its thread was left running.
+pub fn forget_abandoned(hash: &ContentHash) {
+    DISABLED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|disabled| disabled != hash);
+}
+
+/// A point of a runtime's thread just after it took a call to run, before
+/// it says the call started: a test holds it to give the call up then.
+pub const AFTER_A_CALL_IS_CLAIMED: &str = "cineris-ext: after a call is claimed";
 
 /// How many extension threads this process has abandoned.
 #[must_use]
@@ -166,6 +206,13 @@ pub enum LoadError {
          running: it is not started again until the harness restarts or it is approved again"
     )]
     Abandoned,
+    /// An earlier thread of this extension was left running.
+    #[error(
+        "the extension is disabled: its script did not stop when its time was up, and its thread \
+         was left running. It is started again after the harness restarts, or once it is \
+         approved again"
+    )]
+    Disabled,
     /// Too many extension threads did not stop when told to.
     #[error(
         "{0} extension threads did not stop when told to and are still running, so no extension \
@@ -275,6 +322,13 @@ impl ScriptRuntime {
         if abandoned >= MAX_ABANDONED {
             return Err(LoadError::TooManyAbandoned(abandoned));
         }
+        let hash = match &source {
+            Source::Folder { pinned, .. } => *pinned,
+            Source::Snapshot(snapshot) => snapshot.hash(),
+        };
+        if is_disabled(&hash) {
+            return Err(LoadError::Disabled);
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
         let (ready, readied) = oneshot::channel();
@@ -325,6 +379,7 @@ impl ScriptRuntime {
             // Its grace passed: the thread is left running.
             None if grace.is_some() => {
                 ABANDONED.fetch_add(1, Ordering::SeqCst);
+                disable(hash);
                 Err(LoadError::Abandoned)
             }
             None => Err(LoadError::Limit(Limit::Time)),
@@ -381,10 +436,19 @@ impl ScriptRuntime {
         input: Json,
         cx: CallContext<'_, H>,
     ) -> Result<Json, CallError> {
+        // A call already cancelled is not sent at all.
+        if cx.cancel.is_cancelled() {
+            return Err(CallError::Cancelled);
+        }
+        let claim = Arc::new(AtomicU8::new(QUEUED));
         // A call whose future is dropped before it ends (its task given
-        // up) stops the runtime: nothing else would.
-        let guard = StopIfDropped(Some(self));
-        let result = self.call_to_its_end(target, input, cx).await;
+        // up) is withdrawn if it has not started, and otherwise stops the
+        // runtime: nothing else would.
+        let guard = StopIfDropped {
+            runtime: Some(self),
+            claim: Arc::clone(&claim),
+        };
+        let result = self.call_to_its_end(target, input, cx, claim).await;
         guard.disarm();
         result
     }
@@ -394,6 +458,7 @@ impl ScriptRuntime {
         target: Target,
         input: Json,
         cx: CallContext<'_, H>,
+        claim: Arc<AtomicU8>,
     ) -> Result<Json, CallError> {
         if !self.is_alive() {
             return Err(CallError::Gone);
@@ -409,6 +474,7 @@ impl ScriptRuntime {
                 target,
                 input,
                 outbox,
+                claim: Arc::clone(&claim),
             }))
             .map_err(|_| CallError::Gone)?;
         let mut deadline: Option<cineris_base::Sleep> = None;
@@ -515,18 +581,12 @@ impl ScriptRuntime {
                 // Cancelled before its turn came: withdrawn, and the call
                 // the runtime is serving goes on. One that started after
                 // all is stopped as any other.
-                Event::Cancelled if deadline.is_none() => {
-                    replies.close();
-                    let mut begun = false;
-                    while let Ok(reply) = replies.try_recv() {
-                        begun |= matches!(reply, FromThread::Started);
-                    }
-                    if !begun {
-                        return Err(CallError::Cancelled);
-                    }
-                    return Err(self
-                        .stopped(&mut replies, cx.timer, CallError::Cancelled)
-                        .await);
+                Event::Cancelled
+                    if claim
+                        .compare_exchange(QUEUED, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_ok() =>
+                {
+                    return Err(CallError::Cancelled);
                 }
                 Event::Cancelled => {
                     return Err(self
@@ -565,6 +625,7 @@ impl ScriptRuntime {
                 self.alive.store(false, Ordering::SeqCst);
                 if !self.abandoned.swap(true, Ordering::SeqCst) {
                     ABANDONED.fetch_add(1, Ordering::SeqCst);
+                    disable(self.loaded.hash);
                 }
                 return Poll::Ready(());
             }
@@ -584,21 +645,34 @@ impl Drop for ScriptRuntime {
     }
 }
 
-/// Stops a runtime whose call's future was dropped before the call ended.
-struct StopIfDropped<'a>(Option<&'a ScriptRuntime>);
+/// Withdraws a call whose future was dropped before it started, and stops
+/// the runtime of one dropped after it started.
+struct StopIfDropped<'a> {
+    runtime: Option<&'a ScriptRuntime>,
+    claim: Arc<AtomicU8>,
+}
 
 impl StopIfDropped<'_> {
     fn disarm(mut self) {
-        self.0 = None;
+        self.runtime = None;
     }
 }
 
 impl Drop for StopIfDropped<'_> {
     fn drop(&mut self) {
-        if let Some(runtime) = self.0 {
-            runtime.stop.store(true, Ordering::SeqCst);
-            let _ = runtime.inbox.send(ToThread::Shutdown);
+        let Some(runtime) = self.runtime else {
+            return;
+        };
+        // Not started: withdrawn, and the call the runtime serves goes on.
+        if self
+            .claim
+            .compare_exchange(QUEUED, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            return;
         }
+        runtime.stop.store(true, Ordering::SeqCst);
+        let _ = runtime.inbox.send(ToThread::Shutdown);
     }
 }
 

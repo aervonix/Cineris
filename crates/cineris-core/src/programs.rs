@@ -250,7 +250,7 @@ const REFUSED: [(char, &str); 13] = [
 /// word. The list is of the ones known; a full check would convert each
 /// argument as Windows does, which needs Windows' own functions
 /// (`docs/outstanding/an-exec-argument-is-not-checked-against-the-code-pages-best-fit.md`).
-const LOOKALIKES: [(char, &str, &str); 8] = [
+const LOOKALIKES: [(char, &str, &str); 16] = [
     (
         '\u{FF02}',
         "a fullwidth quotation mark (U+FF02)",
@@ -275,6 +275,22 @@ const LOOKALIKES: [(char, &str, &str); 8] = [
     ),
     ('\u{AD}', "a soft hyphen (U+00AD)", "a hyphen"),
     ('\u{FF0D}', "a fullwidth hyphen-minus (U+FF0D)", "a hyphen"),
+    ('\u{2212}', "a minus sign (U+2212)", "a hyphen"),
+    ('\u{2010}', "a hyphen (U+2010)", "a hyphen"),
+    ('\u{2011}', "a non-breaking hyphen (U+2011)", "a hyphen"),
+    ('\u{FE63}', "a small hyphen-minus (U+FE63)", "a hyphen"),
+    (
+        '\u{FE68}',
+        "a small reverse solidus (U+FE68)",
+        "a backslash",
+    ),
+    ('\u{2033}', "a double prime (U+2033)", "a double quote"),
+    (
+        '\u{02DD}',
+        "a double acute accent (U+02DD)",
+        "a double quote",
+    ),
+    ('\u{3003}', "a ditto mark (U+3003)", "a double quote"),
 ];
 
 /// Why `arguments` cannot be given to any program, naming the first
@@ -703,6 +719,14 @@ mod tests {
             ('\u{20A9}', "a won sign (U+20A9)"),
             ('\u{AD}', "a soft hyphen (U+00AD)"),
             ('\u{FF0D}', "a fullwidth hyphen-minus (U+FF0D)"),
+            ('\u{2212}', "a minus sign (U+2212)"),
+            ('\u{2010}', "a hyphen (U+2010)"),
+            ('\u{2011}', "a non-breaking hyphen (U+2011)"),
+            ('\u{FE63}', "a small hyphen-minus (U+FE63)"),
+            ('\u{FE68}', "a small reverse solidus (U+FE68)"),
+            ('\u{2033}', "a double prime (U+2033)"),
+            ('\u{02DD}', "a double acute accent (U+02DD)"),
+            ('\u{3003}', "a ditto mark (U+3003)"),
         ] {
             let given = args(&["ok", &format!("a{character}b")]);
             for (program, windows) in [
