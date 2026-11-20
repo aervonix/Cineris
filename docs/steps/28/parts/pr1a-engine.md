@@ -2,6 +2,28 @@
 
 The first of step 28's pull requests: `cineris-ext`'s folder snapshot, manifest, capabilities, engine and host-function contract, and the core's host for them, with an extension's tool called end to end ([answered.md](../answered.md), "The design, before building", and its cut).
 
+## What was built
+
+- **`cineris-ext`** (its `engine` behind `scripts`): an extension's folder read whole into a snapshot and hashed (`folder`); the manifest, strict (`manifest`); the capabilities compiled for a workspace (`capability`); the events (`event`); what a script registers (`registration`); the host functions' contract, `host::serve`, which asks the manifest before the host for every call; and the engine, QuickJS through `rquickjs`, one runtime on a thread of its own for each extension, one call at a time, with a memory limit, a stack, a time a call checked by the interrupt and by the host, caps on what a script hands the harness, and threads that cannot be stopped left running, counted and capped.
+- **`cineris-core`'s `ext` module**: an approved extension's tools registered behind `tool_search` and `tool_call` (each `Ask` and `Exclusive`), nothing of it started until its first call; the host, each call decided by the permission engine as a call of the extension's tool with an `ext` effect beside its own, a question offering only "allow once" and "deny" and keeping nothing; `fs` through the session's `read`, `write`, `list` and `search` tools with the manifest's gate on every entry; and `cineris.exec` (finding the program outside the workspace and every write root, the line the engine reads in the session's syntax, a launcher of the extension's own at every level with the manifest's write roots, the protected-path look around it, its changes recorded for undo, and on Windows `.exe` arguments quoted for the C runtime and `.cmd`/`.bat` through `cmd.exe` with what it cannot carry refused).
+- **`cineris-sandbox`**: the launcher's policy carries a command's input, at most 1 MiB, given to it as a sealed memfd.
+- **`cineris-tools`**: a run that keeps standard output and standard error apart, `RunCx::call` (the call a run is for, set by the round alone), and a work budget for checking arguments against a schema.
+- **`cineris-cli`**: a headless run under `--fail-on-denial` held to its first denial.
+- **xtask**: the shipped build gives the C compiler `-ffile-prefix-map`.
+- Not in this part: `cineris.http.fetch` (the next pull request), `cineris.state` (the second), and finding extensions by themselves (`CoreOptions::extensions` until the second).
+
+## What was measured
+
+| Budget | Measured | Where |
+|---|---|---|
+| Binary size | Linux musl `dist` 15.05 MB of 20 MB, 1,232 KB more than main (QuickJS's C 601 KB, the standard library 104 KB, `cineris_core` 102 KB); Windows in the pull request's own size job | Try run 44819307542 |
+| Start-up | Untouched: a session with an extension starts no engine (`runtimes_made` unchanged until the first call) | `cineris-core::it extensions::an_extensions_tool_is_called_through_tool_call_after_the_user_allows_it` |
+| Windows tiers, both trees on one runner, medians of five | unit 10.6 s (main 10.7), integration 23.9 s (22.5, +1.4), system 56.3 s (54.9, +1.4); 38%, 57% and 60% of the 25, 40 and 90 s budgets | Try run 44819307542 |
+| Linux 22.04 tiers | 79%, 83% and 74% of the 20, 40 and 60 s budgets | Try run 44819307542 |
+| Clean build | + 5.5 s release, + 3.6 s dev, on 4 cores of the reference machine | [dependencies.md](../../../dependencies.md), `rquickjs` |
+| Threads | None at start-up; one for each extension in use, made at its first call; at most four left running in a process before no extension starts | `cineris-ext::it engine` |
+| Checking a call's arguments | Every built-in tool's schema under a quarter of the work budget | [performance-budgets.md](../../../performance-budgets.md) |
+
 ## The early review of the host functions' permission path
 
 A reviewer that had not seen the author's reasoning read the capability and permission path at its first complete state (`cineris-ext`'s `host`, `capability` and `engine`; the core's `ext` module and its use of the policy) against the bar the maintainers set: any way to act without the manifest and the policy, anything running before approval, a limit that does not hold, a test that passes with its feature removed, a path check fooled by a path that is not canonical. Each finding was fixed with a test and a break in [mutations/step-28.breaks](../../../../mutations/step-28.breaks).
