@@ -508,7 +508,17 @@ caught-by:
 rule: A host call the policy says to stop at ends the script's call, rather than being refused to it.
 file: crates/cineris-core/src/ext/host.rs
 in: CallHost::decide
-find: Verdict::Stop { reason } => Err(HostError::Stopped(reason)),
-replace: Verdict::Stop { reason } => Err(HostError::Denied(reason)),
+find: Err(HostError::Stopped(reason))
+replace: Err(HostError::Denied(reason))
+occurrence: 2
+caught-by:
+    cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
+
+[break] a-stopped-host-call-leaves-the-turn-going
+rule: A host call answered with a stop stops its turn: a call the model wrote after it is not run, and the turn ends denied without the model being asked again.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::decide
+find: self.parts.policy.stop_turn(self.cx.turn, reason.clone());
+replace: let _ = self.parts.policy.stopped_turn(self.cx.turn);
 caught-by:
     cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
