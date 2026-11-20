@@ -38,9 +38,8 @@ caught-by:
 [break] a-walks-entries-are-not-checked
 rule: Each entry a listing or a search reaches is checked against the manifest on its own.
 file: crates/cineris-ext/src/host.rs
-in: entries_json
-find: .filter(|entry| capabilities.reads(&entry.path))
-replace: .filter(|_| true)
+find: self.inner.may_read(path) && self.manifest.allows(path)
+replace: self.inner.may_read(path)
 caught-by:
     cineris-ext::it capability::each_entry_a_walk_reaches_is_checked_on_its_own
 
