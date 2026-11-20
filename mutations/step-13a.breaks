@@ -79,12 +79,13 @@ caught-by:
     cineris-core::it trust::sys_trust_for_the_run_reaches_all_four
 
 [break] engine-told-every-projects-rules-are-approved
-rule: The engine sets a project's allow rules aside until its rules are the ones the user saw. Seen through the core, nothing changes when the engine is told otherwise: configuration has already held the project's rules back, so the engine is never given them. The engine's own tests hold its half (`cineris-policy`, an allow rule that needs trust is withheld).
+rule: The engine sets a project's allow rules aside until its rules are the ones the user saw. For the rules of the project's configuration files, configuration has already held them back, so the engine is never given them. But since step 19 the project's accepted commands reach the engine directly, as learned rules, and the engine's trust is the only thing that holds them back in a project that is not trusted (`RuleSource::Learned`, whose allow needs trust): told every project is trusted, the engine lets an accepted command run unasked there. Marked `expect: survives` until the small fixes, which found the knowledge test catching it.
 file: crates/cineris-core/src/assemble.rs
 in: engine_parts
 find: trusted, repository_trusted, protected
 replace: trusted: true, repository_trusted, protected
-expect: survives
+caught-by:
+    cineris-core::it knowledge::an_accepted_command_waits_for_the_projects_trust
 
 [break] engine-told-every-repository-is-trusted
 rule: In a project the user does not trust, git is not a command that only reads.
