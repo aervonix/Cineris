@@ -2554,8 +2554,8 @@ caught-by:
 rule: A fetch's question shows its URL without its query or fragment.
 file: crates/cineris-core/src/ext/host.rs
 in: shown_url
-find: Some(at) => format!("{}{}…", cineris_base::visible(&url[..at]), &url[at..=at])
-replace: Some(_) => cineris_base::visible(url).into_owned()
+find: Some(at) => (&url[..at], format!("{}…", &url[at..=at]))
+replace: Some(_) => (url, String::new())
 caught-by:
     cineris-core ext::host::tests::a_fetchs_url_is_shown_without_its_query_and_with_nothing_unseen
     cineris-core::it extensions::a_fetch_is_asked_about_only_when_it_could_be_made_and_shows_no_credential
@@ -2576,3 +2576,110 @@ find: host: Some(host)
 replace: host: None
 caught-by:
     cineris-core ext::host::tests::the_clients_request_carries_the_host_that_was_checked
+
+# ---------------------------------------- the review of the fetch's changes since
+
+[break] a-root-rustls-cannot-read-is-taken
+rule: A root certificate rustls cannot read is left out, so that it does not fail every fetch.
+file: crates/cineris-llm/src/fetch.rs
+in: usable_roots
+find: .filter(|der| rustls::RootCertStore::empty().add(der.clone()).is_ok())
+replace: .filter(|_| true)
+caught-by:
+    cineris-llm fetch::tests::a_root_rustls_cannot_read_is_left_out_and_the_rest_make_a_client
+
+[break] a-failure-to-connect-says-its-cause
+rule: A failure to connect reads the same whatever its cause, so a script cannot map what answers on an address by it.
+file: crates/cineris-llm/src/fetch.rs
+find: #[error("the fetch could not connect")]
+replace: #[error("{0}")]
+caught-by:
+    cineris-llm fetch::tests::a_failure_to_connect_reads_the_same_whatever_its_cause
+
+[break] a-long-url-is-taken
+rule: A URL over 8 KiB is refused before anything is looked up.
+file: crates/cineris-llm/src/fetch.rs
+in: prepare
+find: if request.url.len() > URL_LIMIT {
+replace: if false {
+caught-by:
+    cineris-llm fetch::tests::a_check_refuses_what_a_fetch_refuses_before_its_lookup
+
+[break] a-response-prints-its-header-values
+rule: A response's Debug shows its headers' names, never their values.
+file: crates/cineris-llm/src/fetch.rs
+find:
+        .field("status", &self.status)
+            .field("headers", &names)
+            .field("body_bytes", &self.body.len())
+            .field("cut", &self.cut)
+            .field("address", &self.address)
+replace:
+        .field("status", &self.status)
+            .field("headers", &self.headers)
+            .field("body_bytes", &self.body.len())
+            .field("cut", &self.cut)
+            .field("address", &self.address)
+caught-by:
+    cineris-llm fetch::tests::a_response_prints_without_its_header_values
+
+[break] the-dummy-ipv6-prefix-let-through
+rule: IANA's dummy IPv6 prefix, 100:0:0:1::/64, is refused.
+file: crates/cineris-base/src/address.rs
+find: Range::v6([0x100, 0, 0, 1, 0, 0, 0, 0], 64, Reserved)
+replace: Range::v6([0x100, 0, 0, 1, 0, 0, 0, 0], 128, Reserved)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+
+[break] a-fetchs-url-is-shown-whole
+rule: A fetch's question shows at most 200 bytes of its URL.
+file: crates/cineris-core/src/ext/host.rs
+in: shown_url
+find: let start = cineris_base::text::truncate_bytes(before, FETCH_SHOWN_BYTES);
+replace: let start = before;
+caught-by:
+    cineris-core ext::host::tests::what_a_fetchs_question_shows_is_bounded
+
+[break] a-fetchs-header-names-are-shown-whole
+rule: A fetch's question shows at most 200 bytes of its headers' names.
+file: crates/cineris-core/src/ext/host.rs
+in: what_a_fetch_sends
+find: let shown = cineris_base::text::truncate_bytes(&names, FETCH_SHOWN_BYTES);
+replace: let shown = names.as_str();
+caught-by:
+    cineris-core ext::host::tests::what_a_fetchs_question_shows_is_bounded
+
+[break] a-fetchs-query-is-not-named
+rule: A fetch's question names the size of its query, which it no longer shows.
+file: crates/cineris-core/src/ext/host.rs
+in: what_a_fetch_sends
+find: parts.push(format!("a query of {} bytes", query.len()));
+replace: let _ = query;
+caught-by:
+    cineris-core ext::host::tests::what_a_fetch_sends_names_its_headers_and_never_their_values
+    cineris-core::it extensions::a_fetch_is_asked_about_only_when_it_could_be_made_and_shows_no_credential
+
+[break] a-fetch-output-prints-its-body
+rule: What a fetch gave prints its headers' names and its body's size, never their contents.
+file: crates/cineris-ext/src/host.rs
+find:
+        f.debug_struct("FetchOutput")
+            .field("status", &self.status)
+            .field("headers", &names)
+            .field("body_bytes", &self.body.len())
+replace:
+        f.debug_struct("FetchOutput")
+            .field("status", &self.status)
+            .field("headers", &self.headers)
+            .field("body_bytes", &self.body)
+caught-by:
+    cineris-ext::it serve::a_fetch_call_prints_without_what_may_be_a_credential
+
+[break] a-fetch-call-prints-its-path
+rule: What prints of a fetch's URL is its scheme and host, never its path, query or fragment.
+file: crates/cineris-ext/src/host.rs
+in: origin_of
+find: match url[start..].find(['/', '?', '#']) {
+replace: match url[start..].find(['?', '#']) {
+caught-by:
+    cineris-ext::it serve::a_fetch_call_prints_without_what_may_be_a_credential
