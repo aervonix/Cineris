@@ -33,8 +33,9 @@
 //!   Confining such a process is the sandbox's job. On Windows nothing
 //!   leaves a Job Object.
 //!
-//! [`Output`] is the pipe such a command writes to, read by a thread that
-//! can be told to stop.
+//! [`Output`] is a pipe such a command writes to, read by a thread that can
+//! be told to stop: one pipe for both its standard output and its standard
+//! error ([`Output::attach`]), or one for each ([`Output::attach_split`]).
 //!
 //! Everything here blocks, and none of it for long except [`Tree::wait`]
 //! and [`Output::read`], which a caller runs on threads of their own.
@@ -270,12 +271,26 @@ impl Tree {
     }
 }
 
-/// The reading end of the one pipe a command writes both its standard
-/// output and its standard error to, so that the two arrive in the order
-/// they were written.
+/// The reading end of a pipe a command writes to: the one pipe it writes
+/// both its standard output and its standard error to, so that the two
+/// arrive in the order they were written ([`attach`](Self::attach)), or the
+/// pipe of one of the two ([`attach_split`](Self::attach_split)).
 #[derive(Debug)]
 pub struct Output {
     pipe: imp::OutputPipe,
+}
+
+/// A command's standard output and standard error, each a pipe of its own
+/// with its own reader and its own stop ([`Output::attach_split`]).
+///
+/// Each is read on a thread of its own: a command that fills one pipe
+/// while nobody reads it waits, and does not write to the other.
+#[derive(Debug)]
+pub struct SplitOutput {
+    /// The standard output, and what stops a read of it.
+    pub stdout: (Output, OutputStop),
+    /// The standard error, and what stops a read of it.
+    pub stderr: (Output, OutputStop),
 }
 
 /// Stops a read of an [`Output`] from another thread.
@@ -305,6 +320,28 @@ impl Output {
         command.stderr(writer);
         let (pipe, handle) = imp::OutputPipe::new(reader)?;
         Ok((Self { pipe }, OutputStop { handle }))
+    }
+
+    /// Makes two pipes and gives the writing end of one to `command` as its
+    /// standard output and of the other as its standard error, so that a
+    /// caller can read what a program answers apart from what it says
+    /// about its progress. Call it before [`Tree::spawn`].
+    ///
+    /// Each pipe is read and stopped as the one pipe of
+    /// [`attach`](Self::attach) is, by the same reader, and stopping one
+    /// leaves the other's read alone. A process the command left running
+    /// may hold either pipe, or both.
+    pub fn attach_split(command: &mut Command) -> io::Result<SplitOutput> {
+        let (out_reader, out_writer) = io::pipe()?;
+        let (err_reader, err_writer) = io::pipe()?;
+        command.stdout(out_writer);
+        command.stderr(err_writer);
+        let (out_pipe, out_handle) = imp::OutputPipe::new(out_reader)?;
+        let (err_pipe, err_handle) = imp::OutputPipe::new(err_reader)?;
+        Ok(SplitOutput {
+            stdout: (Self { pipe: out_pipe }, OutputStop { handle: out_handle }),
+            stderr: (Self { pipe: err_pipe }, OutputStop { handle: err_handle }),
+        })
     }
 
     /// Reads what the tree has written, blocking until there is something,

@@ -51,13 +51,18 @@ const ECHO: &str = "cin-echo";
 /// What a line of echoed arguments starts with.
 const ECHO_LINE: &str = "cin-echo:";
 
+/// The argument that makes a test binary write to its two output streams.
+const STREAMS: &str = "cin-streams";
+
 /// What one child does, and the child it starts, if any.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChildSpec {
     name: String,
     address: String,
     stubborn: bool,
+    no_stdout: bool,
     say: Option<String>,
+    complain: Option<String>,
     exit: Option<i32>,
     child: Option<Box<ChildSpec>>,
 }
@@ -78,7 +83,9 @@ impl ChildSpec {
             name: name.to_owned(),
             address: roll.address.clone(),
             stubborn: false,
+            no_stdout: false,
             say: None,
+            complain: None,
             exit: None,
             child: None,
         }
@@ -97,16 +104,35 @@ impl ChildSpec {
         self
     }
 
+    /// Makes this child start with its standard output thrown away, so
+    /// that of the two output streams it holds only the standard error it
+    /// inherits. It only applies to a child that another child starts.
+    ///
+    /// On Windows a child also inherits every handle of its parent's that
+    /// may be inherited, which the parent's own standard output is: there
+    /// it may still hold that pipe, unused.
+    #[must_use]
+    pub fn without_stdout(mut self) -> Self {
+        self.no_stdout = true;
+        self
+    }
+
     /// Makes this child print `text` and a line break on its standard
     /// output once it has reported. Letters, digits, `-` and `_`.
     #[must_use]
     pub fn saying(mut self, text: &str) -> Self {
-        assert!(
-            text.bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
-            "what a child says is letters, digits, `-` and `_`: {text:?}"
-        );
+        assert_word(text);
         self.say = Some(text.to_owned());
+        self
+    }
+
+    /// Makes this child print `text` and a line break on its standard
+    /// error once it has reported, after what it says on its standard
+    /// output. Letters, digits, `-` and `_`.
+    #[must_use]
+    pub fn complaining(mut self, text: &str) -> Self {
+        assert_word(text);
+        self.complain = Some(text.to_owned());
         self
     }
 
@@ -165,20 +191,25 @@ impl ChildSpec {
         command
     }
 
-    /// `name,address,flags[,say][+child]`, where flags are letters.
+    /// `name,address,flags,say,complain[+child]`, where flags are letters
+    /// with the exit code last.
     fn encode(&self) -> String {
         let mut flags = String::from("f");
         if self.stubborn {
             flags.push('s');
         }
+        if self.no_stdout {
+            flags.push('o');
+        }
         if let Some(code) = self.exit {
             flags.push_str(&format!("x{code}"));
         }
         let mut text = format!(
-            "{},{},{flags},{}",
+            "{},{},{flags},{},{}",
             self.name,
             self.address,
-            self.say.as_deref().unwrap_or("")
+            self.say.as_deref().unwrap_or(""),
+            self.complain.as_deref().unwrap_or("")
         );
         if let Some(child) = &self.child {
             text.push('+');
@@ -196,20 +227,24 @@ impl ChildSpec {
         let mut field = || {
             fields
                 .next()
-                .expect("a child specification has four fields")
+                .expect("a child specification has five fields")
         };
         let name = field().to_owned();
         let address = field().to_owned();
         let flags = field();
         let say = field();
-        let exit = flags
-            .split_once('x')
-            .map(|(_, code)| code.parse().expect("an exit code"));
+        let complain = field();
+        let (letters, exit) = match flags.split_once('x') {
+            Some((letters, code)) => (letters, Some(code.parse().expect("an exit code"))),
+            None => (flags, None),
+        };
         Self {
             name,
             address,
-            stubborn: flags.contains('s'),
+            stubborn: letters.contains('s'),
+            no_stdout: letters.contains('o'),
             say: (!say.is_empty()).then(|| say.to_owned()),
+            complain: (!complain.is_empty()).then(|| complain.to_owned()),
             exit,
             child: child.map(|child| Box::new(Self::decode(child))),
         }
@@ -239,6 +274,67 @@ pub fn echo_arguments(entry: &str) -> (String, Vec<String>) {
             "--".to_owned(),
         ],
     )
+}
+
+/// Which of a command's two output streams.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stream {
+    /// The standard output.
+    Stdout,
+    /// The standard error.
+    Stderr,
+}
+
+/// The program and the arguments of a command that writes
+/// [`stream_bytes`] of `stderr` bytes to its standard error, then of
+/// `stdout` bytes to its standard output, and exits with code 0: the
+/// running test binary, and the arguments that select `entry`.
+///
+/// It writes the standard error first, all of it, so that a reader that
+/// waits for the standard output to end before it reads the other stream
+/// waits for ever once the standard error is more than a pipe holds.
+///
+/// The test runner prints a line or two of its own on the standard output
+/// before the entry test runs, so what such a command writes there ends
+/// with its bytes. Its standard error holds its bytes alone.
+#[must_use]
+pub fn streams_arguments(entry: &str, stdout: usize, stderr: usize) -> (String, Vec<String>) {
+    let program = std::env::current_exe()
+        .expect("the test binary has a path")
+        .to_str()
+        .expect("the test binary's path is Unicode")
+        .to_owned();
+    (
+        program,
+        vec![
+            "--exact".to_owned(),
+            entry.to_owned(),
+            "--nocapture".to_owned(),
+            STREAMS.to_owned(),
+            stdout.to_string(),
+            stderr.to_string(),
+        ],
+    )
+}
+
+/// The first `count` bytes a command of [`streams_arguments`] writes to
+/// `stream`: numbered lines that name the stream (`out 000001`, or
+/// `err 000001`), so that a byte from the other stream, a byte lost, or a
+/// cut in the wrong place shows.
+#[must_use]
+pub fn stream_bytes(stream: Stream, count: usize) -> Vec<u8> {
+    let name = match stream {
+        Stream::Stdout => "out",
+        Stream::Stderr => "err",
+    };
+    let mut bytes = Vec::with_capacity(count + 16);
+    let mut line = 0u64;
+    while bytes.len() < count {
+        line += 1;
+        bytes.extend_from_slice(format!("{name} {line:06}\n").as_bytes());
+    }
+    bytes.truncate(count);
+    bytes
 }
 
 /// The arguments each echoing child received, in the order their lines
@@ -272,6 +368,27 @@ pub fn run_if_child() {
         #[expect(clippy::exit, reason = "a child process ends when it has answered")]
         std::process::exit(0);
     }
+    if let Some(at) = arguments.iter().position(|argument| argument == STREAMS) {
+        let count = |at: usize| -> usize {
+            arguments
+                .get(at)
+                .and_then(|count| count.parse().ok())
+                .expect("a writer of streams is given two counts")
+        };
+        let (stdout, stderr) = (count(at + 1), count(at + 2));
+        let mut err = std::io::stderr().lock();
+        err.write_all(&stream_bytes(Stream::Stderr, stderr))
+            .expect("write to standard error");
+        err.flush().expect("write to standard error");
+        drop(err);
+        let mut out = std::io::stdout().lock();
+        out.write_all(&stream_bytes(Stream::Stdout, stdout))
+            .expect("write to standard output");
+        out.flush().expect("write to standard output");
+        drop(out);
+        #[expect(clippy::exit, reason = "a child process ends when it has written")]
+        std::process::exit(0);
+    }
     let Some(spec) = arguments
         .iter()
         .find_map(|argument| argument.strip_prefix(MARK).map(unhex))
@@ -301,6 +418,9 @@ pub fn run_if_child() {
             plain
         };
         command.stdin(Stdio::null());
+        if child.no_stdout {
+            command.stdout(Stdio::null());
+        }
         #[cfg(windows)]
         if child.stubborn {
             use std::os::windows::process::CommandExt;
@@ -329,6 +449,11 @@ pub fn run_if_child() {
         writeln!(out, "{text}").expect("write to standard output");
         out.flush().expect("write to standard output");
     }
+    if let Some(text) = &spec.complain {
+        let mut err = std::io::stderr().lock();
+        writeln!(err, "{text}").expect("write to standard error");
+        err.flush().expect("write to standard error");
+    }
     if let Some(code) = spec.exit {
         // The grandchild is left running, on purpose: that is the case of
         // a command that exits and leaves something behind.
@@ -343,6 +468,16 @@ pub fn run_if_child() {
     loop {
         std::thread::park();
     }
+}
+
+/// Panics unless `text` is letters, digits, `-` and `_`: what a child's
+/// specification can carry, and what any shell reads as one word.
+fn assert_word(text: &str) {
+    assert!(
+        text.bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_'),
+        "what a child says is letters, digits, `-` and `_`: {text:?}"
+    );
 }
 
 /// Text as hexadecimal digits: two for each byte.
@@ -555,6 +690,12 @@ mod tests {
             .exiting(3)
             .with_child(ChildSpec::new(&roll, "grand-child_1").stubborn());
         assert_eq!(ChildSpec::decode(&spec.encode()), spec);
+        let streams = ChildSpec::new(&roll, "both")
+            .saying("out")
+            .complaining("err")
+            .exiting(-2)
+            .with_child(ChildSpec::new(&roll, "holder").without_stdout().stubborn());
+        assert_eq!(ChildSpec::decode(&streams.encode()), streams);
         let plain = ChildSpec::new(&roll, "one");
         assert_eq!(ChildSpec::decode(&plain.encode()), plain);
 
@@ -567,8 +708,28 @@ mod tests {
                 .all(|byte| byte.is_ascii_alphanumeric() || b"-_=".contains(&byte))
         );
         assert_eq!(
-            unhex(&hex("child_entry;a,127.0.0.1:9,f,+b")),
-            "child_entry;a,127.0.0.1:9,f,+b"
+            unhex(&hex("child_entry;a,127.0.0.1:9,f,,+b")),
+            "child_entry;a,127.0.0.1:9,f,,+b"
+        );
+    }
+
+    #[test]
+    fn the_bytes_of_each_stream_are_numbered_lines_of_their_own() {
+        assert_eq!(stream_bytes(Stream::Stdout, 0), b"");
+        assert_eq!(
+            stream_bytes(Stream::Stdout, 22),
+            b"out 000001\nout 000002\n"
+        );
+        assert_eq!(stream_bytes(Stream::Stderr, 14), b"err 000001\nerr");
+        let long = stream_bytes(Stream::Stderr, 100_000);
+        assert_eq!(long.len(), 100_000);
+        // A cut keeps the beginning.
+        assert_eq!(&long[..14], stream_bytes(Stream::Stderr, 14));
+
+        let (_, arguments) = streams_arguments("child_entry", 5, 7);
+        assert_eq!(
+            arguments,
+            ["--exact", "child_entry", "--nocapture", STREAMS, "5", "7"]
         );
     }
 }
