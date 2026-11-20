@@ -1542,3 +1542,23 @@ replace: if *entries_seen > MAX_ENTRIES * 100 {
 caught-by:
     cineris-ext::it folder::a_folder_past_its_caps_is_refused
 
+[break] a-schema-check-has-no-budget
+rule: A check of arguments against a schema stops at its work budget, and the call is refused.
+file: crates/cineris-tools/src/schema.rs
+in: Check::value
+find: if done > self.budget {
+replace: if done > self.budget && self.root.is_null() {
+packages: cineris-tools,cineris-core
+caught-by:
+    cineris-tools schema::tests::a_schema_that_branches_back_to_its_root_is_stopped_at_its_budget
+    cineris-core::it extensions::an_extensions_schema_that_would_never_finish_refuses_the_call
+
+[break] a-schema-checks-budget-does-not-grow-with-the-arguments
+rule: A schema check's budget grows with the arguments' values, so that large calls are checked.
+file: crates/cineris-tools/src/schema.rs
+in: validate_counting
+find: let budget = BASE_WORK.saturating_add(WORK_PER_VALUE.saturating_mul(values_in(value)));
+replace: let budget = BASE_WORK.saturating_add(values_in(value));
+caught-by:
+    cineris-tools schema::tests::a_large_real_schema_is_checked_well_inside_the_budget
+
