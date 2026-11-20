@@ -90,6 +90,97 @@ pub fn find_outside(
         })
 }
 
+/// The extensions [`find_runnable_outside`] tries on Windows, in the order
+/// it tries them in each directory: a program, then the two kinds of batch
+/// script, which are started through `cmd.exe`
+/// (`docs/steps/28/answered.md`, "The processes", "Windows").
+pub const WINDOWS_RUNNABLE: [&str; 3] = ["exe", "cmd", "bat"];
+
+/// The program an extension's `cineris.exec` or a hook command names by
+/// `name`: the first in the absolute directories of `directories` that
+/// passes through none of `avoid` ([`passes_through`]).
+///
+/// - With Linux's rules, `name` itself, as [`find_outside`] finds it.
+/// - With Windows's, **each directory in turn** is looked in for
+///   `name.exe`, then `name.cmd`, then `name.bat`, before the next
+///   directory, as the system's own search goes: a `name.cmd` in an earlier
+///   directory is taken before a `name.exe` in a later one. A `name` that
+///   already has an extension is looked for as it is, and only when the
+///   extension is one of those three ([`WINDOWS_RUNNABLE`], in any case).
+///   Nothing else of `PATHEXT` (`.com`, `.ps1`, `.vbs`, `.js`) is ever
+///   tried or taken, and the bare name is never taken on its own.
+///
+/// `None` when nothing is found, when `name` is not one plain file name,
+/// or, with Windows's rules, when its extension is not one of the three.
+/// [`find`] and [`find_outside`], which the harness's own shell and git
+/// are found by, are not changed by this.
+#[must_use]
+pub fn find_runnable_outside(
+    directories: &[PathBuf],
+    name: &str,
+    windows: bool,
+    avoid: &[PathBuf],
+) -> Option<PathBuf> {
+    let plain = matches!(
+        Path::new(name).components().collect::<Vec<_>>()[..],
+        [std::path::Component::Normal(_)]
+    );
+    if !plain || name.contains(['/', '\\']) || (windows && name.contains(':')) {
+        return None;
+    }
+    let names: Vec<OsString> = if !windows {
+        vec![OsString::from(name)]
+    } else {
+        match Path::new(name).extension() {
+            None => WINDOWS_RUNNABLE
+                .iter()
+                .map(|extension| OsString::from(format!("{name}.{extension}")))
+                .collect(),
+            Some(extension) if runnable_on_windows(extension) => vec![OsString::from(name)],
+            Some(_) => return None,
+        }
+    };
+    let avoid = resolved(avoid);
+    directories
+        .iter()
+        .filter(|directory| directory.is_absolute())
+        .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+        .find(|candidate| {
+            candidate.is_absolute()
+                && is_program(candidate, windows)
+                && !passes_through(candidate, &avoid)
+        })
+}
+
+/// Whether `extension` is one [`find_runnable_outside`] takes on Windows,
+/// in any case.
+fn runnable_on_windows(extension: &std::ffi::OsStr) -> bool {
+    extension.to_str().is_some_and(|extension| {
+        WINDOWS_RUNNABLE
+            .iter()
+            .any(|runnable| runnable.eq_ignore_ascii_case(extension))
+    })
+}
+
+/// Whether `path` is a batch script by its extension, `.cmd` or `.bat` in
+/// any case: on Windows it is started through `cmd.exe`, not as a program.
+#[must_use]
+pub fn is_batch_script(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("cmd") || extension.eq_ignore_ascii_case("bat")
+        })
+}
+
+/// Whether a program given by its absolute `path` may be started with
+/// Windows's rules: its extension is `.exe`, `.cmd` or `.bat`, in any
+/// case ([`WINDOWS_RUNNABLE`]). With Linux's rules, any path.
+#[must_use]
+pub fn runnable_by_extension(path: &Path, windows: bool) -> bool {
+    !windows || path.extension().is_some_and(runnable_on_windows)
+}
+
 /// `roots` each at its real path. A place is compared with them by its
 /// real path, and on Windows `canonicalize` returns a verbatim (`\\?\`)
 /// path, which a plain root is never a prefix of: a root left unresolved
@@ -330,6 +421,135 @@ mod tests {
         let exe = program(&dir.join("second"), "git.exe");
         assert_eq!(find(&[first, dir.join("second")], "git", true), Some(exe));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// By Windows's rules a program for `cineris.exec` is looked for in each
+    /// directory in turn as `.exe`, `.cmd`, `.bat`: a `.cmd` where there is
+    /// no `.exe` beside it, and before an `.exe` in a later directory; never
+    /// a `.ps1`, `.com`, `.vbs` or `.js`, nor the bare name, wherever they
+    /// are. Checked on every system, as the rules are a value here.
+    #[test]
+    fn by_windows_rules_a_runnable_is_looked_for_a_directory_at_a_time() {
+        let dir = scratch("runnable");
+        let first = dir.join("first");
+        let second = dir.join("second");
+        let shim = program(&first, "x.cmd");
+        let later_exe = program(&second, "x.exe");
+        let both = [first.clone(), second.clone()];
+        assert_eq!(
+            find_runnable_outside(&both, "x", true, &[]),
+            Some(shim.clone())
+        );
+        // In one directory, `.exe` before `.cmd` before `.bat`.
+        let bat = program(&first, "x.bat");
+        let exe = program(&first, "x.exe");
+        assert_eq!(
+            find_runnable_outside(&both, "x", true, &[]),
+            Some(exe.clone())
+        );
+        std::fs::remove_file(&exe).unwrap();
+        assert_eq!(
+            find_runnable_outside(&both, "x", true, &[]),
+            Some(shim.clone())
+        );
+        std::fs::remove_file(&shim).unwrap();
+        assert_eq!(
+            find_runnable_outside(&both, "x", true, &[]),
+            Some(bat.clone())
+        );
+        std::fs::remove_file(&bat).unwrap();
+        assert_eq!(
+            find_runnable_outside(&both, "x", true, &[]),
+            Some(later_exe)
+        );
+
+        // Nothing else of `PATHEXT`, and not the bare name.
+        let only = dir.join("only");
+        for name in ["y", "y.ps1", "y.com", "y.vbs", "y.js", "y.cmd.txt"] {
+            program(&only, name);
+        }
+        let only = [only];
+        assert_eq!(find_runnable_outside(&only, "y", true, &[]), None);
+        for named in ["y.ps1", "y.com", "y.vbs", "y.js", "y.cmd.txt"] {
+            assert_eq!(
+                find_runnable_outside(&only, named, true, &[]),
+                None,
+                "{named}"
+            );
+        }
+        // A name with one of the three, in any case, is looked for as it is.
+        let upper = program(&only[0], "z.CMD");
+        assert_eq!(
+            find_runnable_outside(&only, "z.CMD", true, &[]),
+            Some(upper.clone())
+        );
+        assert_eq!(
+            find_runnable_outside(&only, "z.cmd", true, &[]).is_some(),
+            cfg!(windows)
+        );
+        // A path, or a drive with no root, is not a name.
+        for not_a_name in ["a/y", "a\\y", "C:y", "..", "."] {
+            assert_eq!(
+                find_runnable_outside(&only, not_a_name, true, &[]),
+                None,
+                "{not_a_name}"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The avoided roots and the relative directories of `PATH` are passed
+    /// over by these rules as by [`find_outside`]'s; by Linux's rules the
+    /// name is looked for as it is, and no `.cmd` is tried.
+    #[test]
+    fn a_runnable_inside_an_avoided_root_or_a_relative_directory_is_passed_over() {
+        let dir = scratch("runnable-avoid");
+        let ws = dir.join("ws");
+        let planted = program(&ws.join("bin"), "x.cmd");
+        let real = program(&dir.join("usr"), "x.cmd");
+        let path = [ws.join("bin"), dir.join("usr")];
+        assert_eq!(
+            find_runnable_outside(&path, "x", true, std::slice::from_ref(&ws)),
+            Some(real)
+        );
+        assert_eq!(find_runnable_outside(&path, "x", true, &[]), Some(planted));
+        if let Some(relative) = relative_to_here(&ws.join("bin")) {
+            assert_eq!(find_runnable_outside(&[relative], "x", true, &[]), None);
+        }
+
+        let linux = program(&dir.join("lin"), "tool");
+        program(&dir.join("lin"), "tool.cmd");
+        let lin = [dir.join("lin")];
+        assert_eq!(find_runnable_outside(&lin, "tool", false, &[]), Some(linux));
+        assert_eq!(
+            find_runnable_outside(&lin, "tool.cmd", false, &[]),
+            Some(dir.join("lin").join("tool.cmd"))
+        );
+        assert_eq!(
+            find_runnable_outside(&lin, "tool", false, std::slice::from_ref(&dir)),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_batch_script_is_known_by_its_extension_in_any_case() {
+        for (path, script, runnable) in [
+            ("C:\\a\\x.cmd", true, true),
+            ("C:\\a\\x.BAT", true, true),
+            ("C:\\a\\x.Exe", false, true),
+            ("C:\\a\\x.ps1", false, false),
+            ("C:\\a\\x", false, false),
+            ("C:\\a\\x.cmd.txt", false, false),
+        ] {
+            assert_eq!(is_batch_script(Path::new(path)), script, "{path}");
+            assert_eq!(
+                runnable_by_extension(Path::new(path), true),
+                runnable,
+                "{path}"
+            );
+            assert!(runnable_by_extension(Path::new(path), false), "{path}");
+        }
     }
 
     #[test]
