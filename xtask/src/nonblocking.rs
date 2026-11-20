@@ -29,7 +29,7 @@ fn budget(target: &str) -> u64 {
 }
 
 /// The target cargo builds for when none is named.
-fn host_target() -> Result<String> {
+pub(crate) fn host_target() -> Result<String> {
     let output = Command::new("rustc")
         .arg("-vV")
         .current_dir(workspace::root())
