@@ -71,3 +71,14 @@ pub use crate::usage::StatsSummary;
 pub use cineris_llm::TokioTimer;
 /// What `cineris stats` found where the aggregates file is.
 pub use cineris_stats::Found as AggregatesFound;
+
+/// Scratch only, never merged: evaluates a script, so that the binary links
+/// the engine for the engine check's size and build-time measurement.
+#[cfg(feature = "scripts")]
+#[doc(hidden)]
+#[must_use]
+pub fn engine_probe(source: &str) -> String {
+    cineris_ext::engine::Engine::new(cineris_ext::engine::Limits::default(), || false)
+        .and_then(|engine| engine.eval_json(source))
+        .unwrap_or_else(|error| error.to_string())
+}

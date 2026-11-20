@@ -12,6 +12,11 @@ publish.workspace = true
 name = "cineris"
 path = "src/main.rs"
 
+[features]
+# Scratch only: the engine check builds the binary with and without it.
+default = ["scripts"]
+scripts = ["cineris-core/scripts"]
+
 [dependencies]
 cineris-base.workspace = true
 cineris-config.workspace = true

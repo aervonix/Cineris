@@ -10,7 +10,7 @@ publish.workspace = true
 doctest = false
 
 [features]
-default = ["mcp", "sandbox", "scripts"]
+default = ["mcp", "sandbox"]
 # Links the MCP client.
 mcp = ["dep:cineris-mcp"]
 # Links the script engine in `cineris-ext` (decision 0005). Without it,

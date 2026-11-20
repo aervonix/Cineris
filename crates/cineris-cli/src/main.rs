@@ -83,6 +83,16 @@ fn main() -> ExitCode {
         return ExitCode::from(u8::try_from(code).unwrap_or(1));
     }
 
+    // Scratch only, never merged: the engine check's probe.
+    #[cfg(feature = "scripts")]
+    if rest.first().is_some_and(|first| first == "__engine-probe") {
+        let source = rest
+            .get(1)
+            .map_or_else(|| "1 + 2".to_owned(), |s| s.to_string_lossy().into_owned());
+        print_out(&cineris_core::engine_probe(&source));
+        return ExitCode::SUCCESS;
+    }
+
     let command = match args::parse(rest) {
         Ok(command) => command,
         Err(error) => {
