@@ -170,18 +170,27 @@ An extension is a folder with a manifest and JavaScript.
 **The manifest** says what the extension is and what it may ask the host to do.
 
 ```toml
+api = 1                         # the version of this format and of the host functions
 name = "tracker"
 version = "0.1.0"
-api = 1
 description = "Issue tracker tools"
 main = "main.js"
+prompt = "prompt.md"            # optional: text for the system prompt, 4 KiB
 
-[capabilities]
-exec  = ["gh"]                  # programs it may ask the host to run
+[capabilities]                  # each is empty unless given
+exec  = ["gh"]                  # programs it may ask the host to run: bare names or absolute paths
+exec_network = true             # whether those programs may reach the network
 read  = ["**"]                  # workspace paths it may read
 write = []                      # workspace paths it may write
 net   = []                      # hosts it may contact through the host's fetch
+hooks = ["tool.before"]         # the events its script may hook
+
+[limits]                        # optional, within the hard caps
+memory = 32                     # MiB, at most 64
+time = 120                      # seconds a tool call, at most 600
 ```
+
+**Read strictly** (since step 28): a key this build does not know, a value of the wrong type, or an `api` it does not know refuses the extension, with the reason. The capabilities are values the harness enforces ([decision 0028](../decisions/0028-enforced-values-fail-closed.md)). The folder holds only regular files and folders, at most 256 files of 1 MiB each and 4 MiB in all: a link of any kind anywhere in it refuses the extension. What the events a script may hook let it see is shown in words when it is approved ("every prompt you send"), since a hook sees the session's content.
 
 **The script** registers what it contributes.
 
@@ -210,28 +219,30 @@ cineris.on("tool.before", { tools: ["edit", "write"] }, (event) => {
 
 | Function | Does | Checked against |
 |---|---|---|
-| `cineris.tool(def)`, `cineris.command(def)`, `cineris.on(event, filter, fn)` | Register contributions. | The manifest's name and API version. |
-| `cineris.exec(program, args, options)` | Asks the host to run a program. Returns exit code and bounded output. | `capabilities.exec`, then the permission engine as an `exec` effect, then the sandbox. |
-| `cineris.fs.read`, `cineris.fs.write`, `cineris.fs.list`, `cineris.fs.search` | Workspace file access through the same code as the built-in tools. | `capabilities.read` and `write`, then the permission engine. |
+| `cineris.tool(def)`, `cineris.command(def)`, `cineris.on(event, filter, fn)` | Register contributions, only while the main module is first evaluated. | The manifest's name and API version; for `on`, `capabilities.hooks`. |
+| `cineris.exec(program, args, options)` | Asks the host to run a program. Returns its exit code, and its standard output and standard error apart, each bounded. | `capabilities.exec`, the program exactly as listed; then the permission engine as an `exec` effect (and a `network` one with `exec_network`); then the sandbox, with write roots made from `capabilities.write`. |
+| `cineris.fs.read`, `cineris.fs.write`, `cineris.fs.list`, `cineris.fs.search` | Workspace file access through the same code as the built-in tools: a write through the `write` tool (its checkpoint, its protected paths), a file overwritten only after the script read it as it is; a listing or a search through the `list` and `search` tools, whose walk is gated by the manifest on every entry. | `capabilities.read` and `write`, against where the path leads; then the permission engine. |
 | `cineris.http.fetch(url, options)` | An HTTP request made by the host. | `capabilities.net`, then the permission engine as a `network` effect. |
-| `cineris.ask(question, choices)`, `cineris.notify(text)`, `cineris.progress(text)` | Talk to the user through the front end. | Rate limits. |
+| `cineris.ask(question, choices)`, `cineris.notify(text)`, `cineris.progress(text)` | Talk to the user through the front end. Not `ask` in a hook. | Caps on length and count. |
 | `cineris.state.get`, `cineris.state.set` | A small key-value store per extension, kept in the session and the state directory. | A size cap. |
-| `cineris.log(...)` | Writes to the log. | |
+| `cineris.log(...)`, and `console.log`, `info`, `warn`, `error`, `debug` as its names | Writes to the log. | |
 
-There is no function that returns credentials, reads the session, changes configuration or grants permission.
+There is no function that returns credentials, reads the session, changes configuration or grants permission. **The manifest is asked first**, in code (`cineris_ext::host::serve`): a call it refuses never reaches the session. Then each call is decided by the permission engine as a call of the extension's tool (`tracker/find_issue`) with the built-in tools' default and an `ext` effect beside its own, so a rule about the extension covers its host calls too, and a question it needs offers only "allow once" and "deny" and keeps no rule (since step 28: a rule kept from it would reach past the extension).
 
 **The runtime.**
 
 | Property | Design |
 |---|---|
 | Isolation | One runtime per extension. Extensions cannot see each other. |
-| Limits | Memory per runtime (default 32 MB, hard cap 64 MB). Time per call (2 minutes for tools, the hook timeouts for hooks), enforced by the engine's interrupt hook, so a tight loop is stopped. |
-| Language | JavaScript modules. Imports resolve only inside the extension's own folder. Types for the host functions ship as a declaration file for editors. |
-| Threading | All runtimes live on one script-host thread, off the core thread. Host functions are asynchronous: a script awaits them, and the core does the work. |
+| Limits | Memory per runtime (default 32 MB, hard cap 64 MB, the manifest's `[limits]` within them). The stack, 256 KiB. Time per call (2 minutes for tools, the hook timeouts for hooks), enforced by the engine's interrupt hook, so a tight loop is stopped, and by the host, which stops waiting. A result is at most 1 MiB of JSON. |
+| Language | JavaScript modules. Imports resolve only inside the extension's own folder, and are served from the snapshot of it whose hash was approved, never from the disk. Types for the host functions ship as a declaration file for editors. |
+| Threading | **One thread per runtime** (since step 28, in place of one thread for all: a script that computes until its time is up never holds up another extension's hook), made the first time something of the extension's is used. **A runtime runs one call at a time,** to its end, and a call's time starts when it starts running: the interrupt check belongs to the runtime and cannot tell two calls apart. Host functions are asynchronous: a script awaits them, and the core does the work. A thread that does not come back within a grace after its deadline is abandoned, and its runtime counts as torn down. |
 | Start-up cost | None. What an extension registers is cached with its hash when it is approved. At start-up the harness reads the cache and knows the tools, commands and hooks without starting the engine. The engine starts the first time something of the extension's is used. |
 | Failure | An exception is an error result for that call. A runtime that hits a limit is torn down and recreated on next use. The session is never affected. |
 
-**Tools from extensions** are reached through `tool_search` and `tool_call` ([05-tools.md](05-tools.md)), so adding one never changes the declared tool list. An extension can ask for a tool to be declared directly from the next context epoch (`expose = "direct"` in the manifest), and the harness may promote frequently used ones the same way.
+**Tools from extensions** are reached through `tool_search` and `tool_call` ([05-tools.md](05-tools.md)), so adding one never changes the declared tool list. **An extension's tool always runs alone** (since step 28), whatever its definition says: its script may make a link, and a call beside it would have been decided before the link was there. `readOnly` is shown to the user and decides nothing. Declaring an extension's tool directly from the next context epoch (`expose = "direct"`), and promoting frequently used ones, are left to step 30, which needs the same for MCP; the manifest has no such key until then.
+
+**As built in step 28** (`cineris-ext`; the core's `ext` module; [steps/28/answered.md](../steps/28/answered.md)): the folder's snapshot and hash (`folder`), the manifest (`manifest`), the capabilities compiled for a workspace (`capability`), the host functions' contract and the order they are checked in (`host`), and the engine (`engine`, behind `scripts`). The core registers an approved extension's tools from what it registered when approved (`CoreOptions::extensions` until the harness finds extensions itself, in the step's second pull request) and serves their host calls.
 
 ## Self-written extensions
 

@@ -1,7 +1,7 @@
-A read kept from a response sent again is used for its call even when the call was planned again onto another path: a stale result.
+A read kept from a response sent again is used for its call even when the call was planned again onto another path: a stale result. Since step 28 no extension tool can reach it (an extension's tool always runs alone and is never started early); an MCP server's tool still could.
 
 - Area: cineris-agent
-- Owner: step 28, or the next change to the round's cache
+- Owner: step 30, or the next change to the round's cache
 
 | Item | Who | When |
 |---|---|---|
