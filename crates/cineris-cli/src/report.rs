@@ -146,6 +146,36 @@ impl Collector {
     }
 }
 
+/// Holds a run under `--fail-on-denial` to its first denial: a turn that
+/// went on to complete after a call nobody could answer was denied is
+/// reported `denied`, with the error a denied turn has, so that the
+/// outcome and the exit code agree.
+///
+/// A call of the round's own that nobody can answer ends the turn denied.
+/// An extension's host call that nobody can answer stops the turn too, but
+/// when its tool's call was the last of its response the model is asked
+/// once more, and a reply of text alone completes the turn (step 28; the
+/// loop's part is the owner's: `docs/outstanding/a-stopped-host-call-does-
+/// not-end-the-turn.md`). Any other end (a limit, a failure, an interrupt)
+/// is left as it is: it says something went wrong too.
+pub(crate) fn held_to_its_denial(result: &mut HeadlessResult, fail_on_denial: bool) {
+    let Some(first) = result.permission_denials.first() else {
+        return;
+    };
+    if !fail_on_denial || result.outcome != TurnOutcome::Completed {
+        return;
+    }
+    result.outcome = TurnOutcome::Denied;
+    result.error = Some(ErrorData::new(
+        cineris_protocol::ErrorKind::Permission,
+        "permission_denied",
+        format!(
+            "{} needed an answer nobody could give, and --fail-on-denial ends the run there: {}",
+            first.summary, first.reason
+        ),
+    ));
+}
+
 /// The first line of `jsonl`.
 pub(crate) fn start_line(session: SessionId, model: ModelId, workspace: String) -> String {
     line(serde_json::to_string(&HeadlessRecord::Session(
@@ -266,6 +296,53 @@ mod tests {
             "phase": "finished", "round": round, "rounds": 2,
             "checks": [{"command": "cargo test", "source": "user", "outcome": outcome}],
             "verdict": if outcome == "passed" { "passed" } else { "failed" }})
+    }
+
+    /// Under `--fail-on-denial`, a turn that completed after a call nobody
+    /// could answer (an extension's host call, the last call of its
+    /// response) is reported denied; without the flag, or with no denial,
+    /// or at another end, the result is as the turn left it.
+    #[test]
+    fn a_turn_that_completed_after_a_denial_is_held_to_it() {
+        let mut collector = Collector::new(SessionId::from("s_1"));
+        collector.observe(&event(1, Some("t_1"), json!({"type": "turn.started"})));
+        collector.observe(&event(2, Some("t_1"), assistant("i_1", "Done anyway.")));
+        collector.observe(&event(3, Some("t_1"), end("completed")));
+        let denial = PermissionDenial {
+            turn_id: TurnId::from("t_1"),
+            call_id: cineris_protocol::CallId::from("c_1"),
+            tool: "probe/ci".to_owned(),
+            summary: "probe/ci: write `.github/workflows/ci.yml`".to_owned(),
+            reason: "a protected path".to_owned(),
+        };
+        let judged = |denials: Vec<PermissionDenial>, flag: bool| {
+            let mut result = collector.result(None, denials, 10);
+            held_to_its_denial(&mut result, flag);
+            result
+        };
+        let held = judged(vec![denial.clone()], true);
+        assert_eq!(held.outcome, TurnOutcome::Denied);
+        let error = held.error.expect("a denied run says why");
+        assert_eq!(error.code, "permission_denied");
+        assert!(error.message.contains("probe/ci"), "{}", error.message);
+        assert_eq!(
+            crate::exit::for_outcome(&held.outcome, Some(&error.kind), None),
+            6
+        );
+        // Without the flag the denial is listed and the turn completed.
+        assert_eq!(
+            judged(vec![denial.clone()], false).outcome,
+            TurnOutcome::Completed
+        );
+        // With no denial there is nothing to hold it to.
+        assert_eq!(judged(Vec::new(), true).outcome, TurnOutcome::Completed);
+        // Another end is left as it is.
+        let mut limited = Collector::new(SessionId::from("s_1"));
+        limited.observe(&event(1, Some("t_1"), json!({"type": "turn.started"})));
+        limited.observe(&event(2, Some("t_1"), end("limit")));
+        let mut result = limited.result(None, vec![denial], 10);
+        held_to_its_denial(&mut result, true);
+        assert_eq!(result.outcome, TurnOutcome::Limit);
     }
 
     #[test]

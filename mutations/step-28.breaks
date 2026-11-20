@@ -522,3 +522,12 @@ find: self.parts.policy.stop_turn(self.cx.turn, reason.clone());
 replace: let _ = self.parts.policy.stopped_turn(self.cx.turn);
 caught-by:
     cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
+
+[break] a-run-that-completed-after-a-denial-exits-0
+rule: Under `--fail-on-denial`, a turn that completed after a call nobody could answer is reported denied, and the run exits 6.
+file: crates/cineris-cli/src/report.rs
+in: held_to_its_denial
+find: result.outcome = TurnOutcome::Denied;
+replace: let _ = TurnOutcome::Denied;
+caught-by:
+    cineris-cli report::tests::a_turn_that_completed_after_a_denial_is_held_to_it
