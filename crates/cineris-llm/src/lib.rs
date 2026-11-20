@@ -14,6 +14,7 @@
 //! | [`stream`] | [`ModelStream`], and streams written as ordinary async code. |
 //! | [`protocol`] | The [`Protocol`] and [`StreamDecoder`] traits, and [`ProviderInfo`]. |
 //! | [`transport`] | The [`Transport`] trait, and the real HTTP transport behind the `http` feature. |
+//! | `fetch` | Behind the `http` feature: the client behind extensions' `cineris.http.fetch`, which reaches the internet and not what only the user's machine can reach. |
 //! | [`http`] | [`HttpRequest`], [`HttpResponse`] and [`Headers`]: plain data. |
 //! | [`auth`] | The [`AuthMethod`] trait and the API-key method. |
 //! | [`sse`] | [`SseParser`], the parser for server-sent events. |
@@ -51,6 +52,8 @@ pub mod catalog;
 pub mod client;
 pub mod error;
 pub mod event;
+#[cfg(feature = "http")]
+pub mod fetch;
 pub mod http;
 pub mod image;
 mod json;
@@ -76,6 +79,11 @@ pub use error::{
 };
 pub use event::{
     BlockKind, CooldownChange, EventSink, ModelEvent, ReportedUsage, RetryInfo, SpeedMove, Usage,
+};
+#[cfg(feature = "http")]
+pub use fetch::{
+    AddressAllowance, AddressKind, FetchError, FetchMethod, FetchRequest, FetchResponse, Fetcher,
+    Refusal, Resolve, SystemResolver,
 };
 pub use http::{BodyStream, Headers, HttpRequest, HttpResponse, Method};
 pub use image::{ImageError, ImageSource};
