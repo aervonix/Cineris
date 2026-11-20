@@ -614,7 +614,11 @@ fn sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it() {
         .wrap_with_input("/bin/sh".as_ref(), &[], input)
         .expect("an input within the limit")
         .stdin;
-    let script = "cat > got; if printf x >&0; then echo wrote; else echo refused; fi; \
+    // The write is tried first, at the input's start, where the size does
+    // not change: only the seal against writing refuses it there (the
+    // early review of step 28: tried at the end, the seal against growing
+    // refused it alone).
+    let script = "if printf x >&0; then echo wrote; else echo refused; fi; cat > got; \
                   exec 0<&-; echo done";
     let ran = run_with(
         &launcher,

@@ -271,7 +271,7 @@ Covered with configuration in [08-configuration.md](08-configuration.md). For ex
 | No ambient access | A script can do nothing except call host functions. This holds on every OS. |
 | Declared capabilities | The manifest bounds what the extension may ask for. The runtime checks every host call against it. |
 | Policy still applies | After the manifest check, each host call goes through the permission engine like a built-in tool's effects. An extension's tool asks by default. |
-| The sandbox still applies | Programs run on an extension's behalf go through the sandbox launcher. |
+| The sandbox still applies | Programs run on an extension's behalf go through a sandbox launcher of the extension's own, with the manifest's write roots and no network unless `exec_network`, at every level, where the sandbox enforces. Where nothing confines programs (Windows in the first release), `write` and `exec_network = false` do not bind them, and the approval says the program runs outside the sandbox. |
 | Review before load | Nothing the agent or a repository supplies runs before the user has seen it. |
 | Trust pinned by hash | Any change disables the extension until approved again. |
 | Limits | Memory, time and output size, per call and per runtime. |

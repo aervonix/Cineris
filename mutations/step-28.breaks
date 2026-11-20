@@ -933,6 +933,18 @@ packages: cineris-sandbox, cineris-core
 caught-by:
     cineris-sandbox::it confined::sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it
 
+[break] input-writable-in-place
+rule: The input a confined command is given cannot be written in place, where its size does not change.
+file: crates/cineris-sandbox/src/launch.rs
+in: input_file
+find: let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+replace: let seals = libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+os: linux
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox::it confined::sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it
+
 [break] input-not-rewound
 rule: The input a confined command is given starts at its first byte.
 file: crates/cineris-sandbox/src/launch.rs
