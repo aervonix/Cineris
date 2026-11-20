@@ -282,10 +282,11 @@ pub(crate) async fn run(
                 .iter()
                 .map(|argument| match argument {
                     Argument::Exact(text) => Ok(OsString::from(text)),
-                    // Only a batch script's line on Windows, where nothing
-                    // is confined.
+                    // Only a Windows line (a batch script's for `cmd.exe`,
+                    // or a program's quoted as the C runtime reads it),
+                    // where nothing is confined.
                     Argument::Verbatim(_) => Err(HostError::Failed(
-                        "a command line written for cmd.exe cannot be confined".to_owned(),
+                        "a command line written for Windows cannot be confined".to_owned(),
                     )),
                 })
                 .collect::<Result<Vec<_>, _>>()?;

@@ -130,8 +130,10 @@ pub enum Argument {
     /// nearly every program reads its command line.
     Exact(String),
     /// Text put on a Windows command line as it is, for a program that
-    /// reads its command line by rules of its own (`cmd.exe`). Elsewhere a
-    /// process is given its arguments one by one, and this is one of them.
+    /// reads its command line by rules of its own (`cmd.exe`), or one the
+    /// caller quoted itself (an extension's program, every argument quoted
+    /// as the C runtime reads it). Elsewhere a process is given its
+    /// arguments one by one, and this is one of them.
     Verbatim(String),
 }
 
