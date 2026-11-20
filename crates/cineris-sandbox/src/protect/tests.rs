@@ -35,9 +35,27 @@ fn fixed(ws: &Path) -> Vec<PathBuf> {
     .collect()
 }
 
+/// The standard limits with a time no machine reaches. A look stops at
+/// [`Limits::time`] of real time, and a test that needs the whole of a
+/// small workspace looked at must not depend on how busy the machine is:
+/// the standard quarter of a second was reached once by a loaded runner
+/// (`a_cargo_made_as_a_link_is_found`). The time bound itself is tested
+/// with a time of zero, which stops every look on any machine.
+fn unhurried() -> Limits {
+    Limits {
+        time: Duration::from_secs(3600),
+        ..Limits::default()
+    }
+}
+
+/// A watch on the workspace's fixed list, with [`unhurried`] limits.
+fn unhurried_watch(ws: &Path) -> Watch {
+    Watch::new(ws, fixed(ws)).with_limits(unhurried())
+}
+
 fn changes(scratch: &Scratch, change: impl FnOnce(&Path)) -> Vec<(String, Change)> {
     let ws = scratch.join("ws");
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     assert!(before.is_complete());
     change(&ws);
@@ -90,7 +108,7 @@ fn a_hook_written_a_config_changed_and_a_file_removed_are_found() {
 fn what_was_there_before_is_kept_to_put_back() {
     let scratch = workspace("kept_to_put_back");
     let ws = scratch.join("ws");
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     fs::write(ws.join(".git/config"), "[core]\nfsmonitor = ./run\n").unwrap();
     fs::create_dir_all(ws.join(".github/workflows")).unwrap();
@@ -124,9 +142,9 @@ fn a_change_that_puts_the_modification_time_back_is_still_found() {
     let config = ws.join(".git/config");
     // Content too large to keep: only what the system sets, the change
     // time and the inode, can tell.
-    let watch = Watch::new(&ws, fixed(&ws)).with_limits(Limits {
+    let watch = unhurried_watch(&ws).with_limits(Limits {
         file_bytes: 0,
-        ..Limits::default()
+        ..unhurried()
     });
     let before = watch.take();
     let time = fs::metadata(&config).unwrap().modified().unwrap();
@@ -152,10 +170,10 @@ fn a_file_too_large_to_hash_marks_the_look_incomplete() {
     let ws = scratch.join("ws");
     let config = ws.join(".git/config");
     fs::write(&config, vec![b'a'; 4096]).unwrap();
-    let watch = Watch::new(&ws, fixed(&ws)).with_limits(Limits {
+    let watch = unhurried_watch(&ws).with_limits(Limits {
         file_bytes: 0,
         hash_bytes: 1024,
-        ..Limits::default()
+        ..unhurried()
     });
     let before = watch.take();
     // The look did not keep or hash the file, so it says it is incomplete.
@@ -240,10 +258,10 @@ fn a_look_that_stops_at_its_bound_reports_nothing_beyond_it() {
     let deep: String = (0..14).map(|level| format!("d{level}/")).collect();
     scratch.file(format!("ws/{deep}.npmrc"), "registry=x");
     let ws = scratch.join("ws");
-    let full = Watch::new(&ws, fixed(&ws));
-    let capped = Watch::new(&ws, fixed(&ws)).with_limits(Limits {
+    let full = unhurried_watch(&ws);
+    let capped = unhurried_watch(&ws).with_limits(Limits {
         directories: 10,
-        ..Limits::default()
+        ..unhurried()
     });
     let whole = full.take();
     let part = capped.take();
@@ -267,7 +285,7 @@ fn a_linked_git_directory_is_not_looked_through() {
     scratch.file("elsewhere/config", "[core]\nsecret = 1\n");
     scratch.file("elsewhere/hooks/post-merge", "#!/bin/sh\n");
     let ws = scratch.join("ws");
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     fs::rename(ws.join(".git"), ws.join(".git.old")).unwrap();
     std::os::unix::fs::symlink(scratch.join("elsewhere"), ws.join(".git")).unwrap();
@@ -307,7 +325,7 @@ fn a_change_of_mode_alone_is_found_and_cannot_be_put_back_by_content() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = workspace("mode");
     let ws = scratch.join("ws");
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     let hook = ws.join(".git/hooks/pre-commit.sample");
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
@@ -331,9 +349,9 @@ fn past_its_limits_a_look_says_it_is_incomplete() {
     let ws = scratch.join("ws");
     let limits = Limits {
         directories: 5,
-        ..Limits::default()
+        ..unhurried()
     };
-    let watch = Watch::new(&ws, fixed(&ws)).with_limits(limits);
+    let watch = unhurried_watch(&ws).with_limits(limits);
     let before = watch.take();
     assert!(!before.is_complete());
     // A change to what was looked at is still found.
@@ -348,9 +366,9 @@ fn past_its_limits_a_look_says_it_is_incomplete() {
     // Content past the limits is compared by size and times, not kept.
     let small = Limits {
         file_bytes: 3,
-        ..Limits::default()
+        ..unhurried()
     };
-    let watch = Watch::new(&ws, fixed(&ws)).with_limits(small);
+    let watch = unhurried_watch(&ws).with_limits(small);
     let before = watch.take();
     fs::write(ws.join(".git/config"), "[core]\ny = 22\n").unwrap();
     let (changed, _) = watch.changes_since(&before);
@@ -361,13 +379,73 @@ fn past_its_limits_a_look_says_it_is_incomplete() {
     assert_eq!(config.before, Before::Unknown);
 }
 
+/// A look past its time stops, says it is incomplete, and reports nothing
+/// beyond where it stopped; what it asked for by name is still compared. A
+/// time of zero is past at the first check, so the look stops there on any
+/// machine, however fast: the walk lists nothing, and of the fixed list
+/// each path is recorded and none is looked into.
+#[test]
+fn past_its_time_a_look_says_it_is_incomplete() {
+    let scratch = workspace("out_of_time");
+    scratch.file("ws/pkg/.npmrc", "registry=x");
+    let ws = scratch.join("ws");
+    let hurried = unhurried_watch(&ws).with_limits(Limits {
+        time: Duration::ZERO,
+        ..unhurried()
+    });
+    let before = hurried.take();
+    assert!(!before.is_complete());
+    let recorded: Vec<String> = before
+        .entries
+        .keys()
+        .map(|path| {
+            let relative = path.strip_prefix(&ws).unwrap();
+            relative.display().to_string().replace('\\', "/")
+        })
+        .collect();
+    assert_eq!(recorded, [".git/config", ".git/hooks"], "{recorded:?}");
+    assert!(before.listed.is_empty(), "{:?}", before.listed);
+
+    fs::write(ws.join(".git/config"), "[core]\nx = 1\n").unwrap();
+    fs::write(ws.join(".git/hooks/pre-commit"), "#!/bin/sh\n").unwrap();
+    fs::write(ws.join("pkg/.npmrc"), "registry=y").unwrap();
+    let (changed, after) = hurried.changes_since(&before);
+    assert!(!after.is_complete());
+    let found: Vec<(String, Change)> = changed
+        .iter()
+        .map(|one| {
+            let relative = one.path.strip_prefix(&ws).unwrap();
+            (
+                relative.display().to_string().replace('\\', "/"),
+                one.change,
+            )
+        })
+        .collect();
+    assert_eq!(found, [(".git/config".to_owned(), Change::Modified)]);
+
+    // The same workspace with time to spare is looked at whole, and the
+    // changes past where the hurried look stopped are there to be found.
+    let whole = unhurried_watch(&ws).take();
+    assert!(whole.is_complete());
+    assert!(
+        whole
+            .entries
+            .keys()
+            .any(|path| path.ends_with("pkg/.npmrc"))
+            && whole
+                .entries
+                .keys()
+                .any(|path| path.ends_with(".git/hooks/pre-commit"))
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn a_change_of_content_and_mode_keeps_the_content() {
     use std::os::unix::fs::PermissionsExt;
     let scratch = workspace("content_and_mode");
     let ws = scratch.join("ws");
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     let config = ws.join(".git/config");
     fs::write(&config, "[core]\nhooksPath = /srv/x\n").unwrap();
@@ -390,7 +468,7 @@ fn a_linked_module_or_worktree_is_not_looked_through() {
     fs::create_dir_all(ws.join(".git/worktrees")).unwrap();
     std::os::unix::fs::symlink(scratch.join("elsewhere"), ws.join(".git/modules/sub")).unwrap();
     std::os::unix::fs::symlink(scratch.join("elsewhere"), ws.join(".git/worktrees/w")).unwrap();
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     // What the links lead to is not the workspace's, and is not looked at.
     assert!(
@@ -461,7 +539,7 @@ fn a_cargo_made_as_a_link_is_found() {
     )
     .unwrap();
     fs::create_dir_all(ws.join("pkg")).unwrap();
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     assert!(before.is_complete());
     std::os::unix::fs::symlink(ws.join("vendor/x"), ws.join(".cargo")).unwrap();
@@ -507,7 +585,7 @@ fn a_commondir_pointing_outside_the_workspace_is_not_followed() {
     )
     .unwrap();
     let ws = scratch.join("ws");
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     assert!(before.is_complete());
     fs::write(ws.join(".git/commondir"), "../../common-outside\n").unwrap();
@@ -541,7 +619,7 @@ fn a_cargo_link_leading_outside_is_not_followed() {
     )
     .unwrap();
     let ws = scratch.join("ws");
-    let watch = Watch::new(&ws, fixed(&ws));
+    let watch = unhurried_watch(&ws);
     let before = watch.take();
     assert!(before.is_complete());
     std::os::unix::fs::symlink(scratch.join("cargo-outside"), ws.join(".cargo")).unwrap();

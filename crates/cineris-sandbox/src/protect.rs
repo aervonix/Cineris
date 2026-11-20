@@ -52,7 +52,9 @@ use std::time::{Duration, Instant, SystemTime};
 pub struct Limits {
     /// The most directories the walk lists.
     pub directories: usize,
-    /// The longest a look may take.
+    /// The longest a look may take. A look that has taken this long stops
+    /// at its next check and says it is incomplete; zero stops every look
+    /// at its first check, on any machine.
     pub time: Duration,
     /// The largest file whose content is kept.
     pub file_bytes: u64,
@@ -396,8 +398,12 @@ const GIT_PARTS: &[&str] = &["config", "config.worktree", "hooks", "info"];
 const WORKTREE_PARTS: &[&str] = &["config.worktree", "commondir", "gitdir"];
 
 impl Look {
+    /// Whether the look is past its time, or already incomplete. At or past
+    /// it, not only past: no time has elapsed on a clock too coarse to see
+    /// the look begin, and a time of zero must still stop it, so that a
+    /// test of the bound does not depend on the machine's clock.
     fn out_of_time(&mut self) -> bool {
-        if self.started.elapsed() > self.limits.time {
+        if self.started.elapsed() >= self.limits.time {
             self.complete = false;
         }
         !self.complete

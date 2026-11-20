@@ -1,0 +1,24 @@
+# The small fixes, the sandbox watch's part: the time bound of
+# the look at protected paths, tested with a time of zero, which stops
+# every look on any machine, now that the tests that need a whole look give
+# it a time no machine reaches.
+
+# ------------------------------------------------- a look past its time
+
+[break] a-look-ignores-its-time
+rule: A look that has taken its time stops at its next check and says it is incomplete; a time of zero stops it at the first.
+file: crates/cineris-sandbox/src/protect.rs
+in: Look::out_of_time
+find: self.started.elapsed() >= self.limits.time
+replace: false
+caught-by:
+    protect::tests::past_its_time_a_look_says_it_is_incomplete
+
+[break] a-look-out-of-time-says-it-is-complete
+rule: A look that stops for its time says it is incomplete, so that what lay beyond where it stopped is not reported as made or gone, and the user is told the look was made in part.
+file: crates/cineris-sandbox/src/protect.rs
+in: Look::out_of_time
+find: self.complete = false;
+replace: return true;
+caught-by:
+    protect::tests::past_its_time_a_look_says_it_is_incomplete
