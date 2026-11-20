@@ -63,10 +63,14 @@ impl CallHost<'_> {
         };
         let spec = ToolSpec::new(self.full_name, "", json!({"type": "object"}))
             .permission(RuleAction::Allow);
-        let mut plan = Plan::new(summary, ()).with_effect(Effect::Ext {
+        // The call's own effects first: a question shows the first one (a
+        // path, a host) as what it is about. The `ext` effect after them
+        // puts the extension's rules to the call too.
+        let mut plan = Plan::new(summary, ());
+        plan.effects.extend(effects);
+        plan.effects.push(Effect::Ext {
             tool: self.full_name.to_owned(),
         });
-        plan.effects.extend(effects);
         let planned = PlannedCall {
             session: &call.session,
             turn: &call.turn,

@@ -249,6 +249,52 @@ fn a_rule_that_denies_a_path_refuses_the_scripts_read_of_it() {
 }
 
 #[test]
+fn a_host_calls_question_names_what_it_touches_not_the_scripts_arguments() {
+    let world = World::new(
+        "ext_host_question",
+        [call_tool("c1", "secret", json!({})), says("Done.")],
+    );
+    world.put(".env", "TOKEN=abc");
+    let extension = approve(
+        &world.dir.join("ext"),
+        "read = [\"**\"]",
+        "cineris.tool({ name: 'secret', run: async () => { \
+           try { return await cineris.fs.read('.env') } \
+           catch (e) { return 'refused: ' + e.message } } });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("read the env").await;
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        // A file that looks like a secret is asked about, as the `read`
+        // tool's would be, and the question names the file.
+        let (id, request) = front.approval().await;
+        assert_eq!(request.tool, "probe/secret");
+        let ApprovalDetail::Target(target) = &request.detail else {
+            panic!("not a target: {:?}", request.detail);
+        };
+        assert_eq!(target.effect, cineris_protocol::lease::Effect::Read);
+        assert!(
+            target.target.replace('\\', "/").ends_with("/.env"),
+            "{}",
+            target.target
+        );
+        assert_eq!(
+            request.choices,
+            [ApprovalChoice::AllowOnce, ApprovalChoice::Deny]
+        );
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        let results = front.results();
+        assert!(results[0].2.contains("refused"), "{results:?}");
+        assert!(!results[0].2.contains("TOKEN"), "{results:?}");
+        front.close().await;
+    });
+}
+
+#[test]
 fn an_extension_changed_since_it_was_approved_is_not_run() {
     let world = World::new(
         "ext_changed",
