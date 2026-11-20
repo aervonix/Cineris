@@ -124,6 +124,18 @@ impl Capabilities {
         self.check(path, &self.read, "read", "reading")
     }
 
+    /// Whether any `read` glob is declared: with none, nothing is read.
+    #[must_use]
+    pub fn grants_reading(&self) -> bool {
+        !self.read.is_empty()
+    }
+
+    /// Whether any `write` glob is declared: with none, nothing is written.
+    #[must_use]
+    pub fn grants_writing(&self) -> bool {
+        !self.write.is_empty()
+    }
+
     /// Whether the extension may write where `path` leads.
     ///
     /// # Errors

@@ -2505,6 +2505,7 @@ pub(crate) fn assemble(
         let parts = Arc::new(crate::ext::HostParts {
             policy: Arc::clone(&policy),
             timer: Arc::clone(&options.timer),
+            clock: Arc::clone(&options.clock),
             workspace: root.clone(),
             write: Arc::new(WriteTool::new(editing.clone())),
             list: Arc::new(cineris_tools::ListTool::new()),

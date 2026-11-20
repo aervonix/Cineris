@@ -6,6 +6,16 @@
 // handed to the host.
 (() => {
   "use strict";
+  // A script's code must not run while an error is being made: the engine
+  // calls `Error.prepareStackTrace` when it builds one, the host's own
+  // included. The native side holds nothing while it does, and this keeps
+  // the hook from being set at all.
+  Object.defineProperty(Error, "prepareStackTrace", {
+    value: undefined,
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
   const host = globalThis.__cineris_host;
   const register = globalThis.__cineris_register;
   delete globalThis.__cineris_host;

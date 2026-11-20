@@ -228,6 +228,10 @@ fn body(
     let shared = Rc::new(RefCell::new(Shared::new(
         manifest.capabilities.hooks.clone(),
     )));
+    // Everything kept across calls goes before the context and the runtime
+    // do, however the thread ends: the engine checks, as the runtime is
+    // freed, that nothing is left, and that check ends the process.
+    let _clear = ClearOnDrop(&shared);
     let mut work = Work {
         runtime: &runtime,
         context: &context,
@@ -253,8 +257,19 @@ fn body(
     if !failed {
         work.serve();
     }
-    // Everything kept across calls goes before the runtime does.
-    shared.borrow_mut().clear();
+}
+
+/// Frees what the thread keeps across calls when it is dropped, before the
+/// context and the runtime are: on any end of the thread, an unwind
+/// included.
+struct ClearOnDrop<'a>(&'a Rc<RefCell<Shared>>);
+
+impl Drop for ClearOnDrop<'_> {
+    fn drop(&mut self) {
+        if let Ok(mut shared) = self.0.try_borrow_mut() {
+            shared.clear();
+        }
+    }
 }
 
 /// Where a call stands.
@@ -480,7 +495,10 @@ impl Work<'_> {
 
     /// Settles the promise of a host call.
     fn answer(&mut self, id: u64, answer: HostAnswer) -> Result<(), Failure> {
-        let Some((resolve, reject)) = self.shared.borrow_mut().pending.remove(&id) else {
+        let Some(Waiting {
+            resolve, reject, ..
+        }) = self.shared.borrow_mut().answered(id)
+        else {
             return Ok(());
         };
         self.context.with(|ctx| -> Result<(), Failure> {
@@ -617,9 +635,37 @@ struct Shared {
     tools: HashMap<String, Persistent<Function<'static>>>,
     commands: HashMap<String, Persistent<Function<'static>>>,
     hooks: Vec<Persistent<Function<'static>>>,
-    pending: HashMap<u64, (Persistent<Function<'static>>, Persistent<Function<'static>>)>,
+    /// The host calls waiting for their answers.
+    pending: HashMap<u64, Waiting>,
+    /// How many of them a script awaits: every kind but the three that
+    /// only tell (`log`, `notify`, `progress`), which their own counts
+    /// bound.
+    awaited: usize,
+    /// The bytes of arguments the waiting calls hold.
+    pending_bytes: usize,
     next: u64,
     outbox: Option<async_mpsc::UnboundedSender<FromThread>>,
+    /// What the running call has said so far, for its caps.
+    notified: u32,
+    progressed: u32,
+    logged: u32,
+    asked: u32,
+}
+
+/// A host call waiting for its answer.
+struct Waiting {
+    resolve: Persistent<Function<'static>>,
+    reject: Persistent<Function<'static>>,
+    /// The size of its arguments.
+    bytes: usize,
+    /// Whether it counts in [`Shared::awaited`].
+    awaited: bool,
+}
+
+/// Whether a host call of `kind` only tells something, and is bounded by
+/// its count in a call rather than by the calls waiting.
+fn only_tells(kind: &str) -> bool {
+    matches!(kind, "log" | "notify" | "progress")
 }
 
 impl Shared {
@@ -632,14 +678,24 @@ impl Shared {
             commands: HashMap::new(),
             hooks: Vec::new(),
             pending: HashMap::new(),
+            awaited: 0,
+            pending_bytes: 0,
             next: 0,
             outbox: None,
+            notified: 0,
+            progressed: 0,
+            logged: 0,
+            asked: 0,
         }
     }
 
     fn begin(&mut self, outbox: async_mpsc::UnboundedSender<FromThread>, phase: Phase) {
         self.outbox = Some(outbox);
         self.phase = phase;
+        self.notified = 0;
+        self.progressed = 0;
+        self.logged = 0;
+        self.asked = 0;
     }
 
     /// The call has ended: its host calls that were not answered never
@@ -647,6 +703,89 @@ impl Shared {
     fn end(&mut self) {
         self.outbox = None;
         self.pending.clear();
+        self.awaited = 0;
+        self.pending_bytes = 0;
+    }
+
+    /// Keeps a host call's promise until its answer comes.
+    fn wait<'js>(
+        &mut self,
+        ctx: &Ctx<'js>,
+        kind: &str,
+        bytes: usize,
+        resolve: Function<'js>,
+        reject: Function<'js>,
+    ) -> u64 {
+        let id = self.next;
+        self.next += 1;
+        let awaited = !only_tells(kind);
+        self.awaited += usize::from(awaited);
+        self.pending_bytes += bytes;
+        self.pending.insert(
+            id,
+            Waiting {
+                resolve: Persistent::save(ctx, resolve),
+                reject: Persistent::save(ctx, reject),
+                bytes,
+                awaited,
+            },
+        );
+        id
+    }
+
+    /// Takes the host call `id` off the waiting ones.
+    fn answered(&mut self, id: u64) -> Option<Waiting> {
+        let waiting = self.pending.remove(&id)?;
+        self.pending_bytes = self.pending_bytes.saturating_sub(waiting.bytes);
+        self.awaited -= usize::from(waiting.awaited);
+        Some(waiting)
+    }
+
+    /// Whether a host call of `kind` with arguments of `bytes` may be
+    /// sent now, and where to. The memory a call's arguments take is the
+    /// harness's, not the runtime's, so what waits is bounded here.
+    fn admit(
+        &mut self,
+        kind: &str,
+        bytes: usize,
+    ) -> Result<async_mpsc::UnboundedSender<FromThread>, Refused> {
+        if self.phase == Phase::Evaluation {
+            return Err(Refused::Thrown(
+                "message",
+                "a host function cannot be called while the extension's main module is first \
+                 evaluated: call it from a tool, a command or a hook"
+                    .to_owned(),
+            ));
+        }
+        let Some(outbox) = self.outbox.clone() else {
+            return Err(Refused::Thrown(
+                "message",
+                "a host function can be called only while a call of the extension runs".to_owned(),
+            ));
+        };
+        if (!only_tells(kind) && self.awaited >= MAX_PENDING)
+            || self.pending_bytes + bytes > MAX_PENDING_BYTES
+        {
+            return Err(Refused::Rejected(format!(
+                "too many host calls are waiting for their answers (at most {MAX_PENDING}, holding \
+                 at most {} MiB): await them before making more",
+                MAX_PENDING_BYTES / (1024 * 1024)
+            )));
+        }
+        let (count, most, what) = match kind {
+            "notify" => (&mut self.notified, MAX_NOTIFY, "notices"),
+            "progress" => (&mut self.progressed, MAX_PROGRESS, "progress lines"),
+            "log" => (&mut self.logged, MAX_LOG, "lines of the log"),
+            "ask" => (&mut self.asked, MAX_ASK, "questions"),
+            _ => return Ok(outbox),
+        };
+        if *count >= most {
+            return Err(Refused::Rejected(format!(
+                "a call of the extension gives at most {most} {what}"
+            )));
+        }
+        *count += 1;
+        Ok(outbox)
     }
 
     fn function(&self, target: &Target) -> Option<Persistent<Function<'static>>> {
@@ -698,44 +837,109 @@ fn install<'js>(ctx: &Ctx<'js>, shared: &Rc<RefCell<Shared>>) -> rquickjs::Resul
     Ok(())
 }
 
-/// A host call: checked for its shape here, sent to the call the thread
-/// serves, and answered by a promise.
+/// The most host calls of one runtime waiting for their answers.
+const MAX_PENDING: usize = 16;
+/// The most bytes of arguments those calls may hold together.
+const MAX_PENDING_BYTES: usize = 12 * 1024 * 1024;
+/// The most `notify` calls in one call of the extension.
+const MAX_NOTIFY: u32 = 10;
+/// The most `progress` calls in one call of the extension.
+const MAX_PROGRESS: u32 = 100;
+/// The most lines `log` writes in one call of the extension.
+const MAX_LOG: u32 = 100;
+/// The most questions one call of the extension puts.
+const MAX_ASK: u32 = 5;
+
+/// The largest arguments of a host call of `kind`, as the JSON text the
+/// prelude passes: room for what the call may carry, escaped.
+fn payload_cap(kind: &str) -> usize {
+    match kind {
+        "write" | "exec" => 8 * 1024 * 1024,
+        "fetch" => 4 * 1024 * 1024,
+        "state.set" => 512 * 1024,
+        _ => 64 * 1024,
+    }
+}
+
+/// Why a host call was not sent, as a promise already rejected: told to
+/// the script without stopping its code where it stands.
+enum Refused {
+    /// Thrown at once: a mistake in how the call was made.
+    Thrown(&'static str, String),
+    /// A rejected promise: the call was made well and is not served.
+    Rejected(String),
+}
+
+/// A host call: checked for its shape and its caps here, sent to the call
+/// the thread serves, and answered by a promise.
+///
+/// Nothing here holds `shared` while the script's own code can run: an
+/// exception being made runs code of the script's (`Error.prepareStackTrace`),
+/// and a call that came back in while `shared` was held would panic the
+/// thread.
 fn host_call<'js>(
     ctx: &Ctx<'js>,
     shared: &Rc<RefCell<Shared>>,
     kind: &str,
     payload: &str,
 ) -> rquickjs::Result<Promise<'js>> {
-    let payload: Json = serde_json::from_str(payload)
-        .map_err(|_| Exception::throw_type(ctx, "a host function's arguments must be JSON"))?;
-    let call =
-        parse_call(kind, &payload).map_err(|message| Exception::throw_type(ctx, &message))?;
-    let mut shared = shared.borrow_mut();
-    if shared.phase == Phase::Evaluation {
-        return Err(Exception::throw_message(
-            ctx,
-            "a host function cannot be called while the extension's main module is first \
-             evaluated: call it from a tool, a command or a hook",
-        ));
-    }
-    let Some(outbox) = shared.outbox.clone() else {
-        return Err(Exception::throw_message(
-            ctx,
-            "a host function can be called only while a call of the extension runs",
-        ));
+    let refused = (|| {
+        if payload.len() > payload_cap(kind) {
+            return Err(Refused::Thrown(
+                "type",
+                format!(
+                    "the arguments of `{kind}` are {} bytes, more than the {} it takes",
+                    payload.len(),
+                    payload_cap(kind)
+                ),
+            ));
+        }
+        let payload: Json = serde_json::from_str(payload).map_err(|_| {
+            Refused::Thrown(
+                "type",
+                "a host function's arguments must be JSON".to_owned(),
+            )
+        })?;
+        parse_call(kind, &payload).map_err(|message| Refused::Thrown("type", message))
+    })();
+    let call = match refused {
+        Ok(call) => call,
+        Err(refusal) => return refuse(ctx, refusal),
     };
     let (promise, resolve, reject) = Promise::new(ctx)?;
-    let id = shared.next;
-    shared.next += 1;
-    shared.pending.insert(
-        id,
-        (
-            Persistent::save(ctx, resolve),
-            Persistent::save(ctx, reject),
-        ),
-    );
-    let _ = outbox.send(FromThread::Call { id, call });
-    Ok(promise)
+    let sent = {
+        let Ok(mut shared) = shared.try_borrow_mut() else {
+            drop((resolve, reject));
+            return refuse(ctx, Refused::Thrown("message", INSIDE_ANOTHER.to_owned()));
+        };
+        shared.admit(kind, payload.len()).map(|outbox| {
+            (
+                shared.wait(ctx, kind, payload.len(), resolve, reject),
+                outbox,
+            )
+        })
+    };
+    match sent {
+        Ok((id, outbox)) => {
+            let _ = outbox.send(FromThread::Call { id, call });
+            Ok(promise)
+        }
+        Err(refusal) => refuse(ctx, refusal),
+    }
+}
+
+/// A refusal told to the script: thrown, or as a rejected promise.
+fn refuse<'js>(ctx: &Ctx<'js>, refusal: Refused) -> rquickjs::Result<Promise<'js>> {
+    match refusal {
+        Refused::Thrown("type", message) => Err(Exception::throw_type(ctx, &message)),
+        Refused::Thrown(_, message) => Err(Exception::throw_message(ctx, &message)),
+        Refused::Rejected(message) => {
+            let (promise, _resolve, reject) = Promise::new(ctx)?;
+            let error = Exception::from_message(ctx.clone(), &message)?;
+            reject.call::<_, ()>((error,))?;
+            Ok(promise)
+        }
+    }
 }
 
 fn field<'a>(payload: &'a Json, key: &str) -> Option<&'a Json> {
@@ -871,7 +1075,21 @@ fn check_description(description: &str) -> Result<(), String> {
     }
 }
 
+/// What one call of `cineris.tool`, `cineris.command` or `cineris.on`
+/// registers, read whole before anything of the thread's is held.
+enum Entry<'js> {
+    Tool(ToolDef, Function<'js>),
+    Command(CommandDef, Function<'js>),
+    Hook(HookDef, Event, Function<'js>),
+}
+
 /// `cineris.tool`, `cineris.command` and `cineris.on`.
+///
+/// Every field of the definition is read before `shared` is borrowed, and
+/// every error is made after it is let go: reading a field runs the
+/// script's code (a getter, `toJSON`), and so does making an error
+/// (`Error.prepareStackTrace`), and that code may call back in. A call
+/// that came back in while `shared` was held would panic the thread.
 fn register<'js>(
     ctx: &Ctx<'js>,
     shared: &Rc<RefCell<Shared>>,
@@ -879,15 +1097,34 @@ fn register<'js>(
     def: &Object<'js>,
     function: Option<Function<'js>>,
 ) -> rquickjs::Result<()> {
-    let refuse = |message: String| Exception::throw_type(ctx, &message);
-    let mut shared = shared.borrow_mut();
-    if shared.phase != Phase::Evaluation {
-        return Err(Exception::throw_message(
-            ctx,
-            "an extension registers its tools, commands and hooks only while its main module is \
-             first evaluated",
-        ));
+    let late = "an extension registers its tools, commands and hooks only while its main module \
+                is first evaluated";
+    match shared.try_borrow().map(|shared| shared.phase) {
+        Ok(Phase::Evaluation) => {}
+        Ok(_) => return Err(Exception::throw_message(ctx, late)),
+        Err(_) => return Err(Exception::throw_message(ctx, INSIDE_ANOTHER)),
     }
+    let entry = read_entry(ctx, kind, def, function)?;
+    let added = match shared.try_borrow_mut() {
+        // The phase changes only between calls, never while a definition is
+        // read: what was checked above holds.
+        Ok(mut shared) => shared.add(ctx, entry),
+        Err(_) => Err(INSIDE_ANOTHER.to_owned()),
+    };
+    added.map_err(|message| Exception::throw_type(ctx, &message))
+}
+
+/// What a native function says when it is called from inside another.
+const INSIDE_ANOTHER: &str = "a host function cannot be called from inside another";
+
+/// Reads a definition's fields, holding nothing.
+fn read_entry<'js>(
+    ctx: &Ctx<'js>,
+    kind: &str,
+    def: &Object<'js>,
+    function: Option<Function<'js>>,
+) -> rquickjs::Result<Entry<'js>> {
+    let refuse = |message: String| Exception::throw_type(ctx, &message);
     let text = |key: &str| -> rquickjs::Result<String> {
         def.get::<_, Option<String>>(key)?
             .ok_or_else(|| Exception::throw_type(ctx, &format!("`{key}` must be text")))
@@ -917,23 +1154,15 @@ fn register<'js>(
             let read_only = def.get::<_, Option<bool>>("readOnly")?.unwrap_or(false);
             let run: Option<Function<'js>> = def.get("run")?;
             let run = run.ok_or_else(|| refuse("a tool needs `run`, a function".to_owned()))?;
-            if shared.tools.contains_key(&name) {
-                return Err(refuse(format!("a tool `{name}` is registered already")));
-            }
-            if shared.registration.tools.len() >= MAX_TOOLS {
-                return Err(refuse(format!(
-                    "an extension registers at most {MAX_TOOLS} tools"
-                )));
-            }
-            shared
-                .tools
-                .insert(name.clone(), Persistent::save(ctx, run));
-            shared.registration.tools.push(ToolDef {
-                name,
-                description,
-                input,
-                read_only,
-            });
+            Ok(Entry::Tool(
+                ToolDef {
+                    name,
+                    description,
+                    input,
+                    read_only,
+                },
+                run,
+            ))
         }
         "command" => {
             let name = text("name")?;
@@ -950,22 +1179,14 @@ fn register<'js>(
             }
             let run: Option<Function<'js>> = def.get("run")?;
             let run = run.ok_or_else(|| refuse("a command needs `run`, a function".to_owned()))?;
-            if shared.commands.contains_key(&name) {
-                return Err(refuse(format!("a command `{name}` is registered already")));
-            }
-            if shared.registration.commands.len() >= MAX_COMMANDS {
-                return Err(refuse(format!(
-                    "an extension registers at most {MAX_COMMANDS} commands"
-                )));
-            }
-            shared
-                .commands
-                .insert(name.clone(), Persistent::save(ctx, run));
-            shared.registration.commands.push(CommandDef {
-                name,
-                description,
-                arguments,
-            });
+            Ok(Entry::Command(
+                CommandDef {
+                    name,
+                    description,
+                    arguments,
+                },
+                run,
+            ))
         }
         "hook" => {
             let name = text("event")?;
@@ -975,13 +1196,6 @@ fn register<'js>(
                     Event::ALL.map(Event::as_str).join(", ")
                 )));
             };
-            if !shared.hooks_allowed.contains(&event) {
-                return Err(refuse(format!(
-                    "the extension's manifest does not allow a hook on `{name}`, which lets it see {} \
-                     (`capabilities.hooks`)",
-                    event.sees()
-                )));
-            }
             let tools = def
                 .get::<_, Option<Vec<String>>>("tools")?
                 .unwrap_or_default();
@@ -994,20 +1208,71 @@ fn register<'js>(
             }
             let function =
                 function.ok_or_else(|| refuse("a hook needs a function to run".to_owned()))?;
-            if shared.registration.hooks.len() >= MAX_HOOKS {
-                return Err(refuse(format!(
-                    "an extension registers at most {MAX_HOOKS} hooks"
-                )));
-            }
-            shared.hooks.push(Persistent::save(ctx, function));
-            shared.registration.hooks.push(HookDef {
-                event: name,
-                tools,
-                observe,
-                timeout_ms,
-            });
+            Ok(Entry::Hook(
+                HookDef {
+                    event: name,
+                    tools,
+                    observe,
+                    timeout_ms,
+                },
+                event,
+                function,
+            ))
         }
-        other => return Err(refuse(format!("`{other}` cannot be registered"))),
+        other => Err(refuse(format!("`{other}` cannot be registered"))),
     }
-    Ok(())
+}
+
+impl Shared {
+    /// Adds what a definition registers. Runs none of the script's code.
+    fn add<'js>(&mut self, ctx: &Ctx<'js>, entry: Entry<'js>) -> Result<(), String> {
+        match entry {
+            Entry::Tool(definition, run) => {
+                if self.tools.contains_key(&definition.name) {
+                    return Err(format!(
+                        "a tool `{}` is registered already",
+                        definition.name
+                    ));
+                }
+                if self.registration.tools.len() >= MAX_TOOLS {
+                    return Err(format!("an extension registers at most {MAX_TOOLS} tools"));
+                }
+                self.tools
+                    .insert(definition.name.clone(), Persistent::save(ctx, run));
+                self.registration.tools.push(definition);
+            }
+            Entry::Command(definition, run) => {
+                if self.commands.contains_key(&definition.name) {
+                    return Err(format!(
+                        "a command `{}` is registered already",
+                        definition.name
+                    ));
+                }
+                if self.registration.commands.len() >= MAX_COMMANDS {
+                    return Err(format!(
+                        "an extension registers at most {MAX_COMMANDS} commands"
+                    ));
+                }
+                self.commands
+                    .insert(definition.name.clone(), Persistent::save(ctx, run));
+                self.registration.commands.push(definition);
+            }
+            Entry::Hook(definition, event, function) => {
+                if !self.hooks_allowed.contains(&event) {
+                    return Err(format!(
+                        "the extension's manifest does not allow a hook on `{}`, which lets it see \
+                         {} (`capabilities.hooks`)",
+                        definition.event,
+                        event.sees()
+                    ));
+                }
+                if self.registration.hooks.len() >= MAX_HOOKS {
+                    return Err(format!("an extension registers at most {MAX_HOOKS} hooks"));
+                }
+                self.hooks.push(Persistent::save(ctx, function));
+                self.registration.hooks.push(definition);
+            }
+        }
+        Ok(())
+    }
 }

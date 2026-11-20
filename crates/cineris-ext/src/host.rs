@@ -41,6 +41,10 @@ pub enum HostError {
     /// It was allowed and failed: the reason.
     #[error("{0}")]
     Failed(String),
+    /// The turn the call is part of was stopped: nothing more of it runs,
+    /// and the script's call ends here.
+    #[error("the turn was stopped: {0}")]
+    Stopped(String),
 }
 
 /// Where the script's call is running: what it may do depends on it.
@@ -350,6 +354,12 @@ pub const NOTIFY_MAX: usize = 1024;
 pub const PROGRESS_MAX: usize = 200;
 /// The longest line of the log.
 pub const LOG_MAX: usize = 4096;
+/// The longest question a script puts.
+pub const ASK_MAX: usize = 1024;
+/// The most choices a question offers.
+pub const ASK_MAX_CHOICES: usize = 8;
+/// The longest choice.
+pub const ASK_CHOICE_MAX: usize = 80;
 
 /// Serves one call a script made: the manifest first, then the host.
 ///
@@ -423,8 +433,7 @@ pub async fn serve<H: Host + ?Sized>(
             offset,
             limit,
         } => {
-            let resolved = host.resolve(&path).await?;
-            capabilities.read(&resolved)?;
+            let resolved = allowed(host, capabilities, &path, Access::Read).await?;
             let text = host.read(resolved, offset, limit).await?;
             Ok(Json::String(text))
         }
@@ -441,14 +450,12 @@ pub async fn serve<H: Host + ?Sized>(
                     "the text is longer than 1 MiB".to_owned(),
                 ));
             }
-            let resolved = host.resolve(&path).await?;
-            capabilities.write(&resolved)?;
+            let resolved = allowed(host, capabilities, &path, Access::Write).await?;
             host.write(resolved, text).await?;
             Ok(Json::Null)
         }
         HostCall::List { path, glob } => {
-            let resolved = host.resolve(&path).await?;
-            capabilities.read(&resolved)?;
+            let resolved = allowed(host, capabilities, &path, Access::Read).await?;
             let gate = ManifestGate {
                 capabilities: capabilities.clone(),
             };
@@ -459,8 +466,7 @@ pub async fn serve<H: Host + ?Sized>(
             path,
             glob,
         } => {
-            let resolved = host.resolve(&path).await?;
-            capabilities.read(&resolved)?;
+            let resolved = allowed(host, capabilities, &path, Access::Read).await?;
             let gate = ManifestGate {
                 capabilities: capabilities.clone(),
             };
@@ -474,15 +480,27 @@ pub async fn serve<H: Host + ?Sized>(
                     "a hook cannot put a question: it decides by its answer (`ask`)".to_owned(),
                 ));
             }
-            let answer = host.ask(question, choices).await?;
+            if choices.len() > ASK_MAX_CHOICES {
+                return Err(HostError::Failed(format!(
+                    "a question offers at most {ASK_MAX_CHOICES} choices"
+                )));
+            }
+            let choices: Vec<String> = choices
+                .iter()
+                .map(|choice| shown(choice, ASK_CHOICE_MAX))
+                .collect();
+            let answer = host.ask(shown(&question, ASK_MAX), choices.clone()).await?;
+            // An answer is one of the choices offered, when there were
+            // choices: anything else is no answer.
+            let answer = answer.filter(|answer| choices.is_empty() || choices.contains(answer));
             Ok(answer.map_or(Json::Null, Json::String))
         }
         HostCall::Notify(text) => {
-            host.notify(cut(&text, NOTIFY_MAX));
+            host.notify(shown(&text, NOTIFY_MAX));
             Ok(Json::Null)
         }
         HostCall::Progress(text) => {
-            host.progress(cut(&text, PROGRESS_MAX));
+            host.progress(shown(&text, PROGRESS_MAX));
             Ok(Json::Null)
         }
         HostCall::StateGet { key, scope } => {
@@ -495,10 +513,59 @@ pub async fn serve<H: Host + ?Sized>(
             Ok(Json::Null)
         }
         HostCall::Log(line) => {
-            host.log(cut(&line, LOG_MAX));
+            host.log(shown(&line, LOG_MAX));
             Ok(Json::Null)
         }
     }
+}
+
+/// Reading or writing, for [`allowed`].
+#[derive(Clone, Copy)]
+enum Access {
+    Read,
+    Write,
+}
+
+/// Where `path` leads, when the manifest lets the extension read or write
+/// there.
+///
+/// A refusal names the path as the script gave it, and is the same however
+/// the path failed: where it leads outside the workspace, and whether it
+/// leads anywhere, are not the script's to learn. A manifest that grants
+/// the access nowhere refuses before the path is resolved at all (the
+/// review of step 28: a script with `read = []` could learn where a link
+/// led, and what kind of entry a path outside was, from the refusal and
+/// the resolver's errors).
+async fn allowed<H: Host + ?Sized>(
+    host: &H,
+    capabilities: &Capabilities,
+    path: &str,
+    access: Access,
+) -> Result<ResolvedPath, HostError> {
+    let (capability, doing) = match access {
+        Access::Read => ("read", "reading"),
+        Access::Write => ("write", "writing"),
+    };
+    let refused = || {
+        HostError::Refused(Refusal {
+            capability,
+            detail: format!("{doing} `{}`", cineris_base::visible(path)),
+        })
+    };
+    let grants = match access {
+        Access::Read => capabilities.grants_reading(),
+        Access::Write => capabilities.grants_writing(),
+    };
+    if !grants {
+        return Err(refused());
+    }
+    let resolved = host.resolve(path).await.map_err(|_| refused())?;
+    let checked = match access {
+        Access::Read => capabilities.read(&resolved),
+        Access::Write => capabilities.write(&resolved),
+    };
+    checked.map_err(|_| refused())?;
+    Ok(resolved)
 }
 
 /// A listing as the script is given it: the tool's text, and its payload.
@@ -516,7 +583,10 @@ fn check_key(key: &str) -> Result<(), HostError> {
     }
 }
 
-/// `text` cut to at most `most` bytes, at a character's edge.
-fn cut(text: &str, most: usize) -> String {
-    cineris_base::text::truncate_bytes(text, most).to_owned()
+/// `text` as the user or the log is shown it: cut to at most `most` bytes,
+/// at a character's edge, with every character that acts unseen (a
+/// control, a line break, a format character) written as an escape, so a
+/// script's text cannot draw what the harness draws.
+fn shown(text: &str, most: usize) -> String {
+    cineris_base::visible(cineris_base::text::truncate_bytes(text, most)).into_owned()
 }

@@ -30,7 +30,7 @@ use std::sync::{Arc, mpsc};
 use std::task::Poll;
 use std::time::Duration;
 
-use cineris_base::{CancelToken, ContentHash, Timer};
+use cineris_base::{CancelToken, Clock, ContentHash, Timer};
 use serde_json::Value as Json;
 use tokio::sync::{mpsc as async_mpsc, oneshot};
 
@@ -152,6 +152,10 @@ pub enum CallError {
     /// It was cancelled.
     #[error("the extension's call was interrupted")]
     Cancelled,
+    /// A host call found its turn stopped: the call ends there, and its
+    /// runtime with it.
+    #[error("the turn was stopped: {0}")]
+    Stopped(String),
     /// The runtime is gone: torn down by a limit, or its thread ended.
     #[error("the extension's runtime is not running")]
     Gone,
@@ -183,6 +187,9 @@ pub struct CallContext<'a, H: Host + ?Sized> {
     pub time: Duration,
     /// The session's timer.
     pub timer: &'a dyn Timer,
+    /// The session's clock, which the timer moves: what is left of the
+    /// call's time when a host call is made.
+    pub clock: &'a dyn Clock,
     /// Fires when the call must stop.
     pub cancel: &'a CancelToken,
 }
@@ -336,6 +343,7 @@ impl ScriptRuntime {
             }))
             .map_err(|_| CallError::Gone)?;
         let mut deadline: Option<cineris_base::Sleep> = None;
+        let mut started = cx.clock.monotonic();
         let mut cancelled = pin!(cx.cancel.cancelled());
         loop {
             let event = poll_fn(|context| {
@@ -356,14 +364,17 @@ impl ScriptRuntime {
             match event {
                 Event::Reply(None) => return Err(CallError::Gone),
                 Event::Reply(Some(FromThread::Started)) => {
+                    started = cx.clock.monotonic();
                     deadline = Some(cx.timer.sleep(cx.time));
                 }
                 Event::Reply(Some(FromThread::Call { id, call })) => {
+                    let left = cx
+                        .time
+                        .saturating_sub(cx.clock.monotonic().saturating_sub(started));
                     // The host call runs under the same deadline and
                     // cancellation: dropped when either fires.
                     let served = {
-                        let mut served =
-                            pin!(serve(call, cx.capabilities, cx.host, phase, cx.time));
+                        let mut served = pin!(serve(call, cx.capabilities, cx.host, phase, left));
                         poll_fn(|context| {
                             if let Poll::Ready(answer) = served.as_mut().poll(context) {
                                 return Poll::Ready(Ok(answer));
@@ -381,6 +392,13 @@ impl ScriptRuntime {
                         .await
                     };
                     match served {
+                        // Nothing more of a stopped turn runs, the
+                        // script's code included.
+                        Ok(Err(HostError::Stopped(reason))) => {
+                            return Err(self
+                                .stopped(&mut replies, cx.timer, CallError::Stopped(reason))
+                                .await);
+                        }
                         Ok(answer) => {
                             let _ = self.inbox.send(ToThread::Answer { id, answer });
                         }
@@ -428,6 +446,10 @@ impl ScriptRuntime {
         error: CallError,
     ) -> CallError {
         self.stop.store(true, Ordering::SeqCst);
+        // A thread waiting for a host call's answer runs none of the
+        // script's code, so the interrupt never comes: this wakes it, and
+        // it ends.
+        let _ = self.inbox.send(ToThread::Shutdown);
         let mut grace = timer.sleep(GRACE);
         poll_fn(|context| {
             loop {

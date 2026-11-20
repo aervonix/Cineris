@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use cineris_base::SharedTimer;
 use cineris_base::path::AbsPath;
+use cineris_base::{SharedClock, SharedTimer};
 use cineris_ext::capability::Capabilities;
 use cineris_ext::engine::{CallContext, CallError, ScriptRuntime, Source, Target};
 use cineris_ext::registration::ToolDef;
@@ -22,6 +22,8 @@ use crate::policy::EnginePolicy;
 pub(crate) struct HostParts {
     pub(crate) policy: Arc<EnginePolicy>,
     pub(crate) timer: SharedTimer,
+    /// The session's clock, which the timer moves.
+    pub(crate) clock: SharedClock,
     pub(crate) workspace: AbsPath,
     pub(crate) write: Arc<dyn Tool>,
     pub(crate) list: Arc<dyn Tool>,
@@ -101,6 +103,15 @@ impl LoadedExtension {
         )
         .await
         .map_err(|error| format!("The extension `{}` could not start: {error}", self.name()))?;
+        // The capabilities and the time were taken from the approved
+        // manifest: the snapshot whose hash was checked must hold that one
+        // (the review of step 28: the two are separate fields).
+        if runtime.manifest() != &self.approved.manifest {
+            return Err(format!(
+                "The extension `{}` could not start: its manifest is not the one approved",
+                self.name()
+            ));
+        }
         let runtime = Arc::new(runtime);
         *slot = Some(Arc::clone(&runtime));
         Ok(runtime)
@@ -137,6 +148,7 @@ impl LoadedExtension {
                     capabilities: &self.capabilities,
                     time: self.approved.manifest.limits.time,
                     timer: self.parts.timer.as_ref(),
+                    clock: self.parts.clock.as_ref(),
                     cancel: &cx.cancel,
                 },
             )
@@ -157,13 +169,21 @@ impl LoadedExtension {
                 let text = match &value {
                     Json::String(text) => text.clone(),
                     Json::Null => "(no result)".to_owned(),
-                    other => serde_json::to_string_pretty(other).unwrap_or_default(),
+                    // Compact: indentation would grow a deeply nested
+                    // result many times over before the output policy cut
+                    // it.
+                    other => serde_json::to_string(other).unwrap_or_default(),
                 };
                 ToolResult::success(format!("{label}\n{text}")).with_payload(value)
             }
             Err(CallError::Cancelled) => {
                 ToolResult::interrupted(format!("`{full_name}` was interrupted."))
             }
+            // A host call found the turn stopped: the script's call ended
+            // there, and nothing more of it ran.
+            Err(CallError::Stopped(reason)) => ToolResult::denied(format!(
+                "`{full_name}` was stopped, and the turn with it. Reason: {reason}"
+            )),
             Err(error) => ToolResult::error(format!("`{full_name}` failed: {error}")),
         }
     }
@@ -209,25 +229,6 @@ fn spec_of(definition: &ToolDef) -> ToolSpec {
     )
     .permission(RuleAction::Ask)
     .concurrency(ConcurrencyClass::Exclusive)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn an_extensions_tool_asks_and_runs_alone_whatever_it_says_of_itself() {
-        for read_only in [false, true] {
-            let spec = spec_of(&ToolDef {
-                name: "find".to_owned(),
-                description: "Finds".to_owned(),
-                input: serde_json::json!({"type": "object"}),
-                read_only,
-            });
-            assert_eq!(spec.permission, RuleAction::Ask);
-            assert_eq!(spec.concurrency, ConcurrencyClass::Exclusive);
-        }
-    }
 }
 
 impl Tool for ExtensionTool {
@@ -301,4 +302,23 @@ pub(crate) fn register(
         }
     }
     left_out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_extensions_tool_asks_and_runs_alone_whatever_it_says_of_itself() {
+        for read_only in [false, true] {
+            let spec = spec_of(&ToolDef {
+                name: "find".to_owned(),
+                description: "Finds".to_owned(),
+                input: serde_json::json!({"type": "object"}),
+                read_only,
+            });
+            assert_eq!(spec.permission, RuleAction::Ask);
+            assert_eq!(spec.concurrency, ConcurrencyClass::Exclusive);
+        }
+    }
 }
