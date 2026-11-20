@@ -37,7 +37,7 @@ caught-by:
 [break] git-keys-not-reloaded
 rule: The session's git withholds the key variables a reload sets, through the one value the shell holds too.
 file: crates/cineris-core/src/sandbox.rs
-in: withheld
+in: SessionGit::withheld
 find: withheld.extend(self.withheld.get());
 replace:
 caught-by:
@@ -47,7 +47,7 @@ caught-by:
 [break] git-start-keys-forgotten-at-a-reload
 rule: The session's git still withholds a variable that was a key when the session started, after a reload, as the shell's commands do.
 file: crates/cineris-core/src/sandbox.rs
-in: withheld
+in: SessionGit::withheld
 find: let mut withheld = self.seeded.clone();
 replace: let mut withheld: Vec<String> = Vec::new();
 caught-by:
@@ -57,7 +57,7 @@ caught-by:
 [break] git-found-in-the-workspace
 rule: The session's git is never one inside the workspace or a write root: the search goes on down `PATH`.
 file: crates/cineris-core/src/sandbox.rs
-in: git_program
+in: SessionGit::git_program
 find: cineris_base::program::find_outside(&path, "git", cfg!(windows), &self.avoid())
 replace: cineris_base::program::find(&path, "git", cfg!(windows))
 caught-by:

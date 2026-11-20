@@ -16,7 +16,10 @@
 //! 3. **The call is decided** as an `exec` of that line (and a `network`
 //!    to any host when the manifest has `exec_network`), beside the
 //!    extension tool's `ext` effect ([`CallHost::decide`]): a question
-//!    offers only "allow once" and "deny".
+//!    offers only "allow once" and "deny", and shows how the program's
+//!    input begins, which no rule judges. The decision may wait on a
+//!    person: the program is then given only what is left of the call's
+//!    time ([`CallHost::deadline`]).
 //! 4. **It is started** through a launcher of the extension's own where the
 //!    sandbox enforces, at every level, `unrestricted` included
 //!    ([`SessionSandbox::extension_launcher`]): the session's reads, the
@@ -28,8 +31,12 @@
 //! 5. **The protected paths are looked at** before and after a start that
 //!    has a write root, where the sandbox enforces, as around a confined
 //!    shell command (step 26): a change from outside since the last look
-//!    refuses the start, and a change the program made fails the call;
-//!    either stops the turn.
+//!    refuses the start, and a change the program made stops the call;
+//!    either stops the turn, and the script's call with it. Both looks are
+//!    made whatever became of the run: ended by the call's cancellation or
+//!    its time, or by a start that failed after the process was made.
+//!    What the program changed in the workspace is looked at with a git
+//!    that follows its confinement ([`FollowingTheProgram`]).
 //! 6. **Its environment** is a shell command's
 //!    ([`cineris_tools::shell::command_env`]): no provider key, no
 //!    `shell.env_remove` variable, an absolute `PATH`; `TMPDIR` the
@@ -57,7 +64,7 @@ use serde_json::json;
 use super::host::{CallHost, HostQuestion};
 use crate::checkpoints::{Rounds, changed_since_last_look, note_changed};
 use crate::programs::{self, Search};
-use crate::sandbox::{SessionSandbox, protected_note};
+use crate::sandbox::{FollowingTheProgram, SessionGit, SessionSandbox, protected_note};
 
 /// What a session runs an extension's programs with.
 #[derive(Debug)]
@@ -93,8 +100,10 @@ pub(crate) struct ExecParts {
     /// The shell's settings a reload changes: whether the look at what a
     /// program changed may ask git.
     pub(crate) live: Arc<ShellLive>,
-    /// How that look's git is run: the session's, inside the sandbox.
-    pub(crate) git: Arc<dyn cineris_base::git::Confinement>,
+    /// How that look's git is run: the session's, inside the sandbox while
+    /// commands are confined; after a program the extension's own launcher
+    /// confined, inside the sandbox at every level ([`FollowingTheProgram`]).
+    pub(crate) git: Arc<SessionGit>,
 }
 
 /// Whether write roots hold the harness's own files: its configuration,
@@ -103,8 +112,12 @@ pub(crate) struct ExecParts {
 #[derive(Clone)]
 pub(crate) struct HarnessFiles(pub(crate) Arc<HoldsHarnessFiles>);
 
-/// The judgement [`HarnessFiles`] holds.
-pub(crate) type HoldsHarnessFiles = dyn Fn(&[PathBuf]) -> bool + Send + Sync;
+/// The judgement [`HarnessFiles`] holds, of write roots each in its plain
+/// form ([`cineris_base::path::AbsPath::to_native_string`]): on Windows
+/// `C:\…`, never the `\\?\C:\…` a file-system path is, which a root's
+/// judgement cannot read. A root it cannot read counts as holding the
+/// harness's files.
+pub(crate) type HoldsHarnessFiles = dyn Fn(&[String]) -> bool + Send + Sync;
 
 impl std::fmt::Debug for HarnessFiles {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -148,7 +161,14 @@ pub(crate) async fn run(
             Ok(path)
         })
         .collect::<Result<_, HostError>>()?;
-    if (parts.harness_files.0)(&write_roots) {
+    // Judged in their plain form: the file system's form of a Windows path
+    // (`\\?\C:\…`) is one the judgement cannot read.
+    let plain_roots: Vec<String> = request
+        .write_roots
+        .iter()
+        .map(cineris_base::path::AbsPath::to_native_string)
+        .collect();
+    if (parts.harness_files.0)(&plain_roots) {
         return Err(HostError::Failed(
             "the extension's write roots hold the harness's own files (its configuration, its \
              state or its launcher): no program of it is run"
@@ -265,11 +285,27 @@ pub(crate) async fn run(
             // In PowerShell and `cmd` the line's first word may be the
             // shell's own command or alias (`write` is `Write-Output`),
             // not the program that runs; in a POSIX shell it is the
-            // program.
-            read_only_asks: !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix),
+            // program, found as the shell finds it, except on Windows,
+            // where Windows' lookup finds it (`sort` is
+            // `System32\sort.exe`, not the shell's).
+            read_only_asks: cfg!(windows)
+                || !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix),
+            // The engine judges the line, not the input: the question
+            // shows its start.
+            extra: request.stdin.as_deref().map(input_reason),
         },
     )
     .await?;
+    // The decision may have waited on a person: the program is given what
+    // is left of the call's time, no more, and nothing starts for a call
+    // that is over.
+    let left = host.deadline.saturating_sub(host.parts.clock.monotonic());
+    if left.is_zero() || cx.cancel.is_cancelled() {
+        return Err(HostError::Failed(format!(
+            "`{named}` was not started: the call ended while it was being decided"
+        )));
+    }
+    let timeout = request.timeout.min(left);
     let watch = launcher
         .as_ref()
         .filter(|_| !write_roots.is_empty())
@@ -340,7 +376,9 @@ pub(crate) async fn run(
         )
         .await
     {
-        return Err(HostError::Denied(format!(
+        // The turn is stopped: the script's call ends here, whatever it
+        // would do with a refusal.
+        return Err(HostError::Stopped(format!(
             "`{named}` was not started. {note}"
         )));
     }
@@ -348,12 +386,21 @@ pub(crate) async fn run(
     // 7. What it changes in the workspace, looked at as a shell command's
     // is: a program that may write it (one with a write root, or one
     // nothing confines) has what it changed put in the round's checkpoint,
-    // so that undo puts it back, and the model's table of files told.
+    // so that undo puts it back, and the model's table of files told. The
+    // look's git follows the program's confinement: inside the sandbox at
+    // every level after one its launcher confined, which may have written
+    // the repository's configuration in its write roots (the review of the
+    // extensions' process starts).
     let detector = (!write_roots.is_empty() || launcher.is_none()).then(|| {
+        let git: Arc<dyn cineris_base::git::Confinement> = if launcher.is_some() {
+            Arc::new(FollowingTheProgram(Arc::clone(&parts.git)))
+        } else {
+            Arc::clone(&parts.git) as Arc<dyn cineris_base::git::Confinement>
+        };
         Arc::new(
             ChangeDetector::new(cx.paths.root().to_native_string())
                 .trusting_the_repository(parts.live.repository_trusted())
-                .with_git(Arc::clone(&parts.git)),
+                .with_git(git),
         )
     });
     let changes_before = match &detector {
@@ -377,27 +424,33 @@ pub(crate) async fn run(
         launch,
         env,
         cwd: directory,
-        timeout: request.timeout,
+        timeout,
         label: String::new(),
     };
-    let finished = parts
+    // Whatever becomes of the run, everything after it is done: a run the
+    // call's cancellation or its time ended, and one whose start failed
+    // after the process was made (a reader or the waiter not started), may
+    // have changed things. The engine polls a host call to its end after
+    // the call's cancellation or deadline, so that the look and the record
+    // are made then too.
+    let ran = parts
         .runner
         .run_apart(start, &cx.cancel, &cx.kill, EXEC_OUTPUT_CAP)
-        .await
-        .map_err(|error| HostError::Failed(format!("`{named}` could not be started: {error}")))?;
+        .await;
+    let escaped = ran.as_ref().is_ok_and(|finished| finished.escaped);
 
     // 5. The look after it, then 7.: a protected path's exact record comes
     // first, as only the first record of a file in a round counts.
     let looked = match (watch, before) {
-        (Some(watch), Some(before)) => {
-            look_after(parts, host, watch, before, finished.escaped).await
-        }
+        (Some(watch), Some(before)) => look_after(parts, host, watch, before, escaped).await,
         _ => Ok(()),
     };
     if let (Some(detector), Some(before)) = (detector, changes_before) {
         record_changes(parts, cx, detector, before).await;
     }
     looked?;
+    let finished =
+        ran.map_err(|error| HostError::Failed(format!("`{named}` could not be started: {error}")))?;
     if finished.ending == Ending::Interrupted {
         return Err(HostError::Failed(format!(
             "`{named}` was stopped: the call was interrupted"
@@ -439,10 +492,11 @@ async fn record_changes(
 
 /// The look at the protected paths after a program that had a write root:
 /// kept for the next confined start's comparison, what changed recorded in
-/// the round's checkpoint, and the turn stopped, with the call failed
-/// naming the change, when a protected path changed or the look stopped
-/// short where the one before did not. A program that left a process the
-/// kill could not clear stops the turn too: it may still write one.
+/// the round's checkpoint, and the turn stopped, with the script's call
+/// stopped naming the change, when a protected path changed or the look
+/// stopped short where the one before did not. A program that left a
+/// process the kill could not clear stops the turn too: it may still write
+/// one.
 async fn look_after(
     parts: &ExecParts,
     host: &CallHost<'_>,
@@ -480,8 +534,10 @@ async fn look_after(
     let root = cx.paths.root().to_fs_path();
     if let Some(note) = protected_note(&changed, complete, &root, &by_hand) {
         if !changed.is_empty() || (complete.0 && !complete.1) {
+            // The turn stops, and the script's call with it: a script that
+            // caught a refusal would go on as if nothing had changed.
             host.parts.policy.stop_turn(cx.turn, note.clone());
-            return Err(HostError::Failed(note));
+            return Err(HostError::Stopped(note));
         }
         // A workspace already past the bound before the program: told,
         // and the call goes on.
@@ -494,9 +550,37 @@ async fn look_after(
                     paths are looked at again before the next command and at the session's \
                     close.]";
         host.parts.policy.stop_turn(cx.turn, note.to_owned());
-        return Err(HostError::Failed(note.to_owned()));
+        return Err(HostError::Stopped(note.to_owned()));
     }
     Ok(())
+}
+
+/// The most lines of a program's input a question shows.
+const INPUT_SHOWN_LINES: usize = 3;
+
+/// The most bytes of a program's input a question shows.
+const INPUT_SHOWN_BYTES: usize = 200;
+
+/// The reason a question about a program given `input` adds: how long the
+/// input is and how it begins, at most [`INPUT_SHOWN_LINES`] lines and
+/// [`INPUT_SHOWN_BYTES`] bytes, every character that acts unseen escaped.
+/// The engine judges the program's line, its arguments; the input is the
+/// script's to give, and no rule reads it.
+fn input_reason(input: &[u8]) -> String {
+    let text = String::from_utf8_lossy(input);
+    let lines: String = text.split_inclusive('\n').take(INPUT_SHOWN_LINES).collect();
+    let mut end = lines.len().min(INPUT_SHOWN_BYTES);
+    while !lines.is_char_boundary(end) {
+        end -= 1;
+    }
+    let start = &lines[..end];
+    let more = if start.len() < text.len() { "…" } else { "" };
+    format!(
+        "The program is given {} bytes of input, which no permission rule judges. It begins: \
+         {}{more}",
+        input.len(),
+        cineris_base::visible(start)
+    )
 }
 
 /// The directories of the `PATH` in `inherited`, in order: the first of

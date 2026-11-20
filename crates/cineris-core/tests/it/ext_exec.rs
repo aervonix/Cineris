@@ -23,10 +23,11 @@ use crate::{Answering, ECHO, ECHO_MARK, Front, World, calls, says};
 const SCRIPT: &str = "cineris.tool({ name: 'run', description: 'runs a program',\n\
    input: { type: 'object', required: ['program'], additionalProperties: false, properties: {\n\
      program: { type: 'string' }, args: { type: 'array', items: { type: 'string' } },\n\
-     cwd: { type: 'string' }, stdin: { type: 'string' } } },\n\
+     cwd: { type: 'string' }, stdin: { type: 'string' }, timeout: { type: 'integer' } } },\n\
    run: async (a) => {\n\
      try {\n\
-       const r = await cineris.exec(a.program, a.args || [], { cwd: a.cwd, stdin: a.stdin });\n\
+       const r = await cineris.exec(a.program, a.args || [],\n\
+         { cwd: a.cwd, stdin: a.stdin, timeout: a.timeout });\n\
        return 'ran: ' + JSON.stringify(r);\n\
      } catch (e) { return 'refused: ' + String(e); }\n\
    } });\n";
@@ -445,6 +446,56 @@ fn a_question_about_a_program_shows_the_quoted_line_and_offers_only_once_or_deny
     });
 }
 
+/// The engine judges a program's line, its arguments, and not its input,
+/// which the script gives: a question about a program given input says how
+/// long it is and how it begins, at most three lines, with every character
+/// that acts unseen escaped (the review of the extensions' process starts).
+#[test]
+fn a_question_about_a_program_given_input_shows_how_the_input_begins() {
+    let world = World::new("exec_input_shown", []);
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let probe = extension(&world, "probe", "exec = [\"probe-echo\"]");
+    let input = "first\u{1b}[2J line\nsecond line\nthird line\nfourth line\n";
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "probe-echo", "args": ["x"], "stdin": input}),
+    ));
+    world.provider.push(says("Done."));
+    let env = echo_on_path(&world);
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.shell_env = Some(env);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let asked = front.turn_denying("run it").await;
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        let approval = &front.approvals()[0];
+        let shown = approval
+            .reasons
+            .iter()
+            .find(|reason| reason.contains("bytes of input"))
+            .unwrap_or_else(|| panic!("the input is not shown: {approval:?}"));
+        assert!(
+            shown.contains(&format!("given {} bytes of input", input.len())),
+            "{shown}"
+        );
+        assert!(
+            shown.contains(r"first\u{1b}[2J line\nsecond line\nthird line"),
+            "{shown}"
+        );
+        assert!(
+            !shown.contains("fourth") && !shown.contains('\u{1b}'),
+            "{shown}"
+        );
+        assert!(answered(&front, 0).starts_with("refused:"));
+        front.close().await;
+    });
+}
+
 /// In a PowerShell session a program's line is judged by PowerShell's own
 /// commands and aliases, which are not the program that runs: `write` is
 /// `Write-Output` there, read-only, and the program is not. What that
@@ -642,6 +693,58 @@ fn sys_undo_puts_back_what_a_program_changed() {
     });
 }
 
+/// The decision may wait on a person: a program decided late is given only
+/// what is left of the call's time, never the time worked out when the
+/// script asked (the review of the extensions' process starts). Here the
+/// call has its 120 seconds, a program 30 unless it says otherwise, and the
+/// person takes 100 to answer: the program has 20.
+#[cfg(unix)]
+#[test]
+fn sys_a_program_decided_late_is_given_only_what_is_left_of_the_calls_time() {
+    use std::time::Duration;
+
+    let world = World::new("exec_time_left", []);
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let probe = extension(&world, "probe", "exec = [\"sh\"]");
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "sh", "args": ["-c", "exec sleep 600"]}),
+    ));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.extensions = vec![probe]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("run it").await;
+        let (id, request) = front.approval().await;
+        assert!(
+            matches!(request.detail, ApprovalDetail::Command(_)),
+            "not the program's question: {request:?}"
+        );
+        world.timer.advance(Duration::from_secs(100));
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        let mut left = std::pin::pin!(world.timer.sleeping_for(Duration::from_secs(20)));
+        let mut asked = std::pin::pin!(
+            world
+                .timer
+                .sleeping_for(cineris_ext::host::EXEC_DEFAULT_TIMEOUT)
+        );
+        std::future::poll_fn(|context| {
+            assert!(
+                asked.as_mut().poll(context).is_pending(),
+                "the program was given the time worked out before the question"
+            );
+            left.as_mut().poll(context)
+        })
+        .await;
+        world.timer.advance(Duration::from_secs(20));
+        front.turns(1).await;
+        front.close().await;
+    });
+}
+
 /// A file a program changed is not overwritten by the model's write from
 /// what it read before: the model reads it again first, as after a shell
 /// command's change.
@@ -689,37 +792,51 @@ fn sys_a_file_a_program_changed_is_not_overwritten_from_an_older_read() {
 
 /// A manifest whose write roots hold the harness's own files (here its
 /// configuration, kept inside the workspace) runs no program, before
-/// anyone is asked: a program could change what it is allowed.
-#[cfg(unix)]
+/// anyone is asked: a program could change what it is allowed. One whose
+/// write root holds none of them runs. On Windows too, where the roots
+/// were judged in the file system's form (`\\?\C:\…`), which the judgement
+/// could not read and passed over (the review of the extensions' process
+/// starts).
 #[test]
-fn a_write_root_that_holds_the_harness_files_runs_nothing() {
+fn sys_a_write_root_that_holds_the_harness_files_runs_nothing() {
     let mut world = World::new("exec_harness_files", []);
     let config = world.workspace.join(".settings");
     std::fs::create_dir_all(config.join("cineris")).unwrap();
+    // Where the configuration folder is, on either system
+    // (`cineris-config`'s `Dirs::from_env`).
     world.env = world
         .env
         .clone()
-        .with("XDG_CONFIG_HOME", config.to_str().unwrap());
+        .with("XDG_CONFIG_HOME", config.to_str().unwrap())
+        .with("APPDATA", config.to_str().unwrap());
     world.user_config("");
-    let probe = extension(&world, "probe", "exec = [\"probe-echo\"]\nwrite = [\"**\"]");
-    world.provider.push(run_call(
-        "c1",
-        "probe",
-        &json!({"program": "probe-echo", "args": echo_args(&[])}),
-    ));
+    std::fs::create_dir_all(world.workspace.join("out")).unwrap();
+    let wide = extension(&world, "wide", "exec = [\"probe-echo\"]\nwrite = [\"**\"]");
+    let narrow = extension(
+        &world,
+        "narrow",
+        "exec = [\"probe-echo\"]\nwrite = [\"out/**\"]",
+    );
+    let arguments = json!({"program": "probe-echo", "args": echo_args(&["ok"])});
+    world.provider.push(run_call("c1", "wide", &arguments));
+    world.provider.push(run_call("c2", "narrow", &arguments));
     world.provider.push(says("Done."));
     let env = echo_on_path(&world);
     let core = world.core_with(|options| {
-        options.extensions = vec![probe];
+        options.extensions = vec![wide, narrow];
         options.shell_env = Some(env);
     });
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.answering(Answering::allow_all());
-        front.turn("run it").await;
+        front.turn("run both").await;
         let answer = answered(&front, 0);
         assert!(answer.contains("harness's own files"), "{answer}");
-        assert_eq!(front.approvals().len(), 1, "{:?}", front.approvals());
+        let report = report(&ran(&answered(&front, 1)));
+        assert_eq!(report["args"], json!(["ok"]), "{report}");
+        // The two tools, and the narrow one's program, were asked about;
+        // the wide one's program never was.
+        assert_eq!(front.approvals().len(), 3, "{:?}", front.approvals());
         front.close().await;
     });
 }
@@ -1138,56 +1255,75 @@ mod confined {
         drop(listener);
     }
 
+    /// What the call at `index` says when its turn's stop ended it: a
+    /// denial, not the script's own answer, which would have caught a
+    /// refusal and gone on.
+    fn stopped(front: &Front, index: usize) -> String {
+        let results = front.results();
+        let (_, outcome, text) = &results[index];
+        assert_eq!(*outcome, "denied", "{results:?}");
+        text.clone()
+    }
+
     /// A program whose write root holds a protected path, and which writes
-    /// one, fails its call with the change named, and the turn stops: the
-    /// model's next call does not run.
+    /// one, has its call stopped with the change named, and the turn
+    /// stops: the model's next call does not run. At `unrestricted` too,
+    /// where the shell's commands are not looked around and the program's
+    /// own launcher still confines it (the review of the extensions'
+    /// process starts: no test ran the look there).
     #[test]
     fn sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn() {
+        use cineris_protocol::lease::Level;
+
         if !enforcing_here() {
             return;
         }
-        let world = World::new("exec_protected", []);
-        world.put(".github/README", "ci\n");
-        world.user_config(
-            "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
-        );
-        let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\".github/**\"]");
-        world.provider.push(run_call(
-            "c1",
-            "probe",
-            &json!({"program": "sh", "args": [
-                "-c", "mkdir -p .github/workflows && echo evil > .github/workflows/ci.yml"
-            ]}),
-        ));
-        world.provider.push(run_call(
-            "c2",
-            "probe",
-            &json!({"program": "sh", "args": ["-c", "echo after > .github/after.txt"]}),
-        ));
-        world.provider.push(says("Done."));
-        let core = world.core_with(|options| {
-            options.extensions = vec![probe];
-            options.launcher = Some(launcher());
-        });
-        world.run(async {
-            let front = Front::start(&world, &core).await;
-            front.answering(Answering::allow_all());
-            let ended = front.turn("run it").await;
-            let answer = answered(&front, 0);
-            assert!(
-                answer.starts_with("refused:")
-                    && answer.contains("changed protected paths")
-                    && answer.contains(".github/workflows"),
-                "{answer}"
+        for (name, level) in [
+            ("exec_protected", Level::Supervised),
+            ("exec_protected_unrestricted", Level::Unrestricted),
+        ] {
+            let world = World::new(name, []);
+            world.put(".github/README", "ci\n");
+            world.user_config(
+                "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \
+                 \"allow\"\n",
             );
-            assert_eq!(
-                ended.outcome,
-                cineris_protocol::event::TurnOutcome::Denied,
-                "{ended:?}"
-            );
-            assert!(world.read(".github/after.txt").is_none());
-            front.close().await;
-        });
+            let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\".github/**\"]");
+            world.provider.push(run_call(
+                "c1",
+                "probe",
+                &json!({"program": "sh", "args": [
+                    "-c", "mkdir -p .github/workflows && echo evil > .github/workflows/ci.yml"
+                ]}),
+            ));
+            world.provider.push(run_call(
+                "c2",
+                "probe",
+                &json!({"program": "sh", "args": ["-c", "echo after > .github/after.txt"]}),
+            ));
+            world.provider.push(says("Done."));
+            let core = world.core_with(|options| {
+                options.extensions = vec![probe];
+                options.launcher = Some(launcher());
+            });
+            world.run(async {
+                let front = front_at(&world, &core, level.clone()).await;
+                let ended = front.turn("run it").await;
+                let answer = stopped(&front, 0);
+                assert!(
+                    answer.contains("changed protected paths")
+                        && answer.contains(".github/workflows"),
+                    "{level:?}: {answer}"
+                );
+                assert_eq!(
+                    ended.outcome,
+                    cineris_protocol::event::TurnOutcome::Denied,
+                    "{level:?}: {ended:?}"
+                );
+                assert!(world.read(".github/after.txt").is_none(), "{level:?}");
+                front.close().await;
+            });
+        }
     }
     /// A protected path that changed after the last look, by nothing of
     /// the harness's (here the test's own hand, between two turns), keeps
@@ -1219,10 +1355,9 @@ mod confined {
             assert_eq!(world.read("out/ran.txt").as_deref(), Some("ran\n"));
             world.put(".github/workflows/new.yml", "on: push\n");
             let ended = front.turn("run it again").await;
-            let answer = answered(&front, 1);
+            let answer = stopped(&front, 1);
             assert!(
-                answer.starts_with("refused:")
-                    && answer.contains("A protected path changed since the last command")
+                answer.contains("A protected path changed since the last command")
                     && answer.contains(".github/workflows"),
                 "{answer}"
             );
@@ -1231,6 +1366,248 @@ mod confined {
                 ended.outcome,
                 cineris_protocol::event::TurnOutcome::Denied,
                 "{ended:?}"
+            );
+            front.close().await;
+        });
+    }
+
+    /// At `unrestricted` the shell's commands run as they are, and the look
+    /// at what one changed runs git as it is; an extension's program is
+    /// still confined, by its own launcher, and the look at what it changed
+    /// runs git inside the sandbox, as the program ran (the review of the
+    /// extensions' process starts). A program that plants a clean filter in
+    /// a trusted repository's configuration does not have the harness run
+    /// it with the user's rights: the mark the filter makes, outside every
+    /// write root, never appears, and the change to `.git/config`, a
+    /// protected path, stops the call. `harness_git`'s tests are the
+    /// control: at `unrestricted` the look after a shell command runs the
+    /// same filter.
+    #[test]
+    fn sys_the_look_after_a_program_runs_git_confined_at_unrestricted() {
+        use cineris_testkit::scratch::git;
+
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_git_follows", []);
+        world.put("tracked.txt", "one\n");
+        git(
+            &world.workspace,
+            &["init", "--quiet", "--initial-branch=main"],
+        );
+        git(&world.workspace, &["add", "--all"]);
+        git(
+            &world.workspace,
+            &["commit", "--quiet", "--message", "first"],
+        );
+        let marker = world.dir.join("filter-ran");
+        let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\"**\"]");
+        let plant = format!(
+            "printf '[filter \"x\"]\\n\\tclean = touch {m}; cat\\n' >> .git/config; echo '* \
+             filter=x' > .gitattributes; touch -d @0 tracked.txt",
+            m = marker.display()
+        );
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": "sh", "args": ["-c", plant]}),
+        ));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+            options.trust_project = true;
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Unrestricted).await;
+            front.turn("run it").await;
+            let answer = stopped(&front, 0);
+            assert!(answer.contains(".git/config"), "{answer}");
+            assert!(
+                !marker.exists(),
+                "the look after the program ran the filter it planted outside the sandbox: \
+                 {answer}"
+            );
+            front.close().await;
+        });
+    }
+
+    /// How a program that wrote a protected path is ended, for
+    /// [`a_program_ended_early_is_looked_at`].
+    enum Ending {
+        /// By its own time, which the script gave.
+        ItsTime,
+        /// By the call's cancellation: the turn is interrupted.
+        TheCallsCancel,
+    }
+
+    /// The time the script gives the program in those tests.
+    const ITS_TIME: std::time::Duration = std::time::Duration::from_secs(7);
+
+    /// A program writes a protected path, then waits; it is ended as `how`
+    /// says, once the test knows the write is made. What it did is looked
+    /// at all the same: the change is named, the turn stops, and undo puts
+    /// it back.
+    fn a_program_ended_early_is_looked_at(name: &str, how: Ending) {
+        use cineris_protocol::Item;
+        use cineris_protocol::methods::{Op, SessionRewindParams};
+
+        let world = World::new(name, [says("Ready.")]);
+        world.put(".github/README", "ci\n");
+        world.user_config(
+            "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+        );
+        // The program waits on a pipe outside the workspace once its write
+        // is made, so that the test ends it after the write, with no wait
+        // of real time: opening the pipe to write blocks until the program
+        // opens it to read.
+        let ready = world.dir.join("ready");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&ready)
+            .status()
+            .expect("mkfifo runs");
+        assert!(made.success());
+        let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\".github/**\"]");
+        let script = format!(
+            "mkdir -p .github/workflows && echo evil > .github/workflows/x.yml && cat '{}' > \
+             /dev/null; exec sleep 600",
+            ready.display()
+        );
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({
+                "program": "sh",
+                "args": ["-c", script],
+                "timeout": u64::try_from(ITS_TIME.as_millis()).unwrap(),
+            }),
+        ));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Supervised).await;
+            front.turn("hello").await;
+            let keep = front
+                .items()
+                .iter()
+                .rev()
+                .find_map(|item| match item {
+                    Item::AssistantMessage(message) => Some(message.id.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            let mut turn = std::pin::pin!(front.turn("run it"));
+            let end = async {
+                // The program has started: its own time is running.
+                world.timer.sleeping_for(ITS_TIME).await;
+                // And it has made its write.
+                drop(
+                    std::fs::OpenOptions::new()
+                        .write(true)
+                        .open(&ready)
+                        .expect("the pipe opens"),
+                );
+                match how {
+                    Ending::ItsTime => world.timer.advance(ITS_TIME),
+                    Ending::TheCallsCancel => front.interrupt(false).await,
+                }
+            };
+            let mut end = std::pin::pin!(end);
+            let mut ended = false;
+            std::future::poll_fn(|context| {
+                if !ended {
+                    ended = end.as_mut().poll(context).is_ready();
+                }
+                turn.as_mut().poll(context).map(|_| ())
+            })
+            .await;
+            let answer = stopped(&front, 0);
+            assert!(
+                answer.contains("changed protected paths") && answer.contains(".github/workflows"),
+                "{answer}"
+            );
+            assert!(world.read(".github/workflows/x.yml").is_some());
+            front
+                .op(Op::SessionRewind(SessionRewindParams {
+                    session_id: front.session.clone(),
+                    to: Some(keep),
+                    before: None,
+                    restore_files: true,
+                    plan: None,
+                }))
+                .await
+                .unwrap();
+            assert!(
+                world.read(".github/workflows/x.yml").is_none(),
+                "undo did not take away the file the program made"
+            );
+            front.close().await;
+        });
+    }
+
+    /// A program stopped at its own time, after it wrote a protected path,
+    /// is looked at (the review of the extensions' process starts: every
+    /// way a run ends has what follows it done).
+    #[test]
+    fn sys_a_program_stopped_at_its_time_is_still_looked_at() {
+        if !enforcing_here() {
+            return;
+        }
+        a_program_ended_early_is_looked_at("exec_its_time_looked", Ending::ItsTime);
+    }
+
+    /// A program stopped by the call's cancellation, after it wrote a
+    /// protected path, is looked at.
+    #[test]
+    #[ignore = "needs cineris-ext's engine to poll an exec host call to its end after the call is \
+                cancelled, the other half of this fix: until then the cancel drops the call \
+                before its look"]
+    fn sys_a_program_the_call_cancels_is_still_looked_at() {
+        if !enforcing_here() {
+            return;
+        }
+        a_program_ended_early_is_looked_at("exec_cancel_looked", Ending::TheCallsCancel);
+    }
+
+    /// A protected path a program changed stops the script's call, not
+    /// only the turn: a script that catches the refusal and goes on does
+    /// not go on, and its call ends as stopped, never with its own answer
+    /// (the review of the extensions' process starts).
+    #[test]
+    fn sys_a_script_that_catches_a_protected_change_does_not_go_on() {
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_caught_stop", []);
+        world.put(".github/README", "ci\n");
+        world.user_config(
+            "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+        );
+        let probe = extension_running(
+            &world,
+            "probe",
+            "exec = [\"sh\"]\nwrite = [\".github/**\"]",
+            "cineris.tool({ name: 'run', input: { type: 'object' }, run: async () => { \
+               try { await cineris.exec('sh', ['-c', 'mkdir -p .github/workflows && echo evil > \
+               .github/workflows/x.yml']); } catch (e) {} \
+               return 'went on'; } });",
+        );
+        world.provider.push(run_call("c1", "probe", &json!({})));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Supervised).await;
+            front.turn("run it").await;
+            let answer = stopped(&front, 0);
+            assert!(
+                !answer.contains("went on") && answer.contains(".github/workflows"),
+                "{answer}"
             );
             front.close().await;
         });
@@ -1339,6 +1716,53 @@ mod windows {
             let report = report(&ran);
             assert_eq!(report["args"], json!(given), "{report}");
             assert_eq!(report["stdin"], "from the script\r\n");
+            front.close().await;
+        });
+    }
+
+    /// In a Bash session on Windows a program's line is judged as Bash
+    /// reads it, but the program is found by Windows' lookup, not Bash's:
+    /// `echo` here is the `echo.exe` first on `PATH`, not Bash's own, as
+    /// `sort` would be `System32\sort.exe`. What the shell calls read-only
+    /// is asked about, as in PowerShell (the review of the extensions'
+    /// process starts).
+    #[test]
+    fn sys_in_bash_on_windows_a_program_the_shell_calls_read_only_is_asked_about() {
+        let world = World::new("exec_bash_windows", []);
+        world.user_config(
+            "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+        );
+        let probe = extension(&world, "probe", "exec = [\"echo\"]");
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": "echo", "args": echo_args(&[])}),
+        ));
+        world.provider.push(says("Done."));
+        let dir = bin(&world, "bin", &[]);
+        let env = path_with(&world, &[&dir], &[]);
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.shell_env = Some(env);
+            options.shell = Some(cineris_tools::Shell::of_kind(
+                cineris_tools::ShellKind::Bash,
+                "bash",
+            ));
+        });
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            let asked = front.turn_denying("run it").await;
+            assert_eq!(asked.len(), 1, "{asked:?}");
+            let approval = &front.approvals()[0];
+            assert!(
+                approval
+                    .reasons
+                    .iter()
+                    .any(|reason| reason.contains("whose lookup is not the one that finds it")),
+                "{approval:?}"
+            );
+            let answer = answered(&front, 0);
+            assert!(answer.starts_with("refused:"), "{answer}");
             front.close().await;
         });
     }

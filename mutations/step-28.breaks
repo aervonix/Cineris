@@ -752,11 +752,11 @@ caught-by:
 # ------------------------------------------- the look at protected paths
 
 [break] exec-look-after-skipped
-rule: A program with a write root has the protected paths looked at after it, and a change it made fails the call.
+rule: A program with a write root has the protected paths looked at after it, and a change it made stops the call.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: look_after(parts, host, watch, before, finished.escaped).await
-replace: { let _ = (watch, before); Ok::<(), HostError>(()) }
+find: look_after(parts, host, watch, before, escaped).await
+replace: { let _ = (watch, before, escaped); Ok::<(), HostError>(()) }
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
 
@@ -764,16 +764,16 @@ caught-by:
 rule: A protected path a program changed stops the turn: the model's next call does not run.
 file: crates/cineris-core/src/ext/exec.rs
 in: look_after
-find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Failed(note));
-replace: return Err(HostError::Failed(note));
+find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Stopped(note));
+replace: return Err(HostError::Stopped(note));
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
 
 [break] exec-protected-change-does-not-fail-the-call
-rule: A protected path a program changed fails its call, naming the change.
+rule: A protected path a program changed ends its call, naming the change.
 file: crates/cineris-core/src/ext/exec.rs
 in: look_after
-find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Failed(note));
+find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Stopped(note));
 replace: host.parts.policy.stop_turn(cx.turn, note.clone()); return Ok(());
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
@@ -1143,10 +1143,10 @@ caught-by:
 rule: No program of an extension runs when its write roots hold the harness's own files.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: if (parts.harness_files.0)(&write_roots) {
-replace: if write_roots.is_empty() && (parts.harness_files.0)(&write_roots) {
+find: if (parts.harness_files.0)(&plain_roots) {
+replace: if write_roots.is_empty() && (parts.harness_files.0)(&plain_roots) {
 caught-by:
-    cineris-core::it ext_exec::a_write_root_that_holds_the_harness_files_runs_nothing
+    cineris-core::it ext_exec::sys_a_write_root_that_holds_the_harness_files_runs_nothing
 
 [break] a-lookup-avoids-only-the-first-write-roots
 rule: A program the harness looks up by name is never taken from a write root the sandbox holds now, one a reload added included.
@@ -1189,8 +1189,8 @@ caught-by:
 rule: A host call's question is put even when the engine, deciding it again, allows it as read-only, where the call says it is asked.
 file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::ask_with
-find: if host.is_some_and(|host| host.read_only_asks) =>
-replace: if host.is_some_and(|host| host.read_only_asks && host.confined.is_none()) =>
+find: if host.as_ref().is_some_and(|host| host.read_only_asks) =>
+replace: if host.as_ref().is_some_and(|host| host.read_only_asks && host.confined.is_none()) =>
 caught-by:
     cineris-core::it ext_exec::sys_in_powershell_a_program_the_shell_calls_read_only_is_asked_about
 
@@ -1198,8 +1198,8 @@ caught-by:
 rule: An exec's line judged in PowerShell or cmd asks for what that shell calls read-only; one judged in a POSIX shell does not.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: read_only_asks: !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix)
-replace: read_only_asks: matches!(shell.kind(), ShellKind::Cmd)
+find: || !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix)
+replace: || matches!(shell.kind(), ShellKind::Cmd)
 caught-by:
     cineris-core::it ext_exec::sys_in_powershell_a_program_the_shell_calls_read_only_is_asked_about
 
@@ -1207,8 +1207,8 @@ caught-by:
 rule: A question about an extension's program says whether its own launcher confines it, not whether the session's commands are.
 file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::ask_with
-find: host.and_then(|host| host.confined).unwrap_or_else(|| {
-replace: host.and_then(|host| host.confined.filter(|_| false)).unwrap_or_else(|| {
+find: host.as_ref().and_then(|host| host.confined).unwrap_or_else(|| {
+replace: host.as_ref().and_then(|host| host.confined.filter(|_| false)).unwrap_or_else(|| {
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_question_about_a_program_at_unrestricted_says_it_is_confined
 

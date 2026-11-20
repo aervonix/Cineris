@@ -1575,7 +1575,10 @@ fn judge_pins(
 /// repository), which holds the level and rules the next session starts
 /// with; or holds the program started as the launcher, which a confined
 /// command could then replace with one that confines nothing (found by the
-/// second review of step 26).
+/// second review of step 26). A root that cannot be read as an absolute
+/// path counts as holding them: what cannot be judged is not granted (on
+/// Windows a root in the file system's form, `\\?\C:\…`, was passed over,
+/// found by the review of step 28's process starts).
 pub(crate) fn holds_harness_files(
     policy: &cineris_protocol::lease::SandboxPolicy,
     loaded: &Loaded,
@@ -1613,16 +1616,16 @@ pub(crate) fn holds_harness_files(
         })
         .collect();
     policy.write.all
-        || policy
-            .write
-            .roots
-            .iter()
-            .filter_map(|root| AbsPath::parse(root, cineris_base::PathStyle::NATIVE).ok())
-            .any(|root| {
-                own.iter()
-                    .any(|dir| dir.starts_with(&root) || root.starts_with(dir))
-                    || files.iter().any(|file| file.starts_with(&root))
-            })
+        || policy.write.roots.iter().any(|root| {
+            match AbsPath::parse(root, cineris_base::PathStyle::NATIVE) {
+                Ok(root) => {
+                    own.iter()
+                        .any(|dir| dir.starts_with(&root) || root.starts_with(dir))
+                        || files.iter().any(|file| file.starts_with(&root))
+                }
+                Err(_) => true,
+            }
+        })
 }
 
 /// Starts an engine, with its failure as the error a front end is shown.
@@ -2539,20 +2542,17 @@ pub(crate) fn assemble(
                         .parts
                         .sandbox_policy
                         .clone();
-                    crate::ext::HarnessFiles(Arc::new(move |roots: &[PathBuf]| {
+                    crate::ext::HarnessFiles(Arc::new(move |roots: &[String]| {
                         let mut policy = policy.clone();
                         policy.write = cineris_protocol::lease::PathSet {
                             all: false,
-                            roots: roots
-                                .iter()
-                                .map(|root| root.to_string_lossy().into_owned())
-                                .collect(),
+                            roots: roots.to_vec(),
                         };
                         holds_harness_files(&policy, &loaded, state.as_ref(), launcher.as_deref())
                     }))
                 },
                 live: Arc::clone(&shell_live),
-                git: Arc::clone(&session_git) as Arc<dyn cineris_base::git::Confinement>,
+                git: Arc::clone(&session_git),
             },
             tell: Arc::new(move |message: String| tell_hooks.tell(message)),
         });
@@ -3174,6 +3174,49 @@ mod trust_and_start_tests {
         if cfg!(windows) {
             assert!(!is_below("C:"));
             assert!(!is_below("C:\\x"));
+        }
+    }
+}
+
+#[cfg(test)]
+mod harness_files_tests {
+    use cineris_config::{Env, LoadOptions, Platform};
+    use cineris_protocol::lease::{NetworkAccess, PathSet, SandboxPolicy};
+
+    use super::holds_harness_files;
+
+    /// A write root that cannot be read as an absolute path counts as
+    /// holding the harness's files: what cannot be judged is not granted.
+    /// On Windows a root in the file system's form (`\\?\C:\…`) was such a
+    /// root, and was passed over (the review of step 28's process starts).
+    /// A plain root that holds none of them does not count.
+    #[test]
+    fn a_root_that_cannot_be_read_counts_as_holding_the_harness_files() {
+        // No home and no managed file: the harness's own folders are none
+        // of the machine's.
+        let mut options = LoadOptions::new(Env::empty(Platform::CURRENT));
+        options.dirs.managed_config = None;
+        let loaded = cineris_config::load(&options).unwrap();
+        let writing = |root: &str| SandboxPolicy {
+            read: PathSet::default(),
+            write: PathSet {
+                all: false,
+                roots: vec![root.to_owned()],
+            },
+            protect: PathSet::default(),
+            network: NetworkAccess::Off,
+        };
+        let plain = if cfg!(windows) {
+            r"C:\nowhere\of\the\harness"
+        } else {
+            "/nowhere/of/the/harness"
+        };
+        assert!(!holds_harness_files(&writing(plain), &loaded, None, None));
+        for unreadable in ["relative/root", r"\\?\C:\nowhere\of\the\harness"] {
+            assert!(
+                holds_harness_files(&writing(unreadable), &loaded, None, None),
+                "{unreadable}"
+            );
         }
     }
 }
