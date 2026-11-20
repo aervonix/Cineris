@@ -245,7 +245,17 @@ fn a_fetch_call_prints_without_what_may_be_a_credential() {
     let printed = format!("{call:?}");
     assert!(!printed.contains("s3cret"), "{printed}");
     assert!(printed.contains("authorization"), "{printed}");
-    assert!(printed.contains("https://api.example.com/x?…"), "{printed}");
+    assert!(!printed.contains("/x"), "{printed}");
+    assert!(printed.contains("https://api.example.com…"), "{printed}");
+    let output = cineris_ext::host::FetchOutput {
+        status: 200,
+        headers: vec![("set-cookie".to_owned(), "session=s3cret".to_owned())],
+        body: b"s3cret".to_vec(),
+        cut: false,
+    };
+    let printed = format!("{output:?}");
+    assert!(!printed.contains("s3cret"), "{printed}");
+    assert!(printed.contains("set-cookie"), "{printed}");
 }
 
 #[test]
