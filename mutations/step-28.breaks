@@ -23,7 +23,7 @@ caught-by:
 [break] a-fetch-is-not-shown-to-the-engine-as-a-network-effect
 rule: A script's fetch is decided by the permission engine as a network effect of its host.
 file: crates/cineris-core/src/ext/host.rs
-find: vec![Effect::Network(NetworkTarget::Host(host))]
+find: vec![Effect::Network(NetworkTarget::Host(host.clone()))]
 replace: Vec::new()
 caught-by:
     cineris-core::it extensions::a_fetch_is_judged_by_the_manifest_then_the_engine_then_the_address
@@ -1872,3 +1872,38 @@ replace: .is_ok() || true =>
 caught-by:
     cineris-ext::it engine::a_call_the_thread_took_before_its_cancel_is_stopped_and_counted
 
+[break] a-host-the-client-reads-differently-is-checked
+rule: A URL whose host has a character the fetch client reads differently (a backslash, a percent sign, a tab) is refused before the manifest and the host are asked.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: if !plain {
+replace: if false {
+caught-by:
+    cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
+
+[break] an-address-in-another-form-is-checked-as-a-name
+rule: A host that ends in a number is an IPv4 address, and is refused unless it is written as four decimal numbers.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: && ends_in_a_number(&host)
+replace: && false
+caught-by:
+    cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
+
+[break] a-hex-last-label-is-a-name
+rule: A last label of 0x and hex digits is a number, as the URL standard reads it.
+file: crates/cineris-ext/src/host.rs
+in: ends_in_a_number
+find: .strip_prefix("0x")
+replace: .strip_prefix("0x-never")
+caught-by:
+    cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
+
+[break] a-bracketed-address-takes-any-character
+rule: An IPv6 address in brackets keeps to hex digits, colons and dots, so a zone or a percent sign is refused.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: c.is_ascii_hexdigit() || matches!(c, ':' | '.')
+replace: c != ']'
+caught-by:
+    cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host

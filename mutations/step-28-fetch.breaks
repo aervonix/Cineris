@@ -435,3 +435,33 @@ replace: match race(sending, &CancelToken::new(), &mut limit).await {
 caught-by:
     cineris-llm::it fetch::cancelling_ends_a_fetch_and_closes_the_connection
     cineris-llm::it fetch::cancelling_ends_a_lookup
+
+# ---------------------------------------------------- the host that was checked
+
+[break] a-url-read-as-another-host-is-fetched
+rule: A URL the fetch reads as another host than the one its caller checked is refused before anything is looked up.
+file: crates/cineris-llm/src/fetch.rs
+in: Fetcher::fetch
+find: && !target.is_host(checked)
+replace: && false
+caught-by:
+    cineris-llm::it fetch::a_url_read_as_another_host_than_the_one_checked_is_refused_before_any_lookup
+
+[break] another-address-is-the-host-checked
+rule: A URL's address is the host checked only when it is that address, not another form of one.
+file: crates/cineris-llm/src/fetch.rs
+in: Target::is_host
+find: .is_ok_and(|named| named == *address)
+replace: .is_ok()
+caught-by:
+    cineris-llm fetch::tests::a_url_is_the_host_it_was_checked_as_only_when_both_readings_agree
+
+[break] any-name-is-the-host-checked
+rule: A URL's name is the host checked only when it is that name.
+file: crates/cineris-llm/src/fetch.rs
+in: Target::is_host
+find: name.eq_ignore_ascii_case(bare)
+replace: !name.is_empty()
+caught-by:
+    cineris-llm fetch::tests::a_url_is_the_host_it_was_checked_as_only_when_both_readings_agree
+    cineris-llm::it fetch::a_url_read_as_another_host_than_the_one_checked_is_refused_before_any_lookup

@@ -103,6 +103,50 @@ fn a_urls_host_is_read_without_its_port_user_or_brackets() {
     ] {
         assert!(url_host(refused).is_err(), "{refused}");
     }
+    for (plain, host) in [
+        ("https://1.2.3.4/", "1.2.3.4"),
+        ("https://[::FFFF:127.0.0.1]/", "::ffff:127.0.0.1"),
+        ("https://under_score-1.example/", "under_score-1.example"),
+        ("https://example.com.:443/", "example.com."),
+    ] {
+        assert_eq!(url_host(plain).unwrap(), host, "{plain}");
+    }
+}
+
+/// A URL the fetch client would read as another host than the one the
+/// manifest and the decision are about never reaches the host, even where
+/// the manifest allows any host.
+#[test]
+fn a_url_the_client_would_read_as_another_host_never_reaches_the_host() {
+    let host = FakeHost::new();
+    let capabilities = capabilities("net = [\"*\"]");
+    for refused in [
+        "https://evil.test\\.cdn.example/",
+        "https://ex%61mple.com/",
+        "https://exa\tmple.com/",
+        "https://exa\nmple.com/",
+        "https://0x7f.1/",
+        "https://2130706433/",
+        "https://127.1/",
+        "https://0177.0.0.1/",
+        "https://127.0.0.01/",
+        "https://1.2.3.4./",
+        "https://1.2.3.0x4/",
+        "https://[::1%25lo]/",
+    ] {
+        let result = block_on(serve(
+            fetch(refused),
+            &capabilities,
+            &host,
+            Phase::Tool,
+            Duration::from_secs(5),
+        ));
+        assert!(
+            matches!(result, Err(HostError::Failed(_))),
+            "{refused:?}: {result:?}"
+        );
+    }
+    assert!(host.asked().is_empty(), "{:?}", host.asked());
 }
 
 #[test]

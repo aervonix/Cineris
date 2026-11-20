@@ -427,9 +427,18 @@ pub const FETCH_DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// A URL with a user part is refused here: the host it names is not
 /// plain to read.
 ///
+/// The fetch client reads the URL again, as the URL standard does, and the
+/// host checked here must be the one it connects to, so a host that reading
+/// would take differently is refused: there a `\` ends the host, a tab or a
+/// line break is dropped, a `%` is decoded, and a host that ends in a
+/// number is an IPv4 address in any written form (`0x7f.1`, `2130706433`,
+/// `127.1`, `0177.0.0.1`). A name keeps to letters, digits, `.`, `-` and
+/// `_`; an address is four decimal numbers, or IPv6 in brackets.
+///
 /// # Errors
 ///
-/// When the URL has no `scheme://`, no host, or a user part.
+/// When the URL has no `scheme://`, no host, or a user part, or its host
+/// is not written plainly.
 pub fn url_host(url: &str) -> Result<String, HostError> {
     let refused = |why: &str| HostError::Failed(format!("`{url}` cannot be fetched: {why}"));
     let (_, rest) = url
@@ -450,7 +459,42 @@ pub fn url_host(url: &str) -> Result<String, HostError> {
     if host.is_empty() {
         return Err(refused("it has no host"));
     }
-    Ok(host.to_ascii_lowercase())
+    let host = host.to_ascii_lowercase();
+    let plain = if authority.starts_with('[') {
+        host.chars()
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'))
+    } else {
+        host.chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    };
+    if !plain {
+        return Err(refused(
+            "its host has a character the fetch would read differently: write it plainly",
+        ));
+    }
+    if !authority.starts_with('[')
+        && ends_in_a_number(&host)
+        && host.parse::<std::net::Ipv4Addr>().is_err()
+    {
+        return Err(refused(
+            "its host is an IPv4 address in another written form: write it as four decimal \
+             numbers",
+        ));
+    }
+    Ok(host)
+}
+
+/// Whether a host's last label is a number as the URL standard reads one
+/// (all digits, or `0x` and hex digits), which makes the whole host an
+/// IPv4 address.
+fn ends_in_a_number(host: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let last = host.rsplit('.').next().unwrap_or_default();
+    !last.is_empty()
+        && (last.bytes().all(|byte| byte.is_ascii_digit())
+            || last
+                .strip_prefix("0x")
+                .is_some_and(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit())))
 }
 
 /// Serves one call a script made: the manifest first, then the host.

@@ -179,6 +179,13 @@ pub struct FetchRequest {
     pub headers: Vec<(String, String)>,
     /// The body: at most [`REQUEST_BODY_LIMIT`] bytes.
     pub body: Vec<u8>,
+    /// The host the caller checked the request for (its patterns, its
+    /// permission decision), as the caller read the URL. When given, a URL
+    /// this module reads as another host is refused before anything is
+    /// looked up: two readings of one URL that differ (a `\`, a `%`, an
+    /// address written as `0x7f.1`) would check one host and connect to
+    /// another.
+    pub host: Option<String>,
 }
 
 impl FetchRequest {
@@ -190,6 +197,7 @@ impl FetchRequest {
             url: url.into(),
             headers: Vec::new(),
             body: Vec::new(),
+            host: None,
         }
     }
 }
@@ -204,6 +212,7 @@ impl std::fmt::Debug for FetchRequest {
             .field("method", &self.method)
             .field("headers", &names)
             .field("body_bytes", &self.body.len())
+            .field("host", &self.host)
             .finish_non_exhaustive()
     }
 }
@@ -519,6 +528,17 @@ pub enum Refusal {
         /// The method, as the script named it.
         name: String,
     },
+    /// The URL reads as another host than the one its caller checked.
+    #[error(
+        "the URL's host was checked as `{checked}`, and a fetch reads the URL as `{read}`: \
+         write the host plainly, as the name or the address it is"
+    )]
+    OtherHost {
+        /// The host the caller checked.
+        checked: String,
+        /// The host this module reads the URL as.
+        read: String,
+    },
     /// The response came over a connection to an address that was not
     /// checked. The resolver the client is given makes this impossible;
     /// this is the second guard, and the response is not returned.
@@ -642,6 +662,15 @@ impl Fetcher {
         }
         let headers = header_map(&request.headers)?;
         let target = Target::parse(&request.url, allowance)?;
+        if let Some(checked) = &request.host
+            && !target.is_host(checked)
+        {
+            return Err(Refusal::OtherHost {
+                checked: checked.clone(),
+                read: target.host_text(),
+            }
+            .into());
+        }
 
         let mut limit = self.timer.sleep(timeout);
         let sending = self.send(request.method, &target, headers, request.body, allowance);
@@ -803,6 +832,19 @@ impl Target {
             }
         }
         Ok(target)
+    }
+
+    /// Whether `checked` names this host: the same address (an IPv6 one
+    /// with or without its brackets), or the same name in any case.
+    fn is_host(&self, checked: &str) -> bool {
+        let bare = checked
+            .strip_prefix('[')
+            .and_then(|inner| inner.strip_suffix(']'))
+            .unwrap_or(checked);
+        match &self.host {
+            Host::Address(address) => bare.parse::<IpAddr>().is_ok_and(|named| named == *address),
+            Host::Name(name) => name.eq_ignore_ascii_case(bare),
+        }
     }
 
     /// The host as the URL has it, without brackets.
@@ -1284,6 +1326,33 @@ mod tests {
 
     fn target(url: &str) -> Target {
         Target::parse(url, &AddressAllowance::none()).unwrap()
+    }
+
+    #[test]
+    fn a_url_is_the_host_it_was_checked_as_only_when_both_readings_agree() {
+        for (url, checked) in [
+            ("https://Example.COM/", "example.com"),
+            ("https://127.0.0.1/", "127.0.0.1"),
+            ("https://[::1]:8443/", "::1"),
+            ("https://[0:0:0:0:0:0:0:1]/", "[::1]"),
+        ] {
+            assert!(target(url).is_host(checked), "{url} as {checked}");
+        }
+        // Each pair is a URL and the host a plainer reading of it gives.
+        for (url, checked) in [
+            (
+                "https://evil.test\\.example.com/",
+                "evil.test\\.example.com",
+            ),
+            ("https://ex%61mple.com/", "ex%61mple.com"),
+            ("https://exa\tmple.com/", "exa\tmple.com"),
+            ("https://0x7f.1/", "0x7f.1"),
+            ("https://2130706433/", "2130706433"),
+            ("https://127.1/", "127.1"),
+            ("https://[::ffff:127.0.0.1]/", "127.0.0.1"),
+        ] {
+            assert!(!target(url).is_host(checked), "{url:?} as {checked:?}");
+        }
     }
 
     #[test]
