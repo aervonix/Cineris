@@ -585,7 +585,7 @@ pub async fn serve<H: Host + ?Sized>(
                     _ => None,
                 })
                 .collect();
-            let asked = timeout_ms.map_or(FETCH_DEFAULT_TIMEOUT, Duration::from_millis);
+            let wanted = timeout_ms.map_or(FETCH_DEFAULT_TIMEOUT, Duration::from_millis);
             let output = host
                 .fetch(
                     FetchRequest {
@@ -593,7 +593,7 @@ pub async fn serve<H: Host + ?Sized>(
                         url,
                         headers,
                         body: body.map(String::into_bytes).unwrap_or_default(),
-                        timeout: asked.min(time_left),
+                        timeout: wanted.min(time_left),
                     },
                     host_name,
                     literal,

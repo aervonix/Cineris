@@ -2,6 +2,32 @@
 # its host functions, broken one at a time, with the tests that must fail.
 # Written with the code (docs/steps/28/answered.md).
 
+[break] a-fetch-skips-the-manifests-hosts
+rule: A fetch reaches the host only for a host the manifest's `net` names.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: capabilities.host(&host_name)?;
+replace: let _ = &host_name;
+caught-by:
+    cineris-ext::it serve::a_fetch_reaches_the_host_only_for_a_host_the_manifest_names
+
+[break] a-fetchs-time-outlasts-its-call
+rule: A fetch's time is never longer than its call has left.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: timeout: wanted.min(time_left)
+replace: timeout: wanted
+caught-by:
+    cineris-ext::it serve::a_fetch_reaches_the_host_only_for_a_host_the_manifest_names
+
+[break] a-fetch-is-not-shown-to-the-engine-as-a-network-effect
+rule: A script's fetch is decided by the permission engine as a network effect of its host.
+file: crates/cineris-core/src/ext/host.rs
+find: vec![Effect::Network(NetworkTarget::Host(host))]
+replace: Vec::new()
+caught-by:
+    cineris-core::it extensions::a_fetch_is_judged_by_the_manifest_then_the_engine_then_the_address
+
 [break] a-host-read-skips-the-manifest
 rule: A host read is checked against the manifest's `read` globs before the host is asked.
 file: crates/cineris-ext/src/host.rs
