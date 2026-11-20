@@ -8,10 +8,13 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, SystemTime};
 
-use cineris_tools::shell::ChangeDetector;
+use cineris_testkit::children::{ChildSpec, Roll};
 use cineris_tools::shell::changes::Method;
+use cineris_tools::shell::{ChangeDetector, Incomplete};
 use cineris_tools::{Concurrency, NoOutput, ShellKind, Tool, execute};
 use serde_json::json;
 
@@ -281,20 +284,92 @@ fn sys_a_project_that_is_not_trusted_is_not_asked_through_git() {
     );
 }
 
+/// A git that never answers: the test binary, started in git's place as a
+/// child that reports to the test's roll and stays until it is killed. It
+/// writes no answer and never closes its output on its own, so that a look
+/// that waits for it waits until the test is stopped.
+#[derive(Debug)]
+struct Silent {
+    program: PathBuf,
+    arguments: Vec<std::ffi::OsString>,
+    /// How many times git was started.
+    started: AtomicUsize,
+}
+
+impl Silent {
+    fn new(child: &ChildSpec) -> Self {
+        let (program, arguments) = child.arguments(crate::ENTRY);
+        Self {
+            program: PathBuf::from(program),
+            arguments: arguments.into_iter().map(Into::into).collect(),
+            started: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl cineris_base::git::Confinement for Silent {
+    fn confines(&self) -> bool {
+        false
+    }
+
+    /// The child itself: no git on `PATH` is needed to be this one.
+    fn git_program(&self) -> Option<PathBuf> {
+        Some(self.program.clone())
+    }
+
+    fn withheld(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn avoid(&self) -> Vec<PathBuf> {
+        Vec::new()
+    }
+
+    fn start(
+        &self,
+        _git: &Path,
+        _arguments: Vec<std::ffi::OsString>,
+    ) -> Result<cineris_base::git::Started, String> {
+        self.started.fetch_add(1, Ordering::Relaxed);
+        Ok(cineris_base::git::Started {
+            program: self.program.clone(),
+            arguments: self.arguments.clone(),
+            stdin: None,
+        })
+    }
+}
+
+/// Git that has not answered when the look's cap passes is not waited for:
+/// the look gives up on it, and the command's changes are not looked for
+/// another way. The git here never answers, so that "not in time" is made
+/// and not hoped for: a real git asked with a cap of zero can answer before
+/// the look first asks for its answer, and is then taken, which failed this
+/// test once in CI. A look that waited for this git would never return.
 #[test]
 fn sys_git_that_does_not_answer_in_time_is_not_waited_for() {
     let ws = Workspace::new("changes_git_slow");
     let root = repository(&ws, &[("a.txt", "one\n")]);
-    // No time at all: git cannot answer, and nothing else is tried.
+    let roll = Roll::new();
+    let silent = Arc::new(Silent::new(&ChildSpec::new(&roll, "silent-git")));
+    // No time at all, so that the test waits for nothing either.
     let detector = ChangeDetector::new(&root)
         .trusting_the_repository(true)
+        .with_git(silent.clone())
         .with_cap(Duration::ZERO);
     let before = detector.before();
     ws.file("a.txt", "changed\n");
     let changes = detector.after(&before);
     assert_eq!(changes.method, Method::None);
+    // Given up on for its time, not for a failure of the stand-in.
+    assert_eq!(
+        changes.incomplete,
+        Some(Incomplete::GitTooSlow),
+        "{changes:?}"
+    );
     assert!(!changes.complete);
-    assert!(changes.is_empty());
+    assert!(changes.is_empty(), "{changes:?}");
+    // Asked once, before the command, and not again after it.
+    assert_eq!(silent.started.load(Ordering::Relaxed), 1);
 }
 
 /// A directory of the test's own that is in no repository: these tests'
