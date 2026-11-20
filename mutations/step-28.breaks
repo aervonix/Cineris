@@ -23,7 +23,7 @@ caught-by:
 [break] a-fetch-is-not-shown-to-the-engine-as-a-network-effect
 rule: A script's fetch is decided by the permission engine as a network effect of its host.
 file: crates/cineris-core/src/ext/host.rs
-find: vec![Effect::Network(NetworkTarget::Host(host.clone()))]
+find: vec![Effect::Network(NetworkTarget::Host(host))]
 replace: Vec::new()
 caught-by:
     cineris-core::it extensions::a_fetch_is_judged_by_the_manifest_then_the_engine_then_the_address
@@ -1873,11 +1873,17 @@ caught-by:
     cineris-ext::it engine::a_call_the_thread_took_before_its_cancel_is_stopped_and_counted
 
 [break] a-host-the-client-reads-differently-is-checked
-rule: A URL whose host has a character the fetch client reads differently (a backslash, a percent sign, a tab) is refused before the manifest and the host are asked.
+rule: A URL whose host has a character the fetch client reads differently (a percent sign, a letter outside ASCII) is refused before the manifest and the host are asked.
 file: crates/cineris-ext/src/host.rs
 in: url_host
-find: if !plain {
-replace: if false {
+find:
+    if !plain {
+        return Err(refused(
+            "its host has a character the fetch would read differently: write it plainly"
+replace:
+    if false {
+        return Err(refused(
+            "its host has a character the fetch would read differently: write it plainly"
 caught-by:
     cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
 
@@ -1885,8 +1891,8 @@ caught-by:
 rule: A host that ends in a number is an IPv4 address, and is refused unless it is written as four decimal numbers.
 file: crates/cineris-ext/src/host.rs
 in: url_host
-find: && ends_in_a_number(&host)
-replace: && false
+find: if ends_in_a_number(&host) && host.parse::<std::net::Ipv4Addr>().is_err() {
+replace: if false {
 caught-by:
     cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
 
@@ -1919,187 +1925,171 @@ caught-by:
 
 [break] loopback-v4-let-through
 rule: An IPv4 loopback address (127.0.0.0/8) is refused unless it is allowed by name.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: (127, _) => Some(AddressKind::Loopback),
-replace: (127, _) => None,
+file: crates/cineris-base/src/address.rs
+find: Range::v4([127, 0, 0, 0], 8, Loopback)
+replace: Range::v4([127, 0, 0, 0], 32, Loopback)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
     cineris-llm::it fetch::localhost_reaches_loopback_only_when_it_is_allowed
 
 [break] private-10-let-through
 rule: A private address in 10.0.0.0/8 is refused unless it is allowed by name.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: (10, _) | (172, 16..=31)
-replace: (172, 16..=31)
+file: crates/cineris-base/src/address.rs
+find: Range::v4([10, 0, 0, 0], 8, Private)
+replace: Range::v4([10, 0, 0, 0], 32, Private)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
     cineris-llm fetch::tests::one_address_outside_the_internet_refuses_the_whole_name
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
     cineris-llm::it fetch::one_address_outside_the_internet_refuses_the_name_whatever_else_it_has
 
 [break] private-172-cut-short
 rule: The private range 172.16.0.0/12 runs to 172.31.255.255.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: (172, 16..=31)
-replace: (172, 16..=30)
+file: crates/cineris-base/src/address.rs
+find: Range::v4([172, 16, 0, 0], 12, Private)
+replace: Range::v4([172, 16, 0, 0], 13, Private)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
 
 [break] private-172-widened
 rule: The private range 172.16.0.0/12 ends at 172.31.255.255: 172.32.0.0 is the internet's.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: (172, 16..=31)
-replace: (172, 16..=32)
+file: crates/cineris-base/src/address.rs
+find: Range::v4([172, 16, 0, 0], 12, Private)
+replace: Range::v4([172, 0, 0, 0], 10, Private)
 caught-by:
-    cineris-llm fetch::tests::the_internet_is_not_named_even_at_the_edge_of_a_range
+    cineris-base address::tests::the_internet_is_not_named_even_at_the_edge_of_a_range
 
 [break] private-192-168-let-through
 rule: A private address in 192.168.0.0/16 is refused unless it is allowed by name.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: | (192, 168)
-replace:
+file: crates/cineris-base/src/address.rs
+find: Range::v4([192, 168, 0, 0], 16, Private)
+replace: Range::v4([192, 168, 0, 0], 32, Private)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] shared-address-let-through
 rule: A shared (carrier-grade NAT) address in 100.64.0.0/10 is refused unless it is allowed by name.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: (100, 64..=127) => Some(AddressKind::Shared),
-replace:
+file: crates/cineris-base/src/address.rs
+find: Range::v4([100, 64, 0, 0], 10, Shared)
+replace: Range::v4([100, 64, 0, 0], 32, Shared)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] link-local-v4-let-through
 rule: A link-local address in 169.254.0.0/16 is refused unless it is allowed by name.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: (169, 254) => Some(AddressKind::LinkLocal),
-replace:
+file: crates/cineris-base/src/address.rs
+find: Range::v4([169, 254, 0, 0], 16, LinkLocal)
+replace: Range::v4([169, 254, 0, 0], 32, LinkLocal)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
 
 [break] metadata-v4-not-named-as-such
 rule: The cloud metadata address 169.254.169.254 is refused, and the refusal says it is the metadata service's.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: return Some(AddressKind::Metadata);
-replace: return Some(AddressKind::LinkLocal);
+file: crates/cineris-base/src/address.rs
+find: Range::v4([169, 254, 169, 254], 32, Metadata)
+replace: Range::v4([169, 254, 169, 254], 32, LinkLocal)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] unspecified-v4-let-through
 rule: An unspecified address (0.0.0.0/8), which reaches this machine on some systems, is refused.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: (0, _) => Some(AddressKind::Unspecified),
-replace:
+file: crates/cineris-base/src/address.rs
+find: Range::v4([0, 0, 0, 0], 8, Unspecified)
+replace: Range::v4([0, 0, 0, 0], 32, Unspecified)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
 
 [break] multicast-v4-let-through
 rule: A multicast address (224.0.0.0/4) is refused.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: (224..=239, _) => Some(AddressKind::Multicast),
-replace:
+file: crates/cineris-base/src/address.rs
+find: Range::v4([224, 0, 0, 0], 4, Multicast)
+replace: Range::v4([224, 0, 0, 0], 32, Multicast)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
 
 [break] broadcast-let-through
-rule: The broadcast address 255.255.255.255 is refused.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v4
-find: if address == Ipv4Addr::BROADCAST {
-replace: if address == Ipv4Addr::BROADCAST && false {
+rule: The broadcast address is refused, and named as such.
+file: crates/cineris-base/src/address.rs
+find: Range::v4([255, 255, 255, 255], 32, Broadcast)
+replace: Range::v4([255, 255, 255, 255], 32, Reserved)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
 
 [break] loopback-v6-named-otherwise
-rule: The IPv6 loopback address ::1 is refused as loopback, and `localhost` reaches it.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v6
-find: if address.is_loopback() {
-replace: if address.is_loopback() && false {
+rule: The IPv6 loopback address ::1 is refused as loopback.
+file: crates/cineris-base/src/address.rs
+find: Range::v6([0, 0, 0, 0, 0, 0, 0, 1], 128, Loopback)
+replace: Range::v6([0, 0, 0, 0, 0, 0, 0, 1], 128, Reserved)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
     cineris-llm fetch::tests::an_allowance_names_literal_addresses_and_localhost_names_loopback
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] metadata-v6-not-named-as-such
 rule: AWS's IPv6 metadata address fd00:ec2::254 is refused as the metadata service's.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v6
-find: if address == METADATA_V6 {
-replace: if address == METADATA_V6 && false {
+file: crates/cineris-base/src/address.rs
+find: Range::v6([0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254], 128, Metadata)
+replace: Range::v6([0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254], 128, UniqueLocal)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
 
 [break] link-local-v6-let-through
 rule: An IPv6 link-local address (fe80::/10) is refused unless it is allowed by name.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v6
-find: first & 0xffc0 == 0xfe80
-replace: first & 0xffc0 == 0xfe81
+file: crates/cineris-base/src/address.rs
+find: Range::v6([0xfe80, 0, 0, 0, 0, 0, 0, 0], 10, LinkLocal)
+replace: Range::v6([0xfe80, 0, 0, 0, 0, 0, 0, 0], 16, LinkLocal)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] unique-local-cut-to-half
 rule: A unique local address is all of fc00::/7, fd00::/8 included.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v6
-find: first & 0xfe00 == 0xfc00
-replace: first & 0xff00 == 0xfc00
+file: crates/cineris-base/src/address.rs
+find: Range::v6([0xfc00, 0, 0, 0, 0, 0, 0, 0], 7, UniqueLocal)
+replace: Range::v6([0xfc00, 0, 0, 0, 0, 0, 0, 0], 8, UniqueLocal)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] multicast-v6-cut-short
 rule: An IPv6 multicast address is all of ff00::/8.
-file: crates/cineris-llm/src/fetch.rs
-in: classify_v6
-find: first & 0xff00 == 0xff00
-replace: first == 0xff00
+file: crates/cineris-base/src/address.rs
+find: Range::v6([0xff00, 0, 0, 0, 0, 0, 0, 0], 8, Multicast)
+replace: Range::v6([0xff00, 0, 0, 0, 0, 0, 0, 0], 16, Multicast)
 caught-by:
-    cineris-llm fetch::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_outside_the_internet_is_named
 
 [break] mapped-form-let-through
 rule: The IPv4-mapped IPv6 form of an address (::ffff:127.0.0.1) is the kind of that IPv4 address.
-file: crates/cineris-llm/src/fetch.rs
+file: crates/cineris-base/src/address.rs
 in: embedded_v4
-find: [0, 0, 0, 0, 0, 0xffff, _, _] |
-replace:
+find: [0, 0, 0, 0, 0, 0xffff, _, _]
+replace: [0, 0, 0, 0, 0, 0xfffe, _, _]
 caught-by:
-    cineris-llm fetch::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
+    cineris-base address::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
     cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] compatible-form-let-through
 rule: The IPv4-compatible IPv6 form of an address (::127.0.0.1) is the kind of that IPv4 address.
-file: crates/cineris-llm/src/fetch.rs
+file: crates/cineris-base/src/address.rs
 in: embedded_v4
 find: | [0, 0, 0, 0, 0, 0, _, _]
-replace:
+replace: | [0, 0, 0, 0, 0, 0, 0xffff, 0xffff]
 caught-by:
-    cineris-llm fetch::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
+    cineris-base address::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
 
 [break] nat64-form-let-through
 rule: An address under NAT64's well-known prefix (64:ff9b::a.b.c.d) is the kind of the IPv4 address it carries.
-file: crates/cineris-llm/src/fetch.rs
+file: crates/cineris-base/src/address.rs
 in: embedded_v4
-find: [0x64, 0xff9b, 0, 0, 0, 0, _, _] => Some(inner),
-replace:
+find: | [0x64, 0xff9b, 0, 0, 0, 0, _, _]
+replace: | [0x64, 0xff9b, 0xdead, 0, 0, 0, _, _]
 caught-by:
-    cineris-llm fetch::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
+    cineris-base address::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
 
 # ------------------------------------------------------------ the allowance
 
@@ -2107,7 +2097,7 @@ caught-by:
 rule: Allowing `localhost` allows loopback and nothing else outside the internet.
 file: crates/cineris-llm/src/fetch.rs
 in: AddressAllowance::allows
-find: self.localhost && classify(address) == Some(AddressKind::Loopback)
+find: self.localhost && address.is_loopback()
 replace: self.localhost
 caught-by:
     cineris-llm fetch::tests::an_allowance_names_literal_addresses_and_localhost_names_loopback
@@ -2116,8 +2106,8 @@ caught-by:
 rule: Loopback is reached only when `localhost` is allowed.
 file: crates/cineris-llm/src/fetch.rs
 in: AddressAllowance::allows
-find: self.localhost && classify(address) == Some(AddressKind::Loopback)
-replace: classify(address) == Some(AddressKind::Loopback)
+find: self.localhost && address.is_loopback()
+replace: address.is_loopback()
 caught-by:
     cineris-llm fetch::tests::an_allowance_names_literal_addresses_and_localhost_names_loopback
     cineris-llm::it fetch::a_literal_address_the_allowance_names_is_reached
@@ -2148,8 +2138,8 @@ caught-by:
 rule: Plain `http` to a name other than an allowed `localhost` is refused before it is looked up: `https` is the only scheme to a name.
 file: crates/cineris-llm/src/fetch.rs
 in: Target::parse
-find: Host::Name(name) => name == "localhost" && allowance.allows_localhost(),
-replace: Host::Name(_) => true,
+find: Host::Name(name) => name == "localhost" && allowance.allows_localhost()
+replace: Host::Name(_) => true
 caught-by:
     cineris-llm fetch::tests::the_scheme_and_the_host_decide_what_a_url_may_reach
     cineris-llm::it fetch::https_to_a_name_connects_to_the_checked_address_and_plain_http_is_refused
@@ -2283,8 +2273,8 @@ caught-by:
 rule: Each method reaches the server as itself.
 file: crates/cineris-llm/src/fetch.rs
 in: FetchMethod::to_http
-find: Self::Put => reqwest::Method::PUT,
-replace: Self::Put => reqwest::Method::POST,
+find: Self::Put => reqwest::Method::PUT
+replace: Self::Put => reqwest::Method::POST
 caught-by:
     cineris-llm fetch::tests::the_methods_are_the_six_in_any_case
     cineris-llm::it fetch::each_method_reaches_the_server_as_itself
@@ -2294,7 +2284,7 @@ caught-by:
 [break] request-body-limit-lifted
 rule: A request body over 1 MiB is refused before anything is looked up.
 file: crates/cineris-llm/src/fetch.rs
-in: Fetcher::fetch
+in: prepare
 find: if request.body.len() > REQUEST_BODY_LIMIT {
 replace: if request.body.len() > REQUEST_BODY_LIMIT * 2 {
 caught-by:
@@ -2303,7 +2293,7 @@ caught-by:
 [break] request-body-limit-off-by-one
 rule: A request body of exactly 1 MiB is sent.
 file: crates/cineris-llm/src/fetch.rs
-in: Fetcher::fetch
+in: prepare
 find: if request.body.len() > REQUEST_BODY_LIMIT {
 replace: if request.body.len() >= REQUEST_BODY_LIMIT {
 caught-by:
@@ -2352,7 +2342,7 @@ caught-by:
 [break] a-url-read-as-another-host-is-fetched
 rule: A URL the fetch reads as another host than the one its caller checked is refused before anything is looked up.
 file: crates/cineris-llm/src/fetch.rs
-in: Fetcher::fetch
+in: prepare
 find: && !target.is_host(checked)
 replace: && false
 caught-by:
@@ -2376,3 +2366,226 @@ replace: !name.is_empty()
 caught-by:
     cineris-llm fetch::tests::a_url_is_the_host_it_was_checked_as_only_when_both_readings_agree
     cineris-llm::it fetch::a_url_read_as_another_host_than_the_one_checked_is_refused_before_any_lookup
+
+# ------------------------------------------------ the full review of the fetch
+
+[break] a-range-is-its-network-alone
+rule: An address is in a range when its first bits are the range's, not only when it is the range's first address.
+file: crates/cineris-base/src/address.rs
+in: Range::contains
+find: u32::from(network) & mask == u32::from(address) & mask
+replace: u32::from(network) == u32::from(address)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+    cineris-base address::tests::every_range_starts_at_its_network_and_is_listed_once
+
+[break] the-shortest-range-gives-the-kind
+rule: An address in two ranges is the kind of the longer: 169.254.169.254 is metadata, not link-local.
+file: crates/cineris-base/src/address.rs
+in: classify
+find: .max_by_key(|range| range.prefix)
+replace: .min_by_key(|range| range.prefix)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+
+[break] six-to-four-let-through
+rule: A 6to4 address is the kind of the IPv4 address it carries.
+file: crates/cineris-base/src/address.rs
+in: embedded_v4
+find: [0x2002, high, low, ..]
+replace: [0x2003, high, low, ..]
+caught-by:
+    cineris-base address::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
+
+[break] nat64-local-use-let-through
+rule: NAT64's local-use prefix, 64:ff9b:1::/48, is refused whole.
+file: crates/cineris-base/src/address.rs
+find: Range::v6([0x64, 0xff9b, 1, 0, 0, 0, 0, 0], 48, Private)
+replace: Range::v6([0x64, 0xff9b, 1, 0, 0, 0, 0, 0], 128, Private)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+
+[break] the-future-use-block-let-through
+rule: 240.0.0.0/4, set aside for future use, is refused.
+file: crates/cineris-base/src/address.rs
+find: Range::v4([240, 0, 0, 0], 4, Reserved)
+replace: Range::v4([240, 0, 0, 0], 32, Reserved)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+
+[break] documentation-let-through
+rule: The documentation networks are refused.
+file: crates/cineris-base/src/address.rs
+find: Range::v4([203, 0, 113, 0], 24, Reserved)
+replace: Range::v4([203, 0, 113, 0], 32, Reserved)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+
+[break] the-ietfs-ipv6-block-cut-short
+rule: IPv6's block of the IETF's protocol assignments, 2001::/23, is refused whole, Teredo and ORCHID with it.
+file: crates/cineris-base/src/address.rs
+find: Range::v6([0x2001, 0, 0, 0, 0, 0, 0, 0], 23, Reserved)
+replace: Range::v6([0x2001, 0, 0, 0, 0, 0, 0, 0], 32, Reserved)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+
+[break] azures-metadata-let-through
+rule: Azure's platform endpoint, 168.63.129.16, is a metadata service's address.
+file: crates/cineris-base/src/address.rs
+find: Range::v4([168, 63, 129, 16], 32, Metadata)
+replace: Range::v4([168, 63, 129, 17], 32, Metadata)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+
+[break] oracles-metadata-named-otherwise
+rule: Oracle's metadata service, 192.0.0.192, is named as one.
+file: crates/cineris-base/src/address.rs
+find: Range::v4([192, 0, 0, 192], 32, Metadata)
+replace: Range::v4([192, 0, 0, 192], 32, Reserved)
+caught-by:
+    cineris-base address::tests::every_range_outside_the_internet_is_named
+
+[break] localhost-allows-what-leaves-the-machine
+rule: Allowing localhost allows this machine's loopback, not an IPv6 form of 127.0.0.1 that a translator or a tunnel carries away.
+file: crates/cineris-llm/src/fetch.rs
+in: AddressAllowance::allows
+find: self.localhost && address.is_loopback()
+replace: self.localhost && classify(address) == Some(AddressKind::Loopback)
+caught-by:
+    cineris-llm fetch::tests::an_allowance_names_literal_addresses_and_localhost_names_loopback
+
+[break] the-headers-are-not-counted
+rule: More than 64 headers, or more than 64 KiB of them, are refused before a map of them is made.
+file: crates/cineris-llm/src/fetch.rs
+in: header_map
+find: if headers.len() > REQUEST_HEADERS_LIMIT || bytes > REQUEST_HEADER_BYTES_LIMIT {
+replace: if false {
+caught-by:
+    cineris-llm fetch::tests::a_request_over_the_header_limits_is_refused_before_its_headers_are_made
+
+[break] the-client-asks-the-system-for-names
+rule: The fetch's HTTP client is given a resolver that answers only with the checked addresses.
+file: crates/cineris-llm/src/fetch.rs
+in: build_client
+find: .dns_resolver(Arc::new(pinned))
+replace:
+caught-by:
+    cineris-llm::it fetch::https_to_a_name_connects_to_the_checked_address_and_plain_http_is_refused
+
+[break] tls-fetches-what-a-certificate-names
+rule: A server's certificate is checked against the system's roots with nothing fetched: on Windows the platform's verifier fetches what a certificate names, from any address.
+file: crates/cineris-llm/src/fetch.rs
+in: build_client
+os: windows
+find: .tls_certs_only(system_roots().iter().cloned())
+replace:
+caught-by:
+    cineris-llm::it fetch::a_servers_certificate_sends_the_machine_nowhere
+
+[break] a-url-not-beginning-with-its-scheme-is-read
+rule: A URL that does not begin with https:// or http:// is refused: the standard skips the slashes after a scheme, so https:good://evil is good.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: .filter(|start| start.eq_ignore_ascii_case(scheme))
+replace: .filter(|_| true)
+caught-by:
+    cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
+
+[break] a-control-character-in-a-url-is-taken
+rule: A URL with a control character or a space anywhere is refused: the standard drops or trims them.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: if url.chars().any(|c| c.is_control() || c == ' ') {
+replace: if false {
+caught-by:
+    cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
+
+[break] a-backslash-in-a-url-is-taken
+rule: A URL with a backslash is refused: the standard reads it as a slash, which a question showing the URL would hide.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: if url.contains('\\') {
+replace: if false {
+caught-by:
+    cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
+
+[break] an-ipv4-mapped-address-is-taken
+rule: An IPv4-mapped IPv6 address in a URL is refused: its IPv4 address is written instead.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: if address.to_ipv4_mapped().is_some() {
+replace: if false {
+caught-by:
+    cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
+
+[break] an-ipv6-host-is-judged-as-written
+rule: An IPv6 host is judged in its shortest form, the one the manifest's entries are kept in.
+file: crates/cineris-ext/src/host.rs
+in: url_host
+find: return Ok(address.to_string());
+replace: return Ok(address.to_string().to_uppercase());
+caught-by:
+    cineris-ext::it serve::a_urls_host_is_read_without_its_port_user_or_brackets
+    cineris-ext::it serve::only_a_host_named_literally_may_be_outside_the_internet
+
+[break] a-manifests-address-is-kept-as-written
+rule: A manifest's address entry is kept in the one form a URL's host is read in.
+file: crates/cineris-ext/src/manifest.rs
+in: host_pattern
+find: |address| address.to_canonical().to_string()
+replace: |_| host.to_owned()
+caught-by:
+    cineris-ext::it manifest::a_full_manifest_is_read
+
+[break] every-literal-entry-goes-with-every-fetch
+rule: Only the host itself, when the manifest names it literally, goes with a fetch as one that may be outside the internet.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: let literal = if capabilities.names_host_literally(&host_name) {
+replace: let literal = if true {
+caught-by:
+    cineris-ext::it serve::only_a_host_named_literally_may_be_outside_the_internet
+
+[break] a-fetch-takes-the-time-the-script-asks
+rule: A fetch takes 30 s at most, whatever time the script asks for.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: .min(FETCH_MAX_TIMEOUT);
+replace: ;
+caught-by:
+    cineris-ext::it serve::a_fetch_takes_thirty_seconds_at_most_and_never_more_than_its_call
+
+[break] a-fetch-the-client-refuses-is-asked-about
+rule: What the client would refuse before its lookup is refused before anyone is asked.
+file: crates/cineris-core/src/ext/host.rs
+find: cineris_llm::fetch::check(&request, &allowance)
+replace: Ok::<(), cineris_llm::Refusal>(())
+caught-by:
+    cineris-core::it extensions::a_fetch_is_asked_about_only_when_it_could_be_made_and_shows_no_credential
+
+[break] a-fetchs-question-shows-its-query
+rule: A fetch's question shows its URL without its query or fragment.
+file: crates/cineris-core/src/ext/host.rs
+in: shown_url
+find: Some(at) => format!("{}{}…", cineris_base::visible(&url[..at]), &url[at..=at])
+replace: Some(_) => cineris_base::visible(url).into_owned()
+caught-by:
+    cineris-core ext::host::tests::a_fetchs_url_is_shown_without_its_query_and_with_nothing_unseen
+    cineris-core::it extensions::a_fetch_is_asked_about_only_when_it_could_be_made_and_shows_no_credential
+
+[break] a-fetchs-question-says-nothing-of-what-it-sends
+rule: A fetch's question names what it sends besides its URL: its body's size and its headers' names.
+file: crates/cineris-core/src/ext/host.rs
+find: extra: sends
+replace: extra: None
+caught-by:
+    cineris-core::it extensions::a_fetch_is_asked_about_only_when_it_could_be_made_and_shows_no_credential
+
+[break] the-clients-request-has-no-checked-host
+rule: The client's request carries the host the manifest and the decision were about.
+file: crates/cineris-core/src/ext/host.rs
+in: client_request
+find: host: Some(host)
+replace: host: None
+caught-by:
+    cineris-core ext::host::tests::the_clients_request_carries_the_host_that_was_checked
