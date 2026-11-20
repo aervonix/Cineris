@@ -29,6 +29,8 @@ pub(crate) struct HostParts {
     pub(crate) list: Arc<dyn Tool>,
     pub(crate) search: Arc<dyn Tool>,
     pub(crate) exec: ExecParts,
+    /// What `cineris.http.fetch` makes its requests with.
+    pub(crate) fetcher: cineris_llm::Fetcher,
     /// Tells the session's front ends something: what `cineris.notify`
     /// says.
     pub(crate) tell: Arc<dyn Fn(String) + Send + Sync>,

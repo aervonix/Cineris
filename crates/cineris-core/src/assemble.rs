@@ -2554,6 +2554,12 @@ pub(crate) fn assemble(
                 live: Arc::clone(&shell_live),
                 git: Arc::clone(&session_git),
             },
+            fetcher: options.fetcher.clone().unwrap_or_else(|| {
+                cineris_llm::Fetcher::new(
+                    Arc::new(cineris_llm::SystemResolver),
+                    Arc::clone(&options.timer),
+                )
+            }),
             tell: Arc::new(move |message: String| tell_hooks.tell(message)),
         });
         for left_out in crate::ext::register(options.extensions.clone(), &parts, &registry) {

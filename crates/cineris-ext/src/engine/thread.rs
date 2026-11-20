@@ -1049,6 +1049,26 @@ fn parse_call(kind: &str, payload: &Json) -> Result<HostCall, String> {
             path: optional_text(payload, "path", "`path`")?.unwrap_or_else(|| ".".to_owned()),
             glob: optional_text(payload, "glob", "`glob`")?,
         },
+        "fetch" => HostCall::Fetch {
+            url: text_field(payload, "url", "the URL")?,
+            method: optional_text(payload, "method", "`method`")?
+                .unwrap_or_else(|| "GET".to_owned()),
+            headers: match field(payload, "headers") {
+                None => Vec::new(),
+                Some(Json::Array(pairs)) => pairs
+                    .iter()
+                    .map(|pair| match pair.as_array().map(Vec::as_slice) {
+                        Some([Json::String(name), Json::String(value)]) => {
+                            Ok((name.clone(), value.clone()))
+                        }
+                        _ => Err("`headers` must be names and texts".to_owned()),
+                    })
+                    .collect::<Result<_, _>>()?,
+                Some(_) => return Err("`headers` must be names and texts".to_owned()),
+            },
+            body: optional_text(payload, "body", "`body`")?,
+            timeout_ms: optional_count(payload, "timeout", "`timeout`")?,
+        },
         "ask" => HostCall::Ask {
             question: text_field(payload, "question", "the question")?,
             choices: texts(payload, "choices", "the choices")?,

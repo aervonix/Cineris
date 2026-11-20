@@ -24,7 +24,8 @@ use std::sync::{Arc, Mutex};
 use cineris_base::path::{PathOptions, PathResolver, ResolvedPath};
 use cineris_ext::folder::Snapshot;
 use cineris_ext::host::{
-    ExecOutput, ExecRequest, Host, HostError, HostFuture, Listing, ManifestGate, Scope,
+    ExecOutput, ExecRequest, FetchOutput, FetchRequest, Host, HostError, HostFuture, Listing,
+    ManifestGate, Scope,
 };
 use cineris_tools::OpenGate;
 use serde_json::Value as Json;
@@ -233,6 +234,29 @@ impl Host for FakeHost {
             Ok(Listing {
                 text: String::new(),
                 payload: Json::Null,
+            })
+        })
+    }
+
+    fn fetch(
+        &self,
+        request: FetchRequest,
+        host: String,
+        literal: Vec<String>,
+    ) -> HostFuture<'_, Result<FetchOutput, HostError>> {
+        Box::pin(async move {
+            self.note(format!(
+                "fetch {} {} host={host} literal={} timeout={}",
+                request.method,
+                request.url,
+                literal.join(","),
+                request.timeout.as_millis()
+            ));
+            Ok(FetchOutput {
+                status: 200,
+                headers: vec![("content-type".to_owned(), "text/plain".to_owned())],
+                body: b"fetched".to_vec(),
+                cut: false,
             })
         })
     }

@@ -16,6 +16,85 @@ use serde_json::json;
 
 use crate::{Front, World, calls, says};
 
+/// A resolver that answers every name with one address, and says what it
+/// was asked.
+#[derive(Debug, Default)]
+struct OneAddress {
+    asked: std::sync::Mutex<Vec<String>>,
+}
+
+impl cineris_llm::Resolve for OneAddress {
+    fn resolve<'a>(
+        &'a self,
+        host: &'a str,
+    ) -> cineris_llm::BoxFuture<'a, std::io::Result<Vec<std::net::IpAddr>>> {
+        self.asked.lock().unwrap().push(host.to_owned());
+        Box::pin(async { Ok(vec![std::net::IpAddr::from([127, 0, 0, 1])]) })
+    }
+}
+
+#[test]
+fn a_fetch_is_judged_by_the_manifest_then_the_engine_then_the_address() {
+    let world = World::new(
+        "ext_fetch",
+        [
+            call_tool("c1", "get", json!({"url": "https://other.example/x"})),
+            call_tool("c2", "get", json!({"url": "https://inside.example/x"})),
+            says("Done."),
+        ],
+    );
+    let extension = approve(
+        &world.dir.join("ext"),
+        "net = [\"*.example\"]",
+        "cineris.tool({ name: 'get', input: { type: 'object' }, run: async (args) => { \
+           try { const r = await cineris.http.fetch(args.url); return 'status ' + r.status } \
+           catch (e) { return 'refused: ' + e.message } } });",
+    );
+    let resolver = Arc::new(OneAddress::default());
+    let fetcher = cineris_llm::Fetcher::new(
+        Arc::clone(&resolver) as Arc<dyn cineris_llm::Resolve>,
+        Arc::new(world.timer.clone()),
+    );
+    let core = world.core_with(|options| {
+        options.extensions = vec![extension];
+        options.fetcher = Some(fetcher);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("get both").await;
+        // Each call of the tool asks; each fetch asks as a network effect
+        // of its host, allow once or deny.
+        for expected_host in ["other.example", "inside.example"] {
+            let (id, _) = front.approval().await;
+            front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+            let (id, request) = front.approval().await;
+            assert_eq!(request.tool, "probe/get");
+            assert_eq!(
+                request.choices,
+                [ApprovalChoice::AllowOnce, ApprovalChoice::Deny]
+            );
+            let ApprovalDetail::Target(target) = &request.detail else {
+                panic!("not a host: {:?}", request.detail);
+            };
+            assert_eq!(target.target, expected_host);
+            front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        }
+        front.turns(1).await;
+        let results = front.results();
+        // The name led to a loopback address, which `*.example` does not
+        // name literally: refused by the address, after the engine.
+        for result in &results[..2] {
+            assert!(result.2.contains("refused"), "{results:?}");
+            assert!(result.2.contains("loopback"), "{results:?}");
+        }
+        front.close().await;
+    });
+    assert_eq!(
+        *resolver.asked.lock().unwrap(),
+        ["other.example", "inside.example"]
+    );
+}
+
 /// Writes an extension called `probe` in `folder`, with these
 /// capabilities and this script, and approves it as it is.
 fn approve(folder: &Path, capabilities: &str, script: &str) -> ApprovedExtension {
