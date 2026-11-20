@@ -530,7 +530,7 @@ in: held_to_its_denial
 find: result.outcome = TurnOutcome::Denied;
 replace: let _ = TurnOutcome::Denied;
 caught-by:
-    cineris-cli report::tests::a_turn_that_completed_after_a_denial_is_held_to_it
+    cineris-cli::bin/cineris report::tests::a_turn_that_completed_after_a_denial_is_held_to_it
 
 # From mutations/step-28-exec.breaks (part `exec`).
 # Step 28: an extension's `cineris.exec` (docs/steps/28/answered.md, "The
