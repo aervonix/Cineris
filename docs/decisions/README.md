@@ -45,6 +45,7 @@ One record per significant choice. Each says what the options were, what was cho
 | [0037](0037-the-named-pipe-is-served-from-cineris-rpc-in-one-windows-only-module-that-may-use-unsafe.md) | The named pipe is served from cineris-rpc, in one Windows-only module that may use unsafe | Proposed in step 27 on 2026-11-16, for the owner |
 | [0038](0038-the-project-is-named-cineris.md) | The project is named Cineris | Accepted by the owner on 2026-11-18. Supersedes [decision 0013](0013-naming.md). |
 | [0039](0039-the-binary-s-budgets-are-20-mib-on-linux-and-25-on-windows.md) | The binary's budgets are 20 MiB on Linux and 25 on Windows | Accepted by the owner on 2026-11-19. Replaces the reserve of [decision 0036](0036-the-shipped-binary-is-optimised-for-size.md). |
+| [0040](0040-extensions-run-in-a-runtime-each-checked-by-their-manifest-and-then-the-permission-engine.md) | Extensions run in a runtime each, checked by their manifest and then the permission engine | Accepted by the maintainers, 2026-11-20 (step 28) |
 
 The owner's answers are dated 2026-11-12 unless a row says otherwise, and are recorded in the [build plan](../build-plan.md) and, from step 4 on, in each step's [records](../steps/README.md).
 
