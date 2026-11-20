@@ -64,7 +64,7 @@ Tier 3 by crate: `xtask` 13.41 to 4.09 s (the tests the nightly now runs on Wind
 
 ## The pull request's CI
 
-The pull request's last run, at `22da14b`: its Windows job passed every test and was then cut off by the five minutes (305 s), before it uploaded its report, so its column is missing from the table below. Its log, on a 9 ms runner: tier 1 23.8 s, tier 2 46.6 s, tier 3 98.0 s (above the start; budgets 25 s as proposed, 40 s and 90 s). Its first run, at `83c58ae` on a 5 ms runner, took 190 s and read 10.7, 22.5 and 64.5 s. Runners of the same start cost differ too: the A/B's 8 ms runner read the same code's tiers 2 and 3 at 37.6 and 81.5 s. The A/Bs above are the comparison.
+The pull request's last run, at `22da14b`: its Windows job passed every test and was then cut off by the five minutes (305 s), before it uploaded its report, so its column is missing from the table below. Its log, on a 9 ms runner: tier 1 23.8 s, tier 2 46.6 s, tier 3 98.0 s (above the start; budgets 20 s, 40 s and 90 s; that run had the proposed 25 s for tier 1, which was dropped). Its first run, at `83c58ae` on a 5 ms runner, took 190 s and read 10.7, 22.5 and 64.5 s. Runners of the same start cost differ too: the A/B's 8 ms runner read the same code's tiers 2 and 3 at 37.6 and 81.5 s. The A/Bs above are the comparison.
 
 <!-- written by cargo xtask ci-times, section "pull-request": it replaces this up to the end mark -->
 Pull request 115, on `main` at `b620a1e`. "Main" is main's own run at `b620a1e` (run 44633500009).
@@ -80,7 +80,7 @@ The PR's run is 44644603576, at `22da14b`.
 
 | Time above process start, against the budget | Linux, main (6 ms) | Linux, `22da14b` (4 ms) | Windows, main (8 ms) |
 |---|---|---|---|
-| Tier 1, unit (20 s on Linux, 25 s on Windows) | 28.3 s | 8.5 s | 19.6 s |
+| Tier 1, unit (20 s) | 28.3 s | 8.5 s | 19.6 s |
 | Tier 2, integration (40 s) | 35.2 s | 17.3 s | 35.6 s |
 | Tier 3, system (60 s on Linux, 90 s on Windows) | 38.1 s | 32.6 s | 98.5 s |
 
