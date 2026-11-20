@@ -16,9 +16,9 @@
 //!   the shell cannot quote refuses the call, naming it.
 //! - **Started** ([`command_line`]). A program as it is, its arguments one
 //!   by one. On every system an argument holding a character that a
-//!   Windows code page's best fit turns into `"` or `\` is refused, naming
-//!   the argument and the character ([`LOOKALIKES`]). On Windows a `.exe`
-//!   is given every argument in double quotes by the C runtime's rules
+//!   Windows code page's best fit turns into `"`, `\` or `-` is refused,
+//!   naming the argument and the character ([`LOOKALIKES`]). On Windows a
+//!   `.exe` is given every argument in double quotes by the C runtime's rules
 //!   ([`crt_quoted`]), so that a program that globs what is not quoted (a
 //!   Cygwin or MSYS2 one) reads `*` as `*`. A `.cmd` or `.bat` is started
 //!   through `%SystemRoot%\System32\cmd.exe` with one line of its own
@@ -244,16 +244,25 @@ const REFUSED: [(char, &str); 13] = [
 /// their names and what they can become. A program that reads its command
 /// line in the system's code page (an "ANSI" one) has Windows convert it
 /// from UTF-16 with a "best fit" for a character the code page lacks,
-/// which turns each of these into a `"` or a `\`, so that the program
-/// reads other words than the engine was shown: a quote that ends the
-/// quoting, or an escape before one.
-const LOOKALIKES: [(char, &str, &str); 4] = [
+/// which turns each of these into a `"`, a `\` or a `-`, so that the
+/// program reads other words than the engine was shown: a quote that ends
+/// the quoting, an escape before one, or an option where the engine saw a
+/// word. The list is of the ones known; a full check would convert each
+/// argument as Windows does, which needs Windows' own functions
+/// (`docs/outstanding/an-exec-argument-is-not-checked-against-the-code-pages-best-fit.md`).
+const LOOKALIKES: [(char, &str, &str); 8] = [
     (
         '\u{FF02}',
         "a fullwidth quotation mark (U+FF02)",
         "a double quote",
     ),
+    (
+        '\u{02BA}',
+        "a modifier letter double prime (U+02BA)",
+        "a double quote",
+    ),
     ('\u{FF3C}', "a fullwidth backslash (U+FF3C)", "a backslash"),
+    ('\u{2216}', "a set minus (U+2216)", "a backslash"),
     (
         '\u{A5}',
         "a yen sign (U+00A5)",
@@ -264,6 +273,8 @@ const LOOKALIKES: [(char, &str, &str); 4] = [
         "a won sign (U+20A9)",
         "a backslash in code page 949",
     ),
+    ('\u{AD}', "a soft hyphen (U+00AD)", "a hyphen"),
+    ('\u{FF0D}', "a fullwidth hyphen-minus (U+FF0D)", "a hyphen"),
 ];
 
 /// Why `arguments` cannot be given to any program, naming the first
@@ -677,17 +688,21 @@ mod tests {
         assert_eq!(crt_words(&written.join(" ")), given);
     }
 
-    /// A character that a Windows code page's best fit makes a `"` or a
-    /// `\` is refused in any argument, on every system and for every kind
-    /// of program, naming the argument and the character.
+    /// A character that a Windows code page's best fit makes a `"`, a `\`
+    /// or a `-` is refused in any argument, on every system and for every
+    /// kind of program, naming the argument and the character.
     #[test]
     fn a_lookalike_of_a_quote_or_a_backslash_is_refused_on_every_system() {
         // Written out here, not taken from the list the code refuses by.
         for (character, name) in [
             ('\u{FF02}', "a fullwidth quotation mark (U+FF02)"),
+            ('\u{02BA}', "a modifier letter double prime (U+02BA)"),
             ('\u{FF3C}', "a fullwidth backslash (U+FF3C)"),
+            ('\u{2216}', "a set minus (U+2216)"),
             ('\u{A5}', "a yen sign (U+00A5)"),
             ('\u{20A9}', "a won sign (U+20A9)"),
+            ('\u{AD}', "a soft hyphen (U+00AD)"),
+            ('\u{FF0D}', "a fullwidth hyphen-minus (U+FF0D)"),
         ] {
             let given = args(&["ok", &format!("a{character}b")]);
             for (program, windows) in [

@@ -19,7 +19,9 @@
 //!   are confined, with no write root and no network ([`SessionGit`]): a
 //!   confined command may write the repository's configuration, which
 //!   can name a program for git to run (found by the third review of step
-//!   26).
+//!   26). After an extension's program, which its own launcher confines at
+//!   every level, the look at what it changed runs git inside the sandbox
+//!   at every level too (`FollowingTheProgram`).
 
 #![allow(
     clippy::disallowed_methods,
@@ -400,20 +402,27 @@ impl SessionSandbox {
     /// otherwise.
     fn start_git(&self, git: &Path, arguments: Vec<OsString>) -> Started {
         match self.reader.as_ref().filter(|_| self.confines()) {
-            Some(reader) => {
-                let wrapped = reader.wrap(git.as_os_str(), &arguments);
-                Started {
-                    program: wrapped.program,
-                    arguments: wrapped.arguments,
-                    stdin: Some(wrapped.stdin),
-                }
-            }
+            Some(reader) => reading(reader, git, arguments),
             None => Started {
                 program: git.to_owned(),
                 arguments,
                 stdin: None,
             },
         }
+    }
+
+    /// What to start in place of the harness's own `git` with `arguments`
+    /// at every level, `unrestricted` included: the reading launcher.
+    /// After a program that something other than the session's level
+    /// confined (an extension's, by its own launcher), so that git follows
+    /// the program's confinement, not the session's commands'.
+    #[cfg(feature = "scripts")]
+    fn start_git_confined(&self, git: &Path, arguments: Vec<OsString>) -> Result<Started, String> {
+        let reader = self
+            .reader
+            .as_ref()
+            .ok_or_else(|| "the sandbox does not enforce in this session".to_owned())?;
+        Ok(reading(reader, git, arguments))
     }
 
     /// Removes the temporary directory and everything in it, if the
@@ -562,6 +571,61 @@ impl Confinement for SessionGit {
             .get()
             .ok_or_else(|| "the session's sandbox is not made yet".to_owned())?;
         Ok(sandbox.start_git(git, arguments))
+    }
+}
+
+/// `git` with `arguments`, started through the reading launcher `reader`.
+fn reading(reader: &SandboxLauncher, git: &Path, arguments: Vec<OsString>) -> Started {
+    let wrapped = reader.wrap(git.as_os_str(), &arguments);
+    Started {
+        program: wrapped.program,
+        arguments: wrapped.arguments,
+        stdin: Some(wrapped.stdin),
+    }
+}
+
+/// The session's git after a program an extension's own launcher confined:
+/// started inside the sandbox, reading only, at every level, as the program
+/// was confined at every level (the review of step 28's process starts).
+/// At `unrestricted` the session's git runs as it is, after commands that
+/// ran as they are; but a program confined by its launcher may have
+/// written the repository's configuration inside its write roots, and a
+/// filter it names would then run, with the user's full rights, in the
+/// look at what the program changed. Where the sandbox does not enforce,
+/// nothing is started: no program was confined there to follow.
+#[cfg(feature = "scripts")]
+#[derive(Debug)]
+pub(crate) struct FollowingTheProgram(pub(crate) Arc<SessionGit>);
+
+#[cfg(feature = "scripts")]
+impl Confinement for FollowingTheProgram {
+    fn confines(&self) -> bool {
+        true
+    }
+
+    fn git_program(&self) -> Option<PathBuf> {
+        self.0.git_program()
+    }
+
+    fn withheld(&self) -> Vec<String> {
+        self.0.withheld()
+    }
+
+    fn avoid(&self) -> Vec<PathBuf> {
+        self.0.avoid()
+    }
+
+    fn inherited(&self) -> Vec<(OsString, OsString)> {
+        self.0.inherited()
+    }
+
+    fn start(&self, git: &Path, arguments: Vec<OsString>) -> Result<Started, String> {
+        let sandbox = self
+            .0
+            .sandbox
+            .get()
+            .ok_or_else(|| "the session's sandbox is not made yet".to_owned())?;
+        sandbox.start_git_confined(git, arguments)
     }
 }
 
