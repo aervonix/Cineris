@@ -1017,7 +1017,18 @@ impl World {
     }
 
     /// Runs a future on the test's runtime, with the sessions.
+    ///
+    /// The run is named to the test kit's watch, so that a test still in
+    /// it at four fifths of its limit says so, with its threads' states,
+    /// before nextest stops it. A test of this rig uses none of the test
+    /// kit's waits as a rule, and one that ran out of time once on the
+    /// reference machine said nothing for itself
+    /// (`docs/outstanding/a-summary-test-that-ran-out-of-time-once.md`).
     pub fn run<T>(&self, future: impl Future<Output = T>) -> T {
+        let _running = cineris_testkit::watch::doing(format!(
+            "running the test's future on the world's runtime (seed {})",
+            self.seed
+        ));
         self.runtime.block_on(future)
     }
 }
