@@ -16,7 +16,7 @@ The first of step 28's pull requests: `cineris-ext`'s folder snapshot, manifest,
 
 | Budget | Measured | Where |
 |---|---|---|
-| Binary size | Linux musl `dist` 15.05 MiB of 20 MiB, + 1,261,936 bytes on main (QuickJS's C 601 KiB, the standard library 104 KiB, `cineris_core` 102 KiB); Windows `dist` 18.01 MiB of 25 MiB, + 1,383,424 bytes | Try runs 44819307542 and 44823536457; [ci.md](../ci.md) |
+| Binary size | Linux musl `dist` 15.05 MiB of 20 MiB, + 1,261,936 bytes on main (QuickJS's C 601 KiB, the standard library 104 KiB, `cineris_core` 102 KiB); Windows `dist` 18.01 MiB of 25 MiB, + 1,383,424 bytes | The pull request's `pr-size` jobs, run 44824670735; [ci.md](../ci.md) |
 | Start-up | Untouched: a session with an extension starts no engine (`runtimes_made` unchanged until the first call) | `cineris-core::it extensions::an_extensions_tool_is_called_through_tool_call_after_the_user_allows_it` |
 | Windows tiers, both trees on one runner, medians of five | unit 10.6 s (main 10.7), integration 23.9 s (22.5, +1.4), system 56.3 s (54.9, +1.4); 38%, 57% and 60% of the 25, 40 and 90 s budgets | Try run 44819307542 |
 | Linux 22.04 tiers | 79%, 83% and 74% of the 20, 40 and 60 s budgets | Try run 44819307542 |
