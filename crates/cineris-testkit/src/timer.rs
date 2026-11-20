@@ -78,6 +78,12 @@ impl FakeTimer {
         }
     }
 
+    /// The clock this timer moves.
+    #[must_use]
+    pub fn clock(&self) -> &FakeClock {
+        &self.clock
+    }
+
     /// Moves the clock forward and finishes every wait whose time has come.
     pub fn advance(&self, duration: Duration) {
         self.clock.advance(duration);

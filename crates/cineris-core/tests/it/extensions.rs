@@ -329,3 +329,268 @@ fn an_extension_changed_since_it_was_approved_is_not_run() {
         front.close().await;
     });
 }
+
+/// "Allow once" on a host call allows that call alone: the next host call
+/// of the same tool call that asks the same question is asked again, with
+/// its own diff (the review of step 28: every host call of a tool call is
+/// planned under its item, and an answer remembered for one allowed the
+/// next unasked).
+#[test]
+fn allowing_a_host_write_once_allows_that_write_alone() {
+    let world = World::new(
+        "ext_once",
+        [call_tool("c1", "twice", json!({})), says("Done.")],
+    );
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"write\"\nmatch = \"src/**\"\naction = \"ask\"\n",
+    );
+    let extension = approve(
+        &world.dir.join("ext"),
+        "read = [\"src/**\"]\nwrite = [\"src/**\"]",
+        "cineris.tool({ name: 'twice', run: async () => { \
+           await cineris.fs.write('src/a.rs', 'harmless\\n'); \
+           const now = await cineris.fs.read('src/a.rs'); \
+           try { await cineris.fs.write('src/a.rs', now + 'malicious\\n'); return 'wrote both' } \
+           catch (e) { return 'refused: ' + e.message } } });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("write twice").await;
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        let diff = |detail: &ApprovalDetail| match detail {
+            ApprovalDetail::Diff(change) => change.diff.clone(),
+            other => panic!("not a change to a file: {other:?}"),
+        };
+        let (id, request) = front.approval().await;
+        assert!(diff(&request.detail).contains("+harmless"));
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        let (id, request) = front.approval().await;
+        assert!(diff(&request.detail).contains("+malicious"));
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        let results = front.results();
+        assert!(results[0].2.contains("refused"), "{results:?}");
+        front.close().await;
+    });
+    assert_eq!(world.read("src/a.rs").as_deref(), Some("harmless\n"));
+}
+
+/// The capabilities a session holds for an extension are the approved
+/// manifest's, and that manifest must be the one in the snapshot whose hash
+/// was checked: one that differs is not run (the review of step 28).
+#[test]
+fn an_approved_manifest_other_than_the_one_in_the_folder_is_not_run() {
+    let world = World::new(
+        "ext_manifest",
+        [call_tool("c1", "echo", json!({})), says("Done.")],
+    );
+    let mut extension = approve(
+        &world.dir.join("ext"),
+        "",
+        "cineris.tool({ name: 'echo', run: () => 'ran' });",
+    );
+    extension.manifest.capabilities.read = vec!["**".to_owned()];
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("echo").await;
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        front.turns(1).await;
+        let results = front.results();
+        assert_eq!(results[0].1, "error", "{results:?}");
+        assert!(results[0].2.contains("not the one approved"), "{results:?}");
+        front.close().await;
+    });
+}
+
+/// A script's listing walks through the session's `list` tool, every entry
+/// gated by the manifest over the session's own gate.
+#[test]
+fn a_scripts_listing_shows_only_what_its_manifest_reads() {
+    let world = World::new(
+        "ext_list",
+        [call_tool("c1", "ls", json!({})), says("Done.")],
+    );
+    world.put("src/a.rs", "a");
+    world.put("src/b.txt", "b");
+    let extension = approve(
+        &world.dir.join("ext"),
+        "read = [\"src\", \"src/*.rs\"]",
+        "cineris.tool({ name: 'ls', run: async () => (await cineris.fs.list('src')).text });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("list").await;
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        front.turns(1).await;
+        let results = front.results();
+        assert_eq!(results[0].1, "success", "{results:?}");
+        assert!(results[0].2.contains("a.rs"), "{results:?}");
+        assert!(!results[0].2.contains("b.txt"), "{results:?}");
+        front.close().await;
+    });
+}
+
+/// A rule about the extension reaches each of its host calls: they carry
+/// an `ext` effect beside their own, so a plain read in the workspace asks
+/// under a rule that says to ask about the extension.
+#[test]
+fn a_rule_about_the_extension_reaches_its_host_calls() {
+    let world = World::new(
+        "ext_rule",
+        [call_tool("c1", "show", json!({})), says("Done.")],
+    );
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"ask\"\n",
+    );
+    world.put("notes.md", "plain notes");
+    let extension = approve(
+        &world.dir.join("ext"),
+        "read = [\"**\"]",
+        "cineris.tool({ name: 'show', run: async () => { \
+           try { return await cineris.fs.read('notes.md') } \
+           catch (e) { return 'refused: ' + e.message } } });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("show").await;
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        let (id, request) = front.approval().await;
+        assert_eq!(request.tool, "probe/show");
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        let results = front.results();
+        assert!(results[0].2.contains("refused"), "{results:?}");
+        assert!(!results[0].2.contains("plain notes"), "{results:?}");
+        front.close().await;
+    });
+}
+
+/// A read decided while a person was asked opens the file only if its path
+/// still leads where it was judged to: a folder above it made a link while
+/// the question was open is refused (the review of step 28).
+#[test]
+fn a_read_whose_path_changed_while_it_was_asked_about_is_refused() {
+    let world = World::new(
+        "ext_read_swap",
+        [call_tool("c1", "secret", json!({})), says("Done.")],
+    );
+    world.put("conf/.env", "TOKEN=inside");
+    let outside = world.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join(".env"), "TOKEN=outside").unwrap();
+    let extension = approve(
+        &world.dir.join("ext"),
+        "read = [\"**\"]",
+        "cineris.tool({ name: 'secret', run: async () => { \
+           try { return await cineris.fs.read('conf/.env') } \
+           catch (e) { return 'refused: ' + e.message } } });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    let mut linked = true;
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("read the env").await;
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        // The read asks: it looks like a secret.
+        let (id, _) = front.approval().await;
+        let conf = world.workspace.join("conf");
+        std::fs::rename(&conf, world.workspace.join("conf-was")).unwrap();
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(&outside, &conf);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_dir(&outside, &conf);
+        if made.is_err() {
+            println!("skipped: this machine cannot make a link");
+            linked = false;
+            std::fs::rename(world.workspace.join("conf-was"), &conf).unwrap();
+        }
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        front.turns(1).await;
+        let results = front.results();
+        if linked {
+            assert!(results[0].2.contains("changed while"), "{results:?}");
+            assert!(!results[0].2.contains("TOKEN"), "{results:?}");
+        }
+        front.close().await;
+    });
+}
+
+/// A file with a NUL byte is not text, however well it decodes.
+#[test]
+fn a_file_with_a_nul_byte_is_not_read_as_text() {
+    let world = World::new(
+        "ext_nul",
+        [call_tool("c1", "show", json!({})), says("Done.")],
+    );
+    world.put("data.bin", b"head\0tail");
+    let extension = approve(
+        &world.dir.join("ext"),
+        "read = [\"**\"]",
+        "cineris.tool({ name: 'show', run: async () => { \
+           try { return await cineris.fs.read('data.bin') } \
+           catch (e) { return 'refused: ' + e.message } } });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("show").await;
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        front.turns(1).await;
+        let results = front.results();
+        assert!(results[0].2.contains("not text"), "{results:?}");
+        assert!(!results[0].2.contains("tail"), "{results:?}");
+        front.close().await;
+    });
+}
+
+/// With `fail_on_denial`, a host call nobody can be asked about stops the
+/// turn: the script's call ends there, and nothing more of it runs.
+#[test]
+fn a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call() {
+    let world = World::new(
+        "ext_stop",
+        [call_tool("c1", "ci", json!({})), says("Done.")],
+    );
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let extension = approve(
+        &world.dir.join("ext"),
+        "write = [\".github/**\", \"notes.txt\"]",
+        "cineris.tool({ name: 'ci', run: async () => { \
+           try { await cineris.fs.write('.github/workflows/ci.yml', 'on: push\\n') } catch (e) { } \
+           await cineris.fs.write('notes.txt', 'went on\\n'); return 'went on' } });",
+    );
+    let core = world.core_with(|options| {
+        options.extensions = vec![extension];
+        options.fail_on_denial = true;
+    });
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::headless(),
+            cineris_protocol::session::SessionSettings::default(),
+        )
+        .await
+        .unwrap();
+        front.turn("set up CI").await;
+        let results = front.results();
+        assert_eq!(results[0].1, "denied", "{results:?}");
+        assert!(results[0].2.contains("stopped"), "{results:?}");
+        assert_eq!(core.permission_denials(&front.session).len(), 1);
+        front.close().await;
+    });
+    assert_eq!(world.read("notes.txt"), None);
+    assert_eq!(world.read(".github/workflows/ci.yml"), None);
+}

@@ -181,3 +181,124 @@ fn oversized_arguments_and_keys_are_refused_before_the_host() {
     }
     assert!(host.asked().is_empty());
 }
+
+/// A refusal of a path names it as the script gave it and is the same
+/// however the path failed, and a manifest that grants no reading refuses
+/// before the path is resolved at all: a script learns nothing of where a
+/// path leads, or whether it leads anywhere (the review of step 28).
+#[test]
+fn a_refused_path_tells_the_script_nothing_of_where_it_leads() {
+    let read = |path: &str| HostCall::Read {
+        path: path.to_owned(),
+        offset: 0,
+        limit: None,
+    };
+    let refusal = |call: HostCall, table: &str, host: &FakeHost| {
+        let refused = block_on(serve(
+            call,
+            &capabilities(table),
+            host,
+            Phase::Tool,
+            Duration::from_secs(5),
+        ));
+        let Err(HostError::Refused(refusal)) = refused else {
+            panic!("not refused as the manifest refuses: {refused:?}");
+        };
+        refusal.detail
+    };
+    // A host with a workspace, whose resolver would answer.
+    let scratch = cineris_testkit::Scratch::for_test(
+        env!("CARGO_TARGET_TMPDIR"),
+        "cineris-ext-it",
+        "refused_path",
+    );
+    scratch.dir("ws");
+    let host = FakeHost::in_workspace(&scratch.join("ws"), None);
+    // No `read` glob: the path is never resolved.
+    assert_eq!(
+        refusal(read("~/.ssh/id_ed25519"), "", &host),
+        "reading `~/.ssh/id_ed25519`"
+    );
+    assert_eq!(host.resolves.load(std::sync::atomic::Ordering::SeqCst), 0);
+    // A path that leads outside is named as given, not where it leads.
+    assert_eq!(
+        refusal(read("../elsewhere/x"), "read = [\"**\"]", &host),
+        "reading `../elsewhere/x`"
+    );
+    // A path that does not resolve is refused just as one that leads
+    // outside: this host has no workspace, and its resolver fails.
+    assert_eq!(
+        refusal(read("src/x"), "read = [\"**\"]", &FakeHost::new()),
+        "reading `src/x`"
+    );
+    // So is a write with no `write` glob.
+    assert_eq!(
+        refusal(
+            HostCall::Write {
+                path: "out/a".to_owned(),
+                text: String::new(),
+            },
+            "read = [\"**\"]",
+            &host,
+        ),
+        "writing `out/a`"
+    );
+    assert!(host.asked().is_empty());
+}
+
+/// A question offers a bounded number of choices, each shown cut and with
+/// nothing that acts unseen, and an answer that is not one of them is no
+/// answer.
+#[test]
+fn a_question_is_bounded_and_its_answer_is_one_of_its_choices() {
+    let host = FakeHost::new();
+    let ask = |choices: &[&str]| HostCall::Ask {
+        question: "Go on?\u{1b}[2J".to_owned(),
+        choices: choices.iter().map(|choice| (*choice).to_owned()).collect(),
+    };
+    let served = |call: HostCall| {
+        block_on(serve(
+            call,
+            &capabilities(""),
+            &host,
+            Phase::Tool,
+            Duration::from_secs(5),
+        ))
+    };
+    // The fake host answers "yes", which is not offered here.
+    assert_eq!(served(ask(&["a", "b"])).unwrap(), json!(null));
+    assert_eq!(host.asked(), ["ask Go on?\\u{1b}[2J"]);
+    assert_eq!(served(ask(&["yes", "no"])).unwrap(), json!("yes"));
+    let refused = served(ask(&["1", "2", "3", "4", "5", "6", "7", "8", "9"]));
+    assert!(
+        matches!(&refused, Err(HostError::Failed(text)) if text.contains("at most 8")),
+        "{refused:?}"
+    );
+    assert_eq!(host.asked().len(), 2);
+}
+
+/// What a script tells the user or the log cannot draw what the harness
+/// draws: a control character is shown as an escape.
+#[test]
+fn a_notice_and_a_line_of_the_log_show_nothing_unseen() {
+    let host = FakeHost::new();
+    for call in [
+        HostCall::Notify("done\u{1b}[1A\rCineris: allowed".to_owned()),
+        HostCall::Progress("half\u{7}".to_owned()),
+        HostCall::Log("line\nforged".to_owned()),
+    ] {
+        block_on(serve(
+            call,
+            &capabilities(""),
+            &host,
+            Phase::Tool,
+            Duration::from_secs(5),
+        ))
+        .unwrap();
+    }
+    let noted = host.asked();
+    assert_eq!(noted.len(), 3);
+    for noted in noted {
+        assert!(!noted.chars().any(char::is_control), "{noted:?}");
+    }
+}

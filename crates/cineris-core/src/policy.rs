@@ -1284,7 +1284,9 @@ impl EnginePolicy {
             // recorded for it.
             if by_supervisor {
                 return if response.choice == ApprovalChoice::AllowOnce {
-                    self.remember_allowed(&call, question);
+                    if !once_only {
+                        self.remember_allowed(&call, question);
+                    }
                     Verdict::Allow
                 } else {
                     Verdict::Deny {
@@ -1316,8 +1318,14 @@ impl EnginePolicy {
             };
             if allowed {
                 // Decided again before it runs, the call is not asked this
-                // question a second time.
-                self.remember_allowed(&call, asked);
+                // question a second time. A host call is never decided
+                // again, and what it was allowed is not remembered: the
+                // next host call of the same tool call asking the same
+                // question would be allowed by it, unasked (the review of
+                // step 28).
+                if !once_only {
+                    self.remember_allowed(&call, asked);
+                }
                 Verdict::Allow
             } else {
                 Verdict::Deny {

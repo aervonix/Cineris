@@ -68,6 +68,7 @@ fn call(
             capabilities: &capabilities,
             time: TIME,
             timer,
+            clock: timer.clock(),
             cancel: &cancel,
         },
     ))
@@ -88,6 +89,7 @@ fn call_out_of_time(runtime: &ScriptRuntime, snapshot: &Snapshot, timer: &FakeTi
                 capabilities: &capabilities,
                 time: TIME,
                 timer,
+                clock: timer.clock(),
                 cancel: &cancel,
             },
         ),
@@ -533,6 +535,7 @@ fn a_cancelled_call_ends_and_takes_its_runtime_down() {
                 capabilities: &capabilities,
                 time: TIME,
                 timer: &timer,
+                clock: timer.clock(),
                 cancel: &cancel,
             },
         ),
@@ -565,4 +568,225 @@ fn a_changed_folder_is_never_evaluated() {
     ))
     .unwrap_err();
     assert!(matches!(error, LoadError::Changed { .. }), "{error}");
+}
+
+/// Reading a definition runs the script's code (a getter, `toJSON`), which
+/// may call back into the engine while it registers: each way in ends
+/// cleanly, and the process with it is never taken down (the review of
+/// step 28: a call that came back in panicked the runtime's thread, and the
+/// engine's own check as the runtime was freed then ended the process).
+#[test]
+fn a_definition_that_calls_back_in_while_it_is_read_is_served_cleanly() {
+    let timer = timer();
+    // A getter that registers: both are kept.
+    let snapshot = extension(
+        "",
+        "cineris.tool({ get name() { cineris.tool({ name: 'inner', run() {} }); return 'outer' }, \
+         run() {} });",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let names: Vec<_> = runtime
+        .registration()
+        .tools
+        .iter()
+        .map(|tool| tool.name.clone())
+        .collect();
+    assert_eq!(names, ["inner", "outer"]);
+    // `toJSON` in the schema that registers: the same.
+    let snapshot = extension(
+        "",
+        "cineris.tool({ name: 't', input: { toJSON() { cineris.tool({ name: 'u', run() {} }); \
+         return { type: 'object' } } }, run() {} });",
+    );
+    assert_eq!(
+        start(&snapshot, &timer).unwrap().registration().tools.len(),
+        2
+    );
+    // A getter that makes a host call, which is refused while the module
+    // is first evaluated: the extension is refused, and nothing more.
+    let snapshot = extension(
+        "",
+        "cineris.tool({ name: 'a', run() {} });\n\
+         cineris.tool({ get name() { cineris.log('x'); return 'b' }, run() {} });",
+    );
+    let error = start(&snapshot, &timer).unwrap_err();
+    assert!(
+        matches!(&error, LoadError::Evaluation(text) if text.contains("first evaluated")),
+        "{error}"
+    );
+    // The thread was not taken down by a panic: another runtime starts.
+    let snapshot = tool("", "() => 1");
+    assert!(start(&snapshot, &timer).is_ok());
+}
+
+/// The engine runs the script's `Error.prepareStackTrace` as it makes an
+/// error, its own included: the hook cannot be set, in the first
+/// evaluation or in a call.
+#[test]
+fn the_stack_trace_hook_cannot_be_set() {
+    let timer = timer();
+    let snapshot = extension(
+        "",
+        "Error.prepareStackTrace = () => { cineris.log('x') };\n\
+         cineris.tool({ name: 't', run() {} });",
+    );
+    let error = start(&snapshot, &timer).unwrap_err();
+    assert!(matches!(&error, LoadError::Evaluation(_)), "{error}");
+    let snapshot = tool(
+        "",
+        "() => { try { Error.prepareStackTrace = () => { cineris.tool({ name: 'late', run() {} }) } } \
+         catch (e) { } \
+         try { cineris.tool({ name: 'late', run() {} }) } catch (e) { return e.message } }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let result = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap();
+    assert!(
+        result
+            .as_str()
+            .unwrap()
+            .contains("only while its main module"),
+        "{result}"
+    );
+    assert!(runtime.is_alive());
+}
+
+/// The arguments of a host call are bounded before they are taken into the
+/// harness's memory, which the runtime's limit does not count.
+#[test]
+fn a_host_calls_arguments_are_bounded_before_they_are_taken() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "() => { try { cineris.log('x'.repeat(100 * 1024)); return 'sent' } \
+         catch (e) { return e.message } }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let result = call(&runtime, &snapshot, &host, &timer, json!({})).unwrap();
+    assert!(result.as_str().unwrap().contains("more than"), "{result}");
+    assert!(host.asked().is_empty());
+}
+
+/// The host calls a script has not had answered are bounded, so a script
+/// cannot queue without end while one call waits (the review of step 28:
+/// 8 MiB a turn of a loop, while a question waited); and the calls that
+/// only tell are bounded by their counts in a call, which start again with
+/// the next call.
+#[test]
+fn the_host_calls_waiting_for_answers_are_bounded() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "async () => { \
+           const refused = []; \
+           for (let i = 0; i < 40; i++) cineris.state.get('k' + i).catch((e) => refused.push(e.message)); \
+           const notices = []; \
+           for (let i = 0; i < 12; i++) cineris.notify('n' + i).catch((e) => notices.push(e.message)); \
+           for (let i = 0; i < 120; i++) console.log('line ' + i); \
+           await null; \
+           return { refused: refused.length, first: refused[0], notices }; \
+         }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    for _ in 0..2 {
+        let host = FakeHost::new();
+        let result = call(&runtime, &snapshot, &host, &timer, json!({})).unwrap();
+        // Sixteen wait; the rest are refused at once.
+        assert_eq!(result["refused"], 24, "{result}");
+        assert!(
+            result["first"].as_str().unwrap().contains("await them"),
+            "{result}"
+        );
+        // Ten notices, a hundred lines of the log, in each call.
+        assert_eq!(result["notices"].as_array().unwrap().len(), 2, "{result}");
+        let asked = host.asked();
+        let count = |kind: &str| asked.iter().filter(|noted| noted.starts_with(kind)).count();
+        assert_eq!(count("notify "), 10);
+        assert_eq!(count("log "), 100);
+        assert!(runtime.is_alive());
+    }
+}
+
+/// A host call that finds its turn stopped ends the script's call there:
+/// nothing more of the script runs.
+#[test]
+fn a_host_call_in_a_stopped_turn_ends_the_scripts_call() {
+    let timer = timer();
+    let snapshot = tool(
+        "exec = [\"gh\"]",
+        "async () => { try { await cineris.exec('gh', []) } catch (e) { } \
+         cineris.notify('went on'); return 'went on' }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost {
+        exec_stops: true,
+        ..FakeHost::new()
+    };
+    // No time passes: the thread, waiting for the answer, is woken and
+    // ends, and its grace is never needed.
+    let result = block_on(call_async(&runtime, &snapshot, &host, &timer));
+    assert!(
+        matches!(&result, Err(CallError::Stopped(reason)) if reason.contains("stopped the turn")),
+        "{result:?}"
+    );
+    assert!(!runtime.is_alive());
+    assert!(
+        !host.asked().iter().any(|noted| noted.contains("went on")),
+        "{:?}",
+        host.asked()
+    );
+}
+
+/// A program's time is what is left of the call's when it is asked for,
+/// not the call's whole time.
+#[test]
+fn a_programs_time_is_what_the_call_has_left_when_it_starts() {
+    let timer = timer();
+    let snapshot = tool(
+        "exec = [\"gh\"]",
+        "async () => { await cineris.ask('go on?'); await cineris.exec('gh', ['x']); }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost {
+        slow_ask: Some((timer.clone(), Duration::from_secs(3))),
+        ..FakeHost::new()
+    };
+    let (result, ()) = block_on(join(
+        call_async(&runtime, &snapshot, &host, &timer),
+        async {
+            timer.sleeping_for(Duration::from_secs(3)).await;
+            timer.advance(Duration::from_secs(3));
+        },
+    ));
+    result.unwrap();
+    // Seven seconds, three of them spent on the question.
+    assert_eq!(
+        host.asked(),
+        ["ask go on?", "exec gh x network=false roots=0 timeout=4000"]
+    );
+}
+
+/// [`call`], as a future to run beside the test's own steps.
+async fn call_async(
+    runtime: &ScriptRuntime,
+    snapshot: &Snapshot,
+    host: &FakeHost,
+    timer: &FakeTimer,
+) -> Result<Json, CallError> {
+    let capabilities = capabilities(snapshot);
+    let cancel = CancelToken::new();
+    runtime
+        .call(
+            Target::Tool("t".to_owned()),
+            json!({}),
+            CallContext {
+                host,
+                capabilities: &capabilities,
+                time: TIME,
+                timer,
+                clock: timer.clock(),
+                cancel: &cancel,
+            },
+        )
+        .await
 }
