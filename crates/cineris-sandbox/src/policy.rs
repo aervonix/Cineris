@@ -25,13 +25,25 @@
 //! network\0 off|full\0      once
 //! landlock\0 <version>\0    once
 //! temp\0 <path>\0           at most once, and under a write root
+//! input\0 <length>\0        at most once: the command's input follows `end`
 //! end\0
+//! <length> bytes            only with `input`: the command's standard input
 //! ```
 //!
 //! Every path is absolute. A field this version does not know, a value it
 //! does not know, a field given twice that may be given once, a missing
 //! field, and anything after `end` refuse the whole policy. Nothing is
 //! skipped: a skipped field could be the one that restricts.
+//!
+//! **The command's input** (step 28: an extension's `cineris.exec`, and a
+//! hook command's event) travels on the same stream, after the policy: the
+//! launcher's standard input is the only way into it. `input` gives its
+//! length in decimal digits, with no sign and no leading zero, at most
+//! [`MAX_INPUT`]; after `end` come exactly that many bytes, which are never
+//! parsed. A length that is not written so, one past the limit, a second
+//! `input`, or a number of bytes after `end` other than the length refuses
+//! the whole policy, as anything after `end` does without `input`. Without
+//! `input` the command's input is closed, as it always was.
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -42,6 +54,14 @@ const MAGIC: &[u8] = b"cineris-sandbox-policy";
 const VERSION: &[u8] = b"1";
 /// The most bytes a policy may take. Far beyond any real one.
 pub const MAX_BYTES: usize = 1 << 20;
+
+/// The most bytes of input a command may be given after its policy: the
+/// most an extension's `cineris.exec`, or a hook command's event, may carry.
+pub const MAX_INPUT: usize = 1 << 20;
+
+/// The most digits a length of input may be written with: those of
+/// [`MAX_INPUT`].
+const MAX_INPUT_DIGITS: usize = 7;
 
 /// The newest Landlock version this build knows the rights of.
 pub const NEWEST_LANDLOCK: u8 = 9;
@@ -97,9 +117,33 @@ impl PolicyError {
 }
 
 impl Policy {
-    /// The policy as the launcher reads it.
+    /// The policy as the launcher reads it, for a command whose input is
+    /// closed.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
+        self.encode_fields(None)
+    }
+
+    /// The policy as the launcher reads it, followed by `input`, which the
+    /// command is given as its standard input.
+    ///
+    /// # Errors
+    ///
+    /// When `input` is longer than [`MAX_INPUT`]: the launcher would refuse
+    /// it.
+    pub fn encode_with_input(&self, input: &[u8]) -> Result<Vec<u8>, PolicyError> {
+        if input.len() > MAX_INPUT {
+            return Err(PolicyError::new(format!(
+                "the command's input is {} bytes, and at most {MAX_INPUT} can be given",
+                input.len()
+            )));
+        }
+        let mut out = self.encode_fields(Some(input.len()));
+        out.extend_from_slice(input);
+        Ok(out)
+    }
+
+    fn encode_fields(&self, input: Option<usize>) -> Vec<u8> {
         let mut out = Vec::new();
         let mut field = |key: &[u8], value: &[u8]| {
             out.extend_from_slice(key);
@@ -130,18 +174,40 @@ impl Policy {
         if let Some(temp) = &self.temp {
             field(b"temp", &path_bytes(temp));
         }
+        if let Some(length) = input {
+            field(b"input", length.to_string().as_bytes());
+        }
         out.extend_from_slice(b"end\0");
         out
     }
 
     /// Reads a policy, refusing it whole if any part of it is not
-    /// understood.
+    /// understood, or if it carries a command's input
+    /// ([`Policy::decode_with_input`] reads that).
     ///
     /// # Errors
     ///
     /// With the field or the value that was not understood.
     pub fn decode(bytes: &[u8]) -> Result<Self, PolicyError> {
-        if bytes.len() > MAX_BYTES {
+        match Self::decode_with_input(bytes)? {
+            (policy, None) => Ok(policy),
+            (_, Some(_)) => Err(PolicyError::new(
+                "it carries a command's input, which only the launcher reads",
+            )),
+        }
+    }
+
+    /// Reads a policy and the command's input after it, if it has an
+    /// `input` field, refusing the whole of it if any part is not
+    /// understood. The input's bytes are taken as they are: nothing reads
+    /// them but the command.
+    ///
+    /// # Errors
+    ///
+    /// With the field or the value that was not understood, or when the
+    /// bytes after `end` are not exactly the input's length.
+    pub fn decode_with_input(bytes: &[u8]) -> Result<(Self, Option<Vec<u8>>), PolicyError> {
+        if bytes.len() > MAX_BYTES + MAX_INPUT {
             return Err(PolicyError::new("it is longer than any policy can be"));
         }
         let mut fields = Fields { rest: bytes };
@@ -162,6 +228,7 @@ impl Policy {
         let mut network = None;
         let mut landlock = None;
         let mut temp = None;
+        let mut input: Option<usize> = None;
         loop {
             let Some(key) = fields.next_part()? else {
                 return Err(PolicyError::new("it ends without `end`"));
@@ -211,6 +278,7 @@ impl Policy {
                     once(&mut landlock, version, "landlock")?;
                 }
                 b"temp" => once(&mut temp, absolute("temp", value)?, "temp")?,
+                b"input" => once(&mut input, input_length(value)?, "input")?,
                 other => {
                     return Err(PolicyError::new(format!(
                         "the field `{}` is not one this build knows",
@@ -219,9 +287,22 @@ impl Policy {
                 }
             }
         }
-        if !fields.rest.is_empty() {
-            return Err(PolicyError::new("there is more after `end`"));
+        if bytes.len() - fields.rest.len() > MAX_BYTES {
+            return Err(PolicyError::new("it is longer than any policy can be"));
         }
+        let input = match input {
+            None if !fields.rest.is_empty() => {
+                return Err(PolicyError::new("there is more after `end`"));
+            }
+            None => None,
+            Some(length) if fields.rest.len() != length => {
+                return Err(PolicyError::new(format!(
+                    "`input` says {length} bytes follow `end`, and {} do",
+                    fields.rest.len()
+                )));
+            }
+            Some(_) => Some(fields.rest.to_vec()),
+        };
         let read = match (read_all, read_roots.is_empty()) {
             (true, true) => Reach::All,
             (false, _) => Reach::Only(read_roots),
@@ -240,13 +321,16 @@ impl Policy {
                 "the temporary directory is not under a write root",
             ));
         }
-        Ok(Self {
-            read,
-            write,
-            network,
-            temp,
-            landlock,
-        })
+        Ok((
+            Self {
+                read,
+                write,
+                network,
+                temp,
+                landlock,
+            },
+            input,
+        ))
     }
 
     /// Whether `path` is under one of the write roots. Both are compared as
@@ -264,6 +348,33 @@ fn once<T>(slot: &mut Option<T>, value: T, name: &str) -> Result<(), PolicyError
     }
     *slot = Some(value);
     Ok(())
+}
+
+/// The length of a command's input: decimal digits only, no sign and no
+/// leading zero, at most [`MAX_INPUT`]. Read strictly: a length is what
+/// decides where the policy ends and the input begins.
+fn input_length(value: &[u8]) -> Result<usize, PolicyError> {
+    let shown = || String::from_utf8_lossy(value).into_owned();
+    let digits = !value.is_empty()
+        && value.len() <= MAX_INPUT_DIGITS
+        && value.iter().all(u8::is_ascii_digit)
+        && (value.len() == 1 || value[0] != b'0');
+    let length = digits
+        .then(|| std::str::from_utf8(value).ok()?.parse::<usize>().ok())
+        .flatten()
+        .ok_or_else(|| {
+            PolicyError::new(format!(
+                "the input's length `{}` is not written as a length is",
+                shown()
+            ))
+        })?;
+    if length > MAX_INPUT {
+        return Err(PolicyError::new(format!(
+            "the input's length `{}` is more than {MAX_INPUT} bytes",
+            shown()
+        )));
+    }
+    Ok(length)
 }
 
 /// The NUL-terminated parts of a policy, in order.
@@ -439,6 +550,159 @@ mod tests {
         assert!(Policy::decode(&longer).is_err());
         assert!(Policy::decode(b"").is_err());
         assert!(Policy::decode(&vec![b'x'; MAX_BYTES + 1]).is_err());
+    }
+
+    /// A command's input follows the policy and comes back byte for byte,
+    /// NULs and all; [`Policy::decode`], which no launcher uses, refuses a
+    /// policy that carries one.
+    #[test]
+    fn a_commands_input_follows_the_policy_and_reads_back_whole() {
+        let policy = sample();
+        for input in [&b""[..], b"x", b"end\0input\x003\0abc", &[0u8; 300]] {
+            let bytes = policy.encode_with_input(input).unwrap();
+            let (back, carried) = Policy::decode_with_input(&bytes).unwrap();
+            assert_eq!(back, policy);
+            assert_eq!(carried.as_deref(), Some(input));
+            assert!(Policy::decode(&bytes).is_err());
+        }
+        // Without the field, there is no input.
+        assert_eq!(
+            Policy::decode_with_input(&policy.encode()).unwrap(),
+            (policy.clone(), None)
+        );
+        // The most there may be, and one byte more.
+        let most = vec![7u8; MAX_INPUT];
+        let bytes = policy.encode_with_input(&most).unwrap();
+        assert_eq!(Policy::decode_with_input(&bytes).unwrap().1, Some(most));
+        assert!(policy.encode_with_input(&vec![7u8; MAX_INPUT + 1]).is_err());
+        // Written by hand past the limit, with the bytes to match: refused.
+        let mut past = policy.encode();
+        past.truncate(past.len() - b"end\0".len());
+        past.extend_from_slice(format!("input\0{}\0end\0", MAX_INPUT + 1).as_bytes());
+        past.extend_from_slice(&vec![7u8; MAX_INPUT + 1]);
+        let error = Policy::decode_with_input(&past).unwrap_err();
+        assert!(error.to_string().contains("more than"), "{error}");
+    }
+
+    /// The bytes after `end` must be exactly the length `input` says: one
+    /// fewer, one more, or any without the field refuses the whole policy;
+    /// so do a second `input` and a length not written as one.
+    #[test]
+    fn an_input_whose_length_does_not_match_or_is_given_twice_is_refused() {
+        let policy = sample();
+        let with = policy.encode_with_input(b"abc").unwrap();
+        let short = &with[..with.len() - 1];
+        let error = Policy::decode_with_input(short).unwrap_err();
+        assert!(error.to_string().contains("3 bytes"), "{error}");
+        let mut long = with.clone();
+        long.push(b'd');
+        assert!(Policy::decode_with_input(&long).is_err());
+        let mut after = policy.encode();
+        after.extend_from_slice(b"abc");
+        let error = Policy::decode_with_input(&after).unwrap_err();
+        assert!(error.to_string().contains("more after `end`"), "{error}");
+
+        let text = String::from_utf8(with).unwrap();
+        let decode = |text: String| Policy::decode_with_input(text.as_bytes());
+        let twice = text.replace("input\x003\0", "input\x003\0input\x003\0");
+        let error = decode(twice).unwrap_err();
+        assert!(
+            error.to_string().contains("`input` is given twice"),
+            "{error}"
+        );
+        for written in [
+            "03", "+3", "-3", " 3", "3 ", "", "0x3", "1048577", "99999999",
+        ] {
+            let changed = text.replace("input\x003\0", &format!("input\0{written}\0"));
+            assert!(decode(changed).is_err(), "the length `{written}` was taken");
+        }
+    }
+
+    /// Whatever is done to the length, to a repeat of the field or to the
+    /// bytes after `end`, the input read back is exactly the input written,
+    /// or the whole policy is refused: never a policy with other bytes for
+    /// the command, and never a policy that reads on into the input.
+    #[test]
+    fn a_damaged_input_field_is_refused_never_misread() {
+        use cineris_base::Rng as _;
+        use cineris_testkit::cases::{self, ensure};
+
+        #[derive(Debug)]
+        struct Case {
+            input: Vec<u8>,
+            length: String,
+            repeat: bool,
+            extra: Vec<u8>,
+            cut: usize,
+        }
+        cases::check(
+            "a_damaged_input_field_is_refused_never_misread",
+            300,
+            |rng| {
+                let input: Vec<u8> = (0..cases::small(rng, 64))
+                    .map(|_| u8::try_from(rng.below(256)).unwrap_or(0))
+                    .collect();
+                let true_length = input.len().to_string();
+                let length = match rng.below(6) {
+                    0 => (input.len() + 1 + cases::small(rng, 8)).to_string(),
+                    1 => input.len().saturating_sub(1).to_string(),
+                    2 => format!("0{true_length}"),
+                    3 => (*cases::pick(rng, &["", "x", "-1", "1e3", "\u{0663}"])).to_owned(),
+                    _ => true_length,
+                };
+                let extra = (0..usize::from(rng.below(4) == 0) * cases::small(rng, 4))
+                    .map(|_| b'!')
+                    .collect();
+                let cut = usize::from(rng.below(4) == 0) * cases::small(rng, 4);
+                Case {
+                    input,
+                    length,
+                    repeat: rng.below(6) == 0,
+                    extra,
+                    cut,
+                }
+            },
+            |case| {
+                let policy = sample();
+                let mut bytes = policy.encode();
+                bytes.truncate(bytes.len() - b"end\0".len());
+                let field = format!("input\0{}\0", case.length);
+                bytes.extend_from_slice(field.as_bytes());
+                if case.repeat {
+                    bytes.extend_from_slice(field.as_bytes());
+                }
+                bytes.extend_from_slice(b"end\0");
+                bytes.extend_from_slice(&case.input);
+                bytes.extend_from_slice(&case.extra);
+                bytes.truncate(bytes.len().saturating_sub(case.cut));
+                // What follows `end` once the bytes are cut; `None` when
+                // the cut reaches into the policy itself.
+                let mut after = case.input.clone();
+                after.extend_from_slice(&case.extra);
+                let after = after
+                    .len()
+                    .checked_sub(case.cut)
+                    .map(|kept| after[..kept].to_vec());
+                // A length written as a length is: its number written back
+                // is the same text.
+                let declared = case
+                    .length
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|length| length.to_string() == case.length && *length <= MAX_INPUT);
+                let sound =
+                    !case.repeat && declared.is_some() && after.as_ref().map(Vec::len) == declared;
+                match Policy::decode_with_input(&bytes) {
+                    Ok((back, input)) => {
+                        ensure!(sound, "a damaged policy was read: {input:?}");
+                        ensure!(back == policy, "the policy came back as {back:?}");
+                        ensure!(input == after, "the input came back as {input:?}");
+                    }
+                    Err(error) => ensure!(!sound, "a sound policy was refused: {error}"),
+                }
+                Ok(())
+            },
+        );
     }
 
     #[test]
