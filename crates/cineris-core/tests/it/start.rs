@@ -714,27 +714,108 @@ fn a_configuration_file_that_is_a_link_is_closed_where_it_leads() {
     assert!(!kept.contains("unrestricted"), "{kept}");
 }
 
+/// The machine's directories with the stored keys kept apart from the
+/// configuration directory, as Windows keeps them (in the data directory).
+/// On Linux the keys' folder is the configuration directory, so closing it
+/// closes the directory too: a test of the directory's own closing must
+/// keep them apart, or a break of it is hidden by the keys' (found by the
+/// small fixes, when the breaks of it were caught by no test).
+fn keys_kept_apart(world: &World) -> cineris_config::Dirs {
+    let mut dirs = world.dirs();
+    dirs.credentials = dirs.data.as_ref().map(|data| data.join("credentials"));
+    assert_ne!(dirs.credentials, dirs.config);
+    dirs
+}
+
+/// What a write of the configuration file that was killed between its
+/// temporary file and the rename leaves in the configuration directory: a
+/// file that is neither the configuration file nor a stored key, and holds
+/// the level the next session starts with.
+const LEFT_BY_A_KILLED_WRITE: &str = ".cineris-0123456789abcdef.tmp";
+
+/// The configuration directory is closed to every tool, to reading and to
+/// writing, whole: not only the files in it that are closed by name. At
+/// `unrestricted`, with a user there who would say yes, so that only the
+/// closing can refuse.
+#[test]
+fn the_configuration_directory_is_closed_whole_to_every_tool() {
+    let world = World::new("config_dir_closed", []);
+    let dirs = keys_kept_apart(&world);
+    let config_dir = dirs.config.clone().unwrap();
+    let left = config_dir.join(LEFT_BY_A_KILLED_WRITE);
+    std::fs::write(&left, "[permissions]\nmode = \"unrestricted\"\n").unwrap();
+    let added = config_dir.join("added.toml");
+    world.provider.push(calls(&[(
+        "c1",
+        "read",
+        json!({"path": left.to_str().unwrap()}),
+    )]));
+    world.provider.push(calls(&[(
+        "c2",
+        "write",
+        json!({"path": added.to_str().unwrap(), "content": "[permissions]\n"}),
+    )]));
+    world.provider.push(says("Could not."));
+    let core = world.core_with(|options| options.dirs = Some(dirs.clone()));
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            ClientInfo::user(),
+            SessionSettings {
+                level: Some(cineris_protocol::lease::Level::Unrestricted),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        let asked = front
+            .turn_allowing("read and write the configuration")
+            .await;
+        assert!(
+            asked.is_empty(),
+            "the configuration directory was asked about"
+        );
+        let results = front.results();
+        assert_eq!(results.len(), 2, "{results:?}");
+        for (tool, outcome, text) in results {
+            assert_eq!(outcome, "denied", "{tool}: {text}");
+            assert!(!text.contains("unrestricted"), "{tool}: {text}");
+        }
+        front.close().await;
+    });
+    assert!(
+        !added.exists(),
+        "a file was written in the configuration directory"
+    );
+}
+
 /// The configuration directory reached through a link is protected as
-/// where it really is.
+/// where it really is: a file of it that nothing else closes, read by its
+/// real path, is refused.
 #[cfg(unix)]
 #[test]
 fn a_configuration_directory_behind_a_link_is_protected_where_it_really_is() {
     let world = World::new("protected_link", []);
+    let dirs = keys_kept_apart(&world);
     // Move the configuration to another place, and leave a link.
-    let config_dir = world.dirs().config.unwrap();
+    let config_dir = dirs.config.clone().unwrap();
     let real = world.dir.join("elsewhere").join("real-config");
     std::fs::create_dir_all(real.parent().unwrap()).unwrap();
     std::fs::rename(&config_dir, &real).unwrap();
     std::os::unix::fs::symlink(&real, &config_dir).unwrap();
 
-    let real_file = real.join("config.toml");
+    // Not the configuration file, which is closed by name and where it
+    // leads, whatever becomes of the directory.
+    let real_file = real.join(LEFT_BY_A_KILLED_WRITE);
+    std::fs::write(&real_file, format!("[model]\nmain = \"{MODEL}\"\n")).unwrap();
     world.provider.push(calls(&[(
         "c1",
         "read",
         json!({"path": real_file.to_str().unwrap()}),
     )]));
     world.provider.push(says("Could not."));
-    let core = world.core();
+    let core = world.core_with(|options| options.dirs = Some(dirs.clone()));
     world.run(async {
         // A user is there to be asked, and would say yes: a read outside
         // the workspace is a question, and a read of the harness's own
