@@ -7,8 +7,9 @@
 //!   input.
 //! - [`run`] is the launcher's side, the body of the hidden subcommand. It
 //!   reads the policy to its end, confines itself, gives the command a
-//!   closed input and the session's temporary directory, and replaces
-//!   itself with the command.
+//!   closed input (or the input that followed the policy, [`input`
+//!   below](#a-commands-input)) and the session's temporary directory, and
+//!   replaces itself with the command.
 //!
 //! **It fails closed.** Once the harness has said the sandbox enforces, a
 //! policy that cannot be read, a Landlock rule the kernel refuses, a
@@ -21,13 +22,27 @@
 //! between `fork` and `exec` of a multi-threaded harness. The process tree
 //! (its session, its group, the death signal, the guard) is set up by the
 //! runner before the launcher starts, so the launcher does not touch it.
+//!
+//! # A command's input
+//!
+//! The launcher's standard input carries the policy, so a command it
+//! starts cannot be given another. A policy with an `input` field
+//! ([`crate::policy`], "The wire form") is followed by the command's input,
+//! at most [`MAX_INPUT`] bytes: an extension's `cineris.exec` with `stdin`,
+//! and a hook command's event (step 28). The launcher puts those bytes in
+//! an anonymous memory file **before it confines itself**, made
+//! close-on-exec, written, sealed against every write, growth and shrink
+//! and against further seals, and rewound, and the command is given it as
+//! its standard input in place of the closed one. The command can read it
+//! and cannot change it; nothing else of it is left open. Without `input`
+//! the command's input is closed, as it always was.
 
 use std::ffi::{OsStr, OsString};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use crate::explain;
-use crate::policy::{MAX_BYTES, Policy};
+use crate::policy::{MAX_BYTES, MAX_INPUT, Policy, PolicyError};
 
 /// What every line the launcher writes about itself begins with.
 pub const MARK: &str = "cineris-sandbox:";
@@ -101,6 +116,26 @@ impl Launcher {
         }
     }
 
+    /// What to start in place of `program` with `arguments`, with `input`
+    /// as the command's standard input: it follows the policy on the
+    /// launcher's own ([`crate::policy`], "The wire form").
+    ///
+    /// # Errors
+    ///
+    /// When `input` is longer than [`MAX_INPUT`].
+    pub fn wrap_with_input(
+        &self,
+        program: &OsStr,
+        arguments: &[OsString],
+        input: &[u8],
+    ) -> Result<Wrapped, PolicyError> {
+        let stdin = self.policy.encode_with_input(input)?;
+        Ok(Wrapped {
+            stdin,
+            ..self.wrap(program, arguments)
+        })
+    }
+
     /// One line for the model about what the sandbox did to a command that
     /// has ended, read from its exit code and its output: which operation
     /// it blocked, or why the command did not run. `None` when there is
@@ -167,13 +202,79 @@ fn launch(arguments: Vec<OsString>) -> Result<Never, Failure> {
     let mut bytes = Vec::new();
     std::io::stdin()
         .lock()
-        .take(u64::try_from(MAX_BYTES).unwrap_or(u64::MAX) + 1)
+        .take(u64::try_from(MAX_BYTES + MAX_INPUT).unwrap_or(u64::MAX) + 1)
         .read_to_end(&mut bytes)
         .map_err(|error| Failure::sandbox(format!("the policy could not be read: {error}")))?;
-    let policy = Policy::decode(&bytes).map_err(Failure::sandbox)?;
+    let (policy, input) = Policy::decode_with_input(&bytes).map_err(Failure::sandbox)?;
+    drop(bytes);
+    // Made before the launcher is confined, which may refuse what making
+    // it takes.
+    let input = input
+        .map(|input| input_file(&input))
+        .transpose()
+        .map_err(|error| {
+            Failure::sandbox(format!("the command's input could not be given: {error}"))
+        })?;
 
     confine(&policy).map_err(Failure::sandbox)?;
-    become_command(&program, &rest, policy.temp.as_deref())
+    become_command(&program, &rest, policy.temp.as_deref(), input)
+}
+
+/// The command's input, in an anonymous memory file: close-on-exec,
+/// written whole, sealed against writing, growing, shrinking and further
+/// seals, and rewound to its start. The command is given a copy of it as
+/// its standard input; this one closes when the launcher becomes the
+/// command.
+#[cfg(target_os = "linux")]
+#[allow(
+    unsafe_code,
+    reason = "decision 0030: an anonymous memory file and its seals are only reachable through \
+              system calls; cineris-sandbox is where such calls live"
+)]
+#[allow(
+    clippy::disallowed_types,
+    reason = "the launcher is a process of its own, with one thread and no runtime: the file is \
+              made before it becomes the command"
+)]
+fn input_file(input: &[u8]) -> std::io::Result<std::fs::File> {
+    use std::io::{Seek, Write};
+    use std::os::fd::FromRawFd;
+
+    // SAFETY: the name is a NUL-terminated string that lives for the call,
+    // and the flags are the kernel's.
+    let fd = unsafe {
+        libc::memfd_create(
+            c"cineris-input".as_ptr(),
+            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+        )
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: `fd` was just made by the call above and nothing else owns
+    // it: the file closes it when dropped.
+    let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+    file.write_all(input)?;
+    let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+    // SAFETY: the call takes the file's descriptor, which the file owns
+    // and keeps open for the call, and two integers; it touches no memory
+    // of this process.
+    if unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, seals) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    file.rewind()?;
+    Ok(file)
+}
+
+#[cfg(not(target_os = "linux"))]
+#[allow(
+    clippy::disallowed_types,
+    reason = "the type of the file the launcher would give the command"
+)]
+fn input_file(_input: &[u8]) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::other(
+        "there is no sandbox launcher on this system",
+    ))
 }
 
 /// Applies the policy to this process and everything it will start.
@@ -199,12 +300,16 @@ fn become_command(
     program: &OsStr,
     arguments: &[OsString],
     temp: Option<&Path>,
+    input: Option<std::fs::File>,
 ) -> Result<Never, Failure> {
     use std::os::unix::process::CommandExt;
 
     close_on_exec();
     let mut command = std::process::Command::new(program);
-    command.args(arguments).stdin(std::process::Stdio::null());
+    command.args(arguments).stdin(match input {
+        Some(input) => std::process::Stdio::from(input),
+        None => std::process::Stdio::null(),
+    });
     if let Some(temp) = temp {
         command.env("TMPDIR", temp);
     }
@@ -223,10 +328,15 @@ fn become_command(
 }
 
 #[cfg(not(unix))]
+#[allow(
+    clippy::disallowed_types,
+    reason = "the type of the file the launcher would give the command"
+)]
 fn become_command(
     _program: &OsStr,
     _arguments: &[OsString],
     _temp: Option<&Path>,
+    _input: Option<std::fs::File>,
 ) -> Result<Never, Failure> {
     Err(Failure::sandbox(
         "there is no sandbox launcher on this system",

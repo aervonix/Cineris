@@ -600,6 +600,102 @@ fn sys_a_policy_that_is_not_understood_runs_nothing() {
     assert!(line.contains("not run"), "{line}");
 }
 
+/// A command started with input after its policy (step 28) reads exactly
+/// those bytes, NULs and lines and all, and then the end of its input; it
+/// cannot write them (the memory file is sealed), so what a second reader
+/// would find is what was given.
+#[test]
+fn sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it() {
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("input");
+    let launcher = launcher(place.policy(Network::Off, landlock));
+    let input = b"first line\nzwei\0drei\n\xc3\xa9 end";
+    let stdin = launcher
+        .wrap_with_input("/bin/sh".as_ref(), &[], input)
+        .expect("an input within the limit")
+        .stdin;
+    let script = "cat > got; if printf x >&0; then echo wrote; else echo refused; fi; \
+                  exec 0<&-; echo done";
+    let ran = run_with(
+        &launcher,
+        &stdin,
+        &[],
+        &place.ws(),
+        "/bin/sh",
+        &["-c", script],
+    );
+    assert!(ran.ok() && ran.output.contains("done"), "{ran:?}");
+    assert!(ran.output.contains("refused"), "{ran:?}");
+    assert_eq!(
+        std::fs::read(place.ws().join("got")).expect("what it read"),
+        input
+    );
+
+    // The most input there may be reaches the command whole: the launcher
+    // reads it with its policy.
+    let most: Vec<u8> = (0..cineris_sandbox::policy::MAX_INPUT)
+        .map(|at| u8::try_from(at % 251).expect("a byte"))
+        .collect();
+    let stdin = launcher
+        .wrap_with_input("/bin/sh".as_ref(), &[], &most)
+        .expect("an input at the limit")
+        .stdin;
+    let ran = run_with(
+        &launcher,
+        &stdin,
+        &[],
+        &place.ws(),
+        "/bin/sh",
+        &["-c", "cat > most"],
+    );
+    assert!(ran.ok(), "{ran:?}");
+    assert!(
+        std::fs::read(place.ws().join("most")).expect("what it read") == most,
+        "the input at the limit did not arrive whole"
+    );
+}
+
+/// With no input after its policy, a confined command's input is closed,
+/// as it always was: a reader sees its end at once.
+#[test]
+fn sys_a_confined_command_with_no_input_reads_its_end_at_once() {
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("no_input");
+    let ran = sh(
+        &place,
+        place.policy(Network::Off, landlock),
+        "cat > got; echo done",
+    );
+    assert!(ran.ok() && ran.output.contains("done"), "{ran:?}");
+    assert_eq!(place.scratch.read_text("ws/got"), "");
+}
+
+/// An input whose length does not match the bytes after the policy runs
+/// nothing: the launcher refuses the whole policy before it starts the
+/// command.
+#[test]
+fn sys_an_input_of_the_wrong_length_runs_nothing() {
+    let Some(landlock) = enforcing() else { return };
+    let place = Place::new("input_length");
+    let launcher = launcher(place.policy(Network::Off, landlock));
+    let mut stdin = launcher.policy().encode_with_input(b"abc").expect("small");
+    stdin.push(b'd');
+    let ran = run_with(
+        &launcher,
+        &stdin,
+        &[],
+        &place.ws(),
+        "/bin/sh",
+        &["-c", "echo ran > ran"],
+    );
+    assert_eq!(ran.code, Some(FAILED), "{ran:?}");
+    assert!(
+        ran.output.contains(MARK) && ran.output.contains("`input`"),
+        "{ran:?}"
+    );
+    assert!(!place.ws().join("ran").exists());
+}
+
 /// Runs `echo ran > ran` through the launcher under a filter, set up by
 /// this binary before it becomes the launcher, that refuses `call`.
 fn under_a_filter_that_refuses(place: &Place, landlock: u8, call: &str) -> Ran {
