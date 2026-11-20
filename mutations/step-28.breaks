@@ -1524,3 +1524,12 @@ replace: let _ = &schema;
 caught-by:
     cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
 
+[break] a-glob-may-hold-a-backslash
+rule: A manifest's glob splits its folders by `/` alone: a backslash is refused on every system.
+file: crates/cineris-ext/src/manifest.rs
+in: check_glob
+find: || glob.contains('\\')
+replace: || glob.contains('\\') && glob.is_empty()
+caught-by:
+    cineris-ext::it manifest::globs_are_relative_to_the_workspace
+
