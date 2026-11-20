@@ -620,8 +620,9 @@ fn a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call() {
 
 /// An extension whose script did not stop when its time was up, and whose
 /// thread was left running, is not started again in this process: its next
-/// call fails at once, saying why and how it is started again (the review
-/// of step 28: each call made a new thread that would not stop either).
+/// call fails at once, saying why and how it is started again, in that
+/// session and in another (the reviews of step 28: each call made a new
+/// thread that would not stop either, and then each session).
 #[test]
 fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
     use std::time::Duration;
@@ -632,6 +633,8 @@ fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
             call_tool("c1", "spin", json!({})),
             call_tool("c2", "spin", json!({})),
             says("Done."),
+            call_tool("c3", "spin", json!({})),
+            says("Done again."),
         ],
     );
     world.user_config(
@@ -661,6 +664,13 @@ fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
         );
         assert_eq!(cineris_ext::engine::runtimes_made(), made);
         front.close().await;
+        // Another session of the same process: refused all the same.
+        let other = Front::start(&world, &core).await;
+        other.turn("spin once more").await;
+        let results = other.results();
+        assert!(results[0].2.contains("is disabled"), "{results:?}");
+        assert_eq!(cineris_ext::engine::runtimes_made(), made);
+        other.close().await;
     });
 }
 

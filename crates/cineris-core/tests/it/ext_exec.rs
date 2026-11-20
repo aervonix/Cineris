@@ -496,6 +496,101 @@ fn a_question_about_a_program_given_input_shows_how_the_input_begins() {
     });
 }
 
+/// An interrupt while a program's question is open withdraws the question,
+/// and the turn ends interrupted: the engine follows a program's host call
+/// to its end, and its decision is given up with the call (the review of
+/// step 28's fixes: the turn waited for an answer nobody would give).
+#[test]
+fn an_interrupt_withdraws_a_programs_open_question() {
+    use cineris_protocol::event::{Event, Resolution, TurnOutcome};
+
+    let world = World::new("exec_interrupt", []);
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let probe = extension(&world, "probe", "exec = [\"probe-echo\"]");
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "probe-echo", "args": echo_args(&[])}),
+    ));
+    let env = echo_on_path(&world);
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.shell_env = Some(env);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("run it").await;
+        let (_, request) = front.approval().await;
+        assert_eq!(request.tool, "probe/run");
+        front.interrupt(false).await;
+        front.turns(1).await;
+        assert_eq!(front.ends()[0].outcome, TurnOutcome::Interrupted);
+        let resolutions: Vec<Resolution> = front
+            .events()
+            .into_iter()
+            .filter_map(|event| match event.event {
+                Event::RequestResolved(resolved) => Some(resolved.resolution),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resolutions, [Resolution::Cancelled]);
+        front.close().await;
+    });
+}
+
+/// A program's question still open when the call's time is up is
+/// withdrawn, and the call ends out of its time, not when a person
+/// answers.
+#[test]
+fn a_programs_open_question_is_withdrawn_when_the_calls_time_is_up() {
+    use cineris_protocol::event::{Event, Resolution};
+    use std::time::Duration;
+
+    let world = World::new("exec_question_time", []);
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let probe = extension(
+        &world,
+        "probe",
+        "exec = [\"probe-echo\"]\n\n[limits]\ntime = 5",
+    );
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "probe-echo", "args": echo_args(&[])}),
+    ));
+    world.provider.push(says("Done."));
+    let env = echo_on_path(&world);
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.shell_env = Some(env);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("run it").await;
+        let (_, request) = front.approval().await;
+        assert_eq!(request.tool, "probe/run");
+        world.timer.sleeping_for(Duration::from_secs(5)).await;
+        world.timer.advance(Duration::from_secs(5));
+        front.turns(1).await;
+        let results = front.results();
+        assert!(results[0].2.contains("ran out of its time"), "{results:?}");
+        let resolutions: Vec<Resolution> = front
+            .events()
+            .into_iter()
+            .filter_map(|event| match event.event {
+                Event::RequestResolved(resolved) => Some(resolved.resolution),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(resolutions.len(), 1, "{resolutions:?}");
+        front.close().await;
+    });
+}
+
 /// In a PowerShell session a program's line is judged by PowerShell's own
 /// commands and aliases, which are not the program that runs: `write` is
 /// `Write-Output` there, read-only, and the program is not. What that

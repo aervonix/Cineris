@@ -18,8 +18,9 @@
 //!    extension tool's `ext` effect ([`CallHost::decide`]): a question
 //!    offers only "allow once" and "deny", and shows how the program's
 //!    input begins, which no rule judges. The decision may wait on a
-//!    person: the program is then given only what is left of the call's
-//!    time ([`CallHost::deadline`]).
+//!    person, and is given up when the call is cancelled or its time is
+//!    up; the program is then given only what is left of the call's time
+//!    when it starts (`ExecRequest::call_left`).
 //! 4. **It is started** through a launcher of the extension's own where the
 //!    sandbox enforces, at every level, `unrestricted` included
 //!    ([`SessionSandbox::extension_launcher`]): the session's reads, the
@@ -132,6 +133,9 @@ pub(crate) async fn run(
     host: &CallHost<'_>,
 ) -> Result<ExecOutput, HostError> {
     let cx = host.cx;
+    // The call's time is reckoned from here: `call_left` is what was left
+    // of it when the script asked for the program.
+    let arrived = host.parts.clock.monotonic();
     // A turn that a confined command stopped starts nothing more: the
     // decision below refuses every call of it (`EnginePolicy::decide`).
     let named = request.program.as_str().to_owned();
@@ -271,7 +275,7 @@ pub(crate) async fn run(
     if request.network {
         effects.push(Effect::Network(NetworkTarget::Any));
     }
-    host.decide(
+    let decision = host.decide(
         format!("{}: run `{line}`", host.full_name),
         json!({
             "program": named,
@@ -294,18 +298,33 @@ pub(crate) async fn run(
             // shows its start.
             extra: request.stdin.as_deref().map(input_reason),
         },
-    )
-    .await?;
-    // The decision may have waited on a person: the program is given what
-    // is left of the call's time, no more, and nothing starts for a call
-    // that is over.
-    let left = host.deadline.saturating_sub(host.parts.clock.monotonic());
-    if left.is_zero() || cx.cancel.is_cancelled() {
-        return Err(HostError::Failed(format!(
+    );
+    // The decision is given up when the call is cancelled or its time is
+    // up, and an open question with it: the engine follows a program's
+    // host call to its end, and a question nobody answers would hold the
+    // call, and the turn, for ever (the review of step 28's fixes).
+    let decided = {
+        let mut decision = std::pin::pin!(decision);
+        let mut cancelled = std::pin::pin!(cx.cancel.cancelled());
+        let mut over = host.parts.timer.sleep(request.call_left);
+        std::future::poll_fn(|context| {
+            if let std::task::Poll::Ready(decided) = decision.as_mut().poll(context) {
+                return std::task::Poll::Ready(Some(decided));
+            }
+            if cancelled.as_mut().poll(context).is_ready() || over.as_mut().poll(context).is_ready()
+            {
+                return std::task::Poll::Ready(None);
+            }
+            std::task::Poll::Pending
+        })
+        .await
+    };
+    let not_started = || {
+        HostError::Failed(format!(
             "`{named}` was not started: the call ended while it was being decided"
-        )));
-    }
-    let timeout = request.timeout.min(left);
+        ))
+    };
+    decided.ok_or_else(not_started)??;
     let watch = launcher
         .as_ref()
         .filter(|_| !write_roots.is_empty())
@@ -420,11 +439,20 @@ pub(crate) async fn run(
     // find nothing where a program could have been planted, as the
     // harness's git's do (the early review of step 28).
     cineris_base::child_env::keep_out_of(&mut env, &avoid, cfg!(windows));
+    // The decision may have waited on a person, and the looks before the
+    // run taken their time: the program is given what is left of the
+    // call's time just before it starts, no more, and nothing starts for a
+    // call that is over.
+    let spent = host.parts.clock.monotonic().saturating_sub(arrived);
+    let left = request.call_left.saturating_sub(spent);
+    if left.is_zero() || cx.cancel.is_cancelled() {
+        return Err(not_started());
+    }
     let start = Start {
         launch,
         env,
         cwd: directory,
-        timeout,
+        timeout: request.timeout.min(left),
         label: String::new(),
     };
     // Whatever becomes of the run, everything after it is done: a run the

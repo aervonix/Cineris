@@ -825,6 +825,7 @@ fn text_a_script_registers_holds_nothing_that_acts_unseen() {
     for script in [
         "cineris.tool({ name: 't', description: 'safe \\u202e efil', run() {} });",
         "cineris.command({ name: 'c', description: 'a\\u0007b', run() {} });",
+        "cineris.command({ name: 'c', description: 'a\\ufe00\\ufe01\\ufe02', run() {} });",
         "cineris.tool({ name: 't', input: { type: 'object', description: 'x\\u200by' }, run() {} });",
         "cineris.tool({ name: 't', input: { type: 'object', properties: { 'a\\u202eb': { type: 'string' } } }, run() {} });",
     ] {
@@ -870,6 +871,14 @@ fn a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted() {
     assert!(runtime.was_abandoned());
     assert!(!runtime.is_alive());
     assert_eq!(cineris_ext::engine::abandoned_threads(), before + 1);
+    // The extension is not started again in this process, by any session:
+    // its next start is refused at once, saying how it is started again.
+    let refused = start(&snapshot, &timer).unwrap_err();
+    assert_eq!(refused, LoadError::Disabled);
+    assert!(refused.to_string().contains("approved again"), "{refused}");
+    // Approved anew, it may be started again.
+    cineris_ext::engine::forget_abandoned(&snapshot.hash());
+    assert!(!cineris_ext::engine::is_disabled(&snapshot.hash()));
 }
 
 /// A main module that will not stop is left running too; past the cap of
@@ -879,12 +888,19 @@ fn past_the_cap_of_threads_left_running_no_extension_starts() {
     use cineris_ext::engine::{EVALUATION_TIME, GRACE, MAX_ABANDONED};
 
     let timer = timer();
-    let spinning = extension(
-        "",
-        "Array.prototype.reverse.call({ length: 2 ** 53 - 1 });\n\
-         cineris.tool({ name: 't', run() {} });",
-    );
-    for _ in 0..MAX_ABANDONED {
+    // Each extension a different one: one whose thread was left running
+    // is not started again.
+    let spinning = |index: usize| {
+        extension(
+            "",
+            &format!(
+                "// {index}\nArray.prototype.reverse.call({{ length: 2 ** 53 - 1 }});\n\
+                 cineris.tool({{ name: 't', run() {{}} }});"
+            ),
+        )
+    };
+    for index in 0..MAX_ABANDONED {
+        let spinning = spinning(index);
         let (started, ()) = block_on(join(
             ScriptRuntime::start(
                 "probe",
@@ -900,6 +916,7 @@ fn past_the_cap_of_threads_left_running_no_extension_starts() {
             },
         ));
         assert!(matches!(started, Err(LoadError::Abandoned)), "{started:?}");
+        assert!(cineris_ext::engine::is_disabled(&spinning.hash()));
     }
     let fine = tool("", "() => 1");
     let refused = start(&fine, &timer).unwrap_err();
@@ -910,15 +927,19 @@ fn past_the_cap_of_threads_left_running_no_extension_starts() {
     assert!(refused.to_string().contains("restarts"), "{refused}");
 }
 
-/// A call cancelled while it waits its turn is withdrawn: the call the
-/// runtime is serving goes on to its end (the review of step 28: the
-/// cancel stopped the runtime under it).
+/// A call cancelled while it waits its turn is withdrawn: it never runs,
+/// and the call the runtime is serving goes on to its end (the reviews of
+/// step 28: the cancel stopped the runtime under it, and a withdrawal told
+/// by closing the channel could miss a start under way).
 #[test]
-fn a_call_cancelled_before_its_turn_leaves_the_running_call_alone() {
+fn a_call_cancelled_before_its_turn_is_withdrawn_and_never_runs() {
     let timer = timer();
-    let snapshot = tool(
+    let snapshot = extension(
         "",
-        "async () => { await cineris.ask('go on?'); return 'answered' }",
+        "cineris.tool({ name: 'slow', run: async () => { await cineris.ask('go on?'); \
+         return 'answered' } });\n\
+         cineris.tool({ name: 'count', run: () => { globalThis.n = (globalThis.n || 0) + 1; \
+         return globalThis.n } });",
     );
     let runtime = start(&snapshot, &timer).unwrap();
     let host = FakeHost {
@@ -926,42 +947,56 @@ fn a_call_cancelled_before_its_turn_leaves_the_running_call_alone() {
         ..FakeHost::new()
     };
     let capabilities = capabilities(&snapshot);
-    let cancelled = CancelToken::new();
-    cancelled.cancel();
+    let first_cancel = CancelToken::new();
+    let second_cancel = CancelToken::new();
     let (first, ()) = block_on(join(
-        call_async(&runtime, &snapshot, &host, &timer),
+        call_named(
+            &runtime,
+            "slow",
+            &host,
+            &capabilities,
+            &timer,
+            &first_cancel,
+        ),
         async {
-            let second = runtime
-                .call(
-                    Target::Tool("t".to_owned()),
-                    json!({}),
-                    CallContext {
-                        host: &host,
-                        capabilities: &capabilities,
-                        time: TIME,
-                        timer: &timer,
-                        clock: timer.clock(),
-                        cancel: &cancelled,
-                    },
-                )
-                .await;
-            assert_eq!(second, Err(CallError::Cancelled));
+            // Queued behind the first, then cancelled before its turn.
+            let mut second = std::pin::pin!(call_named(
+                &runtime,
+                "count",
+                &host,
+                &capabilities,
+                &timer,
+                &second_cancel,
+            ));
+            let mut polled = false;
+            std::future::poll_fn(|context| {
+                if polled {
+                    return std::task::Poll::Ready(());
+                }
+                polled = true;
+                assert!(second.as_mut().poll(context).is_pending());
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            })
+            .await;
+            second_cancel.cancel();
+            assert_eq!(second.await, Err(CallError::Cancelled));
             timer.sleeping_for(Duration::from_secs(3)).await;
             timer.advance(Duration::from_secs(3));
         },
     ));
     assert_eq!(first, Ok(json!("answered")));
     assert!(runtime.is_alive());
-    // The withdrawn call was never run: the next call is served at once,
-    // not after a call nobody waits for.
-    let (third, ()) = block_on(join(
-        call_async(&runtime, &snapshot, &host, &timer),
-        async {
-            timer.sleeping_for(Duration::from_secs(3)).await;
-            timer.advance(Duration::from_secs(3));
-        },
+    // The withdrawn call never ran: the next count is the first.
+    let third = block_on(call_named(
+        &runtime,
+        "count",
+        &host,
+        &capabilities,
+        &timer,
+        &CancelToken::new(),
     ));
-    assert_eq!(third, Ok(json!("answered")));
+    assert_eq!(third, Ok(json!(1)));
 }
 
 /// A call whose future is dropped before it ends stops its runtime: the
@@ -1058,6 +1093,174 @@ fn a_cancelled_call_follows_its_program_to_the_end() {
         "{:?}",
         host.asked()
     );
+}
+
+/// A call cancelled just after the thread took it, before it said so, is
+/// stopped as any started call is: its time's grace and the count of
+/// threads left running apply, though the cancel came first (the review
+/// of step 28's fixes: the withdrawal skipped the grace when the thread
+/// won).
+#[test]
+fn a_call_the_thread_took_before_its_cancel_is_stopped_and_counted() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "() => Array.prototype.reverse.call({ length: 2 ** 53 - 1 })",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let capabilities = capabilities(&snapshot);
+    let cancel = CancelToken::new();
+    let before = cineris_ext::engine::abandoned_threads();
+    let hold = cineris_testkit::Hold::new(cineris_ext::engine::AFTER_A_CALL_IS_CLAIMED);
+    let (result, ()) = block_on(join(
+        runtime.call(
+            Target::Tool("t".to_owned()),
+            json!({}),
+            CallContext {
+                host: &host,
+                capabilities: &capabilities,
+                time: TIME,
+                timer: &timer,
+                clock: timer.clock(),
+                cancel: &cancel,
+            },
+        ),
+        async {
+            // The thread has taken the call and not said so yet.
+            hold.reach();
+            cancel.cancel();
+            timer.sleeping_for(cineris_ext::engine::GRACE).await;
+            hold.release();
+            timer.advance(cineris_ext::engine::GRACE);
+        },
+    ));
+    assert_eq!(result, Err(CallError::Cancelled));
+    assert!(runtime.was_abandoned());
+    assert_eq!(cineris_ext::engine::abandoned_threads(), before + 1);
+}
+
+/// A call whose future is given up while it waits its turn is withdrawn:
+/// the call the runtime is serving goes on (the review of step 28's fixes:
+/// it stopped the runtime under the running call).
+#[test]
+fn a_call_given_up_before_its_turn_leaves_the_running_call_alone() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "async () => { await cineris.ask('go on?'); return 'answered' }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost {
+        slow_ask: Some((timer.clone(), Duration::from_secs(3))),
+        ..FakeHost::new()
+    };
+    let capabilities = capabilities(&snapshot);
+    let cancel = CancelToken::new();
+    let (first, ()) = block_on(join(
+        call_async(&runtime, &snapshot, &host, &timer),
+        async {
+            {
+                let mut second = std::pin::pin!(runtime.call(
+                    Target::Tool("t".to_owned()),
+                    json!({}),
+                    CallContext {
+                        host: &host,
+                        capabilities: &capabilities,
+                        time: TIME,
+                        timer: &timer,
+                        clock: timer.clock(),
+                        cancel: &cancel,
+                    },
+                ));
+                let mut polled = false;
+                std::future::poll_fn(|context| {
+                    if polled {
+                        return std::task::Poll::Ready(());
+                    }
+                    polled = true;
+                    let _ = second.as_mut().poll(context);
+                    context.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                })
+                .await;
+            }
+            timer.sleeping_for(Duration::from_secs(3)).await;
+            timer.advance(Duration::from_secs(3));
+        },
+    ));
+    assert_eq!(first, Ok(json!("answered")));
+    assert!(runtime.is_alive());
+}
+
+/// A program the script started is followed to its end when the call's
+/// time is up, as on a cancel: what it changed is looked at and recorded
+/// after it stops.
+#[test]
+fn a_call_out_of_time_follows_its_program_to_the_end() {
+    let timer = timer();
+    let snapshot = tool(
+        "exec = [\"gh\"]",
+        "async () => { await cineris.exec('gh', []); return 'ran' }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost {
+        slow_exec: Some((timer.clone(), TIME + Duration::from_secs(3))),
+        ..FakeHost::new()
+    };
+    let (result, ()) = block_on(join(
+        call_async(&runtime, &snapshot, &host, &timer),
+        async {
+            timer.sleeping_for(TIME + Duration::from_secs(3)).await;
+            // The call's time is up while the program runs on.
+            timer.advance(TIME);
+            for _ in 0..8 {
+                let mut turned = false;
+                std::future::poll_fn(|context| {
+                    if turned {
+                        std::task::Poll::Ready(())
+                    } else {
+                        turned = true;
+                        context.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+            }
+            timer.advance(Duration::from_secs(3));
+        },
+    ));
+    assert_eq!(result, Err(CallError::TimedOut));
+    assert!(
+        host.asked().iter().any(|noted| noted == "exec finished"),
+        "{:?}",
+        host.asked()
+    );
+}
+
+/// A call of the tool `name`, as a future.
+async fn call_named(
+    runtime: &ScriptRuntime,
+    name: &str,
+    host: &FakeHost,
+    capabilities: &Capabilities,
+    timer: &FakeTimer,
+    cancel: &CancelToken,
+) -> Result<Json, CallError> {
+    runtime
+        .call(
+            Target::Tool(name.to_owned()),
+            json!({}),
+            CallContext {
+                host,
+                capabilities,
+                time: TIME,
+                timer,
+                clock: timer.clock(),
+                cancel,
+            },
+        )
+        .await
 }
 
 /// [`call`], as a future to run beside the test's own steps.
