@@ -32,6 +32,8 @@ mod closing;
 mod context;
 mod day;
 mod events;
+#[cfg(feature = "scripts")]
+mod ext_exec;
 mod extensions;
 mod gates;
 mod harness_git;
@@ -93,11 +95,22 @@ pub const LAUNCH: &str = "cin-launch";
 /// git's answer, which the harness reads, cannot.
 pub const LAUNCH_GIT: &str = "cin-launch-git";
 
+/// The argument that makes this binary a program that says what it was
+/// given: an extension's `cineris.exec` starts it (`ext_exec`). What
+/// follows it (after a `--`) are its arguments.
+pub const ECHO: &str = "cin-echo";
+
+/// What the program [`ECHO`] makes of this binary prints its report after.
+pub const ECHO_MARK: &str = "cin-echo-report:";
+
 /// What the test runner runs as an ordinary test, which passes at once, and
 /// what the sandbox tests start as the launcher.
 #[test]
 fn launcher_entry() {
     let arguments: Vec<OsString> = std::env::args_os().collect();
+    if let Some(at) = arguments.iter().position(|argument| argument == ECHO) {
+        echo_and_exit(&arguments[at + 1..]);
+    }
     if let Some(at) = arguments.iter().position(|argument| argument == LAUNCH_GIT) {
         // The harness's own git, which `sandbox::launcher`'s wrapper
         // started with its output on standard error and the test runner's
@@ -124,6 +137,37 @@ fn launcher_entry() {
         )]
         std::process::exit(code);
     }
+}
+
+/// Says what this process was given, as one line of JSON after
+/// [`ECHO_MARK`] on standard output: its arguments, its standard input,
+/// and the variables an extension's program must not see; writes a line to
+/// standard error; and exits with 7.
+fn echo_and_exit(arguments: &[OsString]) -> ! {
+    use std::io::{Read, Write};
+    let given: Vec<String> = arguments
+        .iter()
+        .skip_while(|argument| *argument == "--")
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    let mut input = Vec::new();
+    let _ = std::io::stdin().read_to_end(&mut input);
+    let report = json!({
+        "args": given,
+        "stdin": String::from_utf8_lossy(&input),
+        "key": std::env::var("ANTHROPIC_API_KEY").ok(),
+        "removed": std::env::var("PROBE_REMOVED").ok(),
+        "kept": std::env::var("PROBE_KEPT").ok(),
+    });
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{ECHO_MARK}{report}");
+    let _ = out.flush();
+    let _ = writeln!(std::io::stderr(), "echo: to standard error");
+    #[expect(
+        clippy::exit,
+        reason = "the program ends with the code its caller checks"
+    )]
+    std::process::exit(7)
 }
 
 /// Gives every provider the scripted client.

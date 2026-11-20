@@ -319,6 +319,57 @@ impl SessionSandbox {
         self.watch.as_ref().filter(|_| self.confines())
     }
 
+    /// The launcher an extension's program is started through
+    /// (`docs/steps/28/answered.md`, "The processes"), wherever the sandbox
+    /// enforces and at every level, `unrestricted` included: the session's
+    /// reads; as write roots `write_roots` alone, each resolved, and the
+    /// session's private temporary directory, which it is given as
+    /// `TMPDIR`; and the network only with `network`. Not the workspace,
+    /// nor any root of the session's grant: a program writes no wider than
+    /// its manifest's directories. `None` where the sandbox does not
+    /// enforce, where a program is started as it is. Blocks: each root is
+    /// found where it really is.
+    #[cfg(feature = "scripts")]
+    pub(crate) fn extension_launcher(
+        &self,
+        write_roots: &[PathBuf],
+        network: bool,
+    ) -> Option<SandboxLauncher> {
+        let (program, prefix, landlock) = self.made_with.as_ref()?;
+        let read = self
+            .launcher
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()?
+            .policy()
+            .read
+            .clone();
+        let mut write: Vec<PathBuf> = write_roots.iter().map(|root| resolve_root(root)).collect();
+        // The session's own, made with no link on the way (`make_temp`); one
+        // that was not made is not written to, as for the shell's commands.
+        let temp = self.temp.made.then(|| resolve_root(&self.temp.path));
+        write.extend(temp.clone());
+        Some(SandboxLauncher::new(
+            program.clone(),
+            prefix.clone(),
+            Policy {
+                read,
+                write,
+                network: if network { Network::Full } else { Network::Off },
+                temp,
+                landlock: *landlock,
+            },
+        ))
+    }
+
+    /// What to look at before and after an extension's program that may
+    /// write: the protected paths, wherever the sandbox enforces, at every
+    /// level, as its launcher confines it at every level.
+    #[cfg(feature = "scripts")]
+    pub(crate) fn extension_watch(&self) -> Option<&Watch> {
+        self.watch.as_ref()
+    }
+
     /// What to start in place of the harness's own `git` with `arguments`
     /// now: the reading launcher while commands are confined, git as it is
     /// otherwise.

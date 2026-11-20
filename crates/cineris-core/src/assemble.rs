@@ -2510,7 +2510,19 @@ pub(crate) fn assemble(
             write: Arc::new(WriteTool::new(editing.clone())),
             list: Arc::new(cineris_tools::ListTool::new()),
             search: Arc::new(cineris_tools::SearchTool::new()),
-            exec: crate::ext::ExecParts::default(),
+            // An extension's programs: found, decided, confined, looked
+            // around and run as the shell's commands are, with the same
+            // runner, environment and removal list.
+            exec: crate::ext::ExecParts {
+                sandbox: Arc::clone(&sandbox),
+                runner: runner(inner),
+                shell: shell.clone(),
+                inherited: options.shell_env.clone(),
+                env_remove: env_remove.clone(),
+                withheld: Arc::clone(&withheld),
+                avoid: avoid.clone(),
+                rounds: rounds.clone(),
+            },
             tell: Arc::new(move |message: String| tell_hooks.tell(message)),
         });
         for left_out in crate::ext::register(options.extensions.clone(), &parts, &registry) {

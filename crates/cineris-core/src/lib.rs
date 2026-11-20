@@ -39,6 +39,10 @@ mod knowledge;
 mod manage;
 mod paging;
 mod policy;
+// An extension's programs, and later a hook command's: only the script
+// engine starts any yet.
+#[cfg(feature = "scripts")]
+mod programs;
 mod provider;
 mod reads;
 mod redact;
