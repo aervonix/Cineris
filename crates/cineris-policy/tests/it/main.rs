@@ -27,6 +27,7 @@ mod levels;
 mod managed_ask;
 mod measure;
 mod narrowed;
+mod pins;
 mod real_paths;
 mod trust;
 mod working_directory;

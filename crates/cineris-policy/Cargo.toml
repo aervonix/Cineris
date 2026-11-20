@@ -14,8 +14,8 @@ cineris-protocol.workspace = true
 cineris-base.workspace = true
 serde.workspace = true
 thiserror.workspace = true
-# The stored approvals and the trust store are TOML files in the state
-# directory (docs/architecture/08-configuration.md, "Other state").
+# The stored approvals, the trust store and the user's pins are TOML files
+# in the state directory (docs/architecture/08-configuration.md, "Other state").
 toml = { workspace = true, features = ["display"] }
 
 [features]

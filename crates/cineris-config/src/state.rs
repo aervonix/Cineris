@@ -4,6 +4,7 @@
 //! | File | Holds | Owner |
 //! |---|---|---|
 //! | `trust.toml` | Trusted projects and the hashes of what was trusted. | `cineris-policy` |
+//! | `pins.toml` | The hashes of the user's own extensions that the user approved (since step 28). | `cineris-policy` |
 //! | `projects/<project key>/knowledge.toml` | What the harness has learned about a project. | `cineris-knowledge` |
 //! | `projects/<project key>/index/` | The repository-map cache. | `cineris-index` |
 //! | `stats/` | Local statistics. | `cineris-stats` |
@@ -78,6 +79,13 @@ impl StateDir {
     #[must_use]
     pub fn trust_file(&self) -> PathBuf {
         self.root.join("trust.toml")
+    }
+
+    /// `pins.toml`: the hashes of what the user approved of their own, such
+    /// as their extensions (since step 28).
+    #[must_use]
+    pub fn pins_file(&self) -> PathBuf {
+        self.root.join("pins.toml")
     }
 
     /// `projects/<key>/`: what is kept about one project. `None` when the
@@ -253,6 +261,7 @@ mod tests {
         let at = |text: &str| PathBuf::from(text);
         assert_eq!(state.root(), Path::new("/state/cineris"));
         assert_eq!(state.trust_file(), at("/state/cineris/trust.toml"));
+        assert_eq!(state.pins_file(), at("/state/cineris/pins.toml"));
         assert_eq!(
             state.knowledge_file(&project),
             Some(at("/state/cineris/projects/9f2c4a1b7d3e/knowledge.toml"))
