@@ -315,7 +315,7 @@ impl ScriptRuntime {
     }
 
     /// Runs a call: waits its turn, then serves its host calls through
-    /// `cx` until it ends, its time is up, or it is cancelled.
+    /// the call's context until it ends, its time is up, or it is cancelled.
     ///
     /// # Errors
     ///
