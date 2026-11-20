@@ -422,6 +422,89 @@ fn https_to_a_name_connects_to_the_checked_address_and_plain_http_is_refused() {
     assert_eq!(closer.finish(), [SocketAddr::new(ip("127.0.0.1"), port)]);
 }
 
+/// A port of five digits that closes each connection, as [`Closer`] does:
+/// the TLS fixture's URLs have five digits to write a port over.
+fn a_closer_of_five_digits() -> Closer {
+    loop {
+        let closer = Closer::start();
+        if closer.address.port() >= 10_000 {
+            return closer;
+        }
+        drop(closer.finish());
+    }
+}
+
+/// The fixture's certificate with `port` written over each of its URLs'
+/// `65432` (its issuer, its OCSP responder, its revocation list).
+fn a_leaf_naming(port: u16) -> Vec<u8> {
+    let mut leaf = include_bytes!("../../fixtures/fetch/leaf.der").to_vec();
+    let written = port.to_string();
+    assert_eq!(written.len(), 5);
+    let mut found = 0;
+    let mut at = 0;
+    while let Some(offset) = leaf[at..].windows(5).position(|bytes| bytes == b"65432") {
+        let start = at + offset;
+        leaf[start..start + 5].copy_from_slice(written.as_bytes());
+        at = start + 5;
+        found += 1;
+    }
+    assert_eq!(found, 3, "the fixture names three URLs");
+    leaf
+}
+
+/// A TLS server on loopback for one connection, which presents `leaf` and
+/// reads until the client gives up on it. Its thread is not waited for: a
+/// client that never connects leaves it waiting, and nothing else.
+fn a_tls_server_presenting(leaf: Vec<u8>) -> SocketAddr {
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+    let key = include_bytes!("../../fixtures/fetch/leaf-key.der").to_vec();
+    let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![CertificateDer::from(leaf)],
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key)),
+    )
+    .unwrap();
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let Ok((stream, _)) = listener.accept() else {
+            return;
+        };
+        let connection = rustls::ServerConnection::new(Arc::new(config)).unwrap();
+        let mut tls = rustls::StreamOwned::new(connection, stream);
+        let mut buffer = [0_u8; 1024];
+        // The client refuses the certificate, and the handshake ends there.
+        let _ = std::io::Read::read(&mut tls, &mut buffer);
+    });
+    address
+}
+
+/// What a server's certificate names is never fetched: the certificate is
+/// checked against the system's roots with nothing retrieved, so a server a
+/// script chose cannot send the user's machine to an address the fetch
+/// refuses. The platform's verifier on Windows fetched a certificate's
+/// issuer and its revocation lists from the URLs it names, to any address,
+/// on the thread that polled the fetch.
+#[test]
+fn a_servers_certificate_sends_the_machine_nowhere() {
+    let named = a_closer_of_five_digits();
+    let server = a_tls_server_presenting(a_leaf_naming(named.address.port()));
+    let rig = Rig::answering([&["127.0.0.1"]]);
+    let error = run(rig.fetch(
+        FetchRequest::get(format!("https://localhost:{}/", server.port())),
+        &AddressAllowance::none().with_localhost(),
+    ))
+    .unwrap_err();
+    assert!(matches!(error, FetchError::Connect(_)), "{error:?}");
+    assert_eq!(rig.resolver.asked(), ["localhost"]);
+    assert_eq!(named.finish(), Vec::<SocketAddr>::new());
+}
+
 /// This binary as a child that makes a fetch with every proxy variable set:
 /// its options are the port of the fetch's target.
 const PROXIED: Role = Role::new("cinfetch-proxied=");
