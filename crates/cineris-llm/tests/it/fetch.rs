@@ -58,12 +58,13 @@ fn the_server() -> AddressAllowance {
 }
 
 /// A resolver that answers from a script, one answer for each lookup, and
-/// keeps every name it was asked. With no answer left, a lookup never
-/// ends.
+/// keeps every name it was asked. With no answer left, a lookup fails at
+/// once, or never ends when the test asked for one that hangs.
 #[derive(Debug, Default)]
 struct Answers {
     script: Mutex<VecDeque<io::Result<Vec<IpAddr>>>>,
     asked: Mutex<Vec<String>>,
+    hang: bool,
 }
 
 impl Answers {
@@ -76,10 +77,12 @@ impl Resolve for Answers {
     fn resolve<'a>(&'a self, host: &'a str) -> BoxFuture<'a, io::Result<Vec<IpAddr>>> {
         self.asked.lock().unwrap().push(host.to_owned());
         let answer = self.script.lock().unwrap().pop_front();
+        let hang = self.hang;
         Box::pin(async move {
             match answer {
                 Some(answer) => answer,
-                None => std::future::pending().await,
+                None if hang => std::future::pending().await,
+                None => Err(io::Error::other("the test's resolver has no answer left")),
             }
         })
     }
@@ -103,10 +106,20 @@ impl Rig {
         )
     }
 
+    /// Every lookup waits for ever.
+    fn never_answering() -> Self {
+        Self::scripted(VecDeque::new(), true)
+    }
+
     fn with(script: VecDeque<io::Result<Vec<IpAddr>>>) -> Self {
+        Self::scripted(script, false)
+    }
+
+    fn scripted(script: VecDeque<io::Result<Vec<IpAddr>>>, hang: bool) -> Self {
         let resolver = Arc::new(Answers {
             script: Mutex::new(script),
             asked: Mutex::default(),
+            hang,
         });
         let clock = FakeClock::starting_at(START).unwrap();
         let timer = FakeTimer::manual(&clock);
@@ -667,7 +680,7 @@ fn the_time_limit_ends_a_fetch_and_closes_the_connection() {
 
 #[test]
 fn the_time_limit_covers_the_lookup_and_is_the_callers() {
-    let rig = Rig::answering([]);
+    let rig = Rig::never_answering();
     let limit = secs(5);
     let (result, ()) = block_on(join(
         rig.fetcher.fetch(
@@ -722,7 +735,7 @@ fn cancelling_ends_a_fetch_and_closes_the_connection() {
 
 #[test]
 fn cancelling_ends_a_lookup() {
-    let rig = Rig::answering([]);
+    let rig = Rig::never_answering();
     let cancel = CancelToken::new();
     let (result, ()) = block_on(join(
         rig.fetcher.fetch(
