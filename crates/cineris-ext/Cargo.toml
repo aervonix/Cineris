@@ -9,12 +9,25 @@ publish.workspace = true
 [lib]
 doctest = false
 
+[features]
+# Links the script engine (decision 0005). `cineris-core`'s `scripts` turns
+# it on. Without it, extensions are custom commands, skills and hook
+# commands.
+scripts = ["dep:rquickjs"]
+
 [dependencies]
 cineris-protocol.workspace = true
 cineris-base.workspace = true
 cineris-policy.workspace = true
 cineris-sandbox.workspace = true
 cineris-tools.workspace = true
+
+rquickjs = { workspace = true, optional = true }
+thiserror.workspace = true
+
+[dev-dependencies]
+# This crate's own tests run the engine. Not an edge of the crate table.
+cineris-ext = { workspace = true, features = ["scripts"] }
 
 [lints]
 workspace = true
