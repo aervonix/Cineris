@@ -2496,7 +2496,27 @@ pub(crate) fn assemble(
             .with_limit(KEEP_LIMIT),
     }
     .with_sync(settings.session.durability != cineris_config::schema::SessionDurability::Never);
-    let mut toolbox = Toolbox::read_only(registry)
+    // The extensions' tools, in the registry behind `tool_search` and
+    // `tool_call`: registered from what each registered when it was
+    // approved, with no engine started (step 28).
+    #[cfg(feature = "scripts")]
+    if !options.extensions.is_empty() {
+        let tell_hooks = Arc::clone(&hooks);
+        let parts = Arc::new(crate::ext::HostParts {
+            policy: Arc::clone(&policy),
+            timer: Arc::clone(&options.timer),
+            workspace: root.clone(),
+            write: Arc::new(WriteTool::new(editing.clone())),
+            list: Arc::new(cineris_tools::ListTool::new()),
+            search: Arc::new(cineris_tools::SearchTool::new()),
+            exec: crate::ext::ExecParts::default(),
+            tell: Arc::new(move |message: String| tell_hooks.tell(message)),
+        });
+        for left_out in crate::ext::register(options.extensions.clone(), &parts, &registry) {
+            told.push(left_out);
+        }
+    }
+    let mut toolbox = Toolbox::read_only(Arc::clone(&registry))
         .with(WriteTool::new(editing.clone()))
         .with(EditTool::new(editing))
         .with(PlanTool::new(Arc::clone(&board)))
