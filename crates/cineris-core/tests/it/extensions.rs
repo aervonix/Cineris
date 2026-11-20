@@ -554,22 +554,39 @@ fn a_file_with_a_nul_byte_is_not_read_as_text() {
 }
 
 /// With `fail_on_denial`, a host call nobody can be asked about stops the
-/// turn: the script's call ends there, and nothing more of it runs.
+/// turn: the script's call ends there, nothing more of it runs, a call the
+/// model wrote after it is not run though a rule allows it, and the turn
+/// ends denied without the model being asked again.
 #[test]
 fn a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call() {
     let world = World::new(
         "ext_stop",
-        [call_tool("c1", "ci", json!({})), says("Done.")],
+        [
+            calls(&[
+                (
+                    "c1",
+                    "tool_call",
+                    json!({"tool": "probe/ci", "arguments": {}}),
+                ),
+                (
+                    "c2",
+                    "write",
+                    json!({"path": "after.txt", "content": "after\n"}),
+                ),
+            ]),
+            says("never sent"),
+        ],
     );
     world.user_config(
-        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n\n\
+         [[permissions.rules]]\neffect = \"write\"\nmatch = \"after.txt\"\naction = \"allow\"\n",
     );
     let extension = approve(
         &world.dir.join("ext"),
-        "write = [\".github/**\", \"notes.txt\"]",
+        "write = [\".github/**\"]",
         "cineris.tool({ name: 'ci', run: async () => { \
            try { await cineris.fs.write('.github/workflows/ci.yml', 'on: push\\n') } catch (e) { } \
-           await cineris.fs.write('notes.txt', 'went on\\n'); return 'went on' } });",
+           return 'went on' } });",
     );
     let core = world.core_with(|options| {
         options.extensions = vec![extension];
@@ -584,13 +601,19 @@ fn a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call() {
         )
         .await
         .unwrap();
-        front.turn("set up CI").await;
+        let end = front.turn("set up CI").await;
+        assert_eq!(
+            end.outcome,
+            cineris_protocol::event::TurnOutcome::Denied,
+            "{end:?}"
+        );
         let results = front.results();
         assert_eq!(results[0].1, "denied", "{results:?}");
         assert!(results[0].2.contains("stopped"), "{results:?}");
         assert_eq!(core.permission_denials(&front.session).len(), 1);
+        assert_eq!(world.provider.remaining(), 1, "the model was asked again");
         front.close().await;
     });
-    assert_eq!(world.read("notes.txt"), None);
     assert_eq!(world.read(".github/workflows/ci.yml"), None);
+    assert_eq!(world.read("after.txt"), None);
 }
