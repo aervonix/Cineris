@@ -107,6 +107,10 @@ fn globs_are_relative_to_the_workspace() {
         "../**",
         "src/../../x",
         "./x",
+        // A `\` splits folders for one reader and not another (the review
+        // of step 28).
+        "a\\b/**",
+        "out\\**",
     ] {
         let text = refused(&manifest(&format!("read = [{bad:?}]")));
         assert!(text.contains("capabilities.read"), "{bad}: {text}");

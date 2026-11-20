@@ -433,21 +433,24 @@ fn program(entry: String) -> Result<Program, ManifestError> {
 }
 
 /// A workspace path glob: relative to the workspace, so no root, no `~`,
-/// no drive, and no `.` or `..` name. Whether it compiles is the
-/// capability check's to say, against the workspace.
+/// no drive, and no `.` or `..` name; its folders split by `/` alone, on
+/// every system. A `\` is refused: a program's write roots and the
+/// manifest's own check would read it differently on Linux, one as a
+/// separator and the other as a name's character (the review of step 28).
+/// Whether it compiles is the capability check's to say, against the
+/// workspace.
 fn check_glob(key: &str, glob: &str) -> Result<(), ManifestError> {
     let first = glob.chars().next();
-    let names_dots = glob
-        .split(['/', '\\'])
-        .any(|name| name == "." || name == "..");
+    let names_dots = glob.split('/').any(|name| name == "." || name == "..");
     let bad = glob.trim().is_empty()
-        || matches!(first, Some('/' | '\\' | '~'))
+        || matches!(first, Some('/' | '~'))
+        || glob.contains('\\')
         || glob.as_bytes().get(1) == Some(&b':')
         || names_dots
         || glob.chars().any(char::is_control);
     if bad {
         Err(refused(format!(
-            "`capabilities.{key}` has `{glob}`: a glob of paths in the workspace, written relative to it, with no `.` or `..`"
+            "`capabilities.{key}` has `{glob}`: a glob of paths in the workspace, written relative to it with `/` between its folders, with no `.` or `..`"
         )))
     } else {
         Ok(())
