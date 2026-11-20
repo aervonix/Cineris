@@ -203,9 +203,9 @@ caught-by:
 [break] policy-with-more-after-its-end
 rule: A policy with anything after `end` is refused whole.
 file: crates/cineris-sandbox/src/policy.rs
-in: Policy::decode
-find: if !fields.rest.is_empty() {
-replace: if fields.rest.is_empty() && false {
+in: Policy::decode_with_input
+find: None if !fields.rest.is_empty() => {
+replace: None if fields.rest.is_empty() && false => {
 caught-by:
     cineris-sandbox policy::tests::a_policy_cut_short_or_with_more_after_its_end_is_refused
 
