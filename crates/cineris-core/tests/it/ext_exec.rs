@@ -34,6 +34,16 @@ const SCRIPT: &str = "cineris.tool({ name: 'run', description: 'runs a program',
 /// An approved extension called `name` with these capabilities, written to
 /// a folder of the world's own outside the workspace.
 fn extension(world: &World, name: &str, capabilities: &str) -> ApprovedExtension {
+    extension_running(world, name, capabilities, SCRIPT)
+}
+
+/// [`extension`] with `script` as its main module.
+fn extension_running(
+    world: &World,
+    name: &str,
+    capabilities: &str,
+    script: &str,
+) -> ApprovedExtension {
     let folder = world.dir.join("extensions").join(name);
     std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
@@ -44,7 +54,7 @@ fn extension(world: &World, name: &str, capabilities: &str) -> ApprovedExtension
         ),
     )
     .unwrap();
-    std::fs::write(folder.join("main.js"), SCRIPT).unwrap();
+    std::fs::write(folder.join("main.js"), script).unwrap();
     let snapshot = Arc::new(cineris_ext::folder::Snapshot::read(&folder).unwrap());
     let hash = snapshot.hash();
     let (manifest, registration) = world
@@ -913,6 +923,128 @@ mod confined {
                 "{ran}"
             );
             front.close().await;
+        });
+    }
+
+    /// A supervisor's "allow once" of a program allows that start alone:
+    /// the next start of the same program in the same tool call is put
+    /// again, to the supervisor and the user (the review of step 28: a
+    /// host call's allow-once was remembered under the tool call's item,
+    /// and allowed the next identical one unasked; a supervisor's answer is
+    /// kept no more than a person's).
+    #[test]
+    fn sys_a_supervisors_allow_once_of_a_program_allows_that_start_alone() {
+        use cineris_protocol::lease::{
+            Budget, Effect, HardLimits, Level, NetworkAccess, PathSet, Rule, RuleAction,
+            SandboxPolicy,
+        };
+        use cineris_protocol::methods::{ClientRole, Op, OpResult, SessionRef};
+
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_supervised_once", []);
+        world.user_config(
+            "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+        );
+        let probe = extension_running(
+            &world,
+            "probe",
+            "exec = [\"make\"]",
+            "cineris.tool({ name: 'twice', input: { type: 'object', properties: { args: { type: 'array', \
+               items: { type: 'string' } } } }, run: async (a) => { \
+               await cineris.exec('make', a.args); await cineris.exec('make', a.args); \
+               return 'ran twice' } });",
+        );
+        world.provider.push(calls(&[(
+            "c1",
+            "tool_call",
+            json!({"tool": "probe/twice", "arguments": {"args": echo_args(&[])}}),
+        )]));
+        world.provider.push(says("Done."));
+        let dir = world.dir.join("tools");
+        place_echo(&dir, "make");
+        let env = path_with(&world, &[&dir], &[]);
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+            options.sandbox = Some(cineris_sandbox::support::Support::Landlock(8));
+            options.shell_env = Some(env);
+        });
+        // The supervisor's grant: the program `make`, where commands run
+        // confined.
+        let everything = PathSet {
+            all: true,
+            roots: Vec::new(),
+        };
+        let grant = cineris_policy::standing_lease(
+            cineris_protocol::ids::LeaseId::new("l_test"),
+            cineris_policy::StandingTerms {
+                level: Level::Supervised,
+                rules: vec![Rule {
+                    effect: Effect::Exec,
+                    pattern: "make *".to_owned(),
+                    action: RuleAction::Allow,
+                }],
+                sandbox: SandboxPolicy {
+                    read: everything.clone(),
+                    write: everything,
+                    protect: PathSet::default(),
+                    network: NetworkAccess::Off,
+                },
+                models: Vec::new(),
+                budget: Budget::default(),
+                limits: HardLimits::default(),
+            },
+            cineris_policy::SandboxState::Enforcing,
+        )
+        .expect("a lease");
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            let client = front.core.connect_with_grant(
+                cineris_core::ClientInfo {
+                    role: ClientRole::Supervisor,
+                    ..cineris_core::ClientInfo::user()
+                },
+                Some(grant),
+            );
+            let opened = front
+                .core
+                .handle(
+                    client.id,
+                    Op::SessionOpen(SessionRef {
+                        session_id: front.session.clone(),
+                    }),
+                )
+                .await
+                .expect("the supervisor opens the session");
+            let OpResult::SessionOpen(opened) = opened else {
+                panic!("not the result of session/open");
+            };
+            let layer = Front {
+                core: front.core.clone(),
+                client,
+                session: front.session.clone(),
+                state: opened.session,
+                seen: std::cell::RefCell::new(Vec::new()),
+                answered: std::cell::RefCell::new(Vec::new()),
+                answering: std::cell::RefCell::new(Answering::default()),
+            };
+            front.prompt("run it twice").await;
+            for start in 0..2 {
+                let (id, request) = layer.approval().await;
+                assert_eq!(request.tool, "probe/twice", "start {start}");
+                let (same, _) = front.approval().await;
+                assert_eq!(same, id, "start {start}");
+                layer
+                    .answer(&id, cineris_protocol::methods::ApprovalChoice::AllowOnce)
+                    .unwrap();
+            }
+            front.turns(1).await;
+            let answer = answered(&front, 0);
+            assert!(answer.contains("ran twice"), "{answer}");
+            front.close().await;
+            layer.close().await;
         });
     }
 
