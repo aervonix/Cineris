@@ -531,3 +531,587 @@ find: result.outcome = TurnOutcome::Denied;
 replace: let _ = TurnOutcome::Denied;
 caught-by:
     cineris-cli report::tests::a_turn_that_completed_after_a_denial_is_held_to_it
+
+# From mutations/step-28-exec.breaks (part `exec`).
+# Step 28: an extension's `cineris.exec` (docs/steps/28/answered.md, "The
+# processes"), and the sandbox launcher's input it needs.
+#
+# Each rule of the program's start is broken here: its lookup (outside the
+# workspace and the writable roots, a directory at a time, .exe, .cmd and
+# .bat only on Windows), the line the permission engine reads and its
+# decision, the launcher of the extension's own (write roots, the
+# temporary directory, the network, every level), the look at protected
+# paths around it, its environment and input, the shim's line for
+# cmd.exe, and the launcher's input field.
+#
+# The breaks of code only Windows runs carry `os: windows`; run them on a
+# runner with `gh workflow run try --ref <branch> -f os=windows
+# -f command="mutate step-28-exec --jobs 2"`.
+
+# ------------------------------------------------------------ the lookup
+
+# Two guards hold the rule: the directories are filtered, and each
+# candidate must be absolute. Both are broken.
+[break] runnable-taken-from-a-relative-path-entry
+rule: A program is looked for only in the absolute directories of PATH: a relative entry names wherever the harness was started.
+file: crates/cineris-base/src/program.rs
+in: find_runnable_outside
+find: .filter(|directory| directory.is_absolute()) .flat_map(|directory| names.iter().map(move |name| directory.join(name))) .find(|candidate| { candidate.is_absolute()
+replace: .filter(|_| true) .flat_map(|directory| names.iter().map(move |name| directory.join(name))) .find(|candidate| { true
+caught-by:
+    cineris-base program::tests::a_runnable_inside_an_avoided_root_or_a_relative_directory_is_passed_over
+
+[break] runnable-taken-inside-the-workspace
+rule: A program named by its bare name is never one inside the workspace or a writable root, nor reached through one.
+file: crates/cineris-base/src/program.rs
+in: find_runnable_outside
+find: && !passes_through(candidate, &avoid)
+replace: && !passes_through(candidate, &avoid[..0])
+packages: cineris-base, cineris-core
+caught-by:
+    cineris-base program::tests::a_runnable_inside_an_avoided_root_or_a_relative_directory_is_passed_over
+    cineris-core::it ext_exec::a_program_in_the_workspace_or_behind_a_relative_path_entry_is_not_found
+
+[break] runnable-shims-not-tried
+rule: On Windows each directory is looked in for name.cmd and name.bat as well as name.exe.
+file: crates/cineris-base/src/program.rs
+in: find_runnable_outside
+find: .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+replace: .flat_map(|directory| names.iter().take(1).map(move |name| directory.join(name)))
+caught-by:
+    cineris-base program::tests::by_windows_rules_a_runnable_is_looked_for_a_directory_at_a_time
+
+[break] runnable-ordered-by-extension-across-directories
+rule: On Windows the search goes a directory at a time: a name.cmd in an earlier directory is taken before a name.exe in a later one.
+file: crates/cineris-base/src/program.rs
+in: find_runnable_outside
+find: .flat_map(|directory| names.iter().map(move |name| directory.join(name)))
+replace: .flat_map(|directory| names.iter().enumerate().map(move |(rank, name)| (rank, directory.join(name)))).filter(|(_, candidate)| is_program(candidate, windows)).min_by_key(|(rank, _)| *rank).map(|(_, candidate)| candidate).into_iter()
+caught-by:
+    cineris-base program::tests::by_windows_rules_a_runnable_is_looked_for_a_directory_at_a_time
+
+[break] runnable-takes-any-extension
+rule: On Windows a name with an extension is taken only when it is .exe, .cmd or .bat: nothing else of PATHEXT (.ps1, .vbs, .js) is ever run.
+file: crates/cineris-base/src/program.rs
+in: find_runnable_outside
+find: Some(_) => return None
+replace: Some(_) => vec![OsString::from(name)]
+caught-by:
+    cineris-base program::tests::by_windows_rules_a_runnable_is_looked_for_a_directory_at_a_time
+
+[break] runnable-takes-a-ps1
+rule: The three extensions tried on Windows are .exe, .cmd and .bat, never .ps1.
+file: crates/cineris-base/src/program.rs
+in: WINDOWS_RUNNABLE
+in-string: bat
+replace: ps1
+caught-by:
+    cineris-base program::tests::by_windows_rules_a_runnable_is_looked_for_a_directory_at_a_time
+
+[break] runnable-takes-the-bare-name
+rule: On Windows a name with no extension is never taken as the file of that bare name.
+file: crates/cineris-base/src/program.rs
+in: find_runnable_outside
+find: .map(|extension| OsString::from(format!("{name}.{extension}")))
+replace: .map(|extension| OsString::from(format!("{name}.{extension}"))).chain(std::iter::once(OsString::from(name)))
+caught-by:
+    cineris-base program::tests::by_windows_rules_a_runnable_is_looked_for_a_directory_at_a_time
+
+[break] path-of-any-extension-on-windows
+rule: On Windows a program named by its path is started only when it is a .exe, .cmd or .bat.
+file: crates/cineris-base/src/program.rs
+in: runnable_by_extension
+find: !windows || path.extension().is_some_and(runnable_on_windows)
+replace: true || path.extension().is_some_and(runnable_on_windows)
+caught-by:
+    cineris-base program::tests::a_batch_script_is_known_by_its_extension_in_any_case
+
+[break] path-inside-a-writable-root-taken
+rule: While commands are confined, a program named by its path inside a writable root is refused.
+file: crates/cineris-core/src/programs.rs
+in: find
+find: if !roots.is_empty() && cineris_base::program::passes_through(named, &roots) {
+replace: if roots.is_empty() && cineris_base::program::passes_through(named, &roots) {
+caught-by:
+    cineris-core::it ext_exec::confined::a_program_named_by_a_path_inside_a_writable_root_is_refused_while_confined
+
+# ------------------------------------------- the line, and its decision
+
+[break] engine-line-argument-unquoted
+rule: The line the permission engine reads has each argument quoted in the session shell's syntax, so that it reads the words the program is given.
+file: crates/cineris-core/src/programs.rs
+in: engine_line
+find: line.push_str(&quoted);
+replace: line.push_str(argument);
+caught-by:
+    cineris-core programs::tests::the_engines_line_quotes_each_argument_in_the_shells_syntax
+    cineris-core::it ext_exec::a_question_about_a_program_shows_the_quoted_line_and_offers_only_once_or_deny
+
+[break] engine-line-unquotable-argument-taken
+rule: An argument the session's shell cannot quote as one word refuses the call, naming it.
+file: crates/cineris-core/src/programs.rs
+in: engine_line
+find: let quoted = shell.quote(argument).map_err(
+replace: let quoted = shell.quote(argument).or_else(|_| Ok::<_, cineris_tools::shell::Unquotable>(argument.clone())).map_err(
+caught-by:
+    cineris-core programs::tests::the_engines_line_quotes_each_argument_in_the_shells_syntax
+
+[break] exec-not-decided
+rule: A program starts only when the permission engine, or the person it asks, allows the line.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: effects, None, ).await?;
+replace: effects, None, ).await.ok();
+caught-by:
+    cineris-core::it ext_exec::a_program_a_rule_denies_is_refused
+    cineris-core::it ext_exec::a_question_about_a_program_shows_the_quoted_line_and_offers_only_once_or_deny
+
+[break] exec-network-not-decided
+rule: With exec_network a program is decided as reaching the network (any host) beside its exec.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: if request.network {
+replace: if !request.network {
+caught-by:
+    cineris-core::it ext_exec::a_program_with_exec_network_is_decided_as_reaching_the_network
+
+[break] exec-cwd-outside-the-workspace
+rule: A program runs inside the workspace: a cwd that resolves outside it is refused.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: if !cwd.is_inside_workspace() {
+replace: if cwd.is_inside_workspace() && false {
+caught-by:
+    cineris-core::it ext_exec::a_program_is_not_run_outside_the_workspace
+
+# ----------------------------------------------- the launcher of its own
+
+[break] exec-write-roots-the-sessions
+rule: A program's only write roots are its manifest's and the temporary directory, not the session's grant.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::extension_launcher
+find: let mut write: Vec<PathBuf> = write_roots.iter().map(|root| resolve_root(root)).collect();
+replace: let mut write: Vec<PathBuf> = self.launcher.read().unwrap_or_else(PoisonError::into_inner).as_ref()?.policy().write.clone(); let _ = write_roots;
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_writes_only_its_write_roots_and_the_temporary_directory
+
+[break] exec-no-temporary-directory
+rule: A program may write the session's private temporary directory, its TMPDIR.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::extension_launcher
+find: write.extend(temp.clone());
+replace: let _ = &write;
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_writes_only_its_write_roots_and_the_temporary_directory
+
+[break] exec-network-always-on
+rule: A program reaches the network only with exec_network.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::extension_launcher
+find: network: if network { Network::Full } else { Network::Off }
+replace: network: if network || true { Network::Full } else { Network::Off }
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_has_the_network_only_with_exec_network
+
+[break] exec-network-never-on
+rule: With exec_network a program reaches the network.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::extension_launcher
+find: network: if network { Network::Full } else { Network::Off }
+replace: network: if network && false { Network::Full } else { Network::Off }
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_has_the_network_only_with_exec_network
+
+[break] exec-unconfined-at-unrestricted
+rule: A program is confined by its own launcher at every level, unrestricted included.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::extension_launcher
+find: let (program, prefix, landlock) = self.made_with.as_ref()?;
+replace: let (program, prefix, landlock) = self.made_with.as_ref().filter(|_| self.confines())?;
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_writes_only_its_write_roots_and_the_temporary_directory
+
+[break] exec-input-not-given-when-confined
+rule: A confined program is given its input, after the launcher's policy.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: let wrapped = match &request.stdin {
+replace: let wrapped = match &None::<Vec<u8>> {
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_writes_only_its_write_roots_and_the_temporary_directory
+
+[break] exec-input-not-given-when-unconfined
+rule: A program started as it is is given its input through the runner's pipe.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: stdin: request.stdin.clone()
+replace: stdin: None
+caught-by:
+    cineris-core::it ext_exec::sys_a_program_runs_with_its_arguments_and_input_and_its_streams_apart
+
+# ------------------------------------------- the look at protected paths
+
+[break] exec-look-after-skipped
+rule: A program with a write root has the protected paths looked at after it, and a change it made fails the call.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: look_after(parts, host, watch, before, finished.escaped).await?;
+replace: let _ = (watch, before);
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
+
+[break] exec-protected-change-does-not-stop-the-turn
+rule: A protected path a program changed stops the turn: the model's next call does not run.
+file: crates/cineris-core/src/ext/exec.rs
+in: look_after
+find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Failed(note));
+replace: return Err(HostError::Failed(note));
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
+
+[break] exec-protected-change-does-not-fail-the-call
+rule: A protected path a program changed fails its call, naming the change.
+file: crates/cineris-core/src/ext/exec.rs
+in: look_after
+find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Failed(note));
+replace: host.parts.policy.stop_turn(cx.turn, note.clone()); return Ok(());
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
+
+[break] exec-change-from-outside-not-looked-for
+rule: Before a confined start with a write root, a protected path changed since the last look, by nothing of the harness's, refuses the start and stops the turn.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: && parts.sandbox.confines()
+replace: && !parts.sandbox.confines()
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_protected_path_changed_since_the_last_program_refuses_the_next
+
+# ------------------------------------------------------ its environment
+
+[break] exec-environment-not-a-commands
+rule: A program is given what a shell command is given: no provider key.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: env: cineris_tools::shell::command_env(inherited, &removed, directory.as_os_str())
+replace: env: { let _ = &removed; inherited }
+caught-by:
+    cineris-core::it ext_exec::sys_a_provider_key_and_a_removed_variable_do_not_reach_the_program
+
+[break] exec-env-remove-not-applied
+rule: A variable shell.env_remove names does not reach a program.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: let mut removed = parts.env_remove.clone();
+replace: let mut removed: Vec<String> = Vec::new();
+caught-by:
+    cineris-core::it ext_exec::sys_a_provider_key_and_a_removed_variable_do_not_reach_the_program
+
+# ------------------------------------------------- the shim's cmd.exe line
+
+[break] shim-backslashes-not-doubled
+rule: A run of backslashes before an argument's closing quote is doubled, so that the argument does not run on into the next.
+file: crates/cineris-core/src/programs.rs
+in: batch_line
+find: line.push_str(&"\\".repeat(trailing));
+replace: let _ = trailing;
+caught-by:
+    cineris-core programs::tests::a_trailing_backslash_does_not_end_an_argument_early
+
+[break] shim-outer-quotes-missing
+rule: The script's line is in an outer pair of quotes, which cmd.exe's /s takes off.
+file: crates/cineris-core/src/programs.rs
+in: batch_line
+find: let mut line = String::from("\"");
+replace: let mut line = String::new();
+caught-by:
+    cineris-core programs::tests::a_scripts_line_quotes_each_item_inside_an_outer_pair
+
+[break] shim-path-not-checked
+rule: The script's path is refused, as an argument is, when it holds a character cmd.exe cannot carry.
+file: crates/cineris-core/src/programs.rs
+in: batch_line
+find: REFUSED.iter().find(|(refused, _)| item.contains(*refused))
+replace: REFUSED.iter().find(|(refused, _)| index > 0 && item.contains(*refused))
+caught-by:
+    cineris-core programs::tests::each_character_cmd_cannot_carry_is_refused_with_its_name
+
+[break] shim-double-quote-taken
+rule: An argument with a double quote is refused for a batch script: it would end the quoting.
+file: crates/cineris-core/src/programs.rs
+in: REFUSED
+find: ('"', "a double quote (\")")
+replace: ('\u{1}', "a double quote (\")")
+caught-by:
+    cineris-core programs::tests::each_character_cmd_cannot_carry_is_refused_with_its_name
+
+[break] shim-percent-taken
+rule: An argument with a percent sign is refused for a batch script: cmd.exe expands it inside quotes.
+file: crates/cineris-core/src/programs.rs
+in: REFUSED
+find: ('%', "a percent sign (%)")
+replace: ('\u{1}', "a percent sign (%)")
+caught-by:
+    cineris-core programs::tests::each_character_cmd_cannot_carry_is_refused_with_its_name
+
+[break] shim-exclamation-taken
+rule: An argument with an exclamation mark is refused for a batch script: a script that turns delayed expansion on expands it.
+file: crates/cineris-core/src/programs.rs
+in: REFUSED
+find: ('!', "an exclamation mark (!)")
+replace: ('\u{1}', "an exclamation mark (!)")
+caught-by:
+    cineris-core programs::tests::each_character_cmd_cannot_carry_is_refused_with_its_name
+
+[break] shim-carriage-return-taken
+rule: An argument with a carriage return is refused for a batch script.
+file: crates/cineris-core/src/programs.rs
+in: REFUSED
+find: ('\r', "a carriage return")
+replace: ('\u{1}', "a carriage return")
+caught-by:
+    cineris-core programs::tests::each_character_cmd_cannot_carry_is_refused_with_its_name
+
+[break] shim-line-feed-taken
+rule: An argument with a line feed is refused for a batch script: cmd.exe reads one line.
+file: crates/cineris-core/src/programs.rs
+in: REFUSED
+find: ('\n', "a line feed")
+replace: ('\u{1}', "a line feed")
+caught-by:
+    cineris-core programs::tests::each_character_cmd_cannot_carry_is_refused_with_its_name
+
+[break] shim-nul-taken
+rule: An argument with a NUL is refused for a batch script.
+file: crates/cineris-core/src/programs.rs
+in: REFUSED
+find: ('\0', "a NUL character")
+replace: ('\u{1}', "a NUL character")
+caught-by:
+    cineris-core programs::tests::each_character_cmd_cannot_carry_is_refused_with_its_name
+
+[break] shim-delayed-expansion-on
+rule: cmd.exe is started with delayed expansion off.
+file: crates/cineris-core/src/programs.rs
+in: CMD_ARGUMENTS
+in-string: /v:off
+replace: /v:on
+caught-by:
+    cineris-core programs::tests::a_batch_script_is_started_through_cmd_and_a_program_as_it_is
+
+[break] shim-started-as-a-program
+rule: On Windows a .cmd or .bat is started through cmd.exe with its own line, never handed to the system as a program.
+file: crates/cineris-core/src/programs.rs
+in: command_line
+find: if !(windows && cineris_base::program::is_batch_script(found)) {
+replace: if !(windows && cineris_base::program::is_batch_script(found)) || true {
+caught-by:
+    cineris-core programs::tests::a_batch_script_is_started_through_cmd_and_a_program_as_it_is
+
+[break] shim-no-cmd-found
+rule: On Windows a batch script is started through %SystemRoot%\System32\cmd.exe, found from the environment.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: .then(|| programs::system_cmd(&cmd_from, &avoid))
+replace: .then(|| { let _ = (&cmd_from, &avoid); None::<PathBuf> })
+os: windows
+caught-by:
+    cineris-core::it ext_exec::windows::sys_a_shim_passes_each_argument_and_its_input_as_written
+    cineris-core::it ext_exec::windows::sys_a_shim_in_an_earlier_folder_beats_an_exe_in_a_later_one_and_no_ps1_runs
+
+# ------------------------------------------------- the launcher's input
+
+[break] input-not-sealed
+rule: The input a confined command is given cannot be written by it.
+file: crates/cineris-sandbox/src/launch.rs
+in: input_file
+find: let seals = libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+replace: let seals = libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL;
+os: linux
+# The backends are built only with cineris-core beside it.
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox::it confined::sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it
+
+[break] input-not-rewound
+rule: The input a confined command is given starts at its first byte.
+file: crates/cineris-sandbox/src/launch.rs
+in: input_file
+find: file.rewind()?;
+replace: let _ = &mut file;
+os: linux
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox::it confined::sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it
+
+[break] input-not-given-to-the-command
+rule: A confined command with an input field is given that input, not a closed one.
+file: crates/cineris-sandbox/src/launch.rs
+in: become_command
+find: Some(input) => std::process::Stdio::from(input)
+replace: Some(_) => std::process::Stdio::null()
+os: linux
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox::it confined::sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it
+
+[break] input-read-only-to-the-policys-limit
+rule: The launcher reads the input with its policy, up to the input's own limit.
+file: crates/cineris-sandbox/src/launch.rs
+in: launch
+find: .take(u64::try_from(MAX_BYTES + MAX_INPUT).unwrap_or(u64::MAX) + 1)
+replace: .take(u64::try_from(MAX_BYTES + MAX_INPUT * 0).unwrap_or(u64::MAX) + 1)
+os: linux
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox::it confined::sys_a_confined_command_reads_exactly_its_input_and_cannot_change_it
+
+[break] input-length-mismatch-taken
+rule: The bytes after the policy's end must be exactly the length its input field says.
+file: crates/cineris-sandbox/src/policy.rs
+in: Policy::decode_with_input
+find: Some(length) if fields.rest.len() != length => {
+replace: Some(length) if fields.rest.len() < length => {
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox policy::tests::an_input_whose_length_does_not_match_or_is_given_twice_is_refused
+    cineris-sandbox policy::tests::a_damaged_input_field_is_refused_never_misread
+    cineris-sandbox::it confined::sys_an_input_of_the_wrong_length_runs_nothing
+
+[break] input-given-twice-taken
+rule: A policy with two input fields is refused whole.
+file: crates/cineris-sandbox/src/policy.rs
+in: Policy::decode_with_input
+find: b"input" => once(&mut input, input_length(value)?, "input")?
+replace: b"input" => input = Some(input_length(value)?)
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox policy::tests::an_input_whose_length_does_not_match_or_is_given_twice_is_refused
+    cineris-sandbox policy::tests::a_damaged_input_field_is_refused_never_misread
+
+[break] input-length-leading-zero-taken
+rule: An input's length is written with no leading zero: one length, one way to write it.
+file: crates/cineris-sandbox/src/policy.rs
+in: input_length
+find: && (value.len() == 1 || value[0] != b'0')
+replace: && true
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox policy::tests::an_input_whose_length_does_not_match_or_is_given_twice_is_refused
+    cineris-sandbox policy::tests::a_damaged_input_field_is_refused_never_misread
+
+[break] input-past-the-limit-taken
+rule: An input longer than the limit is refused, however its policy is written.
+file: crates/cineris-sandbox/src/policy.rs
+in: input_length
+find: if length > MAX_INPUT {
+replace: if length > MAX_INPUT * 2 {
+packages: cineris-sandbox, cineris-core
+caught-by:
+    cineris-sandbox policy::tests::a_commands_input_follows_the_policy_and_reads_back_whole
+
+# From mutations/step-28-runner.breaks (part `runner`).
+# Step 28, the process runner's part: a command's standard output and
+# standard error read apart (`Runner::run_apart` over
+# `tree::Output::attach_split`), for an extension's `cineris.exec`
+# (docs/architecture/05-tools.md, "`shell`", "Output").
+
+# ----------------------------------------------- the two pipes of the tree
+
+[break] split-output-merges-the-streams
+rule: A split output gives the standard error a pipe of its own: nothing the command writes there comes through the standard output's pipe.
+file: crates/cineris-sandbox/src/tree/mod.rs
+in: Output::attach_split
+find: let (err_reader, err_writer) = io::pipe()?;
+replace: let (err_reader, err_writer) = (io::pipe()?.0, out_writer.try_clone()?);
+packages: cineris-sandbox,cineris-tools
+caught-by:
+    cineris-sandbox::it tree::sys_a_split_output_keeps_the_two_streams_apart
+    cineris-tools::it process_apart::sys_standard_output_and_standard_error_are_kept_apart_and_whole
+
+[break] split-output-stops-swapped
+rule: Each stream of a split output is stopped by its own stop, and a stop leaves the other stream's read alone.
+file: crates/cineris-sandbox/src/tree/mod.rs
+in: Output::attach_split
+find:
+    stdout: (Self { pipe: out_pipe }, OutputStop { handle: out_handle }),
+    stderr: (Self { pipe: err_pipe }, OutputStop { handle: err_handle })
+replace:
+    stdout: (Self { pipe: out_pipe }, OutputStop { handle: err_handle }),
+    stderr: (Self { pipe: err_pipe }, OutputStop { handle: out_handle })
+caught-by:
+    cineris-sandbox::it tree::sys_each_stream_of_a_split_output_is_stopped_by_its_own_stop
+
+# ------------------------------------------------ the runner's two readers
+
+[break] apart-keeps-past-the-limit
+rule: Of each stream, at most the run's limit is kept in memory.
+file: crates/cineris-tools/src/process/apart.rs
+in: KeptStream::push
+find: let room = limit.saturating_sub(self.bytes.len()).min(bytes.len());
+replace: let room = limit.max(bytes.len()).min(bytes.len());
+caught-by:
+    cineris-tools process::apart::tests::a_stream_keeps_its_first_bytes_up_to_the_limit_and_counts_the_rest
+    cineris-tools::it process_apart::sys_each_stream_is_cut_at_the_limit_and_its_size_counted
+
+[break] apart-counts-only-what-it-keeps
+rule: Every byte of a stream is counted, those past the limit included, so that a cut stream says how much it carried.
+file: crates/cineris-tools/src/process/apart.rs
+in: KeptStream::push
+find: self.total_bytes += bytes.len() as u64;
+replace: self.total_bytes += room as u64;
+caught-by:
+    cineris-tools process::apart::tests::a_stream_keeps_its_first_bytes_up_to_the_limit_and_counts_the_rest
+    cineris-tools::it process_apart::sys_each_stream_is_cut_at_the_limit_and_its_size_counted
+
+[break] apart-stdout-read-into-the-stderr
+rule: What the command writes to its standard output is kept as its standard output, and only there.
+file: crates/cineris-tools/src/process/apart.rs
+in: Runner::start_apart
+find: |streams| &streams.stdout
+replace: |streams| &streams.stderr
+caught-by:
+    cineris-tools::it process_apart::sys_standard_output_and_standard_error_are_kept_apart_and_whole
+
+# Only Linux has a way out of the tree, so only there can a stream stay held
+# after the tree is gone, and only there does the run's end show whether it
+# waited for both readers and let both go.
+[break] apart-run-ends-with-the-first-stream
+rule: A run with its streams apart has ended its output only when both readers have ended.
+file: crates/cineris-tools/src/process/apart.rs
+in: StreamDone::drop
+find: if self.streams.readers_left.fetch_sub(1, Ordering::SeqCst) == 1 {
+replace: if true {
+os: linux
+caught-by:
+    cineris-tools::it process_apart::sys_a_process_that_left_the_tree_holding_standard_error_has_its_reader_stopped
+
+[break] apart-stderr-reader-never-stopped
+rule: When the runner stops listening, it stops the reader of the standard error as well as that of the standard output.
+file: crates/cineris-tools/src/process/apart.rs
+in: Runner::start_apart
+find: Stops(vec![stdout_stop, stderr_stop])
+replace: Stops({ std::mem::forget(stderr_stop); vec![stdout_stop] })
+os: linux
+caught-by:
+    cineris-tools::it process_apart::sys_a_process_that_left_the_tree_holding_standard_error_has_its_reader_stopped
+
+# ------------------------------------------------ stopped as run_until is
+
+[break] apart-cancellation-not-seen
+rule: A command run with its streams apart is stopped in stages when its call is cancelled.
+file: crates/cineris-tools/src/process/apart.rs
+in: Runner::run_apart
+find: &shared, cancel, kill_now
+replace: &shared, &CancelToken::new(), kill_now
+caught-by:
+    cineris-tools::it process_apart::sys_cancelling_a_command_run_apart_stops_its_whole_tree
+
+[break] apart-kill-now-not-seen
+rule: A command run with its streams apart is killed at once on "kill now".
+file: crates/cineris-tools/src/process/apart.rs
+in: Runner::run_apart
+find: cancel, kill_now, &mut NoOutput
+replace: cancel, &CancelToken::new(), &mut NoOutput
+caught-by:
+    cineris-tools::it process_apart::sys_kill_now_kills_a_command_run_apart_without_the_graces
