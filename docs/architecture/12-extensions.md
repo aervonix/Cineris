@@ -115,6 +115,17 @@ A skill is a folder with a `SKILL.md` that starts with a name and a description.
 - **Scripts inside a skill** are just files. If the model runs one, it runs through the shell tool under the normal permissions.
 - Skills need no trust, for the same reason as instruction files.
 
+**As built in step 28** (`cineris_ext::skills`; [steps/28/answered.md](../steps/28/answered.md), point 7). `skills::find` looks in `.cineris/skills/`, `.agents/skills/` and `.claude/skills/` in the workspace, then the same three in the home directory; with `compat.skills` off, only the two `.cineris/skills/`. It reads the folders and the `SKILL.md` files and nothing else, and blocks, so the caller runs it on the blocking pool.
+
+- **A skill is `<root>/<folder>/SKILL.md`, one level down.** A `SKILL.md` in the root itself or deeper than one folder is not one, and a folder with none is passed over without a word.
+- **Paths are judged where they lead.** Every root, folder and file is found through the session's path resolver (`~`, a relative path, `..`, links, the case Windows stores), and two places are compared by place (`cineris_base::location_within` and its friends), never by their text. A root may be a link the user made (`~/.claude/skills` often is), and is followed; **a project's root must lead to a place inside the workspace.** A skill's folder or its `SKILL.md` reached through a link is followed only where it stays below its root. The file is opened with `open_regular`, which refuses a link, a FIFO or a device at its last name. A root that is the same folder as one looked at before it is looked at once.
+- **The front matter** is a block between two `---` lines at the top of the file, read by a small reader of the plain YAML skills are written in (`FrontMatter`), with no YAML library: `key: value` lines, a value in either quote with its escapes, a value folded over lines, and a `>` or `|` block. A file with no front matter, or without a `name`, is left out with its reason; a missing description is an empty one.
+- **For the system prompt** each name and description is one line: white space becomes one space, and the control characters and Unicode's format characters (the bidirectional controls, the zero-width characters, U+FEFF) are taken out. A name is cut to 64 bytes and a description to 300, between two characters, ending in `…`. The path shown is relative to the workspace for a project's skill and under `~` for the user's, never the home directory written out, with every character that acts unseen written as an escape.
+- **Caps:** at most 1,000 entries looked at in a root (every entry counts, a file too); a `SKILL.md` of at most 64 KiB; at most 100 skills listed, the rest counted.
+- **One name, one skill.** Of two skills with one name, the project's is taken over the user's, and `.cineris/` over `.agents/` over `.claude/`, whatever order the roots are given in; the other is left out with its reason. The list is by name.
+- **What was left out** (a link out of its root or to nothing, a file that is no file, too large, no front matter, no name, a duplicate, a root past its cap) is returned with its reason, for the user; the model is told only how many skills it is not shown.
+- **Section 6's part** (`skills::render`) is a heading line, one line a skill, `- name: description (path)` (`- name (path)` with no description), and a line that counts the skills not listed, within 8 KiB.
+
 ### Tier 3: hooks
 
 A hook runs when an event matches. It is either a command line or a function in an extension script.

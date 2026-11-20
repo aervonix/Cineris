@@ -12,7 +12,9 @@
 //! - [`host`]: the host functions' contract, and [`host::serve`], which
 //!   checks the manifest before the session's side is asked;
 //! - [`registration`]: what a script registers;
-//! - [`event`]: the seven events hooks run on.
+//! - [`event`]: the seven events hooks run on;
+//! - [`skills`]: the skills in the project's and the user's folders, and
+//!   the list of them in section 6 of the system prompt.
 //!
 //! Behind the `scripts` feature, [`engine`]: QuickJS, one runtime an
 //! extension on a thread of its own.
@@ -25,3 +27,4 @@ pub mod folder;
 pub mod host;
 pub mod manifest;
 pub mod registration;
+pub mod skills;
