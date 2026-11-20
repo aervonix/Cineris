@@ -101,7 +101,7 @@ impl CallHost<'_> {
         }
     }
 
-    /// `cx` with the extension's own table of files: the `write` tool
+    /// The call's context with the extension's own table of files: the `write` tool
     /// judges the extension's writes by what its script read.
     fn extension_cx(&self) -> RunCx {
         let mut cx = self.cx.clone();
