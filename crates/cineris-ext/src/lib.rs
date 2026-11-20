@@ -16,7 +16,9 @@
 //! - [`registration`]: what a script registers;
 //! - [`cache`]: the registration cache, what each approved extension
 //!   registered, kept by its hash;
-//! - [`event`]: the seven events hooks run on.
+//! - [`event`]: the seven events hooks run on;
+//! - [`skills`]: the skills in the project's and the user's folders, and
+//!   the list of them in section 6 of the system prompt.
 //!
 //! Behind the `scripts` feature, [`engine`]: QuickJS, one runtime an
 //! extension on a thread of its own.
@@ -31,4 +33,5 @@ pub mod folder;
 pub mod host;
 pub mod manifest;
 pub mod registration;
+pub mod skills;
 pub mod source;

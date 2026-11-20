@@ -1,0 +1,1281 @@
+//! Skills: folders of instructions the model reads when a task calls for
+//! them (`docs/architecture/12-extensions.md`, "Tier 2: skills";
+//! `docs/steps/28/answered.md`, point 7).
+//!
+//! A skill is a folder holding a `SKILL.md` whose front matter gives a
+//! `name` and a `description`: the open Agent Skills layout, read as it is,
+//! so that people's existing skills work. [`find`] looks for them in the
+//! roots it is given ([`Root::standard`] gives the six), and
+//! [`render`] writes the part of section 6 of the system prompt that lists
+//! them. Skills are text for the model, as instruction files are, and need
+//! no trust: nothing here runs anything.
+//!
+//! **What is a skill.** `<root>/<folder>/SKILL.md`, one level down. A
+//! `SKILL.md` directly in a root, or deeper than one folder, is not one, and
+//! a folder with no `SKILL.md` is passed over without a word.
+//!
+//! **Paths are judged where they lead.** Every root, folder and file is
+//! found through the session's path resolver ([`PathResolver`]), which takes
+//! `~`, a relative path and `..`, follows each link and, on Windows, puts
+//! every name in the case the file system stores. Two places are then
+//! compared with [`location_within`] and its friends, never by their text.
+//!
+//! - **A root may be a link** the user made (`~/.claude/skills` often is),
+//!   and is followed: the user named it. **A project's root must lead to a
+//!   place inside the workspace;** one that leads out is left out with its
+//!   reason, since what a repository's link reaches is not the repository's.
+//! - **A skill's folder or its `SKILL.md` reached through a link** is
+//!   followed only where it stays inside its root. A link that leads out, or
+//!   to nothing, is left out with its reason.
+//! - **The file is opened with [`open_regular`]**, after resolving, which
+//!   refuses a link, a FIFO or a device at the last name, so what is read is
+//!   what was checked.
+//!
+//! **The front matter** is read by [`FrontMatter::read`], a small reader of
+//! the plain YAML skills are written in, with no YAML library: `key: value`
+//! lines, quoted strings in both kinds of quotes, a value folded over
+//! lines, and a `>` or `|` block. A file with no front matter, or without a
+//! name, is left out with its reason. A missing description is an empty
+//! one.
+//!
+//! **For the system prompt** each name and description is made one line,
+//! with nothing in it that acts unseen ([`one_line`]): a line break or a
+//! tab becomes a space, every other control character and every format
+//! character (`Cf`: the bidirectional controls, the zero-width characters,
+//! U+FEFF) is taken out, and the text is cut at a character's edge to
+//! [`MAX_NAME_BYTES`] and [`MAX_DESCRIPTION_BYTES`]. The path shown is
+//! relative to the workspace for a project's skill and under `~` for the
+//! user's, never the home directory written out, with every character that
+//! acts unseen written as an escape ([`cineris_base::visible`]), which the
+//! resolver reads back when the model asks for the file.
+//!
+//! **Caps:** at most [`MAX_ENTRIES`] entries looked at in a root, a
+//! `SKILL.md` of at most [`MAX_SKILL_BYTES`], and at most [`MAX_SKILLS`]
+//! skills listed, the rest counted. **One name, one skill:** where two
+//! skills have one name, the project's is taken over the user's, and
+//! `.cineris/` over `.agents/` over `.claude/`; the other is left out with
+//! its reason. **The order is fixed:** by name, then by root.
+//!
+//! Finding skills blocks: it reads folders and files. The caller runs
+//! [`find`] on the blocking pool.
+
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "finding skills reads folders and files; callers run it on the blocking pool"
+)]
+
+use std::ffi::{OsStr, OsString};
+use std::fs::FileType;
+use std::io::Read as _;
+use std::path::{Component, Path, PathBuf};
+
+use cineris_base::text::{ELLIPSIS, truncate_bytes};
+use cineris_base::visible::is_selector;
+use cineris_base::{
+    AbsPath, OpenError, PathError, PathResolver, ResolvedPath, acts_unseen, location_within,
+    open_regular, same_location, strip_location_prefix, visible,
+};
+
+/// The file that makes a folder a skill.
+pub const FILE_NAME: &str = "SKILL.md";
+/// The most skills listed. The rest are counted, not listed.
+pub const MAX_SKILLS: usize = 100;
+/// The largest `SKILL.md` that is read. A larger one is left out.
+pub const MAX_SKILL_BYTES: u64 = 64 * 1024;
+/// The most entries looked at in one root. Every entry counts, a file
+/// beside the skills' folders too, since each costs a look; past it the
+/// rest of the root is not read, and that is said.
+pub const MAX_ENTRIES: usize = 1_000;
+/// The longest a skill's name is shown, in bytes.
+pub const MAX_NAME_BYTES: usize = 64;
+/// The longest a skill's description is shown, in bytes.
+pub const MAX_DESCRIPTION_BYTES: usize = 300;
+/// The cap on section 6 of the system prompt, in bytes.
+pub const INDEX_CAP: usize = 8 * 1024;
+
+/// Whose a root is.
+///
+/// The order is the order a name is taken in: the project's skill over the
+/// user's of the same name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Owner {
+    /// The workspace's: its own folder of skills, text from the repository.
+    Project,
+    /// The user's, in their home directory.
+    User,
+}
+
+/// Which tool's layout a root follows.
+///
+/// The order is the order a name is taken in: `.cineris/` over `.agents/`
+/// over `.claude/`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Layout {
+    /// `.cineris/skills/`, Cineris's own.
+    Cineris,
+    /// `.agents/skills/`, read when `compat.skills` is on.
+    Agents,
+    /// `.claude/skills/`, read when `compat.skills` is on.
+    Claude,
+}
+
+impl Layout {
+    /// Every layout, in the order a name is taken in.
+    pub const ALL: [Self; 3] = [Self::Cineris, Self::Agents, Self::Claude];
+
+    /// The folder its skills are in, relative to the workspace or the home
+    /// directory, with `/`.
+    #[must_use]
+    pub fn folder(self) -> &'static str {
+        match self {
+            Self::Cineris => ".cineris/skills",
+            Self::Agents => ".agents/skills",
+            Self::Claude => ".claude/skills",
+        }
+    }
+
+    /// Whether it is another tool's, read only when `compat.skills` is on.
+    #[must_use]
+    pub fn is_compat(self) -> bool {
+        self != Self::Cineris
+    }
+}
+
+/// A folder to look for skills in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Root {
+    /// Whose it is.
+    pub owner: Owner,
+    /// Which layout it follows.
+    pub layout: Layout,
+    /// Where it is, as a path is given to the session's resolver: relative
+    /// to the workspace, beginning with `~` for the home directory, or
+    /// absolute. `..` and links are taken as the resolver takes them.
+    pub path: String,
+}
+
+impl Root {
+    /// A root at `path`.
+    #[must_use]
+    pub fn new(owner: Owner, layout: Layout, path: impl Into<String>) -> Self {
+        Self {
+            owner,
+            layout,
+            path: path.into(),
+        }
+    }
+
+    /// The roots skills are looked for in: `.cineris/skills/`,
+    /// `.agents/skills/` and `.claude/skills/` in the workspace, then the
+    /// same three in the home directory. Without `compat` (the setting
+    /// `compat.skills` off) only the two `.cineris/skills/`. In the order a
+    /// name is taken in.
+    #[must_use]
+    pub fn standard(compat: bool) -> Vec<Self> {
+        let mut roots = Vec::new();
+        for owner in [Owner::Project, Owner::User] {
+            for layout in Layout::ALL {
+                if layout.is_compat() && !compat {
+                    continue;
+                }
+                let path = match owner {
+                    Owner::Project => layout.folder().to_owned(),
+                    Owner::User => format!("~/{}", layout.folder()),
+                };
+                roots.push(Self::new(owner, layout, path));
+            }
+        }
+        roots
+    }
+}
+
+/// A skill that was found, as section 6 lists it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Skill {
+    /// Its name, one line ([`one_line`]), at most [`MAX_NAME_BYTES`].
+    pub name: String,
+    /// Its description, one line, at most [`MAX_DESCRIPTION_BYTES`]. Empty
+    /// when the front matter gives none.
+    pub description: String,
+    /// Its `SKILL.md` as the model is shown it: relative to the workspace
+    /// for a project's skill, under `~` for the user's (absolute only for a
+    /// user's root that leads out of the home directory), with `/`, and
+    /// every character that acts unseen written as an escape.
+    pub path: String,
+    /// Whose root it was found in.
+    pub owner: Owner,
+    /// Which layout that root follows.
+    pub layout: Layout,
+    /// Where its folder really is, every link followed.
+    pub folder: AbsPath,
+}
+
+/// Something that was looked at and is not listed, and why.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeftOut {
+    /// What it is, as the user is shown it: a root, a folder in one, or a
+    /// `SKILL.md`, in the form [`Skill::path`] has.
+    pub path: String,
+    /// Why it is not listed.
+    pub reason: Reason,
+}
+
+/// Why a root, a folder or a `SKILL.md` was left out.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum Reason {
+    /// It could not be read.
+    #[error("it could not be read: {0}")]
+    Unreadable(String),
+    /// A project's root that leads out of the workspace.
+    #[error("it leads out of the workspace, and a project's skills are read only from inside it")]
+    OutsideWorkspace,
+    /// A root that is not a folder.
+    #[error("it is not a folder")]
+    NotAFolder,
+    /// A root that is the same folder as one looked at before it.
+    #[error("it is the same folder as `{0}`, which was looked at instead")]
+    SameFolder(String),
+    /// A root with more than [`MAX_ENTRIES`] entries.
+    #[error("it holds more than {MAX_ENTRIES} entries, and the rest were not looked at")]
+    TooManyEntries,
+    /// A name that is not valid Unicode.
+    #[error("its name is not valid Unicode")]
+    NotUnicode,
+    /// A link whose target is not there.
+    #[error("it is a link to something that is not there")]
+    Dangling,
+    /// A link that leads out of the root it is in, or to the root itself.
+    #[error("it is a link that leads out of the folder of skills it is in")]
+    LinkOut,
+    /// A `SKILL.md` that is not a regular file: a folder, a FIFO, a device.
+    #[error("it is not a regular file")]
+    NotAFile,
+    /// A `SKILL.md` larger than [`MAX_SKILL_BYTES`].
+    #[error("it is larger than 64 KiB")]
+    TooLarge,
+    /// A `SKILL.md` that does not begin with front matter.
+    #[error("it has no front matter: a block between two `---` lines at its top")]
+    NoFrontMatter,
+    /// Front matter with no `name`, or one that is empty once it is one
+    /// line.
+    #[error("its front matter gives no `name`")]
+    NoName,
+    /// A skill whose name another skill has, which was taken first.
+    #[error("the skill at `{kept}` has the name `{name}` too, and is taken first")]
+    Duplicate {
+        /// The name, as it is shown.
+        name: String,
+        /// The path of the skill taken.
+        kept: String,
+    },
+}
+
+/// What [`find`] found.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Found {
+    /// The skills, by name, at most [`MAX_SKILLS`].
+    pub skills: Vec<Skill>,
+    /// How many more skills there were past [`MAX_SKILLS`].
+    pub not_listed: usize,
+    /// What was left out, and why: in the order the roots were looked at,
+    /// each root's entries by name, then the duplicates.
+    pub left_out: Vec<LeftOut>,
+}
+
+/// Looks for skills in `roots`, through `resolver`, which is the session's:
+/// its workspace is the project's, and its home directory is what `~`
+/// stands for (a resolver with none finds none of the user's).
+///
+/// It reads the roots' folders and the `SKILL.md` files, and nothing else.
+/// It blocks: call it on the blocking pool.
+#[must_use]
+pub fn find(resolver: &PathResolver, roots: &[Root]) -> Found {
+    let places = Places {
+        workspace: resolver.root().to_fs_path(),
+        home: resolver
+            .resolve("~")
+            .ok()
+            .filter(ResolvedPath::exists)
+            .map(|home| home.to_fs_path()),
+    };
+    let mut left_out = Vec::new();
+    let mut candidates = Vec::new();
+    let mut looked: Vec<(PathBuf, String)> = Vec::new();
+    for (index, root) in roots.iter().enumerate() {
+        let Some((real, shown)) = open_root(resolver, root, &places, &looked, &mut left_out) else {
+            continue;
+        };
+        look_in(
+            &Look {
+                resolver,
+                root,
+                index,
+                real: &real,
+                shown: &shown,
+            },
+            &mut candidates,
+            &mut left_out,
+        );
+        looked.push((real.to_fs_path(), shown));
+    }
+    // By name, then by the root a name is taken from first.
+    candidates.sort_by(|one: &Candidate, other: &Candidate| {
+        one.skill
+            .name
+            .cmp(&other.skill.name)
+            .then_with(|| one.skill.owner.cmp(&other.skill.owner))
+            .then_with(|| one.skill.layout.cmp(&other.skill.layout))
+            .then_with(|| one.root.cmp(&other.root))
+            .then_with(|| one.skill.path.cmp(&other.skill.path))
+    });
+    let mut skills: Vec<Skill> = Vec::new();
+    for Candidate { skill, .. } in candidates {
+        if let Some(kept) = skills.last()
+            && kept.name == skill.name
+        {
+            left_out.push(LeftOut {
+                path: skill.path,
+                reason: Reason::Duplicate {
+                    name: skill.name,
+                    kept: kept.path.clone(),
+                },
+            });
+            continue;
+        }
+        skills.push(skill);
+    }
+    let not_listed = skills.len().saturating_sub(MAX_SKILLS);
+    skills.truncate(MAX_SKILLS);
+    Found {
+        skills,
+        not_listed,
+        left_out,
+    }
+}
+
+/// The places a path is shown relative to, as the file system's calls
+/// take them.
+struct Places {
+    workspace: PathBuf,
+    home: Option<PathBuf>,
+}
+
+impl Places {
+    /// `path` as the model and the user are shown it: relative to the
+    /// workspace for a project's, under `~` for the user's, escaped.
+    fn show(&self, owner: Owner, path: &AbsPath) -> String {
+        let real = path.to_fs_path();
+        let below = |base: &Path| strip_location_prefix(&real, base).map(|rest| slashed(&rest));
+        let text = match owner {
+            Owner::Project => below(&self.workspace).map(|rest| {
+                if rest.is_empty() {
+                    ".".to_owned()
+                } else {
+                    rest
+                }
+            }),
+            Owner::User => self.home.as_deref().and_then(below).map(|rest| {
+                if rest.is_empty() {
+                    "~".to_owned()
+                } else {
+                    format!("~/{rest}")
+                }
+            }),
+        };
+        visible(&text.unwrap_or_else(|| path.as_str().to_owned())).into_owned()
+    }
+}
+
+/// The names of a relative path joined with `/`.
+fn slashed(relative: &Path) -> String {
+    relative
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(name) => Some(name.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// A skill found, before the duplicates are taken out.
+struct Candidate {
+    skill: Skill,
+    /// The index of its root among those given.
+    root: usize,
+}
+
+/// One root being looked in.
+struct Look<'a> {
+    resolver: &'a PathResolver,
+    root: &'a Root,
+    index: usize,
+    /// Where the root really is.
+    real: &'a AbsPath,
+    /// The root as it is shown.
+    shown: &'a str,
+}
+
+/// Resolves a root: its real location and how it is shown, or `None` when
+/// there is nothing to look in (said in `left_out` when it is more than an
+/// absent folder).
+fn open_root(
+    resolver: &PathResolver,
+    root: &Root,
+    places: &Places,
+    looked: &[(PathBuf, String)],
+    left_out: &mut Vec<LeftOut>,
+) -> Option<(AbsPath, String)> {
+    let written = || visible(&root.path).into_owned();
+    let resolved = match resolver.resolve(&root.path) {
+        Ok(resolved) => resolved,
+        // No home directory is known: there is no user's root to look in.
+        Err(PathError::NoHome { .. }) => return None,
+        Err(error) => {
+            left_out.push(LeftOut {
+                path: written(),
+                reason: path_reason(error),
+            });
+            return None;
+        }
+    };
+    if !resolved.exists() {
+        return None;
+    }
+    let real = resolved.to_fs_path();
+    if root.owner == Owner::Project && !location_within(&real, &places.workspace) {
+        left_out.push(LeftOut {
+            path: written(),
+            reason: Reason::OutsideWorkspace,
+        });
+        return None;
+    }
+    let shown = places.show(root.owner, resolved.abs());
+    match std::fs::metadata(&real) {
+        Ok(metadata) if metadata.is_dir() => {}
+        Ok(_) => {
+            left_out.push(LeftOut {
+                path: shown,
+                reason: Reason::NotAFolder,
+            });
+            return None;
+        }
+        Err(error) => {
+            left_out.push(LeftOut {
+                path: shown,
+                reason: Reason::Unreadable(error.to_string()),
+            });
+            return None;
+        }
+    }
+    if let Some((_, first)) = looked
+        .iter()
+        .find(|(earlier, _)| same_location(earlier, &real))
+    {
+        left_out.push(LeftOut {
+            path: written(),
+            reason: Reason::SameFolder(first.clone()),
+        });
+        return None;
+    }
+    Some((resolved.abs().clone(), shown))
+}
+
+/// Why a path could not be resolved, as a reason.
+fn path_reason(error: PathError) -> Reason {
+    match error {
+        PathError::DanglingLink { .. } => Reason::Dangling,
+        PathError::Io { source, .. } => Reason::Unreadable(source.to_string()),
+        other => Reason::Unreadable(other.to_string()),
+    }
+}
+
+/// Looks at each entry of one root, by name, up to [`MAX_ENTRIES`].
+fn look_in(look: &Look<'_>, candidates: &mut Vec<Candidate>, left_out: &mut Vec<LeftOut>) {
+    let entries = match std::fs::read_dir(look.real.to_fs_path()) {
+        Ok(entries) => entries,
+        Err(error) => {
+            left_out.push(LeftOut {
+                path: look.shown.to_owned(),
+                reason: Reason::Unreadable(error.to_string()),
+            });
+            return;
+        }
+    };
+    let mut names: Vec<(OsString, FileType)> = Vec::new();
+    for entry in entries {
+        if names.len() == MAX_ENTRIES {
+            left_out.push(LeftOut {
+                path: look.shown.to_owned(),
+                reason: Reason::TooManyEntries,
+            });
+            break;
+        }
+        let kind = entry.and_then(|entry| Ok((entry.file_name(), entry.file_type()?)));
+        match kind {
+            Ok(named) => names.push(named),
+            Err(error) => {
+                left_out.push(LeftOut {
+                    path: look.shown.to_owned(),
+                    reason: Reason::Unreadable(error.to_string()),
+                });
+                break;
+            }
+        }
+    }
+    names.sort_by(|one, other| one.0.cmp(&other.0));
+    for (name, kind) in names {
+        // A file beside the skills' folders, a FIFO or a socket: no skill.
+        if !kind.is_dir() && !kind.is_symlink() {
+            continue;
+        }
+        let named = format!("{}/{}", look.shown, visible(&name.to_string_lossy()));
+        match skill_in(look, &name, &named) {
+            Ok(Some(skill)) => candidates.push(Candidate {
+                skill,
+                root: look.index,
+            }),
+            Ok(None) => {}
+            Err(left) => left_out.push(left),
+        }
+    }
+}
+
+/// The skill in the folder `name` of a root: `None` when the folder is not
+/// a skill's (no `SKILL.md`, or a link to a file), and what was left out
+/// and why when it is one that cannot be taken.
+fn skill_in(look: &Look<'_>, name: &OsStr, named: &str) -> Result<Option<Skill>, LeftOut> {
+    let left = |path: &str, reason: Reason| LeftOut {
+        path: path.to_owned(),
+        reason,
+    };
+    if name.to_str().is_none() {
+        return Err(left(named, Reason::NotUnicode));
+    }
+    let entry = look
+        .real
+        .child(name)
+        .map_err(|error| left(named, path_reason(error)))?;
+    let folder = look
+        .resolver
+        .resolve(entry.as_str())
+        .map_err(|error| left(named, path_reason(error)))?;
+    if !folder.exists() {
+        // Gone since the folder was listed.
+        return Ok(None);
+    }
+    let root = look.real.to_fs_path();
+    // Below the root: a link to a place outside it, or to the root itself,
+    // is not followed.
+    let inside = strip_location_prefix(&folder.to_fs_path(), &root)
+        .is_some_and(|rest| rest.components().next().is_some());
+    if !inside {
+        return Err(left(named, Reason::LinkOut));
+    }
+    match std::fs::metadata(folder.to_fs_path()) {
+        Ok(metadata) if metadata.is_dir() => {}
+        // A link to a file inside the root: not a skill's folder.
+        Ok(_) => return Ok(None),
+        Err(error) => return Err(left(named, Reason::Unreadable(error.to_string()))),
+    }
+    let file_shown = format!("{named}/{FILE_NAME}");
+    let file = folder
+        .abs()
+        .join(FILE_NAME)
+        .map_err(|error| left(&file_shown, path_reason(error)))?;
+    let file = look
+        .resolver
+        .resolve(file.as_str())
+        .map_err(|error| left(&file_shown, path_reason(error)))?;
+    if !file.exists() {
+        // A folder with no `SKILL.md` is not a skill.
+        return Ok(None);
+    }
+    if !location_within(&file.to_fs_path(), &root) {
+        return Err(left(&file_shown, Reason::LinkOut));
+    }
+    let text = match read_capped(&file.to_fs_path()) {
+        Ok(Some(text)) => text,
+        Ok(None) => return Ok(None),
+        Err(reason) => return Err(left(&file_shown, reason)),
+    };
+    let Some(front) = FrontMatter::read(&text) else {
+        return Err(left(&file_shown, Reason::NoFrontMatter));
+    };
+    let skill_name = one_line(front.get("name").unwrap_or_default(), MAX_NAME_BYTES);
+    if skill_name.is_empty() {
+        return Err(left(&file_shown, Reason::NoName));
+    }
+    Ok(Some(Skill {
+        name: skill_name,
+        description: one_line(
+            front.get("description").unwrap_or_default(),
+            MAX_DESCRIPTION_BYTES,
+        ),
+        path: file_shown,
+        owner: look.root.owner,
+        layout: look.root.layout,
+        folder: folder.abs().clone(),
+    }))
+}
+
+/// Reads a `SKILL.md` already resolved, opened so that nothing at the last
+/// name but a regular file is read. `None` when it is gone.
+fn read_capped(path: &Path) -> Result<Option<String>, Reason> {
+    let (file, _metadata) = match open_regular(path) {
+        Ok(opened) => opened,
+        Err(OpenError::NotFound) => return Ok(None),
+        Err(OpenError::Directory | OpenError::NotAFile) => return Err(Reason::NotAFile),
+        // Swapped for a link since it was resolved.
+        Err(OpenError::Link) => return Err(Reason::LinkOut),
+        Err(error) => return Err(Reason::Unreadable(error.to_string())),
+    };
+    // One byte past the cap says the file is larger, whatever its
+    // metadata said a moment before.
+    let mut bytes = Vec::new();
+    file.take(MAX_SKILL_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| Reason::Unreadable(error.to_string()))?;
+    if bytes.len() as u64 > MAX_SKILL_BYTES {
+        return Err(Reason::TooLarge);
+    }
+    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+/// `text` as one line for the system prompt, at most `max_bytes` long.
+///
+/// - White space of every kind (a line break, a tab, U+2028) becomes one
+///   space, and a run of it one space; the ends are trimmed.
+/// - Every other character that acts unseen ([`acts_unseen`]) is taken
+///   out: the control characters, the format characters (`Cf`: the
+///   bidirectional controls U+202A to U+202E and U+2066 to U+2069, the
+///   zero-width characters, U+FEFF), and the characters that render as
+///   nothing. A variation selector stays only right after a character kept.
+/// - Text longer than `max_bytes` is cut between two grapheme clusters, so
+///   never inside a character, and ends with `…` within `max_bytes`.
+#[must_use]
+pub fn one_line(text: &str, max_bytes: usize) -> String {
+    let mut out = String::with_capacity(text.len().min(max_bytes.saturating_add(8)));
+    let mut space = false;
+    // Whether the last character kept may take a variation selector.
+    let mut base = false;
+    for character in text.chars() {
+        if character.is_whitespace() {
+            space = !out.is_empty();
+            base = false;
+        } else if is_selector(character) {
+            if base {
+                out.push(character);
+            }
+        } else if !acts_unseen(character) {
+            if space {
+                out.push(' ');
+                space = false;
+            }
+            out.push(character);
+            base = true;
+        }
+    }
+    if out.len() <= max_bytes {
+        return out;
+    }
+    let Some(room) = max_bytes.checked_sub(ELLIPSIS.len()) else {
+        return truncate_bytes(&out, max_bytes).to_owned();
+    };
+    let mut cut = truncate_bytes(&out, room).trim_end().to_owned();
+    cut.push_str(ELLIPSIS);
+    cut
+}
+
+/// The front matter at the top of a Markdown file: a block between two
+/// `---` lines, the first line of the file, holding `key: value` lines.
+///
+/// A small reader of the plain YAML such blocks are written in, not of
+/// YAML: no library is pulled in for two strings. What it reads:
+///
+/// - **A field** is a line that begins at its first column with a key and
+///   a `:` followed by white space or the line's end. The key may be in
+///   quotes. Lines that begin with white space after it, and blank lines,
+///   are its value's. A line that begins with `#` is a comment. A key given
+///   twice keeps its first value.
+/// - **A plain value** is the rest of the line and its value's lines, each
+///   trimmed and joined by a space (a blank line between them is a line
+///   break), with a comment (` #` and what follows) taken off each.
+/// - **A quoted value,** in `"` or `'`, may run over lines, which are
+///   joined as YAML folds them. In `"`, the escapes are read (`\"`, `\\`,
+///   `\n`, `\t`, `\xXX`, `\uXXXX`, `\UXXXXXXXX` and the others); in `'`, a
+///   doubled `''` is one quote. What follows the closing quote is ignored;
+///   a value whose quote is never closed is taken as far as it goes.
+/// - **A block,** `|` or `>` with any chomping (`+`, `-`) and indentation
+///   (a digit) after it: its lines, less their indentation, kept as lines
+///   for `|` and folded into one for `>` (a blank line being a line break).
+///
+/// Flow collections (`[a, b]`, `{a: b}`), anchors, tags and nested maps
+/// are not read: such a value is the text as it stands, and a nested
+/// map's lines belong to its key.
+///
+/// The file may begin with a byte-order mark, and its lines may end with
+/// `\r\n`. The closing line is `---` or `...`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FrontMatter {
+    fields: Vec<(String, String)>,
+}
+
+impl FrontMatter {
+    /// The front matter of `text`: `None` when its first line is not
+    /// `---`, or the block is never closed.
+    #[must_use]
+    pub fn read(text: &str) -> Option<Self> {
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let mut lines = text
+            .split('\n')
+            .map(|line| line.strip_suffix('\r').unwrap_or(line));
+        if lines.next()?.trim_end() != "---" {
+            return None;
+        }
+        let mut body = Vec::new();
+        for line in lines {
+            if matches!(line.trim_end(), "---" | "...") {
+                return Some(Self {
+                    fields: fields_of(&body),
+                });
+            }
+            body.push(line);
+        }
+        None
+    }
+
+    /// The value of the field `key`, as text.
+    #[must_use]
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// Every field's key and value, in the order the block gives them.
+    pub fn fields(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.fields
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+    }
+}
+
+/// The fields of a block's lines.
+fn fields_of(body: &[&str]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut at = 0;
+    while at < body.len() {
+        let line = body[at];
+        at += 1;
+        if line.trim().is_empty() || indented(line) || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, rest)) = split_key(line) else {
+            continue;
+        };
+        let start = at;
+        while at < body.len() && (body[at].trim().is_empty() || indented(body[at])) {
+            at += 1;
+        }
+        if out.iter().any(|(earlier, _)| *earlier == key) {
+            continue;
+        }
+        let value = scalar(rest, &body[start..at]);
+        out.push((key, value));
+    }
+    out
+}
+
+fn indented(line: &str) -> bool {
+    line.starts_with([' ', '\t'])
+}
+
+/// A field's key, and the rest of its line after the `:`.
+fn split_key(line: &str) -> Option<(String, &str)> {
+    let (key, after) = match line.chars().next() {
+        Some(quote @ ('"' | '\'')) => {
+            let inner = &line[1..];
+            let end = inner.find(quote)?;
+            (
+                &inner[..end],
+                inner[end + 1..].trim_start_matches([' ', '\t']),
+            )
+        }
+        _ => {
+            let bytes = line.as_bytes();
+            let colon = (0..bytes.len()).find(|&index| {
+                bytes[index] == b':'
+                    && bytes
+                        .get(index + 1)
+                        .is_none_or(|next| matches!(next, b' ' | b'\t'))
+            })?;
+            (&line[..colon], &line[colon..])
+        }
+    };
+    let after = after.strip_prefix(':')?;
+    if !(after.is_empty() || after.starts_with([' ', '\t'])) {
+        return None;
+    }
+    Some((key.trim().to_owned(), after.trim_start()))
+}
+
+/// A value: the rest of its key's line, and the lines that follow it.
+fn scalar(first: &str, more: &[&str]) -> String {
+    match first.chars().next() {
+        Some('|' | '>') if block_header(first) => block(first, more),
+        Some(quote @ ('"' | '\'')) => quoted(&first[1..], more, quote),
+        _ => plain(first, more),
+    }
+}
+
+/// Whether `first` is a block's header: `|` or `>`, then only chomping and
+/// indentation indicators, then nothing but a comment.
+fn block_header(first: &str) -> bool {
+    let rest =
+        first[1..].trim_start_matches(['+', '-', '1', '2', '3', '4', '5', '6', '7', '8', '9']);
+    let rest = rest.trim_start();
+    rest.is_empty() || rest.starts_with('#')
+}
+
+/// A `|` or `>` block.
+fn block(header: &str, lines: &[&str]) -> String {
+    let literal = header.starts_with('|');
+    let given = header[1..]
+        .chars()
+        .take_while(|character| matches!(character, '+' | '-' | '1'..='9'))
+        .find_map(|character| character.to_digit(10))
+        .and_then(|digit| usize::try_from(digit).ok());
+    let leading = |line: &str| line.len() - line.trim_start_matches([' ', '\t']).len();
+    let indent = given.unwrap_or_else(|| {
+        lines
+            .iter()
+            .find(|line| !line.trim().is_empty())
+            .map_or(0, |line| leading(line))
+    });
+    let mut content: Vec<&str> = lines
+        .iter()
+        .map(|line| {
+            if line.trim().is_empty() {
+                ""
+            } else {
+                // At most the block's indentation, never into the text.
+                &line[leading(line).min(indent)..]
+            }
+        })
+        .collect();
+    while content.last() == Some(&"") {
+        content.pop();
+    }
+    if literal {
+        return content.join("\n");
+    }
+    let mut out = String::new();
+    let mut breaks = 0;
+    for line in content {
+        if line.is_empty() {
+            breaks += 1;
+            continue;
+        }
+        if !out.is_empty() {
+            if breaks == 0 {
+                out.push(' ');
+            }
+            for _ in 0..breaks {
+                out.push('\n');
+            }
+        }
+        breaks = 0;
+        out.push_str(line);
+    }
+    out
+}
+
+/// A value in quotes, begun on its key's line (`first`, after the opening
+/// quote) and perhaps running over `more`.
+fn quoted(first: &str, more: &[&str], quote: char) -> String {
+    let mut text = first.to_owned();
+    for line in more {
+        text.push('\n');
+        text.push_str(line);
+    }
+    let mut chars = text.chars().peekable();
+    let mut out = String::new();
+    while let Some(character) = chars.next() {
+        match character {
+            '\'' if quote == '\'' && chars.peek() == Some(&'\'') => {
+                chars.next();
+                out.push('\'');
+            }
+            found if found == quote => return out,
+            '\\' if quote == '"' => escape(&mut chars, &mut out),
+            '\n' => {
+                // A line break folds: the white space around it goes, and
+                // it is a space, or a line break for each blank line.
+                while out.ends_with([' ', '\t']) {
+                    out.pop();
+                }
+                let mut breaks = 0;
+                loop {
+                    while matches!(chars.peek(), Some(' ' | '\t')) {
+                        chars.next();
+                    }
+                    if chars.peek() != Some(&'\n') {
+                        break;
+                    }
+                    chars.next();
+                    breaks += 1;
+                }
+                if breaks == 0 {
+                    out.push(' ');
+                }
+                for _ in 0..breaks {
+                    out.push('\n');
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// One escape of a `"` string, its backslash read.
+fn escape(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, out: &mut String) {
+    let Some(code) = chars.next() else {
+        out.push('\\');
+        return;
+    };
+    let simple = match code {
+        '0' => Some('\0'),
+        'a' => Some('\u{7}'),
+        'b' => Some('\u{8}'),
+        't' | '\t' => Some('\t'),
+        'n' => Some('\n'),
+        'v' => Some('\u{b}'),
+        'f' => Some('\u{c}'),
+        'r' => Some('\r'),
+        'e' => Some('\u{1b}'),
+        ' ' => Some(' '),
+        '"' => Some('"'),
+        '/' => Some('/'),
+        '\\' => Some('\\'),
+        'N' => Some('\u{85}'),
+        '_' => Some('\u{a0}'),
+        'L' => Some('\u{2028}'),
+        'P' => Some('\u{2029}'),
+        _ => None,
+    };
+    if let Some(simple) = simple {
+        out.push(simple);
+        return;
+    }
+    let digits = match code {
+        'x' => 2,
+        'u' => 4,
+        'U' => 8,
+        '\n' => {
+            // A line that ends in a backslash goes on with the next, with
+            // no space between.
+            while matches!(chars.peek(), Some(' ' | '\t')) {
+                chars.next();
+            }
+            return;
+        }
+        other => {
+            out.push('\\');
+            out.push(other);
+            return;
+        }
+    };
+    let mut hex = String::new();
+    while hex.len() < digits
+        && let Some(digit) = chars.next_if(char::is_ascii_hexdigit)
+    {
+        hex.push(digit);
+    }
+    match u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+        Some(decoded) if hex.len() == digits => out.push(decoded),
+        _ => {
+            out.push('\\');
+            out.push(code);
+            out.push_str(&hex);
+        }
+    }
+}
+
+/// A plain value: its lines trimmed and joined.
+fn plain(first: &str, more: &[&str]) -> String {
+    let mut out = String::new();
+    let mut breaks = 0;
+    for line in std::iter::once(first).chain(more.iter().copied()) {
+        let text = without_comment(line.trim_start()).trim_end();
+        if text.is_empty() {
+            if !out.is_empty() {
+                breaks += 1;
+            }
+            continue;
+        }
+        if !out.is_empty() {
+            if breaks == 0 {
+                out.push(' ');
+            }
+            for _ in 0..breaks {
+                out.push('\n');
+            }
+        }
+        breaks = 0;
+        out.push_str(text);
+    }
+    out
+}
+
+/// A line without its comment: a `#` at its start, or after white space,
+/// and what follows it.
+fn without_comment(line: &str) -> &str {
+    let mut after_space = true;
+    for (index, character) in line.char_indices() {
+        if character == '#' && after_space {
+            return &line[..index];
+        }
+        after_space = character == ' ' || character == '\t';
+    }
+    line
+}
+
+/// The first line of section 6's list of skills.
+pub const HEADING: &str = "Skills: instructions for particular kinds of task, each in a folder \
+    of the user's or the project's with a SKILL.md file. When the task at hand matches a \
+    skill's description, read its SKILL.md before you begin, and the files it points to as \
+    you need them. Each line gives a skill's name, its description and the path to its \
+    SKILL.md.";
+
+/// Room kept for the line that says skills were not listed.
+const CUT_ROOM: usize = 96;
+
+/// Section 6's list of skills, rendered.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Index {
+    /// The text. Empty when there is no skill to list, or not even one fits.
+    pub text: String,
+    /// How many skills it lists.
+    pub listed: usize,
+    /// How many skills it counts and does not list: those past
+    /// [`MAX_SKILLS`], and those the cap left out.
+    pub not_listed: usize,
+}
+
+/// One skill's line: `- name: description (path)`, or `- name (path)` with
+/// no description.
+fn line(skill: &Skill) -> String {
+    if skill.description.is_empty() {
+        format!("- {} ({})", skill.name, skill.path)
+    } else {
+        format!("- {}: {} ({})", skill.name, skill.description, skill.path)
+    }
+}
+
+/// Renders the skills of `found` as section 6 of the system prompt lists
+/// them, in at most `cap` bytes ([`INDEX_CAP`] is the section's):
+///
+/// ```text
+/// Skills: instructions for particular kinds of task, … the path to its SKILL.md.
+/// - pdf: Fill in and merge PDF forms. (.cineris/skills/pdf/SKILL.md)
+/// - review (~/.claude/skills/review/SKILL.md)
+/// (2 more skills are not listed, to keep this within its size.)
+/// ```
+///
+/// [`HEADING`], then one line a skill in the order of [`Found::skills`],
+/// then, when any were not listed, a line that counts them. The same
+/// `found` always gives the same bytes.
+#[must_use]
+pub fn render(found: &Found, cap: usize) -> Index {
+    let mut index = Index::default();
+    if found.skills.is_empty() {
+        return index;
+    }
+    let lines: Vec<String> = found.skills.iter().map(line).collect();
+    let whole = HEADING.len() + lines.iter().map(|line| 1 + line.len()).sum::<usize>();
+    let room = if whole <= cap && found.not_listed == 0 {
+        cap
+    } else {
+        cap.saturating_sub(CUT_ROOM)
+    };
+    let mut text = HEADING.to_owned();
+    for line in &lines {
+        if text.len() + 1 + line.len() > room {
+            break;
+        }
+        text.push('\n');
+        text.push_str(line);
+        index.listed += 1;
+    }
+    index.not_listed = found.not_listed + (lines.len() - index.listed);
+    if index.listed == 0 {
+        // Not even one fits: a heading over nothing says nothing.
+        return index;
+    }
+    if index.not_listed > 0 {
+        text.push_str(&format!(
+            "\n({} more {} not listed, to keep this within its size.)",
+            index.not_listed,
+            if index.not_listed == 1 {
+                "skill is"
+            } else {
+                "skills are"
+            }
+        ));
+    }
+    index.text = text;
+    index
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn read(text: &str) -> FrontMatter {
+        FrontMatter::read(text).unwrap()
+    }
+
+    #[test]
+    fn plain_values_and_comments() {
+        let front = read(
+            "---\nname: pdf-tools # the folder's name\ndescription: Fill in forms\n  and merge \
+             them.\n\n  Also split.\nlicense: MIT\n---\n# Body\n",
+        );
+        assert_eq!(front.get("name"), Some("pdf-tools"));
+        assert_eq!(
+            front.get("description"),
+            Some("Fill in forms and merge them.\nAlso split.")
+        );
+        assert_eq!(front.get("license"), Some("MIT"));
+        assert_eq!(front.get("missing"), None);
+        // A `#` inside a word is not a comment.
+        assert_eq!(
+            read("---\nname: c#-tools\n---").get("name"),
+            Some("c#-tools")
+        );
+    }
+
+    #[test]
+    fn quoted_values_in_both_quotes_and_over_lines() {
+        let front = read(
+            "---\nname: \"pdf: tools\" # quoted\ndescription: 'It''s for\n  forms, \"all\" of \
+             them.'\n---\n",
+        );
+        assert_eq!(front.get("name"), Some("pdf: tools"));
+        assert_eq!(
+            front.get("description"),
+            Some("It's for forms, \"all\" of them.")
+        );
+        let escaped = read(
+            "---\nname: \"a\\tb\\u00e9\\x41\\\"\\\\\"\ndescription: \"one \\\n  two\n\n  \
+             three\"\n---",
+        );
+        assert_eq!(escaped.get("name"), Some("a\tbéA\"\\"));
+        assert_eq!(escaped.get("description"), Some("one two\nthree"));
+        // A quote never closed is taken as far as it goes.
+        assert_eq!(read("---\nname: \"open\n---").get("name"), Some("open"));
+    }
+
+    #[test]
+    fn blocks_keep_or_fold_their_lines() {
+        let front = read(
+            "---\nname: x\ndescription: >-\n  Folded\n  into one.\n\n  Then more.\nnotes: |\n  \
+             kept\n    indented\n  lines\n---",
+        );
+        assert_eq!(
+            front.get("description"),
+            Some("Folded into one.\nThen more.")
+        );
+        assert_eq!(front.get("notes"), Some("kept\n  indented\nlines"));
+        // An indentation indicator is taken.
+        assert_eq!(
+            read("---\nd: |2\n    deeper\n  less\n---").get("d"),
+            Some("  deeper\nless")
+        );
+        // A `>` that is not a block's header is plain text.
+        assert_eq!(read("---\nd: >x\n---").get("d"), Some(">x"));
+    }
+
+    #[test]
+    fn what_is_and_is_not_front_matter() {
+        for none in [
+            "",
+            "name: x\n",
+            "# Title\n---\nname: x\n---",
+            "---\nname: x\n",
+            " ---\nname: x\n---",
+        ] {
+            assert_eq!(FrontMatter::read(none), None, "{none:?}");
+        }
+        // A byte-order mark, `\r\n` and `...` as the close.
+        let front = read("\u{feff}---\r\nname: x\r\ndescription: y \r\n...\r\nbody");
+        assert_eq!(
+            (front.get("name"), front.get("description")),
+            (Some("x"), Some("y"))
+        );
+        // A key's first value stands; a nested map belongs to its key; a
+        // `key:value` with no space is no field; a quoted key is one.
+        let front = read(
+            "---\nname: first\nmetadata:\n  name: nested\nname: second\nurl:x\n\"description\" : \
+             d\n---",
+        );
+        assert_eq!(front.get("name"), Some("first"));
+        assert_eq!(front.get("url"), None);
+        assert_eq!(front.get("description"), Some("d"));
+        assert_eq!(
+            front.fields().map(|(key, _)| key).collect::<Vec<_>>(),
+            ["name", "metadata", "description"]
+        );
+    }
+
+    #[test]
+    fn one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge() {
+        assert_eq!(
+            one_line("  a\tb\r\n\u{2028}c\u{1b}[31m d  ", 100),
+            "a b c[31m d"
+        );
+        assert_eq!(
+            one_line("ad\u{202e}min\u{2066}\u{200d}\u{200b}\u{feff}\u{ad}x", 100),
+            "adminx"
+        );
+        // A variation selector after a character kept stays; alone, not.
+        assert_eq!(
+            one_line("\u{fe0f}\u{2764}\u{fe0f}", 100),
+            "\u{2764}\u{fe0f}"
+        );
+        // Cut between characters, never inside one, with the mark within
+        // the cap.
+        let cut = one_line(&"é".repeat(200), 300);
+        assert!(cut.len() <= 300 && cut.ends_with(ELLIPSIS), "{}", cut.len());
+        assert_eq!(cut.trim_end_matches(ELLIPSIS), "é".repeat(148));
+        assert_eq!(one_line("abcdef", 2), "ab");
+        assert_eq!(one_line("abc", 3), "abc");
+    }
+
+    #[test]
+    fn the_standard_roots_in_the_order_a_name_is_taken() {
+        let paths = |compat| {
+            Root::standard(compat)
+                .into_iter()
+                .map(|root| root.path)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            paths(true),
+            [
+                ".cineris/skills",
+                ".agents/skills",
+                ".claude/skills",
+                "~/.cineris/skills",
+                "~/.agents/skills",
+                "~/.claude/skills"
+            ]
+        );
+        assert_eq!(paths(false), [".cineris/skills", "~/.cineris/skills"]);
+    }
+}
