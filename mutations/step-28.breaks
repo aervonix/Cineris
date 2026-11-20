@@ -217,9 +217,9 @@ caught-by:
 [break] a-domain-pattern-matches-its-own-name
 rule: `*.example.com` names hosts under the domain, never the domain itself or a name that ends with it.
 file: crates/cineris-ext/src/manifest.rs
-in: matches
-find: .is_some_and(|rest| !rest.is_empty())
-replace: .is_some()
+in: host_pattern
+find: Ok(HostPattern::Under(format!(".{host}")))
+replace: Ok(HostPattern::Under(host.to_owned()))
 caught-by:
     cineris-ext::it manifest::hosts_are_names_addresses_or_wildcards_and_nothing_more
 
