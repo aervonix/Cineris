@@ -487,7 +487,14 @@ fn host_pattern(pattern: &str) -> Result<HostPattern, ManifestError> {
         Ok(HostPattern::Under(format!(".{host}")))
     } else if !under && (name || address) {
         let host = host.trim_start_matches('[').trim_end_matches(']');
-        Ok(HostPattern::Exact(host.to_owned()))
+        // An address in the one form a URL's host is read in
+        // (`host::url_host`): IPv6 at its shortest, and an IPv4-mapped one
+        // as its IPv4 address.
+        let host = host.parse::<std::net::IpAddr>().map_or_else(
+            |_| host.to_owned(),
+            |address| address.to_canonical().to_string(),
+        );
+        Ok(HostPattern::Exact(host))
     } else {
         Err(refused(format!(
             "`capabilities.net` has `{pattern}`: a host is `*`, `*.example.com`, a host's name or an address, with no scheme, port or path"

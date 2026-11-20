@@ -48,6 +48,7 @@
 //! can give. Everywhere else in the crate the workspace's
 //! `unsafe_code = "deny"` holds.
 
+pub mod address;
 pub mod atomic;
 pub mod cancel;
 pub mod child_env;

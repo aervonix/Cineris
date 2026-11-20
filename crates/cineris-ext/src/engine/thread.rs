@@ -35,7 +35,7 @@ use super::loader::{SnapshotLoader, SnapshotResolver};
 use super::{Failure, Limit, LoadError, Target};
 use crate::event::Event;
 use crate::folder::Snapshot;
-use crate::host::{HostAnswer, HostCall, Phase, Scope};
+use crate::host::{FetchCall, HostAnswer, HostCall, Phase, Scope};
 use crate::manifest::Manifest;
 use crate::registration::{
     CommandDef, HookDef, MAX_ARGUMENTS, MAX_COMMANDS, MAX_DESCRIPTION, MAX_FILTER_ENTRY,
@@ -1049,7 +1049,7 @@ fn parse_call(kind: &str, payload: &Json) -> Result<HostCall, String> {
             path: optional_text(payload, "path", "`path`")?.unwrap_or_else(|| ".".to_owned()),
             glob: optional_text(payload, "glob", "`glob`")?,
         },
-        "fetch" => HostCall::Fetch {
+        "fetch" => HostCall::Fetch(FetchCall {
             url: text_field(payload, "url", "the URL")?,
             method: optional_text(payload, "method", "`method`")?
                 .unwrap_or_else(|| "GET".to_owned()),
@@ -1068,7 +1068,7 @@ fn parse_call(kind: &str, payload: &Json) -> Result<HostCall, String> {
             },
             body: optional_text(payload, "body", "`body`")?,
             timeout_ms: optional_count(payload, "timeout", "`timeout`")?,
-        },
+        }),
         "ask" => HostCall::Ask {
             question: text_field(payload, "question", "the question")?,
             choices: texts(payload, "choices", "the choices")?,

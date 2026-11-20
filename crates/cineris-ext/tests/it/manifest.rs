@@ -17,7 +17,7 @@ fn a_full_manifest_is_read() {
     let parsed = Manifest::parse(&format!(
         "{}\n[limits]\nmemory = 48\ntime = 300\n",
         manifest(
-            "exec = [\"gh\", \"/usr/bin/git\", \"C:\\\\Tools\\\\x.exe\"]\nexec_network = true\nread = [\"**\"]\nwrite = [\"out/**\"]\nnet = [\"api.github.com\", \"*.Example.com\", \"*\", \"127.0.0.1\"]\nhooks = [\"tool.before\", \"turn.end\"]"
+            "exec = [\"gh\", \"/usr/bin/git\", \"C:\\\\Tools\\\\x.exe\"]\nexec_network = true\nread = [\"**\"]\nwrite = [\"out/**\"]\nnet = [\"api.github.com\", \"*.Example.com\", \"*\", \"127.0.0.1\", \"[0:0::1]\", \"::FFFF:10.0.0.5\"]\nhooks = [\"tool.before\", \"turn.end\"]"
         )
     ))
     .unwrap();
@@ -37,7 +37,10 @@ fn a_full_manifest_is_read() {
             HostPattern::Exact("api.github.com".to_owned()),
             HostPattern::Under(".example.com".to_owned()),
             HostPattern::Any,
-            HostPattern::Exact("127.0.0.1".to_owned())
+            HostPattern::Exact("127.0.0.1".to_owned()),
+            // An address in the one form a URL's host is read in.
+            HostPattern::Exact("::1".to_owned()),
+            HostPattern::Exact("10.0.0.5".to_owned())
         ]
     );
     assert_eq!(

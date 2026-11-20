@@ -167,8 +167,9 @@ impl ReadGate for Both {
     }
 }
 
-/// An HTTP request a script asks for.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// An HTTP request a script asks for. Its `Debug` shows no header value
+/// and no query: either may carry a credential.
+#[derive(Clone, PartialEq, Eq)]
 pub struct FetchRequest {
     /// The method, as the script wrote it: the host refuses one it does
     /// not make.
@@ -346,18 +347,7 @@ pub enum HostCall {
         glob: Option<String>,
     },
     /// `cineris.http.fetch(url, {method, headers, body, timeout})`.
-    Fetch {
-        /// The URL.
-        url: String,
-        /// The method; `GET` unless given.
-        method: String,
-        /// The headers.
-        headers: Vec<(String, String)>,
-        /// The body, as text.
-        body: Option<String>,
-        /// `options.timeout`, in milliseconds.
-        timeout_ms: Option<u64>,
-    },
+    Fetch(FetchCall),
     /// `cineris.ask(question, choices)`.
     Ask {
         /// The question.
@@ -418,64 +408,158 @@ pub const ASK_MAX: usize = 1024;
 pub const ASK_MAX_CHOICES: usize = 8;
 /// The longest choice.
 pub const ASK_CHOICE_MAX: usize = 80;
-/// A fetch's time unless the script says otherwise.
-pub const FETCH_DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+/// A fetch's longest time, and its time unless the script asks for less;
+/// never more than its call has left.
+pub const FETCH_MAX_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `cineris.http.fetch(url, {method, headers, body, timeout})`, as a script
+/// called it. Its `Debug` shows no header value, no body and no query.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FetchCall {
+    /// The URL.
+    pub url: String,
+    /// The method; `GET` unless given.
+    pub method: String,
+    /// The headers.
+    pub headers: Vec<(String, String)>,
+    /// The body, as text.
+    pub body: Option<String>,
+    /// `options.timeout`, in milliseconds.
+    pub timeout_ms: Option<u64>,
+}
+
+impl std::fmt::Debug for FetchCall {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
+        f.debug_struct("FetchCall")
+            .field("method", &self.method)
+            .field("url", &without_query(&self.url))
+            .field("headers", &names)
+            .field("body_bytes", &self.body.as_ref().map(String::len))
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for FetchRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
+        f.debug_struct("FetchRequest")
+            .field("method", &self.method)
+            .field("url", &without_query(&self.url))
+            .field("headers", &names)
+            .field("body_bytes", &self.body.len())
+            .field("timeout", &self.timeout)
+            .finish()
+    }
+}
+
+/// A URL up to its query or fragment, which may carry a credential: `?…`
+/// or `#…` says one was there.
+fn without_query(url: &str) -> std::borrow::Cow<'_, str> {
+    match url.find(['?', '#']) {
+        Some(at) => format!("{}{}…", &url[..at], &url[at..=at]).into(),
+        None => url.into(),
+    }
+}
 
 /// The host of a URL, in lower case, as the manifest's `net` patterns are
-/// matched against it: the part after `scheme://` and before the first `/`,
-/// `?` or `#`, without its port, and an IPv6 address without its brackets.
-/// A URL with a user part is refused here: the host it names is not
-/// plain to read.
+/// matched against it and the permission engine judges it: the part after
+/// `https://` or `http://` and before the first `/`, `\`, `?` or `#`,
+/// without its port; an IPv6 address without its brackets and in its
+/// shortest form.
 ///
 /// The fetch client reads the URL again, as the URL standard does, and the
-/// host checked here must be the one it connects to, so a host that reading
-/// would take differently is refused: there a `\` ends the host, a tab or a
-/// line break is dropped, a `%` is decoded, and a host that ends in a
-/// number is an IPv4 address in any written form (`0x7f.1`, `2130706433`,
-/// `127.1`, `0177.0.0.1`). A name keeps to letters, digits, `.`, `-` and
-/// `_`; an address is four decimal numbers, or IPv6 in brackets.
+/// host checked here must be the one it connects to, so a URL that reading
+/// would take differently is refused:
+///
+/// - one that does not begin with `https://` or `http://`: the standard
+///   skips any run of `/` and `\` after a scheme, so `https:good.com://evil`
+///   is `good.com`;
+/// - a control character or a space anywhere: it drops a tab or a line
+///   break wherever it is, and trims the ends;
+/// - a `\` anywhere: it reads one as `/`, so `https://evil\.good/` is
+///   `evil`, which a question showing the URL would hide;
+/// - a user part;
+/// - a name with anything but letters, digits, `.`, `-` and `_` (a `%` is
+///   decoded), or that ends in a number and is not four decimal numbers
+///   (`0x7f.1`, `2130706433`, `127.1` and `0177.0.0.1` are `127.0.0.1`);
+/// - an IPv6 address with anything but hex digits, colons and dots, or an
+///   IPv4-mapped one, whose IPv4 address is written instead.
 ///
 /// # Errors
 ///
-/// When the URL has no `scheme://`, no host, or a user part, or its host
-/// is not written plainly.
+/// When the URL is not written so.
 pub fn url_host(url: &str) -> Result<String, HostError> {
-    let refused = |why: &str| HostError::Failed(format!("`{url}` cannot be fetched: {why}"));
-    let (_, rest) = url
-        .split_once("://")
-        .ok_or_else(|| refused("it has no scheme"))?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    let refused =
+        |why: &str| HostError::Failed(format!("`{}` cannot be fetched: {why}", without_query(url)));
+    if url.chars().any(|c| c.is_control() || c == ' ') {
+        return Err(refused(
+            "it has a control character or a space, which the fetch would drop or trim",
+        ));
+    }
+    // The standard reads a `\` as a `/`, so a question that showed one
+    // would show a host the fetch does not reach (`https://evil\.good/`
+    // is `evil`).
+    if url.contains('\\') {
+        return Err(refused(
+            "it has a `\\`, which the fetch reads as `/`: write `/`",
+        ));
+    }
+    let rest = ["https://", "http://"]
+        .iter()
+        .find_map(|scheme| {
+            url.get(..scheme.len())
+                .filter(|start| start.eq_ignore_ascii_case(scheme))
+                .map(|_| &url[scheme.len()..])
+        })
+        .ok_or_else(|| refused("it does not begin with `https://` or `http://`"))?;
+    let authority = rest.split(['/', '\\', '?', '#']).next().unwrap_or_default();
     if authority.contains('@') {
         return Err(refused("it names a user"));
     }
-    let host = if let Some(inside) = authority.strip_prefix('[') {
-        inside
+    if let Some(inside) = authority.strip_prefix('[') {
+        let (address, after) = inside
             .split_once(']')
-            .map(|(address, _)| address)
-            .ok_or_else(|| refused("its address is not closed"))?
-    } else {
-        authority.split(':').next().unwrap_or_default()
-    };
+            .ok_or_else(|| refused("its address is not closed"))?;
+        if !(after.is_empty() || after.starts_with(':')) {
+            return Err(refused("its address is followed by something not a port"));
+        }
+        let plain = address
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'));
+        if !plain {
+            return Err(refused(
+                "its address has a character the fetch would read differently: write it plainly",
+            ));
+        }
+        let address = address
+            .parse::<std::net::Ipv6Addr>()
+            .map_err(|_| refused("its host is not an IPv6 address"))?;
+        if address.to_ipv4_mapped().is_some() {
+            return Err(refused(
+                "its host is an IPv4 address in IPv6's form: write the IPv4 address",
+            ));
+        }
+        return Ok(address.to_string());
+    }
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     if host.is_empty() {
         return Err(refused("it has no host"));
     }
-    let host = host.to_ascii_lowercase();
-    let plain = if authority.starts_with('[') {
-        host.chars()
-            .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'))
-    } else {
-        host.chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
-    };
+    let plain = host
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
     if !plain {
         return Err(refused(
             "its host has a character the fetch would read differently: write it plainly",
         ));
     }
-    if !authority.starts_with('[')
-        && ends_in_a_number(&host)
-        && host.parse::<std::net::Ipv4Addr>().is_err()
-    {
+    if ends_in_a_number(&host) && host.parse::<std::net::Ipv4Addr>().is_err() {
         return Err(refused(
             "its host is an IPv4 address in another written form: write it as four decimal \
              numbers",
@@ -611,25 +695,26 @@ pub async fn serve<H: Host + ?Sized>(
                 host.search(pattern, resolved, glob, gate).await?,
             ))
         }
-        HostCall::Fetch {
+        HostCall::Fetch(FetchCall {
             url,
             method,
             headers,
             body,
             timeout_ms,
-        } => {
+        }) => {
             let host_name = url_host(&url)?;
             capabilities.host(&host_name)?;
-            let literal = capabilities
-                .declared()
-                .net
-                .iter()
-                .filter_map(|pattern| match pattern {
-                    crate::manifest::HostPattern::Exact(name) => Some(name.clone()),
-                    _ => None,
-                })
-                .collect();
-            let wanted = timeout_ms.map_or(FETCH_DEFAULT_TIMEOUT, Duration::from_millis);
+            // Only the host itself, when the manifest names it literally,
+            // may be a loopback or a private address: never a name a `*` or
+            // a domain's pattern matched, whatever else the manifest names.
+            let literal = if capabilities.names_host_literally(&host_name) {
+                vec![host_name.clone()]
+            } else {
+                Vec::new()
+            };
+            let wanted = timeout_ms
+                .map_or(FETCH_MAX_TIMEOUT, Duration::from_millis)
+                .min(FETCH_MAX_TIMEOUT);
             let output = host
                 .fetch(
                     FetchRequest {

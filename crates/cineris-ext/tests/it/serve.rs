@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use cineris_base::path::{AbsPath, PathStyle};
 use cineris_ext::capability::Capabilities;
-use cineris_ext::host::{HostCall, HostError, Phase, Scope, serve};
+use cineris_ext::host::{FetchCall, HostCall, HostError, Phase, Scope, serve};
 use cineris_ext::manifest::Manifest;
 use cineris_testkit::block_on;
 use serde_json::json;
@@ -29,14 +29,18 @@ fn exec(program: &str) -> HostCall {
     }
 }
 
-fn fetch(url: &str) -> HostCall {
-    HostCall::Fetch {
+fn fetch_call(url: &str) -> FetchCall {
+    FetchCall {
         url: url.to_owned(),
         method: "GET".to_owned(),
         headers: Vec::new(),
         body: None,
         timeout_ms: Some(120_000),
     }
+}
+
+fn fetch(url: &str) -> HostCall {
+    HostCall::Fetch(fetch_call(url))
 }
 
 #[test]
@@ -79,7 +83,7 @@ fn a_fetch_reaches_the_host_only_for_a_host_the_manifest_names() {
     assert_eq!(
         host.asked(),
         [
-            "fetch GET https://API.Example.com:443/issues?q=1 host=api.example.com literal=api.example.com,127.0.0.1 timeout=5000"
+            "fetch GET https://API.Example.com:443/issues?q=1 host=api.example.com literal=api.example.com timeout=5000"
         ]
     );
 }
@@ -105,7 +109,8 @@ fn a_urls_host_is_read_without_its_port_user_or_brackets() {
     }
     for (plain, host) in [
         ("https://1.2.3.4/", "1.2.3.4"),
-        ("https://[::FFFF:127.0.0.1]/", "::ffff:127.0.0.1"),
+        ("https://[0:0:0:0:0:0:0:1]:8443/", "::1"),
+        ("HTTPS://Example.COM/", "example.com"),
         ("https://under_score-1.example/", "under_score-1.example"),
         ("https://example.com.:443/", "example.com."),
     ] {
@@ -133,6 +138,20 @@ fn a_url_the_client_would_read_as_another_host_never_reaches_the_host() {
         "https://1.2.3.4./",
         "https://1.2.3.0x4/",
         "https://[::1%25lo]/",
+        "https://[::ffff:127.0.0.1]/",
+        "https://[::1]evil.test/",
+        // The standard skips any run of `/` and `\\` after the scheme, and
+        // drops a tab or a line break wherever it is: each of these is
+        // `good.test`, not `evil.test`.
+        "https:good.test://evil.test/",
+        "https:/\\good.test://evil.test/",
+        "https:\\\\good.test://evil.test/",
+        "https:\t//good.test://evil.test/",
+        "https:/\t/good.test://evil.test/",
+        "https:@good.test://evil.test/",
+        " https://good.test/",
+        "https://good.test/\n",
+        "ftp://good.test/",
     ] {
         let result = block_on(serve(
             fetch(refused),
@@ -147,6 +166,85 @@ fn a_url_the_client_would_read_as_another_host_never_reaches_the_host() {
         );
     }
     assert!(host.asked().is_empty(), "{:?}", host.asked());
+}
+
+/// Only the host itself goes with a fetch as one that may be outside the
+/// internet, and only when the manifest names it literally: a name `*` or a
+/// domain's pattern matched takes nothing, whatever else the manifest names.
+#[test]
+fn only_a_host_named_literally_may_be_outside_the_internet() {
+    let host = FakeHost::new();
+    let capabilities = capabilities("net = [\"*\", \"localhost\", \"10.0.0.5\", \"[0:0::1]\"]");
+    for url in [
+        "https://rebind.attacker.example/",
+        "https://localhost:8443/",
+        "http://10.0.0.5:8080/",
+        "http://[::1]/",
+    ] {
+        block_on(serve(
+            fetch(url),
+            &capabilities,
+            &host,
+            Phase::Tool,
+            Duration::from_secs(5),
+        ))
+        .unwrap();
+    }
+    assert_eq!(
+        host.asked(),
+        [
+            "fetch GET https://rebind.attacker.example/ host=rebind.attacker.example literal= timeout=5000",
+            "fetch GET https://localhost:8443/ host=localhost literal=localhost timeout=5000",
+            "fetch GET http://10.0.0.5:8080/ host=10.0.0.5 literal=10.0.0.5 timeout=5000",
+            "fetch GET http://[::1]/ host=::1 literal=::1 timeout=5000",
+        ]
+    );
+}
+
+/// A fetch takes 30 s at most: less when the script asks for less, and
+/// never more than its call has left.
+#[test]
+fn a_fetch_takes_thirty_seconds_at_most_and_never_more_than_its_call() {
+    let host = FakeHost::new();
+    let capabilities = capabilities("net = [\"api.example.com\"]");
+    for (asked, left, given) in [
+        (Some(120_000), 300, 30_000),
+        (Some(10_000), 300, 10_000),
+        (None, 300, 30_000),
+        (Some(120_000), 5, 5_000),
+    ] {
+        let call = HostCall::Fetch(FetchCall {
+            timeout_ms: asked,
+            ..fetch_call("https://api.example.com/")
+        });
+        block_on(serve(
+            call,
+            &capabilities,
+            &host,
+            Phase::Tool,
+            Duration::from_secs(left),
+        ))
+        .unwrap();
+        let asked_last = host.asked().last().cloned().unwrap_or_default();
+        assert!(
+            asked_last.ends_with(&format!("timeout={given}")),
+            "{asked_last}"
+        );
+    }
+}
+
+/// What a fetch call prints shows no header value, no body and no query.
+#[test]
+fn a_fetch_call_prints_without_what_may_be_a_credential() {
+    let call = FetchCall {
+        headers: vec![("authorization".to_owned(), "Bearer s3cret".to_owned())],
+        body: Some("s3cret".to_owned()),
+        ..fetch_call("https://api.example.com/x?token=s3cret")
+    };
+    let printed = format!("{call:?}");
+    assert!(!printed.contains("s3cret"), "{printed}");
+    assert!(printed.contains("authorization"), "{printed}");
+    assert!(printed.contains("https://api.example.com/x?…"), "{printed}");
 }
 
 #[test]

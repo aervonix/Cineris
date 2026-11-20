@@ -282,38 +282,36 @@ impl Host for CallHost<'_> {
         Box::pin(async move {
             let method = cineris_llm::FetchMethod::parse(&request.method)
                 .map_err(|refusal| HostError::Failed(refusal.to_string()))?;
-            self.decide(
-                format!("{}: {} `{}`", self.full_name, method.as_str(), request.url),
-                json!({"url": request.url, "method": method.as_str()}),
-                vec![Effect::Network(NetworkTarget::Host(host.clone()))],
-                None,
-                HostQuestion::default(),
-            )
-            .await?;
-            // Only what the manifest names literally may be a loopback or
-            // a private address; a name or a `*` never reaches one.
+            // Only the host itself, when the manifest names it literally,
+            // may be a loopback or a private address; a name or a `*` never
+            // reaches one.
             let mut allowance = cineris_llm::AddressAllowance::none();
             for name in &literal {
                 allowance.add_host(name);
             }
+            let shown = shown_url(&request.url);
+            let sends = what_a_fetch_sends(&request);
+            let timeout = request.timeout;
+            let request = client_request(method, request, host.clone());
+            // What the client would refuse before its lookup is refused
+            // before anyone is asked about it.
+            cineris_llm::fetch::check(&request, &allowance)
+                .map_err(|refusal| HostError::Denied(refusal.to_string()))?;
+            self.decide(
+                format!("{}: {} `{shown}`", self.full_name, method.as_str()),
+                json!({"url": shown, "method": method.as_str()}),
+                vec![Effect::Network(NetworkTarget::Host(host))],
+                None,
+                HostQuestion {
+                    extra: sends,
+                    ..HostQuestion::default()
+                },
+            )
+            .await?;
             let response = self
                 .parts
                 .fetcher
-                .fetch(
-                    cineris_llm::FetchRequest {
-                        method,
-                        url: request.url,
-                        headers: request.headers,
-                        body: request.body,
-                        // The host the manifest and the decision were
-                        // about: the client refuses a URL it reads as
-                        // another.
-                        host: Some(host),
-                    },
-                    &allowance,
-                    request.timeout,
-                    self.cx.cancel.clone(),
-                )
+                .fetch(request, &allowance, timeout, self.cx.cancel.clone())
                 .await
                 .map_err(|error| match error {
                     cineris_llm::FetchError::Refused(refusal) => {
@@ -494,12 +492,118 @@ fn read_capped(path: &std::path::Path) -> Result<Vec<u8>, HostError> {
     Ok(bytes)
 }
 
+/// The client's request for a script's fetch: with the host the manifest
+/// and the decision were about, so that the client refuses a URL it reads
+/// as another.
+fn client_request(
+    method: cineris_llm::FetchMethod,
+    request: FetchRequest,
+    host: String,
+) -> cineris_llm::FetchRequest {
+    cineris_llm::FetchRequest {
+        method,
+        url: request.url,
+        headers: request.headers,
+        body: request.body,
+        host: Some(host),
+    }
+}
+
+/// A fetch's URL as its question shows it: without its query or fragment,
+/// which may carry a credential (`?…` or `#…` says one was there), and with
+/// every character that acts unseen made visible.
+fn shown_url(url: &str) -> String {
+    match url.find(['?', '#']) {
+        Some(at) => format!("{}{}…", cineris_base::visible(&url[..at]), &url[at..=at]),
+        None => cineris_base::visible(url).into_owned(),
+    }
+}
+
+/// What a fetch sends besides its URL, which no permission rule judges: the
+/// size of its body and the names of its headers, never their values.
+fn what_a_fetch_sends(request: &FetchRequest) -> Option<String> {
+    let mut parts = Vec::new();
+    if !request.body.is_empty() {
+        parts.push(format!("a body of {} bytes", request.body.len()));
+    }
+    if !request.headers.is_empty() {
+        let names: Vec<String> = request
+            .headers
+            .iter()
+            .map(|(name, _)| cineris_base::visible(name).into_owned())
+            .collect();
+        parts.push(format!("the headers {}", names.join(", ")));
+    }
+    (!parts.is_empty()).then(|| {
+        format!(
+            "The fetch sends {}, which no permission rule judges.",
+            parts.join(" and ")
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use cineris_base::path::{PathOptions, PathResolver};
     use cineris_testkit::Scratch;
 
     use super::*;
+
+    fn a_fetch(url: &str) -> FetchRequest {
+        FetchRequest {
+            method: "GET".to_owned(),
+            url: url.to_owned(),
+            headers: Vec::new(),
+            body: Vec::new(),
+            timeout: std::time::Duration::from_secs(1),
+        }
+    }
+
+    #[test]
+    fn the_clients_request_carries_the_host_that_was_checked() {
+        let request = FetchRequest {
+            headers: vec![("x-a".to_owned(), "1".to_owned())],
+            body: b"b".to_vec(),
+            ..a_fetch("https://a.example/x")
+        };
+        let made = client_request(
+            cineris_llm::FetchMethod::Get,
+            request,
+            "a.example".to_owned(),
+        );
+        assert_eq!(made.host.as_deref(), Some("a.example"));
+        assert_eq!(made.url, "https://a.example/x");
+        assert_eq!(made.headers, [("x-a".to_owned(), "1".to_owned())]);
+        assert_eq!(made.body, b"b");
+    }
+
+    #[test]
+    fn a_fetchs_url_is_shown_without_its_query_and_with_nothing_unseen() {
+        assert_eq!(shown_url("https://a.example/x"), "https://a.example/x");
+        assert_eq!(
+            shown_url("https://a.example/x?token=s3cret"),
+            "https://a.example/x?…"
+        );
+        assert_eq!(
+            shown_url("https://a.example/x#s3cret"),
+            "https://a.example/x#…"
+        );
+        assert!(!shown_url("https://a.example/\u{202e}x").contains('\u{202e}'));
+    }
+
+    #[test]
+    fn what_a_fetch_sends_names_its_headers_and_never_their_values() {
+        assert_eq!(what_a_fetch_sends(&a_fetch("https://a.example/")), None);
+        let sends = what_a_fetch_sends(&FetchRequest {
+            headers: vec![("authorization".to_owned(), "Bearer s3cret".to_owned())],
+            body: b"{}".to_vec(),
+            ..a_fetch("https://a.example/")
+        })
+        .unwrap();
+        assert!(sends.contains("2 bytes"), "{sends}");
+        assert!(sends.contains("authorization"), "{sends}");
+        assert!(!sends.contains("s3cret"), "{sends}");
+    }
 
     /// A tool's plan that touches a path other than the one the manifest
     /// judged is refused; the `ext` effect and the same path are not.
