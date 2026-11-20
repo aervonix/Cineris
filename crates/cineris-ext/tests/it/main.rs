@@ -91,6 +91,9 @@ pub(crate) struct FakeHost {
     pub(crate) slow_ask: Option<(cineris_testkit::FakeTimer, std::time::Duration)>,
     /// When set, a program's run finds its turn stopped.
     pub(crate) exec_stops: bool,
+    /// When set, a program runs this long on the timer, and says when it
+    /// has finished.
+    pub(crate) slow_exec: Option<(cineris_testkit::FakeTimer, std::time::Duration)>,
     /// How many paths it was asked to resolve.
     pub(crate) resolves: std::sync::atomic::AtomicUsize,
 }
@@ -109,6 +112,7 @@ impl FakeHost {
             },
             slow_ask: None,
             exec_stops: false,
+            slow_exec: None,
             resolves: std::sync::atomic::AtomicUsize::new(0),
         }
     }
@@ -160,6 +164,10 @@ impl Host for FakeHost {
             ));
             if self.exec_stops {
                 return Err(HostError::Stopped("a check stopped the turn".to_owned()));
+            }
+            if let Some((timer, runs)) = &self.slow_exec {
+                cineris_base::Timer::sleep(timer, *runs).await;
+                self.note("exec finished".to_owned());
             }
             Ok(self.exec_output.clone())
         })

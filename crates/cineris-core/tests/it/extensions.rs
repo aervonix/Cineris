@@ -617,3 +617,49 @@ fn a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call() {
     assert_eq!(world.read(".github/workflows/ci.yml"), None);
     assert_eq!(world.read("after.txt"), None);
 }
+
+/// An extension whose script did not stop when its time was up, and whose
+/// thread was left running, is not started again in this process: its next
+/// call fails at once, saying why and how it is started again (the review
+/// of step 28: each call made a new thread that would not stop either).
+#[test]
+fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
+    use std::time::Duration;
+
+    let world = World::new(
+        "ext_abandoned",
+        [
+            call_tool("c1", "spin", json!({})),
+            call_tool("c2", "spin", json!({})),
+            says("Done."),
+        ],
+    );
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let extension = approve(
+        &world.dir.join("ext"),
+        "\n[limits]\ntime = 5",
+        "cineris.tool({ name: 'spin', run: () => Array.prototype.reverse.call({ length: 2 ** 53 - 1 }) });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("spin twice").await;
+        // The call's time, then the grace its thread is given.
+        world.timer.sleeping_for(Duration::from_secs(5)).await;
+        world.timer.advance(Duration::from_secs(5));
+        world.timer.sleeping_for(cineris_ext::engine::GRACE).await;
+        let made = cineris_ext::engine::runtimes_made();
+        world.timer.advance(cineris_ext::engine::GRACE);
+        front.turns(1).await;
+        let results = front.results();
+        assert!(results[0].2.contains("ran out of its time"), "{results:?}");
+        assert!(
+            results[1].2.contains("is disabled") && results[1].2.contains("restarts"),
+            "{results:?}"
+        );
+        assert_eq!(cineris_ext::engine::runtimes_made(), made);
+        front.close().await;
+    });
+}
