@@ -15,7 +15,7 @@ default = ["http"]
 # The real HTTP transport and the timer that goes with it. Off for crates
 # that only need the types and traits: nothing else in this crate links an
 # async runtime or a network stack.
-http = ["dep:idna_adapter", "dep:reqwest", "dep:rustls", "dep:tokio"]
+http = ["dep:idna_adapter", "dep:reqwest", "dep:rustls", "dep:rustls-native-certs", "dep:tokio"]
 
 [dependencies]
 cineris-protocol.workspace = true
@@ -31,6 +31,9 @@ reqwest = { workspace = true, optional = true }
 # (root Cargo.toml).
 idna_adapter = { workspace = true, optional = true }
 rustls = { workspace = true, optional = true }
+# The fetch client's roots: rustls checks a server's certificate against
+# them and fetches nothing (src/fetch.rs).
+rustls-native-certs = { workspace = true, optional = true }
 # `rt`: the fetch client looks names up, and makes its HTTP clients, on the
 # blocking pool (src/fetch.rs).
 tokio = { workspace = true, optional = true, features = ["rt", "time"] }

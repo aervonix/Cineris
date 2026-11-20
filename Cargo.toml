@@ -63,6 +63,9 @@ reqwest = { version = "0.13.5", default-features = false, features = ["http2", "
 # futures runtime, no macros.
 rquickjs = { version = "0.14.0", default-features = false, features = ["std", "loader"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
+# The system's root certificates for extensions' fetch client, read from the
+# system's own store with nothing fetched (step 28). It has no features.
+rustls-native-certs = { version = "0.8.5", default-features = false }
 schemars = { version = "1.2.3", default-features = false, features = ["derive", "std"] }
 serde = { version = "1.0.229", default-features = false, features = ["derive", "std"] }
 serde_json = { version = "1.0.145", default-features = false, features = ["std"] }

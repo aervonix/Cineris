@@ -33,6 +33,12 @@
 //!   system's settings are read.
 //! - **No redirect is followed.** A 3xx is a response, returned as it is: a
 //!   redirect to another host would skip the caller's check of the host.
+//! - **TLS fetches nothing.** A server's certificate is checked by rustls
+//!   against the system's roots, read once from its own store. Nothing a
+//!   certificate names is retrieved: not its issuer (a server that sends an
+//!   incomplete chain fails) and not its revocation status (none is
+//!   checked). The platform's verifier, which the provider transport keeps,
+//!   fetches both on Windows, from any address and on the thread that polls.
 //! - **Headers.** The caller may not set a header HTTP itself sets (`Host`,
 //!   `Connection`, `Keep-Alive`, `Transfer-Encoding`, `TE`, `Trailer`,
 //!   `Upgrade`, `Content-Length`, `Expect`) or any `Proxy-` header. No
@@ -49,11 +55,11 @@
 //! - **Cancellation.** The caller's [`CancelToken`] ends the fetch wherever
 //!   it is, and the connection is closed.
 //!
-//! **What a client for each request costs.** Creating it loads the system's
-//! certificate store on Linux, which the provider transport measured at 1.06
-//! to 1.13 ms warm (`docs/performance-budgets.md`). It is created on the
-//! blocking pool, as the lookup is, so the async thread does not wait for
-//! either. A fetch needs a Tokio runtime, as the provider transport does.
+//! **What a client for each request costs.** The system's roots are read
+//! once in a process, at the first fetch, and each client builds its store
+//! of them. It is created on the blocking pool, as the lookup is, so the
+//! async thread does not wait for either. A fetch needs a Tokio runtime, as
+//! the provider transport does.
 
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -979,6 +985,12 @@ fn build_client(pinned: Pinned) -> Result<reqwest::Client, FetchError> {
         .redirect(reqwest::redirect::Policy::none())
         .retry(reqwest::retry::never())
         .referer(false)
+        // Checked by rustls against the system's roots, fetching nothing:
+        // the platform's verifier on Windows fetched what a certificate
+        // names (its issuer, its revocation lists) from any address, on the
+        // thread that polled the fetch, so a server a script chose could
+        // send the machine to an address the fetch refuses.
+        .tls_certs_only(system_roots().iter().cloned())
         .dns_resolver(Arc::new(pinned))
         .build()
         .map_err(|error| {
@@ -987,6 +999,22 @@ fn build_client(pinned: Pinned) -> Result<reqwest::Client, FetchError> {
                 describe(&error)
             ))
         })
+}
+
+/// The system's root certificates, read once from its own store with
+/// nothing fetched: the files the platform names on Linux (or those
+/// `SSL_CERT_FILE` and `SSL_CERT_DIR` name), the `ROOT` store on Windows. A
+/// certificate that cannot be read is left out; with none, every `https`
+/// fetch fails as untrusted.
+fn system_roots() -> &'static [reqwest::Certificate] {
+    static ROOTS: std::sync::OnceLock<Vec<reqwest::Certificate>> = std::sync::OnceLock::new();
+    ROOTS.get_or_init(|| {
+        rustls_native_certs::load_native_certs()
+            .certs
+            .iter()
+            .filter_map(|der| reqwest::Certificate::from_der(der).ok())
+            .collect()
+    })
 }
 
 /// Reads the body to its end or to [`RESPONSE_BODY_LIMIT`], and says
