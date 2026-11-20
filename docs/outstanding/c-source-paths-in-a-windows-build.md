@@ -1,6 +1,6 @@
 A Windows build of the shipped binary at a desk keeps the build machine's folders in QuickJS's asserts, since MSVC has no flag the shipped build can give it to take them out.
 
-- Area: xtask
+- Area: tooling
 - Owner: step 34
 
 | Item | Who | When |
