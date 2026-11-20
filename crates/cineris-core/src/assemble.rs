@@ -2522,6 +2522,28 @@ pub(crate) fn assemble(
                 withheld: Arc::clone(&withheld),
                 avoid: avoid.clone(),
                 rounds: rounds.clone(),
+                harness_files: {
+                    let loaded = loaded.clone();
+                    let state = state_dir.clone();
+                    let launcher = inner.sandbox.program().map(Path::to_path_buf);
+                    let policy = template
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .parts
+                        .sandbox_policy
+                        .clone();
+                    crate::ext::HarnessFiles(Arc::new(move |roots: &[PathBuf]| {
+                        let mut policy = policy.clone();
+                        policy.write = cineris_protocol::lease::PathSet {
+                            all: false,
+                            roots: roots
+                                .iter()
+                                .map(|root| root.to_string_lossy().into_owned())
+                                .collect(),
+                        };
+                        holds_harness_files(&policy, &loaded, state.as_ref(), launcher.as_deref())
+                    }))
+                },
             },
             tell: Arc::new(move |message: String| tell_hooks.tell(message)),
         });

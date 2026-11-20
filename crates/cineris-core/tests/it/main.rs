@@ -158,6 +158,18 @@ fn echo_and_exit(arguments: &[OsString]) -> ! {
         "key": std::env::var("ANTHROPIC_API_KEY").ok(),
         "removed": std::env::var("PROBE_REMOVED").ok(),
         "kept": std::env::var("PROBE_KEPT").ok(),
+        // The last name of each folder of `PATH`, when the test asks: the
+        // whole of it would make the line too long for one result line.
+        "path": std::env::var_os("PROBE_PATH").map(|_| {
+            std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+                .map(|entry| {
+                    entry
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+        }),
     });
     let mut out = std::io::stdout().lock();
     let _ = writeln!(out, "{ECHO_MARK}{report}");

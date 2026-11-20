@@ -27,7 +27,7 @@ use cineris_ext::manifest::Manifest;
 use cineris_ext::registration::Registration;
 
 #[cfg(feature = "scripts")]
-pub(crate) use exec::ExecParts;
+pub(crate) use exec::{ExecParts, HarnessFiles};
 #[cfg(feature = "scripts")]
 pub(crate) use tools::{HostParts, register};
 

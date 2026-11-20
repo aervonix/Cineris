@@ -58,7 +58,7 @@ caught-by:
 rule: The session's git is never one inside the workspace or a write root: the search goes on down `PATH`.
 file: crates/cineris-core/src/sandbox.rs
 in: git_program
-find: cineris_base::program::find_outside(&path, "git", cfg!(windows), &self.avoid)
+find: cineris_base::program::find_outside(&path, "git", cfg!(windows), &self.avoid())
 replace: cineris_base::program::find(&path, "git", cfg!(windows))
 caught-by:
     cineris-core sandbox::tests::the_harness_git_is_never_one_inside_the_workspace
