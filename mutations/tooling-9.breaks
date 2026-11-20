@@ -165,7 +165,7 @@ caught-by:
 [break] process-a-call-has-no-time-limit
 rule: A command's call arms its time limit when it starts.
 file: crates/cineris-tools/src/process/mod.rs
-in: run_until
+in: Runner::drive
 find: timeout: Some(self.timer.sleep(start.timeout))
 replace: timeout: None
 caught-by:

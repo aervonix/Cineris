@@ -1,0 +1,104 @@
+# Step 28, the process runner's part: a command's standard output and
+# standard error read apart (`Runner::run_apart` over
+# `tree::Output::attach_split`), for an extension's `cineris.exec`
+# (docs/architecture/05-tools.md, "`shell`", "Output").
+
+# ----------------------------------------------- the two pipes of the tree
+
+[break] split-output-merges-the-streams
+rule: A split output gives the standard error a pipe of its own: nothing the command writes there comes through the standard output's pipe.
+file: crates/cineris-sandbox/src/tree/mod.rs
+in: Output::attach_split
+find: let (err_reader, err_writer) = io::pipe()?;
+replace: let (err_reader, err_writer) = (io::pipe()?.0, out_writer.try_clone()?);
+packages: cineris-sandbox,cineris-tools
+caught-by:
+    cineris-sandbox::it tree::sys_a_split_output_keeps_the_two_streams_apart
+    cineris-tools::it process_apart::sys_standard_output_and_standard_error_are_kept_apart_and_whole
+
+[break] split-output-stops-swapped
+rule: Each stream of a split output is stopped by its own stop, and a stop leaves the other stream's read alone.
+file: crates/cineris-sandbox/src/tree/mod.rs
+in: Output::attach_split
+find:
+    stdout: (Self { pipe: out_pipe }, OutputStop { handle: out_handle }),
+    stderr: (Self { pipe: err_pipe }, OutputStop { handle: err_handle })
+replace:
+    stdout: (Self { pipe: out_pipe }, OutputStop { handle: err_handle }),
+    stderr: (Self { pipe: err_pipe }, OutputStop { handle: out_handle })
+caught-by:
+    cineris-sandbox::it tree::sys_each_stream_of_a_split_output_is_stopped_by_its_own_stop
+
+# ------------------------------------------------ the runner's two readers
+
+[break] apart-keeps-past-the-limit
+rule: Of each stream, at most the run's limit is kept in memory.
+file: crates/cineris-tools/src/process/apart.rs
+in: KeptStream::push
+find: let room = limit.saturating_sub(self.bytes.len()).min(bytes.len());
+replace: let room = limit.max(bytes.len()).min(bytes.len());
+caught-by:
+    cineris-tools process::apart::tests::a_stream_keeps_its_first_bytes_up_to_the_limit_and_counts_the_rest
+    cineris-tools::it process_apart::sys_each_stream_is_cut_at_the_limit_and_its_size_counted
+
+[break] apart-counts-only-what-it-keeps
+rule: Every byte of a stream is counted, those past the limit included, so that a cut stream says how much it carried.
+file: crates/cineris-tools/src/process/apart.rs
+in: KeptStream::push
+find: self.total_bytes += bytes.len() as u64;
+replace: self.total_bytes += room as u64;
+caught-by:
+    cineris-tools process::apart::tests::a_stream_keeps_its_first_bytes_up_to_the_limit_and_counts_the_rest
+    cineris-tools::it process_apart::sys_each_stream_is_cut_at_the_limit_and_its_size_counted
+
+[break] apart-stdout-read-into-the-stderr
+rule: What the command writes to its standard output is kept as its standard output, and only there.
+file: crates/cineris-tools/src/process/apart.rs
+in: Runner::start_apart
+find: |streams| &streams.stdout
+replace: |streams| &streams.stderr
+caught-by:
+    cineris-tools::it process_apart::sys_standard_output_and_standard_error_are_kept_apart_and_whole
+
+# Only Linux has a way out of the tree, so only there can a stream stay held
+# after the tree is gone, and only there does the run's end show whether it
+# waited for both readers and let both go.
+[break] apart-run-ends-with-the-first-stream
+rule: A run with its streams apart has ended its output only when both readers have ended.
+file: crates/cineris-tools/src/process/apart.rs
+in: StreamDone::drop
+find: if self.streams.readers_left.fetch_sub(1, Ordering::SeqCst) == 1 {
+replace: if true {
+os: linux
+caught-by:
+    cineris-tools::it process_apart::sys_a_process_that_left_the_tree_holding_standard_error_has_its_reader_stopped
+
+[break] apart-stderr-reader-never-stopped
+rule: When the runner stops listening, it stops the reader of the standard error as well as that of the standard output.
+file: crates/cineris-tools/src/process/apart.rs
+in: Runner::start_apart
+find: Stops(vec![stdout_stop, stderr_stop])
+replace: Stops({ std::mem::forget(stderr_stop); vec![stdout_stop] })
+os: linux
+caught-by:
+    cineris-tools::it process_apart::sys_a_process_that_left_the_tree_holding_standard_error_has_its_reader_stopped
+
+# ------------------------------------------------ stopped as run_until is
+
+[break] apart-cancellation-not-seen
+rule: A command run with its streams apart is stopped in stages when its call is cancelled.
+file: crates/cineris-tools/src/process/apart.rs
+in: Runner::run_apart
+find: &shared, cancel, kill_now
+replace: &shared, &CancelToken::new(), kill_now
+caught-by:
+    cineris-tools::it process_apart::sys_cancelling_a_command_run_apart_stops_its_whole_tree
+
+[break] apart-kill-now-not-seen
+rule: A command run with its streams apart is killed at once on "kill now".
+file: crates/cineris-tools/src/process/apart.rs
+in: Runner::run_apart
+find: cancel, kill_now, &mut NoOutput
+replace: cancel, &CancelToken::new(), &mut NoOutput
+caught-by:
+    cineris-tools::it process_apart::sys_kill_now_kills_a_command_run_apart_without_the_graces

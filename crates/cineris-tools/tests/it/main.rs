@@ -33,6 +33,7 @@ mod paths_windows;
 mod perf;
 mod plan;
 mod process;
+mod process_apart;
 mod read;
 mod registry;
 mod remember;

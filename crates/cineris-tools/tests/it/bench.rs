@@ -452,6 +452,34 @@ impl Bench {
     }
 }
 
+/// Runs `call` on this thread while `direct` runs on another, as
+/// [`Bench::directed`] runs a call of the tool, for a test that drives the
+/// runner itself. `call` is given the call's two tokens, the ordinary one
+/// and "kill now", which the director holds too.
+pub(crate) fn directed_call<R, T: Send + 'static>(
+    timer: &TestTimer,
+    call: impl FnOnce(&CancelToken, &CancelToken) -> R,
+    direct: impl FnOnce(&Director) -> T + Send + 'static,
+) -> (R, T) {
+    let cancel = CancelToken::new();
+    let kill = CancelToken::new();
+    let finished = Arc::new(AtomicBool::new(false));
+    let director = Director {
+        timer: timer.clone(),
+        cancel: cancel.clone(),
+        kill: kill.clone(),
+        finished: Arc::clone(&finished),
+    };
+    let thread = std::thread::spawn(move || direct(&director));
+    let called = call(&cancel, &kill);
+    finished.store(true, Ordering::SeqCst);
+    let directed = match thread.join() {
+        Ok(directed) => directed,
+        Err(panic) => std::panic::resume_unwind(panic),
+    };
+    (called, directed)
+}
+
 /// A runner on a test timer, with the guard and one update for each piece
 /// of output.
 pub(crate) fn runner(timer: &TestTimer) -> Runner {

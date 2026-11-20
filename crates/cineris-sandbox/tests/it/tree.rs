@@ -2,9 +2,10 @@
 //! tree, its output pipe, and what happens to it when the harness dies.
 
 use std::io;
+use std::sync::{Arc, Mutex};
 
-use cineris_sandbox::tree::{Exit, Output, ReadOutcome, Tree};
-use cineris_testkit::children::{ChildSpec, Roll};
+use cineris_sandbox::tree::{Exit, Output, ReadOutcome, SplitOutput, Tree};
+use cineris_testkit::children::{ChildSpec, Roll, Stream, stream_bytes, streams_arguments, until};
 
 use crate::{BARE_HARNESS, ENTRY, HARNESS, LIMIT, harness};
 
@@ -276,6 +277,140 @@ fn sys_a_read_of_the_output_can_be_stopped() {
     );
     tree.end();
     assert!(holder.gone_within(LIMIT));
+}
+
+/// A pipe read to its end on a thread of its own, whose bytes the test can
+/// look at while it reads.
+struct Reading {
+    seen: Arc<Mutex<Vec<u8>>>,
+    thread: std::thread::JoinHandle<(ReadOutcome, Output)>,
+}
+
+impl Reading {
+    fn start(mut output: Output) -> Self {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let filling = Arc::clone(&seen);
+        let thread = std::thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            loop {
+                match output.read(&mut buffer).expect("read the output") {
+                    ReadOutcome::Bytes(count) => {
+                        filling.lock().unwrap().extend_from_slice(&buffer[..count]);
+                    }
+                    other => return (other, output),
+                }
+            }
+        });
+        Self { seen, thread }
+    }
+
+    fn has(&self, word: &[u8]) -> bool {
+        let seen = self.seen.lock().unwrap();
+        seen.windows(word.len()).any(|window| window == word)
+    }
+
+    fn end(self) -> (Vec<u8>, ReadOutcome, Output) {
+        let (outcome, output) = self.thread.join().expect("the reader ended");
+        let seen = self.seen.lock().unwrap().clone();
+        (seen, outcome, output)
+    }
+}
+
+/// Each stream of a split output comes through its own pipe alone, whole.
+/// The command writes more than a pipe holds to each, all of its standard
+/// error first, so each pipe must be read on a thread of its own.
+#[test]
+fn sys_a_split_output_keeps_the_two_streams_apart() {
+    let (out_size, err_size) = (200_000, 150_000);
+    let (program, arguments) = streams_arguments(ENTRY, out_size, err_size);
+    let mut command = std::process::Command::new(program);
+    command.args(arguments).stdin(std::process::Stdio::null());
+    let SplitOutput {
+        stdout: (stdout, _out_stop),
+        stderr: (stderr, _err_stop),
+    } = Output::attach_split(&mut command).expect("make the pipes");
+    let tree = Tree::spawn(command, None).expect("start the command");
+    let (stdout, stderr) = (Reading::start(stdout), Reading::start(stderr));
+    let (out, out_end, _) = stdout.end();
+    let (err, err_end, _) = stderr.end();
+    assert_eq!(tree.wait().expect("wait"), Exit::Code(0));
+    tree.end();
+
+    assert_eq!(
+        (out_end, err_end),
+        (ReadOutcome::Closed, ReadOutcome::Closed)
+    );
+    assert!(
+        err == stream_bytes(Stream::Stderr, err_size),
+        "the standard error is not what the command wrote to it"
+    );
+    // The test runner's own lines come before the command's on the
+    // standard output.
+    let before = out
+        .len()
+        .checked_sub(out_size)
+        .expect("the standard output holds what the command wrote to it");
+    assert!(before < 256, "{before} bytes before the command's");
+    assert!(
+        out[before..] == stream_bytes(Stream::Stdout, out_size),
+        "the standard output is not what the command wrote to it"
+    );
+}
+
+/// Each stream's read is stopped by its own stop, and a stop leaves the
+/// other stream's read alone: it goes on until its pipe closes.
+#[test]
+fn sys_each_stream_of_a_split_output_is_stopped_by_its_own_stop() {
+    for stopped in [Stream::Stdout, Stream::Stderr] {
+        let roll = Roll::new();
+        // The child stays, so both pipes stay open and a read of either
+        // blocks once it has said its words.
+        let mut command = ChildSpec::new(&roll, "holder")
+            .saying("on-stdout")
+            .complaining("on-stderr")
+            .command(ENTRY);
+        let SplitOutput {
+            stdout: (stdout, out_stop),
+            stderr: (stderr, err_stop),
+        } = Output::attach_split(&mut command).expect("make the pipes");
+        let tree = Tree::spawn(command, None).expect("start the command");
+        let holder = roll.next(LIMIT);
+        let (stdout, stderr) = (Reading::start(stdout), Reading::start(stderr));
+        until(LIMIT, "the holder's words", || {
+            stdout.has(b"on-stdout") && stderr.has(b"on-stderr")
+        });
+
+        let (stop, stopping, other) = match stopped {
+            Stream::Stdout => (out_stop, stdout, stderr),
+            Stream::Stderr => (err_stop, stderr, stdout),
+        };
+        // A read that was just starting when it was told may need telling
+        // again.
+        until(LIMIT, "the read to stop", || {
+            stop.stop();
+            stopping.thread.is_finished()
+        });
+        let (_, outcome, mut output) = stopping.end();
+        assert_eq!(outcome, ReadOutcome::Stopped, "{stopped:?}");
+        let mut buffer = [0u8; 16];
+        assert_eq!(
+            output.read(&mut buffer).expect("read again"),
+            ReadOutcome::Stopped,
+            "{stopped:?} stays stopped"
+        );
+        assert!(holder.is_alive(), "stopping a read stops nothing else");
+
+        // The other read was not stopped: it ends when the tree does, and
+        // its pipe closes.
+        tree.end();
+        assert!(holder.gone_within(LIMIT));
+        let (_, outcome, _) = other.end();
+        assert_eq!(
+            outcome,
+            ReadOutcome::Closed,
+            "stopping the {stopped:?} stopped the other stream"
+        );
+    }
 }
 
 #[test]
