@@ -5,23 +5,18 @@
 [break] a-host-read-skips-the-manifest
 rule: A host read is checked against the manifest's `read` globs before the host is asked.
 file: crates/cineris-ext/src/host.rs
-in: serve
-find:
-            let resolved = host.resolve(&path).await?;
-            capabilities.read(&resolved)?;
-            let text = host.read(resolved, offset, limit).await?;
-replace:
-            let resolved = host.resolve(&path).await?;
-            let text = host.read(resolved, offset, limit).await?;
+in: allowed
+find: Access::Read => capabilities.read(&resolved),
+replace: Access::Read => Ok(()),
 caught-by:
     cineris-ext::it capability::a_read_is_judged_where_its_path_leads_however_it_is_written
 
 [break] a-host-write-skips-the-manifest
 rule: A host write is checked against the manifest's `write` globs before the host is asked.
 file: crates/cineris-ext/src/host.rs
-in: serve
-find: capabilities.write(&resolved)?;
-replace: let _ = &resolved;
+in: allowed
+find: Access::Write => capabilities.write(&resolved)
+replace: Access::Write => Ok(())
 caught-by:
     cineris-ext::it capability::a_write_is_judged_the_same_way
 
@@ -126,17 +121,17 @@ caught-by:
 rule: An extension registers only while its main module is first evaluated.
 file: crates/cineris-ext/src/engine/thread.rs
 in: register
-find: if shared.phase != Phase::Evaluation {
-replace: if shared.phase == Phase::Hook {
+find: Ok(_) => return Err(Exception::throw_message(ctx, late)),
+replace: Ok(_) => {}
 caught-by:
     cineris-ext::it engine::registering_after_the_first_evaluation_is_refused
 
 [break] a-hook-on-an-event-the-manifest-does-not-list
 rule: A script hooks only the events its manifest lists.
 file: crates/cineris-ext/src/engine/thread.rs
-in: register
-find: if !shared.hooks_allowed.contains(&event) {
-replace: if shared.hooks_allowed.contains(&event) && false {
+in: Shared::add
+find: if !self.hooks_allowed.contains(&event) {
+replace: if self.hooks_allowed.contains(&event) && false {
 caught-by:
     cineris-ext::it engine::a_hook_on_an_event_the_manifest_does_not_list_refuses_the_extension
 
@@ -290,4 +285,229 @@ in: detail
 find: .find(|effect| !matches!(effect, Effect::Ext { .. }))
 replace: .find(|_| true)
 caught-by:
-    policy::tests::an_approval_names_what_a_call_touches_wherever_its_ext_effect_stands
+    cineris-core policy::tests::an_approval_names_what_a_call_touches_wherever_its_ext_effect_stands
+
+# The early review of the host functions' permission path (step 28).
+
+[break] a-definition-is-read-while-the-thread-is-held
+rule: Nothing holds the thread's state while a definition is read: the script's code it runs may call back in.
+file: crates/cineris-ext/src/engine/thread.rs
+in: register
+find: let entry = read_entry(ctx, kind, def, function)?;
+replace:
+    let _held = shared.borrow_mut();
+    let entry = read_entry(ctx, kind, def, function)?;
+caught-by:
+    cineris-ext::it engine::a_definition_that_calls_back_in_while_it_is_read_is_served_cleanly
+
+[break] the-stack-trace-hook-can-be-set
+rule: A script cannot set `Error.prepareStackTrace`, which the engine runs as it makes an error.
+file: crates/cineris-ext/src/engine/prelude.js
+find: Object.defineProperty(Error, "prepareStackTrace", {
+replace: Object.defineProperty({}, "prepareStackTrace", {
+caught-by:
+    cineris-ext::it engine::the_stack_trace_hook_cannot_be_set
+
+[break] a-host-calls-arguments-are-taken-whole
+rule: A host call's arguments are bounded before they are taken into the harness's memory.
+file: crates/cineris-ext/src/engine/thread.rs
+in: host_call
+find: if payload.len() > payload_cap(kind) {
+replace: if payload.len() > usize::MAX - 1 {
+caught-by:
+    cineris-ext::it engine::a_host_calls_arguments_are_bounded_before_they_are_taken
+
+[break] host-calls-waiting-are-unbounded
+rule: At most sixteen host calls a script awaits wait for their answers at once.
+file: crates/cineris-ext/src/engine/thread.rs
+in: Shared::admit
+find: if (!only_tells(kind) && self.awaited >= MAX_PENDING)
+replace: if (!only_tells(kind) && self.awaited >= MAX_PENDING * 100)
+caught-by:
+    cineris-ext::it engine::the_host_calls_waiting_for_answers_are_bounded
+
+[break] calls-that-only-tell-take-the-awaited-ones-places
+rule: `log`, `notify` and `progress` are bounded by their counts, and leave the places of the calls a script awaits.
+file: crates/cineris-ext/src/engine/thread.rs
+in: only_tells
+find: matches!(kind, "log" | "notify" | "progress")
+replace: kind.is_empty()
+caught-by:
+    cineris-ext::it engine::the_host_calls_waiting_for_answers_are_bounded
+
+[break] notices-are-not-counted
+rule: A call of the extension gives at most ten notices, a hundred lines of the log and five questions.
+file: crates/cineris-ext/src/engine/thread.rs
+in: Shared::admit
+find: if *count >= most {
+replace: if *count >= most * 100 {
+caught-by:
+    cineris-ext::it engine::the_host_calls_waiting_for_answers_are_bounded
+
+[break] the-counts-do-not-start-again
+rule: The counts of what a call says start again with each call.
+file: crates/cineris-ext/src/engine/thread.rs
+in: Shared::begin
+find: self.notified = 0;
+replace: let _ = 0;
+caught-by:
+    cineris-ext::it engine::the_host_calls_waiting_for_answers_are_bounded
+
+[break] a-programs-time-is-the-calls-whole-time
+rule: A program is given at most what is left of the call's time when it is asked for.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::call
+find: pin!(serve(call, cx.capabilities, cx.host, phase, left))
+replace: pin!(serve(call, cx.capabilities, cx.host, phase, cx.time.max(left)))
+caught-by:
+    cineris-ext::it engine::a_programs_time_is_what_the_call_has_left_when_it_starts
+
+[break] a-script-goes-on-in-a-stopped-turn
+rule: A host call that finds its turn stopped ends the script's call there.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::call
+find: Ok(Err(HostError::Stopped(reason))) => {
+replace: Ok(Err(HostError::Stopped(reason))) if reason.is_empty() => {
+caught-by:
+    cineris-ext::it engine::a_host_call_in_a_stopped_turn_ends_the_scripts_call
+    cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
+
+[break] a-thread-waiting-for-an-answer-is-not-woken
+rule: A call that must end now wakes a thread waiting for a host call's answer, which no interrupt reaches.
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::stopped
+find: let _ = self.inbox.send(ToThread::Shutdown);
+replace: let _ = &self.inbox;
+caught-by:
+    cineris-ext::it engine::a_host_call_in_a_stopped_turn_ends_the_scripts_call
+
+[break] a-path-is-resolved-where-the-manifest-grants-nothing
+rule: A manifest that grants no reading or writing refuses before the path is resolved.
+file: crates/cineris-ext/src/host.rs
+in: allowed
+find: if !grants {
+replace: if !grants && path.is_empty() {
+caught-by:
+    cineris-ext::it serve::a_refused_path_tells_the_script_nothing_of_where_it_leads
+
+[break] a-resolvers-error-reaches-the-script
+rule: A path that does not resolve is refused as one that leads outside, saying nothing more.
+file: crates/cineris-ext/src/host.rs
+in: allowed
+find: let resolved = host.resolve(path).await.map_err(|_| refused())?;
+replace: let resolved = host.resolve(path).await?;
+caught-by:
+    cineris-ext::it serve::a_refused_path_tells_the_script_nothing_of_where_it_leads
+
+[break] a-refusal-names-where-the-path-leads
+rule: A refusal names the path as the script gave it, never where it leads.
+file: crates/cineris-ext/src/host.rs
+in: allowed
+find: checked.map_err(|_| refused())?;
+replace: checked?;
+caught-by:
+    cineris-ext::it serve::a_refused_path_tells_the_script_nothing_of_where_it_leads
+
+[break] an-answer-not-offered-is-taken
+rule: An answer to a script's question is one of the choices it offered, or none.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: choices.is_empty() || choices.contains(answer)
+replace: !answer.is_empty() || choices.contains(answer)
+caught-by:
+    cineris-ext::it serve::a_question_is_bounded_and_its_answer_is_one_of_its_choices
+
+[break] a-question-offers-any-number-of-choices
+rule: A script's question offers at most eight choices.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: if choices.len() > ASK_MAX_CHOICES {
+replace: if choices.len() > ASK_MAX_CHOICES * 100 {
+caught-by:
+    cineris-ext::it serve::a_question_is_bounded_and_its_answer_is_one_of_its_choices
+
+[break] a-scripts-text-is-shown-as-written
+rule: What a script tells the user or the log shows every character that acts unseen as an escape.
+file: crates/cineris-ext/src/host.rs
+in: shown
+find: cineris_base::visible(cineris_base::text::truncate_bytes(text, most)).into_owned()
+replace: cineris_base::text::truncate_bytes(text, most).to_owned()
+caught-by:
+    cineris-ext::it serve::a_notice_and_a_line_of_the_log_show_nothing_unseen
+    cineris-ext::it serve::a_question_is_bounded_and_its_answer_is_one_of_its_choices
+
+[break] allowing-a-host-call-once-is-remembered
+rule: What a person allowed for a host call is not remembered: the next host call of the same tool call is asked again.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find:
+                if !once_only {
+                    self.remember_allowed(&call, asked);
+                }
+replace:
+                self.remember_allowed(&call, asked);
+caught-by:
+    cineris-core::it extensions::allowing_a_host_write_once_allows_that_write_alone
+
+[break] the-approved-manifest-is-not-compared
+rule: An extension runs only when the manifest in its checked snapshot is the approved one, whose capabilities the session holds.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::runtime
+find: if runtime.manifest() != &self.approved.manifest {
+replace: if runtime.manifest() != &self.approved.manifest && self.name().is_empty() {
+caught-by:
+    cineris-core::it extensions::an_approved_manifest_other_than_the_one_in_the_folder_is_not_run
+
+[break] a-scripts-walk-is-not-gated-by-its-manifest
+rule: A script's listing or search is gated, entry by entry, by its manifest over the session's own gate.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::through
+find: .with_gate(gate.over(std::sync::Arc::clone(&self.cx.gate)));
+replace: .with_gate(std::sync::Arc::clone(&self.cx.gate));
+caught-by:
+    cineris-core::it extensions::a_scripts_listing_shows_only_what_its_manifest_reads
+
+[break] a-host-call-carries-no-ext-effect
+rule: Each host call carries an `ext` effect beside its own, so a rule about the extension reaches it.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::decide
+find: plan.effects.push(Effect::Ext {
+replace: let _ = (Effect::Ext {
+caught-by:
+    cineris-core::it extensions::a_rule_about_the_extension_reaches_its_host_calls
+
+[break] a-read-opens-a-path-that-changed-while-it-was-asked
+rule: A read opens its file only if the path still leads where it was judged to, after its decision.
+file: crates/cineris-core/src/ext/host.rs
+in: read
+find: self.still_leads(&path).await?;
+replace: let _ = &path;
+caught-by:
+    cineris-core::it extensions::a_read_whose_path_changed_while_it_was_asked_about_is_refused
+
+[break] a-tools-plan-for-another-path-is-taken
+rule: A write or a walk acts only on the path the manifest judged, not on the one its tool resolved again.
+file: crates/cineris-core/src/ext/host.rs
+in: same_place
+find: path.abs() != checked.abs()
+replace: path.abs() == checked.abs() && false
+caught-by:
+    cineris-core ext::host::tests::a_plan_that_touches_another_path_than_the_one_checked_is_refused
+
+[break] a-binary-file-is-read-as-text
+rule: A file with a NUL byte is not given to a script as text.
+file: crates/cineris-core/src/ext/host.rs
+in: read
+find: .filter(|text| !text.contains('\0'))
+replace: .filter(|text| !text.is_empty() || text.is_empty())
+caught-by:
+    cineris-core::it extensions::a_file_with_a_nul_byte_is_not_read_as_text
+
+[break] a-stop-is-taken-for-a-denial
+rule: A host call the policy says to stop at ends the script's call, rather than being refused to it.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::decide
+find: Verdict::Stop { reason } => Err(HostError::Stopped(reason)),
+replace: Verdict::Stop { reason } => Err(HostError::Denied(reason)),
+caught-by:
+    cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call

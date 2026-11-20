@@ -87,6 +87,12 @@ pub(crate) struct FakeHost {
     pub(crate) asked: Mutex<Vec<String>>,
     pub(crate) state: Mutex<BTreeMap<String, Json>>,
     pub(crate) exec_output: ExecOutput,
+    /// When set, a question is answered only after this long on the timer.
+    pub(crate) slow_ask: Option<(cineris_testkit::FakeTimer, std::time::Duration)>,
+    /// When set, a program's run finds its turn stopped.
+    pub(crate) exec_stops: bool,
+    /// How many paths it was asked to resolve.
+    pub(crate) resolves: std::sync::atomic::AtomicUsize,
 }
 
 impl FakeHost {
@@ -101,6 +107,9 @@ impl FakeHost {
                 stderr: b"err".to_vec(),
                 ..ExecOutput::default()
             },
+            slow_ask: None,
+            exec_stops: false,
+            resolves: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 
@@ -127,6 +136,8 @@ impl FakeHost {
 impl Host for FakeHost {
     fn resolve<'a>(&'a self, path: &'a str) -> HostFuture<'a, Result<ResolvedPath, HostError>> {
         Box::pin(async move {
+            self.resolves
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let resolver = self
                 .resolver
                 .as_ref()
@@ -147,6 +158,9 @@ impl Host for FakeHost {
                 request.write_roots.len(),
                 request.timeout.as_millis()
             ));
+            if self.exec_stops {
+                return Err(HostError::Stopped("a check stopped the turn".to_owned()));
+            }
             Ok(self.exec_output.clone())
         })
     }
@@ -222,6 +236,9 @@ impl Host for FakeHost {
     ) -> HostFuture<'_, Result<Option<String>, HostError>> {
         Box::pin(async move {
             self.note(format!("ask {question}"));
+            if let Some((timer, wait)) = &self.slow_ask {
+                cineris_base::Timer::sleep(timer, *wait).await;
+            }
             Ok(Some("yes".to_owned()))
         })
     }

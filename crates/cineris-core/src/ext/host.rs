@@ -88,13 +88,13 @@ impl CallHost<'_> {
                     "the permission rules refuse it".to_owned()
                 })))
             }
-            Decision::Stop { reason } => Err(HostError::Denied(reason)),
+            Decision::Stop { reason } => Err(HostError::Stopped(reason)),
             Decision::Ask => match self.parts.policy.ask_with(planned, true).await {
                 Verdict::Allow => Ok(()),
                 Verdict::Deny { note } => Err(HostError::Denied(
                     note.unwrap_or_else(|| "the user refused it".to_owned()),
                 )),
-                Verdict::Stop { reason } => Err(HostError::Denied(reason)),
+                Verdict::Stop { reason } => Err(HostError::Stopped(reason)),
                 _ => Err(HostError::Denied("it was not allowed".to_owned())),
             },
             _ => Err(HostError::Denied("it was not allowed".to_owned())),
@@ -140,23 +140,37 @@ impl Host for CallHost<'_> {
                 None,
             )
             .await?;
+            // The decision may have waited on a person: the path must still
+            // lead where the manifest and the engine judged it to.
+            self.still_leads(&path).await?;
             let at = path.to_fs_path();
             let bytes = run_blocking(&self.cx.cancel, move |_| read_capped(&at))
                 .await
                 .map_err(|error| HostError::Failed(error.to_string()))??;
-            let text = String::from_utf8(bytes).map_err(|_| {
-                HostError::Failed(format!("`{}` is not text (UTF-8)", path.shown()))
-            })?;
+            // A file with a NUL byte is binary, as the `read` tool judges,
+            // however well it decodes.
+            let text = String::from_utf8(bytes)
+                .ok()
+                .filter(|text| !text.contains('\0'))
+                .ok_or_else(|| {
+                    HostError::Failed(format!("`{}` is not text (UTF-8)", path.shown()))
+                })?;
             // The script read it as it is: its writes to it are judged by
-            // this.
+            // this, and by the lines it was given, which are what it saw.
             let snapshot = FileSnapshot::of_content(text.as_bytes(), None);
             let total = text.lines().count() as u64;
+            let first = offset.saturating_add(1);
+            let last = limit.map_or(total, |limit| offset.saturating_add(limit).min(total));
+            let mut lines = LineRanges::new();
+            if first <= last {
+                lines.insert(first, last);
+            }
             self.files.record_read(
                 path.abs(),
                 snapshot.clone(),
                 Shown {
                     hash: snapshot.hash,
-                    lines: LineRanges::of(1, total.max(1)),
+                    lines,
                     total_lines: total,
                     turn: self.cx.turn,
                     kept: false,
@@ -185,6 +199,9 @@ impl Host for CallHost<'_> {
                 .await
                 .map_err(|error| HostError::Failed(error.to_string()))?
                 .map_err(|error| HostError::Failed(error.to_string()))?;
+            // The tool resolved the path again: it writes only where the
+            // manifest judged.
+            same_place(&plan.effects, &path)?;
             let preview = match self.parts.write.preview(&plan, &cx) {
                 Some(work) => run_blocking(&cx.cancel, move |_| work()).await.ok(),
                 None => None,
@@ -218,7 +235,7 @@ impl Host for CallHost<'_> {
             if let Some(glob) = glob {
                 arguments["glob"] = Json::String(glob);
             }
-            self.through(&self.parts.list, arguments, gate).await
+            self.through(&self.parts.list, arguments, &path, gate).await
         })
     }
 
@@ -234,7 +251,8 @@ impl Host for CallHost<'_> {
             if let Some(glob) = glob {
                 arguments["glob"] = Json::String(glob);
             }
-            self.through(&self.parts.search, arguments, gate).await
+            self.through(&self.parts.search, arguments, &path, gate)
+                .await
         })
     }
 
@@ -310,6 +328,7 @@ impl CallHost<'_> {
         &self,
         tool: &std::sync::Arc<dyn cineris_tools::Tool>,
         arguments: Json,
+        checked: &ResolvedPath,
         gate: ManifestGate,
     ) -> Result<Listing, HostError> {
         let cx = self
@@ -325,6 +344,7 @@ impl CallHost<'_> {
         .await
         .map_err(|error| HostError::Failed(error.to_string()))?
         .map_err(|error| HostError::Failed(error.to_string()))?;
+        same_place(&plan.effects, checked)?;
         self.decide(
             format!("{}: {}", self.full_name, plan.summary),
             arguments,
@@ -340,6 +360,42 @@ impl CallHost<'_> {
             text: result.text(),
             payload: result.payload().cloned().unwrap_or(Json::Null),
         })
+    }
+}
+
+impl CallHost<'_> {
+    /// Whether `path` leads, now, where it led when it was checked.
+    async fn still_leads(&self, path: &ResolvedPath) -> Result<(), HostError> {
+        let again = self.resolve(&path.abs().to_native_string()).await?;
+        if again.abs() == path.abs() {
+            Ok(())
+        } else {
+            Err(HostError::Failed(format!(
+                "`{}` changed while the call was being decided",
+                path.shown()
+            )))
+        }
+    }
+}
+
+/// Refuses a plan that touches a path other than `checked`, the one the
+/// manifest judged: a tool resolves the path it is given again, and a
+/// folder above it may have become a link in between (the review of step
+/// 28).
+fn same_place(effects: &[Effect], checked: &ResolvedPath) -> Result<(), HostError> {
+    let elsewhere = effects.iter().any(|effect| match effect {
+        Effect::Read(path) | Effect::ReadTree(path) | Effect::Write(path) => {
+            path.abs() != checked.abs()
+        }
+        _ => false,
+    });
+    if elsewhere {
+        Err(HostError::Failed(format!(
+            "`{}` changed while the call was being made",
+            checked.shown()
+        )))
+    } else {
+        Ok(())
     }
 }
 
@@ -361,4 +417,33 @@ fn read_capped(path: &std::path::Path) -> Result<Vec<u8>, HostError> {
         ));
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use cineris_base::path::{PathOptions, PathResolver};
+    use cineris_testkit::Scratch;
+
+    use super::*;
+
+    /// A tool's plan that touches a path other than the one the manifest
+    /// judged is refused; the `ext` effect and the same path are not.
+    #[test]
+    fn a_plan_that_touches_another_path_than_the_one_checked_is_refused() {
+        let scratch = Scratch::outside("cineris-core-unit", "ext_same_place");
+        let paths = PathResolver::new(&scratch.dir("ws"), PathOptions::new()).unwrap();
+        let checked = paths.resolve("out/a.txt").unwrap();
+        let other = paths.resolve("out/b.txt").unwrap();
+        let ext = Effect::Ext {
+            tool: "probe/t".to_owned(),
+        };
+        assert!(same_place(&[Effect::Write(checked.clone()), ext.clone()], &checked).is_ok());
+        for effect in [
+            Effect::Write(other.clone()),
+            Effect::Read(other.clone()),
+            Effect::ReadTree(other),
+        ] {
+            assert!(same_place(&[ext.clone(), effect], &checked).is_err());
+        }
+    }
 }
