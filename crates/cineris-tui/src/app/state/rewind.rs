@@ -559,9 +559,7 @@ impl App {
         };
         rereading.mapper.turn_done(&mut rereading.transcript, now);
         rereading.transcript.set_now(LONG_AGO);
-        let _ = rereading
-            .transcript
-            .commit_parts(self.width.max(1), &self.look);
+        let _ = rereading.transcript.commit(self.width.max(1), &self.look);
         let head = rereading.transcript.take_finished();
         self.kept.replace_before(rereading.from, head);
         // `/copy` copies the branch's last answer, not one undone, unless

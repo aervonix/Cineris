@@ -136,7 +136,7 @@ caught-by:
 [break] the-open-answers-rows-are-not-kept
 rule: The rows an answer commits while it is still open are kept beside it, so the full screen shows them before it finishes.
 file: crates/cineris-tui/src/transcript.rs
-in: Transcript::commit_parts
+in: Transcript::commit
 find: self.open_rows.extend(lines.iter().cloned());
 replace: self.open_rows.clear();
 caught-by:

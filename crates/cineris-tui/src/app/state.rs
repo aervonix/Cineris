@@ -73,7 +73,7 @@ use crate::editor::Fragment;
 use crate::focus::Target;
 use crate::input::{Delivery, Input, Outcome, SendMode};
 use crate::transcript::kept::Kept;
-use crate::transcript::{Block, Committed, Transcript};
+use crate::transcript::{Block, Transcript};
 use crate::view::{self, Hint, HintRow, Look, RunningKeys};
 
 /// The window in which a second interrupt is "stop now"
@@ -2579,8 +2579,7 @@ impl App {
         self.transcript
             .set_now(now.saturating_duration_since(self.began));
         let boxes = self.mapper.live_rounds(&mut self.transcript);
-        let parts = self.transcript.commit_parts(width, &self.look);
-        let commit: Vec<Line> = parts.into_iter().flat_map(Committed::into_lines).collect();
+        let commit = self.transcript.commit(width, &self.look);
         let before = self.kept.len();
         let finished = self.transcript.take_finished();
         let finished = self.kept_words(finished);
