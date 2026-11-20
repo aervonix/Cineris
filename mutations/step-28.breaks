@@ -660,8 +660,8 @@ caught-by:
 rule: A program starts only when the permission engine, or the person it asks, allows the line.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: effects, None, ).await?;
-replace: effects, None, ).await.ok();
+find: }, ).await?;
+replace: }, ).await.ok();
 caught-by:
     cineris-core::it ext_exec::a_program_a_rule_denies_is_refused
     cineris-core::it ext_exec::a_question_about_a_program_shows_the_quoted_line_and_offers_only_once_or_deny
@@ -1163,3 +1163,48 @@ find: cineris_base::child_env::keep_out_of(&mut env, &avoid, cfg!(windows));
 replace: let _ = &avoid;
 caught-by:
     cineris-core::it ext_exec::sys_a_programs_own_path_holds_no_folder_of_the_workspace
+
+[break] a-shells-read-only-runs-a-program-unasked
+rule: Where the session's shell is PowerShell or cmd, a program the engine allows as read-only is asked about.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::decide
+find: Decision::AllowReadOnly if how.read_only_asks => {}
+replace: Decision::AllowReadOnly if how.read_only_asks && how.confined.is_none() => {}
+caught-by:
+    cineris-core::it ext_exec::sys_in_powershell_a_program_the_shell_calls_read_only_is_asked_about
+
+[break] a-shells-read-only-is-allowed-when-asked-again
+rule: A host call's question is put even when the engine, deciding it again, allows it as read-only, where the call says it is asked.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: if host.is_some_and(|host| host.read_only_asks) =>
+replace: if host.is_some_and(|host| host.read_only_asks && host.confined.is_none()) =>
+caught-by:
+    cineris-core::it ext_exec::sys_in_powershell_a_program_the_shell_calls_read_only_is_asked_about
+
+[break] a-powershell-line-is-taken-as-the-program
+rule: An exec's line judged in PowerShell or cmd asks for what that shell calls read-only; one judged in a POSIX shell does not.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: read_only_asks: !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix)
+replace: read_only_asks: matches!(shell.kind(), ShellKind::Cmd)
+caught-by:
+    cineris-core::it ext_exec::sys_in_powershell_a_program_the_shell_calls_read_only_is_asked_about
+
+[break] a-programs-question-says-the-sessions-confinement
+rule: A question about an extension's program says whether its own launcher confines it, not whether the session's commands are.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: host.and_then(|host| host.confined).unwrap_or_else(|| {
+replace: host.and_then(|host| host.confined.filter(|_| false)).unwrap_or_else(|| {
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_question_about_a_program_at_unrestricted_says_it_is_confined
+
+[break] a-programs-confinement-is-not-told
+rule: Exec tells its question whether the extension's own launcher confines the program.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: confined: Some(launcher.is_some())
+replace: confined: None
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_question_about_a_program_at_unrestricted_says_it_is_confined

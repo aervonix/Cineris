@@ -53,7 +53,7 @@ use cineris_tools::process::{Argument, CommandLine, Ending, Exit, Launch, Runner
 use cineris_tools::{Effect, NetworkTarget, Shell, ShellKind, run_blocking};
 use serde_json::json;
 
-use super::host::CallHost;
+use super::host::{CallHost, HostQuestion};
 use crate::checkpoints::{Rounds, changed_since_last_look};
 use crate::programs::{self, Search};
 use crate::sandbox::{SessionSandbox, protected_note};
@@ -227,6 +227,16 @@ pub(crate) async fn run(
         .map_err(HostError::Failed)?
     };
 
+    // 4. Through what it is started: made before the decision, which it
+    // has no part in, so that the question says whether the program is
+    // confined by it, whatever the session's commands are.
+    let launcher = {
+        let sandbox = Arc::clone(&parts.sandbox);
+        let roots = write_roots.clone();
+        let network = request.network;
+        blocking(cx, move || sandbox.extension_launcher(&roots, network)).await?
+    };
+
     // 3. The decision.
     let mut effects = vec![Effect::Exec {
         command: line.clone(),
@@ -244,16 +254,16 @@ pub(crate) async fn run(
         }),
         effects,
         None,
+        HostQuestion {
+            confined: Some(launcher.is_some()),
+            // In PowerShell and `cmd` the line's first word may be the
+            // shell's own command or alias (`write` is `Write-Output`),
+            // not the program that runs; in a POSIX shell it is the
+            // program.
+            read_only_asks: !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix),
+        },
     )
     .await?;
-
-    // 4. Through what it is started.
-    let launcher = {
-        let sandbox = Arc::clone(&parts.sandbox);
-        let roots = write_roots.clone();
-        let network = request.network;
-        blocking(cx, move || sandbox.extension_launcher(&roots, network)).await?
-    };
     let watch = launcher
         .as_ref()
         .filter(|_| !write_roots.is_empty())
