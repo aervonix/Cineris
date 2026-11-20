@@ -338,10 +338,19 @@ pub struct Log {
     /// The calls planned, by their plan's summary, in order: a call planned
     /// again is here twice.
     planned: Mutex<Vec<String>>,
+    /// The call each run was told it runs for (`RunCx::call`), in the
+    /// order the runs started.
+    ran_for: Mutex<Vec<Option<cineris_tools::CallRef>>>,
     wake: Notify,
 }
 
 impl Log {
+    /// The call each run was told it runs for, in the order the runs
+    /// started.
+    pub fn ran_for(&self) -> Vec<Option<cineris_tools::CallRef>> {
+        lock(&self.ran_for).clone()
+    }
+
     fn push(&self, line: String) {
         lock(&self.lines).push(line);
         self.wake.notify_one();
@@ -568,6 +577,7 @@ impl Tool for Probe {
                 Err(error) => return error.into_result(),
             };
             let label = &args.label;
+            lock(&self.log.ran_for).push(cx.call.clone());
             self.log.push(format!("start {name} {label}"));
             if let Some(output) = &args.output {
                 out.output(output);

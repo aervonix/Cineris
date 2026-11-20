@@ -655,3 +655,32 @@ fn a_policy_that_panics_deciding_gives_the_call_an_error_and_it_does_not_run() {
     );
     assert_valid_history(&last_request(&world.provider).messages);
 }
+
+#[test]
+fn each_run_names_the_call_it_runs_for() {
+    // `RunCx::call` (step 28): what a tool that puts questions on its own
+    // account names them by. No built-in tool reads it; the round runs as
+    // it did, which the rest of this file holds.
+    let response = calls(&[
+        ("c1", "read", json!({"path": "a"})),
+        ("c2", "write", json!({"path": "b"})),
+    ]);
+    let (world, rig) = Rig::one("each_run_names_its_call", [response, says("Done.")]);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    let recorded = results(&rig);
+    let ran_for = world.log.ran_for();
+    assert_eq!(ran_for.len(), 2, "{ran_for:?}");
+    for call in ran_for {
+        let call = call.expect("a run names its call");
+        let result = recorded
+            .iter()
+            .find(|result| result.call_id == call.call_id)
+            .expect("a result for the call the run named");
+        // The loop's own id for the call is its result's item.
+        assert_eq!(call.item, result.id);
+        assert_eq!(&call.session, rig.handle.id());
+    }
+}

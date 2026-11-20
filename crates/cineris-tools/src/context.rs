@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use cineris_base::{AbsPath, CancelToken, PathResolver};
+use cineris_protocol::{CallId, ItemId, SessionId, TurnId};
 
 use crate::files::FileTable;
 use crate::output::OutputLimits;
@@ -193,11 +194,30 @@ pub struct RunCx {
     /// the model has been shown what an earlier call was told
     /// (`docs/architecture/05-tools.md`, "`plan`").
     pub round: u64,
+    /// The call being run, when the loop runs it: what a tool that puts
+    /// questions on its own account names them by (an extension's host
+    /// calls, since step 28). `None` for a tool run any other way, and
+    /// while a call is planned. No built-in tool reads it.
+    pub call: Option<CallRef>,
+}
+
+/// Which call of which turn a tool is running for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallRef {
+    /// The session.
+    pub session: SessionId,
+    /// The turn.
+    pub turn: TurnId,
+    /// The provider's id for the call.
+    pub call_id: CallId,
+    /// The loop's own id for the call: its result's item.
+    pub item: ItemId,
 }
 
 impl RunCx {
     /// A context with the default limits, an open gate, no outline source,
-    /// no image support, an unknown turn and round, and tokens of its own.
+    /// no image support, an unknown turn and round, no call, and tokens of
+    /// its own.
     #[must_use]
     pub fn new(
         paths: Arc<PathResolver>,
@@ -216,7 +236,15 @@ impl RunCx {
             images: None,
             turn: 0,
             round: 0,
+            call: None,
         }
+    }
+
+    /// Sets the call being run.
+    #[must_use]
+    pub fn with_call(mut self, call: CallRef) -> Self {
+        self.call = Some(call);
+        self
     }
 
     /// Sets the cancellation token.
