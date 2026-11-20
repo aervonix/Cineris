@@ -10,8 +10,11 @@
 //! them out, and is not stable on the pinned toolchain, so every build of
 //! the shipped binary through `xtask` (`size`, `startup --profile dist`,
 //! and step 34's `dist`) passes rustc a `--remap-path-prefix` for each of
-//! those folders ([`environment_of`]), and `size` then reads the binary
-//! for any path still under a home folder ([`home_paths`]). `cargo xtask
+//! those folders ([`environment_of`]), and the C compiler a
+//! `-ffile-prefix-map` for each (since step 28: QuickJS's asserts name
+//! their source files, which its binding compiles from its build folder;
+//! MSVC has no such flag, [`c_flags`]). `size` then reads the binary for
+//! any path still under a home folder ([`home_paths`]). `cargo xtask
 //! home-paths FILE…` reads any built file the same way.
 
 use std::env;
@@ -160,16 +163,67 @@ pub(crate) fn encoded_rustflags(
     flags.join(&FLAG_SEPARATOR.to_string())
 }
 
+/// The C compiler's flags for the shipped build for `triple`: the flags
+/// already set for it, then `-ffile-prefix-map=FROM=TO` for each of
+/// `remaps`, so that a C file's `__FILE__` names no folder of the build
+/// machine. QuickJS's asserts name their source file, and the engine's
+/// binding compiles its sources from its build folder (step 28's engine
+/// check found the target folder four times in a Linux binary).
+///
+/// `None` for MSVC, whose compiler has no such flag, and when there is
+/// nothing to add. A folder with white space in its path is left out:
+/// the `cc` crate splits these flags at white space. The home-path check
+/// of `size` still finds what is left.
+pub(crate) fn c_flags(
+    triple: &str,
+    already: Option<&str>,
+    remaps: &[(String, &'static str)],
+) -> Option<String> {
+    if triple.contains("msvc") {
+        return None;
+    }
+    let mut flags: Vec<String> = already
+        .map(|already| already.split_whitespace().map(str::to_owned).collect())
+        .unwrap_or_default();
+    let before = flags.len();
+    for (from, to) in remaps {
+        if !from.contains(char::is_whitespace) {
+            flags.push(format!("-ffile-prefix-map={from}={to}"));
+        }
+    }
+    (flags.len() > before).then(|| flags.join(" "))
+}
+
+/// The C flags the `cc` crate would use for `triple`: the first of the
+/// variables it reads, in its order.
+fn c_flags_already(triple: &str) -> Option<String> {
+    [
+        format!("CFLAGS_{triple}"),
+        format!("CFLAGS_{}", triple.replace('-', "_")),
+        "TARGET_CFLAGS".to_owned(),
+        "CFLAGS".to_owned(),
+    ]
+    .iter()
+    .find_map(|name| env::var(name).ok())
+}
+
 /// The environment every build of the shipped binary through `xtask` is
-/// made in, for the tree at `root` with its build directory at `target`.
-fn environment_of(root: &Path, target: &Path) -> Vec<(&'static str, String)> {
+/// made in, for the tree at `root` with its build directory at `target`,
+/// for the target `triple`.
+fn environment_of(root: &Path, target: &Path, triple: &str) -> Vec<(String, String)> {
     let folders = Folders::of_tree(root, target);
+    let remaps = folders.remaps();
     let encoded = env::var("CARGO_ENCODED_RUSTFLAGS").ok();
     let plain = env::var("RUSTFLAGS").ok();
-    vec![(
-        "CARGO_ENCODED_RUSTFLAGS",
-        encoded_rustflags(encoded.as_deref(), plain.as_deref(), &folders.remaps()),
-    )]
+    let mut environment = vec![(
+        "CARGO_ENCODED_RUSTFLAGS".to_owned(),
+        encoded_rustflags(encoded.as_deref(), plain.as_deref(), &remaps),
+    )];
+    if let Some(flags) = c_flags(triple, c_flags_already(triple).as_deref(), &remaps) {
+        // The first name `cc` looks for, so that it is the one it takes.
+        environment.push((format!("CFLAGS_{triple}"), flags));
+    }
+    environment
 }
 
 /// Builds `cineris` in the shipped profile, with the build's environment.
@@ -220,11 +274,15 @@ pub(crate) fn build_with(options: &Options) -> Result<()> {
     if let Some(target) = options.target {
         arguments.extend(["--target", target]);
     }
+    let triple = match options.target {
+        Some(target) => target.to_owned(),
+        None => crate::nonblocking::host_target()?,
+    };
     println!("$ cargo {}", arguments.join(" "));
     let mut command = Command::new(workspace::cargo());
     command
         .args(&arguments)
-        .envs(environment_of(&root, &target_dir))
+        .envs(environment_of(&root, &target_dir, &triple))
         .envs(options.variables.iter().copied())
         // A token for `gh` (a `try` run of `size` has one) is no build
         // script's or procedural macro's business.
@@ -443,6 +501,34 @@ mod tests {
             encoded_rustflags(None, None, &spaced),
             "--remap-path-prefix=/x/my files=."
         );
+    }
+
+    #[test]
+    fn the_c_compiler_is_given_the_same_remaps_except_on_msvc() {
+        let remaps = vec![
+            ("/x/.cargo".to_owned(), "cargo"),
+            ("/x/w/target".to_owned(), "target"),
+        ];
+        let ours = "-ffile-prefix-map=/x/.cargo=cargo -ffile-prefix-map=/x/w/target=target";
+        assert_eq!(
+            c_flags("x86_64-unknown-linux-musl", None, &remaps).as_deref(),
+            Some(ours)
+        );
+        assert_eq!(
+            c_flags("x86_64-unknown-linux-gnu", None, &remaps).as_deref(),
+            Some(ours)
+        );
+        // MSVC's compiler has no such flag; given one, it fails the build.
+        assert_eq!(c_flags("x86_64-pc-windows-msvc", None, &remaps), None);
+        // The flags already set are kept, ahead of ours.
+        assert_eq!(
+            c_flags("x86_64-unknown-linux-gnu", Some(" -O2  -g "), &remaps).as_deref(),
+            Some(format!("-O2 -g {ours}").as_str())
+        );
+        // `cc` splits at white space, so a folder with a space is left out,
+        // and with nothing to add nothing is set.
+        let spaced = vec![("/x/my files".to_owned(), ".")];
+        assert_eq!(c_flags("x86_64-unknown-linux-gnu", None, &spaced), None);
     }
 
     #[test]
