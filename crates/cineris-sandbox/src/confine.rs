@@ -184,13 +184,16 @@ fn grant(
     let fd = match open_no_symlinks(root) {
         Ok(fd) => fd,
         Err(error) if error.raw_os_error() == Some(libc::ELOOP) => {
-            // The root, or a directory on the way to it, is a link now:
-            // `openat2` refused to follow it. It was a real directory, or
-            // was not there, when the harness resolved the roots, so a
-            // confined command replaced it. Fail closed.
+            // The root, or a directory on the way to it, is a link:
+            // `openat2` refused to follow it. Either it was a real
+            // directory, or was not there, when the harness resolved the
+            // roots, and something replaced it since; or the root was
+            // never resolved (an extension's write root, handed over as
+            // named) and names a link. Fail closed.
             return Err(format!(
-                "{}: a root, or a directory on the way to it, is a symbolic link now, which it \
-                 was not when the session started: it was replaced",
+                "{}: a root, or a directory on the way to it, is a symbolic link, which the \
+                 launcher never follows: it was made a link after the root was resolved, or the \
+                 root was named through one",
                 root.display()
             ));
         }

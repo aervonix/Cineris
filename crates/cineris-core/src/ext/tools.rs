@@ -131,6 +131,13 @@ impl LoadedExtension {
         };
         let full_name = format!("{}/{tool}", self.name());
         let progress = Mutex::new(Vec::new());
+        // The call's time runs from here, on the clock the engine reads it
+        // by: no later than the engine's own start of it.
+        let deadline = self
+            .parts
+            .clock
+            .monotonic()
+            .saturating_add(self.approved.manifest.limits.time);
         let host = host::CallHost {
             parts: &self.parts,
             cx,
@@ -138,6 +145,7 @@ impl LoadedExtension {
             full_name: &full_name,
             extension: self.name(),
             progress: &progress,
+            deadline,
         };
         let result = runtime
             .call(

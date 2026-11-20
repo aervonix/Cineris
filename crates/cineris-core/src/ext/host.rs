@@ -45,6 +45,11 @@ pub(crate) struct CallHost<'a> {
     pub(crate) extension: &'a str,
     /// What the script said it is doing, for the call's output.
     pub(crate) progress: &'a Mutex<Vec<String>>,
+    /// When the call's time is up, on the session's clock
+    /// (`HostParts::clock`'s monotonic time): a program started after a
+    /// decision, which may have waited on a person, is given no more than
+    /// what is left of it.
+    pub(crate) deadline: std::time::Duration,
 }
 
 impl CallHost<'_> {

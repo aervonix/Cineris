@@ -1180,7 +1180,7 @@ impl EnginePolicy {
             // may have settled this one.
             let mut question = match self.outcome(&call) {
                 Outcome::Allow { read_only: true }
-                    if host.is_some_and(|host| host.read_only_asks) =>
+                    if host.as_ref().is_some_and(|host| host.read_only_asks) =>
                 {
                     Question {
                         reasons: vec![READ_ONLY_IN_ANOTHER_SHELL.to_owned()],
@@ -1219,12 +1219,21 @@ impl EnginePolicy {
                 summary: call.plan.summary.clone(),
                 detail: detail(
                     &call,
-                    host.and_then(|host| host.confined).unwrap_or_else(|| {
-                        self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
-                    }),
+                    host.as_ref()
+                        .and_then(|host| host.confined)
+                        .unwrap_or_else(|| {
+                            self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
+                        }),
                 ),
                 choices: question.choices(),
-                reasons: question.reasons.clone(),
+                // The engine's reasons, then what the host call adds: a
+                // program's input, which no rule judges.
+                reasons: question
+                    .reasons
+                    .iter()
+                    .cloned()
+                    .chain(host.as_ref().and_then(|host| host.extra.clone()))
+                    .collect(),
                 adds: question
                     .lifts
                     .iter()
@@ -1357,7 +1366,7 @@ impl EnginePolicy {
 }
 
 /// How an extension's host call is put to a person (step 28).
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub(crate) struct HostQuestion {
     /// For a program: whether the extension's own launcher confines it.
     /// Its question says so, whatever the session's commands do: at
@@ -1367,14 +1376,19 @@ pub(crate) struct HostQuestion {
     /// Whether a call the engine allows as read-only is asked all the same:
     /// a program's line judged in a shell whose own commands and aliases
     /// are not the program that runs (in PowerShell `write` is
-    /// `Write-Output`; the program is `write.exe`).
+    /// `Write-Output`; the program is `write.exe`), or, on Windows, whose
+    /// lookup is not the one that finds the program.
     pub(crate) read_only_asks: bool,
+    /// One more reason the question gives, after the engine's: for a
+    /// program given input, what the input is, which no rule judges.
+    pub(crate) extra: Option<String>,
 }
 
 /// Why a program the engine judged read-only is asked about.
 pub(crate) const READ_ONLY_IN_ANOTHER_SHELL: &str = "The program's line was judged in the \
-     session's shell, whose own commands and aliases are not the program that runs, so what that \
-     shell calls read-only is asked about.";
+     session's shell, whose own commands and aliases are not the program that runs (and on \
+     Windows whose lookup is not the one that finds it), so what that shell calls read-only is \
+     asked about.";
 
 /// What a directory walk may read, entry by entry: the engine's read rules.
 struct EngineGate(Arc<Engine>);
