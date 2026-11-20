@@ -15,15 +15,21 @@
 //!   command analysis reads the words the program is given. An argument
 //!   the shell cannot quote refuses the call, naming it.
 //! - **Started** ([`command_line`]). A program as it is, its arguments one
-//!   by one. On Windows a `.cmd` or `.bat` is started through
-//!   `%SystemRoot%\System32\cmd.exe` with one line of its own
+//!   by one. On every system an argument holding a character that a
+//!   Windows code page's best fit turns into `"` or `\` is refused, naming
+//!   the argument and the character ([`LOOKALIKES`]). On Windows a `.exe`
+//!   is given every argument in double quotes by the C runtime's rules
+//!   ([`crt_quoted`]), so that a program that globs what is not quoted (a
+//!   Cygwin or MSYS2 one) reads `*` as `*`. A `.cmd` or `.bat` is started
+//!   through `%SystemRoot%\System32\cmd.exe` with one line of its own
 //!   ([`batch_line`]): the script's path and each argument in double
-//!   quotes, inside which `cmd.exe` takes `^ & | < > ( )` as plain
-//!   characters; a run of backslashes before each closing quote doubled,
+//!   quotes, and a run of backslashes before each closing quote doubled,
 //!   so that the program the script starts reads the argument as it was
-//!   given; and `"`, `%`, `!`, a carriage return, a line feed and a NUL
-//!   refused, naming the argument and the character, since `cmd.exe` has
-//!   no way to carry them unchanged.
+//!   given. `"`, `%`, `!`, `& | < > ^ ( )`, a carriage return, a line feed
+//!   and a NUL are refused there, naming the argument and the character:
+//!   `cmd.exe` has no way to carry the first ones unchanged, and a script
+//!   that expands an argument again (`set A=%~1`, then `echo %A%`) acts on
+//!   the others.
 
 use std::path::{Path, PathBuf};
 
@@ -194,8 +200,8 @@ impl std::fmt::Display for BatchRefusal {
         match self {
             Self::Character { which, character } => write!(
                 f,
-                "{which} holds {character}, which cmd.exe cannot pass to a .cmd or .bat script \
-                 unchanged"
+                "{which} holds {character}, which is never passed to a .cmd or .bat script: \
+                 cmd.exe, or a script that expands its arguments again, would act on it"
             ),
             Self::TooLong { length } => write!(
                 f,
@@ -206,24 +212,113 @@ impl std::fmt::Display for BatchRefusal {
     }
 }
 
-/// The characters `cmd.exe` cannot carry in a script's line unchanged, and
-/// their names: a quote ends the quoting; `%` and `!` are expanded inside
-/// quotes (`!` where the script turns delayed expansion on); and a line
-/// break or a NUL ends the line.
-const REFUSED: [(char, &str); 6] = [
+/// The characters a script's line never carries, and their names.
+///
+/// - `cmd.exe` cannot carry these unchanged: a quote ends the quoting;
+///   `%` and `!` are expanded inside quotes (`!` where the script turns
+///   delayed expansion on); and a line break or a NUL ends the line.
+/// - A script can make these live: they are plain inside the quotes of
+///   `cmd.exe`'s first reading, but a script that takes the quotes off and
+///   reads an argument again (`set A=%~1` and then `echo %A%`, `call :x
+///   %~1`, `if "%~1"==… (…)`) runs what follows `&` or `|`, redirects at
+///   `<` or `>`, groups at a parenthesis, and joins its next line to one
+///   that ends in `^`. An npm shim's argument such as `--x=(a)` is refused
+///   with them.
+const REFUSED: [(char, &str); 13] = [
     ('"', "a double quote (\")"),
     ('%', "a percent sign (%)"),
     ('!', "an exclamation mark (!)"),
+    ('&', "an ampersand (&)"),
+    ('|', "a vertical bar (|)"),
+    ('<', "a less-than sign (<)"),
+    ('>', "a greater-than sign (>)"),
+    ('^', "a caret (^)"),
+    ('(', "an opening parenthesis"),
+    (')', "a closing parenthesis"),
     ('\r', "a carriage return"),
     ('\n', "a line feed"),
     ('\0', "a NUL character"),
 ];
 
+/// The characters no argument of a program is given with, on any system,
+/// their names and what they can become. A program that reads its command
+/// line in the system's code page (an "ANSI" one) has Windows convert it
+/// from UTF-16 with a "best fit" for a character the code page lacks,
+/// which turns each of these into a `"` or a `\`, so that the program
+/// reads other words than the engine was shown: a quote that ends the
+/// quoting, or an escape before one.
+const LOOKALIKES: [(char, &str, &str); 4] = [
+    (
+        '\u{FF02}',
+        "a fullwidth quotation mark (U+FF02)",
+        "a double quote",
+    ),
+    ('\u{FF3C}', "a fullwidth backslash (U+FF3C)", "a backslash"),
+    (
+        '\u{A5}',
+        "a yen sign (U+00A5)",
+        "a backslash in code page 932",
+    ),
+    (
+        '\u{20A9}',
+        "a won sign (U+20A9)",
+        "a backslash in code page 949",
+    ),
+];
+
+/// Why `arguments` cannot be given to any program, naming the first
+/// argument that holds a character of [`LOOKALIKES`] and the character.
+fn lookalike(arguments: &[String]) -> Option<String> {
+    arguments.iter().enumerate().find_map(|(index, argument)| {
+        LOOKALIKES
+            .iter()
+            .find(|(character, _, _)| argument.contains(*character))
+            .map(|(_, name, becomes)| {
+                format!(
+                    "argument {} holds {name}, which is never passed to a program: one that reads \
+                     its command line in a Windows code page can be given {becomes} in its place",
+                    index + 1
+                )
+            })
+    })
+}
+
+/// `argument` as a Windows program written with the C runtime reads it
+/// back exactly, in double quotes whatever it holds: each `"` escaped as
+/// `\"`, with the backslashes before it doubled, and the backslashes before
+/// the closing quote doubled. Inside the quotes a Cygwin or MSYS2 program
+/// expands no pattern (`* ? [`) and takes `'` as a plain character, which
+/// it does not do outside them; it still takes `\\` there as one backslash,
+/// so a run of them not before a quote reaches it shortened
+/// (`docs/architecture/12-extensions.md`, "Windows").
+fn crt_quoted(argument: &str) -> String {
+    let mut quoted = String::with_capacity(argument.len() + 2);
+    quoted.push('"');
+    let mut backslashes = 0;
+    for character in argument.chars() {
+        match character {
+            '\\' => backslashes += 1,
+            '"' => {
+                // The argument's n backslashes, already written, and n + 1
+                // more: 2n + 1, which the C runtime reads as n and a quote.
+                quoted.extend(std::iter::repeat_n('\\', backslashes + 1));
+                backslashes = 0;
+            }
+            _ => backslashes = 0,
+        }
+        quoted.push(character);
+    }
+    // The argument's n backslashes at its end, and n more: 2n, which the
+    // C runtime reads as n before a quote that closes.
+    quoted.extend(std::iter::repeat_n('\\', backslashes));
+    quoted.push('"');
+    quoted
+}
+
 /// The line `cmd.exe /s /c` runs a batch script with: `""<script>"
 /// "<argument>" …"`, the whole in an outer pair of quotes that `/s` takes
 /// off, and the script's path and each argument in quotes of their own.
-/// Inside those, `^ & | < > ( )` are plain characters to `cmd.exe`, and a
-/// run of backslashes before the closing quote is doubled, so that a
+/// A run of backslashes before the closing quote is doubled, so that a
 /// program the script hands `%*` to reads it as one argument ending in
 /// those backslashes (by the C runtime's rules), never as an escaped quote
 /// that runs on into the next argument.
@@ -267,21 +362,36 @@ pub(crate) fn batch_line(script: &str, arguments: &[String]) -> Result<String, B
 }
 
 /// The command line that starts `found` with `arguments`: the program as
-/// it is, or on Windows a `.cmd` or `.bat` through `cmd`, which is
-/// `%SystemRoot%\System32\cmd.exe` ([`system_cmd`]).
+/// it is, on Windows each argument written in double quotes by the C
+/// runtime's rules ([`crt_quoted`]); or on Windows a `.cmd` or `.bat`
+/// through `cmd`, which is `%SystemRoot%\System32\cmd.exe`
+/// ([`system_cmd`]).
 ///
 /// # Errors
 ///
-/// The reason a script's line was refused, or that there is no `cmd.exe`
-/// to start one with.
+/// An argument that holds a character of [`LOOKALIKES`], on any system;
+/// the reason a script's line was refused, or that there is no `cmd.exe`
+/// to start one with. Each names the argument and the character.
 pub(crate) fn command_line(
     found: &Path,
     arguments: &[String],
     windows: bool,
     cmd: Option<&Path>,
 ) -> Result<CommandLine, String> {
+    if let Some(refused) = lookalike(arguments) {
+        return Err(refused);
+    }
     if !(windows && cineris_base::program::is_batch_script(found)) {
-        return Ok(CommandLine::new(found).args(arguments.iter().cloned()));
+        let line = CommandLine::new(found);
+        if !windows {
+            return Ok(line.args(arguments.iter().cloned()));
+        }
+        // Verbatim, so that the standard library adds no quoting of its
+        // own: it quotes only an argument that is empty or has a space or
+        // a tab, and leaves `*` bare for a program that globs it.
+        return Ok(arguments
+            .iter()
+            .fold(line, |line, argument| line.verbatim(crt_quoted(argument))));
     }
     let Some(cmd) = cmd else {
         return Err(format!(
@@ -327,17 +437,18 @@ mod tests {
         items.iter().map(|item| (*item).to_owned()).collect()
     }
 
-    /// The line `cmd.exe` is given: the outer quotes, each item quoted, the
-    /// characters `cmd.exe` would act on left plain inside the quotes.
+    /// The line `cmd.exe` is given: the outer quotes, and each item quoted,
+    /// the separators `cmd.exe` splits a script's arguments at left plain
+    /// inside the quotes.
     #[test]
     fn a_scripts_line_quotes_each_item_inside_an_outer_pair() {
         assert_eq!(
             batch_line(
                 r"C:\Program Files\nodejs\npx.cmd",
-                &args(&["a b", "x^y&z|w<v>u(t)"])
+                &args(&["a b", "--x=y,z;w"])
             )
             .unwrap(),
-            r#"""C:\Program Files\nodejs\npx.cmd" "a b" "x^y&z|w<v>u(t)"""#
+            r#"""C:\Program Files\nodejs\npx.cmd" "a b" "--x=y,z;w"""#
         );
         assert_eq!(
             batch_line(r"C:\t\x.bat", &args(&["", "plain"])).unwrap(),
@@ -360,8 +471,9 @@ mod tests {
         );
     }
 
-    /// Every character `cmd.exe` cannot carry is refused, in the path or in
-    /// any argument, naming which and the character.
+    /// Every character `cmd.exe` cannot carry, or that a script which
+    /// expands its arguments again would act on, is refused, in the path or
+    /// in any argument, naming which and the character.
     #[test]
     fn each_character_cmd_cannot_carry_is_refused_with_its_name() {
         // Written out here, not taken from the list the code refuses by: a
@@ -370,6 +482,13 @@ mod tests {
             ('"', "a double quote"),
             ('%', "a percent sign"),
             ('!', "an exclamation mark"),
+            ('&', "an ampersand"),
+            ('|', "a vertical bar"),
+            ('<', "a less-than sign"),
+            ('>', "a greater-than sign"),
+            ('^', "a caret"),
+            ('(', "an opening parenthesis"),
+            (')', "a closing parenthesis"),
             ('\r', "a carriage return"),
             ('\n', "a line feed"),
             ('\0', "a NUL character"),
@@ -405,14 +524,15 @@ mod tests {
     }
 
     /// A batch script on Windows is started through `cmd.exe` with the
-    /// script's line as one verbatim argument; anything else, and every
-    /// program elsewhere, as it is.
+    /// script's line as one verbatim argument; a `.exe` on Windows as it
+    /// is, each argument written in quotes by the C runtime's rules; and
+    /// every program elsewhere as it is, its arguments exact.
     #[test]
     fn a_batch_script_is_started_through_cmd_and_a_program_as_it_is() {
         use cineris_tools::process::Argument;
         let cmd = Path::new(r"C:\Windows\System32\cmd.exe");
         let line =
-            command_line(Path::new(r"C:\t\x.CMD"), &args(&["a&b"]), true, Some(cmd)).unwrap();
+            command_line(Path::new(r"C:\t\x.CMD"), &args(&["a b"]), true, Some(cmd)).unwrap();
         assert_eq!(line.program, cmd);
         // No AutoRun, command extensions on (the shims' `%~dp0` and
         // `call :label`), delayed expansion off, the outer quotes taken off.
@@ -420,15 +540,169 @@ mod tests {
             .iter()
             .map(|one| Argument::Exact((*one).to_owned()))
             .collect();
-        expected.push(Argument::Verbatim(r#"""C:\t\x.CMD" "a&b"""#.to_owned()));
+        expected.push(Argument::Verbatim(r#"""C:\t\x.CMD" "a b"""#.to_owned()));
         assert_eq!(line.arguments, expected);
         assert!(command_line(Path::new(r"C:\t\x.bat"), &[], true, None).is_err());
 
-        for (program, windows) in [(r"C:\t\x.exe", true), ("/usr/bin/x.cmd", false)] {
-            let line =
-                command_line(Path::new(program), &args(&["a&b"]), windows, Some(cmd)).unwrap();
-            assert_eq!(line.program, Path::new(program));
-            assert_eq!(line.arguments, vec![Argument::Exact("a&b".to_owned())]);
+        let line = command_line(
+            Path::new(r"C:\t\x.exe"),
+            &args(&["a&b", "*"]),
+            true,
+            Some(cmd),
+        )
+        .unwrap();
+        assert_eq!(line.program, Path::new(r"C:\t\x.exe"));
+        assert_eq!(
+            line.arguments,
+            [
+                Argument::Verbatim(r#""a&b""#.to_owned()),
+                Argument::Verbatim(r#""*""#.to_owned())
+            ]
+        );
+        let line = command_line(
+            Path::new("/usr/bin/x.cmd"),
+            &args(&["a&b", "*"]),
+            false,
+            Some(cmd),
+        )
+        .unwrap();
+        assert_eq!(line.program, Path::new("/usr/bin/x.cmd"));
+        assert_eq!(
+            line.arguments,
+            [
+                Argument::Exact("a&b".to_owned()),
+                Argument::Exact("*".to_owned())
+            ]
+        );
+    }
+
+    /// The words a program written with the C runtime (Microsoft's, since
+    /// 2008, and the standard library's) reads from the arguments of a
+    /// command line, after the program's own word: separated by spaces and
+    /// tabs outside quotes; a `"` that opens or closes quoting, or inside
+    /// quotes is followed by another and is one; `2n` backslashes before a
+    /// `"` are `n` and the quote acts, `2n + 1` are `n` and the quote is
+    /// one; and backslashes before anything else are themselves.
+    fn crt_words(line: &str) -> Vec<String> {
+        let mut words = Vec::new();
+        let mut chars = line.chars().peekable();
+        loop {
+            while chars.next_if(|c| *c == ' ' || *c == '\t').is_some() {}
+            if chars.peek().is_none() {
+                return words;
+            }
+            let mut word = String::new();
+            let mut quoted = false;
+            while let Some(&c) = chars.peek() {
+                match c {
+                    ' ' | '\t' if !quoted => break,
+                    '\\' => {
+                        let mut run = 0;
+                        while chars.next_if_eq(&'\\').is_some() {
+                            run += 1;
+                        }
+                        if chars.peek() == Some(&'"') {
+                            word.extend(std::iter::repeat_n('\\', run / 2));
+                            if run % 2 == 1 {
+                                word.push('"');
+                                chars.next();
+                            }
+                        } else {
+                            word.extend(std::iter::repeat_n('\\', run));
+                        }
+                    }
+                    '"' => {
+                        chars.next();
+                        if quoted && chars.next_if_eq(&'"').is_some() {
+                            word.push('"');
+                        } else {
+                            quoted = !quoted;
+                        }
+                    }
+                    _ => {
+                        word.push(c);
+                        chars.next();
+                    }
+                }
+            }
+            words.push(word);
+        }
+    }
+
+    /// On Windows each argument of a `.exe` is written in double quotes,
+    /// a `"` escaped and the backslashes before a quote doubled, and the C
+    /// runtime's reading of the line gives back exactly the arguments.
+    #[test]
+    fn an_exes_arguments_are_quoted_by_the_c_runtimes_rules() {
+        use cineris_tools::process::Argument;
+        let given = args(&[
+            "*",
+            "?",
+            "a'b",
+            "x\"y",
+            "a\\",
+            "a\\\"b",
+            "",
+            ".en*",
+            r"C:\a b\",
+            r"\\server\share",
+            "two  spaces\tand a tab",
+        ]);
+        let line = command_line(Path::new(r"C:\t\x.exe"), &given, true, None).unwrap();
+        let written: Vec<&str> = line
+            .arguments
+            .iter()
+            .map(|argument| match argument {
+                Argument::Verbatim(text) => text.as_str(),
+                Argument::Exact(text) => panic!("left to the standard library: {text:?}"),
+            })
+            .collect();
+        assert_eq!(
+            written,
+            [
+                r#""*""#,
+                r#""?""#,
+                r#""a'b""#,
+                r#""x\"y""#,
+                r#""a\\""#,
+                r#""a\\\"b""#,
+                r#""""#,
+                r#"".en*""#,
+                r#""C:\a b\\""#,
+                r#""\\server\share""#,
+                "\"two  spaces\tand a tab\"",
+            ]
+        );
+        // As the standard library joins them, after the program's word.
+        assert_eq!(crt_words(&written.join(" ")), given);
+    }
+
+    /// A character that a Windows code page's best fit makes a `"` or a
+    /// `\` is refused in any argument, on every system and for every kind
+    /// of program, naming the argument and the character.
+    #[test]
+    fn a_lookalike_of_a_quote_or_a_backslash_is_refused_on_every_system() {
+        // Written out here, not taken from the list the code refuses by.
+        for (character, name) in [
+            ('\u{FF02}', "a fullwidth quotation mark (U+FF02)"),
+            ('\u{FF3C}', "a fullwidth backslash (U+FF3C)"),
+            ('\u{A5}', "a yen sign (U+00A5)"),
+            ('\u{20A9}', "a won sign (U+20A9)"),
+        ] {
+            let given = args(&["ok", &format!("a{character}b")]);
+            for (program, windows) in [
+                (r"C:\t\x.exe", true),
+                (r"C:\t\x.cmd", true),
+                ("/usr/bin/x", false),
+            ] {
+                let cmd = Path::new(r"C:\Windows\System32\cmd.exe");
+                let refused =
+                    command_line(Path::new(program), &given, windows, Some(cmd)).unwrap_err();
+                assert!(
+                    refused.starts_with("argument 2 holds ") && refused.contains(name),
+                    "{program}: {refused}"
+                );
+            }
         }
     }
 
