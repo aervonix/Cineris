@@ -159,6 +159,13 @@ impl Capabilities {
         path.starts_with(&self.workspace) && self.read.iter().any(|glob| glob.matches(path))
     }
 
+    /// Whether a `read` glob can match a path below the folder `tree`: one
+    /// a walk of it would reach. A walk enters such a folder.
+    #[must_use]
+    pub fn reaches_under(&self, tree: &AbsPath) -> bool {
+        tree.starts_with(&self.workspace) && self.read.iter().any(|glob| glob.reaches_under(tree))
+    }
+
     /// The pattern that lets the extension contact `host`, given in lower
     /// case.
     ///

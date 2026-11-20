@@ -195,8 +195,9 @@ fn another_case_is_the_same_file_only_where_the_system_says_so() {
 #[test]
 fn each_entry_a_walk_reaches_is_checked_on_its_own() {
     let setup = setup("each_entry_a_walk_reaches_is_checked_on_its_own");
-    // The host's listing holds `src/a.rs` and `notes.md`; the manifest
-    // reads `src/**` only.
+    // The fake host walks `src`, `src/a.rs`, `notes.md`, `out` and
+    // `out/old.txt` through the gate it is handed; the manifest reads
+    // `src/**` only.
     let listed = block_on(serve(
         HostCall::List {
             path: "src".to_owned(),
@@ -208,13 +209,23 @@ fn each_entry_a_walk_reaches_is_checked_on_its_own() {
         Duration::from_secs(1),
     ))
     .unwrap();
-    let shown: Vec<&str> = listed
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|entry| entry["path"].as_str().unwrap())
-        .collect();
-    assert_eq!(shown, ["src/a.rs"]);
+    assert_eq!(listed["text"], "src\nsrc/a.rs");
+}
+
+#[test]
+fn a_walk_enters_a_folder_a_glob_reaches_under_and_reads_only_what_it_names() {
+    let setup = setup("a_walk_enters_a_folder_a_glob_reaches_under_and_reads_only_what_it_names");
+    setup.scratch.file("ws/docs/x.rs", "r");
+    setup.scratch.file("ws/docs/x.md", "m");
+    let parsed = Manifest::parse(&manifest("read = [\"**/*.rs\"]")).unwrap();
+    let root = setup.host.resolver.as_ref().unwrap().root().clone();
+    let capabilities = Capabilities::compile(&parsed.capabilities, &root).unwrap();
+    let at = |relative: &str| root.join(relative).unwrap();
+    assert!(capabilities.reaches_under(&at("docs")));
+    assert!(capabilities.reads(&at("docs/x.rs")));
+    assert!(!capabilities.reads(&at("docs/x.md")));
+    // A file is never let through for what a glob could reach under it.
+    assert!(!capabilities.reads(&at("notes.md")));
 }
 
 #[test]
