@@ -57,6 +57,10 @@ landlock = { version = "0.4.7", default-features = false }
 lexopt = { version = "0.3.1", default-features = false }
 libc = { version = "0.2.191", default-features = false }
 reqwest = { version = "0.13.5", default-features = false, features = ["http2", "rustls-no-provider"] }
+# The script engine (decision 0005): QuickJS, behind `cineris-ext`'s
+# `scripts` feature. `std` only: no module loader of the binding's, no
+# futures runtime, no macros.
+rquickjs = { version = "0.14.0", default-features = false, features = ["std"] }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12"] }
 schemars = { version = "1.2.3", default-features = false, features = ["derive", "std"] }
 serde = { version = "1.0.229", default-features = false, features = ["derive", "std"] }
