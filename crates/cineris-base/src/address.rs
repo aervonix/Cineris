@@ -13,8 +13,11 @@
 //! deprecated IPv4-compatible form (`::a.b.c.d`), NAT64's well-known prefix
 //! (`64:ff9b::a.b.c.d`), which a network with DNS64 answers names with, and
 //! 6to4 (`2002:aabb:ccdd::`). A network's own NAT64 prefix cannot be known
-//! from here (a network tells its hosts of it, RFC 7050): an address under
-//! one is read as the internet.
+//! from here (a network tells its hosts of it, RFC 7050), nor can an ISATAP
+//! address's (`prefix::5efe:a.b.c.d`): an address under one is read as the
+//! internet. Nor are the machine's own addresses, or its network's, when
+//! they are addresses of the internet (a dual-stack network's IPv6 ones):
+//! nothing here knows them.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
@@ -83,15 +86,30 @@ impl std::fmt::Display for AddressKind {
 /// `prefix` bits are `network`'s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Range {
-    /// The range's first address.
-    pub network: IpAddr,
-    /// How many leading bits the range's addresses share.
-    pub prefix: u8,
-    /// What kind of address the range holds.
-    pub kind: AddressKind,
+    network: IpAddr,
+    prefix: u8,
+    kind: AddressKind,
 }
 
 impl Range {
+    /// The range's first address.
+    #[must_use]
+    pub const fn network(&self) -> IpAddr {
+        self.network
+    }
+
+    /// How many leading bits the range's addresses share.
+    #[must_use]
+    pub const fn prefix(&self) -> u8 {
+        self.prefix
+    }
+
+    /// What kind of address the range holds.
+    #[must_use]
+    pub const fn kind(&self) -> AddressKind {
+        self.kind
+    }
+
     const fn v4(octets: [u8; 4], prefix: u8, kind: AddressKind) -> Self {
         let [a, b, c, d] = octets;
         Self {
@@ -131,7 +149,9 @@ impl Range {
 
 /// Every range outside the internet. An address in two is the kind of the
 /// longer one: `169.254.169.254` is metadata, the rest of `169.254.0.0/16`
-/// link-local.
+/// link-local. **Decide with [`classify`]**, not with a range's
+/// [`contains`](Range::contains): the ranges alone do not see an IPv6 form
+/// of an IPv4 address (`::ffff:127.0.0.1` is in none of them).
 pub const RANGES: &[Range] = {
     use AddressKind::{
         Broadcast, LinkLocal, Loopback, Metadata, Multicast, Private, Reserved, Shared,
@@ -170,8 +190,9 @@ pub const RANGES: &[Range] = {
         Range::v6([0, 0, 0, 0, 0, 0, 0, 1], 128, Loopback),
         // NAT64's local-use prefix.
         Range::v6([0x64, 0xff9b, 1, 0, 0, 0, 0, 0], 48, Private),
-        // Discard only.
+        // Discard only, and a dummy prefix (RFC 9780).
         Range::v6([0x100, 0, 0, 0, 0, 0, 0, 0], 64, Reserved),
+        Range::v6([0x100, 0, 0, 1, 0, 0, 0, 0], 64, Reserved),
         // The IETF's protocol assignments: Teredo, benchmarking, ORCHID.
         Range::v6([0x2001, 0, 0, 0, 0, 0, 0, 0], 23, Reserved),
         // Documentation.
@@ -310,6 +331,7 @@ mod tests {
             ("240.0.0.1", Reserved),
             ("255.255.255.254", Reserved),
             ("100::1", Reserved),
+            ("100:0:0:1::1", Reserved),
             ("2001::1", Reserved),
             ("2001:1ff:ffff::1", Reserved),
             ("2001:db8::1", Reserved),
@@ -361,6 +383,7 @@ mod tests {
             "2001:db9::1",
             "3fff:1000::1",
             "64:ff9b:2::1",
+            "100:0:0:2::1",
             "ff::1",
             "fe7f::1",
             "fbff::1",

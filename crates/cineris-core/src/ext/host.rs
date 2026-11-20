@@ -289,14 +289,15 @@ impl Host for CallHost<'_> {
             for name in &literal {
                 allowance.add_host(name);
             }
-            let shown = shown_url(&request.url);
-            let sends = what_a_fetch_sends(&request);
             let timeout = request.timeout;
             let request = client_request(method, request, host.clone());
             // What the client would refuse before its lookup is refused
-            // before anyone is asked about it.
+            // before anyone is asked about it, and before the question is
+            // made of it.
             cineris_llm::fetch::check(&request, &allowance)
                 .map_err(|refusal| HostError::Denied(refusal.to_string()))?;
+            let shown = shown_url(&request.url);
+            let sends = what_a_fetch_sends(&request);
             self.decide(
                 format!("{}: {} `{shown}`", self.full_name, method.as_str()),
                 json!({"url": shown, "method": method.as_str()}),
@@ -509,37 +510,74 @@ fn client_request(
     }
 }
 
+/// The most of a fetch's URL before its query that its question shows,
+/// and the most of its headers' names: 200 bytes each, as a program's input
+/// is shown.
+const FETCH_SHOWN_BYTES: usize = 200;
+
 /// A fetch's URL as its question shows it: without its query or fragment,
-/// which may carry a credential (`?…` or `#…` says one was there), and with
-/// every character that acts unseen made visible.
+/// which may carry a credential (`?…` or `#…` says one was there), cut at
+/// [`FETCH_SHOWN_BYTES`] (`…` says it was), and with every character that
+/// acts unseen made visible. Its path is shown, and a path may be a
+/// credential too (a webhook's): the person is shown where it goes.
 fn shown_url(url: &str) -> String {
-    match url.find(['?', '#']) {
-        Some(at) => format!("{}{}…", cineris_base::visible(&url[..at]), &url[at..=at]),
-        None => cineris_base::visible(url).into_owned(),
-    }
+    let (before, mark) = match url.find(['?', '#']) {
+        Some(at) => (&url[..at], format!("{}…", &url[at..=at])),
+        None => (url, String::new()),
+    };
+    let start = cineris_base::text::truncate_bytes(before, FETCH_SHOWN_BYTES);
+    let cut = if start.len() < before.len() {
+        "…"
+    } else {
+        ""
+    };
+    format!("{}{cut}{mark}", cineris_base::visible(start))
 }
 
-/// What a fetch sends besides its URL, which no permission rule judges: the
-/// size of its body and the names of its headers, never their values.
-fn what_a_fetch_sends(request: &FetchRequest) -> Option<String> {
+/// What a fetch sends besides where it goes, which no permission rule
+/// judges: the size of its query and of its body, and its headers' count,
+/// size and names (cut at [`FETCH_SHOWN_BYTES`]), never their values.
+fn what_a_fetch_sends(request: &cineris_llm::FetchRequest) -> Option<String> {
     let mut parts = Vec::new();
+    if let Some(at) = request.url.find('?') {
+        let query = request.url[at + 1..].split('#').next().unwrap_or_default();
+        parts.push(format!("a query of {} bytes", query.len()));
+    }
     if !request.body.is_empty() {
         parts.push(format!("a body of {} bytes", request.body.len()));
     }
     if !request.headers.is_empty() {
-        let names: Vec<String> = request
+        let bytes: usize = request
             .headers
             .iter()
-            .map(|(name, _)| cineris_base::visible(name).into_owned())
-            .collect();
-        parts.push(format!("the headers {}", names.join(", ")));
+            .map(|(name, value)| name.len() + value.len())
+            .sum();
+        let names = request
+            .headers
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let shown = cineris_base::text::truncate_bytes(&names, FETCH_SHOWN_BYTES);
+        let more = if shown.len() < names.len() { "…" } else { "" };
+        let count = match request.headers.len() {
+            1 => "a header".to_owned(),
+            count => format!("{count} headers"),
+        };
+        parts.push(format!(
+            "{count} of {bytes} bytes ({}{more})",
+            cineris_base::visible(shown)
+        ));
     }
-    (!parts.is_empty()).then(|| {
-        format!(
-            "The fetch sends {}, which no permission rule judges.",
-            parts.join(" and ")
-        )
-    })
+    let (last, rest) = parts.split_last()?;
+    let listed = if rest.is_empty() {
+        last.clone()
+    } else {
+        format!("{} and {last}", rest.join(", "))
+    };
+    Some(format!(
+        "The fetch sends {listed}, which no permission rule judges."
+    ))
 }
 
 #[cfg(test)]
@@ -593,16 +631,39 @@ mod tests {
 
     #[test]
     fn what_a_fetch_sends_names_its_headers_and_never_their_values() {
-        assert_eq!(what_a_fetch_sends(&a_fetch("https://a.example/")), None);
-        let sends = what_a_fetch_sends(&FetchRequest {
+        let get = cineris_llm::FetchRequest::get;
+        assert_eq!(what_a_fetch_sends(&get("https://a.example/#part")), None);
+        let sends = what_a_fetch_sends(&cineris_llm::FetchRequest {
             headers: vec![("authorization".to_owned(), "Bearer s3cret".to_owned())],
             body: b"{}".to_vec(),
-            ..a_fetch("https://a.example/")
+            ..get("https://a.example/?token=s3cret#part")
         })
         .unwrap();
-        assert!(sends.contains("2 bytes"), "{sends}");
-        assert!(sends.contains("authorization"), "{sends}");
-        assert!(!sends.contains("s3cret"), "{sends}");
+        assert_eq!(
+            sends,
+            "The fetch sends a query of 12 bytes, a body of 2 bytes and a header of 26 bytes \
+             (authorization), which no permission rule judges."
+        );
+        let query = what_a_fetch_sends(&get("https://a.example/x?d=abc")).unwrap();
+        assert!(query.contains("a query of 5 bytes"), "{query}");
+    }
+
+    #[test]
+    fn what_a_fetchs_question_shows_is_bounded() {
+        let long = format!("https://a.example/{}", "p".repeat(10 * 1024));
+        let shown = shown_url(&long);
+        assert!(shown.len() <= FETCH_SHOWN_BYTES + 4, "{}", shown.len());
+        assert!(shown.ends_with('…'), "{shown}");
+        let named = cineris_llm::FetchRequest {
+            headers: (0..64)
+                .map(|index| (format!("x-a-long-header-name-{index:02}"), "1".to_owned()))
+                .collect(),
+            ..cineris_llm::FetchRequest::get("https://a.example/")
+        };
+        let sends = what_a_fetch_sends(&named).unwrap();
+        assert!(sends.contains("64 headers of"), "{sends}");
+        assert!(sends.len() < FETCH_SHOWN_BYTES + 120, "{}", sends.len());
+        assert!(sends.contains("…)"), "{sends}");
     }
 
     /// A tool's plan that touches a path other than the one the manifest

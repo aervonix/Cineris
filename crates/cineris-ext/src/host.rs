@@ -184,8 +184,9 @@ pub struct FetchRequest {
     pub timeout: Duration,
 }
 
-/// What an HTTP request gave.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// What an HTTP request gave. Its `Debug` shows no header value and no
+/// body: either may be a credential.
+#[derive(Clone, PartialEq, Eq)]
 pub struct FetchOutput {
     /// The status code.
     pub status: u16,
@@ -254,9 +255,9 @@ pub trait Host: Send + Sync {
     ) -> HostFuture<'_, Result<Listing, HostError>>;
 
     /// Makes an HTTP request for the script. `host` is the URL's host, which
-    /// the manifest named; `literal` is every host the manifest names
-    /// literally (not through a `*`): only those may be a loopback or
-    /// private address.
+    /// the manifest named; `literal` is that host when the manifest names it
+    /// literally (not through a pattern), and empty otherwise: only then may
+    /// it be a loopback or a private address.
     fn fetch(
         &self,
         request: FetchRequest,
@@ -433,7 +434,7 @@ impl std::fmt::Debug for FetchCall {
         let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
         f.debug_struct("FetchCall")
             .field("method", &self.method)
-            .field("url", &without_query(&self.url))
+            .field("url", &origin_of(&self.url))
             .field("headers", &names)
             .field("body_bytes", &self.body.as_ref().map(String::len))
             .field("timeout_ms", &self.timeout_ms)
@@ -446,7 +447,7 @@ impl std::fmt::Debug for FetchRequest {
         let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
         f.debug_struct("FetchRequest")
             .field("method", &self.method)
-            .field("url", &without_query(&self.url))
+            .field("url", &origin_of(&self.url))
             .field("headers", &names)
             .field("body_bytes", &self.body.len())
             .field("timeout", &self.timeout)
@@ -454,12 +455,26 @@ impl std::fmt::Debug for FetchRequest {
     }
 }
 
-/// A URL up to its query or fragment, which may carry a credential: `?…`
-/// or `#…` says one was there.
-fn without_query(url: &str) -> std::borrow::Cow<'_, str> {
-    match url.find(['?', '#']) {
-        Some(at) => format!("{}{}…", &url[..at], &url[at..=at]).into(),
+/// A URL's scheme and host, without its path, query or fragment, any of
+/// which may carry a credential (a webhook's path is one): `…` says more
+/// was there.
+fn origin_of(url: &str) -> std::borrow::Cow<'_, str> {
+    let start = url.find("://").map_or(0, |at| at + 3);
+    match url[start..].find(['/', '?', '#']) {
+        Some(at) => format!("{}…", &url[..start + at]).into(),
         None => url.into(),
+    }
+}
+
+impl std::fmt::Debug for FetchOutput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
+        f.debug_struct("FetchOutput")
+            .field("status", &self.status)
+            .field("headers", &names)
+            .field("body_bytes", &self.body.len())
+            .field("cut", &self.cut)
+            .finish()
     }
 }
 
@@ -492,7 +507,7 @@ fn without_query(url: &str) -> std::borrow::Cow<'_, str> {
 /// When the URL is not written so.
 pub fn url_host(url: &str) -> Result<String, HostError> {
     let refused =
-        |why: &str| HostError::Failed(format!("`{}` cannot be fetched: {why}", without_query(url)));
+        |why: &str| HostError::Failed(format!("`{}` cannot be fetched: {why}", origin_of(url)));
     if url.chars().any(|c| c.is_control() || c == ' ') {
         return Err(refused(
             "it has a control character or a space, which the fetch would drop or trim",

@@ -163,7 +163,9 @@ fn a_fetch_is_asked_about_only_when_it_could_be_made_and_shows_no_credential() {
             request
                 .reasons
                 .iter()
-                .any(|reason| reason.contains("2 bytes") && reason.contains("authorization")),
+                .any(|reason| reason.contains("a query of 12 bytes")
+                    && reason.contains("2 bytes")
+                    && reason.contains("authorization")),
             "{:?}",
             request.reasons
         );

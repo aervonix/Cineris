@@ -78,6 +78,10 @@ use crate::transport::{BoxFuture, describe};
 /// before anything is looked up.
 pub const REQUEST_BODY_LIMIT: usize = 1024 * 1024;
 
+/// The longest URL a fetch takes: 8 KiB. A longer one is refused before
+/// anything is looked up.
+pub const URL_LIMIT: usize = 8 * 1024;
+
 /// The most headers a fetch sends. More are refused before anything is
 /// looked up.
 pub const REQUEST_HEADERS_LIMIT: usize = 64;
@@ -245,9 +249,10 @@ pub struct FetchResponse {
 
 impl std::fmt::Debug for FetchResponse {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let names: Vec<&str> = self.headers.iter().map(|(name, _)| name.as_str()).collect();
         f.debug_struct("FetchResponse")
             .field("status", &self.status)
-            .field("headers", &self.headers)
+            .field("headers", &names)
             .field("body_bytes", &self.body.len())
             .field("cut", &self.cut)
             .field("address", &self.address)
@@ -415,6 +420,12 @@ pub enum Refusal {
         /// What their names and values come to.
         bytes: usize,
     },
+    /// A URL longer than [`URL_LIMIT`].
+    #[error("the URL is {length} bytes, over the limit of {URL_LIMIT} (8 KiB)")]
+    UrlLength {
+        /// Its length.
+        length: usize,
+    },
     /// A request body over [`REQUEST_BODY_LIMIT`].
     #[error("the request body is {length} bytes, over the limit of {REQUEST_BODY_LIMIT} (1 MiB)")]
     RequestBody {
@@ -472,8 +483,11 @@ pub enum FetchError {
         /// What the resolver said.
         detail: String,
     },
-    /// No connection could be made, or its TLS handshake failed.
-    #[error("{0}")]
+    /// No connection could be made, or its TLS handshake failed. Its text
+    /// is the same whatever the cause, so that a script cannot tell a
+    /// closed port from a refused certificate by it and so map what answers
+    /// on an address; the cause is kept in its field for a log.
+    #[error("the fetch could not connect")]
     Connect(String),
     /// The request or the response failed after the connection was made.
     #[error("{0}")]
@@ -651,6 +665,11 @@ fn prepare(
     request: &FetchRequest,
     allowance: &AddressAllowance,
 ) -> Result<(HeaderMap, Target), Refusal> {
+    if request.url.len() > URL_LIMIT {
+        return Err(Refusal::UrlLength {
+            length: request.url.len(),
+        });
+    }
     if request.body.len() > REQUEST_BODY_LIMIT {
         return Err(Refusal::RequestBody {
             length: request.body.len(),
@@ -894,15 +913,23 @@ async fn client_for(
     target: &Target,
     checked: &[SocketAddr],
 ) -> Result<reqwest::Client, FetchError> {
+    let https = target.https;
     let pinned = Pinned {
         host: target.host_text(),
         addresses: checked.to_vec(),
     };
-    tokio::task::spawn_blocking(move || build_client(pinned))
-        .await
-        .map_err(|error| {
-            FetchError::Failed(format!("the HTTP client could not be made: {error}"))
-        })?
+    tokio::task::spawn_blocking(move || {
+        if https && system_roots().is_empty() {
+            return Err(FetchError::Failed(
+                "no root certificate of the system's store could be read, so no `https` \
+                 server can be checked"
+                    .to_owned(),
+            ));
+        }
+        build_client(pinned)
+    })
+    .await
+    .map_err(|error| FetchError::Failed(format!("the HTTP client could not be made: {error}")))?
 }
 
 fn build_client(pinned: Pinned) -> Result<reqwest::Client, FetchError> {
@@ -928,20 +955,29 @@ fn build_client(pinned: Pinned) -> Result<reqwest::Client, FetchError> {
         })
 }
 
-/// The system's root certificates, read once from its own store with
-/// nothing fetched: the files the platform names on Linux (or those
-/// `SSL_CERT_FILE` and `SSL_CERT_DIR` name), the `ROOT` store on Windows. A
-/// certificate that cannot be read is left out; with none, every `https`
-/// fetch fails as untrusted.
+/// The system's root certificates, read once in a process from its own
+/// store with nothing fetched: the files `SSL_CERT_FILE` and `SSL_CERT_DIR`
+/// name, on any system, when they are set; otherwise the platform's files
+/// on Linux, and the current user's `ROOT` store on Windows, as it stands
+/// (Windows' automatic update of roots is not asked, and its `Disallowed`
+/// store is not read). One rustls cannot read is left out.
 fn system_roots() -> &'static [reqwest::Certificate] {
     static ROOTS: std::sync::OnceLock<Vec<reqwest::Certificate>> = std::sync::OnceLock::new();
-    ROOTS.get_or_init(|| {
-        rustls_native_certs::load_native_certs()
-            .certs
-            .iter()
-            .filter_map(|der| reqwest::Certificate::from_der(der).ok())
-            .collect()
-    })
+    ROOTS.get_or_init(|| usable_roots(rustls_native_certs::load_native_certs().certs))
+}
+
+/// The certificates of `found` that rustls can take as roots: one it cannot
+/// read would fail the building of every client, and so every fetch, where
+/// it should be left out (a system's store can hold an old or malformed
+/// one). `reqwest::Certificate::from_der` takes any bytes.
+fn usable_roots(
+    found: Vec<rustls::pki_types::CertificateDer<'static>>,
+) -> Vec<reqwest::Certificate> {
+    found
+        .into_iter()
+        .filter(|der| rustls::RootCertStore::empty().add(der.clone()).is_ok())
+        .filter_map(|der| reqwest::Certificate::from_der(&der).ok())
+        .collect()
 }
 
 /// Reads the body to its end or to [`RESPONSE_BODY_LIMIT`], and says
@@ -1222,6 +1258,34 @@ mod tests {
     }
 
     #[test]
+    fn a_root_rustls_cannot_read_is_left_out_and_the_rest_make_a_client() {
+        use rustls::pki_types::CertificateDer;
+        let junk = [0x30, 0x03, 0x02, 0x01, 0x00];
+        let good = CertificateDer::from(include_bytes!("../fixtures/fetch/leaf.der").to_vec());
+        let roots = usable_roots(vec![
+            CertificateDer::from(junk.to_vec()),
+            good,
+            CertificateDer::from(junk.to_vec()),
+        ]);
+        assert_eq!(roots.len(), 1);
+        crate::transport::install_tls_provider();
+        assert!(
+            reqwest::Client::builder()
+                .tls_certs_only(roots)
+                .build()
+                .is_ok()
+        );
+        // Let in, the one rustls cannot read makes no client at all.
+        let all = vec![reqwest::Certificate::from_der(&junk).unwrap()];
+        assert!(
+            reqwest::Client::builder()
+                .tls_certs_only(all)
+                .build()
+                .is_err()
+        );
+    }
+
+    #[test]
     fn a_check_refuses_what_a_fetch_refuses_before_its_lookup() {
         let none = AddressAllowance::none();
         let fine = FetchRequest::get("https://example.com/");
@@ -1255,6 +1319,13 @@ mod tests {
             check(&headers, &none),
             Err(Refusal::Headers { .. })
         ));
+        let long = FetchRequest::get(format!("https://example.com/{}", "a".repeat(URL_LIMIT)));
+        assert_eq!(
+            check(&long, &none),
+            Err(Refusal::UrlLength {
+                length: URL_LIMIT + 20
+            })
+        );
         let body = FetchRequest {
             body: vec![0; REQUEST_BODY_LIMIT + 1],
             ..fine
@@ -1402,6 +1473,28 @@ mod tests {
         for name in ["CONNECT", "TRACE", "OPTIONS", "", "GETS"] {
             assert!(FetchMethod::parse(name).is_err(), "{name}");
         }
+    }
+
+    #[test]
+    fn a_failure_to_connect_reads_the_same_whatever_its_cause() {
+        let refused = FetchError::Connect("tcp connect error: connection refused".to_owned());
+        let untrusted = FetchError::Connect("invalid peer certificate: UnknownIssuer".to_owned());
+        assert_eq!(refused.to_string(), untrusted.to_string());
+        assert!(!refused.to_string().contains("refused"), "{refused}");
+    }
+
+    #[test]
+    fn a_response_prints_without_its_header_values() {
+        let response = FetchResponse {
+            status: 200,
+            headers: vec![("set-cookie".to_owned(), "session=s3cret".to_owned())],
+            body: b"s3cret".to_vec(),
+            cut: false,
+            address: SocketAddr::from(([127, 0, 0, 1], 443)),
+        };
+        let printed = format!("{response:?}");
+        assert!(!printed.contains("s3cret"), "{printed}");
+        assert!(printed.contains("set-cookie"), "{printed}");
     }
 
     #[test]
