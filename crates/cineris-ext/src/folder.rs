@@ -35,6 +35,10 @@ pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 pub const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024;
 /// The deepest a file may be below the folder.
 pub const MAX_DEPTH: usize = 16;
+/// The most entries, folders and files together, an extension's folder
+/// may hold: a folder of empty folders is bounded too (the review of step
+/// 28).
+pub const MAX_ENTRIES: usize = 1024;
 
 /// What every snapshot's hash starts with, so that the hash of an
 /// extension is never the hash of anything else the harness pins.
@@ -76,6 +80,9 @@ pub enum FolderError {
     /// A file deeper than [`MAX_DEPTH`].
     #[error("`{0}` is more than {MAX_DEPTH} folders deep")]
     TooDeep(String),
+    /// More entries, folders and files together, than [`MAX_ENTRIES`].
+    #[error("the folder holds more than {MAX_ENTRIES} files and folders")]
+    TooManyEntries,
 }
 
 /// Every file of an extension's folder, as it was when it was read, and
@@ -117,7 +124,8 @@ impl Snapshot {
                 reason: "it is not a folder".to_owned(),
             });
         }
-        read_into(folder, "", 0, &mut files, &mut total)?;
+        let mut entries = 0;
+        read_into(folder, "", 0, &mut files, &mut total, &mut entries)?;
         Ok(Self::from_files(files))
     }
 
@@ -173,6 +181,7 @@ fn read_into(
     depth: usize,
     files: &mut BTreeMap<String, Vec<u8>>,
     total: &mut u64,
+    entries_seen: &mut usize,
 ) -> Result<(), FolderError> {
     let shown = |name: &str| {
         if prefix.is_empty() {
@@ -191,6 +200,12 @@ fn read_into(
             path: prefix.to_owned(),
             reason: error.to_string(),
         })?;
+        // Counted as it is read, so that a folder of a great many is not
+        // taken whole first.
+        *entries_seen += 1;
+        if *entries_seen > MAX_ENTRIES {
+            return Err(FolderError::TooManyEntries);
+        }
         let name = entry
             .file_name()
             .into_string()
@@ -215,7 +230,7 @@ fn read_into(
             if depth + 1 >= MAX_DEPTH {
                 return Err(FolderError::TooDeep(relative));
             }
-            read_into(&path, &relative, depth + 1, files, total)?;
+            read_into(&path, &relative, depth + 1, files, total, entries_seen)?;
         } else if kind.is_file() {
             if files.len() >= MAX_FILES {
                 return Err(FolderError::TooManyFiles);
