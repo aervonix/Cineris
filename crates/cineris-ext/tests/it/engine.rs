@@ -1034,6 +1034,21 @@ fn a_cancelled_call_follows_its_program_to_the_end() {
         async {
             timer.sleeping_for(Duration::from_secs(5)).await;
             cancel.cancel();
+            // The call sees the cancel while its program still runs: a few
+            // turns of the other side, before the program ends.
+            for _ in 0..8 {
+                let mut turned = false;
+                std::future::poll_fn(|context| {
+                    if turned {
+                        std::task::Poll::Ready(())
+                    } else {
+                        turned = true;
+                        context.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+            }
             timer.advance(Duration::from_secs(5));
         },
     ));
