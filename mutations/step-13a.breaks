@@ -454,7 +454,7 @@ caught-by:
     cineris-core::it plan::a_resumed_session_has_its_plan_back_with_the_users_last_edit
 
 [break] protected-directory-unresolved
-rule: Protected trees are given to the engine as resolved paths: a configuration directory behind a link is protected where it really is.
+rule: Protected trees are given to the engine as resolved paths: a configuration directory behind a link is protected where it really is. Its test keeps the stored keys apart from the directory (since the small fixes): on Linux their folder is the same directory, resolved, which closed the real place whatever this line did.
 file: crates/cineris-core/src/assemble.rs
 find: if let Some(config) = dirs.config.as_deref().and_then(resolve_dir) {
 replace: if let Some(config) = dirs.config.as_deref().and_then(|dir| AbsPath::from_os(dir).ok()) {
@@ -462,11 +462,12 @@ caught-by:
     cineris-core::it start::a_configuration_directory_behind_a_link_is_protected_where_it_really_is
 
 [break] configuration-directory-not-closed
-rule: The harness's configuration directory is closed to every tool.
+rule: The harness's configuration directory is closed to every tool, whole. On Linux the stored keys' folder is the same directory and is closed too, which hid this break from every test until the small fixes: the tests keep the keys apart, as Windows does.
 file: crates/cineris-core/src/assemble.rs
 find: protected = protected.closed(config);
 replace: let _ = config;
 caught-by:
+    cineris-core::it start::the_configuration_directory_is_closed_whole_to_every_tool
     cineris-core::it start::a_configuration_directory_behind_a_link_is_protected_where_it_really_is
 
 [break] invalid-catalog-entry-skipped
@@ -894,33 +895,22 @@ caught-by:
     cineris-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw
 
 [break] repository-trust-not-given-to-the-shell
-rule: The shell tool is given the answer about the repository's trust: in a trusted project git is asked what a command changed.
+rule: The shell tool is given the answer about the repository's trust: in a trusted project git is asked what a command changed. Since step 24 the shell reads its trust from the session's `ShellLive`, which a reload sets again, and not from `ShellConfig`'s field, which it reads only when it has no `ShellLive`; the break was moved there by the small fixes, when breaking the old place had stopped changing anything.
 file: crates/cineris-core/src/assemble.rs
-find:
-        repository_trusted,
-        start: start.clone(),
-    };
-replace:
-        repository_trusted: false,
-        start: start.clone(),
-    };
+find: ShellLive::sharing(repository_trusted, Arc::clone(&withheld))
+replace: ShellLive::sharing(false, Arc::clone(&withheld))
 caught-by:
     cineris-core::it shell::sys_undo_puts_back_what_a_command_changed_where_git_still_has_it
     cineris-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw
 
 [break] shell-given-rules-trust
-rule: The shell tool follows the user's trust alone: a change to the project's rules does not stop git being asked what a command changed.
+rule: The shell tool follows the user's trust alone: a change to the project's rules does not stop git being asked what a command changed. Broken where the shell's trust now comes from, the session's `ShellLive` (since step 24; moved by the small fixes).
 file: crates/cineris-core/src/assemble.rs
-find:
-        repository_trusted,
-        start: start.clone(),
-    };
-replace:
-        repository_trusted: rules_trusted,
-        start: start.clone(),
-    };
+find: ShellLive::sharing(repository_trusted, Arc::clone(&withheld))
+replace: ShellLive::sharing(rules_trusted, Arc::clone(&withheld))
 caught-by:
     cineris-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw
+    cineris-core::it trust::sys_a_repository_whose_git_was_not_shown_gets_nothing_of_git
 
 [break] repository-trust-not-given-to-the-capture
 rule: The capture of the base state is given the answer about the repository's trust.

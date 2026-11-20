@@ -2524,7 +2524,9 @@ pub(crate) fn assemble(
             detect_changes: true,
             // Without trust, the look for what a command changed does not
             // ask git, which the repository's own configuration could make
-            // run a program.
+            // run a program. The tool reads it from `shell_live`, given
+            // below, which a reload sets again: this field is read only by
+            // a shell with no `ShellLive`, and is kept the same here.
             repository_trusted,
             start: start.clone(),
         };
