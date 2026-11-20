@@ -755,8 +755,8 @@ caught-by:
 rule: A program with a write root has the protected paths looked at after it, and a change it made fails the call.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: look_after(parts, host, watch, before, finished.escaped).await?;
-replace: let _ = (watch, before);
+find: look_after(parts, host, watch, before, finished.escaped).await
+replace: { let _ = (watch, before); Ok::<(), HostError>(()) }
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
 
@@ -1208,3 +1208,12 @@ find: confined: Some(launcher.is_some())
 replace: confined: None
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_question_about_a_program_at_unrestricted_says_it_is_confined
+
+[break] undo-misses-what-a-program-changed
+rule: What a program changed in the workspace is in the round's checkpoint, so undo puts it back.
+file: crates/cineris-core/src/ext/exec.rs
+in: record_changes
+find: let _ = run_blocking(&free, move |_| rounds.record_changes(&recorded)).await;
+replace: let _ = (rounds, recorded);
+caught-by:
+    cineris-core::it ext_exec::sys_undo_puts_back_what_a_program_changed

@@ -50,11 +50,12 @@ use cineris_base::child_env::Withheld;
 use cineris_ext::host::{EXEC_OUTPUT_CAP, ExecOutput, ExecRequest, HostError};
 use cineris_sandbox::protect::{Changed, Snapshot, Watch};
 use cineris_tools::process::{Argument, CommandLine, Ending, Exit, Launch, Runner, Start};
-use cineris_tools::{Effect, NetworkTarget, Shell, ShellKind, run_blocking};
+use cineris_tools::shell::ChangeDetector;
+use cineris_tools::{Effect, NetworkTarget, Shell, ShellKind, ShellLive, run_blocking};
 use serde_json::json;
 
 use super::host::{CallHost, HostQuestion};
-use crate::checkpoints::{Rounds, changed_since_last_look};
+use crate::checkpoints::{Rounds, changed_since_last_look, note_changed};
 use crate::programs::{self, Search};
 use crate::sandbox::{SessionSandbox, protected_note};
 
@@ -89,6 +90,11 @@ pub(crate) struct ExecParts {
     /// Whether write roots hold the harness's own files, judged as the
     /// session's own roots are.
     pub(crate) harness_files: HarnessFiles,
+    /// The shell's settings a reload changes: whether the look at what a
+    /// program changed may ask git.
+    pub(crate) live: Arc<ShellLive>,
+    /// How that look's git is run: the session's, inside the sandbox.
+    pub(crate) git: Arc<dyn cineris_base::git::Confinement>,
 }
 
 /// Whether write roots hold the harness's own files: its configuration,
@@ -338,6 +344,25 @@ pub(crate) async fn run(
         )));
     }
 
+    // 7. What it changes in the workspace, looked at as a shell command's
+    // is: a program that may write it (one with a write root, or one
+    // nothing confines) has what it changed put in the round's checkpoint,
+    // so that undo puts it back, and the model's table of files told.
+    let detector = (!write_roots.is_empty() || launcher.is_none()).then(|| {
+        Arc::new(
+            ChangeDetector::new(cx.paths.root().to_native_string())
+                .trusting_the_repository(parts.live.repository_trusted())
+                .with_git(Arc::clone(&parts.git)),
+        )
+    });
+    let changes_before = match &detector {
+        Some(detector) => {
+            let detector = Arc::clone(detector);
+            Some(blocking(cx, move || detector.before()).await?)
+        }
+        None => None,
+    };
+
     // 6. Its environment, and 8. the run.
     let mut removed = parts.env_remove.clone();
     removed.extend(parts.withheld.get());
@@ -360,10 +385,18 @@ pub(crate) async fn run(
         .await
         .map_err(|error| HostError::Failed(format!("`{named}` could not be started: {error}")))?;
 
-    // 5. The look after it.
-    if let (Some(watch), Some(before)) = (watch, before) {
-        look_after(parts, host, watch, before, finished.escaped).await?;
+    // 5. The look after it, then 7.: a protected path's exact record comes
+    // first, as only the first record of a file in a round counts.
+    let looked = match (watch, before) {
+        (Some(watch), Some(before)) => {
+            look_after(parts, host, watch, before, finished.escaped).await
+        }
+        _ => Ok(()),
+    };
+    if let (Some(detector), Some(before)) = (detector, changes_before) {
+        record_changes(parts, cx, detector, before).await;
     }
+    looked?;
     if finished.ending == Ending::Interrupted {
         return Err(HostError::Failed(format!(
             "`{named}` was stopped: the call was interrupted"
@@ -380,6 +413,27 @@ pub(crate) async fn run(
         stderr: finished.stderr.bytes,
         timed_out: finished.ending == Ending::TimedOut,
     })
+}
+
+/// Records what a program changed in the workspace: in the round's
+/// checkpoint, so that undo puts it back, and in the model's table of
+/// files. Whatever became of the call: the program ran.
+async fn record_changes(
+    parts: &ExecParts,
+    cx: &cineris_tools::RunCx,
+    detector: Arc<ChangeDetector>,
+    before: cineris_tools::shell::changes::Before,
+) {
+    let free = CancelToken::new();
+    let Ok(changes) = run_blocking(&free, move |_| detector.after(&before).to_json()).await else {
+        return;
+    };
+    if let Some(rounds) = &parts.rounds {
+        let rounds = Arc::clone(rounds);
+        let recorded = changes.clone();
+        let _ = run_blocking(&free, move |_| rounds.record_changes(&recorded)).await;
+    }
+    note_changed(&changes, cx);
 }
 
 /// The look at the protected paths after a program that had a write root:

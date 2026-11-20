@@ -2496,6 +2496,13 @@ pub(crate) fn assemble(
             .with_limit(KEEP_LIMIT),
     }
     .with_sync(settings.session.durability != cineris_config::schema::SessionDurability::Never);
+    // What of the shell a reload changes: the repository's trust and the
+    // providers' key variables, for the next command (and for an
+    // extension's program's look at what it changed).
+    let shell_live = Arc::new(cineris_tools::ShellLive::sharing(
+        repository_trusted,
+        Arc::clone(&withheld),
+    ));
     // The extensions' tools, in the registry behind `tool_search` and
     // `tool_call`: registered from what each registered when it was
     // approved, with no engine started (step 28).
@@ -2544,6 +2551,8 @@ pub(crate) fn assemble(
                         holds_harness_files(&policy, &loaded, state.as_ref(), launcher.as_deref())
                     }))
                 },
+                live: Arc::clone(&shell_live),
+                git: Arc::clone(&session_git) as Arc<dyn cineris_base::git::Confinement>,
             },
             tell: Arc::new(move |message: String| tell_hooks.tell(message)),
         });
@@ -2563,12 +2572,6 @@ pub(crate) fn assemble(
         }));
     // The session's shell, which the project's checks run through too.
     let mut checks_shell: Option<Arc<RecordingShell>> = None;
-    // What of the shell a reload changes: the repository's trust and the
-    // providers' key variables, for the next command.
-    let shell_live = Arc::new(cineris_tools::ShellLive::sharing(
-        repository_trusted,
-        Arc::clone(&withheld),
-    ));
     let repository = Arc::new(std::sync::atomic::AtomicBool::new(repository_trusted));
     if let Some(shell) = shell {
         let (timeout, max_timeout) = shell_limits(settings);
