@@ -285,7 +285,7 @@ impl Host for CallHost<'_> {
             self.decide(
                 format!("{}: {} `{}`", self.full_name, method.as_str(), request.url),
                 json!({"url": request.url, "method": method.as_str()}),
-                vec![Effect::Network(NetworkTarget::Host(host))],
+                vec![Effect::Network(NetworkTarget::Host(host.clone()))],
                 None,
                 HostQuestion::default(),
             )
@@ -305,6 +305,10 @@ impl Host for CallHost<'_> {
                         url: request.url,
                         headers: request.headers,
                         body: request.body,
+                        // The host the manifest and the decision were
+                        // about: the client refuses a URL it reads as
+                        // another.
+                        host: Some(host),
                     },
                     &allowance,
                     request.timeout,

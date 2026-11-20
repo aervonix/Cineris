@@ -532,6 +532,38 @@ fn a_refused_header_or_body_stops_the_fetch_before_anything_is_looked_up() {
     assert!(rig.resolver.asked().is_empty());
 }
 
+/// A URL the fetch reads as another host than the one its caller checked
+/// is refused before anything is looked up: the caller's patterns and
+/// decision were about the host it read.
+#[test]
+fn a_url_read_as_another_host_than_the_one_checked_is_refused_before_any_lookup() {
+    for (url, checked, read) in [
+        (
+            "https://evil.test\\.example.com/",
+            "evil.test\\.example.com",
+            "evil.test",
+        ),
+        ("https://0x7f.1/", "0x7f.1", "127.0.0.1"),
+        ("https://ex%61mple.test/", "ex%61mple.test", "example.test"),
+    ] {
+        let rig = Rig::answering([&["203.0.113.7"]]);
+        let request = FetchRequest {
+            host: Some(checked.to_owned()),
+            ..FetchRequest::get(url)
+        };
+        let error = block_on(rig.fetch(request, &AddressAllowance::none())).unwrap_err();
+        assert_eq!(
+            error,
+            refused(Refusal::OtherHost {
+                checked: checked.to_owned(),
+                read: read.to_owned()
+            }),
+            "{url}"
+        );
+        assert!(rig.resolver.asked().is_empty(), "{url}");
+    }
+}
+
 #[test]
 fn a_request_body_of_the_whole_limit_is_sent() {
     let server = SseServer::start();
