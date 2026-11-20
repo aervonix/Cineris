@@ -8,11 +8,11 @@
 //! **A budget is held against the time above the start of the tests'
 //! processes.** nextest runs every test in a process of its own, and on a
 //! hosted Windows runner starting one costs 6 to 12 ms, by the runner's
-//! speed. For a thousand unit tests that is 6 to 12 s of a 20 s budget before
-//! any test has done anything, so the raw total said more about the runner a
-//! run drew than about the tests. Each run measures its own start cost
-//! ([`start_cost`]) and takes it off every test; the report prints both
-//! totals, and the cost it used.
+//! speed. For a thousand unit tests that is 6 to 12 s of a 20 s budget (25 s
+//! since 2026-11-20) before any test has done anything, so the raw total said
+//! more about the runner a run drew than about the tests. Each run measures
+//! its own start cost ([`start_cost`]) and takes it off every test; the
+//! report prints both totals, and the cost it used.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -120,7 +120,12 @@ impl Tier {
     /// time of the run.
     pub(crate) fn budget(self, os: Os) -> f64 {
         match (self, os) {
-            (Tier::Unit, _) => 20.0,
+            // The owner's decision of 2026-11-20, taken in the small fixes:
+            // 680 unit tests since wave 12 put an 8 ms Windows runner at 20
+            // to 21 s (docs/steps/ci-budgets/answered.md, "Left for the
+            // owner"; docs/steps/small-fixes/answered.md).
+            (Tier::Unit, Os::Windows) => 25.0,
+            (Tier::Unit, Os::Linux) => 20.0,
             (Tier::Integration, _) => 40.0,
             (Tier::System, Os::Windows) => 90.0,
             (Tier::System, Os::Linux) => 60.0,
@@ -775,7 +780,7 @@ mod tests {
 
 | Tier | Tests | Time | Above start | Budget | Used |
 |---|---:|---:|---:|---:|---:|
-| 1, unit | 5 | 6.0 s | 5.0 s | 20 s | 25% |
+| 1, unit | 5 | 6.0 s | 5.0 s | 25 s | 20% |
 | 2, integration | 4 | 10.0 s | 9.2 s | 40 s | 23% |
 | 3, system | 4 | 15.0 s | 14.2 s | 90 s | 16% |
 "
@@ -971,8 +976,8 @@ mod tests {
     #[test]
     fn a_slow_runner_alone_does_not_put_a_tier_over_its_budget() {
         // Two thousand unit tests that do nothing, each 12 ms of starting
-        // a process on a slow runner: 24 s, over the budget of 20 s as a
-        // raw total, and nothing above the start.
+        // a process on a slow runner: 24 s, near Windows' budget of 25 s as
+        // a raw total, and nothing above the start.
         let cases: Vec<TestCase> = (0..2000)
             .map(|i| case("cineris-base", &format!("tests::t{i}"), 0.012))
             .collect();
@@ -981,9 +986,9 @@ mod tests {
         assert!(table.contains("24.0 s        0.0 s"), "{table}");
         // Two thousand tests are enough to measure the start on.
         assert!(!table.contains("fewer than"), "{table}");
-        // One test that takes 21 s puts it over, as it should.
+        // One test that takes 26 s puts it over, as it should.
         let mut slow = cases;
-        slow.push(case("cineris-base", "tests::slow", 21.0));
+        slow.push(case("cineris-base", "tests::slow", 26.0));
         assert_eq!(
             summarise(&slow, Os::Windows).1,
             [(Tier::Unit, Verdict::OverBudget)]
@@ -1068,14 +1073,16 @@ mod tests {
         text
     }
 
-    /// The tree of a CI run whose unit tier is far over its budget (as in
-    /// `a_tier_far_over_its_budget_fails`), and whose test runs left `record`
+    /// The tree of a CI run whose unit tier is far over its budget on every
+    /// system (39.5 s above the start: past one and a half times 20 s on
+    /// Linux and 25 s on Windows, judged on the system the test runs on),
+    /// and whose test runs left `record`
     /// (a line of `stall::Record`'s form) when it is given.
     fn tree_with(label: &str, record: Option<&str>) -> std::path::PathBuf {
         let root = std::env::temp_dir().join(format!("xtask-tiers-{label}-{}", std::process::id()));
         let report = workspace::nextest_report(&root, "ci");
         std::fs::create_dir_all(report.parent().unwrap()).unwrap();
-        std::fs::write(&report, report_of(&unit_tests_taking(6.5))).unwrap();
+        std::fs::write(&report, report_of(&unit_tests_taking(8.0))).unwrap();
         if let Some(record) = record {
             std::fs::write(stall::record_path(&root), record).unwrap();
         }

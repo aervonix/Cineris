@@ -731,7 +731,7 @@ mod tests {
         );
         assert!(text.contains("      most: cineris-llm 2.2 s\n"), "{text}");
         assert!(
-            text.contains("  1, unit             1.0 s    2.6 s          3.2 s     20 s\n"),
+            text.contains("  1, unit             1.0 s    2.6 s          3.2 s     25 s\n"),
             "{text}"
         );
         // Linux's slow runner is 1.44 times the measured one.

@@ -1209,7 +1209,7 @@ The PR's run is 4242, at `0123456`.
 
 | Time above process start, against the budget | Linux, main (10 ms) | Linux, `0123456` (20 ms) | Windows, `0123456` (200 ms) |
 |---|---|---|---|
-| Tier 1, unit (20 s) | 1.0 s | 1.2 s | 5.0 s |
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 1.0 s | 1.2 s | 5.0 s |
 | Tier 2, integration (40 s) | 1.5 s | 3.5 s | 9.2 s |
 | Tier 3, system (60 s on Linux, 90 s on Windows) | 2.0 s | 2.0 s | 14.2 s |
 "
