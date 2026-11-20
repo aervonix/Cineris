@@ -474,7 +474,8 @@ async fn finish(
     failure: Option<(TurnOutcome, ErrorData)>,
 ) -> u8 {
     let denials = denials(core, collector);
-    let result = collector.result(failure, denials, elapsed(front.plan.started));
+    let mut result = collector.result(failure, denials, elapsed(front.plan.started));
+    report::held_to_its_denial(&mut result, front.plan.run.fail_on_denial);
     let code = exit::for_outcome(
         &result.outcome,
         result.error.as_ref().map(|error| &error.kind),
