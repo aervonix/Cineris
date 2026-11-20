@@ -476,6 +476,42 @@ fn a_program_is_not_run_outside_the_workspace() {
     });
 }
 
+/// An argument holding a character that a Windows code page's best fit
+/// makes a `"` (here U+FF02) is refused on every system, naming the
+/// argument and the character, before anything is asked or started.
+#[test]
+fn a_lookalike_of_a_quote_is_refused_before_anything_is_asked() {
+    let world = World::new("exec_lookalike", []);
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let probe = extension(&world, "probe", "exec = [\"probe-echo\"]");
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "probe-echo", "args": ["ok", "a\u{FF02} --flag"]}),
+    ));
+    world.provider.push(says("Done."));
+    let env = echo_on_path(&world);
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.shell_env = Some(env);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("run it").await;
+        assert!(front.approvals().is_empty(), "{:?}", front.approvals());
+        let answer = answered(&front, 0);
+        assert!(
+            answer.starts_with("refused:")
+                && answer.contains("argument 2")
+                && answer.contains("a fullwidth quotation mark (U+FF02)"),
+            "{answer}"
+        );
+        front.close().await;
+    });
+}
+
 #[cfg(target_os = "linux")]
 mod confined {
     //! Where the sandbox enforces: a launcher of the extension's own.
@@ -765,19 +801,20 @@ mod windows {
          SETLOCAL\nCALL :find_dp0\n\"%dp0%\\echo.exe\" --exact launcher_entry --nocapture \
          cin-echo -- %*\n";
 
-    /// A shim in a folder whose path has spaces runs, and hands the
-    /// program beside it each argument as written: `^` and `&` inside one,
-    /// a trailing backslash that does not end it early, and its input.
+    /// A shim in a folder whose path has spaces runs (its `%~dp0` and
+    /// `call :label`), and hands the program beside it each argument as
+    /// written through `%*`: a trailing backslash that does not end it
+    /// early, spaces, an empty one, and its input.
     #[test]
     fn sys_a_shim_passes_each_argument_and_its_input_as_written() {
         let world = World::new("exec_shim", []);
         let dir = bin(&world, "my tools", &[("tool.cmd", SHIM)]);
         let probe = extension(&world, "probe", "exec = [\"tool\"]");
         let given = [
-            "a^b&c|d<e>f(g)",
             "x\\",
             "a --upload-pack=evil",
             "two  spaces",
+            "--x=y,z;w",
             "",
         ];
         world.provider.push(run_call(
@@ -880,7 +917,8 @@ mod windows {
         });
     }
 
-    /// Every character `cmd.exe` cannot carry is refused before anything
+    /// Every character `cmd.exe` cannot carry, or that a script which
+    /// expands its arguments again would act on, is refused before anything
     /// is asked or started, naming the argument and the character.
     #[test]
     fn each_character_a_shim_cannot_carry_is_refused_with_its_name() {
@@ -894,6 +932,13 @@ mod windows {
             ("a\"b", "a double quote"),
             ("100%", "a percent sign"),
             ("wow!", "an exclamation mark"),
+            ("a&b", "an ampersand"),
+            ("a|b", "a vertical bar"),
+            ("a<b", "a less-than sign"),
+            ("a>b", "a greater-than sign"),
+            ("a^", "a caret"),
+            ("--x=(a", "an opening parenthesis"),
+            ("a)", "a closing parenthesis"),
             ("a\rb", "a carriage return"),
             ("a\nb", "a line feed"),
             ("a\0b", "NUL"),
@@ -925,6 +970,127 @@ mod windows {
                 );
             }
             assert!(world.read("ran.txt").is_none());
+            front.close().await;
+        });
+    }
+
+    /// A script that takes an argument's quotes off and reads it again
+    /// (`set A=%~1`, then `echo %A%`) would run what follows an `&` in it:
+    /// such an argument is refused, and nothing of it runs. The script
+    /// itself runs with an argument it can be given.
+    #[test]
+    fn sys_a_script_that_expands_an_argument_again_is_never_given_an_operator() {
+        let world = World::new("exec_shim_expands", []);
+        let dir = bin(
+            &world,
+            "bin",
+            &[("reread.cmd", "@echo off\nset A=%~1\necho %A%\n")],
+        );
+        let probe = extension(&world, "probe", "exec = [\"reread\"]");
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": "reread", "args": ["x & echo pwned> pwned.txt"]}),
+        ));
+        world.provider.push(run_call(
+            "c2",
+            "probe",
+            &json!({"program": "reread", "args": ["said back"]}),
+        ));
+        world.provider.push(says("Done."));
+        let env = path_with(&world, &[&dir], &[]);
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.shell_env = Some(env);
+        });
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            front.answering(Answering::allow_all());
+            front.turn("run both").await;
+            let answer = answered(&front, 0);
+            assert!(
+                answer.starts_with("refused:")
+                    && answer.contains("argument 1")
+                    && answer.contains("an ampersand"),
+                "{answer}"
+            );
+            assert!(world.read("pwned.txt").is_none(), "{answer}");
+            let said = ran(&answered(&front, 1));
+            assert_eq!(said["code"], 0, "{said}");
+            assert!(
+                said["stdout"]
+                    .as_str()
+                    .is_some_and(|out| out.contains("said back")),
+                "{said}"
+            );
+            front.close().await;
+        });
+    }
+
+    /// Git for Windows' MSYS2 `echo.exe`, where the runner has it: a
+    /// program of the Cygwin family, which expands a pattern it is given
+    /// unquoted against the folder it runs in, and takes `'` and braces as
+    /// a shell would.
+    fn msys_echo() -> Option<PathBuf> {
+        let mut candidates: Vec<PathBuf> = ["ProgramFiles", "ProgramW6432"]
+            .iter()
+            .filter_map(std::env::var_os)
+            .map(|folder| PathBuf::from(folder).join(r"Git\usr\bin\echo.exe"))
+            .collect();
+        candidates.push(PathBuf::from(r"C:\Program Files\Git\usr\bin\echo.exe"));
+        // Where `git.exe` is on `PATH`: `Git\cmd`, `Git\bin` or
+        // `Git\mingw64\bin`.
+        if let Some(path) = std::env::var_os("PATH") {
+            for folder in std::env::split_paths(&path) {
+                if folder.join("git.exe").is_file() {
+                    for up in folder.ancestors().skip(1).take(2) {
+                        candidates.push(up.join(r"usr\bin\echo.exe"));
+                    }
+                }
+            }
+        }
+        candidates.into_iter().find(|candidate| candidate.is_file())
+    }
+
+    /// A Cygwin or MSYS2 program named by its path, given a pattern, a
+    /// quote and braces, reads each as written: every argument reaches it
+    /// in double quotes, so it expands nothing against the files in the
+    /// folder it runs in. Without the quotes, `.en*` read `.env`.
+    #[test]
+    fn sys_an_msys_program_reads_a_pattern_as_written() {
+        let Some(echo) = msys_echo() else {
+            eprintln!(
+                "skipped: no Git for Windows `usr\\bin\\echo.exe` here, the MSYS2 program this \
+                 test runs"
+            );
+            return;
+        };
+        let world = World::new("exec_msys", []);
+        world.put(".env", "SECRET=1\n");
+        world.put("a.txt", "a\n");
+        world.put("b.txt", "b\n");
+        let probe = extension(
+            &world,
+            "probe",
+            &format!("exec = [{}]", literal(&echo.to_string_lossy())),
+        );
+        let given = ["*", ".en*", "[ab].txt", "{a,b}.txt", "it's", "?.txt"];
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": echo, "args": given}),
+        ));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| options.extensions = vec![probe]);
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            front.answering(Answering::allow_all());
+            front.turn("run it").await;
+            let ran = ran(&answered(&front, 0));
+            assert_eq!(ran["code"], 0, "{ran}");
+            let out = ran["stdout"].as_str().expect("its output");
+            assert_eq!(out.trim_end(), given.join(" "), "{ran}");
+            assert!(!out.contains(".env ") && !out.contains("a.txt"), "{ran}");
             front.close().await;
         });
     }
