@@ -64,27 +64,25 @@ Tier 3 by crate: `xtask` 13.41 to 4.09 s (the tests the nightly now runs on Wind
 
 ## The pull request's CI
 
-On different runners: `main`'s Windows job on an 8 ms one, the pull request's on a 5 ms one, so its job time is the runner's as much as the branch's; the A/Bs above are the comparison.
+The pull request's last run, at `22da14b`: its Windows job passed every test and was then cut off by the five minutes (305 s), before it uploaded its report, so its column is missing from the table below. Its log, on a 9 ms runner: tier 1 23.8 s, tier 2 46.6 s, tier 3 98.0 s (above the start; budgets 25 s as proposed, 40 s and 90 s). Its first run, at `83c58ae` on a 5 ms runner, took 190 s and read 10.7, 22.5 and 64.5 s. Runners of the same start cost differ too: the A/B's 8 ms runner read the same code's tiers 2 and 3 at 37.6 and 81.5 s. The A/Bs above are the comparison.
 
 <!-- written by cargo xtask ci-times, section "pull-request": it replaces this up to the end mark -->
 Pull request 115, on `main` at `b620a1e`. "Main" is main's own run at `b620a1e` (run 44633500009).
-The PR's run is 44640941232, at `83c58ae`.
+The PR's run is 44644603576, at `22da14b`.
 
-| Job | Main, `b620a1e` | The PR at `83c58ae` |
+| Job | Main, `b620a1e` | The PR at `22da14b` |
 |---|---|---|
-| `lint-linux` | 63 s | 63 s |
-| `test-linux` | 159 s | 156 s |
-| `lint-windows` | 106 s | 100 s |
-| `test-windows` | 296 s | 190 s |
-| `pr-size-linux` (blocks nothing) | — | 167 s |
-| `ts-client` (blocks nothing) | 0 s | 13 s |
-| `pr-size-windows` (blocks nothing) | — | 257 s |
+| `lint-linux` | 63 s | 73 s |
+| `test-linux` | 159 s | 117 s |
+| `lint-windows` | 106 s | 95 s |
+| `test-windows` | 296 s | 305 s |
+| `ts-client` (blocks nothing) | 0 s | 0 s |
 
-| Time above process start, against the budget | Linux, main (6 ms) | Linux, `83c58ae` (4 ms) | Windows, main (8 ms) | Windows, `83c58ae` (5 ms) |
-|---|---|---|---|---|
-| Tier 1, unit (20 s) | 28.3 s | 16.8 s | 19.6 s | 10.7 s |
-| Tier 2, integration (40 s) | 35.2 s | 22.5 s | 35.6 s | 22.5 s |
-| Tier 3, system (60 s on Linux, 90 s on Windows) | 38.1 s | 38.8 s | 98.5 s | 64.5 s |
+| Time above process start, against the budget | Linux, main (6 ms) | Linux, `22da14b` (4 ms) | Windows, main (8 ms) |
+|---|---|---|---|
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 28.3 s | 8.5 s | 19.6 s |
+| Tier 2, integration (40 s) | 35.2 s | 17.3 s | 35.6 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 38.1 s | 32.6 s | 98.5 s |
 
 <!-- end of what cargo xtask ci-times wrote, section "pull-request" -->
 
@@ -105,4 +103,4 @@ The PR's run is 44640941232, at `83c58ae`.
 
 ## The job's time for a pull request that touches `cineris-base`
 
-Such a pull request builds every crate of the workspace; `xtask`'s own binary, built first, depends only on `cineris-protocol`, and the cache restores it in about a second. On `main`, which builds the workspace's crates with nothing restored, the build of the tests took 150 s on an 8 ms runner (run 44592310472); with the set-up (about 35 s), the restore and dating (about 9 s), and the two test runs (55 s each there), such a pull request's job was about 308 s. The branch takes off about 20 s of the build (no debug info, the job A/B above in [answered.md](answered.md)) and about 9 s of the two test runs' wall time on an 8 ms runner (105.0 to 96.0 s, the medians above): about 279 s, under the five minutes with about 20 s of room, not the 30 the maintainers asked for. What is left is the workspace's build itself, about 130 s on such a runner. Not measured as one job: no pull request of the branch touches `cineris-base`.
+Such a pull request builds every crate of the workspace; `xtask`'s own binary, built first, depends only on `cineris-protocol`, and the cache restores it in about a second. On `main`, which builds the workspace's crates with nothing restored, the build of the tests took 150 s on an 8 ms runner (run 44592310472); with the set-up (about 35 s), the restore and dating (about 9 s), and the two test runs (55 s each there), such a pull request's job was about 308 s. The branch takes off about 20 s of the build (no debug info, the job A/B above in [answered.md](answered.md)) and about 9 s of the two test runs' wall time on an 8 ms runner (105.0 to 96.0 s, the medians above): about 279 s, under the five minutes with about 20 s of room, not the 30 the maintainers asked for. What is left is the workspace's build itself, about 130 s on such a runner. **Measured on this pull request,** which changes `[profile.ci]` and so rebuilds every crate as such a pull request does, `xtask` too: 305 s on a 9 ms runner, cut off after every test passed (set-up 38 s, `xtask` 18 s, the build 130 s, the two test runs 57 and 53 s). Without the `xtask` rebuild, which a change to `cineris-base` alone does not cause, it would be about 287 s there: on a slow runner such a pull request is at the five minutes still, and the estimate above is a usual runner's. The rest is the workspace's build and Windows' system tests; the maintainers' rule for a job cut off after every test passed stays needed for such pull requests.
