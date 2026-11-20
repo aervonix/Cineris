@@ -4,7 +4,9 @@
 //! scripted transport, the fake clock and the fake timer, so every wait is
 //! a number the test reads back and no test takes time. [`transport`] is
 //! the one that uses the real HTTP client, against the scripted SSE server
-//! on the loopback interface.
+//! on the loopback interface, and [`fetch`] does the same for the fetch
+//! client behind extensions' `cineris.http.fetch`, with a resolver that
+//! answers what the test says.
 
 #![allow(
     clippy::unwrap_used,
@@ -14,6 +16,8 @@
 
 mod anthropic;
 mod client;
+#[cfg(feature = "http")]
+mod fetch;
 #[cfg(feature = "http")]
 mod live;
 mod openai_chat;
@@ -25,6 +29,14 @@ mod transport;
 
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Run by the test runner, it passes at once. Started as a child by a test
+/// of [`fetch`], in one of that module's roles, it plays that part.
+#[cfg(feature = "http")]
+#[test]
+fn child_entry() {
+    fetch::play_a_part();
+}
 
 use cineris_base::{CancelToken, ErrorKind, UtcTime};
 use cineris_llm::error::ProviderError;
