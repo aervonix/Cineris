@@ -73,6 +73,31 @@ const ARTIFACT_LABEL: &str = "full output of shell";
 /// How much of a command a summary shows.
 const SUMMARY_CHARS: usize = 80;
 
+/// The environment of a program a session starts beside its shell's
+/// commands, by the same rules as a command's: an extension's
+/// `cineris.exec`, a hook command (`docs/steps/28/answered.md`, "The
+/// processes"). It is exactly what a command started in `cwd` is given
+/// (`docs/architecture/05-tools.md`, "`shell`", "Environment"): `inherited`
+/// without the providers' key variables ([`DEFAULT_REMOVED`]), without
+/// what `removed` names (the session's `shell.env_remove` and the keys of
+/// the providers it is configured with) and without [`ANALYSIS_REMOVED`];
+/// no pager, no colour, a terminal that can do nothing; git's file-system
+/// monitor off; a `PATH` of absolute directories only; on Windows
+/// `NoDefaultCurrentDirectoryInExePath`; and `PWD` naming `cwd`. Nothing
+/// a caller passes can bring a removed variable back.
+#[must_use]
+pub fn command_env(
+    inherited: impl IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    removed: &[String],
+    cwd: &std::ffi::OsStr,
+) -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    env::starting_in(
+        env::build(inherited, removed, cfg!(windows)),
+        cwd,
+        cfg!(windows),
+    )
+}
+
 /// The settings of the `shell` tool: configuration's `[shell]` table, less
 /// the program and its arguments, which choose the [`Shell`].
 #[derive(Debug, Clone, PartialEq, Eq)]

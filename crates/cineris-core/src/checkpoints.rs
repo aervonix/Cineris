@@ -759,40 +759,66 @@ impl RecordingShell {
     /// a workspace something outside the harness has changed. `None` when
     /// nothing changed from outside.
     async fn continuity(&self, before: &Snapshot, cx: &RunCx) -> Option<ToolResult> {
-        let changed = self.sandbox.continuity(before)?;
-        // What the harness's own tools changed since the last after-look is
-        // not a change from outside.
-        let touched = self.rounds.as_ref().map(|rounds| rounds.touched());
-        let changed: Vec<Changed> = changed
-            .into_iter()
-            .filter(|one| {
-                touched.as_ref().is_none_or(|touched| {
-                    AbsPath::from_os(&one.path)
-                        .ok()
-                        .is_none_or(|path| !touched.contains(path.key()))
-                })
-            })
-            .collect();
-        if changed.is_empty() {
-            return None;
-        }
-        let root = cx.paths.root().to_fs_path();
-        let by_hand = match &self.rounds {
-            Some(rounds) => {
-                let rounds = Arc::clone(rounds);
-                let changed = changed.clone();
-                tokio::task::spawn_blocking(move || rounds.record_protected(&changed))
-                    .await
-                    .unwrap_or_default()
-            }
-            None => changed.iter().map(|one| one.path.clone()).collect(),
-        };
-        let note = continuity_note(&changed, &root, &by_hand);
-        self.policy.stop_turn(cx.turn, note.clone());
+        let note = changed_since_last_look(
+            &self.sandbox,
+            self.rounds.as_ref(),
+            &self.policy,
+            before,
+            cx.turn,
+            &cx.paths.root().to_fs_path(),
+        )
+        .await?;
         Some(ToolResult::denied(format!(
             "The command was not run. {note}"
         )))
     }
+}
+
+/// Compares `before`, the look before a confined start, with the look after
+/// the last one, and if a protected path changed in between that none of
+/// the harness's own tools changed (a process an earlier command left
+/// running, or the user's own hand), records it in the round's checkpoint,
+/// stops turn `turn`, and returns what the model and the user are told.
+/// `None` when nothing changed from outside. The shell's commands and an
+/// extension's programs (step 28) start only after it.
+pub(crate) async fn changed_since_last_look(
+    sandbox: &SessionSandbox,
+    rounds: Option<&Arc<Rounds>>,
+    policy: &EnginePolicy,
+    before: &Snapshot,
+    turn: u32,
+    root: &std::path::Path,
+) -> Option<String> {
+    let changed = sandbox.continuity(before)?;
+    // What the harness's own tools changed since the last after-look is
+    // not a change from outside.
+    let touched = rounds.map(|rounds| rounds.touched());
+    let changed: Vec<Changed> = changed
+        .into_iter()
+        .filter(|one| {
+            touched.as_ref().is_none_or(|touched| {
+                AbsPath::from_os(&one.path)
+                    .ok()
+                    .is_none_or(|path| !touched.contains(path.key()))
+            })
+        })
+        .collect();
+    if changed.is_empty() {
+        return None;
+    }
+    let by_hand = match rounds {
+        Some(rounds) => {
+            let rounds = Arc::clone(rounds);
+            let changed = changed.clone();
+            tokio::task::spawn_blocking(move || rounds.record_protected(&changed))
+                .await
+                .unwrap_or_default()
+        }
+        None => changed.iter().map(|one| one.path.clone()).collect(),
+    };
+    let note = continuity_note(&changed, root, &by_hand);
+    policy.stop_turn(turn, note.clone());
+    Some(note)
 }
 
 /// What the model and the user are told when a protected path changed
