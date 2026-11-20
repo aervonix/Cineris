@@ -1050,17 +1050,128 @@ impl Policy for EnginePolicy {
     }
 
     fn ask<'a>(&'a self, call: PlannedCall<'a>) -> BoxFuture<'a, Verdict> {
+        self.ask_with(call, false)
+    }
+
+    /// Whether an answer may be to stop the turn. A person's choices have
+    /// no "stop". The answers that are one come from here: a question
+    /// nobody can be asked, with `fail_on_denial` set; and any question
+    /// while commands are confined, since a command beside it may change
+    /// protected paths and stop the turn. Whether somebody can be asked is
+    /// not known until the question is put (a client may leave in
+    /// between), so the settings alone decide: with either, the loop holds
+    /// later calls back while a question is open, which is slower and never
+    /// wrong.
+    fn answers_may_stop(&self) -> bool {
+        // While commands are confined, a command may stop the turn while a
+        // question is open, and the answer is then to stop (found by the
+        // second review of step 26).
+        // A front end that can stop the turn from a question (step 23's
+        // interrupt key in a dialog) says so too.
+        self.fail_on_denial
+            || self.stops_from_questions
+            || self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    fn narrowed(&self) -> u64 {
+        self.in_force.narrowed()
+    }
+
+    fn read_gate(&self) -> Arc<dyn ReadGate> {
+        Arc::new(EngineGate(self.engine()))
+    }
+}
+
+impl EnginePolicy {
+    /// Puts an extension's question to the session's users
+    /// (`question/ask`, naming the extension), as an approval is put, and
+    /// waits for the answer within the approvals' time limit. `None` when
+    /// nobody can be asked, nobody answered in time, or the user declined
+    /// to answer. Dropped, it withdraws the question.
+    #[cfg(feature = "scripts")]
+    pub(crate) async fn put_question(
+        &self,
+        session: &cineris_protocol::SessionId,
+        turn: &TurnId,
+        question: String,
+        choices: Vec<String>,
+        extension: &str,
+    ) -> Option<String> {
+        let asked = self.clients.approvers(&self.sink.subscribers());
+        if asked.is_empty() {
+            return None;
+        }
+        let request = cineris_protocol::methods::QuestionRequest {
+            session_id: session.clone(),
+            turn_id: Some(turn.clone()),
+            question,
+            choices,
+            extension: Some(extension.to_owned()),
+        };
+        let (id, mut answer) = self.clients.ask(
+            session,
+            &asked,
+            |_| ServerRequest::Question(request.clone()),
+            None,
+        );
+        let mut open = Asked {
+            policy: self,
+            id: id.clone(),
+            settled: false,
+        };
+        let mut limit = self.timeout.map(|limit| self.timer.sleep(limit));
+        let answered = poll_fn(|cx| {
+            if let Poll::Ready(response) = std::pin::Pin::new(&mut answer).poll(cx) {
+                return Poll::Ready(response.ok());
+            }
+            if let Some(limit) = &mut limit
+                && limit.as_mut().poll(cx).is_ready()
+            {
+                return Poll::Ready(None);
+            }
+            Poll::Pending
+        })
+        .await;
+        open.settled = true;
+        let Some(answered) = answered else {
+            self.clients.close(&id);
+            self.resolved(&id, Resolution::TimedOut);
+            return None;
+        };
+        self.resolved(&id, Resolution::Answered);
+        match answered.response {
+            ServerResponse::Question(response) => response.answer,
+            _ => None,
+        }
+    }
+
+    /// Puts a planned call's question, as [`Policy::ask`] does. With
+    /// `once_only` the question offers only "allow once" and "deny", and
+    /// no answer records a rule: what an extension's host call asks (a
+    /// rule kept from it would reach past the extension: an
+    /// `exec_network` call names no host, so its rule would be
+    /// `network *`).
+    pub(crate) fn ask_with<'a>(
+        &'a self,
+        call: PlannedCall<'a>,
+        once_only: bool,
+    ) -> BoxFuture<'a, Verdict> {
         Box::pin(async move {
             if let Some(reason) = self.stopped(&call) {
                 return Verdict::Stop { reason };
             }
             // Decided again: an answer to an earlier question of the round
             // may have settled this one.
-            let question = match self.outcome(&call) {
+            let mut question = match self.outcome(&call) {
                 Outcome::Allow { .. } => return Verdict::Allow,
                 Outcome::Deny { reason } => return Verdict::Deny { note: Some(reason) },
                 Outcome::Ask(question) => question,
             };
+            if once_only {
+                // Nothing to add: only "allow once" and "deny" are
+                // offered, and whatever a client answers keeps no rule.
+                question.lifts.clear();
+            }
             let subscribers = self.sink.subscribers();
             let asked = self.clients.approvers(&subscribers);
             // A session kept with no client at all puts the question to
@@ -1206,34 +1317,6 @@ impl Policy for EnginePolicy {
                 }
             }
         })
-    }
-
-    /// Whether an answer may be to stop the turn. A person's choices have
-    /// no "stop". The answers that are one come from here: a question
-    /// nobody can be asked, with `fail_on_denial` set; and any question
-    /// while commands are confined, since a command beside it may change
-    /// protected paths and stop the turn. Whether somebody can be asked is
-    /// not known until the question is put (a client may leave in
-    /// between), so the settings alone decide: with either, the loop holds
-    /// later calls back while a question is open, which is slower and never
-    /// wrong.
-    fn answers_may_stop(&self) -> bool {
-        // While commands are confined, a command may stop the turn while a
-        // question is open, and the answer is then to stop (found by the
-        // second review of step 26).
-        // A front end that can stop the turn from a question (step 23's
-        // interrupt key in a dialog) says so too.
-        self.fail_on_denial
-            || self.stops_from_questions
-            || self.sandboxed.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    fn narrowed(&self) -> u64 {
-        self.in_force.narrowed()
-    }
-
-    fn read_gate(&self) -> Arc<dyn ReadGate> {
-        Arc::new(EngineGate(self.engine()))
     }
 }
 

@@ -33,6 +33,7 @@ mod content;
 pub mod core;
 mod day;
 pub mod events;
+pub mod ext;
 mod instructions;
 mod knowledge;
 mod manage;

@@ -286,6 +286,11 @@ pub struct CoreOptions {
     /// terminal (`docs/security.md`, section 5): a session that would be
     /// there is refused `unrestricted_not_allowed`.
     pub allow_unrestricted: bool,
+    /// Extensions the caller has already had approved, whose tools every
+    /// session registers (`crate::ext`). Empty by default: the harness's
+    /// own finding of extensions, with their pins, is step 28's second
+    /// pull request; until then only a test hands any in.
+    pub extensions: Vec<crate::ext::ApprovedExtension>,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -348,6 +353,7 @@ impl CoreOptions {
             answers_may_stop: false,
             keep_sessions: false,
             allow_unrestricted: true,
+            extensions: Vec::new(),
         }
     }
 }
