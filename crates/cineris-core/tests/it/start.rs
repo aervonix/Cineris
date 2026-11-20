@@ -790,6 +790,59 @@ fn the_configuration_directory_is_closed_whole_to_every_tool() {
     );
 }
 
+/// The state directory is closed to every tool, to reading and to writing,
+/// whole: the user's own pins (`pins.toml`, since step 28) as much as the
+/// trust store, so that no model can approve its own change to an extension
+/// of the user's. At `unrestricted`, with a user there who would say yes,
+/// so that only the closing can refuse.
+#[test]
+fn the_state_directory_is_closed_whole_to_every_tool() {
+    let world = World::new("state_dir_closed", []);
+    let dirs = world.dirs();
+    let state = dirs.state.clone().unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    let pins = state.join("pins.toml");
+    std::fs::write(&pins, "version = 1\n").unwrap();
+    world.provider.push(calls(&[(
+        "c1",
+        "read",
+        json!({"path": pins.to_str().unwrap()}),
+    )]));
+    world.provider.push(calls(&[(
+        "c2",
+        "write",
+        json!({"path": pins.to_str().unwrap(), "content": "version = 1\n\n[[pin]]\n"}),
+    )]));
+    world.provider.push(says("Could not."));
+    let core = world.core_with(|options| options.dirs = Some(dirs.clone()));
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            ClientInfo::user(),
+            SessionSettings {
+                level: Some(cineris_protocol::lease::Level::Unrestricted),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        let asked = front.turn_allowing("read and write the pins").await;
+        assert!(asked.is_empty(), "the state directory was asked about");
+        let results = front.results();
+        assert_eq!(results.len(), 2, "{results:?}");
+        for (tool, outcome, text) in results {
+            assert_eq!(outcome, "denied", "{tool}: {text}");
+        }
+        front.close().await;
+    });
+    assert_eq!(
+        std::fs::read_to_string(&pins).unwrap(),
+        "version = 1\n",
+        "the pins were written by a tool"
+    );
+}
+
 /// The configuration directory reached through a link is protected as
 /// where it really is: a file of it that nothing else closes, read by its
 /// real path, is refused.
