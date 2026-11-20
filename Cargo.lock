@@ -218,9 +218,14 @@ dependencies = [
  "cineris-policy",
  "cineris-protocol",
  "cineris-sandbox",
+ "cineris-testkit",
  "cineris-tools",
  "rquickjs",
+ "serde",
+ "serde_json",
  "thiserror",
+ "tokio",
+ "toml",
 ]
 
 [[package]]

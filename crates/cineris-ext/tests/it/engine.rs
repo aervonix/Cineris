@@ -1,46 +1,190 @@
-//! The engine as built: it runs a script, it has nothing ambient, and its
-//! limits stop a runaway script. No test waits: the interrupt check counts
-//! its own calls.
+//! The engine: a script runs and reaches nothing but the host functions,
+//! registers only while it is first evaluated, and is stopped by its
+//! limits without taking anything else down. No test waits: a call's time
+//! is the fake timer's, moved on by the test.
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::time::Duration;
 
-use cineris_ext::engine::{Engine, Limits, ScriptError};
+use cineris_base::path::{AbsPath, PathStyle};
+use cineris_base::{CancelToken, FakeClock};
+use cineris_ext::capability::Capabilities;
+use cineris_ext::engine::{
+    CallContext, CallError, Failure, Limit, LoadError, ScriptRuntime, Source, Target, register,
+};
+use cineris_ext::folder::Snapshot;
+use cineris_ext::manifest::Manifest;
+use cineris_testkit::{FakeTimer, block_on, join};
+use serde_json::{Value as Json, json};
 
-fn engine() -> Engine {
-    Engine::new(Limits::default(), || false).unwrap()
+use crate::{FakeHost, extension, snapshot};
+
+const TIME: Duration = Duration::from_secs(7);
+
+fn timer() -> FakeTimer {
+    FakeTimer::manual(&FakeClock::new(cineris_base::UtcTime::UNIX_EPOCH))
+}
+
+fn workspace() -> AbsPath {
+    AbsPath::parse("/work/app", PathStyle::Posix).unwrap()
+}
+
+fn capabilities(snapshot: &Snapshot) -> Capabilities {
+    let manifest = Manifest::of(snapshot).unwrap();
+    Capabilities::compile(&manifest.capabilities, &workspace()).unwrap()
+}
+
+fn start(snapshot: &Arc<Snapshot>, timer: &FakeTimer) -> Result<ScriptRuntime, LoadError> {
+    block_on(ScriptRuntime::start(
+        "probe",
+        Source::Snapshot(Arc::clone(snapshot)),
+        None,
+        timer,
+    ))
+}
+
+/// A tool `t` whose `run` is `body`, with these capabilities.
+fn tool(capabilities: &str, body: &str) -> Arc<Snapshot> {
+    extension(
+        capabilities,
+        &format!("cineris.tool({{ name: \"t\", description: \"a tool\", run: {body} }});"),
+    )
+}
+
+fn call(
+    runtime: &ScriptRuntime,
+    snapshot: &Snapshot,
+    host: &FakeHost,
+    timer: &FakeTimer,
+    input: Json,
+) -> Result<Json, CallError> {
+    let capabilities = capabilities(snapshot);
+    let cancel = CancelToken::new();
+    block_on(runtime.call(
+        Target::Tool("t".to_owned()),
+        input,
+        CallContext {
+            host,
+            capabilities: &capabilities,
+            time: TIME,
+            timer,
+            cancel: &cancel,
+        },
+    ))
+}
+
+/// Runs the tool, moving the clock past its time once its time is
+/// running: the call must end on its deadline, however it runs.
+fn call_out_of_time(runtime: &ScriptRuntime, snapshot: &Snapshot, timer: &FakeTimer) -> CallError {
+    let capabilities = capabilities(snapshot);
+    let host = FakeHost::new();
+    let cancel = CancelToken::new();
+    let (result, ()) = block_on(join(
+        runtime.call(
+            Target::Tool("t".to_owned()),
+            json!({}),
+            CallContext {
+                host: &host,
+                capabilities: &capabilities,
+                time: TIME,
+                timer,
+                cancel: &cancel,
+            },
+        ),
+        async {
+            timer.sleeping_for(TIME).await;
+            timer.advance(TIME);
+            // The grace given to the thread, should it need it.
+            timer.advance(Duration::from_secs(5));
+        },
+    ));
+    result.unwrap_err()
 }
 
 #[test]
-fn a_script_runs_and_gives_its_value() {
-    let engine = engine();
-    assert_eq!(engine.eval_json("1 + 2").unwrap(), "3");
+fn a_tool_runs_with_its_arguments_and_gives_json() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "(args) => ({ doubled: args.x * 2, words: 'a b c'.split(' ') })",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    assert_eq!(runtime.registration().tools[0].name, "t");
+    let result = call(
+        &runtime,
+        &snapshot,
+        &FakeHost::new(),
+        &timer,
+        json!({"x": 21}),
+    )
+    .unwrap();
+    assert_eq!(result, json!({"doubled": 42, "words": ["a", "b", "c"]}));
+}
+
+#[test]
+fn an_async_tool_awaits_host_functions_the_manifest_allows() {
+    let timer = timer();
+    let snapshot = tool(
+        "exec = [\"gh\"]",
+        "async () => { const r = await cineris.exec('gh', ['issue', 'list']); \
+         const kept = await cineris.state.set('k', {n: 1}); \
+         return { code: r.code, out: r.stdout, err: r.stderr, kept, back: await cineris.state.get('k') } }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let result = call(&runtime, &snapshot, &host, &timer, json!({})).unwrap();
     assert_eq!(
-        engine
-            .eval_json("JSON.parse('{\"a\":[1,2]}').a.map(x => x * 2)")
-            .unwrap(),
-        "[2,4]"
+        result,
+        json!({"code": 0, "out": "out", "err": "err", "kept": null, "back": {"n": 1}})
     );
     assert_eq!(
-        engine
-            .eval_json("'word count'.split(' ').length + /c(o)u/.exec('count')[1].length")
-            .unwrap(),
-        "3"
+        host.asked(),
+        ["exec gh issue list network=false roots=0 timeout=7000"]
     );
+}
+
+#[test]
+fn a_program_the_manifest_does_not_list_never_reaches_the_host() {
+    let timer = timer();
+    let snapshot = tool(
+        "exec = [\"gh\"]",
+        "async () => { try { await cineris.exec('curl', ['https://example.com']); return 'ran' } \
+         catch (e) { return String(e.message) } }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let result = call(&runtime, &snapshot, &host, &timer, json!({})).unwrap();
+    let text = result.as_str().unwrap();
+    assert!(
+        text.contains("capabilities.exec") && text.contains("curl"),
+        "{text}"
+    );
+    assert!(host.asked().is_empty(), "{:?}", host.asked());
+    // `gh` by another spelling is another program.
+    let snapshot = tool(
+        "exec = [\"gh\"]",
+        "async () => { try { await cineris.exec('/usr/bin/gh', []); return 'ran' } \
+         catch (e) { return String(e.message) } }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let result = call(&runtime, &snapshot, &host, &timer, json!({})).unwrap();
+    assert!(result.as_str().unwrap().contains("capabilities.exec"));
+    assert!(host.asked().is_empty());
 }
 
 #[test]
 fn nothing_ambient_is_on_the_global_object() {
-    let engine = engine();
-    for name in [
+    let names = [
         "require",
         "process",
+        "module",
+        "exports",
         "std",
         "os",
         "print",
-        "console",
         "setTimeout",
         "setInterval",
+        "setImmediate",
         "fetch",
         "XMLHttpRequest",
         "WebSocket",
@@ -51,77 +195,374 @@ fn nothing_ambient_is_on_the_global_object() {
         "scriptArgs",
         "gc",
         "navigator",
-    ] {
-        assert_eq!(
-            engine.eval_json(&format!("typeof {name}")).unwrap(),
-            "\"undefined\"",
-            "`{name}` is reachable"
-        );
+        "__cineris_host",
+        "__cineris_register",
+        "__loadScript",
+    ];
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        &format!(
+            "() => [{}].map(([n, t]) => n + ':' + t)",
+            names
+                .iter()
+                .map(|name| format!("['{name}', typeof globalThis['{name}']]"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let result = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap();
+    for entry in result.as_array().unwrap() {
+        let entry = entry.as_str().unwrap();
+        assert!(entry.ends_with(":undefined"), "reachable: {entry}");
+    }
+    // What is there is the host functions and their names for `console`.
+    let snapshot = tool(
+        "",
+        "() => [typeof cineris.exec, typeof console.log, Object.isFrozen(cineris), \
+         Object.getOwnPropertyDescriptor(globalThis, 'cineris').configurable]",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let result = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap();
+    assert_eq!(result, json!(["function", "function", true, false]));
+}
+
+#[test]
+fn code_made_by_eval_and_by_function_reaches_no_more() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "() => [eval('typeof require'), new Function('return typeof process')(), \
+         (0, eval)('typeof globalThis.__cineris_host')]",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let result = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap();
+    assert_eq!(result, json!(["undefined", "undefined", "undefined"]));
+}
+
+#[test]
+fn imports_load_only_the_extensions_own_files() {
+    let timer = timer();
+    let manifest = crate::manifest("");
+    let files = [
+        ("extension.toml", manifest.as_str()),
+        (
+            "main.js",
+            "import { twice } from './lib/twice.js';\n\
+             cineris.tool({ name: 't', run: async () => {\n\
+               const outside = [];\n\
+               for (const name of ['../outside.js', '/etc/passwd', 'fs', 'node:fs', \
+                 'https://example.com/x.js', './missing.js', './lib/../../x.js']) {\n\
+                 try { await import(name); outside.push(name + ': loaded') }\n\
+                 catch (e) { outside.push(name + ': refused') }\n\
+               }\n\
+               const lib = await import('./lib/twice.js');\n\
+               return { twice: twice(2), again: lib.twice(3), outside };\n\
+             } });",
+        ),
+        ("lib/twice.js", "export const twice = (n) => n * 2;"),
+    ];
+    let snapshot = snapshot(&files);
+    let runtime = start(&snapshot, &timer).unwrap();
+    let result = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap();
+    assert_eq!(result["twice"], 4);
+    assert_eq!(result["again"], 6);
+    for entry in result["outside"].as_array().unwrap() {
+        assert!(entry.as_str().unwrap().ends_with(": refused"), "{entry}");
     }
 }
 
 #[test]
-fn a_dynamic_import_loads_nothing() {
-    let engine = engine();
-    // With no loader set, a module cannot be found by any name.
-    let outcome = engine
-        .eval_json(
-            "let seen = 'pending'; \
-             import('/etc/passwd').then(() => { seen = 'loaded' }, e => { seen = String(e) }); \
-             seen",
-        )
-        .unwrap();
-    assert_eq!(outcome, "\"pending\"");
+fn registering_after_the_first_evaluation_is_refused() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "() => { try { cineris.tool({ name: 'late', run: () => 1 }); return 'registered' } \
+         catch (e) { return String(e.message) } }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let result = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap();
+    assert!(
+        result
+            .as_str()
+            .unwrap()
+            .contains("only while its main module"),
+        "{result}"
+    );
 }
 
 #[test]
-fn an_endless_loop_is_stopped_by_the_interrupt_check() {
-    let polls = Rc::new(Cell::new(0_u32));
-    let counted = Rc::clone(&polls);
-    let engine = Engine::new(Limits::default(), move || {
-        counted.set(counted.get() + 1);
-        counted.get() > 3
-    })
-    .unwrap();
-    let error = engine.eval_json("for (;;) {}").unwrap_err();
+fn a_host_function_during_the_first_evaluation_refuses_the_extension() {
+    let timer = timer();
+    let snapshot = extension("exec = [\"gh\"]", "await cineris.exec('gh', []);");
+    let error = start(&snapshot, &timer).unwrap_err();
     assert!(
-        matches!(&error, ScriptError::Thrown(text) if text.contains("interrupted")),
+        matches!(&error, LoadError::Evaluation(text) if text.contains("first evaluated")),
         "{error}"
     );
-    assert!(polls.get() > 3);
+}
+
+#[test]
+fn a_hook_on_an_event_the_manifest_does_not_list_refuses_the_extension() {
+    let timer = timer();
+    let snapshot = extension(
+        "hooks = [\"tool.after\"]",
+        "cineris.on('tool.before', () => ({ decision: 'allow' }));",
+    );
+    let error = start(&snapshot, &timer).unwrap_err();
+    assert!(
+        matches!(&error, LoadError::Evaluation(text) if text.contains("capabilities.hooks")),
+        "{error}"
+    );
+    // Listed, it registers.
+    let snapshot = extension(
+        "hooks = [\"tool.before\"]",
+        "cineris.on('tool.before', { tools: ['write'] }, () => ({ decision: 'allow' }));",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    assert_eq!(runtime.registration().hooks[0].event, "tool.before");
+    assert_eq!(runtime.registration().hooks[0].tools, ["write"]);
+}
+
+#[test]
+fn a_registration_other_than_the_approved_one_refuses_the_extension() {
+    let timer = timer();
+    let snapshot = tool("", "() => 1");
+    let (_, approved) = block_on(register(Arc::clone(&snapshot), &timer)).unwrap();
+    let mut other = approved.clone();
+    other.tools[0].description = "something else".to_owned();
+    let error = block_on(ScriptRuntime::start(
+        "probe",
+        Source::Snapshot(Arc::clone(&snapshot)),
+        Some(other),
+        &timer,
+    ))
+    .unwrap_err();
+    assert_eq!(error, LoadError::Mismatch);
+    block_on(ScriptRuntime::start(
+        "probe",
+        Source::Snapshot(snapshot),
+        Some(approved),
+        &timer,
+    ))
+    .unwrap();
+}
+
+#[test]
+fn an_endless_loop_is_stopped_at_its_time_and_only_its_runtime_goes() {
+    let timer = timer();
+    let snapshot = tool("", "() => { for (;;) {} }");
+    let runtime = start(&snapshot, &timer).unwrap();
+    assert_eq!(
+        call_out_of_time(&runtime, &snapshot, &timer),
+        CallError::TimedOut
+    );
+    assert!(!runtime.is_alive());
+    // Another runtime of the same extension is made and runs.
+    let snapshot = tool("", "() => 'fine'");
+    let fresh = start(&snapshot, &timer).unwrap();
+    assert_eq!(
+        call(&fresh, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap(),
+        json!("fine")
+    );
+}
+
+#[test]
+fn a_regular_expression_that_backtracks_without_end_is_stopped_too() {
+    let timer = timer();
+    let snapshot = tool("", "() => /^(a+)+$/.test('a'.repeat(40) + 'b')");
+    let runtime = start(&snapshot, &timer).unwrap();
+    assert_eq!(
+        call_out_of_time(&runtime, &snapshot, &timer),
+        CallError::TimedOut
+    );
 }
 
 #[test]
 fn a_memory_bomb_is_stopped_by_the_memory_limit() {
-    let engine = Engine::new(
-        Limits {
-            memory: 8 * 1024 * 1024,
-            ..Limits::default()
-        },
-        || false,
-    )
-    .unwrap();
-    let error = engine
-        .eval_json("const a = []; for (;;) { a.push('x'.repeat(1 << 16) + a.length) }")
-        .unwrap_err();
-    assert!(
-        matches!(&error, ScriptError::Thrown(text) if text.contains("out of memory")),
-        "{error}"
-    );
-    let error = engine.eval_json("'x'.repeat(1 << 28).length").unwrap_err();
-    assert!(matches!(error, ScriptError::Thrown(_)), "{error}");
+    let timer = timer();
+    let snapshot = snapshot(&[
+        (
+            "extension.toml",
+            "api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n[limits]\nmemory = 8\n",
+        ),
+        (
+            "main.js",
+            "cineris.tool({ name: 't', run: () => { const a = []; for (;;) { a.push('x'.repeat(1 << 16) + a.length) } } });",
+        ),
+    ]);
+    let runtime = start(&snapshot, &timer).unwrap();
+    let error = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap_err();
+    assert_eq!(error, CallError::Failed(Failure::Limit(Limit::Memory)));
+    assert!(!runtime.is_alive());
 }
 
 #[test]
-fn endless_recursion_is_stopped_by_the_stack_limit() {
-    let engine = engine();
-    let error = engine
-        .eval_json("function deeper(n) { return deeper(n + 1) + 1 } deeper(0)")
-        .unwrap_err();
+fn the_memory_limit_is_the_one_the_manifest_sets() {
+    let timer = timer();
+    // About 16 MiB held at once: more than 8, less than 32.
+    let script = "cineris.tool({ name: 't', run: () => { const a = []; \
+                  for (let i = 0; i < 256; i++) { a.push('x'.repeat(1 << 16) + i) } return a.length } });";
+    for (memory, fits) in [(8, false), (32, true)] {
+        let snapshot = snapshot(&[
+            (
+                "extension.toml",
+                &format!(
+                    "api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n[limits]\nmemory = {memory}\n"
+                ),
+            ),
+            ("main.js", script),
+        ]);
+        let runtime = start(&snapshot, &timer).unwrap();
+        let result = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({}));
+        if fits {
+            assert_eq!(result.unwrap(), json!(256));
+        } else {
+            assert_eq!(
+                result.unwrap_err(),
+                CallError::Failed(Failure::Limit(Limit::Memory))
+            );
+        }
+    }
+}
+
+#[test]
+fn endless_recursion_is_an_error_and_the_runtime_goes_on() {
+    let timer = timer();
+    let snapshot = extension(
+        "",
+        "function deeper(n) { return deeper(n + 1) + 1 }\n\
+         cineris.tool({ name: 't', run: (args) => args.deep ? deeper(0) : 'fine' });",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let error = call(
+        &runtime,
+        &snapshot,
+        &FakeHost::new(),
+        &timer,
+        json!({"deep": true}),
+    )
+    .unwrap_err();
     assert!(
-        matches!(&error, ScriptError::Thrown(text) if text.contains("stack")),
+        matches!(&error, CallError::Failed(Failure::Thrown(text)) if text.contains("stack")),
         "{error}"
     );
-    // The engine is still usable after it.
-    assert_eq!(engine.eval_json("40 + 2").unwrap(), "42");
+    assert!(runtime.is_alive());
+    assert_eq!(
+        call(
+            &runtime,
+            &snapshot,
+            &FakeHost::new(),
+            &timer,
+            json!({"deep": false})
+        )
+        .unwrap(),
+        json!("fine")
+    );
+}
+
+#[test]
+fn a_result_larger_than_its_cap_is_refused() {
+    let timer = timer();
+    let snapshot = tool("", "() => 'x'.repeat(2 * 1024 * 1024)");
+    let runtime = start(&snapshot, &timer).unwrap();
+    let error = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap_err();
+    assert!(
+        matches!(&error, CallError::Failed(Failure::Result(text)) if text.contains("1 MiB")),
+        "{error}"
+    );
+    assert!(runtime.is_alive());
+}
+
+#[test]
+fn a_script_cannot_block_its_thread_on_a_shared_wait() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "() => { try { Atomics.wait(new Int32Array(new ArrayBuffer(4)), 0, 0); return 'waited' } \
+         catch (e) { return 'refused' } }",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    assert_eq!(
+        call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap(),
+        json!("refused")
+    );
+}
+
+#[test]
+fn a_call_that_awaits_what_never_comes_ends_with_an_error() {
+    let timer = timer();
+    let snapshot = tool("", "() => new Promise(() => {})");
+    let runtime = start(&snapshot, &timer).unwrap();
+    let error = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap_err();
+    assert!(
+        matches!(&error, CallError::Failed(Failure::Thrown(text)) if text.contains("never comes")),
+        "{error}"
+    );
+    assert!(runtime.is_alive());
+}
+
+#[test]
+fn a_thrown_error_is_the_calls_error_with_its_message() {
+    let timer = timer();
+    let snapshot = tool("", "async () => { throw new Error('no issues found') }");
+    let runtime = start(&snapshot, &timer).unwrap();
+    let error = call(&runtime, &snapshot, &FakeHost::new(), &timer, json!({})).unwrap_err();
+    assert!(
+        matches!(&error, CallError::Failed(Failure::Thrown(text)) if text.contains("no issues found")),
+        "{error}"
+    );
+    assert!(runtime.is_alive());
+}
+
+#[test]
+fn a_cancelled_call_ends_and_takes_its_runtime_down() {
+    let timer = timer();
+    let snapshot = tool("", "() => { for (;;) {} }");
+    let runtime = start(&snapshot, &timer).unwrap();
+    let capabilities = capabilities(&snapshot);
+    let host = FakeHost::new();
+    let cancel = CancelToken::new();
+    let (result, ()) = block_on(join(
+        runtime.call(
+            Target::Tool("t".to_owned()),
+            json!({}),
+            CallContext {
+                host: &host,
+                capabilities: &capabilities,
+                time: TIME,
+                timer: &timer,
+                cancel: &cancel,
+            },
+        ),
+        async {
+            timer.sleeping_for(TIME).await;
+            cancel.cancel();
+            timer.advance(Duration::from_secs(5));
+        },
+    ));
+    assert_eq!(result.unwrap_err(), CallError::Cancelled);
+    assert!(!runtime.is_alive());
+}
+
+#[test]
+fn a_changed_folder_is_never_evaluated() {
+    let scratch = cineris_testkit::scratch!("a_changed_folder_is_never_evaluated");
+    scratch.file("ext/extension.toml", crate::manifest(""));
+    scratch.file("ext/main.js", "cineris.tool({ name: 't', run: () => 1 });");
+    let pinned = Snapshot::read(&scratch.join("ext")).unwrap().hash();
+    scratch.file("ext/main.js", "cineris.tool({ name: 't', run: () => 2 });");
+    let timer = timer();
+    let error = block_on(ScriptRuntime::start(
+        "probe",
+        Source::Folder {
+            path: scratch.join("ext"),
+            pinned,
+        },
+        None,
+        &timer,
+    ))
+    .unwrap_err();
+    assert!(matches!(error, LoadError::Changed { .. }), "{error}");
 }
