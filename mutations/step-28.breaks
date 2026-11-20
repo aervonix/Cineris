@@ -1906,11 +1906,11 @@ caught-by:
     cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
 
 [break] a-bracketed-address-takes-any-character
-rule: An IPv6 address in brackets keeps to hex digits, colons and dots, so a zone or a percent sign is refused.
+rule: A host in brackets is an IPv6 address written plainly, so a zone or a percent sign is refused.
 file: crates/cineris-ext/src/host.rs
 in: url_host
-find: c.is_ascii_hexdigit() || matches!(c, ':' | '.')
-replace: c != ']'
+find: .parse::<std::net::Ipv6Addr>()
+replace: .parse::<std::net::Ipv6Addr>().or(Ok::<_, ()>(std::net::Ipv6Addr::LOCALHOST))
 caught-by:
     cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
 
@@ -1930,8 +1930,6 @@ find: Range::v4([127, 0, 0, 0], 8, Loopback)
 replace: Range::v4([127, 0, 0, 0], 32, Loopback)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
-    cineris-llm::it fetch::localhost_reaches_loopback_only_when_it_is_allowed
 
 [break] private-10-let-through
 rule: A private address in 10.0.0.0/8 is refused unless it is allowed by name.
@@ -1940,9 +1938,6 @@ find: Range::v4([10, 0, 0, 0], 8, Private)
 replace: Range::v4([10, 0, 0, 0], 32, Private)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-llm fetch::tests::one_address_outside_the_internet_refuses_the_whole_name
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
-    cineris-llm::it fetch::one_address_outside_the_internet_refuses_the_name_whatever_else_it_has
 
 [break] private-172-cut-short
 rule: The private range 172.16.0.0/12 runs to 172.31.255.255.
@@ -1967,7 +1962,6 @@ find: Range::v4([192, 168, 0, 0], 16, Private)
 replace: Range::v4([192, 168, 0, 0], 32, Private)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] shared-address-let-through
 rule: A shared (carrier-grade NAT) address in 100.64.0.0/10 is refused unless it is allowed by name.
@@ -1976,7 +1970,6 @@ find: Range::v4([100, 64, 0, 0], 10, Shared)
 replace: Range::v4([100, 64, 0, 0], 32, Shared)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] link-local-v4-let-through
 rule: A link-local address in 169.254.0.0/16 is refused unless it is allowed by name.
@@ -1993,7 +1986,6 @@ find: Range::v4([169, 254, 169, 254], 32, Metadata)
 replace: Range::v4([169, 254, 169, 254], 32, LinkLocal)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] unspecified-v4-let-through
 rule: An unspecified address (0.0.0.0/8), which reaches this machine on some systems, is refused.
@@ -2026,8 +2018,6 @@ find: Range::v6([0, 0, 0, 0, 0, 0, 0, 1], 128, Loopback)
 replace: Range::v6([0, 0, 0, 0, 0, 0, 0, 1], 128, Reserved)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-llm fetch::tests::an_allowance_names_literal_addresses_and_localhost_names_loopback
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] metadata-v6-not-named-as-such
 rule: AWS's IPv6 metadata address fd00:ec2::254 is refused as the metadata service's.
@@ -2044,7 +2034,6 @@ find: Range::v6([0xfe80, 0, 0, 0, 0, 0, 0, 0], 10, LinkLocal)
 replace: Range::v6([0xfe80, 0, 0, 0, 0, 0, 0, 0], 16, LinkLocal)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] unique-local-cut-to-half
 rule: A unique local address is all of fc00::/7, fd00::/8 included.
@@ -2053,7 +2042,6 @@ find: Range::v6([0xfc00, 0, 0, 0, 0, 0, 0, 0], 7, UniqueLocal)
 replace: Range::v6([0xfc00, 0, 0, 0, 0, 0, 0, 0], 8, UniqueLocal)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] multicast-v6-cut-short
 rule: An IPv6 multicast address is all of ff00::/8.
@@ -2071,7 +2059,6 @@ find: [0, 0, 0, 0, 0, 0xffff, _, _]
 replace: [0, 0, 0, 0, 0, 0xfffe, _, _]
 caught-by:
     cineris-base address::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
-    cineris-llm::it fetch::a_name_at_an_address_outside_the_internet_is_refused_with_its_reason
 
 [break] compatible-form-let-through
 rule: The IPv4-compatible IPv6 form of an address (::127.0.0.1) is the kind of that IPv4 address.
@@ -2377,7 +2364,7 @@ find: u32::from(network) & mask == u32::from(address) & mask
 replace: u32::from(network) == u32::from(address)
 caught-by:
     cineris-base address::tests::every_range_outside_the_internet_is_named
-    cineris-base address::tests::every_range_starts_at_its_network_and_is_listed_once
+    cineris-base address::tests::an_ipv6_form_of_an_ipv4_address_is_the_kind_of_that_address
 
 [break] the-shortest-range-gives-the-kind
 rule: An address in two ranges is the kind of the longer: 169.254.169.254 is metadata, not link-local.
@@ -2523,7 +2510,7 @@ rule: An IPv6 host is judged in its shortest form, the one the manifest's entrie
 file: crates/cineris-ext/src/host.rs
 in: url_host
 find: return Ok(address.to_string());
-replace: return Ok(address.to_string().to_uppercase());
+replace: return Ok(written.to_owned());
 caught-by:
     cineris-ext::it serve::a_urls_host_is_read_without_its_port_user_or_brackets
     cineris-ext::it serve::only_a_host_named_literally_may_be_outside_the_internet

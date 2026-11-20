@@ -519,23 +519,16 @@ pub fn url_host(url: &str) -> Result<String, HostError> {
         return Err(refused("it names a user"));
     }
     if let Some(inside) = authority.strip_prefix('[') {
-        let (address, after) = inside
+        let (written, after) = inside
             .split_once(']')
             .ok_or_else(|| refused("its address is not closed"))?;
         if !(after.is_empty() || after.starts_with(':')) {
             return Err(refused("its address is followed by something not a port"));
         }
-        let plain = address
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'));
-        if !plain {
-            return Err(refused(
-                "its address has a character the fetch would read differently: write it plainly",
-            ));
-        }
-        let address = address
+        // Only an IPv6 address, written plainly: no zone, no `%`.
+        let address = written
             .parse::<std::net::Ipv6Addr>()
-            .map_err(|_| refused("its host is not an IPv6 address"))?;
+            .map_err(|_| refused("its host is not an IPv6 address written plainly"))?;
         if address.to_ipv4_mapped().is_some() {
             return Err(refused(
                 "its host is an IPv4 address in IPv6's form: write the IPv4 address",

@@ -110,6 +110,7 @@ fn a_urls_host_is_read_without_its_port_user_or_brackets() {
     for (plain, host) in [
         ("https://1.2.3.4/", "1.2.3.4"),
         ("https://[0:0:0:0:0:0:0:1]:8443/", "::1"),
+        ("https://[FE80:0::A]/", "fe80::a"),
         ("HTTPS://Example.COM/", "example.com"),
         ("https://under_score-1.example/", "under_score-1.example"),
         ("https://example.com.:443/", "example.com."),
@@ -179,7 +180,7 @@ fn only_a_host_named_literally_may_be_outside_the_internet() {
         "https://rebind.attacker.example/",
         "https://localhost:8443/",
         "http://10.0.0.5:8080/",
-        "http://[::1]/",
+        "http://[0:0::1]/",
     ] {
         block_on(serve(
             fetch(url),
@@ -196,7 +197,7 @@ fn only_a_host_named_literally_may_be_outside_the_internet() {
             "fetch GET https://rebind.attacker.example/ host=rebind.attacker.example literal= timeout=5000",
             "fetch GET https://localhost:8443/ host=localhost literal=localhost timeout=5000",
             "fetch GET http://10.0.0.5:8080/ host=10.0.0.5 literal=10.0.0.5 timeout=5000",
-            "fetch GET http://[::1]/ host=::1 literal=::1 timeout=5000",
+            "fetch GET http://[0:0::1]/ host=::1 literal=::1 timeout=5000",
         ]
     );
 }
