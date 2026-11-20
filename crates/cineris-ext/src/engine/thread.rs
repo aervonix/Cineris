@@ -38,8 +38,8 @@ use crate::folder::Snapshot;
 use crate::host::{HostAnswer, HostCall, Phase, Scope};
 use crate::manifest::Manifest;
 use crate::registration::{
-    CommandDef, HookDef, MAX_COMMANDS, MAX_DESCRIPTION, MAX_HOOKS, MAX_SCHEMA_BYTES, MAX_TOOLS,
-    Registration, ToolDef,
+    CommandDef, HookDef, MAX_ARGUMENTS, MAX_COMMANDS, MAX_DESCRIPTION, MAX_FILTER_ENTRY,
+    MAX_HOOK_TOOLS, MAX_HOOKS, MAX_SCHEMA_BYTES, MAX_TOOLS, Registration, ToolDef,
 };
 
 /// How many runtimes this process has made: the start-up test holds it at
@@ -1067,17 +1067,120 @@ fn check_name(name: &str) -> Result<(), String> {
         Ok(())
     } else {
         Err(format!(
-            "`{name}` cannot be a name: 1 to 64 of ASCII letters, digits, `_`, `-` and `.`"
+            "`{}` cannot be a name: 1 to 64 of ASCII letters, digits, `_`, `-` and `.`",
+            shown(name)
         ))
     }
+}
+
+/// A text of the script's as an error shows it: cut, and nothing in it
+/// acting unseen.
+fn shown(text: &str) -> String {
+    cineris_base::visible(cineris_base::text::truncate_bytes(text, 80)).into_owned()
+}
+
+/// Whether `text` holds a character that acts unseen (a control, a format
+/// character such as a direction override), a line break and a tab apart:
+/// text a script registers is shown to the model and the user as written.
+fn hides_something(text: &str) -> bool {
+    text.chars()
+        .any(|character| !matches!(character, '\n' | '\t') && cineris_base::acts_unseen(character))
 }
 
 fn check_description(description: &str) -> Result<(), String> {
     if description.len() > MAX_DESCRIPTION {
         Err("a description is at most 2 KiB".to_owned())
+    } else if hides_something(description) {
+        Err(
+            "a description holds a character that acts unseen (a control or a format character)"
+                .to_owned(),
+        )
     } else {
         Ok(())
     }
+}
+
+/// One entry of a hook's filter: a tool's registry name, or a source's
+/// tools (`source/*`).
+fn check_filter(entry: &str) -> Result<(), String> {
+    let fine = !entry.is_empty()
+        && entry.len() <= MAX_FILTER_ENTRY
+        && entry.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | '/' | '*')
+        });
+    if fine {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{}` cannot be a tool in a hook's filter: 1 to {MAX_FILTER_ENTRY} of ASCII letters, \
+             digits, `_`, `-`, `.`, `/` and `*`",
+            shown(entry)
+        ))
+    }
+}
+
+/// Every text of a schema, its keys included, shown as written.
+fn check_schema_text(schema: &Json) -> Result<(), String> {
+    let bad = |text: &str| hides_something(text);
+    let found = match schema {
+        Json::String(text) => bad(text),
+        Json::Array(items) => return items.iter().try_for_each(check_schema_text),
+        Json::Object(fields) => {
+            for (key, value) in fields {
+                if bad(key) {
+                    return Err(SCHEMA_HIDES.to_owned());
+                }
+                check_schema_text(value)?;
+            }
+            false
+        }
+        _ => false,
+    };
+    if found {
+        Err(SCHEMA_HIDES.to_owned())
+    } else {
+        Ok(())
+    }
+}
+
+const SCHEMA_HIDES: &str =
+    "`input` holds a character that acts unseen (a control or a format character)";
+
+/// A list of texts from `def[key]`, at most `most` of them: its length is
+/// read before any of it is taken into the harness's memory, which the
+/// runtime's limit does not count (the review of step 28).
+fn bounded_texts<'js>(
+    ctx: &Ctx<'js>,
+    def: &Object<'js>,
+    key: &str,
+    most: usize,
+) -> rquickjs::Result<Vec<String>> {
+    let value: Value<'js> = def.get(key)?;
+    if value.is_undefined() || value.is_null() {
+        return Ok(Vec::new());
+    }
+    let Some(array) = value.as_array() else {
+        return Err(Exception::throw_type(
+            ctx,
+            &format!("`{key}` must be a list of text"),
+        ));
+    };
+    if array.len() > most {
+        return Err(Exception::throw_type(
+            ctx,
+            &format!(
+                "`{key}` lists at most {most}, and this lists {}",
+                array.len()
+            ),
+        ));
+    }
+    (0..array.len())
+        .map(|index| {
+            array.get::<Option<String>>(index)?.ok_or_else(|| {
+                Exception::throw_type(ctx, &format!("`{key}` must be a list of text"))
+            })
+        })
+        .collect()
 }
 
 /// What one call of `cineris.tool`, `cineris.command` or `cineris.on`
@@ -1154,6 +1257,7 @@ fn read_entry<'js>(
                         "`input` must be a JSON Schema object of at most 16 KiB".to_owned(),
                     ));
                 }
+                check_schema_text(&schema).map_err(refuse)?;
                 schema
             };
             let read_only = def.get::<_, Option<bool>>("readOnly")?.unwrap_or(false);
@@ -1176,9 +1280,7 @@ fn read_entry<'js>(
                 .get::<_, Option<String>>("description")?
                 .unwrap_or_default();
             check_description(&description).map_err(refuse)?;
-            let arguments = def
-                .get::<_, Option<Vec<String>>>("arguments")?
-                .unwrap_or_default();
+            let arguments = bounded_texts(ctx, def, "arguments", MAX_ARGUMENTS)?;
             for argument in &arguments {
                 check_name(argument).map_err(refuse)?;
             }
@@ -1201,9 +1303,10 @@ fn read_entry<'js>(
                     Event::ALL.map(Event::as_str).join(", ")
                 )));
             };
-            let tools = def
-                .get::<_, Option<Vec<String>>>("tools")?
-                .unwrap_or_default();
+            let tools = bounded_texts(ctx, def, "tools", MAX_HOOK_TOOLS)?;
+            for tool in &tools {
+                check_filter(tool).map_err(refuse)?;
+            }
             let observe = def.get::<_, Option<bool>>("observe")?.unwrap_or(false);
             let timeout_ms = def.get::<_, Option<u64>>("timeout")?;
             if timeout_ms.is_some_and(|time| time == 0 || time > MAX_HOOK_TIME_MS) {

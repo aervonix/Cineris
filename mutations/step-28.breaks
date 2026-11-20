@@ -1488,3 +1488,39 @@ replace: let to_its_end = matches!(call, HostCall::Log(_));
 caught-by:
     cineris-ext::it engine::a_cancelled_call_follows_its_program_to_the_end
 
+[break] a-registered-lists-length-is-not-read-first
+rule: A list a script registers is refused past its cap before any of it is taken.
+file: crates/cineris-ext/src/engine/thread.rs
+in: bounded_texts
+find: if array.len() > most {
+replace: if array.len() > most * 1_000_000 {
+caught-by:
+    cineris-ext::it engine::what_a_script_registers_is_bounded_before_it_is_taken
+
+[break] a-hooks-filter-entry-is-not-checked
+rule: Each tool a hook's filter names is a registry name or a source's tools, at most 129 bytes.
+file: crates/cineris-ext/src/engine/thread.rs
+in: read_entry
+find: check_filter(tool).map_err(refuse)?;
+replace: let _ = tool;
+caught-by:
+    cineris-ext::it engine::what_a_script_registers_is_bounded_before_it_is_taken
+
+[break] a-description-may-hide-text
+rule: A description a script registers holds no character that acts unseen.
+file: crates/cineris-ext/src/engine/thread.rs
+in: check_description
+find: } else if hides_something(description) {
+replace: } else if hides_something(description) && description.is_empty() {
+caught-by:
+    cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
+
+[break] a-schema-may-hide-text
+rule: A tool's schema holds no character that acts unseen, in its keys or its values.
+file: crates/cineris-ext/src/engine/thread.rs
+in: read_entry
+find: check_schema_text(&schema).map_err(refuse)?;
+replace: let _ = &schema;
+caught-by:
+    cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
+

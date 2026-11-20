@@ -772,6 +772,76 @@ fn a_programs_time_is_what_the_call_has_left_when_it_starts() {
     );
 }
 
+/// What a script registers is bounded before it is taken into the
+/// harness's memory, which the runtime's limit does not count: a list's
+/// length is read first (the review of step 28: four million filters, or
+/// arguments, became four million strings).
+#[test]
+fn what_a_script_registers_is_bounded_before_it_is_taken() {
+    let timer = timer();
+    let refused = |capabilities: &str, script: &str, says: &str| {
+        let error = start(&extension(capabilities, script), &timer).unwrap_err();
+        assert!(
+            matches!(&error, LoadError::Evaluation(text) if text.contains(says)),
+            "{script}: {error}"
+        );
+    };
+    refused(
+        "",
+        "cineris.command({ name: 'c', arguments: new Array(17).fill('a'), run() {} });",
+        "lists at most 16",
+    );
+    refused(
+        "",
+        "cineris.command({ name: 'c', arguments: new Array(1e6).fill('a'), run() {} });",
+        "lists at most 16",
+    );
+    refused(
+        "hooks = [\"tool.before\"]",
+        "cineris.on('tool.before', { tools: new Array(65).fill('write') }, () => ({}));",
+        "lists at most 64",
+    );
+    refused(
+        "hooks = [\"tool.before\"]",
+        "cineris.on('tool.before', { tools: ['write\\u202e'] }, () => ({}));",
+        "cannot be a tool in a hook's filter",
+    );
+    // At the caps, and as a registry names a tool, it registers.
+    let fine = extension(
+        "hooks = [\"tool.before\"]",
+        "cineris.command({ name: 'c', arguments: new Array(16).fill('a'), run() {} });\n\
+         cineris.on('tool.before', { tools: ['probe/run', 'mcp_x/*'] }, () => ({}));",
+    );
+    let runtime = start(&fine, &timer).unwrap();
+    assert_eq!(runtime.registration().commands[0].arguments.len(), 16);
+}
+
+/// What a script registers is shown to the model and the user as written:
+/// a description or a schema that holds a character acting unseen (a
+/// direction override, a control) refuses the extension.
+#[test]
+fn text_a_script_registers_holds_nothing_that_acts_unseen() {
+    let timer = timer();
+    for script in [
+        "cineris.tool({ name: 't', description: 'safe \\u202e efil', run() {} });",
+        "cineris.command({ name: 'c', description: 'a\\u0007b', run() {} });",
+        "cineris.tool({ name: 't', input: { type: 'object', description: 'x\\u200by' }, run() {} });",
+        "cineris.tool({ name: 't', input: { type: 'object', properties: { 'a\\u202eb': { type: 'string' } } }, run() {} });",
+    ] {
+        let error = start(&extension("", script), &timer).unwrap_err();
+        assert!(
+            matches!(&error, LoadError::Evaluation(text) if text.contains("acts unseen")),
+            "{script}: {error}"
+        );
+    }
+    // A line break and a tab are text.
+    let fine = extension(
+        "",
+        "cineris.tool({ name: 't', description: 'one\\n\\ttwo', run() {} });",
+    );
+    assert!(start(&fine, &timer).is_ok());
+}
+
 /// A native function of the engine that loops without looking at the
 /// interrupt cannot be stopped: its thread is left running when its grace
 /// is up, said so, and counted (the review of step 28).
