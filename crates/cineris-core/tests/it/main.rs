@@ -32,6 +32,7 @@ mod closing;
 mod context;
 mod day;
 mod events;
+mod extensions;
 mod gates;
 mod harness_git;
 mod index;
