@@ -472,6 +472,12 @@ impl ScriptRuntime {
                         .await
                     };
                     if let Some(error) = ending {
+                        // A program whose look found its turn stopped says
+                        // so, over the cancel or the deadline that ended it.
+                        let error = match answer {
+                            Some(Err(HostError::Stopped(reason))) => CallError::Stopped(reason),
+                            _ => error,
+                        };
                         return Err(self.stopped(&mut replies, cx.timer, error).await);
                     }
                     match answer {

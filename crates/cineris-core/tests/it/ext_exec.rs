@@ -1562,9 +1562,6 @@ mod confined {
     /// A program stopped by the call's cancellation, after it wrote a
     /// protected path, is looked at.
     #[test]
-    #[ignore = "needs cineris-ext's engine to poll an exec host call to its end after the call is \
-                cancelled, the other half of this fix: until then the cancel drops the call \
-                before its look"]
     fn sys_a_program_the_call_cancels_is_still_looked_at() {
         if !enforcing_here() {
             return;
