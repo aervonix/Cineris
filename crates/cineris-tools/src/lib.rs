@@ -71,7 +71,7 @@ pub use blocking::{BlockingError, run_blocking};
 pub use checkpoint::{
     Change, CheckpointError, Checkpoints, EDIT_LIMIT, Editing, MemoryCheckpoints,
 };
-pub use context::{ImageSupport, OpenGate, Outlined, Outliner, PlanCx, ReadGate, RunCx};
+pub use context::{CallRef, ImageSupport, OpenGate, Outlined, Outliner, PlanCx, ReadGate, RunCx};
 pub use contract::{
     BoxFuture, ChangePreview, Concurrency, ConcurrencyClass, Effect, Json, NetworkTarget, NoOutput,
     Plan, Preview, Tool, ToolOutput, ToolSpec,
