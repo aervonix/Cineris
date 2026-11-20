@@ -37,6 +37,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-base
 
+- [a-windows-program-lookup-takes-a-file-with-no-extension](a-windows-program-lookup-takes-a-file-with-no-extension.md): On Windows, looking a program up by name takes a file of that name with no extension before a later folder's `.exe`, and then fails to start it. Owner: step 32 (hardening pass).
 - [log-crate-bridge](log-crate-bridge.md): The logging subscriber has no bridge for dependencies that log through the `log` crate at `warn` and above. Owner: step 32, or the first step whose dependency needs it.
 - [the-harness-git-reads-the-repository-git-names-in-the-environment](the-harness-git-reads-the-repository-git-names-in-the-environment.md): The harness's own git reads `GIT_DIR`, `GIT_INDEX_FILE` and git's other variables of a repository's place from the harness's environment, so a harness started from a git hook answers about another repository. Owner: the maintainers.
 
