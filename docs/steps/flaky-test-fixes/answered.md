@@ -103,4 +103,4 @@ A one-runner A/B on Linux (try 44451657672, three rounds each, 5 ms a process st
 
 ## Opened
 
-- [a-git-cap-of-zero-that-git-can-still-beat](../../outstanding/a-git-cap-of-zero-that-git-can-still-beat.md): `cineris-tools`' `changes::sys_git_that_does_not_answer_in_time_is_not_waited_for` failed once in this pull request's `test-linux`. The code it tests is not on this change's path. Its zero cap can be beaten by a git that answers before the wait is asked. It is marked as a known flake, and left to a fix session: a change of `cineris-tools`' detector or its test is outside these fixes.
+- `a-git-cap-of-zero-that-git-can-still-beat` (settled by the [small fixes](../small-fixes/answered.md), whose test gives the detector a git that never answers): `cineris-tools`' `changes::sys_git_that_does_not_answer_in_time_is_not_waited_for` failed once in this pull request's `test-linux`. The code it tests is not on this change's path. Its zero cap can be beaten by a git that answers before the wait is asked. It is marked as a known flake, and left to a fix session: a change of `cineris-tools`' detector or its test is outside these fixes.
