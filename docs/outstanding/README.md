@@ -93,6 +93,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [fuzz-targets-for-later-decoders](fuzz-targets-for-later-decoders.md): Each later provider protocol's decoder needs a fuzz target in `fuzz/` and a line in `xtask/src/outside.rs`. Owner: steps 31, 35 and 36.
 - [the-message-for-a-host-outside-ascii](the-message-for-a-host-outside-ascii.md): A refused host outside ASCII is told the `xn--` form by an example, not its own; a percent-encoded one gets the URL library's message. Owner: a later step on providers, or step 33.
 - [the-prefix-check-and-image-references](the-prefix-check-and-image-references.md): The debug prefix check skips requests holding a stored image reference; a protocol should write a placeholder. Owner: step 33, or the step that next touches images.
+- [the-provider-transports-tls-check-on-windows-fetches-what-a-certificate-names](the-provider-transports-tls-check-on-windows-fetches-what-a-certificate-names.md): The provider transport checks a server's certificate with the platform's verifier, which on Windows fetches what the certificate names, its issuer and its revocation status, from any address and on the thread that polls the request. Owner: step 32 (hardening pass).
 
 ### cineris-policy
 
