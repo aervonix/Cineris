@@ -1961,12 +1961,11 @@ impl App {
         }
         // What was held is of a session that is not this client's: a
         // fork's original, the one `/new` closed, or one that failed to open.
-        // Only its notices are shown.
+        // No session is open here (a session is only ever opened with none
+        // open), so `event` shows only its notices.
         let held = std::mem::take(&mut self.held);
         for event in held {
-            if matches!(event.event, Event::Notice(_)) {
-                self.event(event, now);
-            }
+            self.event(event, now);
         }
         self.give_back_held();
         self.stop_running();
@@ -2346,7 +2345,10 @@ impl App {
         match &self.session {
             Some(session) if session.session_id != event.session_id => return,
             // With none open, an event is of one closed or that failed to
-            // open: only what it said is shown.
+            // open: only what it said is shown, and nothing else of it is
+            // taken (an update of it is not taken for a session of this
+            // client's). The one gate for both: `open_failed` and the
+            // update's arm below rely on it.
             None if !matches!(event.event, Event::Notice(_)) => return,
             _ => {}
         }
@@ -2421,12 +2423,9 @@ impl App {
                 self.last_interrupt = None;
             }
             // The session open on this client changed. An update of another,
-            // while none is open, is not taken for it.
-            Event::SessionUpdated(updated) => {
-                if self.session.is_some() {
-                    self.session = Some(updated.session.clone());
-                }
-            }
+            // while none is open, never comes here: with none open only a
+            // notice is taken, above.
+            Event::SessionUpdated(updated) => self.session = Some(updated.session.clone()),
             Event::UsageUpdated(updated) => self.usage = Some(updated.usage.clone()),
             // What a reload changed, found by another client's reload or by
             // the core's look before a turn. This application's own
