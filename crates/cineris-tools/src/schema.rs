@@ -19,9 +19,21 @@
 //! of a keyword this file has not heard of would make the tool unusable; the
 //! tool checks its own arguments in any case. What is known is enforced.
 
+use std::cell::Cell;
 use std::fmt::Write as _;
 
 use crate::contract::Json;
+
+/// The work a check may do, in schemas looked at, before it gives up: a
+/// part for any call, and a part for each value of the arguments. A schema
+/// written by others can make the work grow without end, `oneOf` branches
+/// that refer back to the root growing it by their number at each level
+/// (the review of step 28: about 100 bytes of schema kept a thread busy for
+/// days), and a call whose check runs out of it is refused. A tool's own
+/// schema with arguments of any size is checked well inside it.
+pub const BASE_WORK: usize = 20_000;
+/// The part of [`BASE_WORK`]'s budget each value of the arguments adds.
+pub const WORK_PER_VALUE: usize = 64;
 
 /// How deep a schema may send the validator, through nesting and through
 /// `$ref`. A schema that refers to itself without end stops here, and what
@@ -61,18 +73,75 @@ impl std::fmt::Display for SchemaMismatch {
 impl std::error::Error for SchemaMismatch {}
 
 /// Checks `value` against `schema`.
+///
+/// # Errors
+///
+/// What does not fit; or that the check ran out of its work, which refuses
+/// the value.
 pub fn validate(schema: &Json, value: &Json) -> Result<(), SchemaMismatch> {
+    validate_counting(schema, value).0
+}
+
+/// What a check did, against what it may do.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Work {
+    /// The schemas it looked at.
+    pub done: usize,
+    /// The most it may look at, for these arguments.
+    pub budget: usize,
+}
+
+/// [`validate`], with the work the check did: for a test that a schema is
+/// checked well inside its budget.
+///
+/// # Errors
+///
+/// As [`validate`].
+pub fn validate_counting(schema: &Json, value: &Json) -> (Result<(), SchemaMismatch>, Work) {
+    let budget = BASE_WORK.saturating_add(WORK_PER_VALUE.saturating_mul(values_in(value)));
+    let work = Cell::new(0);
+    let exhausted = Cell::new(false);
     let mut check = Check {
         root: schema,
         problems: Vec::new(),
+        work: &work,
+        exhausted: &exhausted,
+        budget,
     };
     check.value(schema, value, &mut Place::default(), 0);
+    let done = Work {
+        done: work.get(),
+        budget,
+    };
+    if exhausted.get() {
+        return (
+            Err(SchemaMismatch {
+                problems: vec![format!(
+                    "the arguments could not be checked: the tool's schema needs more than {budget} \
+                     steps for them, so the call is refused"
+                )],
+            }),
+            done,
+        );
+    }
     if check.problems.is_empty() {
-        Ok(())
+        (Ok(()), done)
     } else {
-        Err(SchemaMismatch {
-            problems: check.problems,
-        })
+        (
+            Err(SchemaMismatch {
+                problems: check.problems,
+            }),
+            done,
+        )
+    }
+}
+
+/// How many values `value` holds, itself included.
+fn values_in(value: &Json) -> usize {
+    match value {
+        Json::Array(items) => 1 + items.iter().map(values_in).sum::<usize>(),
+        Json::Object(fields) => 1 + fields.values().map(values_in).sum::<usize>(),
+        _ => 1,
     }
 }
 
@@ -117,6 +186,12 @@ enum Step<'a> {
 struct Check<'a> {
     root: &'a Json,
     problems: Vec<String>,
+    /// The work done so far, shared with the checks of the branches.
+    work: &'a Cell<usize>,
+    /// Whether the work ran past the budget: the value is then refused,
+    /// whatever was found.
+    exhausted: &'a Cell<bool>,
+    budget: usize,
 }
 
 impl Check<'_> {
@@ -132,13 +207,22 @@ impl Check<'_> {
         let mut probe = Check {
             root: self.root,
             problems: Vec::new(),
+            work: self.work,
+            exhausted: self.exhausted,
+            budget: self.budget,
         };
         probe.value(schema, value, &mut Place::default(), depth);
         probe.problems.is_empty()
     }
 
     fn value(&mut self, schema: &Json, value: &Json, place: &mut Place, depth: usize) {
-        if depth > MAX_DEPTH {
+        if depth > MAX_DEPTH || self.exhausted.get() {
+            return;
+        }
+        let done = self.work.get() + 1;
+        self.work.set(done);
+        if done > self.budget {
+            self.exhausted.set(true);
             return;
         }
         let schema = match schema {
@@ -796,5 +880,83 @@ mod tests {
             problems(&json!({"type": "string"}), &json!(null)),
             ["the arguments must be a string, and is null"]
         );
+    }
+
+    /// A schema whose branches refer back to its root makes the work grow
+    /// by their number at each level: about 100 bytes of it would keep a
+    /// thread busy for days. The check stops at its budget, and the call is
+    /// refused (the review of step 28).
+    #[test]
+    fn a_schema_that_branches_back_to_its_root_is_stopped_at_its_budget() {
+        let schema = json!({"type": "object", "oneOf": [
+            {"$ref": "#"}, {"$ref": "#"}, {"$ref": "#"}, {"$ref": "#"}
+        ]});
+        let (result, work) = validate_counting(&schema, &json!({}));
+        let mismatch = result.expect_err("refused");
+        assert!(
+            mismatch.problems()[0].contains("could not be checked"),
+            "{mismatch}"
+        );
+        assert_eq!(work.done, work.budget + 1);
+        assert_eq!(work.budget, BASE_WORK + WORK_PER_VALUE);
+    }
+
+    /// A large schema of the kind an MCP server declares, with arguments of
+    /// some size, is checked well inside the budget: the budget refuses
+    /// nothing a tool means.
+    #[test]
+    fn a_large_real_schema_is_checked_well_inside_the_budget() {
+        let record = json!({
+            "type": "object",
+            "required": ["id", "kind"],
+            "additionalProperties": false,
+            "properties": {
+                "id": {"type": "string", "minLength": 1, "maxLength": 64},
+                "kind": {"enum": ["issue", "pull", "comment", "review"]},
+                "labels": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+                "body": {"anyOf": [
+                    {"type": "string"},
+                    {"type": "object", "properties": {"markdown": {"type": "string"}}},
+                    {"type": "null"}
+                ]},
+                "assignee": {"$ref": "#/$defs/user"},
+                "priority": {"type": "integer", "minimum": 0, "maximum": 5}
+            }
+        });
+        let schema = json!({
+            "type": "object",
+            "required": ["repository", "records"],
+            "$defs": {"user": {"type": "object", "properties": {
+                "login": {"type": "string"}, "id": {"type": "integer"}
+            }}},
+            "properties": {
+                "repository": {"type": "string", "pattern": "^[^/]+/[^/]+$"},
+                "records": {"type": "array", "items": {"oneOf": [
+                    record,
+                    {"type": "object", "required": ["delete"], "properties": {"delete": {"type": "string"}}}
+                ]}},
+                "dry_run": {"type": "boolean"},
+                "options": {"type": "object", "additionalProperties": {"type": "string"}}
+            }
+        });
+        let records: Vec<Json> = (0..500)
+            .map(|index| {
+                json!({
+                    "id": format!("r{index}"),
+                    "kind": "issue",
+                    "labels": ["bug", "triage", "p1"],
+                    "body": {"markdown": "Steps to reproduce"},
+                    "assignee": {"login": "someone", "id": index},
+                    "priority": index % 6
+                })
+            })
+            .collect();
+        let value = json!({"repository": "owner/repo", "records": records, "dry_run": false});
+        let (result, work) = validate_counting(&schema, &value);
+        result.expect("fits");
+        assert!(work.done * 4 < work.budget, "{work:?}");
+        // With no arguments at all, too.
+        let (_, small) = validate_counting(&schema, &json!({}));
+        assert!(small.done * 4 < small.budget, "{small:?}");
     }
 }

@@ -663,3 +663,117 @@ fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
         front.close().await;
     });
 }
+
+/// Every built-in tool's schema, as the model is given it, is checked well
+/// inside the work budget of `cineris_tools::schema` with arguments of some
+/// size in every field it declares: the budget that stops a schema written
+/// never to finish refuses nothing a built-in tool means (step 28).
+#[test]
+fn every_built_in_tools_schema_is_checked_well_inside_the_budget() {
+    let world = World::new("schema_budget", [says("Hello.")]);
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("hello").await;
+        front.close().await;
+    });
+    let tools = world.provider.requests()[0].tools.clone();
+    assert!(
+        tools.len() >= 8,
+        "{:?}",
+        tools.iter().map(|tool| &tool.name).collect::<Vec<_>>()
+    );
+    for tool in &tools {
+        let arguments = example(&tool.schema, &tool.schema, 0);
+        let (_, work) = cineris_tools::schema::validate_counting(&tool.schema, &arguments);
+        assert!(work.done * 4 < work.budget, "{}: {work:?}", tool.name);
+    }
+}
+
+/// An extension's tool whose schema would never finish being checked is
+/// refused at its call, at once, by the budget.
+#[test]
+fn an_extensions_schema_that_would_never_finish_refuses_the_call() {
+    let world = World::new(
+        "ext_schema_budget",
+        [call_tool("c1", "grow", json!({})), says("Done.")],
+    );
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let extension = approve(
+        &world.dir.join("ext"),
+        "",
+        "cineris.tool({ name: 'grow', input: { type: 'object', oneOf: \
+         [{$ref:'#'},{$ref:'#'},{$ref:'#'},{$ref:'#'}] }, run: () => 'ran' });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("grow").await;
+        let results = front.results();
+        assert_eq!(results[0].1, "error", "{results:?}");
+        assert!(results[0].2.contains("could not be checked"), "{results:?}");
+        front.close().await;
+    });
+}
+
+/// Arguments for `schema` with a value in every field it declares, and
+/// lists of some length: what a model might send at the most.
+fn example(
+    schema: &serde_json::Value,
+    root: &serde_json::Value,
+    depth: usize,
+) -> serde_json::Value {
+    use serde_json::Value;
+    if depth > 8 {
+        return Value::Null;
+    }
+    let Value::Object(fields) = schema else {
+        return Value::Null;
+    };
+    if let Some(Value::String(reference)) = fields.get("$ref") {
+        let target = reference
+            .strip_prefix('#')
+            .and_then(|pointer| root.pointer(pointer))
+            .unwrap_or(&Value::Null);
+        return example(target, root, depth + 1);
+    }
+    for key in ["anyOf", "oneOf", "allOf"] {
+        if let Some(Value::Array(branches)) = fields.get(key)
+            && let Some(first) = branches.first()
+        {
+            return example(first, root, depth + 1);
+        }
+    }
+    if let Some(Value::Array(options)) = fields.get("enum")
+        && let Some(first) = options.first()
+    {
+        return first.clone();
+    }
+    let kind = match fields.get("type") {
+        Some(Value::String(kind)) => kind.as_str(),
+        Some(Value::Array(kinds)) => kinds.first().and_then(Value::as_str).unwrap_or("null"),
+        _ if fields.contains_key("properties") => "object",
+        _ => "null",
+    };
+    match kind {
+        "object" => {
+            let mut object = serde_json::Map::new();
+            if let Some(Value::Object(properties)) = fields.get("properties") {
+                for (name, property) in properties {
+                    object.insert(name.clone(), example(property, root, depth + 1));
+                }
+            }
+            Value::Object(object)
+        }
+        "array" => {
+            let item = fields.get("items").unwrap_or(&Value::Null);
+            Value::Array((0..50).map(|_| example(item, root, depth + 1)).collect())
+        }
+        "string" => Value::String("x".repeat(40)),
+        "integer" | "number" => json!(1),
+        "boolean" => Value::Bool(true),
+        _ => Value::Null,
+    }
+}
