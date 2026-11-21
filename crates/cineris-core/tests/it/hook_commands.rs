@@ -302,6 +302,30 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
         assert_eq!(front.approvals().len(), asked_before, "nobody was asked");
         assert!(world.read(".git/config").is_none());
         assert!(world.read("notes.txt").is_none());
+
+        // The same file named three ways, and on Windows in another case,
+        // is one file to `{path}`, given once, by place.
+        let mut named = vec!["src/a.rs", "./src/a.rs", "src/../src/a.rs"];
+        if cfg!(windows) {
+            named.push("SRC/A.RS");
+        }
+        let ran = core
+            .run_hook_command(
+                &front.session,
+                "gate",
+                HookRun {
+                    input: json!({"event": "tool.before"}),
+                    tool: Some("edit".to_owned()),
+                    paths: named.iter().map(|path| (*path).to_owned()).collect(),
+                    turn: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(ran, HookOutcome::Answered(_)), "{ran:?}");
+        let given: Value =
+            serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
+        assert_eq!(given["args"].as_array().unwrap().len(), 4, "{given}");
         front.close().await;
     });
 }

@@ -401,7 +401,6 @@ find: if output.timed_out {
 replace: if false {
 caught-by:
     ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
-    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
 
 [break] a-replacement-holds-a-key-twice
 rule: A hook's answer is one JSON value with no object in it, at any depth, holding a key twice: `{"decision":"deny","decision":"allow"}` is a failure, not an allow.
@@ -409,6 +408,7 @@ file: crates/cineris-ext/src/hook/answer.rs
 in: StrictValue::visit_map
 find: if object.contains_key(&key) {
 replace: if false {
+packages: cineris-ext,cineris-core
 caught-by:
     hook::answer::tests::an_unknown_field_or_decision_is_a_failure
     ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
@@ -449,6 +449,7 @@ file: crates/cineris-ext/src/hook/command.rs
 in: CommandHook::expand
 find: if self.uses_path() && with.paths.is_empty() {
 replace: if false {
+packages: cineris-ext,cineris-core
 caught-by:
     hook::command::tests::the_arguments_are_capped_as_written_and_as_filled
     cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
@@ -459,6 +460,7 @@ file: crates/cineris-ext/src/hook/command.rs
 in: CommandHook::warning
 find: && self.filter.is_every())
 replace: && self.filter.is_every() && false)
+packages: cineris-ext,cineris-core
 caught-by:
     hook::command::tests::a_gating_hook_that_relies_on_path_for_every_tool_is_warned_of
     cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
@@ -469,6 +471,7 @@ file: crates/cineris-ext/src/hook/command.rs
 in: CommandHook::in_words
 find: words.push(ITS_ENVIRONMENT.to_owned());
 replace:
+packages: cineris-ext,cineris-core
 caught-by:
     hook::command::tests::its_words_show_every_text_as_code
     cineris-core::it hook_wiring::permissions_trust_lists_and_pins_a_projects_hooks
@@ -620,3 +623,88 @@ find: !matches!(part, cineris_protocol::Part::Text(_) | cineris_protocol::Part::
 replace: false
 caught-by:
     cineris-core::it hook_wiring::a_prompt_holds_text_and_images_only
+
+# ----------------------------------- round 2: what the review found untested
+
+[break] the-users-hook-does-not-pass-a-question
+rule: The user's own hook runs where the engine would ask: it is the user's word.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: hook_may_run
+find: Source::User => Ok(())
+replace: Source::User => Err(NotRun::WouldAsk(String::new()))
+caught-by:
+    ext::hook_command::tests::a_hooks_start_follows_the_engine_and_a_project_never_passes_a_question
+
+[break] a-hooks-standard-error-is-quoted-unescaped
+rule: A failure quotes the first line of a hook's standard error with what acts unseen in it escaped.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: said
+find: visible(shown)
+replace: shown
+caught-by:
+    ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
+
+[break] a-context-is-kept-whole
+rule: An answer's `context` is cut to 8 KiB, and said to be.
+file: crates/cineris-ext/src/hook/answer.rs
+in: Answer::of
+find: let (context, was_cut) = cut(text(given)?);
+replace: let (context, was_cut) = (text(given)?, false);
+caught-by:
+    hook::answer::tests::an_answer_is_bounded_and_its_texts_are_cut
+
+[break] trust-for-the-run-reads-no-pin-of-a-hook
+rule: Under `--trust-project` a project's hook pinned as it is runs, the store read for it.
+file: crates/cineris-core/src/assemble.rs
+in: assemble
+find: None if options.trust_project && !configured.project.is_empty() => {
+replace: None if false && !configured.project.is_empty() => {
+caught-by:
+    cineris-core::it hook_wiring::trust_for_the_run_approves_no_hook_that_is_not_pinned
+
+[break] permissions-trust-pins-no-hook
+rule: `cineris permissions trust`, with the hooks approved, pins each as it was shown.
+file: crates/cineris-core/src/manage.rs
+in: Core::trust_project_with
+find: pin.extend(hooks.iter().map(|hook| hook.definition.clone()));
+replace:
+caught-by:
+    cineris-core::it hook_wiring::permissions_trust_lists_and_pins_a_projects_hooks
+
+[break] an-unkept-yes-approves-no-hook
+rule: A yes the trust store cannot keep approves the hooks shown, by their hashes, for the session.
+file: crates/cineris-core/src/assemble.rs
+in: trusted_unkept
+find: hooks: question.hooks.clone()
+occurrence: 1
+replace: hooks: Vec::new()
+caught-by:
+    cineris-core::it hook_wiring::a_yes_the_store_cannot_keep_approves_the_hooks_shown_for_the_session
+
+[break] a-trusted-project-is-not-asked-about-a-new-hook
+rule: A trusted project with nothing else new is asked about a hook in it that is new or changed.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: if quiet && extensions.pins.is_empty() && hooks.pins.is_empty() {
+replace: if quiet && extensions.pins.is_empty() {
+caught-by:
+    cineris-core::it hook_wiring::a_trusted_project_is_asked_about_a_new_hook_and_keep_leaves_it_off
+
+[break] keep-without-a-new-hook-asks-again-in-the-core
+rule: Keep trusting it, without a new hook, is kept by the core for its run: it asks no more until the next start.
+file: crates/cineris-core/src/assemble.rs
+in: kept_answer
+find: || !question.hooks.is_empty()
+replace:
+caught-by:
+    cineris-core::it hook_wiring::a_trusted_project_is_asked_about_a_new_hook_and_keep_leaves_it_off
+
+[break] a-hook-without-network-reaches-the-network
+rule: A hook reaches the network where commands are confined only with `network = true`.
+os: linux
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: network: hook.network
+replace: network: true
+caught-by:
+    cineris-core::it hook_wiring::confined::sys_a_hook_reaches_the_network_only_with_network
