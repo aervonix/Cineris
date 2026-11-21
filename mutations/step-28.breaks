@@ -3818,10 +3818,30 @@ caught-by:
 rule: A missing pin store pins nothing, and is not an error: the first pin makes it.
 file: crates/cineris-policy/src/trust/pins.rs
 in: PinStore::read
-find: Err(error) if error.kind() == io::ErrorKind::NotFound => {
-replace: Err(error) if error.kind() == io::ErrorKind::NotFound && false => {
+find: Err(OpenError::NotFound) => {
+replace: Err(OpenError::NotFound) if false => {
 caught-by:
     pins::a_missing_file_pins_nothing_and_the_first_pin_makes_it
+
+# ------------------------------------------------------------ no link at its name
+
+[break] pins-read-through-a-link
+rule: A link at the pin store's name is not read through: nothing is taken as pinned, and the error says why.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::read
+find: cineris_base::open_regular(&self.file)
+replace: std::fs::File::open(&self.file).and_then(|opened| { let found = opened.metadata()?; Ok((opened, found)) }).map_err(|error| if error.kind() == io::ErrorKind::NotFound { OpenError::NotFound } else { OpenError::Io(error) })
+caught-by:
+    pins::a_link_at_the_stores_name_is_neither_read_nor_written_through
+
+[break] pins-written-through-a-link
+rule: A link put at the pin store's name after its read is not written through: the change fails, and what the link names is left as it is.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::write
+find: follow_links: false
+replace: follow_links: true
+caught-by:
+    trust::pins::tests::a_link_put_at_the_stores_name_after_its_read_is_not_written_through
 
 # ------------------------------------------------------------ written owner-only
 
@@ -4154,9 +4174,35 @@ file: crates/cineris-core/src/ext/state.rs
 in: ExtState::project_set
 find: owner_only: true
 replace: owner_only: false
-os: linux
 caught-by:
     cineris-core::it ext_state::a_project_file_is_written_owner_only
+
+[break] state-project-file-changed-without-its-lock
+rule: A project's file is changed under its lock, from before the read until after the write: two sessions of the project changing it at once both keep their value.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::project_set
+find: cineris_base::private::hold_lock(&path)
+replace: Ok::<Option<()>, std::io::Error>(None)
+caught-by:
+    cineris-core ext::state::tests::two_writers_of_a_projects_file_keep_both_values
+
+[break] state-project-file-read-through-a-link
+rule: A link at a project's file's name is not read through: the call is refused, and what the link names is not read as the extension's values.
+file: crates/cineris-core/src/ext/state.rs
+in: read_file
+find: cineris_base::open_regular(path)
+replace: std::fs::File::open(path).map(|file| (file, ())).map_err(|error| if error.kind() == std::io::ErrorKind::NotFound { cineris_base::OpenError::NotFound } else { cineris_base::OpenError::Io(error) })
+caught-by:
+    cineris-core ext::state::tests::a_link_at_a_projects_file_is_neither_read_nor_written_through
+
+[break] state-project-file-written-through-a-link
+rule: A link put at a project's file's name after its read is not written through: the write is refused, and what the link names is left as it is.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::project_set
+find: follow_links: false
+replace: follow_links: true
+caught-by:
+    cineris-core ext::state::tests::a_link_put_at_a_projects_file_after_its_read_is_not_written_through
 
 # ------------------------------------------------------------------ caps
 
