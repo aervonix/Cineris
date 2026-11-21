@@ -408,6 +408,13 @@ pub const STATE_MAX_KEY: usize = 256;
 /// `set` that would take them past it, and grow them, is refused, and
 /// nothing is kept.
 pub const STATE_MAX_BYTES: usize = 64 * 1024;
+/// The most an extension's `session` values may write to one session's
+/// log, over the whole session: each change is a record of its own, so a
+/// key set again and again adds a line each time, whatever the values come
+/// to. Counted from the records already in the log when they are first
+/// read, so a resume does not start it again. A `set` past it is refused,
+/// and nothing is written.
+pub const STATE_MAX_SESSION_LOG: usize = 16 * 1024 * 1024;
 /// The longest text of a notice to the user.
 pub const NOTIFY_MAX: usize = 1024;
 /// The longest progress line.
