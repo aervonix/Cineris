@@ -357,6 +357,159 @@ fn a_fork_has_the_values_as_they_were_at_its_point_and_neither_sees_the_others_s
     });
 }
 
+/// A fork is a session of its own, stored: closed and opened again, it has
+/// the values as they were at the fork's point, which its log was given
+/// when the fork was made.
+#[test]
+fn a_resumed_fork_has_the_values_as_they_were_at_the_fork() {
+    let world = World::new(
+        "ext_state_fork_resume",
+        [
+            ops("c1", json!([{"set": "n", "value": 1}])),
+            says("One."),
+            ops(
+                "c2",
+                json!([{"set": "n", "value": 2}, {"set": "m", "value": 1}]),
+            ),
+            says("Two."),
+            ops("c3", json!([{"get": "n"}, {"get": "m"}])),
+            says("In the fork, again."),
+        ],
+    );
+    let extension = users(&world);
+    let core = core_with(&world, &extension);
+    let fork = world.run(async {
+        let front = Front::start(&world, &core).await;
+        assert_eq!(turn(&front, "one").await, ["kept"]);
+        assert_eq!(turn(&front, "two").await, ["kept", "kept"]);
+        let forked = front
+            .op(Op::SessionFork(SessionForkParams {
+                session_id: front.session.clone(),
+                at: Some(result_of(&front, "c1")),
+                before: None,
+            }))
+            .await
+            .unwrap();
+        let OpResult::SessionFork(forked) = forked else {
+            panic!("not a fork");
+        };
+        let fork = forked.session.session_id.clone();
+        front
+            .op(Op::SessionClose(SessionRef {
+                session_id: fork.clone(),
+            }))
+            .await
+            .unwrap();
+        front.close().await;
+        fork
+    });
+    let core = core_with(&world, &extension);
+    world.run(async {
+        let front = reopen(&core, &fork).await;
+        assert_eq!(
+            turn(&front, "in the fork, again").await,
+            ["got 1", "got null"],
+            "the values as they were at the first call's result"
+        );
+        front.close().await;
+    });
+}
+
+/// What an extension's `session` records may hold in one session's log
+/// (16 MiB; here a test's 4 KiB, through `CoreOptions`): at it a set is
+/// kept, one byte past it a set is refused and nothing is written, and a
+/// resume counts what the log already holds. A record counts its `ext` and
+/// `data` as compact JSON and 128 bytes for the rest of its line.
+#[test]
+fn a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume() {
+    const BUDGET: usize = 4096;
+    let counted = |length: usize| {
+        let data = json!({"state": {"key": "k", "value": "x".repeat(length)}});
+        serde_json::to_vec(&json!({"ext": "user/probe", "data": data}))
+            .unwrap()
+            .len()
+            + 128
+    };
+    let first = 1000;
+    // The second record takes them to the budget exactly.
+    let second = BUDGET - counted(first) - counted(0);
+    assert_eq!(counted(first) + counted(second), BUDGET);
+    let world = World::new(
+        "ext_state_session_budget",
+        [
+            ops(
+                "c1",
+                json!([
+                    {"set": "k", "fill": first},
+                    {"set": "k", "fill": second + 1},
+                    {"len": "k"},
+                    {"set": "k", "fill": second},
+                    {"set": "k", "fill": 1},
+                    {"set": "other", "value": 1},
+                    {"set": "k"},
+                    {"len": "k"},
+                    {"set": "k", "fill": second},
+                    {"set": "p", "value": 1, "scope": "project"},
+                ]),
+            ),
+            says("Kept."),
+            ops(
+                "c2",
+                json!([{"set": "k", "fill": 2}, {"len": "k"}, {"get": "other"}]),
+            ),
+            says("Resumed."),
+        ],
+    );
+    let extension = users(&world);
+    let budgeted = |extension: &ApprovedExtension| {
+        let extension = extension.clone();
+        world.core_with(move |options| {
+            options.extensions = vec![extension];
+            options.ext_session_budget = Some(BUDGET);
+        })
+    };
+    let refused = |outcome: &str| {
+        outcome.starts_with("refused: ")
+            && outcome.contains(&format!(
+                "more than the {BUDGET} bytes it may write to one session"
+            ))
+    };
+    let core = budgeted(&extension);
+    let session = world.run(async {
+        let front = Front::start(&world, &core).await;
+        let outcomes = turn(&front, "keep").await;
+        assert_eq!(outcomes[0], "kept", "{outcomes:?}");
+        assert!(refused(&outcomes[1]), "one byte past: {outcomes:?}");
+        assert_eq!(outcomes[2], format!("length {first}"), "nothing was kept");
+        assert_eq!(outcomes[3], "kept", "at the budget: {outcomes:?}");
+        for past in &outcomes[4..7] {
+            assert!(refused(past), "past it, a removal too: {outcomes:?}");
+        }
+        assert_eq!(outcomes[7], format!("length {second}"));
+        // A set that changes nothing writes nothing, and is not refused;
+        // the project's values have no log.
+        assert_eq!(outcomes[8..], ["kept", "kept"]);
+        assert_eq!(records(&front, &world).len(), 2);
+        front.close().await;
+        front.session.clone()
+    });
+    let core = budgeted(&extension);
+    world.run(async {
+        let front = reopen(&core, &session).await;
+        let outcomes = turn(&front, "resumed").await;
+        assert!(
+            refused(&outcomes[0]),
+            "the log still holds it: {outcomes:?}"
+        );
+        assert_eq!(
+            outcomes[1..],
+            [format!("length {second}"), "got null".to_owned()]
+        );
+        assert_eq!(records(&front, &world).len(), 2);
+        front.close().await;
+    });
+}
+
 /// A record belongs to the session, not to a branch: a rewind leaves an
 /// extension's values as they are, as it leaves the lease.
 #[test]

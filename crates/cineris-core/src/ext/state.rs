@@ -21,10 +21,18 @@
 //!   nothing is read from it or written over it. It is changed under its
 //!   lock, from before the read until after the write, and written whole,
 //!   owner-only and atomically.
-//! - **The cap.** 64 KiB of values an extension a scope
+//! - **The caps.** 64 KiB of values an extension a scope
 //!   ([`STATE_MAX_BYTES`]): a set that would take them past it, and grow
 //!   them, is refused with the reason, and nothing is written. A set that
-//!   changes nothing writes nothing.
+//!   changes nothing writes nothing. **And 16 MiB of `session` records an
+//!   extension a session** ([`STATE_MAX_SESSION_LOG`]): a key set again
+//!   adds a line each time, so the cap on the values alone does not bound
+//!   the log. Each record counts as its `ext` and `data` in compact JSON
+//!   and [`LINE_ALLOWANCE`] for the rest of its line, counted from the
+//!   records already in the log when the values are first read, so a
+//!   resume does not start it again; a set past it, a removal included, is
+//!   refused with the reason, and nothing is written. A session with no
+//!   log writes nothing, and has none.
 //!
 //! No call here is a permission question: the design gives `state` no
 //! capability and no effect, since it touches only the extension's own
@@ -36,7 +44,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use cineris_base::{AtomicWriteOptions, CancelToken, SharedClock, write_atomic};
 use cineris_config::StateDir;
-use cineris_ext::host::{HostError, STATE_MAX_BYTES, STATE_MAX_KEY, Scope};
+use cineris_ext::host::{HostError, STATE_MAX_BYTES, STATE_MAX_KEY, STATE_MAX_SESSION_LOG, Scope};
 use cineris_ext::source::Source;
 use cineris_protocol::{ProjectKey, TurnId};
 use cineris_session::Body;
@@ -54,8 +62,25 @@ pub(crate) const FILE_VERSION: u64 = 1;
 /// far smaller: its values are at most [`STATE_MAX_BYTES`].
 const FILE_MAX_BYTES: u64 = 1024 * 1024;
 
+/// What a record of a `session` value counts for its line's envelope
+/// (`v`, `id`, `parent`, `ts`, `turn`, `kind`, and `redacted` when it is
+/// there), besides its own `ext` and `data`: about 90 bytes in a session's
+/// first ten thousand entries, and more as the ids and the turns grow.
+pub(crate) const LINE_ALLOWANCE: usize = 128;
+
 /// One extension's values, by key.
 type Values = Map<String, Json>;
+
+/// A session's values, and what each extension's records of them hold in
+/// its log.
+#[derive(Debug, Default)]
+struct SessionValues {
+    /// The values, by [`Owner::id`].
+    values: HashMap<String, Values>,
+    /// The bytes of each extension's records in the log, by [`Owner::id`],
+    /// as [`record_bytes`] counts them.
+    written: HashMap<String, usize>,
+}
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Each change behind these locks is whole before the lock is let go.
@@ -142,9 +167,12 @@ pub(crate) struct ExtState {
     /// The session's log, given once it is made, which is after the
     /// extensions' tools are registered.
     log: OnceLock<SharedLog>,
-    /// The `session` values, by [`Owner::id`]: `None` until they are read
-    /// from the log, at their first use.
-    session: Mutex<Option<HashMap<String, Values>>>,
+    /// The `session` values and what their records hold in the log: `None`
+    /// until they are read from the log, at their first use.
+    session: Mutex<Option<SessionValues>>,
+    /// The most bytes an extension's `session` records may hold in the log
+    /// ([`STATE_MAX_SESSION_LOG`], or less).
+    session_budget: usize,
     /// Where the project's values are kept: `None` with no state directory.
     project: Option<ProjectStore>,
     clock: SharedClock,
@@ -154,17 +182,27 @@ impl std::fmt::Debug for ExtState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ExtState")
             .field("project", &self.project)
+            .field("session_budget", &self.session_budget)
             .finish_non_exhaustive()
     }
 }
 
 impl ExtState {
     /// The values of a session about to be put together: nothing is read
-    /// until an extension asks.
-    pub(crate) fn new(project: Option<ProjectStore>, clock: SharedClock) -> Self {
+    /// until an extension asks. `session_budget` is what an extension's
+    /// `session` records may hold in the log, never more than
+    /// [`STATE_MAX_SESSION_LOG`]: `None` is that.
+    pub(crate) fn new(
+        project: Option<ProjectStore>,
+        clock: SharedClock,
+        session_budget: Option<usize>,
+    ) -> Self {
         Self {
             log: OnceLock::new(),
             session: Mutex::new(None),
+            session_budget: session_budget.map_or(STATE_MAX_SESSION_LOG, |budget| {
+                budget.min(STATE_MAX_SESSION_LOG)
+            }),
             project,
             clock,
         }
@@ -213,6 +251,7 @@ impl ExtState {
         let mut slot = lock(&self.session);
         let all = self.session_values(&mut slot)?;
         Ok(all
+            .values
             .get(&owner.id())
             .and_then(|values| values.get(key))
             .cloned())
@@ -229,7 +268,8 @@ impl ExtState {
         let all = self.session_values(&mut slot)?;
         let id = owner.id();
         let empty = Values::new();
-        let Some(after) = apply(all.get(&id).unwrap_or(&empty), &key, value.as_ref())? else {
+        let current = all.values.get(&id).unwrap_or(&empty);
+        let Some(after) = apply(current, &key, value.as_ref())? else {
             return Ok(());
         };
         let log = self
@@ -237,47 +277,53 @@ impl ExtState {
             .get()
             .ok_or_else(|| failed("the session's log is not open yet"))?;
         if let Some(disk) = lock(log).disk() {
+            let data = json!({"state": {"key": key, "value": value}});
+            let bytes = record_bytes(&id, &data);
+            let written = all.written.get(&id).copied().unwrap_or(0);
+            within_budget(written, bytes, self.session_budget)?;
             let record = Body::Ext(ExtRecord {
                 ext: id.clone(),
-                data: json!({"state": {"key": key, "value": value}}),
+                data,
             });
             disk.session
                 .append(turn, record)
                 .map_err(|error| unseen_path("the session's log could not be written", &error))?;
+            all.written
+                .insert(id.clone(), written.saturating_add(bytes));
         }
         // In memory only once the log has it: what is read is what a resume
         // would read.
-        all.insert(id, after);
+        all.values.insert(id, after);
         Ok(())
     }
 
     /// The `session` values, read from the log the first time.
     fn session_values<'a>(
         &self,
-        slot: &'a mut Option<HashMap<String, Values>>,
-    ) -> Result<&'a mut HashMap<String, Values>, HostError> {
+        slot: &'a mut Option<SessionValues>,
+    ) -> Result<&'a mut SessionValues, HostError> {
         if slot.is_none() {
             *slot = Some(self.read_session()?);
         }
-        Ok(slot.get_or_insert_with(HashMap::new))
+        Ok(slot.get_or_insert_with(SessionValues::default))
     }
 
     /// Every extension's `session` values, as the log's records leave
-    /// them, in the order they were written.
-    fn read_session(&self) -> Result<HashMap<String, Values>, HostError> {
+    /// them, in the order they were written, and what those records hold.
+    fn read_session(&self) -> Result<SessionValues, HostError> {
         let log = self
             .log
             .get()
             .ok_or_else(|| failed("the session's log is not open yet"))?;
         let mut kept = lock(log);
         let Some(disk) = kept.disk() else {
-            return Ok(HashMap::new());
+            return Ok(SessionValues::default());
         };
         let records = disk
             .session
             .records(&Kind::Ext)
             .map_err(|error| unseen_path("the session's log could not be read", &error))?;
-        let mut all: HashMap<String, Values> = HashMap::new();
+        let mut all = SessionValues::default();
         for entry in records {
             let Body::Ext(record) = entry.body else {
                 continue;
@@ -285,7 +331,11 @@ impl ExtState {
             let Some((key, value)) = change_of(&record) else {
                 continue;
             };
-            let values = all.entry(record.ext.clone()).or_default();
+            // What the log already holds counts against the budget: a
+            // resume does not start it again.
+            let written = all.written.entry(record.ext.clone()).or_default();
+            *written = written.saturating_add(record_bytes(&record.ext, &record.data));
+            let values = all.values.entry(record.ext.clone()).or_default();
             match value {
                 Some(value) => {
                     values.insert(key.to_owned(), value.clone());
@@ -411,6 +461,35 @@ fn apply(before: &Values, key: &str, value: Option<&Json>) -> Result<Option<Valu
 /// The bytes of `values` as the cap counts them: their compact JSON.
 fn bytes_of(values: &Values) -> usize {
     serde_json::to_vec(values).map_or(usize::MAX, |bytes| bytes.len())
+}
+
+/// What a `session` record of the extension `ext` holding `data` counts
+/// against its budget: its `ext` and `data` as compact JSON, and
+/// [`LINE_ALLOWANCE`] for the rest of its line. Counted the same from what
+/// is about to be written and from what a resume reads back.
+pub(crate) fn record_bytes(ext: &str, data: &Json) -> usize {
+    serde_json::to_vec(&json!({"ext": ext, "data": data}))
+        .map_or(usize::MAX, |bytes| bytes.len())
+        .saturating_add(LINE_ALLOWANCE)
+}
+
+/// Refuses a record of `bytes` that would take an extension's `session`
+/// records past `budget`, `written` being what they hold already.
+fn within_budget(written: usize, bytes: usize, budget: usize) -> Result<(), HostError> {
+    let would_be = written.saturating_add(bytes);
+    if would_be > budget {
+        let most = if budget.is_multiple_of(1024 * 1024) {
+            format!("{} MiB", budget / (1024 * 1024))
+        } else {
+            format!("{budget} bytes")
+        };
+        return Err(failed(format!(
+            "the value is not kept: the extension's records in this session's log would be \
+             {would_be} bytes, more than the {most} it may write to one session (each change is \
+             a record of its own); a new session starts again"
+        )));
+    }
+    Ok(())
 }
 
 /// The values in a project's file at `path`, which the script is told of
@@ -599,6 +678,28 @@ mod tests {
         assert!(apply(&over, "n", None).unwrap().is_some());
         assert!(apply(&over, "n", Some(&json!(1))).unwrap().is_some());
         assert!(apply(&over, "n", Some(&json!(123_456))).is_err());
+    }
+
+    /// A record counts its `ext` and `data` and the allowance for its line;
+    /// at the budget it is written, one byte past it it is not.
+    #[test]
+    fn the_session_records_are_held_to_their_budget() {
+        let data = json!({"state": {"key": "k", "value": 1}});
+        let own = serde_json::to_vec(&json!({"ext": "user/probe", "data": data}))
+            .unwrap()
+            .len();
+        assert_eq!(record_bytes("user/probe", &data), own + LINE_ALLOWANCE);
+        assert!(within_budget(0, 1000, 1000).is_ok());
+        assert!(within_budget(400, 600, 1000).is_ok());
+        let refused = within_budget(401, 600, 1000).unwrap_err().to_string();
+        assert!(
+            refused.contains("1001 bytes, more than the 1000 bytes"),
+            "{refused}"
+        );
+        let refused = within_budget(STATE_MAX_SESSION_LOG, 1, STATE_MAX_SESSION_LOG)
+            .unwrap_err()
+            .to_string();
+        assert!(refused.contains("the 16 MiB"), "{refused}");
     }
 
     #[test]
