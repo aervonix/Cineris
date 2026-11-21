@@ -439,7 +439,9 @@ mod confined {
 
     /// A hook without `write` writes nothing, and fails when it tries; one
     /// with it writes the workspace, and a protected path it changes is
-    /// found by the look after it, which stops the turn.
+    /// found by the look after it, which puts it back as it was and stops
+    /// the turn (the look is `cineris.exec`'s, since the third security fix
+    /// one that puts back).
     #[test]
     fn sys_a_hooks_writes_are_confined_and_looked_at() {
         if !enforcing_here() {
@@ -489,7 +491,11 @@ mod confined {
                 panic!("{scribble:?}");
             };
             assert!(note.contains(".github/workflows"), "{note}");
-            assert!(world.read(".github/workflows/x.yml").is_some());
+            assert!(note.contains("put back"), "{note}");
+            assert!(
+                world.read(".github/workflows/x.yml").is_none(),
+                "the hook's protected change is put back"
+            );
             // The turn is stopped: no more of its hooks starts.
             let again = core
                 .run_hook_command(&front.session, "reader", after())
@@ -516,5 +522,88 @@ mod confined {
             assert!(note.contains("changed since the last command"), "{note}");
             front.close().await;
         });
+    }
+
+    /// A protected path a hook's start changed, put back, and then changed
+    /// again by something else (here the test's own hand) is a change from
+    /// outside: the next start with a write root is refused, and a session
+    /// that closes before another start says so in its log. The early
+    /// review of the hook commands found that a path the look had just
+    /// recorded counted as the harness's own until the next look after,
+    /// so that a change to it passed both checks unreported.
+    #[test]
+    fn sys_a_protected_path_changed_again_after_a_hook_is_found_by_the_next_start_and_the_close() {
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new(
+            "hook_changed_again",
+            [crate::says("Hi."), crate::says("Hi.")],
+        );
+        world.put(".github/README", "ci\n");
+        world.user_config(&entry(
+            "scribble",
+            "tool.after",
+            &this_binary("write", &[".github/workflows/x.yml"]),
+            "write = true",
+        ));
+        let after = |turn: &str| HookRun {
+            input: json!({"event": "tool.after"}),
+            tool: Some("edit".to_owned()),
+            turn: Some(turn.to_owned()),
+            ..HookRun::default()
+        };
+        // The next start is refused.
+        let core = world.core_with(|options| options.launcher = Some(launcher()));
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            front.turn("hello").await;
+            let first = core
+                .run_hook_command(&front.session, "scribble", after("t_2"))
+                .await
+                .unwrap();
+            assert!(matches!(first, HookOutcome::Stopped(_)), "{first:?}");
+            assert!(world.read(".github/workflows/x.yml").is_none());
+            world.put(".github/workflows/x.yml", "changed again\n");
+            let next = core
+                .run_hook_command(&front.session, "scribble", after("t_3"))
+                .await
+                .unwrap();
+            let HookOutcome::Stopped(note) = &next else {
+                panic!("the next start was not refused: {next:?}");
+            };
+            assert!(
+                note.contains("changed since the last command") && note.contains("x.yml"),
+                "{note}"
+            );
+            assert_eq!(
+                world.read(".github/workflows/x.yml").as_deref(),
+                Some("changed again\n")
+            );
+            front.close().await;
+        });
+        // The close says so.
+        std::fs::remove_file(world.workspace.join(".github/workflows/x.yml")).unwrap();
+        let core = world.core_with(|options| options.launcher = Some(launcher()));
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            front.turn("hello").await;
+            let first = core
+                .run_hook_command(&front.session, "scribble", after("t_2"))
+                .await
+                .unwrap();
+            assert!(matches!(first, HookOutcome::Stopped(_)), "{first:?}");
+            world.put(".github/workflows/x.yml", "changed again\n");
+            front.close().await;
+        });
+        let logs = world.logs();
+        let last = logs
+            .iter()
+            .map(|log| std::fs::read_to_string(log).unwrap())
+            .find(|log| log.contains("changed since the last command"));
+        let Some(last) = last else {
+            panic!("no session's log says the change at its close: {logs:?}");
+        };
+        assert!(last.contains("x.yml"), "{last}");
     }
 }

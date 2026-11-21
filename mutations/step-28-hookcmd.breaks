@@ -401,3 +401,22 @@ find: if object.contains_key(&key) {
 replace: if false {
 caught-by:
     hook::answer::tests::an_unknown_field_or_decision_is_a_failure
+
+# ------------------------------------- a protected path changed again
+
+[break] a-change-from-outside-after-a-hooks-start-passes-the-next-start
+rule: A protected path a hook's start changed, then changed again from outside, refuses the next start with a write root.
+file: crates/cineris-core/src/checkpoints.rs
+in: changed_since_last_look
+find: .is_none_or(|path| !touched.contains(path.key()))
+replace: .is_none_or(|_| false)
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_protected_path_changed_again_after_a_hook_is_found_by_the_next_start_and_the_close
+
+[break] the-close-does-not-say-a-change-from-outside-after-a-hooks-start
+rule: A protected path a hook's start changed, then changed again from outside, is said in the log when the session closes before another start.
+file: crates/cineris-core/src/core.rs
+find: .is_none_or(|path| !touched.contains(path.key()))
+replace: .is_none_or(|_| false)
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_protected_path_changed_again_after_a_hook_is_found_by_the_next_start_and_the_close
