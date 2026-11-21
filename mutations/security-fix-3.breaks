@@ -48,7 +48,6 @@ caught-by:
     cineris-core sandbox::tests::the_harness_git_runs_inside_the_sandbox_reading_only
     cineris-core::it harness_git::sys_at_unrestricted_the_harness_git_still_runs_inside_the_sandbox
     cineris-core::it harness_git::sys_the_base_state_is_taken_by_a_git_inside_the_sandbox
-    cineris-core::it ext_exec::confined::sys_the_look_after_a_program_runs_git_confined_at_unrestricted
 
 [break] harness-git-says-it-follows-the-level
 rule: The session's git says it is confined wherever the sandbox enforces, whatever the level: a git that failed there is reported as one that failed inside the sandbox.
@@ -122,7 +121,7 @@ in: open_dir
 find: how.resolve = libc::RESOLVE_NO_SYMLINKS;
 replace: how.resolve = 0;
 caught-by:
-    cineris-sandbox protect::tests::putting_back::a_path_whose_directory_is_a_link_now_is_left_alone
+    cineris-sandbox protect::tests::putting_back::a_path_under_a_folder_that_is_a_link_now_is_left_alone
 
 [break] restore-writes-in-place
 rule: A file is put back under a name of its own and renamed into place, so that a link at its name is replaced, never written through.
@@ -318,8 +317,8 @@ caught-by:
 rule: A directory made again is open to its owner while what goes in it is put back, and given its own mode last.
 file: crates/cineris-sandbox/src/protect/restore.rs
 in: restore
-find: mkdir_at(&dir, &name, mode | 0o700)?;
-replace: mkdir_at(&dir, &name, mode)?;
+find: Now::Missing => { mkdir_at(&dir, &name, mode | 0o700)?; chmod_at(&dir, &name, mode | 0o700, Now::Directory) }
+replace: Now::Missing => { mkdir_at(&dir, &name, mode)?; chmod_at(&dir, &name, mode, Now::Directory) }
 caught-by:
     cineris-sandbox protect::tests::putting_back::a_directory_without_its_owners_write_right_gets_its_children_back
 

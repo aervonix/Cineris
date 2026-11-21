@@ -303,14 +303,15 @@ fn sys_a_filter_a_confined_command_plants_never_runs_afterwards() {
 }
 
 /// Since the third security fix the harness's own git runs inside the
-/// sandbox wherever it enforces, at every level, `unrestricted` included. A
-/// confined command writes a filter into a file the repository's
-/// configuration includes (`include.path`): not a protected path, so it is
-/// not put back. The user then moves the session to `unrestricted`. The
-/// looks around the next command ask git, and the filter git runs for them
-/// still runs inside the sandbox, and cannot write outside. (The model's own
-/// `git status` there would run it with the user's rights: a stated limit,
-/// `outstanding/files-git-runs-that-the-protected-list-does-not-name.md`.)
+/// sandbox wherever it enforces, at every level, `unrestricted` included,
+/// whoever wrote what its configuration names. Here a filter is written at
+/// `unrestricted` itself, by a command that runs as it is (nothing is
+/// looked at or put back there: the user gave those rights), and the looks
+/// around it ask git: the filter git runs for them runs inside the sandbox,
+/// and cannot write outside. Before the fix the look after ran it with the
+/// user's rights (`sys_where_the_sandbox_does_not_enforce_the_after_look_git_runs_the_planted_filter`
+/// is that control); what a confined start writes is put back besides
+/// (`sys_a_filter_a_confined_command_plants_never_runs_afterwards`).
 #[test]
 fn sys_at_unrestricted_the_harness_git_still_runs_inside_the_sandbox() {
     if !enforcing_here() {
@@ -318,23 +319,12 @@ fn sys_at_unrestricted_the_harness_git_still_runs_inside_the_sandbox() {
     }
     let world = World::new("harness_git_unrestricted", []);
     repository(&world);
-    let config = world.workspace.join(".git/config");
-    let mut text = std::fs::read_to_string(&config).unwrap();
-    text.push_str("[include]\n\tpath = ../shared.gitconfig\n");
-    std::fs::write(&config, text).unwrap();
-    world.put("shared.gitconfig", "");
     let outside = world.dir.join("outside");
     std::fs::create_dir_all(&outside).unwrap();
-    world.put("fix.sh", planting(&outside, "shared.gitconfig"));
+    world.put("fix.sh", planting(&outside, ".git/config"));
     world
         .provider
         .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
-    world.provider.push(says("Done."));
-    world.provider.push(calls(&[(
-        "c2",
-        "shell",
-        json!({"command": "echo two > two.txt"}),
-    )]));
     world.provider.push(says("Done."));
     let core = world.core_with(|options| {
         options.launcher = Some(launcher());
@@ -345,30 +335,18 @@ fn sys_at_unrestricted_the_harness_git_still_runs_inside_the_sandbox() {
             &world,
             &core,
             cineris_core::ClientInfo::user(),
-            at(Level::Autonomous),
+            at(Level::Unrestricted),
         )
         .await
         .expect("the session starts");
-        front.turn("fix it").await;
-        assert!(!outside.join("planted").exists(), "{:?}", front.results());
-        set_level(&front, Level::Unrestricted).await;
-        front.turn("go on").await;
-        let results = front.results();
-        // The looks asked git, and git asked the filter.
-        let payload = front
-            .items()
-            .iter()
-            .filter_map(|item| match item {
-                Item::ToolResult(result) if result.tool == "shell" => result.payload.clone(),
-                _ => None,
-            })
-            .nth(1)
-            .expect("the second command's payload");
-        assert_eq!(payload["changes"]["method"], "git", "{payload}");
+        assert_eq!(front.state.sandbox, SandboxStatus::Off);
+        front.turn("go").await;
+        // The look after asked git, and git asked the filter.
+        assert_eq!(shell_payload(&front)["changes"]["method"], "git");
         assert!(
             !outside.join("planted").exists(),
-            "the harness's git ran, at unrestricted, a filter a confined command planted, with \
-             the user's rights: {results:?}"
+            "the harness's git ran, at unrestricted, a filter with the user's rights: {:?}",
+            front.results()
         );
         front.close().await;
     });
