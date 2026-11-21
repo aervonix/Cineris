@@ -98,3 +98,53 @@ The pull request's `pr-size` jobs in run 44842130923, each against `main`'s own 
 
 On Windows the fetch client's roots bring `rustls-native-certs` and `schannel` into the build, which on Linux were there already. Neither binary holds a path under a home folder.
 
+## The third pull request: extensions found and pinned
+
+<!-- written by cargo xtask ci-times, section "The third pull request: extensions found and pinned": it replaces this up to the end mark -->
+Pull request 121, on `main` at `5a02276`. "Main" is main's own run at `5a02276` (run 44876997123).
+The PR's run is 44884999537, at `fba04d8`.
+
+| Job | Main, `5a02276` | The PR at `fba04d8` |
+|---|---|---|
+| `lint-linux` | 73 s | 80 s |
+| `test-linux` | 160 s | 125 s |
+| `lint-windows` | 104 s | 107 s |
+| `test-windows` | 244 s | 250 s |
+| `pr-size-linux` (blocks nothing) | — | 449 s |
+| `ts-client` (blocks nothing) | 0 s | 70 s |
+| `pr-size-windows` (blocks nothing) | — | 335 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `fba04d8` (3 ms) | Windows, main (7 ms) | Windows, `fba04d8` (7 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 17.1 s | 11.5 s | 15.7 s | 17.0 s |
+| Tier 2, integration (40 s) | 24.8 s | 21.3 s | 32.5 s | 35.5 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 39.8 s | 34.8 s | 74.7 s | 75.2 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The third pull request: extensions found and pinned" -->
+
+Every job passed, `test-windows` in 250 s. Both Windows runs were on runners at 7 ms a process start, and there this pull request's tier 2 is at 35.5 s of 40 (89%), +3.0 s on `main`'s, without a warning. The change is read from both trees on one runner, below.
+
+## The third pull request, both trees on one runner
+
+`try --final` (run 44883274241, at `c8517a2`, which is this pull request less its last commit, a break's test name): Windows, the median of 5 runs each, on one runner at 6.0 ms a process start. Copied from `cargo xtask try-result 44883274241`, as for the first pull request.
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 18.0 s (3,312 tests) | 17.3 s (3,251) | +0.6 s | 25 s |
+| 2, integration | 39.3 s (1,740 tests) | 35.8 s (1,674) | **+3.5 s** | 40 s |
+| 3, system | 72.3 s (227 tests) | 72.3 s (225) | +0.1 s | 90 s |
+
+The crates that moved: `cineris-core`, +3.55 s in tier 2 (13.98 s to 17.53 s), its extension tests, the costliest the walk of a project's extension through its trust (0.18 s) and the state tests (0.11 to 0.13 s each); `cineris-ext`, +0.63 s in tier 1, its discovery and cache tests, moved there from tier 2; every other crate within 0.5 s either way. The same run's tests on Linux 22.04 used 90%, 69% and 69% of the three tiers' budgets.
+
+**Tier 2 is a conflict with its budget, recorded** (rule 11). The extension tests added +5.1 s to Windows' tier 2 at first (`try` 44873812174, a runner at 6 ms). Folding the tests that share a setup, moving what needs no core into unit tests and chaining the one flow that is one story brought it to +2.6 s on that run's runner (`try` 44881859246) and +3.5 s on this one's; hosted runners of one start cost still differ. What is left is the cost of a session, about 20 ms on Windows in a release build with its world, core and close, and about twice that in CI's build; a test is one rule, so the tests are not folded further. On a slow runner, where `main`'s own tier 2 is over its budget, this change is about 9 s under the failure at 60 s. The lever, a session's open and first turn on Windows, is in [main-windows-tiers-over-budget-on-slow-runners](../../outstanding/main-windows-tiers-over-budget-on-slow-runners.md); [the part's record](parts/pr2a1-found.md), "The tests folded for Windows' tier 2", has each run's numbers.
+
+## The third pull request: the binary's size
+
+The pull request's `pr-size` jobs in run 44884999537, each against `main`'s own size record at `5a02276` (run 44876997098). The shipped `dist` build:
+
+| System | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| Linux, `x86_64-unknown-linux-musl` | 16,206,744 bytes (15.46 MiB) | 15,854,392 bytes | + 352,352 bytes (344 KiB) | 20 MiB |
+| Windows, `x86_64-pc-windows-msvc` | 19,471,360 bytes (18.57 MiB) | 18,990,592 bytes | + 480,768 bytes (469.5 KiB) | 25 MiB |
+
+On Linux the crates that grew most are `cineris_core` (+96 KiB, the pipeline, the trust question's words and `cineris.state`), the standard library (+64 KiB) and `cineris_ext` (+60 KiB, discovery and the cache), from `cargo xtask size` in `try --final` (run 44883274241). Neither binary holds a path under a home folder.
