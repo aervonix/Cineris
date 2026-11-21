@@ -67,9 +67,9 @@ pub use found::{
 #[cfg(feature = "scripts")]
 pub(crate) use exec::{ExecParts, HarnessFiles};
 #[cfg(feature = "scripts")]
-pub(crate) use hook_command::{HookCommands, SessionHooks};
+pub use hook_command::{A_HOOK_WRITES, HookOutcome, HookRun};
 #[cfg(feature = "scripts")]
-pub use hook_command::{HookOutcome, HookRun};
+pub(crate) use hook_command::{HookCommands, SessionHooks};
 #[cfg(feature = "scripts")]
 pub(crate) use hook_points::PointHooks;
 #[cfg(feature = "scripts")]

@@ -37,6 +37,14 @@
 //! - **Its writes** are not recorded in the round's checkpoint, and the
 //!   model's table of files is not told of them.
 //!
+//! **The session's own events** (`session.start`, `session.end`) are run
+//! here, not by the loop. A `session.start` hook that is waited for gives
+//! its `context` as a notice before the first prompt, and the first turn
+//! waits for it, up to its time; **an observer of `session.start` is not
+//! waited for, by design** (as an observer is nowhere): it runs to its own
+//! time beside the session, and its failure is logged. A `session.end`
+//! hook is observed, given up to [`SESSION_END_TIME`].
+//!
 //! A hook that is refused, would need a question, does not start, runs
 //! past its time, exits with anything but 0, writes more than 1 MiB, or
 //! answers outside the contract has failed ([`HookOutcome::Failed`]).
@@ -301,8 +309,13 @@ impl SessionHooks {
             for (name, waited, _cancel, task) in runs {
                 if !waited {
                     // Never waited for, its answer not read: a failure is
-                    // logged.
-                    drop(task);
+                    // logged, as an observer's is everywhere.
+                    tokio::spawn(async move {
+                        if let Ok(HookOutcome::Failed(why) | HookOutcome::Stopped(why)) = task.await
+                        {
+                            tracing::warn!(hook = %name, %why, "a `session.start` observer failed");
+                        }
+                    });
                     continue;
                 }
                 let said = match task.await {
@@ -378,6 +391,11 @@ impl SessionHooks {
         }
     }
 }
+
+/// A hook's start with a write root has the one baseline of the look at
+/// the protected paths to itself: no other such start runs until it ends
+/// (a point a test can stop at: [`cineris_base::hook`]).
+pub const A_HOOK_WRITES: &str = "core: a hook's start with a write root holds the look's baseline";
 
 /// The most a session's `session.end` hooks are given while it closes.
 pub(crate) const SESSION_END_TIME: std::time::Duration = std::time::Duration::from_secs(5);
@@ -543,6 +561,9 @@ impl HookCommands {
         } else {
             Some(self.writing.lock().await)
         };
+        if !request.write_roots.is_empty() {
+            cineris_base::hook::await_point!(A_HOOK_WRITES);
+        }
         let run_cx = RunCx::new(
             Arc::clone(&cx.paths),
             Arc::clone(&self.content),

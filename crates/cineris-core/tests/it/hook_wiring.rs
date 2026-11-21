@@ -533,6 +533,171 @@ fn a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_w
     });
 }
 
+/// Two hooks with a write root never run at once: they share one baseline
+/// of the look at the protected paths. The first holds it at the point
+/// after it is taken, and the second does not reach it until the first is
+/// let go. Their starts are then refused by a rule, so nothing is started.
+#[test]
+fn hooks_with_a_write_root_run_one_at_a_time() {
+    let world = World::new("hook_writes_one_at_a_time", []);
+    let program = std::env::current_exe().expect("the test binary has a path");
+    world.user_config(&format!(
+        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"deny\"\n{}",
+        program.display(),
+        [
+            entry(
+                "first",
+                "turn.end",
+                &this_binary("fail", &[]),
+                "write = true"
+            ),
+            entry(
+                "second",
+                "turn.end",
+                &this_binary("fail", &[]),
+                "write = true"
+            ),
+        ]
+        .concat()
+    ));
+    let core = world.core();
+    let writes = cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let run = || HookRun {
+            input: json!({"event": "turn.end"}),
+            ..HookRun::default()
+        };
+        let mut first = std::pin::pin!(core.run_hook_command(&front.session, "first", run()));
+        let mut second = std::pin::pin!(core.run_hook_command(&front.session, "second", run()));
+        let mut both = std::pin::pin!(async {
+            let mut done = (None, None);
+            std::future::poll_fn(|context| {
+                if done.0.is_none()
+                    && let std::task::Poll::Ready(ran) = first.as_mut().poll(context)
+                {
+                    done.0 = Some(ran);
+                }
+                if done.1.is_none()
+                    && let std::task::Poll::Ready(ran) = second.as_mut().poll(context)
+                {
+                    done.1 = Some(ran);
+                }
+                if done.0.is_some() && done.1.is_some() {
+                    std::task::Poll::Ready(())
+                } else {
+                    std::task::Poll::Pending
+                }
+            })
+            .await;
+            done
+        });
+        writes.drive_until_reached(both.as_mut()).await;
+        // Everything else runs as far as it can: the other start waits for
+        // the baseline, and does not reach the point.
+        for _ in 0..64 {
+            let mut once = std::pin::pin!(async {
+                tokio::task::yield_now().await;
+            });
+            let _ = std::future::poll_fn(|context| {
+                let _ = both.as_mut().poll(context);
+                once.as_mut().poll(context)
+            })
+            .await;
+        }
+        assert_eq!(writes.arrivals(), 1, "two starts with a write root at once");
+        writes.release();
+        let (first, second) = both.await;
+        for ran in [first, second] {
+            assert!(matches!(ran, Some(Ok(HookOutcome::Failed(_)))), "{ran:?}");
+        }
+        assert_eq!(writes.arrivals(), 2);
+        front.close().await;
+    });
+}
+
+/// At `read-only` a hook with `write = true` is given no write root: its
+/// start does not take the baseline that a start with one holds.
+#[test]
+fn a_write_hook_has_no_write_root_at_read_only() {
+    let world = World::new("hook_write_read_only", []);
+    let program = std::env::current_exe().expect("the test binary has a path");
+    // Refused by a rule, so that nothing is started at all.
+    world.user_config(&format!(
+        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"deny\"\n{}",
+        program.display(),
+        entry(
+            "scribble",
+            "turn.end",
+            &this_binary("fail", &[]),
+            "write = true",
+        )
+    ));
+    let core = world.core();
+    let writes = cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES).skipping(usize::MAX);
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            ClientInfo::user(),
+            cineris_protocol::session::SessionSettings {
+                level: Some(Level::ReadOnly),
+                ..cineris_protocol::session::SessionSettings::default()
+            },
+        )
+        .await
+        .expect("the session starts");
+        let ran = core
+            .run_hook_command(
+                &front.session,
+                "scribble",
+                HookRun {
+                    input: json!({"event": "turn.end"}),
+                    ..HookRun::default()
+                },
+            )
+            .await;
+        assert!(matches!(ran, Ok(HookOutcome::Failed(_))), "{ran:?}");
+        assert_eq!(writes.arrivals(), 0, "a write root at read-only");
+        front.close().await;
+    });
+}
+
+/// An observer of `session.start` is not waited for, and a failure of it
+/// is logged.
+#[test]
+fn a_failing_observer_of_session_start_is_logged() {
+    let world = World::new("hook_start_observer", [says("Hi.")]);
+    let program = std::env::current_exe().expect("the test binary has a path");
+    world.user_config(&format!(
+        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"deny\"\n{}",
+        program.display(),
+        entry(
+            "watch",
+            "session.start",
+            &this_binary("fail", &[]),
+            "observe = true",
+        )
+    ));
+    let core = world.core();
+    let warnings = crate::extensions::Warnings::default();
+    let logged = std::sync::Arc::clone(&warnings.0);
+    tracing::subscriber::with_default(warnings, || {
+        world.run(async {
+            let front = Front::start(&world, &core).await;
+            front.turn("hello").await;
+            front.close().await;
+        });
+    });
+    let logged = logged.lock().unwrap();
+    assert!(
+        logged.iter().any(
+            |line| line.contains("a `session.start` observer failed") && line.contains("watch")
+        ),
+        "{logged:?}"
+    );
+}
+
 #[cfg(target_os = "linux")]
 mod confined {
     //! Where the sandbox enforces.
