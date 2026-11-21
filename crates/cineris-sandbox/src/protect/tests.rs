@@ -1574,4 +1574,32 @@ mod putting_back {
         assert_eq!(modes, [0o711; 5]);
         assert!(put.after.unlistable().is_empty());
     }
+
+    /// A folder on the way swapped for a link to a folder outside after the
+    /// look that found the change and before the put-back: the directory
+    /// the path is put back in is opened with no link followed on its way,
+    /// so nothing is written where the link leads. (A link the look sees is
+    /// recorded and taken away first, which a swap after the look is not.)
+    #[test]
+    fn a_folder_swapped_for_a_link_after_the_look_takes_nothing_elsewhere() {
+        let scratch = workspace("put_back_swapped_after_the_look");
+        let ws = scratch.join("ws");
+        scratch.file("ws/.github/workflows/ci.yml", "on: push\n");
+        let theirs = scratch.file("outside/github/workflows/ci.yml", "theirs\n");
+        let watch = unhurried_watch(&ws);
+        let before = watch.take();
+        fs::write(ws.join(".github/workflows/ci.yml"), "on: [push]\n").unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        fs::rename(ws.join(".github"), scratch.join("moved-github")).unwrap();
+        symlink(scratch.join("outside/github"), ws.join(".github")).unwrap();
+        let kept = scratch.join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
+        assert_eq!(
+            fs::read_to_string(&theirs).unwrap(),
+            "theirs\n",
+            "the write went through the link: {:?}",
+            put.left
+        );
+    }
 }

@@ -88,7 +88,7 @@ rule: What a confined start changed among the protected paths is put back at onc
 file: crates/cineris-core/src/sandbox.rs
 in: protected_changes
 find: let put = watch.put_back(before, &changed, &within, keep);
-replace: let put = cineris_sandbox::protect::PutBack { changed: changed.clone(), restored: Vec::new(), left: changed.clone(), kept: Vec::new(), unkept: Vec::new(), after: after.clone() };
+replace: let put = cineris_sandbox::protect::PutBack { changed: changed.clone(), restored: Vec::new(), left: changed.clone(), kept: Vec::new(), unkept: Vec::new(), reopened: Vec::new(), after: after.clone() };
 caught-by:
     cineris-core::it harness_git::sys_a_filter_a_confined_command_plants_never_runs_afterwards
     cineris-core::it ext_exec::confined::sys_a_filter_a_program_plants_never_runs_afterwards
@@ -121,7 +121,12 @@ in: open_dir
 find: how.resolve = libc::RESOLVE_NO_SYMLINKS;
 replace: how.resolve = 0;
 caught-by:
-    cineris-sandbox protect::tests::putting_back::a_path_under_a_folder_that_is_a_link_now_is_left_alone
+    cineris-sandbox protect::tests::putting_back::a_folder_swapped_for_a_link_after_the_look_takes_nothing_elsewhere
+# `a_path_under_a_folder_that_is_a_link_now_is_left_alone` no longer catches
+# it on its own: since the narrow check of the full review, a link on the
+# way to a watched path is recorded and taken away before anything under it
+# is put back. A link swapped in after the look is not, which the test this
+# break names holds.
 
 [break] restore-writes-in-place
 rule: A file is put back under a name of its own and renamed into place, so that a link at its name is replaced, never written through.
