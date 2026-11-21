@@ -282,7 +282,15 @@ mod tests {
             properties["tui"]["properties"]["glyphs"]["x-cineris-trust"],
             "user only"
         );
-        assert_eq!(properties["hooks"]["x-cineris-trust"], "runs code");
+        assert_eq!(properties["mcp"]["x-cineris-trust"], "runs code");
+        // A hook's entry is enforced, and each of its keys kept apart.
+        let hook = &properties["hooks"]["additionalProperties"];
+        assert_eq!(hook["additionalProperties"], false);
+        assert_eq!(
+            hook["properties"]["command"]["x-cineris-trust"],
+            "kept apart: a project's own are read on their own, never merged with yours, each \
+             waiting for trust and its approval"
+        );
         assert_eq!(
             properties["model"]["properties"]["roles"]["additionalProperties"]["properties"]["speed"]
                 ["type"],

@@ -1,4 +1,6 @@
-//! Where an extension comes from: the user's own folder, or a project's.
+//! Where an extension comes from: the user's own folder, or a project's;
+//! and where a hook command comes from: the user's own configuration, or a
+//! project's (since step 28).
 //!
 //! It decides which approval an extension needs and where its pin is kept,
 //! and it keys what an extension keeps (its `cineris.state`), so that a

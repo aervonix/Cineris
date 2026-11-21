@@ -283,6 +283,21 @@ pub struct Change {
     pub effect: Effect,
 }
 
+/// One of a project's hooks, read apart from the user's (since step 28): a
+/// `[hooks.<name>]` table of the project's own files, the shared one's keys
+/// under the local one's. It is never merged with a hook of the user's, and
+/// it runs only once the project is trusted and the entry, as it is now, is
+/// approved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProjectHook {
+    /// Its name.
+    pub name: String,
+    /// The entry.
+    pub settings: schema::HookSettings,
+    /// Where its table is: the file that defines it first, and the line.
+    pub origin: Origin,
+}
+
 /// A loaded configuration: the settings, where each came from, and what was
 /// noticed while loading.
 ///
@@ -315,6 +330,11 @@ pub struct Loaded {
     /// The files that were looked for, lowest layer first, and whether each
     /// was there.
     pub files: Vec<(LayerKind, PathBuf, bool)>,
+    /// The project's hooks, by name, read apart from the user's, which are
+    /// in `settings.hooks` (since step 28). Whether the project is trusted
+    /// does not change them: trust and each entry's approval decide whether
+    /// one runs. One whose name the managed file locks is left out.
+    pub project_hooks: Vec<ProjectHook>,
     values: toml::Table,
     origins: BTreeMap<KeyPath, Origin>,
     entry_origins: BTreeMap<KeyPath, Vec<Origin>>,
@@ -334,6 +354,7 @@ impl fmt::Debug for Loaded {
             .field("profile", &self.profile)
             .field("dirs", &self.dirs)
             .field("files", &self.files)
+            .field("project_hooks", &self.project_hooks)
             .field(
                 "values",
                 &schema::redact(&KeyPath::root(), &Value::Table(self.values.clone())),
@@ -456,6 +477,7 @@ pub(crate) fn merge_layers(
     for given in &options.overrides {
         apply_override(given, &mut merger, &mut diagnostics);
     }
+    let project_hooks = project_hooks(layers, &merger, &mut diagnostics);
 
     diagnostics.append(&mut merger.diagnostics);
     if failed(&diagnostics) {
@@ -487,12 +509,84 @@ pub(crate) fn merge_layers(
         profiles,
         dirs: options.dirs.clone(),
         files,
+        project_hooks,
         values: merger.values,
         origins: merger.origins,
         entry_origins: merger.entry_origins,
         layers: merger.layers,
         locks: merger.locks,
     })
+}
+
+/// The project's hooks, read apart from every other layer (since step 28):
+/// each `[hooks.<name>]` of the project's shared file, then of its local
+/// one, a key of the local one's over the shared one's, in name order.
+/// Each layer was checked already, so each entry reads; one that does not
+/// is an error, as a merged configuration that does not read is. A hook
+/// whose name the managed file locks, or every hook where it locks
+/// `hooks`, is left out, with a note: a lock holds against a project's
+/// hook as against any value of a layer above the managed file.
+fn project_hooks(
+    layers: &[FileLayer],
+    merger: &Merger,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<ProjectHook> {
+    let mut entries: BTreeMap<String, (toml::Table, Origin)> = BTreeMap::new();
+    for layer in layers.iter().filter(|layer| layer.kind.is_project()) {
+        let Some(Value::Table(hooks)) = layer.document.table.get("hooks") else {
+            continue;
+        };
+        for (name, entry) in hooks {
+            let Value::Table(entry) = entry else {
+                continue;
+            };
+            let key = KeyPath::new(["hooks", name.as_str()]);
+            let origin = Origin {
+                layer: layer.kind,
+                defined_in: None,
+                file: Some(layer.file.clone()),
+                line: layer.document.line_of(&key),
+                detail: None,
+            };
+            if merger.is_locked(&key) {
+                diagnostics.push(Diagnostic {
+                    severity: Severity::Note,
+                    layer: Some(layer.kind),
+                    file: origin.file.clone(),
+                    line: origin.line,
+                    key: Some(key),
+                    message: "locked by the managed configuration; this hook is not used"
+                        .to_owned(),
+                });
+                continue;
+            }
+            let (merged, _) = entries
+                .entry(name.clone())
+                .or_insert_with(|| (toml::Table::new(), origin));
+            for (field, value) in entry {
+                merged.insert(field.clone(), value.clone());
+            }
+        }
+    }
+    let mut hooks = Vec::with_capacity(entries.len());
+    for (name, (entry, origin)) in entries {
+        match schema::HookSettings::read(&Value::Table(entry)) {
+            Ok(settings) => hooks.push(ProjectHook {
+                name,
+                settings,
+                origin,
+            }),
+            Err(message) => diagnostics.push(Diagnostic {
+                severity: Severity::Error,
+                layer: Some(origin.layer),
+                file: origin.file.clone(),
+                line: origin.line,
+                key: Some(KeyPath::new(["hooks", name.as_str()])),
+                message: format!("the project's hook could not be read: {message}"),
+            }),
+        }
+    }
+    hooks
 }
 
 /// Reads, parses and checks one file, named `file` and read from
@@ -1131,6 +1225,9 @@ impl Loaded {
             profiles: newer.profiles.clone(),
             dirs: self.dirs.clone(),
             files: newer.files.clone(),
+            // A hook is read when a session opens: a reload leaves the
+            // session's as they were.
+            project_hooks: self.project_hooks.clone(),
             values,
             origins,
             entry_origins,

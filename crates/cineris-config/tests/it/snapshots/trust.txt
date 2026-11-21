@@ -130,7 +130,14 @@ terminal.paste_wait                user only
 terminal.clipboard                 user only
 rpc.approval_timeout               user only
 rpc.stalled_client                 user only
-hooks.*                            runs code
+hooks.*.event                      kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval  [enforced]
+hooks.*.tools                      kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval  [enforced]
+hooks.*.command                    kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval  [enforced]
+hooks.*.observe                    kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval  [enforced]
+hooks.*.timeout                    kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval  [enforced]
+hooks.*.write                      kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval  [enforced]
+hooks.*.network                    kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval  [enforced]
+hooks.*.enabled                    kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval  [enforced]
 extensions.*.enabled               user only
 skills.*                           user only
 mcp.*                              runs code

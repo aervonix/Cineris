@@ -321,6 +321,9 @@ pub(crate) struct Assembled {
     pub(crate) repository: Arc<std::sync::atomic::AtomicBool>,
     /// The session's extensions, to find once its loop runs (step 28).
     pub(crate) extensions: crate::ext::found::Pending,
+    /// The session's hook commands (step 28).
+    #[cfg(feature = "scripts")]
+    pub(crate) command_hooks: Arc<crate::ext::SessionHooks>,
 }
 
 /// The root of the workspace at `path`, as a session opened there would
@@ -397,6 +400,10 @@ pub(crate) struct ForTheRun {
     /// approved for this session alone (the maintainers' call on step 28's
     /// early review). A folder changed since stands changed.
     pub(crate) extensions: Vec<Definition>,
+    /// The project's hooks the question listed, by the hashes shown,
+    /// approved for this session alone as its extensions are. One changed
+    /// since stands changed.
+    pub(crate) hooks: Vec<Definition>,
 }
 
 /// What was learned about the project's trust.
@@ -554,6 +561,9 @@ pub(crate) struct TrustQuestion {
     /// The project's extensions that were listed, as they were read: a yes
     /// pins each (step 28).
     pub(crate) extensions: Vec<Definition>,
+    /// The project's hooks that were listed, as they were read: a yes pins
+    /// each, kind `hook`, by the hash of what was shown (step 28).
+    pub(crate) hooks: Vec<Definition>,
 }
 
 /// A person's answer to the trust question.
@@ -697,6 +707,23 @@ pub(crate) fn look(
         })
     };
     let mut peeked = None;
+    // The project's hooks, read apart from the user's whatever its trust:
+    // each not approved as it is now is listed (step 28).
+    let configured_hooks = crate::ext::hooks::Configured::of(&trust.loaded);
+    // What its programs can do is said of the load a yes puts in force,
+    // the project's own settings in it: the question's own may hold back
+    // a `sandbox.write` that turns the sandbox off (the fresh review of
+    // step 28). A project whose rules are trusted has it loaded already.
+    let confined = if found.found.is_empty() && configured_hooks.project.is_empty() {
+        false
+    } else if trust.rules {
+        programs_confined(inner, &trust.loaded, &place.root, place.state.as_ref())
+    } else {
+        let load = trusted_load(None)?;
+        let confined = programs_confined(inner, &load, &place.root, place.state.as_ref());
+        peeked = Some(load);
+        confined
+    };
     let extensions = if found.found.is_empty() {
         crate::ext::found::Asked::default()
     } else {
@@ -704,24 +731,13 @@ pub(crate) fn look(
             &place.resolver,
             place.load.dirs.config.as_deref(),
         );
-        // What its programs can do is said of the load a yes puts in force,
-        // the project's own settings in it: the question's own may hold back
-        // a `sandbox.write` that turns the sandbox off (the fresh review of
-        // step 28). A project whose rules are trusted has it loaded already.
-        let confined = if trust.rules {
-            programs_confined(inner, &trust.loaded, &place.root, place.state.as_ref())
-        } else {
-            let load = trusted_load(None)?;
-            let confined = programs_confined(inner, &load, &place.root, place.state.as_ref());
-            peeked = Some(load);
-            confined
-        };
         crate::ext::found::asked(&found, &users, &stored, confined)
     };
+    let hooks = crate::ext::hooks::asked(&configured_hooks, &stored, confined);
     // Handed to the session without the extensions' bytes, its places
     // stamped as they were before they were read.
     trust.found = Some(crate::ext::found::looked(&found, watched));
-    if quiet && extensions.pins.is_empty() {
+    if quiet && extensions.pins.is_empty() && hooks.pins.is_empty() {
         return Ok((trust, None));
     }
     let trusted = stored.is_trusted();
@@ -797,6 +813,7 @@ pub(crate) fn look(
         });
     }
     resources.extend(extensions.resources);
+    resources.extend(hooks.resources);
     // A held-back write root that would turn the sandbox off is said before
     // anything else it lists (the maintainers, after the fresh review of
     // step 28): what trust turns on there is the sandbox off.
@@ -830,6 +847,7 @@ pub(crate) fn look(
         rules_shown,
         git_shown,
         extensions: extensions.pins,
+        hooks: hooks.pins,
     };
     Ok((trust, Some(question)))
 }
@@ -911,8 +929,10 @@ fn kept_answer(
             } else {
                 Vec::new()
             };
-            // Each extension listed, as it was read when it was listed.
+            // Each extension and hook listed, as it was read when it was
+            // listed.
             pin.extend(question.extensions.iter().cloned());
+            pin.extend(question.hooks.iter().cloned());
             let kept = if question.trusted {
                 store.approve(&question.key, &pin, question.git_shown)
             } else {
@@ -934,10 +954,10 @@ fn kept_answer(
             let rules = question.rules_shown.then_some(&question.pin);
             match store.keep_without(&question.key, rules, question.git_shown) {
                 Ok(_) => {
-                    // The extensions listed stay unapproved, and the store
-                    // keeps no record of a keep of them: they are not
-                    // asked about again in this core, as after not now.
-                    if !question.extensions.is_empty() {
+                    // The extensions and hooks listed stay unapproved, and
+                    // the store keeps no record of a keep of them: they are
+                    // not asked about again in this core, as after not now.
+                    if !question.extensions.is_empty() || !question.hooks.is_empty() {
                         not_now();
                     }
                     self::trust(inner, place.state.as_ref(), &place.root, &place.load)
@@ -1006,12 +1026,13 @@ fn trusted_unkept(
         ),
         None => failure.to_string(),
     };
-    // The extensions the question listed are trusted with the rest, by the
-    // hashes shown, for this session alone.
-    let what = if question.extensions.is_empty() {
-        "its rules"
-    } else {
-        "its rules and the extensions you were shown"
+    // The extensions and hooks the question listed are trusted with the
+    // rest, by the hashes shown, for this session alone.
+    let what = match (question.extensions.is_empty(), question.hooks.is_empty()) {
+        (true, true) => "its rules",
+        (false, true) => "its rules and the extensions you were shown",
+        (true, false) => "its rules and the hooks you were shown",
+        (false, false) => "its rules and the extensions and hooks you were shown",
     };
     let load = |trusted: bool, profile: Option<&str>| {
         let mut options = options.clone();
@@ -1043,6 +1064,7 @@ fn trusted_unkept(
                 pin: question.pin.clone(),
                 git: repository,
                 extensions: question.extensions.clone(),
+                hooks: question.hooks.clone(),
             }),
             problem: Some(format!(
                 "Your answer could not be kept, so this project, {what}, is trusted for this \
@@ -1065,6 +1087,7 @@ fn trusted_unkept(
                 pin: question.pin.clone(),
                 git: repository,
                 extensions: question.extensions.clone(),
+                hooks: question.hooks.clone(),
             }),
             problem: Some(format!(
                 "Your answer could not be kept, so this project, {what}, is trusted for this \
@@ -2409,6 +2432,7 @@ pub(crate) fn assemble(
         git_note,
         standing,
         found: project_found,
+        stored,
         ..
     } = match looked {
         Some(trust) => trust,
@@ -2959,6 +2983,47 @@ pub(crate) fn assemble(
         }
         parts
     };
+    // The session's hook commands (step 28): the user's own, and the
+    // project's that are approved as they are now, while it is trusted.
+    // The store's reading the trust was worked out from decides a
+    // project's; where none was kept (`--trust-project`), it is read now.
+    #[cfg(feature = "scripts")]
+    let command_hooks = {
+        let trusted = matches!(
+            standing,
+            TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
+        );
+        let configured = crate::ext::hooks::Configured::of(&loaded);
+        let stored = match stored {
+            Some(stored) => Some(stored),
+            None if trusted && !configured.project.is_empty() => {
+                state_dir.as_ref().and_then(|state| {
+                    TrustStore::new(state.trust_file(), Arc::clone(&clock))
+                        .project(&project)
+                        .ok()
+                })
+            }
+            None => None,
+        };
+        let in_session = crate::ext::hooks::in_session(
+            configured,
+            trusted,
+            stored.as_ref(),
+            for_the_run
+                .as_ref()
+                .map(|run| run.hooks.as_slice())
+                .unwrap_or_default(),
+        );
+        told.extend(in_session.told);
+        Arc::new(crate::ext::SessionHooks {
+            hooks: in_session.hooks,
+            refused: in_session.refused,
+            commands: crate::ext::HookCommands::new(Arc::clone(&ext_parts), Arc::clone(&content)),
+            paths: Arc::clone(&resolver),
+        })
+    };
+    #[cfg(not(feature = "scripts"))]
+    drop(stored);
     // Sections 6 and 7 of the system prompt: what the session's skills and
     // extensions give it, settled by the same finding, which the first
     // turn waits for, and answered from memory when the loop asks.
@@ -2990,7 +3055,7 @@ pub(crate) fn assemble(
             .map(|(name, _)| name.clone())
             .collect(),
         registry: Arc::clone(&registry),
-        parts: ext_parts,
+        parts: Arc::clone(&ext_parts),
         // The user's three roots of skills always, and the project's three
         // whether or not it is trusted: skills are text, as instruction
         // files are. `compat.skills` off leaves out `.agents/` and
@@ -3359,6 +3424,8 @@ pub(crate) fn assemble(
         shell_live,
         repository,
         extensions,
+        #[cfg(feature = "scripts")]
+        command_hooks,
     })
 }
 

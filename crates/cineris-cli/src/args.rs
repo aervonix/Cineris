@@ -433,12 +433,12 @@ pub(crate) enum PermissionsCommand {
     /// `revoke ID…`
     Revoke { ids: Vec<String> },
     /// `trust [--with-extensions]`: trust this project, or approve the
-    /// change of its rules; and its extensions, shown, on a yes at a
-    /// terminal, or with `--with-extensions` where there is none to ask at
-    /// (since step 28).
+    /// change of its rules; and its extensions and hooks, shown, on a yes
+    /// at a terminal, or with `--with-extensions` where there is none to
+    /// ask at (since step 28).
     Trust {
-        /// `--with-extensions`: approve the extensions shown with no
-        /// terminal to ask at.
+        /// `--with-extensions`: approve the extensions and hooks shown with
+        /// no terminal to ask at.
         with_extensions: bool,
     },
     /// `untrust`

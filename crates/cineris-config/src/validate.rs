@@ -21,8 +21,11 @@ use crate::key::KeyPath;
 use crate::layer::{Diagnostic, LayerKind, Severity};
 use crate::schema::{self, CONFIG_VERSION, Child, Meta, Node};
 
-/// The keys that belong to a file and so cannot be set by a profile.
-const NOT_IN_A_PROFILE: [&str; 4] = ["config_version", "profile", "profiles", "managed"];
+/// The keys that belong to a file and so cannot be set by a profile. A
+/// hook is the file's that defines it (since step 28): whose it is, the
+/// user's or a project's, is the file's to say, and a project's waits for
+/// its own approval, which a profile's selection would step round.
+const NOT_IN_A_PROFILE: [&str; 5] = ["config_version", "profile", "profiles", "managed", "hooks"];
 
 /// What a layer is checked as.
 pub(crate) struct Checked<'a> {

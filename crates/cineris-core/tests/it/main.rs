@@ -49,6 +49,7 @@ mod extensions_review;
 mod extensions_trust;
 mod gates;
 mod harness_git;
+mod hook_commands;
 mod index;
 mod knowledge;
 mod lifecycle;
@@ -117,6 +118,10 @@ pub const ECHO: &str = "cin-echo";
 /// What the program [`ECHO`] makes of this binary prints its report after.
 pub const ECHO_MARK: &str = "cin-echo-report:";
 
+/// The argument that makes this binary a hook command's program, which
+/// answers as the word after it says (`hook_and_exit`).
+pub const HOOK: &str = "cin-hook";
+
 /// What the test runner runs as an ordinary test, which passes at once, and
 /// what the sandbox tests start as the launcher.
 #[test]
@@ -124,6 +129,17 @@ fn launcher_entry() {
     let arguments: Vec<OsString> = std::env::args_os().collect();
     if let Some(at) = arguments.iter().position(|argument| argument == ECHO) {
         echo_and_exit(&arguments[at + 1..]);
+    }
+    // A hook's program only when nothing starts it through the launcher:
+    // the launcher's own arguments name the program it starts, and the
+    // launcher must not become it.
+    let launched = arguments
+        .iter()
+        .any(|argument| argument == LAUNCH || argument == LAUNCH_GIT);
+    if let Some(at) = arguments.iter().position(|argument| argument == HOOK)
+        && !launched
+    {
+        hook_and_exit(&arguments[at + 1..]);
     }
     if let Some(at) = arguments.iter().position(|argument| argument == LAUNCH_GIT) {
         // The harness's own git, which `sandbox::launcher`'s wrapper
@@ -194,6 +210,75 @@ fn echo_and_exit(arguments: &[OsString]) -> ! {
         reason = "the program ends with the code its caller checks"
     )]
     std::process::exit(7)
+}
+
+/// A hook command's program: reads the event on its standard input, and
+/// does what its first argument says with the rest. The test runner's own
+/// first lines are on its standard output: a hook that answers is a script
+/// that starts this binary and then answers (`hook_commands::script`).
+///
+/// - `report FILE`: writes to `FILE` what it was given (its arguments,
+///   its input, and whether a provider's key reached it), and exits with 0;
+/// - `fail`: says so on standard error and exits with 3;
+/// - `hang`: never ends, until its process tree is killed;
+/// - `write FILE`: writes `FILE`, relative to where it runs, and answers
+///   nothing; exits with 4 when the write fails.
+fn hook_and_exit(arguments: &[OsString]) -> ! {
+    use std::io::{Read, Write};
+    let mode = arguments
+        .first()
+        .map(|mode| mode.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let given: Vec<String> = arguments
+        .iter()
+        .skip(1)
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect();
+    let mut input = Vec::new();
+    let _ = std::io::stdin().read_to_end(&mut input);
+    let mut out = std::io::stdout().lock();
+    let code = match mode.as_str() {
+        "report" => {
+            let report = json!({
+                "args": given.get(1..).unwrap_or_default(),
+                "stdin": String::from_utf8_lossy(&input),
+                "key": std::env::var("ANTHROPIC_API_KEY").ok(),
+            });
+            let file = given.first().map_or("", String::as_str);
+            match std::fs::write(file, report.to_string()) {
+                Ok(()) => 0,
+                Err(_) => 5,
+            }
+        }
+        "fail" => {
+            let _ = writeln!(std::io::stderr(), "the hook went wrong");
+            3
+        }
+        "hang" => loop {
+            std::thread::park();
+        },
+        "write" => {
+            let file = std::path::Path::new(given.first().map_or("", String::as_str));
+            let made = file
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::write(file, "written by a hook\n"));
+            match made {
+                Ok(()) => 0,
+                Err(error) => {
+                    let _ = writeln!(std::io::stderr(), "the write failed: {error}");
+                    4
+                }
+            }
+        }
+        _ => 9,
+    };
+    let _ = out.flush();
+    #[expect(
+        clippy::exit,
+        reason = "the program ends with the code its caller checks"
+    )]
+    std::process::exit(code)
 }
 
 /// Gives every provider the scripted client.

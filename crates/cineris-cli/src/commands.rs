@@ -713,28 +713,48 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                     out!("{warning}\n");
                 }
                 let extensions = core.project_extensions(&project).map_err(fail)?;
-                let mut approved = Vec::new();
-                if !extensions.is_empty() {
-                    let mut listing = String::from(
-                        "Its extensions, which trusting them would let run, as they are now:\n",
-                    );
+                // Its hook commands, shown and approved with its
+                // extensions, as the trust question lists them (step 28).
+                let hooks = core.project_hook_commands(&project).map_err(fail)?;
+                let mut approved = (Vec::new(), Vec::new());
+                if !extensions.is_empty() || !hooks.is_empty() {
+                    let mut listing = String::new();
+                    if !extensions.is_empty() {
+                        listing.push_str(
+                            "Its extensions, which trusting them would let run, as they are \
+                             now:\n",
+                        );
+                    }
                     for extension in &extensions {
                         // The author's words on a line of their own.
                         listing
                             .push_str(&format!("  {}\n", extension.detail.replace('\n', "\n    ")));
                     }
+                    if !hooks.is_empty() {
+                        listing.push_str(
+                            "Its hooks, which trusting them would let run, as they are now:\n",
+                        );
+                    }
+                    for hook in &hooks {
+                        listing.push_str(&format!("  {}\n", hook.detail.replace('\n', "\n    ")));
+                    }
                     out!("{listing}");
+                    let what = match (extensions.is_empty(), hooks.is_empty()) {
+                        (false, true) => "extensions",
+                        (true, false) => "hooks",
+                        _ => "extensions and hooks",
+                    };
                     let at_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
                     if approves_extensions(at_terminal, with_extensions, || {
-                        out!("Approve these extensions too? [y/N] ");
+                        out!("Approve these {what} too? [y/N] ");
                         let mut line = String::new();
                         io::stdin().read_line(&mut line).map(|_| line)
                     }) {
-                        approved = extensions;
+                        approved = (extensions, hooks);
                     } else {
                         context.say(&format!(
-                            "the project's extensions were left unapproved: `{} permissions \
-                             trust` asks again{}",
+                            "the project's {what} were left unapproved: `{} permissions trust` \
+                             asks again{}",
                             context.name,
                             if at_terminal {
                                 ""
@@ -744,7 +764,9 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         ));
                     }
                 }
-                let trusted = core.trust_project_with(&project, &approved).map_err(fail)?;
+                let trusted = core
+                    .trust_project_approving(&project, &approved.0, &approved.1)
+                    .map_err(fail)?;
                 let mut out = format!(
                     "{} {}{}.\n",
                     if trusted.was_trusted && trusted.git {
@@ -787,6 +809,17 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         "Approved its extensions: {}.\n",
                         trusted
                             .extensions
+                            .iter()
+                            .map(|name| format!("`{name}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                if !trusted.hooks.is_empty() {
+                    out.push_str(&format!(
+                        "Approved its hooks: {}.\n",
+                        trusted
+                            .hooks
                             .iter()
                             .map(|name| format!("`{name}`"))
                             .collect::<Vec<_>>()

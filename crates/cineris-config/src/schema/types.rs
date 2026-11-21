@@ -504,6 +504,28 @@ impl VerifyMode {
 }
 
 choice! {
+    /// The event a hook command runs on (`docs/architecture/12-extensions.md`,
+    /// "Tier 3: hooks"): the seven of the first release, which are
+    /// `cineris_ext::event::Event`'s.
+    pub enum HookEventName {
+        /// A session opens.
+        SessionStart => "session.start",
+        /// The user sends a prompt, before it reaches the model.
+        PromptSubmit => "prompt.submit",
+        /// A tool call has been planned and passed policy, before it runs.
+        ToolBefore => "tool.before",
+        /// A tool call finished.
+        ToolAfter => "tool.after",
+        /// A turn ended.
+        TurnEnd => "turn.end",
+        /// Before a summary is requested.
+        CompactionBefore => "compaction.before",
+        /// The session closes.
+        SessionEnd => "session.end",
+    }
+}
+
+choice! {
     /// How the usage view's week and month are counted.
     pub enum UsageRanges {
         /// The calendar week and month.
