@@ -2506,6 +2506,17 @@ pub(crate) fn assemble(
         repository_trusted,
         Arc::clone(&withheld),
     ));
+    // What the session's extensions keep (`cineris.state`): their `session`
+    // values in the log, given to it once the log is made below, and their
+    // `project` values in the state directory. Nothing is read until an
+    // extension asks.
+    #[cfg(feature = "scripts")]
+    let ext_state = Arc::new(crate::ext::ExtState::new(
+        state_dir
+            .as_ref()
+            .and_then(|state| crate::ext::ProjectStore::new(state, &project)),
+        Arc::clone(&clock),
+    ));
     // The extensions' tools, in the registry behind `tool_search` and
     // `tool_call`: registered from what each registered when it was
     // approved, with no engine started (step 28).
@@ -2561,6 +2572,7 @@ pub(crate) fn assemble(
                 )
             }),
             tell: Arc::new(move |message: String| tell_hooks.tell(message)),
+            state: Arc::clone(&ext_state),
         });
         for left_out in crate::ext::register(options.extensions.clone(), &parts, &registry) {
             told.push(left_out);
@@ -2667,6 +2679,8 @@ pub(crate) fn assemble(
         }
     }
     let log: SharedLog = Arc::new(std::sync::Mutex::new(kept));
+    #[cfg(feature = "scripts")]
+    ext_state.attach(Arc::clone(&log));
 
     // ------------------------------------------------ the repository index
     // Made here, touching no file: its first pass starts once the loop runs

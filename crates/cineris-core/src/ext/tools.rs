@@ -34,6 +34,8 @@ pub(crate) struct HostParts {
     /// Tells the session's front ends something: what `cineris.notify`
     /// says.
     pub(crate) tell: Arc<dyn Fn(String) + Send + Sync>,
+    /// What the session's extensions keep: `cineris.state`.
+    pub(crate) state: Arc<super::ExtState>,
 }
 
 impl std::fmt::Debug for HostParts {
@@ -143,6 +145,7 @@ impl LoadedExtension {
             files: &self.files,
             full_name: &full_name,
             extension: self.name(),
+            source: self.approved.source,
             progress: &progress,
         };
         let result = runtime

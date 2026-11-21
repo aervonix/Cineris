@@ -698,6 +698,19 @@ impl Log {
         self.scan.end = offset + len as u64 + 1;
     }
 
+    /// The index of the first entry of the conversation after the one at
+    /// `index`, in the file: `None` when every line after it is a record.
+    pub(crate) fn next_tree_index(&self, index: u32) -> Option<u32> {
+        let after = usize::try_from(index).ok()?.checked_add(1)?;
+        self.scan
+            .nodes
+            .iter()
+            .enumerate()
+            .skip(after)
+            .find(|(_, node)| !node.record)
+            .and_then(|(found, _)| u32::try_from(found).ok())
+    }
+
     /// The ids of entries that are session records of a kind.
     pub(crate) fn record_indices(&self, kind: &Kind) -> Vec<u32> {
         self.scan

@@ -8,7 +8,7 @@ use cineris_protocol::ids::{CallId, ItemId, SessionId, TurnId};
 use cineris_protocol::item::{Item, NoticeItem, NoticeSource, ToolOutcome};
 use cineris_protocol::lease::Lease;
 use cineris_session::entry::{
-    Body, EntryId, Kind, LeaseEvent, LeaseRecord, Meta, Outcome, Reverted, RewindReason,
+    Body, EntryId, ExtRecord, Kind, LeaseEvent, LeaseRecord, Meta, Outcome, Reverted, RewindReason,
 };
 use cineris_session::{Log, Restore};
 use serde_json::json;
@@ -295,6 +295,53 @@ fn a_fork_copies_the_branch_and_the_base_and_leaves_the_original() {
     let listed = world.project.index().list().unwrap();
     assert!(listed.iter().any(|record| record.id.as_str() == "s_2"
         && record.parent.as_ref().map(SessionId::as_str) == Some("s_1")));
+}
+
+/// A fork has an extension's records as they were at its point: those
+/// written before the next entry of the conversation after it, and every
+/// one when it goes back to the end. They are `cineris.state`'s `session`
+/// values (step 28).
+#[test]
+fn a_fork_copies_the_extensions_records_written_before_its_point() {
+    let world = World::new("fork_ext");
+    let mut session = world.create("s_1");
+    let set = |value: i64| {
+        Body::Ext(ExtRecord {
+            ext: "user/probe".into(),
+            data: json!({"state": {"key": "n", "value": value}}),
+        })
+    };
+    session.append(None, user("one")).unwrap();
+    session.append(None, set(1)).unwrap();
+    let first = session.append(None, assistant("i_2", "1", &[])).unwrap();
+    // After the point and before the conversation went on: still the
+    // state there.
+    session.append(None, set(2)).unwrap();
+    session.append(None, user("two")).unwrap();
+    session.append(None, set(3)).unwrap();
+    session.end_turn().unwrap();
+    let values = |log: &Log| -> Vec<i64> {
+        log.records(&Kind::Ext)
+            .unwrap()
+            .iter()
+            .map(|entry| match &entry.body {
+                Body::Ext(record) => record.data["state"]["value"].as_i64().unwrap(),
+                other => panic!("not an extension's record: {other:?}"),
+            })
+            .collect()
+    };
+
+    let (at_first, report) = session
+        .fork(Some(&first), SessionId::new("s_2"), world.options())
+        .unwrap();
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(values(&at_first), [1, 2]);
+    assert_eq!(at_first.active(), Some(&first));
+    let (at_end, _) = session
+        .fork(None, SessionId::new("s_3"), world.options())
+        .unwrap();
+    assert_eq!(values(&at_end), [1, 2, 3]);
+    assert_eq!(values(&session), [1, 2, 3], "the original keeps its own");
 }
 
 fn lease_json() -> serde_json::Value {

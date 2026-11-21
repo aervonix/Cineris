@@ -867,12 +867,16 @@ pub struct Meta {
     pub note: Option<String>,
 }
 
-/// State an extension saved, namespaced by the extension's id.
+/// State an extension saved, namespaced by the extension's id. A record:
+/// a rewind leaves it, and a fork copies those written before its point.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExtRecord {
-    /// The extension.
+    /// The extension: where it comes from and its name, `user/tracker` or
+    /// `project/tracker` (since step 28).
     pub ext: String,
-    /// What it saved. Its shape is the extension's.
+    /// What it saved. Its shape is the extension system's: since step 28,
+    /// one change to a `session` value of `cineris.state`, `{"state":
+    /// {"key": …, "value": …}}`, a `null` value removing the key.
     #[serde(default)]
     pub data: Value,
 }
