@@ -3307,7 +3307,7 @@ in: decide
 find: decided.told.push(sentence(&left.reason));
 replace: let _ = &left.reason;
 caught-by:
-    extensions_found::a_projects_folder_of_extensions_behind_a_link_out_of_the_workspace_is_not_looked_in
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 # ------------------------------------------------------------ how each stands
 
@@ -3319,7 +3319,7 @@ find: if standing == Standing::Approved {
 replace: if standing != Standing::New {
 caught-by:
     extensions_found::a_users_extension_stands_by_its_pin
-    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-new-extension-loaded
 rule: A user's extension never pinned is not loaded, and its script is never evaluated.
@@ -3337,7 +3337,7 @@ in: decide
 find: project_standing(trust.get_or_insert_with(|| project_trust(inputs)), &inputs.for_the_run, &definition)
 replace: pins.get_or_insert_with(|| user_pins(inputs, &mut decided.told)).as_ref().map_or(Standing::New, |pins| pins.standing(&definition))
 caught-by:
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-turned-off-loaded
 rule: The user's extension that `[extensions.<name>] enabled = false` turns off is not loaded, and nothing is said or asked of it.
@@ -3355,7 +3355,7 @@ in: decide
 find: if users.takes(&listed.manifest.name) {
 replace: if users.takes(&listed.manifest.name) && false {
 caught-by:
-    extensions_found::a_projects_extension_of_a_users_name_is_not_used
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 # ------------------------------------------------------------ what the session is told
 
@@ -3501,8 +3501,7 @@ in: look
 find: resources.extend(extensions.resources);
 replace: drop(extensions.resources);
 caught-by:
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
-    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-yes-pins-no-extension
 rule: A yes to the trust question pins each extension it listed, as it was read, with the project's other definitions.
@@ -3511,7 +3510,7 @@ in: kept_answer
 find: pin.extend(question.extensions.iter().cloned());
 replace: pin.extend(question.extensions.iter().take(0).cloned());
 caught-by:
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-trusted-project-not-asked-about-its-extensions
 rule: A trusted project with nothing else new is asked about an extension in it that is new or changed.
@@ -3520,7 +3519,7 @@ in: look
 find: if quiet && extensions.pins.is_empty() {
 replace: if quiet {
 caught-by:
-    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-change-not-flagged
 rule: An extension the project was trusted with at another hash is listed as changed.
@@ -3529,7 +3528,7 @@ in: asked
 find: Standing::Changed => true
 replace: Standing::Changed => false
 caught-by:
-    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-approved-asked-about-again
 rule: An extension approved as it is now is not listed by the trust question: a trusted project whose extensions are all approved is asked nothing.
@@ -3538,7 +3537,7 @@ in: asked
 find: Standing::Approved => continue
 replace: Standing::Approved => false
 caught-by:
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-same-name-asked-about
 rule: The trust question does not list a project's extension of a name the user's own has: it is not used whatever the answer.
@@ -3547,7 +3546,7 @@ in: asked
 find: if users.takes(&found.manifest.name) {
 replace: if users.takes(&found.manifest.name) && false {
 caught-by:
-    extensions_found::a_projects_extension_of_a_users_name_is_not_used
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-words-not-escaped
 rule: Every text of the manifest that the trust question shows has what acts unseen written as an escape.
@@ -3556,7 +3555,7 @@ in: in_words
 find: visible(&quoted(description))
 replace: quoted(description)
 caught-by:
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-words-say-the-network-wrong
 rule: Where an extension's programs are confined, the trust question says whether they may reach the network, as its manifest says. (Where they are not, it claims no limit: the full review of step 28.)
@@ -3574,7 +3573,7 @@ in: in_words
 find: event.sees()
 replace: event.as_str()
 caught-by:
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 # ------------------------------------------------------------ the early review's findings
 
@@ -3816,7 +3815,7 @@ in: detail
 find: if changed {
 replace: if false {
 caught-by:
-    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-dialog-calls-an-extension-rules
 rule: The dialog says the rules changed only of rules: a changed extension is no changed rule.
@@ -3910,7 +3909,7 @@ find: self.registry.remove_source(&gone.1);
 replace: let _ = &gone.1;
 caught-by:
     extensions_reload::an_extension_approved_and_changed_in_a_session_is_loaded_and_withdrawn_at_the_next_turns
-    extensions_reload::a_projects_folder_swapped_for_a_link_out_is_withdrawn
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 [break] pinned-pins-unwatched
 rule: The stores of the pins are watched: an approval made in another process loads the extension at the next turn.
@@ -4065,7 +4064,7 @@ find: } else if confined {
 replace: } else if confined || !confined {
 caught-by:
     ext::found::tests::what_an_extension_may_do_is_said_as_its_programs_are_confined_or_not
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_found::a_projects_extension_walks_through_its_trust
     ext::found::tests::an_authors_description_cannot_pose_as_what_the_harness_says
 
 [break] pinned-confined-without-a-sandbox
@@ -4075,7 +4074,7 @@ in: programs_confined
 find: sandbox == SandboxState::Enforcing
 replace: sandbox == SandboxState::Enforcing || sandbox != SandboxState::Enforcing
 caught-by:
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_found::a_projects_extension_walks_through_its_trust
 
 
 [break] pinned-any-host-said-as-a-star

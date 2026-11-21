@@ -656,19 +656,32 @@ fn a_projects_extensions_are_not_looked_in_while_it_is_not_trusted() {
     assert_eq!(cineris_ext::engine::runtimes_made(), made);
 }
 
+/// One project's extension through its trust, a story told in one world,
+/// each step's sessions after the last's (chained for Windows' tier 2; each
+/// step's rule is said where it is checked):
+/// 1. the trust question lists it in words from its manifest, each text of
+///    it escaped and the author's words last; a yes pins it as it was
+///    listed, and the session registers it, since the cache misses it;
+/// 2. the next session is asked nothing, and loads it from the cache;
+/// 3. changed since it was approved, it is disabled and asked about as
+///    changed; not now leaves it off, and the session says why;
+/// 4. another core asks again, and a yes approves the change; then its
+///    folder swapped for a link out of the workspace is not followed: it is
+///    withdrawn at the next turn, and the session says the folder leads out;
+/// 5. a session opened with the folder behind that link does not look in it,
+///    though what it reaches is pinned and cached as it is;
+/// 6. a project's extension of a name of the user's own is not used, and not
+///    asked about, whatever the answer.
 #[test]
-fn a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes() {
-    let world = World::new("found_project_yes", searches_times(2));
+fn a_projects_extension_walks_through_its_trust() {
+    let world = World::new("found_project_walk", searches_times(7));
     let folder = projects(&world);
-    // A description that holds what acts unseen: a line break and a
-    // right-to-left override.
-    write_described(
-        &folder,
-        "Tracks issues\\nfor you\\u202Etxt.exe",
-        "exec = [\"gh\"]\nexec_network = true\nread = [\"src/**\"]\nwrite = [\"out/**\"]\nnet \
-         = [\"api.example.com\", \"*.example.org\"]\nhooks = [\"tool.before\"]",
-        "the projects",
-    );
+    let description = "Tracks issues\\nfor you\\u202Etxt.exe";
+    let capabilities = "exec = [\"gh\"]\nexec_network = true\nread = [\"src/**\"]\nwrite = \
+                        [\"out/**\"]\nnet = [\"api.example.com\", \"*.example.org\"]\nhooks = \
+                        [\"tool.before\"]";
+    // 1. Listed in words, and loaded after a yes.
+    write_described(&folder, description, capabilities, "the projects");
     let core = world.core();
     world.run(async {
         let (front, asked) = open_answering(&world, &core, yes()).await;
@@ -710,15 +723,13 @@ fn a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_afte
             !detail.contains('\u{202e}') && !detail.contains("issues\nfor"),
             "{detail:?}"
         );
-        // The yes pinned it as it was listed; the session registers it,
-        // since the cache misses it, and loads it.
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         front.close().await;
     });
     let stored = trust_store(&world).project(&project_key(&world)).unwrap();
     assert_eq!(stored.standing(&definition(&folder)), Standing::Approved);
-    // The next session is asked nothing, and loads it from the cache.
+    // 2. The next session is asked nothing, and loads it from the cache.
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
         let (front, asked) = open_answering(&world, &core, TrustResponse::default()).await;
@@ -728,23 +739,13 @@ fn a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_afte
         front.close().await;
     });
     assert_eq!(cineris_ext::engine::runtimes_made(), made);
-}
-
-#[test]
-fn a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed() {
-    let world = World::new("found_project_changed", searches_times(2));
-    let folder = projects(&world);
-    write_extension(&folder, "", "the first");
-    trust(&world, &[definition(&folder)]);
-    cache(&world, &folder);
-    write_extension(&folder, "", "the second");
+    // 3. Changed since it was approved: disabled, and asked about as
+    // changed; not now leaves the project trusted and it off.
+    write_described(&folder, description, capabilities, "the second");
     let made = cineris_ext::engine::runtimes_made();
     let core = world.core();
     world.run(async {
-        // Not now: the session opens with the project trusted, and its
-        // changed extension disabled.
-        let not_now = TrustResponse::default();
-        let (front, asked) = open_answering(&world, &core, not_now).await;
+        let (front, asked) = open_answering(&world, &core, TrustResponse::default()).await;
         let [request] = asked.as_slice() else {
             panic!("one question: {asked:?}");
         };
@@ -782,32 +783,80 @@ fn a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_abou
         front.close().await;
     });
     assert_eq!(cineris_ext::engine::runtimes_made(), made);
-    // Another core asks again, and a yes approves the change.
+    // 4. Another core asks again, and a yes approves the change; its folder
+    // swapped then for a link out of the workspace is withdrawn.
     let core = world.core();
+    let inside = world.workspace.join(".cineris/extensions");
+    let outside = world.dir.join("outside");
+    let mut linked = false;
     world.run(async {
         let (front, asked) = open_answering(&world, &core, yes()).await;
         assert_eq!(asked.len(), 1, "{asked:?}");
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::rename(&inside, outside.join("extensions")).unwrap();
+        linked = make_link(&outside.join("extensions"), &inside);
+        if linked {
+            front.turn("look for the probe").await;
+            assert!(!found_probe(&front), "{:?}", front.results());
+            assert!(
+                front
+                    .notices()
+                    .iter()
+                    .any(|notice| notice.contains("leads out of the workspace")),
+                "{:?}",
+                front.notices()
+            );
+            assert!(
+                about_probe(&front)
+                    .iter()
+                    .any(|notice| notice.contains("is withdrawn")),
+                "{:?}",
+                front.notices()
+            );
+        }
         front.close().await;
     });
     let stored = trust_store(&world).project(&project_key(&world)).unwrap();
-    assert_eq!(stored.standing(&definition(&folder)), Standing::Approved);
-}
-
-#[test]
-fn a_projects_extension_of_a_users_name_is_not_used() {
-    let world = World::new("found_same_name", searches());
+    assert_eq!(
+        stored.standing(&definition(&outside.join("extensions").join(NAME))),
+        Standing::Approved
+    );
+    // 5. A session opened with the folder behind that link does not look
+    // in it, though what it reaches is pinned and cached as it is: what a
+    // repository's link reaches is not the repository's.
+    if linked {
+        let made = cineris_ext::engine::runtimes_made();
+        world.run(async {
+            let front = start(&world, &core).await;
+            front.turn("look for the probe").await;
+            assert!(!found_probe(&front), "{:?}", front.results());
+            assert!(
+                front
+                    .notices()
+                    .iter()
+                    .any(|notice| notice.contains("leads out of the workspace")),
+                "{:?}",
+                front.notices()
+            );
+            front.close().await;
+        });
+        assert_eq!(cineris_ext::engine::runtimes_made(), made);
+        if std::fs::remove_file(&inside).is_err() {
+            std::fs::remove_dir(&inside).unwrap();
+        }
+    }
+    // 6. Back inside, and changed again, so that it would be new and asked
+    // about; a folder of the user's own of its name: not used, and not
+    // asked about, whatever the answer.
+    std::fs::rename(outside.join("extensions"), &inside).unwrap();
+    write_extension(&folder, "", "one of theirs");
     write_extension(&users(&world), "", "one of mine");
     pin(&world, &users(&world));
     cache(&world, &users(&world));
-    // The project is trusted, and its extension is not approved: it would
-    // be new, and asked about.
-    write_extension(&projects(&world), "", "one of theirs");
-    trust(&world, &[]);
     let core = world.core();
     world.run(async {
-        // Not asked about: whatever the answer, it is not used.
         let (front, asked) = open_answering(&world, &core, yes()).await;
         assert!(asked.is_empty(), "{asked:?}");
         front.turn("look for the probe").await;
@@ -823,36 +872,3 @@ fn a_projects_extension_of_a_users_name_is_not_used() {
 }
 
 // ------------------------------------------------------------ where they are
-
-#[test]
-fn a_projects_folder_of_extensions_behind_a_link_out_of_the_workspace_is_not_looked_in() {
-    let world = World::new("found_project_link_out", searches());
-    let outside = world.dir.join("outside").join("extensions");
-    let folder = outside.join(NAME);
-    write_extension(&folder, "", "from outside");
-    // Trusted, and even pinned and cached as it is: what a repository's
-    // link reaches is not the repository's.
-    trust(&world, &[definition(&folder)]);
-    cache(&world, &folder);
-    std::fs::create_dir_all(world.workspace.join(".cineris")).unwrap();
-    if !make_link(&outside, &world.workspace.join(".cineris/extensions")) {
-        return;
-    }
-    let core = world.core();
-    let made = cineris_ext::engine::runtimes_made();
-    world.run(async {
-        let front = start(&world, &core).await;
-        front.turn("look for the probe").await;
-        assert!(!found_probe(&front), "{:?}", front.results());
-        assert!(
-            front
-                .notices()
-                .iter()
-                .any(|notice| notice.contains("leads out of the workspace")),
-            "{:?}",
-            front.notices()
-        );
-        front.close().await;
-    });
-    assert_eq!(cineris_ext::engine::runtimes_made(), made);
-}

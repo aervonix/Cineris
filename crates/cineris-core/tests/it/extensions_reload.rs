@@ -7,12 +7,11 @@
 use std::path::PathBuf;
 
 use cineris_ext::discover::{A_NAME_IS_LOOKED_AT, A_ROOT_IS_RESOLVED, AN_EXTENSION_IS_READ};
-use cineris_protocol::methods::TrustResponse;
 use cineris_testkit::Hold;
 
 use crate::extensions_found::{
-    about_probe, cache, definition, found_probe, make_link, open_answering, pin, projects,
-    searches, searches_times, start, state, trust, users, write_extension,
+    about_probe, cache, found_probe, make_link, pin, searches, searches_times, start, state,
+    users, write_extension,
 };
 use crate::{World, says};
 
@@ -95,49 +94,6 @@ fn a_change_is_seen_however_the_configuration_directory_is_given() {
             front.close().await;
         });
     }
-}
-
-/// A project's folder of extensions swapped during a session for a link
-/// out of the workspace is not followed: the extension is withdrawn, and
-/// the session says the folder leads out.
-#[test]
-fn a_projects_folder_swapped_for_a_link_out_is_withdrawn() {
-    let world = World::new("reload_link_out", searches_times(2));
-    let folder = projects(&world);
-    write_extension(&folder, "", "the projects");
-    trust(&world, &[definition(&folder)]);
-    cache(&world, &folder);
-    let core = world.core();
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, TrustResponse::default()).await;
-        assert!(asked.is_empty(), "{asked:?}");
-        front.turn("look for the probe").await;
-        assert!(found_probe(&front), "{:?}", front.results());
-        let inside = world.workspace.join(".cineris/extensions");
-        let outside = world.dir.join("outside");
-        std::fs::create_dir_all(&outside).unwrap();
-        std::fs::rename(&inside, outside.join("extensions")).unwrap();
-        if make_link(&outside.join("extensions"), &inside) {
-            front.turn("look for the probe").await;
-            assert!(!found_probe(&front), "{:?}", front.results());
-            assert!(
-                front
-                    .notices()
-                    .iter()
-                    .any(|notice| notice.contains("leads out of the workspace")),
-                "{:?}",
-                front.notices()
-            );
-            assert!(
-                about_probe(&front)
-                    .iter()
-                    .any(|notice| notice.contains("is withdrawn")),
-                "{:?}",
-                front.notices()
-            );
-        }
-        front.close().await;
-    });
 }
 
 // ------------------------------------------------------------ start-up
