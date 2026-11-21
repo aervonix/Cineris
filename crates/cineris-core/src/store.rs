@@ -103,6 +103,7 @@ fn epoch_body(epoch: EpochStart) -> Body {
             .map(|(path, hash)| InstructionMark { path, hash })
             .collect(),
         profile: epoch.profile,
+        index: epoch.index,
         variants: epoch
             .variants
             .as_ref()
@@ -145,6 +146,7 @@ fn epoch_start(epoch: &Epoch, redacted: bool) -> EpochStart {
             .map(|mark| (mark.path.clone(), mark.hash))
             .collect(),
         profile: epoch.profile,
+        index: epoch.index,
         // The hash was taken of the prompt and the tools as they were sent,
         // before the filter: one that no longer matches is of a prompt the
         // log holds masked.
@@ -776,6 +778,7 @@ mod tests {
             base: Some(cineris_base::ContentHash::of(b"base")),
             instructions: vec![("AGENTS.md".to_owned(), cineris_base::ContentHash::of(b"x"))],
             profile: Some(cineris_base::ContentHash::of(b"the profile")),
+            index: Some(cineris_base::ContentHash::of(b"the index")),
             altered: false,
             variants: None,
         };

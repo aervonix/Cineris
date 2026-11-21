@@ -503,6 +503,12 @@ pub struct Epoch {
     /// profile. Added in step 17.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<ContentHash>,
+    /// The hash of the index of skills and tool sources as the system
+    /// prompt holds it (section 6). A later change to the index is told the
+    /// model as a notice, measured against this. Absent when the prompt
+    /// holds no index. Added in step 28.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub index: Option<ContentHash>,
     /// The choice at each variant point the epoch's requests are made with
     /// (`edit_format`, `tool_schema`, `prompt_style`), fixed for the epoch.
     /// Added in step 16; absent before.
@@ -1345,6 +1351,7 @@ mod tests {
                 hash: ContentHash::of(b"be brief"),
             }],
             profile: Some(ContentHash::of(b"Project profile")),
+            index: Some(ContentHash::of(b"Skills")),
             variants: [("tool_schema".to_owned(), "loose".to_owned())]
                 .into_iter()
                 .collect(),

@@ -86,6 +86,10 @@ open_enum! {
         /// The project profile changed since the model was given it
         /// (since step 17).
         Profile => "profile",
+        /// What extensions give the system prompt changed since the model
+        /// was given it: the index of skills and tool sources, given whole,
+        /// or an extension's text, withdrawn (since step 28).
+        Extensions => "extensions",
     }
 }
 

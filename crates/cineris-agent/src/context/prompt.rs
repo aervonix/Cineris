@@ -158,7 +158,9 @@ pub(crate) struct Sections<'a> {
 pub(crate) struct TextMark {
     /// The extension's name.
     pub(crate) name: String,
-    /// The hash of its part: the line that names it, and its text.
+    /// The hash of its part standing alone: the line that names it, and
+    /// its text cut to [`EXTENSION_TEXT_CAP`], whatever section 7's cap
+    /// leaves of it.
     pub(crate) hash: ContentHash,
 }
 
@@ -274,7 +276,8 @@ pub(crate) const TOOL_SEARCH_LINE: &str = "Find these tools with `tool_search`, 
 /// [`SKILLS_CAP`] is cut at a character's edge, and the sources that do not
 /// fit after it are counted in a line of their own. Empty when there is
 /// nothing to list.
-pub(crate) fn render_index(sections: &ExtensionSections) -> String {
+#[must_use]
+pub fn render_index(sections: &ExtensionSections) -> String {
     let mut text = cut(plain(&sections.skills).trim(), SKILLS_CAP);
     let mut sources: Vec<&SourceSummary> = sections
         .sources
@@ -350,38 +353,60 @@ pub(crate) fn text_heading(name: &str) -> String {
     )
 }
 
-/// Section 7: each extension's text, by name, under the line that names
-/// it, with what acts unseen taken out ([`plain`]); an extension whose text
-/// is then empty is left out. Each text is cut at a character's edge to
-/// [`EXTENSION_TEXT_CAP`], and the section to [`EXTENSIONS_CAP`]: the text
-/// that reaches it is cut there, and the extensions after it are left out.
-/// With what the section holds of each, as [`TextMark`]s.
-pub(crate) fn render_texts(prompts: &[ExtensionPrompt]) -> (String, Vec<TextMark>) {
+/// One extension's part of section 7 standing alone, by name: the line
+/// that names it and its text, with what acts unseen taken out ([`plain`])
+/// and cut at a character's edge to [`EXTENSION_TEXT_CAP`]. An extension
+/// whose text is then empty has none.
+fn text_parts(prompts: &[ExtensionPrompt]) -> Vec<(TextMark, String, String)> {
     let mut sorted: Vec<&ExtensionPrompt> = prompts.iter().collect();
     sorted.sort_by(|one, other| one.name.cmp(&other.name));
+    sorted
+        .into_iter()
+        .filter_map(|prompt| {
+            let body = plain(&prompt.text);
+            let body = cut(body.trim(), EXTENSION_TEXT_CAP);
+            if body.is_empty() {
+                return None;
+            }
+            let heading = text_heading(&prompt.name);
+            let mark = TextMark {
+                name: prompt.name.clone(),
+                hash: ContentHash::of(format!("{heading}\n\n{body}").as_bytes()),
+            };
+            Some((mark, heading, body))
+        })
+        .collect()
+}
+
+/// The mark of each extension's text standing alone, whether or not
+/// section 7's cap leaves room for it: what a text the model has is held
+/// against, so that an extension that another pushes past the cap is not
+/// taken for one that changed.
+pub(crate) fn text_marks(prompts: &[ExtensionPrompt]) -> Vec<TextMark> {
+    text_parts(prompts)
+        .into_iter()
+        .map(|(mark, _, _)| mark)
+        .collect()
+}
+
+/// Section 7: each extension's part ([`text_parts`]), by name, the section
+/// at most [`EXTENSIONS_CAP`]: the text that reaches the cap is cut there
+/// at a character's edge, and the extensions after it are left out. With
+/// the mark of each extension the section holds ([`text_marks`]).
+pub(crate) fn render_texts(prompts: &[ExtensionPrompt]) -> (String, Vec<TextMark>) {
     let mut out = String::new();
     let mut marks = Vec::new();
-    for prompt in sorted {
-        let body = plain(&prompt.text);
-        let body = body.trim();
-        if body.is_empty() {
-            continue;
-        }
-        let heading = text_heading(&prompt.name);
+    for (mark, heading, body) in text_parts(prompts) {
         let gap = if out.is_empty() { 0 } else { 2 };
         let room = EXTENSIONS_CAP.saturating_sub(out.len() + gap + heading.len() + 2);
         if room < LEAST_TEXT {
             break;
         }
-        let part = format!("{heading}\n\n{}", cut(body, EXTENSION_TEXT_CAP.min(room)));
         if gap > 0 {
             out.push_str("\n\n");
         }
-        out.push_str(&part);
-        marks.push(TextMark {
-            name: prompt.name.clone(),
-            hash: ContentHash::of(part.as_bytes()),
-        });
+        out.push_str(&format!("{heading}\n\n{}", cut(&body, room)));
+        marks.push(mark);
     }
     (out, marks)
 }
@@ -900,11 +925,15 @@ mod tests {
                 .all(|character| character == 'é')
         );
         assert!(!texts.contains("`e`"));
-        // What the marks say is what the section holds of each.
+        // Each mark is of its extension's text standing alone, whatever the
+        // cap leaves of it, and every extension has one.
         assert_eq!(
             marks[3].hash,
-            ContentHash::of(format!("{}\n\n{fourth}", text_heading("d")).as_bytes())
+            ContentHash::of(format!("{}\n\n{full}", text_heading("d")).as_bytes())
         );
+        let all = text_marks(&prompts);
+        assert_eq!(&all[..4], &marks[..]);
+        assert_eq!(all[4].name, "e");
     }
 
     #[test]

@@ -38,6 +38,7 @@
 mod context;
 mod denials;
 mod early;
+mod extensions;
 mod interrupt;
 mod limits;
 mod map;
@@ -1102,6 +1103,9 @@ pub struct Setup {
     pub map: Option<cineris_agent::context::RepoMap>,
     /// Where the project profile comes from, when the session has one.
     pub profile: Option<Arc<dyn cineris_agent::ProfileSource>>,
+    /// Where sections 6 and 7 of the prompt come from, when the session
+    /// has extensions.
+    pub extensions: Option<Arc<dyn cineris_agent::ExtensionsSource>>,
 }
 
 /// One session, with everything it does remembered.
@@ -1142,6 +1146,7 @@ impl Setup {
             root: None,
             map: None,
             profile: None,
+            extensions: None,
         }
     }
 
@@ -1179,6 +1184,7 @@ impl Setup {
             plan: self.plan,
             map: self.map,
             profile: self.profile,
+            extensions: self.extensions,
             ..ContextParts::new()
         };
         let parts = SessionParts {

@@ -370,6 +370,7 @@ impl Session {
             base: Some(built.base),
             instructions: discovered.marks.clone(),
             profile: built.profile,
+            index: built.index,
             altered: false,
             variants: Some(self.model.variants.clone()),
         }
@@ -420,6 +421,10 @@ impl Session {
             // request would not begin as the earlier ones did.
             let goes_on = self.context.epoch.as_ref().is_some_and(|epoch| {
                 !epoch.altered
+                    // An epoch that withdrew an extension's text: the
+                    // prompt now holds either another section 7, or that
+                    // text again, which the model was told to disregard.
+                    && !self.context.withdrew
                     && epoch.tools == self.context.tools
                     // Variants the user changed since apply from a new
                     // epoch: they are fixed for one.
@@ -436,8 +441,10 @@ impl Session {
                 // The prompt is the one the harness would build, but for
                 // the instruction files: what changed in them is told as a
                 // notice, below. A session read again on a later day is
-                // told the date.
+                // told the date. Its section 7 is the one built now, which
+                // `base` holds.
                 self.context.unchecked = false;
+                self.context.given_texts = built.texts.clone();
                 let today = date_of(self.clock.now());
                 if self
                     .context
@@ -461,6 +468,7 @@ impl Session {
                 };
                 let epoch = self.epoch_start(&built, &discovered, reason);
                 self.begin_epoch(turn, epoch, None).await?;
+                self.context.given_texts = built.texts.clone();
                 begun = true;
                 // The history goes on under the new prompt. A notice of an
                 // older profile in it would stand after the prompt's
@@ -469,11 +477,68 @@ impl Session {
                 if self.context.history.tells_a_profile() {
                     self.profile_changes(turn, true).await?;
                 }
+                // So would an older index, or a text withdrawn that the new
+                // prompt holds again: the model is told the prompt holds
+                // both sections as they are.
+                if self.context.history.tells_extensions() {
+                    self.record_notice(
+                        turn,
+                        NoticeSource::Extensions,
+                        crate::context::EXTENSIONS_AGAIN.to_owned(),
+                    )
+                    .await?;
+                }
             }
         }
         if !begun {
             self.instruction_changes(turn).await?;
             self.profile_changes(turn, false).await?;
+            self.extension_changes(turn).await?;
+        }
+        Ok(())
+    }
+
+    /// Tells the model what changed of sections 6 and 7 since it was given
+    /// them: the epoch's prompt stays as it was sent. Each extension whose
+    /// text the model has and that the prompt would not now hold as it is
+    /// (removed, disabled, changed) is withdrawn by a notice that names it;
+    /// then an index that is not the one the model has follows whole. An
+    /// extension added waits for the next epoch.
+    async fn extension_changes(&mut self, turn: &Turn) -> Result<(), StoreError> {
+        let Some(now) = Self::extensions_now(self.context.parts.extensions.clone()).await else {
+            return Ok(());
+        };
+        // Each held against its own text, whether or not the cap leaves
+        // room for it: an extension another pushes past the cap is as it
+        // was.
+        let texts = crate::context::text_marks(&now.prompts);
+        let gone: Vec<crate::context::TextMark> = self
+            .context
+            .given_texts
+            .iter()
+            .filter(|given| !texts.contains(given))
+            .cloned()
+            .collect();
+        for mark in gone {
+            self.record_notice(
+                turn,
+                NoticeSource::Extensions,
+                crate::context::withdrawn_text(&mark.name),
+            )
+            .await?;
+            self.context.given_texts.retain(|given| *given != mark);
+            self.context.withdrew = true;
+        }
+        let index = crate::context::render_index(&now);
+        let hash = crate::context::index_hash(&index);
+        if hash != self.context.given_index {
+            self.record_notice(
+                turn,
+                NoticeSource::Extensions,
+                crate::context::index_notice(&index),
+            )
+            .await?;
+            self.context.given_index = hash;
         }
         Ok(())
     }
@@ -1769,6 +1834,7 @@ impl Session {
         self.begin_epoch(turn, epoch, Some(history))
             .await
             .map_err(Unfinished::Store)?;
+        self.context.given_texts = built.texts.clone();
         self.context.carried_before = Some(carried_value);
         self.context.touched = crate::context::Touched::default();
         self.shared.lock().history = true;

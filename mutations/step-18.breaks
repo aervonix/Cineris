@@ -196,8 +196,8 @@ caught-by:
 rule: After a summary the old epoch's map is not replayed with the turns it did not cover: the new epoch has its own.
 file: crates/cineris-agent/src/context/history.rs
 in: History::extend_projected
-find: if meta.map || meta.profile {
-replace: if meta.profile {
+find: if meta.map || meta.profile || meta.extensions {
+replace: if meta.profile || meta.extensions {
 caught-by:
     cineris-agent context::tests::an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again
 
