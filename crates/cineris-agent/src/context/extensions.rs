@@ -69,7 +69,9 @@ pub const SKILLS_CAP: usize = INDEX_CAP - 1024;
 /// manifest's prompt file may hold.
 pub const EXTENSION_TEXT_CAP: usize = 4 * 1024;
 
-/// The most section 7 holds in all, in bytes.
+/// The most section 7 holds in all, in bytes: the extensions' texts as
+/// their authors wrote them, each with the line that names it and the gaps
+/// around that line; not the quoting, nor the section's lead and end.
 pub const EXTENSIONS_CAP: usize = 16 * 1024;
 
 /// Where sections 6 and 7 come from.
@@ -156,7 +158,7 @@ pub const TEXTS_REPLACED: &str = "The system prompt was built again, and the tex
 pub(crate) fn replaced_text(names: &[String]) -> String {
     format!(
         "{TEXTS_REPLACED} {}{REPLACED_REST} the system prompt gives each extension's text as it \
-         is now, and none for an extension it does not name.",
+         is now, and gives no text for an extension it does not name.",
         names_as_code(names)
     )
 }
@@ -226,20 +228,23 @@ pub(crate) fn withdrawn_name(notice: &str) -> Option<&str> {
 }
 
 /// What the user is told of an extension whose text section 7's cap left
-/// out of an epoch's prompt, wholly or cut: the model is not told.
+/// out of an epoch's prompt, wholly or cut: the model is not told. It says
+/// what the cap counts: the extensions' texts as their authors wrote them,
+/// with the line that names each one.
 pub(crate) fn left_out_text(text: &TextLeftOut) -> String {
     let name = in_code(&text.name);
     let cap = EXTENSIONS_CAP / 1024;
     if text.cut {
         format!(
             "The text the extension `{name}` gives the system prompt is cut, to keep the \
-             extensions' part of the system prompt within {cap} KiB: the model is given only its \
-             beginning."
+             extensions' texts, with the line that names each one, within {cap} KiB: the model is \
+             given only its beginning."
         )
     } else {
         format!(
             "The text the extension `{name}` gives the system prompt is left out, to keep the \
-             extensions' part of the system prompt within {cap} KiB: the model is not given it."
+             extensions' texts, with the line that names each one, within {cap} KiB: the model is \
+             not given it."
         )
     }
 }

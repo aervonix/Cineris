@@ -14,7 +14,8 @@ default = ["mcp", "sandbox", "scripts"]
 # Links the MCP client.
 mcp = ["dep:cineris-mcp"]
 # Links the script engine in `cineris-ext` (decision 0005). Without it,
-# extensions are custom commands, skills and hook commands.
+# extensions are custom commands and hook commands, and a session has no
+# skills for now: they are found on the extensions' finding, which needs it.
 scripts = ["cineris-ext/scripts"]
 # Links the OS sandbox's backends (Landlock and seccomp on Linux). Without it
 # every session reports the sandbox off, and `autonomous` is refused.

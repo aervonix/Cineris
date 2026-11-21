@@ -103,8 +103,6 @@ pub const MAX_ENTRIES: usize = 1_000;
 pub const MAX_NAME_BYTES: usize = 64;
 /// The longest a skill's description is shown, in bytes.
 pub const MAX_DESCRIPTION_BYTES: usize = 300;
-/// The cap on section 6 of the system prompt, in bytes.
-pub const INDEX_CAP: usize = 8 * 1024;
 
 /// Whose a root is.
 ///
@@ -1244,7 +1242,8 @@ fn line(skill: &Skill) -> String {
 }
 
 /// Renders the skills of `found` as section 6 of the system prompt lists
-/// them, in at most `cap` bytes ([`INDEX_CAP`] is the section's):
+/// them, in at most `cap` bytes: the skills' part of the section, whose
+/// cap the prompt's builder gives (`cineris_agent::SKILLS_CAP`).
 ///
 /// ```text
 /// Skills: instructions for particular kinds of task, … the path to its SKILL.md.

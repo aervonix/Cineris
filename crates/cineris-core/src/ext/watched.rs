@@ -47,6 +47,10 @@ enum Stamp {
     /// way to a place, whose kind alone matters (a file another tool writes
     /// beside it is no change of it).
     Kind(Kind),
+    /// A link on the way to a place, by where it points as it is written
+    /// (`read_link`, which follows nothing): a link pointed elsewhere is a
+    /// change, though its kind is the same.
+    LinkTo(PathBuf),
     /// A folder, a file, a link or anything else.
     Present {
         modified: Option<SystemTime>,
@@ -93,11 +97,13 @@ impl Stamp {
     /// What `path` is, looked at itself: its kind alone.
     fn kind_of(path: &std::path::Path) -> Self {
         match std::fs::symlink_metadata(path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => match std::fs::read_link(path) {
+                Ok(target) => Self::LinkTo(target),
+                Err(error) => Self::Unreadable(error.kind()),
+            },
             Ok(metadata) => {
                 let kind = metadata.file_type();
-                Self::Kind(if kind.is_symlink() {
-                    Kind::Link
-                } else if kind.is_dir() {
+                Self::Kind(if kind.is_dir() {
                     Kind::Folder
                 } else if kind.is_file() {
                     Kind::File
@@ -179,8 +185,9 @@ impl Watched {
 
     /// Stamps `place` now by its kind alone: a name on the way to a place,
     /// which changes when it comes, goes or becomes a link, and not when
-    /// something is made in it. A place stamped already keeps its first
-    /// stamp.
+    /// something is made in it; a link by where it points as well, so that
+    /// one pointed elsewhere is a change. A place stamped already keeps its
+    /// first stamp.
     pub(crate) fn note_kind(&mut self, place: PathBuf, clock: &SharedClock) {
         if !self.known.insert(place.clone()) {
             return;
@@ -273,7 +280,7 @@ impl Watched {
     pub(crate) fn changed(&self) -> Option<PathBuf> {
         self.places.iter().find_map(|(place, stamp, taken)| {
             let now = match stamp {
-                Stamp::Kind(_) => Stamp::kind_of(place),
+                Stamp::Kind(_) | Stamp::LinkTo(_) => Stamp::kind_of(place),
                 _ => Stamp::of(place),
             };
             (now != *stamp || unsettled(stamp, *taken)).then(|| place.clone())
@@ -392,6 +399,49 @@ mod tests {
         std::fs::remove_dir_all(dir.join("way")).unwrap();
         std::fs::write(dir.join("way"), "a file now").unwrap();
         assert_eq!(watched.changed(), Some(dir.join("way")), "another kind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A link on the way, stamped by its kind, is stamped by where it points
+    /// as well: `~/.claude` linked to a folder with no skills, then pointed
+    /// at one with skills, is a change, though it is a link as before. What
+    /// is made where it leads is not.
+    #[test]
+    fn a_link_on_the_way_pointed_elsewhere_is_a_change() {
+        let dir = std::env::temp_dir().join(format!("cineris-core-relink-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        let link = |target: &str| {
+            #[cfg(unix)]
+            let made = std::os::unix::fs::symlink(dir.join(target), dir.join("way"));
+            #[cfg(windows)]
+            let made = std::os::windows::fs::symlink_dir(dir.join(target), dir.join("way"));
+            made
+        };
+        let made = link("a");
+        // A machine that cannot make a link has nothing to check; a CI
+        // runner can.
+        if made.is_err() && std::env::var_os("GITHUB_ACTIONS").is_none() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return;
+        }
+        made.unwrap();
+        let clock: SharedClock = Arc::new(FakeClock::starting_at("2001-01-01T00:00:00Z").unwrap());
+        let mut watched = Watched::default();
+        watched.note_kind(dir.join("way"), &clock);
+        std::fs::write(dir.join("a/history"), "written where it leads").unwrap();
+        assert_eq!(watched.changed(), None, "made where it leads: no change");
+        #[cfg(unix)]
+        std::fs::remove_file(dir.join("way")).unwrap();
+        #[cfg(windows)]
+        std::fs::remove_dir(dir.join("way")).unwrap();
+        link("b").unwrap();
+        assert_eq!(
+            watched.changed(),
+            Some(dir.join("way")),
+            "pointed elsewhere"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
