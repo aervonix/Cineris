@@ -126,6 +126,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [path-forms-on-windows-the-helper-does-not-reach](path-forms-on-windows-the-helper-does-not-reach.md): The protected-path watch and the base state's git parsing handle mixed Windows path forms without `same_location`. Owner: step 32, or the step that brings the sandbox to Windows.
 - [the-cost-of-the-look-at-protected-paths](the-cost-of-the-look-at-protected-paths.md): Walking the workspace around each confined command for protected names costs about 47 ms in a large tree. Owner: step 33.
 - [the-last-writes-of-a-killed-command](the-last-writes-of-a-killed-command.md): The session sweep that ends a command's tree can lose a race with a fast-forking process. Owner: step 32.
+- [the-put-backs-remaining-edges](the-put-backs-remaining-edges.md): The put-back of a confined start's protected change, built in the third security fix, has edges its reviews found and left: none lets a confined start keep a change unnamed at the look after it. Owner: step 32.
 
 ### cineris-session
 

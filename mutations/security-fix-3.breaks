@@ -665,8 +665,8 @@ caught-by:
 rule: A folder the look before listed and a look after cannot is given its owner's right to list it back, and looked at again.
 file: crates/cineris-sandbox/src/protect.rs
 in: Watch::put_back
-find: restore::reopen(&folder);
-replace: let _ = &folder;
+find: if restore::reopen(&folder) {
+replace: if false {
 packages: cineris-sandbox,cineris-core
 caught-by:
     cineris-sandbox protect::tests::putting_back::a_folder_the_look_before_listed_and_a_command_closed_is_opened_and_looked_in
@@ -720,3 +720,12 @@ find: if found.left.is_empty() {
 replace: if found.left.is_empty() || found.kept_nowhere.is_empty() {
 caught-by:
     cineris-core::it sandbox::sys_what_could_not_be_put_back_is_told_again_at_each_turns_start
+
+[break] closed-folders-opened-one-level-a-round
+rule: Every folder under one opened again that the look before listed is opened too, all the way down, before the next look, so folders closed deeper than the rounds go hide nothing.
+file: crates/cineris-sandbox/src/protect.rs
+in: Watch::put_back
+find: for under in before.listed_in(&folder) {
+replace: for under in Vec::<PathBuf>::new() {
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_hook_behind_five_closed_folders_is_found_and_taken_away
