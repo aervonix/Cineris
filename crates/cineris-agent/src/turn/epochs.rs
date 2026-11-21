@@ -217,7 +217,13 @@ impl CompactionAsk {
     /// Asks them: what they add to the summary's instructions, and which
     /// failed.
     async fn run(self) -> crate::hooks::Added {
-        let heard = crate::hooks::ask_all(&self.set, self.matched, self.input).await;
+        let heard = crate::hooks::ask_all(
+            &self.set,
+            self.matched,
+            self.input,
+            crate::hooks::Observers::Run,
+        )
+        .await;
         crate::hooks::added(crate::hooks::HookEvent::CompactionBefore, heard)
     }
 }
@@ -1845,10 +1851,7 @@ impl Session {
                 Some(taken) => taken,
                 None => {
                     if instructions.is_none() {
-                        match self
-                            .compaction_hooks(turn, trigger, focus.as_deref())
-                            .await
-                        {
+                        match self.compaction_hooks(turn, trigger, focus.as_deref()).await {
                             Some(added) => instructions = Some(added),
                             None => return Phase::Interrupted(None),
                         }

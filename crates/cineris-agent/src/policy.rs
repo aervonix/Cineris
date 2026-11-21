@@ -63,11 +63,16 @@ pub struct PlannedCall<'a> {
     ///
     /// With it, [`Policy::ask`] puts the question **even when the rules
     /// alone would allow the call**: a hook that asks turns an allowed call
-    /// into a question. With a replacement (`replaced`), `arguments` and
-    /// `plan` are the hook's, the model's own are its `original`, and the
-    /// question offers only "allow once" and "deny", keeps no rule, and
-    /// where nobody can be asked is answered "deny", whatever a default
-    /// answer would be: a replacement is new work nobody chose.
+    /// into a question. Where nobody can be asked, such a question is
+    /// answered "deny", as any question nobody can answer is.
+    ///
+    /// With a replacement (`replaced`), `arguments` and `plan` are the
+    /// hook's, the model's own are its `original`, and the question offers
+    /// only "allow once" and "deny", keeps no rule, and where nobody can be
+    /// asked is answered "deny", whatever a default answer would be: a
+    /// replacement is new work nobody chose. **It is answered only by a
+    /// person** (a `user` client), never by a supervisor's grant: the core
+    /// enforces it.
     pub hooks: Option<&'a HookQuestion>,
 }
 
@@ -188,21 +193,26 @@ impl Policy for AllowAll {
         Decision::Allow
     }
 
-    /// Allows what it is asked about, with nobody to ask: but for a call
-    /// whose arguments a hook replaced, which only a person may allow.
+    /// Allows what it is asked about, with nobody to ask: but for a call a
+    /// hook put the question about (one it asked about, or whose arguments
+    /// it replaced), which is refused as any question nobody can answer is.
+    /// A hook's question is a person's to answer.
     fn ask<'a>(&'a self, call: PlannedCall<'a>) -> BoxFuture<'a, Verdict> {
-        let replaced = call.hooks.is_some_and(|hooks| hooks.replaced.is_some());
-        Box::pin(std::future::ready(if replaced {
-            Verdict::Deny {
+        let verdict = match call.hooks {
+            None => Verdict::Allow,
+            Some(hooks) => Verdict::Deny {
                 note: Some(
-                    "Nobody could be asked, and only a person may allow arguments a hook \
-                     replaced."
-                        .to_owned(),
+                    if hooks.replaced.is_some() {
+                        "Nobody could be asked, and only a person may allow arguments a hook \
+                         replaced."
+                    } else {
+                        "Nobody could be asked what a hook asked."
+                    }
+                    .to_owned(),
                 ),
-            }
-        } else {
-            Verdict::Allow
-        }))
+            },
+        };
+        Box::pin(std::future::ready(verdict))
     }
 
     fn answers_may_stop(&self) -> bool {
@@ -225,9 +235,9 @@ mod tests {
 
     use super::*;
 
-    /// Where nobody can be asked, a call whose arguments a hook replaced is
-    /// refused: `AllowAll` asks nobody. A hook that only asked is allowed,
-    /// as everything else it is asked about.
+    /// Where nobody can be asked, a question a hook put is refused, as any
+    /// question nobody can answer is: `AllowAll` asks nobody. What it is
+    /// asked about with no hook it allows.
     #[test]
     fn nobody_to_ask_refuses_a_replacement_and_allows_the_rest() {
         let (session, turn) = (SessionId::new("s_1"), TurnId::new("t_1"));
@@ -265,7 +275,7 @@ mod tests {
             }))
         };
         assert_eq!(ask(None), Verdict::Allow);
-        assert_eq!(ask(Some(&asked)), Verdict::Allow);
+        assert!(matches!(ask(Some(&asked)), Verdict::Deny { .. }));
         assert!(matches!(ask(Some(&replaced)), Verdict::Deny { .. }));
     }
 }
