@@ -2,18 +2,53 @@
 //! its hash, is read strictly and whole or not at all, sets aside what it
 //! cannot read, and is written owner-only and atomically.
 
-use std::path::PathBuf;
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "a test prepares real files, fails by panicking, and says when it skips"
+)]
 
-use cineris_base::{ContentHash, private};
-use cineris_ext::cache::{
+use std::path::{Path, PathBuf};
+
+use crate::cache::{
     BEFORE_IT_IS_SET_ASIDE, BEFORE_IT_IS_WRITTEN, CacheError, Entry, Loaded, MAX_BYTES,
     MAX_ENTRIES, RegistrationCache, VERSION,
 };
-use cineris_ext::manifest::Manifest;
-use cineris_ext::registration::{CommandDef, HookDef, Registration, ToolDef};
-use cineris_testkit::scratch;
+use crate::manifest::Manifest;
+use crate::registration::{CommandDef, HookDef, Registration, ToolDef};
+use cineris_base::{ContentHash, private};
 use cineris_testkit::scratch::Scratch;
 use serde_json::{Value as Json, json};
+
+/// Makes a symbolic link to a file or, with `directory`, to a folder. On
+/// Windows that needs a privilege an ordinary account lacks unless
+/// Developer Mode is on; the CI runner has it, and there the link must be
+/// made. Elsewhere `false` when it could not be, and the test says so and
+/// stops.
+fn make_link(target: &Path, link: &Path, directory: bool) -> bool {
+    #[cfg(unix)]
+    let made = {
+        let _ = directory;
+        std::os::unix::fs::symlink(target, link)
+    };
+    #[cfg(windows)]
+    let made = if directory {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+    match made {
+        Ok(()) => true,
+        Err(error) if std::env::var_os("GITHUB_ACTIONS").is_none() => {
+            println!("skipped: cannot make a link here ({error})");
+            false
+        }
+        Err(error) => panic!("the CI runner cannot make a link: {error}"),
+    }
+}
 
 /// The cache in a state directory of the test's own, which is not made.
 fn cache(scratch: &Scratch) -> RegistrationCache {
@@ -103,7 +138,10 @@ fn file_of(entries: &[(String, String)]) -> String {
 
 #[test]
 fn an_entry_put_is_read_back_and_the_file_is_the_designs() {
-    let scratch = scratch!("an_entry_put_is_read_back_and_the_file_is_the_designs");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "an_entry_put_is_read_back_and_the_file_is_the_designs",
+    );
     let cache = cache(&scratch);
     let tracker = entry("tracker");
     let mut plain = entry("plain");
@@ -153,7 +191,10 @@ fn an_entry_put_is_read_back_and_the_file_is_the_designs() {
 
 #[test]
 fn a_missing_file_is_an_empty_cache_and_reading_it_makes_nothing() {
-    let scratch = scratch!("a_missing_file_is_an_empty_cache_and_reading_it_makes_nothing");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_missing_file_is_an_empty_cache_and_reading_it_makes_nothing",
+    );
     let loaded = cache(&scratch).load();
     assert_eq!(loaded, Loaded::default());
     assert!(loaded.cache.is_empty());
@@ -162,7 +203,10 @@ fn a_missing_file_is_an_empty_cache_and_reading_it_makes_nothing() {
 
 #[test]
 fn a_put_keeps_the_other_entries_and_replaces_its_own() {
-    let scratch = scratch!("a_put_keeps_the_other_entries_and_replaces_its_own");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_put_keeps_the_other_entries_and_replaces_its_own",
+    );
     let cache = cache(&scratch);
     cache.put(&hash("a"), entry("first")).unwrap();
     cache.put(&hash("b"), entry("second")).unwrap();
@@ -190,7 +234,10 @@ fn a_put_keeps_the_other_entries_and_replaces_its_own() {
 
 #[test]
 fn a_file_not_understood_whole_is_set_aside_and_read_as_empty() {
-    let scratch = scratch!("a_file_not_understood_whole_is_set_aside_and_read_as_empty");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_file_not_understood_whole_is_set_aside_and_read_as_empty",
+    );
     let cache = cache(&scratch);
     let key = hash("tracker").to_hex();
     let good = entry_json("tracker");
@@ -492,7 +539,10 @@ fn a_file_not_understood_whole_is_set_aside_and_read_as_empty() {
 
 #[test]
 fn a_file_larger_than_16_mib_is_set_aside_unread() {
-    let scratch = scratch!("a_file_larger_than_16_mib_is_set_aside_unread");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_file_larger_than_16_mib_is_set_aside_unread",
+    );
     let cache = cache(&scratch);
     // A file with no blocks of its own: its size is all that is asked.
     let large =
@@ -511,7 +561,10 @@ fn a_file_larger_than_16_mib_is_set_aside_unread() {
 
 #[test]
 fn a_put_over_a_file_not_understood_sets_it_aside_and_begins_a_new_one() {
-    let scratch = scratch!("a_put_over_a_file_not_understood_sets_it_aside_and_begins_a_new_one");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_put_over_a_file_not_understood_sets_it_aside_and_begins_a_new_one",
+    );
     let cache = cache(&scratch);
     scratch.file(file(&scratch), r#"{"version": 9, "entries": {}}"#);
     cache.put(&hash("tracker"), entry("tracker")).unwrap();
@@ -527,7 +580,10 @@ fn a_put_over_a_file_not_understood_sets_it_aside_and_begins_a_new_one() {
 
 #[test]
 fn a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did() {
-    let scratch = scratch!("a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did",
+    );
     let cache = cache(&scratch);
     for name in ["kept", "gone", "also-gone"] {
         cache.put(&hash(name), entry(name)).unwrap();
@@ -549,7 +605,10 @@ fn a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did() {
 
 #[test]
 fn every_write_is_owner_only_and_leaves_no_temporary_file() {
-    let scratch = scratch!("every_write_is_owner_only_and_leaves_no_temporary_file");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "every_write_is_owner_only_and_leaves_no_temporary_file",
+    );
     let cache = cache(&scratch);
     cache.put(&hash("one"), entry("one")).unwrap();
     // Its folder was made owner-only too.
@@ -575,12 +634,15 @@ fn every_write_is_owner_only_and_leaves_no_temporary_file() {
 /// every approved extension again.
 #[test]
 fn a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed() {
-    let scratch = scratch!("a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed",
+    );
     let cache = cache(&scratch);
     let aside = cache.set_aside_path();
     let target = scratch.file("elsewhere.json", "kept");
     scratch.dir("state/extensions");
-    if !crate::make_link(&target, &file(&scratch), false) {
+    if !make_link(&target, &file(&scratch), false) {
         return;
     }
     let reason = cache.load().set_aside.unwrap();
@@ -624,7 +686,10 @@ fn a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed() {
 /// and put back.
 #[test]
 fn a_cache_written_while_one_is_set_aside_is_put_back() {
-    let scratch = scratch!("a_cache_written_while_one_is_set_aside_is_put_back");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_cache_written_while_one_is_set_aside_is_put_back",
+    );
     let cache = cache(&scratch);
     // What another session's put writes, made beside it.
     let other = RegistrationCache::new(scratch.join("other/registered.json"));
@@ -659,7 +724,10 @@ fn a_cache_written_while_one_is_set_aside_is_put_back() {
 /// written is not written through: the write refuses it.
 #[test]
 fn a_link_made_just_before_the_write_is_never_written_through() {
-    let scratch = scratch!("a_link_made_just_before_the_write_is_never_written_through");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_link_made_just_before_the_write_is_never_written_through",
+    );
     let cache = cache(&scratch);
     let target = scratch.file("elsewhere.json", "kept");
     scratch.dir("state/extensions");
@@ -669,7 +737,7 @@ fn a_link_made_just_before_the_write_is_never_written_through() {
         std::thread::spawn(move || cache.put(&hash("one"), entry("one")))
     };
     hold.reach();
-    let made = crate::make_link(&target, &file(&scratch), false);
+    let made = make_link(&target, &file(&scratch), false);
     hold.let_one_go();
     let written = writer.join().unwrap();
     if !made {
@@ -687,7 +755,7 @@ fn a_link_made_just_before_the_write_is_never_written_through() {
 /// extension it fits, its hooks among those the manifest allows.
 #[test]
 fn an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has() {
-    let snapshot = crate::snapshot(&[
+    let snapshot = snapshot(&[
         (
             "extension.toml",
             "api = 1\nname = \"tracker\"\nversion = \"0.1.0\"\nmain = \"main.js\"\nprompt = \
@@ -734,7 +802,10 @@ fn an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has() {
 
 #[test]
 fn a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing() {
-    let scratch = scratch!("a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing",
+    );
     let cache = cache(&scratch);
     // An entry past a registration's caps.
     let mut long = entry("long");
@@ -777,4 +848,13 @@ fn a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing() {
 
     // An entry within every cap cannot make the file larger than 16 MiB
     // alone: the write's cap is held by `cache::tests`, at a smaller cap.
+}
+
+/// A snapshot of an extension made of these files.
+fn snapshot(files: &[(&str, &str)]) -> std::sync::Arc<crate::folder::Snapshot> {
+    let files: std::collections::BTreeMap<String, Vec<u8>> = files
+        .iter()
+        .map(|(path, content)| ((*path).to_owned(), content.as_bytes().to_vec()))
+        .collect();
+    std::sync::Arc::new(crate::folder::Snapshot::from_files(files))
 }

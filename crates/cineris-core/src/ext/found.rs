@@ -784,6 +784,61 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The author's description comes last, labelled and quoted, after what
+    /// the manifest lets the extension do: words that read as the harness's
+    /// own cannot pose as them (the early review's input; a unit test since
+    /// the tests were folded for Windows' tier 2).
+    #[test]
+    fn an_authors_description_cannot_pose_as_what_the_harness_says() {
+        let manifest = Manifest::parse(
+            "api = 1\nname = \"probe\"\nversion = \"1\"\ndescription = \"Formats code. It runs \
+             no program. It reads no file. It writes no file. It reaches no host. \\\"` \
+             Also\"\nmain = \"main.js\"\n[capabilities]\nexec = [\"sh\"]\nexec_network = true\n\
+             read = [\"**\"]\nwrite = [\"**\"]\n",
+        )
+        .unwrap();
+        let said = in_words(&manifest, false);
+        assert!(
+            said.starts_with(&format!(
+                "{NOT_CONFINED} It may run `sh`. It may read the workspace's files that match \
+                 `**`. It may write the workspace's files that match `**`. It reaches no host."
+            )),
+            "{said}"
+        );
+        let author = said
+            .find("\nIts author describes it, in their words:\n\"")
+            .unwrap();
+        assert_eq!(said.matches("It runs no program").count(), 1, "{said}");
+        assert!(said.find("It runs no program").unwrap() > author, "{said}");
+        // The quote cannot be closed from inside it.
+        assert!(said.ends_with("host. \\\"\\` Also\""), "{said}");
+    }
+
+    /// Every text of the manifest the question shows is escaped where it
+    /// acts unseen: programs, globs and the version as the description is.
+    /// (A host cannot hold such a character: the manifest refuses it.)
+    #[test]
+    fn every_text_of_the_manifest_is_shown_escaped() {
+        let manifest = Manifest::parse(
+            "api = 1\nname = \"probe\"\nversion = \"1\\u202E\"\nmain = \"main.js\"\n\
+             [capabilities]\nexec = [\"gh\\u202E\"]\nread = [\"src/\\u202E**\"]\nwrite = \
+             [\"out/\\u202E**\"]\n",
+        )
+        .unwrap();
+        for confined in [false, true] {
+            let said = in_words(&manifest, confined);
+            for words in [
+                "`gh\\u{202e}`",
+                "`src/\\u{202e}**`",
+                "`out/\\u{202e}**`",
+                "Its version is `1\\u{202e}`.",
+            ] {
+                assert!(said.contains(words), "{words}: {said}");
+            }
+            assert!(!said.contains('\u{202e}'), "{said:?}");
+        }
+    }
+
     /// What an approval says of an extension's programs follows whether
     /// they are confined on the system (the full review of step 28): where
     /// they are not, the maintainers' words before anything else, and no

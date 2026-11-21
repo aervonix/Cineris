@@ -17,11 +17,11 @@ use serde_json::json;
 
 use crate::extensions_found::{
     about_probe, cache, cache_file, clock, definition, found_probe, make_link, open_answering,
-    open_doing, pin, project_key, projects, searches, searches_times, state, trust, trust_store,
-    users, write_extension, yes,
+    open_doing, pin, project_key, projects, searches, searches_times, start, state, trust,
+    trust_store, users, write_extension, yes,
 };
-use crate::extensions_trust::{counting, listed_detail, not_now};
-use crate::{Front, World, calls, poll_once, says, settle};
+use crate::extensions_trust::{counting, listed_detail, named_definition, not_now, write_named};
+use crate::{World, calls, poll_once, says, settle};
 
 /// Pins something else of the user's: `pins.toml` changes, and the next
 /// turn's look finds a change.
@@ -199,7 +199,7 @@ fn a_file_changed_as_its_folder_is_read_is_seen_at_the_first_turn() {
     let core = world.core();
     let read = Hold::new(cineris_ext::discover::AN_EXTENSION_WAS_READ);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut waiting = std::pin::pin!(std::future::pending::<()>());
         read.drive_until_reached(waiting.as_mut()).await;
         write_extension(&folder, "", "the second, and changed");
@@ -229,7 +229,7 @@ fn a_file_put_in_an_empty_folder_of_an_extension_is_a_change() {
     cache(&world, &folder);
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         std::fs::write(folder.join("lib/deep/more.js"), "// more").unwrap();
@@ -317,25 +317,23 @@ fn a_folder_on_the_way_to_a_linked_folder_of_extensions_swapped_for_a_link_out_i
 /// of a name the user's might have is not used.
 #[test]
 fn a_users_folder_that_cannot_be_opened_takes_every_name() {
-    for (test, form) in [
-        ("review_users_folder_a_file", "file"),
-        ("review_users_folder_a_dangling_link", "link"),
-    ] {
-        let world = World::new(test, searches());
-        let root = world.dirs().config.unwrap().join("extensions");
-        std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+    let world = World::new("review_users_folder_unopened", searches_times(2));
+    let root = world.dirs().config.unwrap().join("extensions");
+    std::fs::create_dir_all(root.parent().unwrap()).unwrap();
+    let theirs = projects(&world);
+    write_extension(&theirs, "", "the projects");
+    trust(&world, &[definition(&theirs)]);
+    cache(&world, &theirs);
+    for form in ["file", "link"] {
+        let _ = std::fs::remove_file(&root);
         if form == "file" {
             std::fs::write(&root, "not a folder").unwrap();
         } else if !make_link(&world.dir.join("nowhere"), &root) {
             continue;
         }
-        let theirs = projects(&world);
-        write_extension(&theirs, "", "the projects");
-        trust(&world, &[definition(&theirs)]);
-        cache(&world, &theirs);
         let core = world.core();
         world.run(async {
-            let (front, _) = open_answering(&world, &core, not_now()).await;
+            let front = start(&world, &core).await;
             front.turn("look for the probe").await;
             assert!(!found_probe(&front), "{form}: {:?}", front.results());
             assert!(
@@ -365,7 +363,7 @@ fn registration_evaluates_the_snapshot_whose_hash_is_pinned() {
     let core = world.core();
     let registering = Hold::new(cineris_core::ext::BEFORE_AN_EXTENSION_IS_REGISTERED);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut waiting = std::pin::pin!(std::future::pending::<()>());
         registering.drive_until_reached(waiting.as_mut()).await;
         write_extension(&folder, "", "the second, and changed");
@@ -398,7 +396,7 @@ fn a_registration_that_fails_is_said_once_and_not_evaluated_again() {
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         pin_something_else(&world, "unrelated");
         front.turn("look for the probe").await;
@@ -426,7 +424,7 @@ fn a_turn_that_waits_for_the_extensions_says_so_after_a_few_seconds() {
     let core = world.core();
     let registering = Hold::new(cineris_core::ext::BEFORE_AN_EXTENSION_IS_REGISTERED);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut prompt = std::pin::pin!(front.prompt("look for the probe"));
         registering.drive_until_reached(prompt.as_mut()).await;
         assert!(poll_once(prompt.as_mut()).await.is_pending());
@@ -513,7 +511,7 @@ fn what_the_session_was_told_is_not_said_again_at_a_later_look() {
     let core = world.core();
     let reads = counting(AN_EXTENSION_IS_READ);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         pin_something_else(&world, "another");
         front.turn("look for the probe").await;
@@ -537,21 +535,37 @@ fn what_the_session_was_told_is_not_said_again_at_a_later_look() {
 /// question kept its prompt file to check it by.
 #[test]
 fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
-    for (test, misfit, of_the_user) in [
-        ("review_misfit_hook_users", "hook", true),
-        ("review_misfit_prompt_users", "prompt", true),
-        ("review_misfit_hook_projects", "hook", false),
-        ("review_misfit_prompt_projects", "prompt", false),
-        ("review_fits_users", "none", true),
-        ("review_fits_projects", "none", false),
-    ] {
-        let world = World::new(test, searches());
-        let folder = if of_the_user {
-            users(&world)
+    // Six extensions side by side in one world, each its own name: for the
+    // user and for a trusted project, one whose entry has a hook the
+    // manifest does not list, one whose prompt is not its file's, and one
+    // that fits.
+    let world = World::new(
+        "review_misfits",
+        [
+            calls(&[("s1", "tool_search", json!({"query": "echo"}))]),
+            says("Done."),
+        ],
+    );
+    let root = |of_the_user: bool| {
+        if of_the_user {
+            world.dirs().config.unwrap().join("extensions")
         } else {
-            projects(&world)
-        };
-        write_extension(&folder, "", "Gives its arguments back");
+            world.workspace.join(".cineris/extensions")
+        }
+    };
+    let cases = [
+        ("uhook", "hook", true),
+        ("uprompt", "prompt", true),
+        ("ufits", "none", true),
+        ("phook", "hook", false),
+        ("pprompt", "prompt", false),
+        ("pfits", "none", false),
+    ];
+    let mut trusted = Vec::new();
+    let mut hashes = Vec::new();
+    for (name, misfit, of_the_user) in cases {
+        let folder = root(of_the_user).join(name);
+        write_named(&folder, name, "Gives its arguments back");
         let manifest_file = folder.join("extension.toml");
         let manifest = std::fs::read_to_string(&manifest_file).unwrap().replace(
             "main = \"main.js\"\n",
@@ -559,10 +573,13 @@ fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
         );
         std::fs::write(&manifest_file, manifest).unwrap();
         std::fs::write(folder.join("prompt.md"), "Use the probe.").unwrap();
+        let defined = named_definition(&folder, name);
         if of_the_user {
-            pin(&world, &folder);
+            PinStore::new(state(&world).pins_file(), clock(&world))
+                .pin(&defined)
+                .unwrap();
         } else {
-            trust(&world, &[definition(&folder)]);
+            trusted.push(defined);
         }
         let hash = cache(&world, &folder);
         let mut entry = cache_file(&world).load().cache.get(&hash).unwrap().clone();
@@ -584,67 +601,105 @@ fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
             _ => entry.prompt = Some("Use the probe.".to_owned()),
         }
         cache_file(&world).put(&hash, entry).unwrap();
-        let core = world.core();
-        let made = cineris_ext::engine::runtimes_made();
-        world.run(async {
-            let (front, _) = open_answering(&world, &core, not_now()).await;
-            front.turn("look for the probe").await;
-            assert!(found_probe(&front), "{test}: {:?}", front.results());
-            front.close().await;
-        });
-        let again = usize::from(misfit != "none");
-        assert_eq!(
-            cineris_ext::engine::runtimes_made(),
-            made + again,
-            "{test}: registered again only when it did not fit"
-        );
-        let kept = cache_file(&world).load().cache;
+        hashes.push((name, hash));
+    }
+    trust(&world, &trusted);
+    let core = world.core();
+    let made = cineris_ext::engine::runtimes_made();
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("look for the tools").await;
+        let results = front.results();
+        let (_, _, found) = results.last().expect("the search ran");
+        for (name, _, _) in cases {
+            assert!(found.contains(&format!("{name}/echo")), "{name}: {found}");
+        }
+        front.close().await;
+    });
+    assert_eq!(
+        cineris_ext::engine::runtimes_made(),
+        made + 4,
+        "registered again only where the entry did not fit"
+    );
+    let kept = cache_file(&world).load().cache;
+    for (name, hash) in hashes {
         let entry = kept.get(&hash).expect("kept");
-        assert_eq!(entry.prompt.as_deref(), Some("Use the probe."), "{test}");
-        assert!(entry.registration.hooks.is_empty(), "{test}");
+        assert_eq!(entry.prompt.as_deref(), Some("Use the probe."), "{name}");
+        assert!(entry.registration.hooks.is_empty(), "{name}");
     }
 }
 
 // ------------------------------------------------------------ the fresh review
 
-/// What an extension's programs can do is said of the load a yes puts in
-/// force, where the sandbox enforces (the fresh review of step 28): a
-/// project whose own `sandbox.write` names a folder that holds the
-/// harness's files, which the question's own load holds back and which
-/// turns the sandbox off for the project's trusted sessions, is said not to
-/// confine them; without that setting they are said to be confined.
+/// What the trust question says of the sandbox, where it enforces, is of
+/// the load a yes puts in force (the fresh review of step 28, and the
+/// maintainers after it), one world and a core for each case, folded for
+/// Windows' tier 2:
+/// - a project whose own `sandbox.write` names a folder that holds the
+///   harness's files (`~/.cargo`, with the launcher in `~/.cargo/bin`),
+///   which the question's own load holds back, is warned of before anything
+///   else, and its extension's programs are said not to be confined;
+/// - an ordinary write root, a folder in the workspace, gets no warning,
+///   and the programs are said to be confined (the first core test to reach
+///   that branch);
+/// - such a root in a profile the project defines is warned of too, naming
+///   the profile, in a session opened with none: a yes trusts every profile.
 #[test]
-fn what_an_extensions_programs_can_do_is_said_of_the_load_a_yes_puts_in_force() {
-    for (test, writes_home) in [
-        ("review_confined_by_the_trusted_load", true),
-        ("review_confined_where_enforcing", false),
+fn the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force() {
+    let world = World::new("review_sandbox_by_the_trusted_load", []);
+    let bin = world.home.join(".cargo/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("cineris"), "the launcher").unwrap();
+    write_extension(&projects(&world), "exec = [\"sh\"]", "x");
+    let warned = "This project's configuration asks to write in `~/.cargo`, which holds \
+                  Cineris's own files. If you trust it, its sessions run without the sandbox.";
+    let in_dev = "This project's configuration asks, in its profile `dev`, to write in `~/.cargo`, \
+                  which holds Cineris's own files. If you trust it, its sessions with that profile \
+                  run without the sandbox.";
+    for (config, said, confined) in [
+        ("[sandbox]\nwrite = [\"~/.cargo\"]\n", Some(warned), false),
+        ("[sandbox]\nwrite = [\"build\"]\n", None, true),
+        (
+            "[profiles.dev.sandbox]\nwrite = [\"~/.cargo\"]\n",
+            Some(in_dev),
+            true,
+        ),
     ] {
-        let world = World::new(test, []);
-        if writes_home {
-            // The home folder holds the harness's configuration and state.
-            world.project_config(&format!(
-                "[sandbox]\nwrite = [\"{}\"]\n",
-                world.home.display().to_string().replace('\\', "\\\\")
-            ));
-        }
-        write_extension(&projects(&world), "exec = [\"sh\"]", "x");
+        world.project_config(config);
+        // A core of its own: a not now is the core's for its life.
         let core = world.core_with(|options| {
-            options.launcher = Some(crate::sandbox::launcher());
+            options.launcher = Some((bin.join("cineris"), Vec::new()));
             options.sandbox = Some(cineris_sandbox::support::Support::Landlock(8));
         });
         world.run(async {
             let (front, asked) = open_answering(&world, &core, not_now()).await;
+            assert_eq!(asked.len(), 1, "{config}");
+            let resources = &asked[0].resources;
+            let warnings: Vec<&TrustResource> = resources
+                .iter()
+                .filter(|resource| resource.detail.contains("without the sandbox"))
+                .collect();
+            match said {
+                Some(said) => {
+                    assert_eq!(warnings.len(), 1, "{config}: {resources:#?}");
+                    assert_eq!(warnings[0].kind, TrustResourceKind::Settings);
+                    assert_eq!(warnings[0].detail, said);
+                    // Said before anything else the question lists.
+                    assert!(std::ptr::eq(warnings[0], &resources[0]), "{resources:#?}");
+                }
+                None => assert!(warnings.is_empty(), "{config}: {warnings:#?}"),
+            }
             let detail = listed_detail(&asked);
-            if writes_home {
-                assert!(
-                    detail.contains(cineris_core::ext::NOT_CONFINED),
-                    "{test}: {detail}"
-                );
-            } else {
+            if confined {
                 assert!(
                     !detail.contains(cineris_core::ext::NOT_CONFINED)
                         && detail.contains("Its programs are confined"),
-                    "{test}: {detail}"
+                    "{config}: {detail}"
+                );
+            } else {
+                assert!(
+                    detail.contains(cineris_core::ext::NOT_CONFINED),
+                    "{config}: {detail}"
                 );
             }
             front.close().await;
@@ -714,90 +769,4 @@ fn perf_a_crafted_folder_of_extensions_is_looked_at_within_its_bounds() {
         cineris_testkit::numbers::report(what, took.as_secs_f64() * 1e3, "ms");
         assert!(took < bound, "{what}: {took:?}");
     }
-}
-
-/// The trust question warns, before the yes, of a write root of the
-/// project's own configuration that holds the harness's files, which
-/// trusting it would turn the sandbox off with (the maintainers, after the
-/// fresh review of step 28): `~/.cargo`, with the launcher in
-/// `~/.cargo/bin`. An ordinary write root, a folder in the workspace, gets
-/// no such words.
-#[test]
-fn the_trust_question_warns_of_a_write_root_that_would_turn_the_sandbox_off() {
-    let warned = "This project's configuration asks to write in `~/.cargo`, which holds \
-                  Cineris's own files. If you trust it, its sessions run without the sandbox.";
-    for (test, root) in [
-        ("review_warns_of_the_cargo_folder", "~/.cargo"),
-        ("review_warns_of_nothing_ordinary", "build"),
-    ] {
-        let world = World::new(test, []);
-        let bin = world.home.join(".cargo/bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("cineris"), "the launcher").unwrap();
-        world.project_config(&format!("[sandbox]\nwrite = [\"{root}\"]\n"));
-        let core = world.core_with(|options| {
-            options.launcher = Some((bin.join("cineris"), Vec::new()));
-            options.sandbox = Some(cineris_sandbox::support::Support::Landlock(8));
-        });
-        world.run(async {
-            let (front, asked) = open_answering(&world, &core, not_now()).await;
-            assert_eq!(asked.len(), 1, "{test}");
-            let said: Vec<&TrustResource> = asked[0]
-                .resources
-                .iter()
-                .filter(|resource| resource.detail.contains("run without the sandbox"))
-                .collect();
-            if root == "~/.cargo" {
-                assert_eq!(said.len(), 1, "{test}: {:#?}", asked[0].resources);
-                assert_eq!(said[0].kind, TrustResourceKind::Settings);
-                assert_eq!(said[0].detail, warned);
-                // Said before anything else the question lists.
-                assert!(
-                    std::ptr::eq(said[0], &asked[0].resources[0]),
-                    "{test}: {:#?}",
-                    asked[0].resources
-                );
-            } else {
-                assert!(said.is_empty(), "{test}: {said:#?}");
-            }
-            front.close().await;
-        });
-    }
-}
-
-/// A write root that would turn the sandbox off in one of the project's
-/// profiles is warned of too, naming the profile, in a session opened with
-/// no profile: a yes trusts every profile (the last look at the warning).
-#[test]
-fn the_trust_question_warns_of_a_profiles_write_root_that_would_turn_the_sandbox_off() {
-    let world = World::new("review_warns_of_a_profiles_root", []);
-    let bin = world.home.join(".cargo/bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    std::fs::write(bin.join("cineris"), "the launcher").unwrap();
-    world.project_config("[profiles.dev.sandbox]\nwrite = [\"~/.cargo\"]\n");
-    let core = world.core_with(|options| {
-        options.launcher = Some((bin.join("cineris"), Vec::new()));
-        options.sandbox = Some(cineris_sandbox::support::Support::Landlock(8));
-    });
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, not_now()).await;
-        assert_eq!(asked.len(), 1);
-        let said: Vec<&str> = asked[0]
-            .resources
-            .iter()
-            .filter(|resource| resource.detail.contains("without the sandbox"))
-            .map(|resource| resource.detail.as_str())
-            .collect();
-        assert_eq!(
-            said,
-            [
-                "This project's configuration asks, in its profile `dev`, to write in `~/.cargo`, \
-              which holds Cineris's own files. If you trust it, its sessions with that profile \
-              run without the sandbox."
-            ],
-            "{:#?}",
-            asked[0].resources
-        );
-        front.close().await;
-    });
 }
