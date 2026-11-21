@@ -112,6 +112,33 @@ pub struct HookReason {
     pub reason: Option<String>,
 }
 
+impl HookReason {
+    /// The line of an approval's `reasons` that says this hook asked
+    /// (since step 28): what a client that does not read `hooks` shows,
+    /// and one that does need not show again.
+    #[must_use]
+    pub fn asking_line(&self) -> String {
+        match &self.reason {
+            Some(reason) => format!("The hook `{}` asks: {reason}", self.hook),
+            None => format!("The hook `{}` asks about this call.", self.hook),
+        }
+    }
+}
+
+impl ReplacedArguments {
+    /// The line of an approval's `reasons` that says a hook changed the
+    /// call (since step 28): what a client that does not read `replaced`
+    /// shows, and one that does need not show again.
+    #[must_use]
+    pub fn reason_line(&self) -> String {
+        format!(
+            "The hook `{}` changed the arguments the model wrote: the call would run with the \
+             hook's.",
+            self.hook
+        )
+    }
+}
+
 /// Arguments a `tool.before` hook put in place of the ones the model wrote
 /// (since step 28). Such a call is always put to the user, who may allow it
 /// once or refuse it.

@@ -930,6 +930,61 @@ impl Session {
         );
     }
 
+    /// Runs a turn's `turn.end` hooks on a task of their own, not waited
+    /// for. What each adds is a notice for the next turn: given at its
+    /// start if it is in by then, else at the next safe boundary, as any
+    /// notice waiting is. A hook that fails is shown to the user and adds
+    /// nothing. Closing the session stops them.
+    fn turn_ended(&self, turn: &Turn, outcome: &TurnOutcome, error: Option<String>) {
+        let Some(set) = self
+            .env
+            .hooks
+            .as_ref()
+            .filter(|set| set.hooks.wants(HookEvent::TurnEnd, None))
+        else {
+            return;
+        };
+        let set = set.clone();
+        let matched = set.hooks.matching(HookEvent::TurnEnd, None);
+        let input = HookInput {
+            event: HookEvent::TurnEnd,
+            session: self.shared.info.id.clone(),
+            turn: turn.id.clone(),
+            workspace: self.env.workspace.paths.root().clone(),
+            subject: HookSubject::TurnEnded {
+                outcome: outcome.clone(),
+                error,
+            },
+        };
+        let shared = Arc::clone(&self.shared);
+        tokio::spawn(async move {
+            let Some(heard) = shared
+                .cancel
+                .race(hooks::ask_all(&set, matched, input))
+                .await
+            else {
+                return;
+            };
+            let added = hooks::added(HookEvent::TurnEnd, heard);
+            for failed in added.failed {
+                // The turn has ended: the notice is the session's.
+                shared.emitter.emit(
+                    None,
+                    Event::Notice(Notice::Info(InfoNotice { message: failed })),
+                );
+            }
+            if !added.texts.is_empty() {
+                let mut inbox = shared.lock();
+                for (hook, text) in added.texts {
+                    inbox.pending.push_back(Pending::Notice {
+                        source: NoticeSource::Hook,
+                        text: hooks::turn_end_notice(&hook, &text),
+                    });
+                }
+            }
+        });
+    }
+
     /// Records what a prompt's hooks added, each after the prompt under a
     /// line that names the hook.
     async fn add_context(
@@ -2120,8 +2175,12 @@ impl Session {
             }
             next
         };
+        let error_code = completed.error.as_ref().map(|error| error.code.clone());
         self.emit(turn, Event::TurnCompleted(completed));
         cineris_base::hook::point(TURN_COMPLETED_TOLD);
+        // The turn's `turn.end` hooks, not waited for: what they add waits
+        // for the next turn, as any notice does.
+        self.turn_ended(turn, &outcome, error_code);
         {
             let inbox = self.shared.lock();
             // Told under the lock, so that a prompt accepted from another

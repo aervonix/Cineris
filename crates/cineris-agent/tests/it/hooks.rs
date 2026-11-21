@@ -1349,3 +1349,465 @@ fn hooks_across_the_turns_of_one_session() {
     assert_eq!(world.provider.requests().len(), 4);
     assert_valid_history(&last_request(&world.provider).messages);
 }
+
+// --------------------------------------------- the events that only add
+
+/// The text of every `info` notice the session sent its front ends.
+fn infos(rig: &Rig) -> Vec<String> {
+    rig.events
+        .notices()
+        .into_iter()
+        .filter_map(|notice| match notice {
+            Notice::Info(info) => Some(info.message),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The notices the log holds of the source `hook`, in order.
+fn hook_notices(rig: &Rig) -> Vec<String> {
+    rig.store
+        .items()
+        .into_iter()
+        .filter_map(|item| match item {
+            Item::Notice(notice) if notice.source == NoticeSource::Hook => Some(notice.text),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The text of a request's last message: a summary request's instructions.
+fn last_message(request: &cineris_llm::ModelRequest) -> String {
+    request.messages.last().map(text_of).unwrap_or_default()
+}
+
+/// A `tool.after` hook's text is a note at the end of the call's result,
+/// under a line that names the hook, which the model is shown. The hook is
+/// given the call as it ran and its result.
+#[test]
+fn a_tool_after_hooks_note_ends_the_result_under_a_line_naming_it() {
+    let response = calls(&[("c1", "read", json!({"path": "a"}))]);
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked("hook_after_note", [response, says("Done.")]);
+    let hook = hooks.add(
+        FakeHook::on("lint", HookEvent::ToolAfter)
+            .tool("read")
+            .replies([answer(json!({"context": "a.rs has 3 warnings"}))]),
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    let result = &results(&rig)[0];
+    assert_eq!(result.outcome, ToolOutcome::Success);
+    let Some(Part::Text(note)) = result.content.last() else {
+        panic!("a note ends the result: {result:?}");
+    };
+    assert!(
+        note.text
+            .starts_with("The hook `lint` adds this note to the result above."),
+        "{}",
+        note.text
+    );
+    assert!(note.text.ends_with("a.rs has 3 warnings"));
+    assert!(text(result).starts_with("read a ok"), "the tool's own first");
+    let input = &hook.inputs()[0];
+    assert_eq!(input["event"], "tool.after");
+    assert_eq!(input["arguments"], json!({"path": "a"}));
+    assert_eq!(input["plan"], "read a");
+    assert_eq!(
+        input["result"],
+        json!({"outcome": "success", "content": "read a ok"})
+    );
+    let request = last_request(&world.provider);
+    let sent = format!("{:?}", request.messages);
+    assert!(sent.contains("a.rs has 3 warnings"), "the model is shown it");
+}
+
+/// A `tool.after` hook is waited for: the round's results are not recorded,
+/// and the next request not sent, until it answers.
+#[test]
+fn a_tool_after_hook_is_waited_for() {
+    let response = calls(&[("c1", "read", json!({"path": "a"}))]);
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked("hook_after_waited", [response, says("Done.")]);
+    let held = Gate::new();
+    let hook = hooks.add(FakeHook::on("slow", HookEvent::ToolAfter).replies([
+        Reply::AtGate(
+            held.clone(),
+            HookOutcome::Answer(json!({"context": "late"})),
+        ),
+    ]));
+    world.run(async {
+        rig.prompt("go");
+        hook.runs(1).await;
+        crate::settle().await;
+        assert_eq!(world.log.count("end read a"), 1, "the tool ran");
+        assert!(results(&rig).is_empty(), "its result waits for the hook");
+        assert_eq!(world.provider.requests().len(), 1);
+        held.open();
+        rig.events.turns(1).await;
+    });
+    assert!(text(&results(&rig)[0]).ends_with("late"));
+}
+
+/// On `tool.after`, a hook that fails, does not answer in its time, or
+/// answers outside its contract (a decision, a reason) is shown to the
+/// user and adds nothing: the call keeps its own result.
+#[test]
+fn a_tool_after_hook_that_fails_is_shown_and_adds_nothing() {
+    for (reply, named) in [
+        (fails("it exited with 1"), "it exited with 1"),
+        (answer(json!({"decision": "deny"})), "`decision`"),
+        (answer(json!({"reason": "x"})), "`reason`"),
+        (Reply::Never, "did not answer within 5 s"),
+    ] {
+        let response = calls(&[("c1", "read", json!({"path": "a"}))]);
+        let Hooked {
+            world,
+            rig,
+            hooks,
+            timer,
+        } = hooked("hook_after_fails", [response, says("Done.")]);
+        let stuck = matches!(reply, Reply::Never);
+        hooks.add(FakeHook::on("lint", HookEvent::ToolAfter).replies([reply]));
+        world.run(async {
+            rig.prompt("go");
+            if stuck {
+                timer.sleeping_for(Duration::from_secs(5)).await;
+                timer.advance(Duration::from_secs(5));
+            }
+            rig.events.turns(1).await;
+        });
+        let result = &results(&rig)[0];
+        assert_eq!(result.outcome, ToolOutcome::Success, "{named}");
+        assert_eq!(text(result), "read a ok", "nothing was added");
+        let infos = infos(&rig);
+        assert_eq!(infos.len(), 1, "{infos:?}");
+        assert!(
+            infos[0].starts_with("The hook `lint` failed on `tool.after`"),
+            "{infos:?}"
+        );
+        assert!(infos[0].contains(named), "{infos:?}");
+    }
+}
+
+/// `tool.after` is asked about a call that ran, with the arguments it ran
+/// with: not about one that was refused, and a hook's replacement is what
+/// it is shown.
+#[test]
+fn tool_after_sees_the_calls_that_ran_with_the_arguments_they_ran_with() {
+    let response = calls(&[
+        ("c1", "write", json!({"path": "a"})),
+        ("c2", "shell", json!({"id": "deploy"})),
+    ]);
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked("hook_after_ran", [response, says("Done.")]);
+    hooks.add(
+        FakeHook::on("swap", HookEvent::ToolBefore)
+            .tool("write")
+            .replies([answer(json!({"arguments": {"path": "b"}}))]),
+    );
+    let after = hooks.add(FakeHook::on("after", HookEvent::ToolAfter));
+    rig.policy.decide_for("shell", Decision::Deny { reason: None });
+    rig.policy.answer_for("write", Verdict::Allow);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+    let inputs = after.inputs();
+    assert_eq!(inputs.len(), 1, "only the call that ran: {inputs:?}");
+    assert_eq!(inputs[0]["tool"], "write");
+    assert_eq!(inputs[0]["arguments"], json!({"path": "b"}));
+}
+
+/// A `turn.end` hook's text is a notice for the next turn, given at its
+/// start when it is in by then, before the prompt; the hook is told how the
+/// turn ended.
+#[test]
+fn a_turn_end_hooks_notice_is_given_at_the_next_turns_start() {
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked("hook_turn_end", [says("One."), says("Two.")]);
+    let hook = hooks.add(FakeHook::on("journal", HookEvent::TurnEnd).replies([
+        answer(json!({"context": "The release is on Friday."})),
+        nothing(),
+    ]));
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        hook.runs(1).await;
+        crate::settle().await;
+        rig.prompt("second");
+        rig.events.turns(2).await;
+    });
+    let input = &hook.inputs()[0];
+    assert_eq!(input["event"], "turn.end");
+    assert_eq!(input["outcome"], "completed");
+    let items = rig.store.items();
+    let notice = items
+        .iter()
+        .position(|item| matches!(item, Item::Notice(notice) if notice.source == NoticeSource::Hook))
+        .expect("the hook's notice");
+    let second = items
+        .iter()
+        .rposition(|item| matches!(item, Item::UserMessage(_)))
+        .expect("the second prompt");
+    assert!(notice < second, "before the second prompt: {items:?}");
+    let notices = hook_notices(&rig);
+    assert!(notices[0].starts_with("The hook `journal` adds this after the turn before ended."));
+    assert!(notices[0].ends_with("The release is on Friday."));
+    let sent = format!("{:?}", last_request(&world.provider).messages);
+    assert!(sent.contains("The release is on Friday."));
+    assert_valid_history(&last_request(&world.provider).messages);
+}
+
+/// A `turn.end` hook is not waited for: the turn ends while it runs, and
+/// what it adds once the next turn has begun comes at that turn's next safe
+/// boundary, after its round.
+#[test]
+fn a_turn_end_hooks_late_notice_comes_at_the_next_safe_boundary() {
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked(
+        "hook_turn_end_late",
+        [
+            says("One."),
+            calls(&[("c1", "read", json!({"path": "a", "gate": "tool"}))]),
+            says("Two."),
+        ],
+    );
+    let held = Gate::new();
+    let hook = hooks.add(FakeHook::on("journal", HookEvent::TurnEnd).replies([
+        Reply::AtGate(
+            held.clone(),
+            HookOutcome::Answer(json!({"context": "Late news."})),
+        ),
+        nothing(),
+    ]));
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        hook.runs(1).await;
+        rig.prompt("second");
+        world.log.has("start read a").await;
+        held.open();
+        crate::settle().await;
+        world.gates.open("tool");
+        rig.events.turns(2).await;
+    });
+    let kinds: Vec<&str> = rig
+        .store
+        .items()
+        .iter()
+        .skip_while(|item| !matches!(item, Item::ToolResult(_)))
+        .map(|item| match item {
+            Item::ToolResult(_) => "result",
+            Item::Notice(notice) if notice.source == NoticeSource::Hook => "hook",
+            Item::AssistantMessage(_) => "assistant",
+            _ => "other",
+        })
+        .collect();
+    assert_eq!(kinds, ["result", "hook", "assistant"]);
+    assert_valid_history(&last_request(&world.provider).messages);
+}
+
+/// On `turn.end`, a hook that fails is shown to the user and adds nothing.
+#[test]
+fn a_turn_end_hook_that_fails_is_shown_and_adds_nothing() {
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked("hook_turn_end_fails", [says("One."), says("Two.")]);
+    let hook = hooks.add(
+        FakeHook::on("journal", HookEvent::TurnEnd)
+            .replies([answer(json!({"decision": "deny"})), nothing()]),
+    );
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        hook.runs(1).await;
+        crate::settle().await;
+        rig.prompt("second");
+        rig.events.turns(2).await;
+    });
+    assert!(hook_notices(&rig).is_empty());
+    let infos = infos(&rig);
+    assert_eq!(infos.len(), 1, "{infos:?}");
+    assert!(infos[0].starts_with("The hook `journal` failed on `turn.end`"));
+    assert_eq!(rig.events.ends()[1].outcome, TurnOutcome::Completed);
+}
+
+/// A `compaction.before` hook's text goes into the summary request's
+/// instructions under a line that names it. It is waited for: nothing is
+/// requested until it answers. It is told what set the compaction off.
+#[test]
+fn a_compaction_hooks_instructions_go_into_the_summary_request_naming_it() {
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked("hook_compaction", [says("One."), says("The summary.")]);
+    let held = Gate::new();
+    let hook = hooks.add(
+        FakeHook::on("keep", HookEvent::CompactionBefore).replies([Reply::AtGate(
+            held.clone(),
+            HookOutcome::Answer(json!({"context": "Keep the ticket numbers."})),
+        )]),
+    );
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        rig.handle
+            .compact(Some("the plan".to_owned()))
+            .expect("a compaction");
+        hook.runs(1).await;
+        crate::settle().await;
+        assert_eq!(world.provider.requests().len(), 1, "it waits for the hook");
+        held.open();
+        rig.events.turns(2).await;
+    });
+    let input = &hook.inputs()[0];
+    assert_eq!(input["event"], "compaction.before");
+    assert_eq!(input["trigger"], "manual");
+    assert_eq!(input["focus"], "the plan");
+    let summary = last_request(&world.provider);
+    let instructions = last_message(&summary);
+    assert!(
+        instructions.ends_with(
+            "Instructions for the summary from the hook `keep`, not from the user:\nKeep the \
+             ticket numbers."
+        ),
+        "{instructions}"
+    );
+    assert!(instructions.contains("keep in particular: the plan"));
+    assert_eq!(rig.store.summaries().len(), 1, "it compacted");
+}
+
+/// On `compaction.before`, a hook that fails is shown to the user and adds
+/// nothing: the summary is asked for as it would be without it.
+#[test]
+fn a_compaction_hook_that_fails_is_shown_and_adds_nothing() {
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked("hook_compaction_fails", [says("One."), says("The summary.")]);
+    hooks.add(FakeHook::on("keep", HookEvent::CompactionBefore).replies([fails("no file")]));
+    world.run(async {
+        rig.prompt("first");
+        rig.events.turns(1).await;
+        rig.handle.compact(None).expect("a compaction");
+        rig.events.turns(2).await;
+    });
+    let instructions = last_message(&last_request(&world.provider));
+    assert!(!instructions.contains("from the hook"), "{instructions}");
+    let infos = infos(&rig);
+    assert!(
+        infos
+            .iter()
+            .any(|info| info.starts_with("The hook `keep` failed on `compaction.before`")
+                && info.contains("no file")),
+        "{infos:?}"
+    );
+    assert_eq!(rig.store.summaries().len(), 1, "it compacted all the same");
+}
+
+/// A summary prepared in the background has its `compaction.before` hooks
+/// asked on its own task, before it is requested, and what they add is in
+/// its instructions.
+#[test]
+fn a_background_summarys_hooks_are_asked_before_it_is_requested() {
+    let fast = cineris_testkit::ScriptedProvider::new([says("A summary.")]);
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked_with("hook_background", [says("Fine.")], |_, setup| {
+        setup.utility = Some(cineris_agent::RoleModel::new(
+            Arc::new(fast.clone()),
+            cineris_testkit::fixtures::model(),
+        ));
+    });
+    rig.window(6_000);
+    let _ = rig.fill(crate::Fill::Preparing, "go");
+    let hook = hooks.add(
+        FakeHook::on("keep", HookEvent::CompactionBefore)
+            .replies([answer(json!({"context": "Keep the plan."}))]),
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+        hook.runs(1).await;
+        crate::settle().await;
+    });
+    assert_eq!(hook.inputs()[0]["trigger"], "background");
+    let requests = fast.requests();
+    assert_eq!(requests.len(), 1, "the summary was prepared");
+    assert!(
+        last_message(&requests[0])
+            .ends_with("from the hook `keep`, not from the user:\nKeep the plan."),
+        "{}",
+        last_message(&requests[0])
+    );
+}
+
+/// The events that only add take only `context`: a decision or a reason is
+/// outside their contract.
+#[test]
+fn the_events_that_only_add_take_only_context() {
+    for event in [
+        HookEvent::ToolAfter,
+        HookEvent::TurnEnd,
+        HookEvent::CompactionBefore,
+    ] {
+        assert!(!event.gates(), "{event}");
+    }
+    assert!(HookEvent::PromptSubmit.gates() && HookEvent::ToolBefore.gates());
+}
+
+/// The events that only add, across the turns of one session: a note on a
+/// result and a notice for the next turn, then a compaction with a hook's
+/// instructions, and a turn after it.
+#[test]
+fn the_events_that_only_add_across_the_turns_of_one_session() {
+    let Hooked {
+        world, rig, hooks, ..
+    } = hooked(
+        "hook_story_after",
+        [
+            calls(&[("c1", "read", json!({"path": "a"}))]),
+            says("Read."),
+            says("The summary."),
+            says("Again."),
+        ],
+    );
+    hooks.add(
+        FakeHook::on("lint", HookEvent::ToolAfter)
+            .replies([answer(json!({"context": "clean"}))]),
+    );
+    let journal = hooks.add(FakeHook::on("journal", HookEvent::TurnEnd).replies([
+        answer(json!({"context": "Read a."})),
+        nothing(),
+        nothing(),
+    ]));
+    hooks.add(
+        FakeHook::on("keep", HookEvent::CompactionBefore)
+            .replies([answer(json!({"context": "Keep what was read."}))]),
+    );
+    world.run(async {
+        rig.prompt("read a");
+        rig.events.turns(1).await;
+        journal.runs(1).await;
+        crate::settle().await;
+        rig.handle.compact(None).expect("a compaction");
+        rig.events.turns(2).await;
+        rig.prompt("again");
+        rig.events.turns(3).await;
+    });
+    let requests = world.provider.requests();
+    assert_eq!(requests.len(), 4);
+    let summary = last_message(&requests[2]);
+    assert!(summary.contains("from the hook `keep`"), "{summary}");
+    let sent = format!("{:?}", requests[2].messages);
+    assert!(sent.contains("clean"), "the note is in what is summarized");
+    assert!(sent.contains("Read a."), "and the turn's notice");
+    assert_eq!(rig.store.summaries().len(), 1);
+    assert_valid_history(&requests[3].messages);
+}
