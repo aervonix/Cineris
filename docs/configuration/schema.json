@@ -184,10 +184,87 @@
       "type": "object"
     },
     "hooks": {
-      "description": "Hooks by name.",
-      "type": "object",
-      "x-cineris-reserved": true,
-      "x-cineris-trust": "runs code"
+      "additionalProperties": {
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "default": [],
+            "description": "The program and its arguments, each one argument: the first a bare name, found in `PATH`'s absolute directories outside the workspace, or an absolute path. An argument that is a whole placeholder is filled: `{path}` with each file the call reads or writes, one argument each (and none for a call that names no file), `{tool}`, `{workspace}`, `{event}`. A placeholder is never part of an argument: `--file={path}` refuses the entry. At most 256 arguments.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-cineris-effect": "next session",
+            "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"
+          },
+          "enabled": {
+            "default": true,
+            "description": "Whether it runs. `false` keeps it out of new sessions.",
+            "type": "boolean",
+            "x-cineris-effect": "next session",
+            "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"
+          },
+          "event": {
+            "description": "The event it runs on: `session.start`, `prompt.submit`, `tool.before`, `tool.after`, `turn.end`, `compaction.before` or `session.end`. Needed: an entry without one is refused.",
+            "enum": [
+              "session.start",
+              "prompt.submit",
+              "tool.before",
+              "tool.after",
+              "turn.end",
+              "compaction.before",
+              "session.end"
+            ],
+            "x-cineris-effect": "next session",
+            "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"
+          },
+          "network": {
+            "default": false,
+            "description": "Whether it may reach the network where commands are confined.",
+            "type": "boolean",
+            "x-cineris-effect": "next session",
+            "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"
+          },
+          "observe": {
+            "default": false,
+            "description": "Whether it only observes: never waited for, its answer not read, its failure logged.",
+            "type": "boolean",
+            "x-cineris-effect": "next session",
+            "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"
+          },
+          "timeout": {
+            "description": "How long it may run before its process tree is stopped: 5 seconds by default for a hook that is waited for, at most a minute; 60 seconds by default for an observer, at most ten minutes.",
+            "pattern": "^([0-9]+(ms|s|m|h|d))+$",
+            "type": "string",
+            "x-cineris-effect": "next session",
+            "x-cineris-milliseconds": {
+              "maximum": 600000,
+              "minimum": 1
+            },
+            "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"
+          },
+          "tools": {
+            "default": [],
+            "description": "For `tool.before` and `tool.after` only: the tools it runs on, each a tool's name or `source/*` for every tool of a source. A `tool_call` is matched by `tool_call` and by the `source/tool` it names. Empty: every tool.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "x-cineris-effect": "next session",
+            "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"
+          },
+          "write": {
+            "default": false,
+            "description": "Whether it may write the workspace where commands are confined. Without it, it reads what the session's commands may read and writes nothing. What it writes is not recorded in the round's checkpoint, so undo does not put it back.",
+            "type": "boolean",
+            "x-cineris-effect": "next session",
+            "x-cineris-trust": "kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval"
+          }
+        },
+        "type": "object"
+      },
+      "description": "Hook commands by name: `[hooks.<name>]`, a program run when an event of the session's happens (since step 28). The user's own layers merge as any setting's do; **a project's are kept apart**, never merged with the user's: each waits for the project's trust and its own approval, as the trust question showed it, and one with the name of one of the user's is refused. Enforced: a key this build does not know refuses the file.",
+      "type": "object"
     },
     "http": {
       "description": "The HTTP client: the connect timeout, a proxy, and extra certificate authorities.",
@@ -759,7 +836,7 @@
       "additionalProperties": {
         "$ref": "#"
       },
-      "description": "Named sets of settings. A profile may hold any key of this file except `profile`, `profiles`, `managed` and `config_version`.",
+      "description": "Named sets of settings. A profile may hold any key of this file except `profile`, `profiles`, `managed`, `config_version` and `hooks`: a hook belongs to the file that defines it, which is what says whose it is (since step 28).",
       "type": "object"
     },
     "project": {

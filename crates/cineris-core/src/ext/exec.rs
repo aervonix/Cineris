@@ -48,6 +48,11 @@
 //! 8. **It runs** through the session's process runner, its standard
 //!    output and standard error read apart, each kept to
 //!    [`EXEC_OUTPUT_CAP`] with a flag when cut.
+//!
+//! **A hook command** (`super::hook_command`) is started through
+//! [`run_as`]: all of the above but its decision, which never asks
+//! ([`Decided::Unasked`]), and what it writes, which is not recorded in
+//! the round's checkpoint.
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -126,11 +131,55 @@ impl std::fmt::Debug for HarnessFiles {
     }
 }
 
+/// How a program's start is decided.
+pub(crate) enum Decided<'a> {
+    /// As the extension's host call ([`CallHost::decide`]): asked about
+    /// where the engine asks, "allow once" and "deny" alone; what the
+    /// program changed recorded in the round's checkpoint.
+    Host,
+    /// Never asked: a hook command's start (`super::hook_command`), which
+    /// `decide` answers from the engine's own decision, refusing one it
+    /// would ask about unless the hook is the user's. What the program
+    /// writes is not recorded in the round's checkpoint (the page says so),
+    /// and the model's table of files is not told.
+    Unasked(&'a (dyn Fn(ToDecide<'_>) -> Result<(), HostError> + Sync)),
+}
+
+/// What a start is decided on: the line the engine reads, where it runs,
+/// what it does, and whether the engine's "read-only" may not be the
+/// program's.
+pub(crate) struct ToDecide<'a> {
+    /// The program as named and each argument quoted in the session
+    /// shell's syntax.
+    pub(crate) line: &'a str,
+    /// Where it runs: inside the workspace.
+    pub(crate) cwd: &'a cineris_base::path::ResolvedPath,
+    /// Its `exec` effect, and `network` when it may reach the network.
+    pub(crate) effects: Vec<Effect>,
+    /// Whether a line the engine judges as only reading may still be
+    /// another program than the one that runs (PowerShell, `cmd`, or
+    /// Windows' own lookup), so that it counts as a question.
+    pub(crate) read_only_asks: bool,
+}
+
 /// Runs `request` for the call `host` serves.
 pub(crate) async fn run(
     parts: &ExecParts,
     request: ExecRequest,
     host: &CallHost<'_>,
+) -> Result<ExecOutput, HostError> {
+    run_as(parts, request, host, &Decided::Host).await
+}
+
+/// [`run`], its start decided as `decided` says: everything else (the
+/// program's lookup, the line, the launcher, the looks at the protected
+/// paths before and after it, the environment and the run) is the same,
+/// for an extension's program and a hook command's.
+pub(crate) async fn run_as(
+    parts: &ExecParts,
+    request: ExecRequest,
+    host: &CallHost<'_>,
+    decided: &Decided<'_>,
 ) -> Result<ExecOutput, HostError> {
     let cx = host.cx;
     // The call's time is reckoned from here: `call_left` is what was left
@@ -275,66 +324,76 @@ pub(crate) async fn run(
     if request.network {
         effects.push(Effect::Network(NetworkTarget::Any));
     }
-    let decision = host.decide(
-        // The line as code it cannot end (the full review of step 28).
-        format!("{}: run `{}`", host.full_name, cineris_base::in_code(&line)),
-        json!({
-            "program": named,
-            "args": request.args,
-            "cwd": cwd.data(),
-        }),
-        effects,
-        None,
-        HostQuestion {
-            confined: Some(launcher.is_some()),
-            // In PowerShell and `cmd` the line's first word may be the
-            // shell's own command or alias (`write` is `Write-Output`),
-            // not the program that runs; in a POSIX shell it is the
-            // program, found as the shell finds it, except on Windows,
-            // where Windows' lookup finds it (`sort` is
-            // `System32\sort.exe`, not the shell's).
-            read_only_asks: cfg!(windows)
-                || !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix),
-            // The engine judges the line, not the input: the question
-            // shows its start.
-            extra: request.stdin.as_deref().map(input_reason),
-        },
-    );
-    // The decision is given up when the call is cancelled or its time is
-    // up, and an open question with it: the engine follows a program's
-    // host call to its end, and a question nobody answers would hold the
-    // call, and the turn, for ever (the review of step 28's fixes).
-    // Its time is reckoned from when the program was asked for, the steps
-    // before the decision included, and a call already over or cancelled
-    // is put no question at all (the review of step 28's fixes: one could
-    // be put and withdrawn at once).
-    let left = request
-        .call_left
-        .saturating_sub(host.parts.clock.monotonic().saturating_sub(arrived));
-    let decided = if left.is_zero() || cx.cancel.is_cancelled() {
-        None
-    } else {
-        let mut decision = std::pin::pin!(decision);
-        let mut cancelled = std::pin::pin!(cx.cancel.cancelled());
-        let mut over = host.parts.timer.sleep(left);
-        std::future::poll_fn(|context| {
-            if cancelled.as_mut().poll(context).is_ready() || over.as_mut().poll(context).is_ready()
-            {
-                return std::task::Poll::Ready(None);
-            }
-            if let std::task::Poll::Ready(decided) = decision.as_mut().poll(context) {
-                return std::task::Poll::Ready(Some(decided));
-            }
-            std::task::Poll::Pending
-        })
-        .await
-    };
+    // In PowerShell and `cmd` the line's first word may be the shell's own
+    // command or alias (`write` is `Write-Output`), not the program that
+    // runs; in a POSIX shell it is the program, found as the shell finds
+    // it, except on Windows, where Windows' lookup finds it (`sort` is
+    // `System32\sort.exe`, not the shell's).
+    let read_only_asks =
+        cfg!(windows) || !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix);
     let not_started = || {
         HostError::Failed(format!(
             "`{named}` was not started: the call ended while it was being decided"
         ))
     };
-    decided.ok_or_else(not_started)??;
+    if let Decided::Unasked(decide) = decided {
+        decide(ToDecide {
+            line: &line,
+            cwd: &cwd,
+            effects,
+            read_only_asks,
+        })?;
+    } else {
+        let decision = host.decide(
+            // The line as code it cannot end (the full review of step 28).
+            format!("{}: run `{}`", host.full_name, cineris_base::in_code(&line)),
+            json!({
+                "program": named,
+                "args": request.args,
+                "cwd": cwd.data(),
+            }),
+            effects,
+            None,
+            HostQuestion {
+                confined: Some(launcher.is_some()),
+                read_only_asks,
+                // The engine judges the line, not the input: the question
+                // shows its start.
+                extra: request.stdin.as_deref().map(input_reason),
+            },
+        );
+        // The decision is given up when the call is cancelled or its time is
+        // up, and an open question with it: the engine follows a program's
+        // host call to its end, and a question nobody answers would hold the
+        // call, and the turn, for ever (the review of step 28's fixes).
+        // Its time is reckoned from when the program was asked for, the steps
+        // before the decision included, and a call already over or cancelled
+        // is put no question at all (the review of step 28's fixes: one could
+        // be put and withdrawn at once).
+        let left = request
+            .call_left
+            .saturating_sub(host.parts.clock.monotonic().saturating_sub(arrived));
+        let answer = if left.is_zero() || cx.cancel.is_cancelled() {
+            None
+        } else {
+            let mut decision = std::pin::pin!(decision);
+            let mut cancelled = std::pin::pin!(cx.cancel.cancelled());
+            let mut over = host.parts.timer.sleep(left);
+            std::future::poll_fn(|context| {
+                if cancelled.as_mut().poll(context).is_ready()
+                    || over.as_mut().poll(context).is_ready()
+                {
+                    return std::task::Poll::Ready(None);
+                }
+                if let std::task::Poll::Ready(decided) = decision.as_mut().poll(context) {
+                    return std::task::Poll::Ready(Some(decided));
+                }
+                std::task::Poll::Pending
+            })
+            .await
+        };
+        answer.ok_or_else(not_started)??;
+    }
     let watch = launcher
         .as_ref()
         .filter(|_| !write_roots.is_empty())
@@ -419,8 +478,10 @@ pub(crate) async fn run(
     // look's git follows the program's confinement: inside the sandbox at
     // every level after one its launcher confined, which may have written
     // the repository's configuration in its write roots (the review of the
-    // extensions' process starts).
-    let detector = (!write_roots.is_empty() || launcher.is_none()).then(|| {
+    // extensions' process starts). A hook command's writes are not
+    // recorded: the page says undo does not put them back.
+    let records = matches!(decided, Decided::Host);
+    let detector = (records && (!write_roots.is_empty() || launcher.is_none())).then(|| {
         let git: Arc<dyn cineris_base::git::Confinement> = if launcher.is_some() {
             Arc::new(FollowingTheProgram(Arc::clone(&parts.git)))
         } else {

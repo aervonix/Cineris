@@ -9,7 +9,9 @@
 //!    applied. A value that can run code, widen access or raise cost is
 //!    applied only in a trusted project, and is otherwise held back and
 //!    listed. A value that
-//!    is the user's alone is ignored, with a warning.
+//!    is the user's alone is ignored, with a warning. A value kept apart (a
+//!    hook's, since step 28) is not merged at all: a project's hooks are
+//!    read on their own (`Loaded::project_hooks`).
 //! 3. **Then the value is applied.** Tables merge key by key. A scalar or a
 //!    list replaces what was there. The lists marked as joined in the
 //!    schema (permission rules and the sandbox's path lists) are added to
@@ -151,6 +153,14 @@ impl Merger {
         trust: Trust,
         joined: bool,
     ) {
+        // A project's value kept apart is recorded as the layer said it and
+        // never merged, locked or not: a project's hooks are read on their
+        // own (`Loaded::project_hooks`), which says a lock once there.
+        if trust == Trust::KeptApart && source.authority.is_project() {
+            let origin = self.origin(source, key, None);
+            self.record(source, key, value, &origin);
+            return;
+        }
         if joined {
             let Value::Array(entries) = value else {
                 return;
@@ -236,6 +246,10 @@ impl Merger {
         }
         match class {
             TrustClass::Preference => true,
+            // Read apart, and never merged with the user's: a project's
+            // hooks are its own (`Loaded::project_hooks`), each approved on
+            // its own, so no word of a warning here.
+            TrustClass::KeptApart => false,
             TrustClass::UserOnly => {
                 // A limit or a wait that a project may lower says so, and
                 // says what is in effect.

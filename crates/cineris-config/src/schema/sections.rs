@@ -13,9 +13,9 @@ use cineris_protocol::lease::{NetworkAccess, Rule};
 use cineris_protocol::{Level, ModelRole, Speed};
 
 use super::types::{
-    BackspaceChoice, Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, PresenterChoice,
-    Profiles, ReasoningShown, ReasoningVisibility, Reserved, SessionDurability, StoreChoice,
-    ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
+    BackspaceChoice, Bindings, ColorChoice, DensityChoice, GlyphChoice, Headers, HookEventName,
+    PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility, Reserved, SessionDurability,
+    StoreChoice, ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
 };
 use super::{CONFIG_VERSION, settings};
 
@@ -35,7 +35,9 @@ settings! {
         [UserOnly, NextEpoch]
         pub profile: Option<String>,
         /// Named sets of settings. A profile may hold any key of this file
-        /// except `profile`, `profiles`, `managed` and `config_version`.
+        /// except `profile`, `profiles`, `managed`, `config_version` and
+        /// `hooks`: a hook belongs to the file that defines it, which is
+        /// what says whose it is (since step 28).
         [nested]
         pub profiles: Profiles,
         /// For the managed file of a shared machine only.
@@ -138,9 +140,15 @@ settings! {
         /// clients.
         [nested]
         pub rpc: RpcSettings,
-        /// Hooks by name.
-        [reserved RunsCode]
-        pub hooks: Reserved,
+        /// Hook commands by name: `[hooks.<name>]`, a program run when an
+        /// event of the session's happens (since step 28). The user's own
+        /// layers merge as any setting's do; **a project's are kept apart**,
+        /// never merged with the user's: each waits for the project's trust
+        /// and its own approval, as the trust question showed it, and one
+        /// with the name of one of the user's is refused. Enforced: a key
+        /// this build does not know refuses the file.
+        [enforced]
+        pub hooks: BTreeMap<String, HookSettings>,
         /// Extensions by name: `[extensions.<name>]`, which only turns one
         /// off (`cineris ext disable` writes it). The user's alone: a
         /// project's entry is ignored, since a project's extension is kept
@@ -251,6 +259,59 @@ settings! {
         /// trust.
         [BySpeed, Now]
         pub speed: Option<Speed>,
+    }
+}
+
+settings! {
+    /// One hook command (`docs/architecture/12-extensions.md`, "Tier 3:
+    /// hooks"). Its program is started for each event it runs on, its start
+    /// decided by the permission engine as an `exec` of its line in the
+    /// workspace; it is given the event as JSON on standard input, and its
+    /// answer is read from standard output.
+    pub struct HookSettings {
+        /// The event it runs on: `session.start`, `prompt.submit`,
+        /// `tool.before`, `tool.after`, `turn.end`, `compaction.before` or
+        /// `session.end`. Needed: an entry without one is refused.
+        [KeptApart, NextSession]
+        pub event: Option<HookEventName>,
+        /// For `tool.before` and `tool.after` only: the tools it runs on,
+        /// each a tool's name or `source/*` for every tool of a source. A
+        /// `tool_call` is matched by `tool_call` and by the `source/tool` it
+        /// names. Empty: every tool.
+        [KeptApart, NextSession]
+        pub tools: Vec<String>,
+        /// The program and its arguments, each one argument: the first a
+        /// bare name, found in `PATH`'s absolute directories outside the
+        /// workspace, or an absolute path. An argument that is a whole
+        /// placeholder is filled: `{path}` with each file the call reads
+        /// or writes, one argument each (and none for a call that names no
+        /// file), `{tool}`, `{workspace}`, `{event}`. A placeholder is never
+        /// part of an argument: `--file={path}` refuses the entry. At most
+        /// 256 arguments.
+        [KeptApart, NextSession]
+        pub command: Vec<String>,
+        /// Whether it only observes: never waited for, its answer not read,
+        /// its failure logged.
+        [KeptApart, NextSession]
+        pub observe: bool = false,
+        /// How long it may run before its process tree is stopped: 5
+        /// seconds by default for a hook that is waited for, at most a
+        /// minute; 60 seconds by default for an observer, at most ten
+        /// minutes.
+        [KeptApart, NextSession, 1ms..=10m]
+        pub timeout: Option<Duration>,
+        /// Whether it may write the workspace where commands are confined.
+        /// Without it, it reads what the session's commands may read and
+        /// writes nothing. What it writes is not recorded in the round's
+        /// checkpoint, so undo does not put it back.
+        [KeptApart, NextSession]
+        pub write: bool = false,
+        /// Whether it may reach the network where commands are confined.
+        [KeptApart, NextSession]
+        pub network: bool = false,
+        /// Whether it runs. `false` keeps it out of new sessions.
+        [KeptApart, NextSession]
+        pub enabled: bool = true,
     }
 }
 

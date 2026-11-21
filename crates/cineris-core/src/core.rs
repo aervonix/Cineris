@@ -418,6 +418,9 @@ pub(crate) struct Live {
     /// One turn's start at a time: the looks at its start and the prompt's
     /// handing to the loop are one step (step 28).
     pub(crate) turn_start: tokio::sync::Mutex<()>,
+    /// The session's hook commands (step 28).
+    #[cfg(feature = "scripts")]
+    pub(crate) command_hooks: Arc<crate::ext::SessionHooks>,
 }
 
 impl Inner {
@@ -741,7 +744,7 @@ impl Core {
         Ok(())
     }
 
-    fn live(&self, session: &SessionId) -> Result<Arc<Live>, OpError> {
+    pub(crate) fn live(&self, session: &SessionId) -> Result<Arc<Live>, OpError> {
         lock(&self.inner.sessions)
             .get(session)
             .cloned()
@@ -881,6 +884,8 @@ impl Core {
             shell_live,
             repository,
             extensions,
+            #[cfg(feature = "scripts")]
+            command_hooks,
         } = assembled;
         // The client is listening before the session can say anything.
         sink.subscribe(client.0, queue);
@@ -930,6 +935,8 @@ impl Core {
             lease_count: AtomicU64::new(lease_count),
             knowledge,
             extensions,
+            #[cfg(feature = "scripts")]
+            command_hooks,
             turn_start: tokio::sync::Mutex::new(()),
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));

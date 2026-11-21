@@ -117,6 +117,9 @@ pub struct Trusted {
     /// The names of the project's extensions approved with it, as they
     /// were shown (since step 28).
     pub extensions: Vec<String>,
+    /// The names of the project's hooks approved with it, as they were
+    /// shown (since step 28).
+    pub hooks: Vec<String>,
 }
 
 /// One of a project's extensions that `cineris permissions trust` can
@@ -130,6 +133,21 @@ pub struct ProjectExtension {
     /// What it may do, in words: the trust question's own text.
     pub detail: String,
     /// Whether it was approved before, at another hash.
+    pub changed: bool,
+    definition: Definition,
+}
+
+/// One of a project's hook commands that `cineris permissions trust` can
+/// approve with the project (since step 28): what the trust question shows
+/// of it, and the definition approving it pins, kind `hook`, the hash of
+/// what is shown.
+#[derive(Debug, Clone)]
+pub struct ProjectHookCommand {
+    /// Its name.
+    pub name: String,
+    /// What it does, in words: the trust question's own text.
+    pub detail: String,
+    /// Whether it was approved before, as something else.
     pub changed: bool,
     definition: Definition,
 }
@@ -473,6 +491,51 @@ impl Core {
             .collect())
     }
 
+    /// The project's hook commands that trusting it could approve: those
+    /// not approved as they are now, each as the trust question lists it.
+    /// One whose name is one of the user's own hooks' is not listed: it
+    /// never runs. Nothing is approved.
+    ///
+    /// # Errors
+    ///
+    /// When the workspace cannot be resolved, its configuration loaded, or
+    /// the trust store read.
+    pub fn project_hook_commands(
+        &self,
+        project: &Project,
+    ) -> Result<Vec<ProjectHookCommand>, OpError> {
+        let loaded = self.load_trusted(project)?;
+        let configured = crate::ext::hooks::Configured::of(&loaded);
+        if configured.project.is_empty() {
+            return Ok(Vec::new());
+        }
+        let stored = self
+            .trust_store()?
+            .project(&project.key)
+            .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
+        let root = self.resolver(&project.root)?.root().clone();
+        // Whether a hook's program would be confined, which what it is
+        // shown as says.
+        let confined = crate::assemble::programs_confined(
+            &self.inner,
+            &loaded,
+            &root,
+            self.state_dir().as_ref(),
+        );
+        let asked = crate::ext::hooks::asked(&configured, &stored, confined);
+        Ok(asked
+            .resources
+            .into_iter()
+            .zip(asked.pins)
+            .map(|(resource, definition)| ProjectHookCommand {
+                name: resource.name,
+                detail: resource.detail,
+                changed: resource.changed,
+                definition,
+            })
+            .collect())
+    }
+
     /// [`trust_project`](Self::trust_project), approving `extensions` with
     /// it (from [`project_extensions`](Self::project_extensions), which
     /// the person was shown): each pinned as it was read to be shown.
@@ -484,6 +547,22 @@ impl Core {
         &self,
         project: &Project,
         extensions: &[ProjectExtension],
+    ) -> Result<Trusted, OpError> {
+        self.trust_project_approving(project, extensions, &[])
+    }
+
+    /// [`trust_project_with`](Self::trust_project_with), approving `hooks`
+    /// too (from [`project_hook_commands`](Self::project_hook_commands),
+    /// which the person was shown): each pinned as it was read to be shown.
+    ///
+    /// # Errors
+    ///
+    /// As [`trust_project`](Self::trust_project).
+    pub fn trust_project_approving(
+        &self,
+        project: &Project,
+        extensions: &[ProjectExtension],
+        hooks: &[ProjectHookCommand],
     ) -> Result<Trusted, OpError> {
         let rules = self.pinned(project)?;
         // What an untrusted load holds back is what trust now turns on.
@@ -503,6 +582,7 @@ impl Core {
                 .iter()
                 .map(|extension| extension.definition.clone()),
         );
+        pin.extend(hooks.iter().map(|hook| hook.definition.clone()));
         let git = in_git_at(&project.root);
         if was_trusted {
             store.approve(&project.key, &pin, git).map_err(failed)?;
@@ -524,6 +604,7 @@ impl Core {
                 .iter()
                 .map(|extension| extension.name.clone())
                 .collect(),
+            hooks: hooks.iter().map(|hook| hook.name.clone()).collect(),
         })
     }
 

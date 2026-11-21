@@ -17,6 +17,8 @@
 //! - [`cache`]: the registration cache, what each approved extension
 //!   registered, kept by its hash;
 //! - [`event`]: the seven events hooks run on;
+//! - [`hook`]: a hook's contract: its filter of tools, its answer read
+//!   strictly, and a hook command compiled from its configuration's entry;
 //! - [`skills`]: the skills in the project's and the user's folders, and
 //!   the list of them in section 6 of the system prompt.
 //!
@@ -30,6 +32,7 @@ pub mod discover;
 pub mod engine;
 pub mod event;
 pub mod folder;
+pub mod hook;
 pub mod host;
 pub mod manifest;
 pub mod registration;

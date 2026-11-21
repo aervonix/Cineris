@@ -30,14 +30,13 @@ fn header(name: &str) -> String {
 
 /// Where else a user's file can hold a key: in a web address, and in a
 /// reserved section, whose keys a later step declares (an MCP server's
-/// environment, a hook's key, a proxy's password). It goes on from the
-/// provider's table that [`header`] opens.
+/// environment, a proxy's password). It goes on from the provider's table
+/// that [`header`] opens.
 fn elsewhere() -> String {
     format!(
         "base_url = \"https://me:{KEY}@gateway.example.test/v1\"\n\
          [mcp.servers.helper]\ncommand = \"helper-server\"\n\
          [mcp.servers.helper.env]\nHELPER_TOKEN = \"{KEY}\"\n\
-         [hooks.audit]\ncommand = \"audit\"\napi_key = \"{KEY}\"\n\
          [http]\nproxy = \"http://me:{KEY}@proxy.example.test:8080\"\n\
          [tui]\ntheme = \"dusk\"\n"
     )
@@ -91,7 +90,6 @@ fn no_debug_or_display_form_holds_a_key() {
         "providers.azure.base_url = \"https://[redacted]@gateway.example.test/v1\"",
         "mcp.servers.helper.command = \"helper-server\"",
         "mcp.servers.helper.env.HELPER_TOKEN = \"[redacted]\"",
-        "hooks.audit.api_key = \"[redacted]\"",
         "http.proxy = \"http://[redacted]@proxy.example.test:8080\"",
         "tui.theme = \"dusk\"",
     ] {

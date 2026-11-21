@@ -475,44 +475,58 @@ fn declared(raw: RawCapabilities) -> Result<Declared, ManifestError> {
 /// A program entry: a bare name, or an absolute path. A relative path is
 /// refused: it would name whichever file is there.
 fn program(entry: String) -> Result<Program, ManifestError> {
-    let shown = in_code(&entry).into_owned();
-    let bad = entry.trim().is_empty()
-        || entry != entry.trim()
-        || entry.chars().any(char::is_control)
-        || entry == "."
-        || entry == "..";
-    if bad {
-        return Err(refused(format!(
-            "`capabilities.exec` has `{shown}`, which is not a program's name"
-        )));
-    }
-    if !entry.contains('/') && !entry.contains('\\') {
-        if entry.contains(':') {
-            return Err(refused(format!(
-                "`capabilities.exec` has `{shown}`: a drive with no root is a relative path"
-            )));
+    Program::parse(entry)
+        .map_err(|(shown, why)| refused(format!("`capabilities.exec` has `{shown}`{why}")))
+}
+
+impl Program {
+    /// A program named as a manifest's `exec` names one, or a hook
+    /// command's first word (since step 28): a bare name, or an absolute
+    /// path with no `.` or `..` and not on a share. A relative path is
+    /// refused: it would name whichever file is there.
+    ///
+    /// # Errors
+    ///
+    /// The entry as code ([`in_code`]) and why it is not a program, as the
+    /// end of a sentence that names it: `", which is not a program's
+    /// name"`, or `": …"`.
+    pub fn parse(entry: String) -> Result<Self, (String, &'static str)> {
+        let shown = || in_code(&entry).into_owned();
+        let bad = entry.trim().is_empty()
+            || entry != entry.trim()
+            || entry.chars().any(char::is_control)
+            || entry == "."
+            || entry == "..";
+        if bad {
+            return Err((shown(), ", which is not a program's name"));
         }
-        return Ok(Program::Name(entry));
-    }
-    let unix_absolute = entry.starts_with('/');
-    let bytes = entry.as_bytes();
-    let windows_absolute = bytes.len() > 3
-        && bytes[0].is_ascii_alphabetic()
-        && bytes[1] == b':'
-        && matches!(bytes[2], b'\\' | b'/');
-    let has_dots = entry
-        .split(['/', '\\'])
-        .any(|name| name == "." || name == "..");
-    if (unix_absolute || windows_absolute)
-        && !has_dots
-        && !entry.starts_with("//")
-        && !entry.starts_with("\\\\")
-    {
-        Ok(Program::Path(entry))
-    } else {
-        Err(refused(format!(
-            "`capabilities.exec` has `{shown}`: a program is a bare name or an absolute path, with no `.` or `..`"
-        )))
+        if !entry.contains('/') && !entry.contains('\\') {
+            if entry.contains(':') {
+                return Err((shown(), ": a drive with no root is a relative path"));
+            }
+            return Ok(Self::Name(entry));
+        }
+        let unix_absolute = entry.starts_with('/');
+        let bytes = entry.as_bytes();
+        let windows_absolute = bytes.len() > 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/');
+        let has_dots = entry
+            .split(['/', '\\'])
+            .any(|name| name == "." || name == "..");
+        if (unix_absolute || windows_absolute)
+            && !has_dots
+            && !entry.starts_with("//")
+            && !entry.starts_with("\\\\")
+        {
+            Ok(Self::Path(entry))
+        } else {
+            Err((
+                shown(),
+                ": a program is a bare name or an absolute path, with no `.` or `..`",
+            ))
+        }
     }
 }
 

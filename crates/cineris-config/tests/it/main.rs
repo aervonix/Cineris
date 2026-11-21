@@ -23,6 +23,7 @@
 mod credentials;
 mod discovery;
 mod generated;
+mod hooks;
 mod layers;
 mod loading;
 mod measure;

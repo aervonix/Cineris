@@ -45,15 +45,16 @@ pub use json::json_schema;
 pub(crate) use redact::redact;
 pub use reference::reference_page;
 pub use sections::{
-    AdaptSettings, CompatSettings, CredentialSettings, KeySettings, LimitSet, LimitSettings,
-    LogSettings, ManagedSettings, ModelSettings, PermissionSettings, ProviderSettings,
-    RetrySettings, RoleSettings, RpcSettings, SandboxSettings, SessionSettings, Settings,
-    StatsSettings, TerminalSettings, TuiSettings, UsageSettings, VariantSettings, VerifySettings,
+    AdaptSettings, CompatSettings, CredentialSettings, HookSettings, KeySettings, LimitSet,
+    LimitSettings, LogSettings, ManagedSettings, ModelSettings, PermissionSettings,
+    ProviderSettings, RetrySettings, RoleSettings, RpcSettings, SandboxSettings, SessionSettings,
+    Settings, StatsSettings, TerminalSettings, TuiSettings, UsageSettings, VariantSettings,
+    VerifySettings,
 };
 pub use types::{
     BackspaceChoice, Bindings, ColorChoice, DensityChoice, EnvText, GlyphChoice, Headers,
-    PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility, Reserved, SessionDurability,
-    StoreChoice, ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
+    HookEventName, PresenterChoice, Profiles, ReasoningShown, ReasoningVisibility, Reserved,
+    SessionDurability, StoreChoice, ToolOutputChoice, UsageRanges, VerifyMode, Weekday,
 };
 pub(crate) use types::{magnitude, milliseconds_as_text};
 
@@ -92,6 +93,12 @@ pub enum Trust {
     StopsCommands,
     /// The user's alone. A project's value is ignored, with a warning.
     UserOnly,
+    /// Kept apart (since step 28, for hooks): the user's layers merge as
+    /// any setting's do, and a project's value is never merged with them.
+    /// A project's entries are read on their own ([`crate::ProjectHook`]),
+    /// each waiting for trust and its own approval, so that no project file
+    /// can name, change or turn off one of the user's.
+    KeptApart,
     /// A permission rule: `deny` and `ask` are preferences, `allow` widens
     /// access.
     ByRuleAction,
@@ -137,6 +144,9 @@ pub enum TrustClass {
     StopsCommands,
     /// Never applied from a project.
     UserOnly,
+    /// Never merged from a project: its entries are read apart, each
+    /// approved on its own (since step 28).
+    KeptApart,
 }
 
 impl TrustClass {
@@ -151,6 +161,7 @@ impl TrustClass {
             Self::RaisesCost => "raises cost",
             Self::StopsCommands => "stops commands",
             Self::UserOnly => "user only",
+            Self::KeptApart => "kept apart",
         }
     }
 
@@ -182,6 +193,7 @@ impl Trust {
             Self::RaisesCost => TrustClass::RaisesCost,
             Self::StopsCommands => TrustClass::StopsCommands,
             Self::UserOnly => TrustClass::UserOnly,
+            Self::KeptApart => TrustClass::KeptApart,
             Self::ByRuleAction => {
                 // Anything but a plain `deny` or `ask` is treated as an
                 // allow: a rule that cannot be read is not a restriction.
@@ -243,6 +255,10 @@ impl Trust {
             Self::RaisesCost => "raises cost",
             Self::StopsCommands => "stops commands",
             Self::UserOnly => "user only",
+            Self::KeptApart => {
+                "kept apart: a project's own are read on their own, never merged with yours, each \
+                 waiting for trust and its approval"
+            }
             Self::ByRuleAction => {
                 "by action: `deny` and `ask` are preferences, `allow` widens access"
             }

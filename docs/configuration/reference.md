@@ -255,6 +255,19 @@ Every key a Cineris configuration file may hold. The design is in [architecture/
 | `rpc.approval_timeout` | length of time, 0s to 1d | `"10m"` | user only | restart | How long an approval waits for a client's answer before it is a denial (`"0s"`: for as long as it takes). The terminal UI is not a server and sets none. |
 | `rpc.stalled_client` | length of time, 1s to 1h | `"30s"` | user only | restart | How long a client may take nothing the server sends while whole events wait for it past its queue, before its connection is closed. The session goes on. |
 
+## `[hooks]`
+
+| Key | Type | Default | From a project | Takes effect | What it is |
+|---|---|---|---|---|---|
+| `hooks.*.event` | `"session.start"`, `"prompt.submit"`, `"tool.before"`, `"tool.after"`, `"turn.end"`, `"compaction.before"`, `"session.end"` | not set | kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval | next session | The event it runs on: `session.start`, `prompt.submit`, `tool.before`, `tool.after`, `turn.end`, `compaction.before` or `session.end`. Needed: an entry without one is refused. Fails closed. |
+| `hooks.*.tools` | list of text | `[]` | kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval | next session | For `tool.before` and `tool.after` only: the tools it runs on, each a tool's name or `source/*` for every tool of a source. A `tool_call` is matched by `tool_call` and by the `source/tool` it names. Empty: every tool. Fails closed. |
+| `hooks.*.command` | list of text | `[]` | kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval | next session | The program and its arguments, each one argument: the first a bare name, found in `PATH`'s absolute directories outside the workspace, or an absolute path. An argument that is a whole placeholder is filled: `{path}` with each file the call reads or writes, one argument each (and none for a call that names no file), `{tool}`, `{workspace}`, `{event}`. A placeholder is never part of an argument: `--file={path}` refuses the entry. At most 256 arguments. Fails closed. |
+| `hooks.*.observe` | `true` or `false` | `false` | kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval | next session | Whether it only observes: never waited for, its answer not read, its failure logged. Fails closed. |
+| `hooks.*.timeout` | length of time, 1ms to 10m | not set | kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval | next session | How long it may run before its process tree is stopped: 5 seconds by default for a hook that is waited for, at most a minute; 60 seconds by default for an observer, at most ten minutes. Fails closed. |
+| `hooks.*.write` | `true` or `false` | `false` | kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval | next session | Whether it may write the workspace where commands are confined. Without it, it reads what the session's commands may read and writes nothing. What it writes is not recorded in the round's checkpoint, so undo does not put it back. Fails closed. |
+| `hooks.*.network` | `true` or `false` | `false` | kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval | next session | Whether it may reach the network where commands are confined. Fails closed. |
+| `hooks.*.enabled` | `true` or `false` | `true` | kept apart: a project's own are read on their own, never merged with yours, each waiting for trust and its approval | next session | Whether it runs. `false` keeps it out of new sessions. Fails closed. |
+
 ## `[extensions]`
 
 | Key | Type | Default | From a project | Takes effect | What it is |
@@ -272,6 +285,5 @@ These sections belong to parts of the harness that are not built yet. A file may
 | `[http]` | user only | The HTTP client: the connect timeout, a proxy, and extra certificate authorities. |
 | `[tools]` | user only | Enabled tools, output limits and per-tool settings. |
 | `[runs]` | user only | The run engine: concurrency, workspaces, budgets. |
-| `[hooks]` | runs code | Hooks by name. |
 | `[skills]` | user only | Where skills are looked for. |
 | `[mcp]` | runs code | MCP servers by name, and MCP settings. |
