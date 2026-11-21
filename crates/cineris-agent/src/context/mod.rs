@@ -52,8 +52,8 @@ use serde_json::Value;
 pub use budget::{DEFAULT_RATIO, OUTPUT_RESERVE_CAP, limit_of};
 pub use compact::SUMMARY_INSTRUCTIONS;
 pub use extensions::{
-    EXTENSION_TEXT_CAP, EXTENSIONS_CAP, ExtensionPrompt, ExtensionSections, ExtensionsSource,
-    INDEX_CAP, SKILLS_CAP,
+    EXTENSION_TEXT_CAP, EXTENSIONS_AGAIN, EXTENSIONS_CAP, ExtensionPrompt, ExtensionSections,
+    ExtensionsSource, INDEX_CAP, INDEX_CHANGED, INDEX_EMPTY, SKILLS_CAP, withdrawn_text,
 };
 pub use history::{NOTICE_LEAD, append, project};
 pub use instructions::{
@@ -64,10 +64,11 @@ pub(crate) use map::Answered;
 pub use map::{MapAnswer, MapPending, MapSource, RepoMap};
 pub use prefix::{PrefixDifference, check_prefix};
 pub use profile::{PROFILE_CHANGED, PROFILE_EMPTY, ProfileSource};
-pub use prompt::{CORE_INSTRUCTIONS, Environment, GUIDED_NOTES};
+pub use prompt::{CORE_INSTRUCTIONS, Environment, GUIDED_NOTES, render_index};
 
 pub(crate) use budget::{Budget, Pressure, fraction_of, pressure, summary_room};
 pub(crate) use compact::{ARTIFACT_ROUNDS, Carried, SUMMARY_CUT, Touched, instructions_message};
+pub(crate) use extensions::{index_hash, index_notice};
 pub(crate) use history::{History, Source, message_bytes};
 pub(crate) use instructions::{
     Change, Discovered, Found, Given, Place, cap_text, date_text, discover, nested_dirs,
@@ -75,7 +76,7 @@ pub(crate) use instructions::{
 };
 pub(crate) use prefix::{InFlight, Shape, difference, excerpt, hash_of};
 pub(crate) use profile::{hash_of as profile_hash, notice_text as profile_notice};
-pub(crate) use prompt::{Built, Sections, build};
+pub(crate) use prompt::{Built, Sections, TextMark, build, text_marks};
 
 use crate::store::{EpochReason, EpochStart, Opened};
 
@@ -310,6 +311,17 @@ pub(crate) struct Context {
     /// epoch's prompt holds, or of the last notice that replaced it.
     /// `None` when it has none.
     pub(crate) given_profile: Option<cineris_base::ContentHash>,
+    /// The index of section 6 the model has: the hash of the one its
+    /// epoch's prompt holds, or of the last notice that replaced it. `None`
+    /// when it has none.
+    pub(crate) given_index: Option<cineris_base::ContentHash>,
+    /// The extensions' texts of section 7 the model has: those its epoch's
+    /// prompt holds, less those withdrawn since. Empty after a load until
+    /// the epoch is held against the prompt the harness would build now.
+    pub(crate) given_texts: Vec<TextMark>,
+    /// Whether the epoch's history withdrew an extension's text: such an
+    /// epoch is not gone on with when the session is read again.
+    pub(crate) withdrew: bool,
     pub(crate) budget: Budget,
     /// The date the epoch's history tells the model.
     pub(crate) date: Option<String>,
@@ -344,6 +356,9 @@ impl Context {
             history: History::default(),
             given: Given::default(),
             given_profile: None,
+            given_index: None,
+            given_texts: Vec::new(),
+            withdrew: false,
             budget: Budget::default(),
             date: None,
             last_user: None,
@@ -408,10 +423,11 @@ impl Context {
             for &index in rest {
                 // The old epoch's map is not replayed: the new epoch has its
                 // own (`History::extend_projected`).
-                // Nor is a notice of the old epoch's profile: the new
-                // epoch's prompt holds the profile as it was then.
+                // Nor is a notice of the old epoch's profile, or of what
+                // its extensions gave: the new epoch's prompt holds them as
+                // they were then.
                 if index < at
-                    && matches!(&items[index], Item::Notice(notice) if matches!(notice.source, NoticeSource::Map | NoticeSource::Profile))
+                    && matches!(&items[index], Item::Notice(notice) if matches!(notice.source, NoticeSource::Map | NoticeSource::Profile | NoticeSource::Extensions))
                 {
                     continue;
                 }
@@ -450,6 +466,16 @@ impl Context {
         self.given_profile = first
             .and_then(|first| opened.epochs.get(first))
             .and_then(|(_, epoch)| epoch.profile);
+        // And of the index, the same way; and whether the epoch withdrew an
+        // extension's text. The texts themselves are known once the epoch
+        // is held against the prompt the harness would build now, which
+        // goes on with it only when that prompt holds the epoch's.
+        let epoch_index = first
+            .and_then(|first| opened.epochs.get(first))
+            .and_then(|(_, epoch)| epoch.index);
+        self.given_index = epoch_index;
+        self.given_texts.clear();
+        self.withdrew = false;
         let notices_from = epoch_from.max(summary.map_or(0, |at| at + 1));
         for item in items.iter().skip(notices_from) {
             if let Item::Notice(notice) = item {
@@ -457,6 +483,14 @@ impl Context {
                     self.given.note(&notice.text);
                 } else if notice.source == NoticeSource::Profile {
                     self.given_profile = profile::told(&notice.text);
+                } else if notice.source == NoticeSource::Extensions {
+                    match extensions::told(&notice.text) {
+                        extensions::Told::Index(index) => self.given_index = index,
+                        // It is the first of its epoch's notices of the
+                        // source: what it says is what the epoch began with.
+                        extensions::Told::Again => {}
+                        extensions::Told::Withdrawn => self.withdrew = true,
+                    }
                 }
             }
         }
@@ -606,6 +640,11 @@ impl Context {
         if epoch.reason != Some(EpochReason::Model) {
             self.given = Given::from_marks(&epoch.instructions);
             self.given_profile = epoch.profile;
+            self.given_index = epoch.index;
+            // The texts of the new prompt are its own, which the loop gives
+            // as it begins the epoch (`EpochStart` does not record them).
+            self.given_texts.clear();
+            self.withdrew = false;
         }
         self.epoch = Some(epoch);
         self.epoch_number += 1;

@@ -63,6 +63,11 @@ struct Meta {
     /// moment of the epoch. Like the map, it is not replayed after a
     /// summary: the new epoch's prompt holds the profile as it is then.
     profile: bool,
+    /// The message is a notice of what extensions give the prompt: the
+    /// index as it was at some moment of the epoch, or an extension's text
+    /// withdrawn. Not replayed after a summary either: the new epoch's
+    /// prompt holds both sections as they are then.
+    extensions: bool,
 }
 
 /// The messages of an epoch.
@@ -191,6 +196,7 @@ impl History {
                 dated: false,
                 map: matches!(item, Item::Notice(notice) if notice.source == NoticeSource::Map),
                 profile: matches!(item, Item::Notice(notice) if notice.source == NoticeSource::Profile),
+                extensions: matches!(item, Item::Notice(notice) if notice.source == NoticeSource::Extensions),
             });
         } else if self.messages.len() == before
             && matches!(item, Item::ToolResult(_))
@@ -236,6 +242,13 @@ impl History {
         self.meta.iter().any(|meta| meta.profile)
     }
 
+    /// Whether the history holds a notice of what extensions give the
+    /// prompt: one that a new prompt, built over this history, would be
+    /// followed by.
+    pub(crate) fn tells_extensions(&self) -> bool {
+        self.meta.iter().any(|meta| meta.extensions)
+    }
+
     /// Adds the messages of `other` from `from` on, without the reasoning
     /// or the provider's own blocks of its assistant messages: the turns a
     /// summary did not cover, replayed after it.
@@ -244,11 +257,12 @@ impl History {
     /// of the same items after a summary: a message that held only
     /// reasoning is left out, a first user message loses the date it
     /// carried, which the summary says now, and the old epoch's repository
-    /// map and its notices of the project profile are left out, because
-    /// the new epoch is given its own of each.
+    /// map and its notices of the project profile and of what extensions
+    /// give the prompt are left out, because the new epoch is given its own
+    /// of each.
     pub(crate) fn extend_projected(&mut self, other: &Self, from: usize) {
         for (message, meta) in other.messages.iter().zip(&other.meta).skip(from) {
-            if meta.map || meta.profile {
+            if meta.map || meta.profile || meta.extensions {
                 continue;
             }
             let mut message = if message.role == Role::Assistant {
@@ -272,6 +286,7 @@ impl History {
                 dated: false,
                 map: false,
                 profile: false,
+                extensions: false,
             });
         }
         self.dated = true;

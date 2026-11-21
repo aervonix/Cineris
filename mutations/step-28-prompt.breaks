@@ -1,0 +1,355 @@
+# Step 28, sections 6 and 7 of the system prompt: the index of skills and
+# tool sources, the extensions' own text, their caps, and the epoch rule
+# with the notices of the source `extensions`
+# (`crates/cineris-agent/src/context/{prompt.rs,extensions.rs}`, the loop's
+# `turn/epochs.rs`). Each rule broken on its own, with the tests that must
+# fail. Written with the code (docs/steps/28/answered.md, point 7).
+
+# Where the sections are, and `base`.
+
+[break] section-six-inside-base
+rule: Section 6 is outside the epoch's `base` hash, so a skill added between two processes does not make a resume a new epoch.
+file: crates/cineris-agent/src/context/prompt.rs
+in: build
+find: if let Some(text) = &index { outside.push(parts.len());
+replace: if let Some(text) = &index {
+caught-by:
+    cineris-agent context::prompt::tests::the_base_hash_leaves_section_six_out
+    cineris-agent::it extensions::a_resume_whose_index_differs_goes_on_in_its_epoch_and_is_told
+
+[break] section-seven-outside-base
+rule: Section 7 is inside `base`: a resume whose extensions' texts differ begins a new epoch.
+file: crates/cineris-agent/src/context/prompt.rs
+in: build
+find: if !texts.is_empty() { parts.push(texts); }
+replace: if !texts.is_empty() { outside.push(parts.len()); parts.push(texts); }
+caught-by:
+    cineris-agent context::prompt::tests::the_base_hash_holds_section_seven
+    cineris-agent::it extensions::a_resume_whose_texts_differ_begins_a_new_epoch
+
+[break] an-empty-index-is-a-section
+rule: An index with nothing to list is no section, and no hash.
+file: crates/cineris-agent/src/context/prompt.rs
+in: build
+find: .map(render_index).filter(|text| !text.is_empty())
+replace: .map(render_index)
+caught-by:
+    cineris-agent context::prompt::tests::empty_sections_are_left_out
+    cineris-agent::it extensions::both_sections_are_in_the_epochs_prompt_and_the_index_is_recorded
+
+# Section 6.
+
+[break] sources-in-the-order-given
+rule: Section 6 lists the sources of tools by name, whatever order they come in.
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_index
+find: sources.sort_by(|one, other| one.name.cmp(&other.name));
+replace:
+caught-by:
+    cineris-agent context::prompt::tests::sections_six_and_seven_come_after_the_profile_and_before_the_appended_text
+    cineris-agent context::prompt::tests::section_six_is_held_to_8_kib_and_counts_the_sources_it_leaves_out
+
+[break] a-source-with-no-tool-is-listed
+rule: A source with no tool is not listed: there is nothing to find in it.
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_index
+find: .filter(|source| source.tools > 0)
+replace:
+caught-by:
+    cineris-agent context::prompt::tests::empty_sections_are_left_out
+
+[break] section-six-past-its-cap
+rule: Section 6 is at most 8 KiB: the sources that do not fit after the skills are not listed.
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_index
+find: if text.len() + 1 + line.len() + tail > room { break; }
+replace:
+caught-by:
+    cineris-agent context::prompt::tests::section_six_is_held_to_8_kib_and_counts_the_sources_it_leaves_out
+
+[break] sources-left-out-are-not-counted
+rule: The sources section 6 leaves out are counted in a line of their own.
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_index
+find: if left > 0
+replace: if false
+caught-by:
+    cineris-agent context::prompt::tests::section_six_is_held_to_8_kib_and_counts_the_sources_it_leaves_out
+
+[break] a-skills-part-past-its-cap
+rule: A skills' part longer than its cap is cut at a character's edge, so that the sources keep their room.
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_index
+find: cut(plain(&sections.skills).trim(), SKILLS_CAP)
+replace: plain(&sections.skills).trim().to_owned()
+caught-by:
+    cineris-agent context::prompt::tests::section_six_is_held_to_8_kib_and_counts_the_sources_it_leaves_out
+
+[break] a-sources-name-is-not-shown-as-code
+rule: A source's name is shown as code it cannot end.
+file: crates/cineris-agent/src/context/prompt.rs
+in: source_line
+find: in_code(&source.name)
+replace: source.name.as_str()
+caught-by:
+    cineris-agent context::prompt::tests::a_name_is_shown_as_code_it_cannot_end
+
+[break] a-description-keeps-what-acts-unseen
+rule: A source's description is one line with nothing in it that acts unseen.
+file: crates/cineris-agent/src/context/prompt.rs
+in: one_line
+find: !acts_unseen(character)
+replace: true
+caught-by:
+    cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
+
+# Section 7.
+
+[break] texts-in-the-order-given
+rule: Section 7 orders the extensions by name, whatever order they come in.
+file: crates/cineris-agent/src/context/prompt.rs
+in: text_parts
+find: sorted.sort_by(|one, other| one.name.cmp(&other.name));
+replace:
+caught-by:
+    cineris-agent context::prompt::tests::sections_six_and_seven_come_after_the_profile_and_before_the_appended_text
+    cineris-agent context::prompt::tests::the_base_hash_holds_section_seven
+    cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
+
+[break] an-extensions-name-is-not-shown-as-code
+rule: The line above an extension's text names it as code it cannot end.
+file: crates/cineris-agent/src/context/prompt.rs
+in: text_heading
+find: in_code(name)
+replace: name
+caught-by:
+    cineris-agent context::prompt::tests::a_name_is_shown_as_code_it_cannot_end
+
+[break] a-text-keeps-what-acts-unseen
+rule: An extension's text keeps its line breaks and tabs, and nothing else that acts unseen.
+file: crates/cineris-agent/src/context/prompt.rs
+in: plain
+find: unseen if acts_unseen(unseen) => {}
+replace: '\u{0}' => {}
+caught-by:
+    cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
+
+[break] an-empty-text-is-a-part
+rule: An extension whose text is empty once what acts unseen is out has no part in section 7.
+file: crates/cineris-agent/src/context/prompt.rs
+in: text_parts
+find: if body.is_empty() { return None; }
+replace:
+caught-by:
+    cineris-agent context::prompt::tests::empty_sections_are_left_out
+
+[break] a-text-past-its-cap
+rule: Each extension's text is cut to 4 KiB.
+file: crates/cineris-agent/src/context/prompt.rs
+in: text_parts
+find: cut(body.trim(), EXTENSION_TEXT_CAP)
+replace: body.trim().to_owned()
+caught-by:
+    cineris-agent context::prompt::tests::each_extensions_text_is_cut_to_4_kib_at_a_characters_edge
+
+[break] section-seven-past-its-cap
+rule: Section 7 is at most 16 KiB in all: the text that reaches it is cut there, and the extensions after it are left out.
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_texts
+find: EXTENSIONS_CAP.saturating_sub(out.len() + gap + heading.len() + 2)
+replace: usize::MAX
+caught-by:
+    cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
+
+[break] a-text-is-marked-by-what-the-cap-leaves
+rule: A text the model has is held against its extension's own text, whether or not section 7's cap leaves room for it: one another pushes past the cap is not withdrawn.
+file: crates/cineris-agent/src/context/prompt.rs
+in: text_marks
+find: text_parts(prompts).into_iter().map(|(mark, _, _)| mark).collect()
+replace: render_texts(prompts).1
+caught-by:
+    cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
+    cineris-agent::it extensions::a_text_another_pushes_past_the_cap_is_not_withdrawn
+
+[break] a-cut-falls-inside-a-character
+rule: A cut falls between two characters, never inside one.
+file: crates/cineris-agent/src/context/prompt.rs
+in: cut
+find: truncate_bytes(text, room).trim_end().to_owned()
+replace: String::from_utf8_lossy(&text.as_bytes()[..room]).into_owned()
+caught-by:
+    cineris-agent context::prompt::tests::each_extensions_text_is_cut_to_4_kib_at_a_characters_edge
+    cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
+    cineris-agent context::prompt::tests::section_six_is_held_to_8_kib_and_counts_the_sources_it_leaves_out
+
+# The epoch rule and the notices of the source `extensions`.
+
+[break] the-epoch-records-no-index
+rule: An epoch records the hash of the index its prompt holds, which a later change is measured against.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::epoch_start
+find: index: built.index
+replace: index: None
+caught-by:
+    cineris-agent::it extensions::both_sections_are_in_the_epochs_prompt_and_the_index_is_recorded
+    cineris-agent::it extensions::a_text_removed_disabled_or_changed_is_withdrawn_by_name
+
+[break] the-log-keeps-no-index
+rule: The log's epoch entry keeps the index's hash, so that a resume knows what the model has.
+file: crates/cineris-core/src/store.rs
+in: epoch_body
+find: index: epoch.index
+replace: index: None
+caught-by:
+    cineris-core store::tests::the_epochs_of_a_branch_are_placed_among_its_items
+
+[break] a-change-to-the-index-is-not-told
+rule: During an epoch, a change to section 6 is told at the next turn's start.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::extension_changes
+find: if hash != self.context.given_index {
+replace: if false {
+caught-by:
+    cineris-agent::it extensions::a_change_to_the_index_is_told_whole_at_the_next_turns_start
+    cineris-agent::it extensions::a_resume_whose_index_differs_goes_on_in_its_epoch_and_is_told
+
+[break] the-index-notice-is-not-whole
+rule: The notice of a changed index gives the section whole, as the profile's notice does.
+file: crates/cineris-agent/src/context/extensions.rs
+in: index_notice
+find: format!("{INDEX_CHANGED}\n\n{section}")
+replace: INDEX_CHANGED.to_owned()
+caught-by:
+    cineris-agent context::extensions::tests::a_notice_read_back_says_what_the_model_has
+    cineris-agent::it extensions::a_change_to_the_index_is_told_whole_at_the_next_turns_start
+
+[break] the-index-notice-is-not-read-back
+rule: Read again, the index the model has is the last notice's: a resume with that index tells nothing more.
+file: crates/cineris-agent/src/context/mod.rs
+in: Context::load
+find: extensions::Told::Index(index) => self.given_index = index,
+replace: extensions::Told::Index(_) => {}
+caught-by:
+    cineris-agent::it extensions::a_resume_whose_index_differs_goes_on_in_its_epoch_and_is_told
+
+[break] the-epochs-index-is-not-read-back
+rule: Read again, the index the model has is first the one its epoch's prompt holds.
+file: crates/cineris-agent/src/context/mod.rs
+in: Context::load
+find: self.given_index = epoch_index;
+replace: self.given_index = None;
+caught-by:
+    cineris-agent::it extensions::a_resume_whose_texts_differ_begins_a_new_epoch
+
+[break] a-text-is-not-withdrawn
+rule: During an epoch, an extension whose text the model has and that is removed, disabled or changed is withdrawn by a notice.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::extension_changes
+find: .filter(|given| !texts.contains(given))
+replace: .filter(|_| false)
+caught-by:
+    cineris-agent::it extensions::a_text_removed_disabled_or_changed_is_withdrawn_by_name
+    cineris-agent::it extensions::a_resume_after_a_withdrawal_begins_a_new_epoch_and_says_the_prompt_is_current
+
+[break] a-changed-text-is-not-withdrawn
+rule: An extension whose text changed is withdrawn too, not only one that is gone: a text is told apart by what the prompt holds of it.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::extension_changes
+find: .filter(|given| !texts.contains(given))
+replace: .filter(|given| !texts.iter().any(|now| now.name == given.name))
+caught-by:
+    cineris-agent::it extensions::a_text_removed_disabled_or_changed_is_withdrawn_by_name
+
+[break] a-withdrawal-names-it-as-it-is
+rule: A withdrawal names the extension as code it cannot end.
+file: crates/cineris-agent/src/context/extensions.rs
+in: withdrawn_text
+find: let name = in_code(name);
+replace:
+caught-by:
+    cineris-agent context::extensions::tests::a_withdrawal_names_the_extension_as_code
+    cineris-agent::it extensions::a_text_removed_disabled_or_changed_is_withdrawn_by_name
+
+[break] a-new-epoch-has-no-texts
+rule: A new epoch's texts are those of its prompt, which a later withdrawal is measured against.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: self.begin_epoch(turn, epoch, None).await?; self.context.given_texts = built.texts.clone();
+replace: self.begin_epoch(turn, epoch, None).await?;
+caught-by:
+    cineris-agent::it extensions::a_text_removed_disabled_or_changed_is_withdrawn_by_name
+
+[break] an-epoch-gone-on-with-has-no-texts
+rule: A resume that goes on in its epoch has the epoch's texts, which a later withdrawal is measured against.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: self.context.unchecked = false; self.context.given_texts = built.texts.clone();
+replace: self.context.unchecked = false;
+caught-by:
+    cineris-agent::it extensions::a_withdrawal_is_of_a_text_the_epoch_in_force_holds
+
+[break] a-compactions-epoch-has-no-texts
+rule: A compaction's epoch has its new prompt's texts, which a later withdrawal is measured against.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::finish_compaction
+find: self.context.given_texts = built.texts.clone();
+replace:
+caught-by:
+    cineris-agent::it extensions::a_withdrawal_is_of_a_text_the_epoch_in_force_holds
+
+[break] a-resume-goes-on-after-a-withdrawal
+rule: An epoch that withdrew a text is not gone on with when it is read again, even with the text back as it was.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: && !self.context.withdrew
+replace:
+caught-by:
+    cineris-agent::it extensions::a_resume_after_a_withdrawal_begins_a_new_epoch_and_says_the_prompt_is_current
+
+[break] a-withdrawal-is-not-read-back
+rule: Read again, an epoch knows that it withdrew a text.
+file: crates/cineris-agent/src/context/mod.rs
+in: Context::load
+find: extensions::Told::Withdrawn => self.withdrew = true
+replace: extensions::Told::Withdrawn => {}
+caught-by:
+    cineris-agent::it extensions::a_resume_after_a_withdrawal_begins_a_new_epoch_and_says_the_prompt_is_current
+
+[break] a-new-prompt-over-older-notices-says-nothing
+rule: A new prompt over a history that holds notices of the source is followed by one notice that it holds both sections as they are.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: if self.context.history.tells_extensions() {
+replace: if false {
+caught-by:
+    cineris-agent::it extensions::a_resume_after_a_withdrawal_begins_a_new_epoch_and_says_the_prompt_is_current
+    cineris-agent::it extensions::a_resume_into_a_new_epoch_after_an_index_notice_says_the_prompt_is_current
+
+[break] the-current-notice-reads-back-as-a-withdrawal
+rule: The notice that the prompt is as it is reads back as itself, not as a withdrawal: the epoch it follows goes on when read again.
+file: crates/cineris-agent/src/context/extensions.rs
+in: told
+find: if notice == EXTENSIONS_AGAIN { return Told::Again; }
+replace:
+caught-by:
+    cineris-agent context::extensions::tests::a_notice_read_back_says_what_the_model_has
+    cineris-agent::it extensions::a_resume_after_a_withdrawal_begins_a_new_epoch_and_says_the_prompt_is_current
+    cineris-agent::it extensions::a_resume_into_a_new_epoch_after_an_index_notice_says_the_prompt_is_current
+
+[break] a-summary-replays-the-old-notices-live
+rule: After a summary, no notice of the source from the old epoch is replayed: the new prompt holds both sections as they are.
+file: crates/cineris-agent/src/context/history.rs
+in: History::extend_projected
+find: if meta.map || meta.profile || meta.extensions {
+replace: if meta.map || meta.profile {
+caught-by:
+    cineris-agent::it extensions::a_compaction_builds_both_sections_as_they_are_and_replays_no_older_notice
+
+[break] a-summary-replays-the-old-notices-read-again
+rule: Read again after a summary, no notice of the source from the old epoch is replayed, as live.
+file: crates/cineris-agent/src/context/mod.rs
+in: Context::load
+find: NoticeSource::Map | NoticeSource::Profile | NoticeSource::Extensions
+replace: NoticeSource::Map | NoticeSource::Profile
+caught-by:
+    cineris-agent::it extensions::a_compaction_builds_both_sections_as_they_are_and_replays_no_older_notice
