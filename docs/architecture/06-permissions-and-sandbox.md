@@ -269,6 +269,8 @@ Some files in a workspace decide what runs later, outside the sandbox and withou
 | `supervised`, `guided`, `autonomous` | Asked about. `autonomous` lets a command run unasked and still asks about these. |
 | `unrestricted` | Left to the holder: the level asks nothing. A user's `deny` and `ask` rules still hold there, and so does the built-in protection of the harness's own files. |
 
+An extension's script's write of one (`cineris.fs.write`) is the exception: it is refused at every level, `unrestricted` included, before the engine is asked, since nothing looks at it afterwards as the look at the protected paths does after a command ([12-extensions.md](12-extensions.md), "Tier 4").
+
 - **Every route asks.**
   - The `write` and `edit` tools.
   - A redirection: `echo x > .git/config`.
