@@ -38,6 +38,10 @@ const MAX_NAME: usize = 64;
 const MAX_DESCRIPTION: usize = 1024;
 /// The most entries a list of capabilities may have.
 const MAX_ENTRIES: usize = 64;
+/// The longest program or path glob a capability lists, in bytes: a real
+/// program's path or a glob is well inside it, and it keeps what an
+/// approval shows of each entry, sixty-four of them at most, bounded.
+pub const MAX_ENTRY_BYTES: usize = 256;
 
 /// Why a manifest was refused.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -222,6 +226,7 @@ impl Manifest {
         }
         check_name(&raw.name)?;
         check_text("version", &raw.version, MAX_NAME, false)?;
+        check_shown("version", &raw.version)?;
         check_text("description", &raw.description, MAX_DESCRIPTION, true)?;
         check_file("main", &raw.main, &["js", "mjs"])?;
         if let Some(prompt) = &raw.prompt {
@@ -295,6 +300,24 @@ fn check_name(name: &str) -> Result<(), ManifestError> {
     }
 }
 
+/// What an approval shows as code, a program, a path glob or the version:
+/// at most [`MAX_ENTRY_BYTES`], and with no backtick, which would end the
+/// code span it is shown in, so that what follows it would read as the
+/// harness's own words (the early review of step 28's second part).
+fn check_shown(key: &str, text: &str) -> Result<(), ManifestError> {
+    if text.len() > MAX_ENTRY_BYTES {
+        return Err(refused(format!(
+            "`{key}` has an entry longer than {MAX_ENTRY_BYTES} bytes"
+        )));
+    }
+    if text.contains('`') {
+        return Err(refused(format!(
+            "`{key}` has an entry that holds a backtick, which would end the code an approval shows it as"
+        )));
+    }
+    Ok(())
+}
+
 fn check_text(key: &str, text: &str, most: usize, may_be_empty: bool) -> Result<(), ManifestError> {
     if !may_be_empty && text.trim().is_empty() {
         return Err(refused(format!("`{key}` is empty")));
@@ -349,6 +372,9 @@ fn declared(raw: RawCapabilities) -> Result<Declared, ManifestError> {
             )));
         }
     }
+    for entry in &raw.exec {
+        check_shown("capabilities.exec", entry)?;
+    }
     let exec = raw
         .exec
         .into_iter()
@@ -356,6 +382,7 @@ fn declared(raw: RawCapabilities) -> Result<Declared, ManifestError> {
         .collect::<Result<Vec<_>, _>>()?;
     for (key, globs) in [("read", &raw.read), ("write", &raw.write)] {
         for glob in globs {
+            check_shown(&format!("capabilities.{key}"), glob)?;
             check_glob(key, glob)?;
         }
     }
