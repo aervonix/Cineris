@@ -3878,6 +3878,7 @@ rule: A turn's start looks again at what the extensions were found in.
 file: crates/cineris-core/src/core.rs
 find: live.extensions.recheck().await;
 replace: let _ = &live.extensions;
+occurrence: 1
 caught-by:
     extensions_reload::an_extension_approved_and_changed_in_a_session_is_loaded_and_withdrawn_at_the_next_turns
 

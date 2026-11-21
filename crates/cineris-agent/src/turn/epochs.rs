@@ -306,8 +306,11 @@ impl Session {
 
     /// Reads the instruction files and builds the system prompt. With what
     /// the extensions' source answered, so that a turn's start that goes on
-    /// in its epoch does not ask it again.
-    async fn build_prompt(&mut self, turn: &Turn) -> (Built, Discovered, Asked) {
+    /// in its epoch does not ask it again. The source is asked to its end,
+    /// whatever the turn's token says (it answers from memory): an epoch is
+    /// never begun from a prompt that lacks sections 6 and 7 because its
+    /// turn was interrupted as it began.
+    async fn build_prompt(&mut self) -> (Built, Discovered, Asked) {
         let (found, io, cap) = {
             let parts = &self.context.parts;
             (
@@ -327,7 +330,8 @@ impl Session {
         let profile = Self::profile_now(self.context.parts.profile.clone())
             .await
             .unwrap_or_default();
-        let asked = Self::extensions_now(self.context.parts.extensions.clone(), &turn.cancel).await;
+        let asked =
+            Self::extensions_now(self.context.parts.extensions.clone(), &CancelToken::new()).await;
         let parts = &self.context.parts;
         // No answer, no section: a prompt holds no text it was not given.
         let extensions = match &asked {
@@ -457,7 +461,7 @@ impl Session {
         let mut begun = false;
         let mut answer = None;
         if self.context.epoch.is_none() || self.context.unchecked {
-            let (built, discovered, asked) = self.build_prompt(turn).await;
+            let (built, discovered, asked) = self.build_prompt().await;
             self.warn_instructions(turn, &discovered);
             // An epoch whose prompt the log does not hold as it was sent
             // (the filter masked something in it) cannot go on: its next
@@ -544,6 +548,8 @@ impl Session {
                 // prompt does not hold as it was, is named, whether or not
                 // the history holds a notice: what it said is not to be
                 // followed on the strength of the history.
+                // A text the new prompt cuts, whole or not before, is named
+                // too: the rest of it no longer applies.
                 let gone: Vec<String> = before
                     .iter()
                     .filter(|(name, hash)| {
@@ -551,6 +557,10 @@ impl Session {
                             .texts
                             .iter()
                             .any(|mark| mark.name == *name && mark.hash == *hash)
+                            || built
+                                .left_out
+                                .iter()
+                                .any(|left| left.cut && left.name == *name)
                     })
                     .map(|(name, _)| name.clone())
                     .collect();
@@ -561,6 +571,10 @@ impl Session {
                         crate::context::replaced_text(&gone),
                     )
                     .await?;
+                    for name in &gone {
+                        self.context
+                            .note_withdrawn(cineris_base::in_code(name).into_owned());
+                    }
                 }
             }
         }
@@ -809,8 +823,7 @@ impl Session {
             .await?;
             self.context.given_texts.retain(|given| *given != mark);
             self.context
-                .withdrawn
-                .push(cineris_base::in_code(&mark.name).into_owned());
+                .note_withdrawn(cineris_base::in_code(&mark.name).into_owned());
         }
         Ok(())
     }
@@ -1881,7 +1894,7 @@ impl Session {
     ) -> Result<u64, Unfinished> {
         // The new epoch's models, before its prompt is built.
         self.take_epoch_models();
-        let (built, discovered, _) = self.build_prompt(turn).await;
+        let (built, discovered, _) = self.build_prompt().await;
         self.warn_instructions(turn, &discovered);
         let root = self.root();
         let today = date_of(self.clock.now());

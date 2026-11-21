@@ -1691,11 +1691,16 @@ impl Core {
             Op::SessionCompact(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
-                // A compaction begins as a turn does, and may build the
-                // session's first prompt: it waits for the session's
-                // extensions and skills as a turn does, so that the prompt
-                // holds what they give it (step 28).
+                // A compaction begins as a turn does, and builds an epoch's
+                // prompt: it waits for the session's extensions and skills
+                // as a turn's start does, one start at a time, and looks
+                // again at what they were found in when no turn runs, so
+                // that the prompt holds what they give it now (step 28).
+                let _starting = live.turn_start.lock().await;
                 live.extensions.wait().await;
+                if !live.handle.turn_running() {
+                    live.extensions.recheck().await;
+                }
                 live.handle.compact(params.focus)?;
                 Ok(OpResult::SessionCompact(Empty {}))
             }

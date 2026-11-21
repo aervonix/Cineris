@@ -481,10 +481,10 @@ caught-by:
 rule: A session read again knows the texts withdrawn since the last summary, from the history, for its next summary (L3).
 file: crates/cineris-agent/src/context/mod.rs
 in: Context::load
-find: extensions::withdrawn_name(&notice.text).map(str::to_owned)
-replace: None
+find: extensions::withdrawn_name(&notice.text).map(|name| vec![name.to_owned()])
+replace: None::<Vec<String>>
 caught-by:
-    cineris-agent::it extensions::a_summary_is_asked_to_leave_out_a_withdrawn_text
+    cineris-agent::it extensions::a_resume_after_a_withdrawal_begins_a_new_epoch_and_says_the_prompt_is_current
 
 # The core fills them: skills found with the extensions, the sections from
 # what the session's finding settled, a change at the next turn's start.
@@ -529,8 +529,8 @@ caught-by:
 rule: Each place the skills are found through is stamped before it is looked at or read, so that a change is seen.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: skills_found
-find: watched.note(place.to_path_buf(), clock);
-replace: let _ = place;
+find: skills::Seen::Place(place) => watched.note(place.to_path_buf(), clock)
+replace: skills::Seen::Place(_) => {}
 caught-by:
     cineris-core::it extensions_prompt::a_skill_added_changed_and_removed_is_told_and_a_session_read_again_goes_on
 
@@ -538,7 +538,7 @@ caught-by:
 rule: Each `SKILL.md` is named to the caller before it is read, where it really is: an edit in place is a change.
 file: crates/cineris-ext/src/skills.rs
 in: skill_in
-find: seen(&file.to_fs_path());
+find: seen(Seen::Place(&file.to_fs_path()));
 replace:
 packages: cineris-ext,cineris-core
 caught-by:
@@ -569,7 +569,7 @@ caught-by:
 [break] a-compaction-does-not-wait-for-the-extensions
 rule: A compaction may build a session's first prompt, and waits for the session's extensions as a turn does.
 file: crates/cineris-core/src/core.rs
-find: live.extensions.wait().await; live.handle.compact(params.focus)?;
+find: live.extensions.wait().await; if !live.handle.turn_running() { live.extensions.recheck().await; } live.handle.compact(params.focus)?;
 replace: live.handle.compact(params.focus)?;
 caught-by:
     cineris-core::it extensions_prompt::a_compaction_before_the_first_turn_waits_for_the_extensions
@@ -599,4 +599,95 @@ in: Held::settle
 find: self.prompt.withdraw(&gone);
 replace:
 expect: survives
+
+# The review of the changes since round 1.
+
+[break] an-interrupted-start-builds-a-prompt-without-sections
+rule: The prompt an epoch is built from asks the extensions' source to its end, whatever the turn's token says: a turn interrupted as it began does not begin an epoch without sections 6 and 7.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::build_prompt
+find: Self::extensions_now(self.context.parts.extensions.clone(), &CancelToken::new())
+replace: Self::extensions_now(self.context.parts.extensions.clone(), &{ let token = CancelToken::new(); token.cancel(); token })
+caught-by:
+    cineris-agent::it extensions::an_epoch_begun_by_an_interrupted_turn_holds_both_sections
+
+[break] a-resume-does-not-name-a-text-it-cuts
+rule: A resume whose new prompt cuts a text the epoch before held names it: its mark, of the text standing alone, is as it was.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: || built.left_out.iter().any(|left| left.cut && left.name == *name)
+replace:
+caught-by:
+    cineris-agent::it extensions::a_resume_whose_prompt_cuts_a_text_names_it
+
+[break] the-summary-forgets-the-texts-a-resume-named
+rule: The extensions a resume named as gone are for the next summary to leave out, as a withdrawal's are.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: for name in &gone { self.context.note_withdrawn(cineris_base::in_code(name).into_owned()); }
+replace:
+caught-by:
+    cineris-agent::it extensions::a_resume_whose_prompt_cuts_a_text_names_it
+
+[break] the-summary-forgets-the-texts-a-resume-named-read-again
+rule: Read again, the extensions a resume named as gone are for the next summary to leave out, read back from its notice.
+file: crates/cineris-agent/src/context/mod.rs
+in: Context::load
+find: .unwrap_or_else(|| extensions::replaced_names(&notice.text))
+replace: .unwrap_or_default()
+caught-by:
+    cineris-agent::it extensions::a_resume_names_the_texts_that_went_or_changed_since_its_epoch
+
+[break] a-root-through-a-link-is-not-watched-where-it-would-be
+rule: A root of skills that is not there, reached through a link, is named where it would be, so that a root made there later is seen.
+file: crates/cineris-ext/src/skills.rs
+in: open_root
+find: seen(Seen::Way(&resolved.to_fs_path()));
+replace:
+caught-by:
+    cineris-ext skills::tests::a_root_through_a_link_is_named_where_it_would_be
+
+[break] a-root-through-a-link-to-nothing-is-not-watched
+rule: A root of skills that is a link to nothing has where it leads named, so that a folder made there later is seen.
+file: crates/cineris-ext/src/skills.rs
+in: open_root
+find: seen(Seen::Way(&target));
+replace:
+caught-by:
+    cineris-ext skills::tests::a_root_through_a_link_is_named_where_it_would_be
+
+[break] a-root-reads-its-skills-without-a-budget
+rule: A root reads at most 8 MiB of `SKILL.md` files: the skills past it are left out, unread.
+file: crates/cineris-ext/src/skills.rs
+in: find_seeing
+find: left: std::cell::Cell::new(MAX_ROOT_BYTES)
+replace: left: std::cell::Cell::new(u64::MAX)
+caught-by:
+    cineris-ext skills::tests::a_root_reads_at_most_its_bytes_of_skills
+
+[break] a-name-on-the-way-is-stamped-by-its-times
+rule: A name on the way to a root of skills is stamped by its kind alone: a file another tool writes beside the skills is no change, and nothing is read again for it.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: skills_found
+find: skills::Seen::Way(way) => watched.note_kind(way.to_path_buf(), clock),
+replace: skills::Seen::Way(way) => watched.note(way.to_path_buf(), clock),
+caught-by:
+    cineris-core::it extensions_prompt::a_skill_added_changed_and_removed_is_told_and_a_session_read_again_goes_on
+
+[break] a-kind-stamp-is-looked-at-by-its-times
+rule: A place stamped by its kind is looked at again by its kind alone.
+file: crates/cineris-core/src/ext/watched.rs
+in: Watched::changed
+find: Stamp::Kind(_) => Stamp::kind_of(place),
+replace: Stamp::Kind(_) => Stamp::of(place),
+caught-by:
+    cineris-core ext::watched::tests::a_name_stamped_by_its_kind_changes_only_with_its_kind
+
+[break] a-compaction-does-not-look-again
+rule: A compaction looks again at what the extensions were found in before it builds its epoch's prompt, as a turn's start does.
+file: crates/cineris-core/src/core.rs
+find: if !live.handle.turn_running() { live.extensions.recheck().await; }
+replace:
+caught-by:
+    cineris-core::it extensions_prompt::a_compaction_looks_again_before_it_builds_its_prompt
 

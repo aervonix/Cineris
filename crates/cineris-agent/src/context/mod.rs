@@ -324,12 +324,16 @@ pub(crate) struct Context {
     /// prompt holds, less those withdrawn since. Empty after a load until
     /// the epoch is held against the prompt the harness would build now.
     pub(crate) given_texts: Vec<TextMark>,
-    /// Whether the epoch's history withdrew an extension's text: such an
-    /// epoch is not gone on with when the session is read again.
+    /// Whether the epoch's history withdrew an extension's text, as the
+    /// session read again from its branch (`load`) finds it: such an epoch
+    /// is not gone on with. The live session needs no such mark: a text it
+    /// withdraws leaves `given_texts`, and an epoch is held against the
+    /// prompt the harness would build only when the session is read again.
     pub(crate) withdrew: bool,
     /// The extensions whose text the history since the last summary
-    /// withdrew, each as the notice named it (as code): the next summary is
-    /// asked to leave out what that text asked for.
+    /// withdrew or named as gone, each as the notice named it (as code),
+    /// each once: the next summary is asked to leave out what that text
+    /// asked for.
     pub(crate) withdrawn: Vec<String>,
     pub(crate) budget: Budget,
     /// The date the epoch's history tells the model.
@@ -393,6 +397,14 @@ impl Context {
             && epoch.variants.is_none()
         {
             epoch.variants = Some(variants.clone());
+        }
+    }
+
+    /// Notes an extension whose text was withdrawn or named as gone, as
+    /// the notice named it, once.
+    pub(crate) fn note_withdrawn(&mut self, shown: String) {
+        if !self.withdrawn.contains(&shown) {
+            self.withdrawn.push(shown);
         }
     }
 
@@ -504,18 +516,21 @@ impl Context {
                 }
             }
         }
-        // The texts withdrawn since the last summary, in every epoch since:
-        // what the next one is to leave out.
-        self.withdrawn = items
-            .iter()
-            .skip(summary.map_or(0, |at| at + 1))
-            .filter_map(|item| match item {
-                Item::Notice(notice) if notice.source == NoticeSource::Extensions => {
-                    extensions::withdrawn_name(&notice.text).map(str::to_owned)
+        // The texts withdrawn or named as gone since the last summary, in
+        // every epoch since: what the next one is to leave out.
+        self.withdrawn.clear();
+        for item in items.iter().skip(summary.map_or(0, |at| at + 1)) {
+            if let Item::Notice(notice) = item
+                && notice.source == NoticeSource::Extensions
+            {
+                let names = extensions::withdrawn_name(&notice.text)
+                    .map(|name| vec![name.to_owned()])
+                    .unwrap_or_else(|| extensions::replaced_names(&notice.text));
+                for name in names {
+                    self.note_withdrawn(name);
                 }
-                _ => None,
-            })
-            .collect();
+            }
+        }
         // The date the history tells: its summary's, or its first user
         // message's, or a later notice's.
         self.date = None;

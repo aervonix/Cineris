@@ -155,10 +155,34 @@ pub const TEXTS_REPLACED: &str = "The system prompt was built again, and the tex
 /// two prompts.
 pub(crate) fn replaced_text(names: &[String]) -> String {
     format!(
-        "{TEXTS_REPLACED} {}. Disregard what their text said before: the system prompt gives \
-         each extension's text as it is now, and none for an extension it does not name.",
+        "{TEXTS_REPLACED} {}{REPLACED_REST} the system prompt gives each extension's text as it \
+         is now, and none for an extension it does not name.",
         names_as_code(names)
     )
+}
+
+/// The words of the notice of [`replaced_text`] after its names.
+const REPLACED_REST: &str = ". Disregard what their text said before:";
+
+/// The extensions a notice of [`replaced_text`] names, as it shows them (as
+/// code); none for a notice that is not one. An extension's name is of
+/// letters, digits, `_`, `-` and `.` (its checked manifest's), so the
+/// list's commas and backticks are the notice's own.
+pub(crate) fn replaced_names(notice: &str) -> Vec<String> {
+    let Some(rest) = notice
+        .strip_prefix(TEXTS_REPLACED)
+        .and_then(|rest| rest.strip_prefix(' '))
+    else {
+        return Vec::new();
+    };
+    let Some(end) = rest.find(REPLACED_REST) else {
+        return Vec::new();
+    };
+    rest[..end]
+        .split(", ")
+        .filter_map(|shown| shown.strip_prefix('`')?.strip_suffix('`'))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Names, each shown as code it cannot end, with commas between them.
@@ -331,6 +355,8 @@ mod tests {
             "{named}"
         );
         assert_eq!(told(&named), Told::Replaced);
+        assert_eq!(replaced_names(&named), ["a\\`b", "c"]);
+        assert!(replaced_names(EXTENSIONS_AGAIN).is_empty());
     }
 
     /// A withdrawal names its extension as code, and is read back so: the

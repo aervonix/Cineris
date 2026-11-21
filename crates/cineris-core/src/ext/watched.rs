@@ -43,6 +43,10 @@ enum Stamp {
     Missing,
     /// Something is there that cannot be looked at.
     Unreadable(std::io::ErrorKind),
+    /// Something of this kind, whatever its time and size: a name on the
+    /// way to a place, whose kind alone matters (a file another tool writes
+    /// beside it is no change of it).
+    Kind(Kind),
     /// A folder, a file, a link or anything else.
     Present {
         modified: Option<SystemTime>,
@@ -80,6 +84,26 @@ impl Stamp {
                     },
                     identity: identity(&metadata),
                 }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::Missing,
+            Err(error) => Self::Unreadable(error.kind()),
+        }
+    }
+
+    /// What `path` is, looked at itself: its kind alone.
+    fn kind_of(path: &std::path::Path) -> Self {
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                let kind = metadata.file_type();
+                Self::Kind(if kind.is_symlink() {
+                    Kind::Link
+                } else if kind.is_dir() {
+                    Kind::Folder
+                } else if kind.is_file() {
+                    Kind::File
+                } else {
+                    Kind::Other
+                })
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Self::Missing,
             Err(error) => Self::Unreadable(error.kind()),
@@ -150,6 +174,18 @@ impl Watched {
             return;
         }
         let stamp = Stamp::of(&place);
+        self.places.push((place, stamp, clock.now()));
+    }
+
+    /// Stamps `place` now by its kind alone: a name on the way to a place,
+    /// which changes when it comes, goes or becomes a link, and not when
+    /// something is made in it. A place stamped already keeps its first
+    /// stamp.
+    pub(crate) fn note_kind(&mut self, place: PathBuf, clock: &SharedClock) {
+        if !self.known.insert(place.clone()) {
+            return;
+        }
+        let stamp = Stamp::kind_of(&place);
         self.places.push((place, stamp, clock.now()));
     }
 
@@ -236,7 +272,10 @@ impl Watched {
     /// at.
     pub(crate) fn changed(&self) -> Option<PathBuf> {
         self.places.iter().find_map(|(place, stamp, taken)| {
-            let now = Stamp::of(place);
+            let now = match stamp {
+                Stamp::Kind(_) => Stamp::kind_of(place),
+                _ => Stamp::of(place),
+            };
             (now != *stamp || unsettled(stamp, *taken)).then(|| place.clone())
         })
     }
@@ -327,6 +366,32 @@ mod tests {
         let now: SharedClock = Arc::new(cineris_base::SystemClock::new());
         let watched = Watched::stamp(vec![dir.join("gone")], &now);
         assert_eq!(watched.changed(), Some(dir.join("gone")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A name on the way, stamped by its kind alone, changes when it comes,
+    /// goes or becomes something else, and not when something is made in
+    /// it: `~/.claude`, which another tool writes in, is not a change each
+    /// time it does.
+    #[test]
+    fn a_name_stamped_by_its_kind_changes_only_with_its_kind() {
+        let dir = std::env::temp_dir().join(format!("cineris-core-kind-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("way")).unwrap();
+        let clock: SharedClock = Arc::new(FakeClock::starting_at("2001-01-01T00:00:00Z").unwrap());
+        let mut watched = Watched::default();
+        watched.note_kind(dir.join("way"), &clock);
+        watched.note_kind(dir.join("later"), &clock);
+        std::fs::write(dir.join("way/history"), "written beside").unwrap();
+        std::fs::create_dir(dir.join("way/projects")).unwrap();
+        assert_eq!(watched.changed(), None, "made in it: no change of it");
+        std::fs::create_dir(dir.join("later")).unwrap();
+        assert_eq!(watched.changed(), Some(dir.join("later")), "come");
+        let mut watched = Watched::default();
+        watched.note_kind(dir.join("way"), &clock);
+        std::fs::remove_dir_all(dir.join("way")).unwrap();
+        std::fs::write(dir.join("way"), "a file now").unwrap();
+        assert_eq!(watched.changed(), Some(dir.join("way")), "another kind");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

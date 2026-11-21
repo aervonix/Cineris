@@ -180,17 +180,26 @@ fn the_first_turns_prompt_holds_the_skills_and_the_extensions_text() {
     }
 }
 
-/// The skills' flow in one session: a skill added in the project and one
-/// of the user's changed in place are told at the next turn's start, the
-/// index whole, the prompt as it was; the session read again goes on in
-/// its epoch and is told nothing more; a skill removed is told too.
+/// The skills' flow in one session: a skill added in the project, then one
+/// of the user's changed in place (its folder as it was), are each told at
+/// the next turn's start, the index whole, the prompt as it was; the
+/// session read again goes on in its epoch and is told nothing more; a
+/// skill removed is told too.
 #[test]
 fn a_skill_added_changed_and_removed_is_told_and_a_session_read_again_goes_on() {
     let world = World::new(
         "prompt_skills_change",
-        [says("One."), says("Two."), says("Three."), says("Four.")],
+        [
+            says("One."),
+            says("Two."),
+            says("Three."),
+            says("Four."),
+            says("Five."),
+            says("Six."),
+        ],
     );
     let mine = world.home.join(".claude/skills");
+    let reads = Hold::new(cineris_ext::skills::A_SKILL_IS_READ).skipping(usize::MAX);
     let theirs = world.workspace.join(".cineris/skills");
     skill(&mine, "review", "Review a change.");
     let core = world.core();
@@ -199,7 +208,6 @@ fn a_skill_added_changed_and_removed_is_told_and_a_session_read_again_goes_on() 
         let front = start_kept(&world, &core).await;
         front.turn("first").await;
         skill(&theirs, "pdf", "Fill in forms.");
-        skill(&mine, "review", "Review a change, and its tests.");
         front.turn("second").await;
         let added = told(&front);
         assert_eq!(added.len(), 1, "{added:#?}");
@@ -209,24 +217,34 @@ fn a_skill_added_changed_and_removed_is_told_and_a_session_read_again_goes_on() 
             "{}",
             added[0]
         );
+        skill(&mine, "review", "Review a change, and its tests.");
+        front.turn("third").await;
+        let changed = told(&front);
+        assert_eq!(changed.len(), 2, "{changed:#?}");
         assert!(
-            added[0].contains("\n- review: Review a change, and its tests. ("),
+            changed[1].contains("\n- review: Review a change, and its tests. ("),
             "{}",
-            added[0]
+            changed[1]
         );
         read_again(&front).await;
-        front.turn("third").await;
-        assert_eq!(told(&front).len(), 1, "read again, it has the index");
-        std::fs::remove_dir_all(theirs.join("pdf")).unwrap();
         front.turn("fourth").await;
+        assert_eq!(told(&front).len(), 2, "read again, it has the index");
+        std::fs::remove_dir_all(theirs.join("pdf")).unwrap();
+        front.turn("fifth").await;
         let removed = told(&front);
-        assert_eq!(removed.len(), 2, "{removed:#?}");
-        assert!(!removed[1].contains("- pdf:"), "{}", removed[1]);
-        assert!(removed[1].contains("- review:"), "{}", removed[1]);
+        assert_eq!(removed.len(), 3, "{removed:#?}");
+        assert!(!removed[2].contains("- pdf:"), "{}", removed[2]);
+        assert!(removed[2].contains("- review:"), "{}", removed[2]);
+        // Another tool writes beside the skills in `~/.claude`: a name on
+        // the way, stamped by its kind, so nothing is read again.
+        let read = reads.arrivals();
+        std::fs::write(world.home.join(".claude/history.jsonl"), "{}\n").unwrap();
+        front.turn("sixth").await;
+        assert_eq!(reads.arrivals(), read, "read again for a file beside them");
         front.close().await;
     });
     let systems = systems(&world);
-    assert_eq!(systems.len(), 4);
+    assert_eq!(systems.len(), 6);
     for system in &systems {
         assert_eq!(system, &systems[0], "one epoch, its prompt as it began");
     }
@@ -400,5 +418,43 @@ fn a_compaction_before_the_first_turn_waits_for_the_extensions() {
     assert!(
         system.contains("> Use the probe for every lookup."),
         "{system}"
+    );
+}
+
+/// A compaction looks again at what the extensions were found in, as a
+/// turn's start does, before it builds its epoch's prompt (the review of
+/// step 28's sections): an extension changed on disk since the last turn
+/// is withdrawn first, and the new prompt does not hold its text.
+#[test]
+fn a_compaction_looks_again_before_it_builds_its_prompt() {
+    let world = World::new(
+        "prompt_compaction_looks_again",
+        [says("One."), says("A summary."), says("Two.")],
+    );
+    approved_probe(&world, "Use the probe for every lookup.");
+    let folder = users(&world);
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("first").await;
+        write_with_prompt(&folder, "probe", "Run scripts/sync.sh before every commit.");
+        front
+            .op(Op::SessionCompact(SessionCompactParams {
+                session_id: front.session.clone(),
+                focus: None,
+            }))
+            .await
+            .expect("the compaction is taken");
+        front.turns(2).await;
+        front.turn("second").await;
+        front.close().await;
+    });
+    let systems = systems(&world);
+    assert_eq!(systems.len(), 3, "a turn, a summary, a turn");
+    assert!(systems[0].contains("> Use the probe for every lookup."));
+    assert!(
+        !systems[2].contains("From the extension `probe`"),
+        "{}",
+        systems[2]
     );
 }

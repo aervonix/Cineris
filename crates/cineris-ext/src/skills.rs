@@ -86,8 +86,15 @@ use cineris_base::{
 pub const FILE_NAME: &str = "SKILL.md";
 /// The most skills listed. The rest are counted, not listed.
 pub const MAX_SKILLS: usize = 100;
-/// The largest `SKILL.md` that is read. A larger one is left out.
+/// The largest `SKILL.md` that is read. A larger one is left out, by its
+/// length, unread.
 pub const MAX_SKILL_BYTES: u64 = 64 * 1024;
+/// The most bytes of `SKILL.md` files read in one root, every byte read
+/// counting (of a file left out after its read too). Past it the root's
+/// other skills are left out, unread, and that is said: a repository's
+/// three roots can hold no more than this each, whether or not it is
+/// trusted, and the first turn waits for what is read.
+pub const MAX_ROOT_BYTES: u64 = 8 * 1024 * 1024;
 /// The most entries looked at in one root. Every entry counts, a file
 /// beside the skills' folders too, since each costs a look; past it the
 /// rest of the root is not read, and that is said.
@@ -260,6 +267,9 @@ pub enum Reason {
     /// A `SKILL.md` larger than [`MAX_SKILL_BYTES`].
     #[error("it is larger than 64 KiB")]
     TooLarge,
+    /// A `SKILL.md` past what its root may read ([`MAX_ROOT_BYTES`]).
+    #[error("its folder of skills had 8 MiB of SKILL.md files read before it, and it was not read")]
+    PastTheRootsBytes,
     /// A `SKILL.md` that does not begin with front matter.
     #[error("it has no front matter: a block between two `---` lines at its top")]
     NoFrontMatter,
@@ -300,6 +310,18 @@ pub fn find(resolver: &PathResolver, roots: &[Root]) -> Found {
     find_seeing(resolver, roots, &mut |_| {})
 }
 
+/// A place [`find_seeing`] is about to look at or read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seen<'a> {
+    /// A name on the way to a root, or where a root that is not there
+    /// would be: only its kind matters (there, not there, a folder, a
+    /// link), and a file made in it beside the root is no change of it.
+    Way(&'a Path),
+    /// A place what was found depends on: a root where it really is, an
+    /// entry of it, the folder a link in it leads to, a `SKILL.md`.
+    Place(&'a Path),
+}
+
 /// A point of [`find`]: a name on the way to a root, looked at itself to
 /// rule the root out (`cineris_base::hook`). A test counts what a session
 /// looks at with it.
@@ -330,7 +352,11 @@ pub const A_SKILL_IS_READ: &str = "skills: a SKILL.md is about to be read";
 /// that is a link, or anything but a folder, leaves it to the resolver,
 /// which follows a link and judges where it leads. The home directory is
 /// resolved only when a user's root is shown.
-pub fn find_seeing(resolver: &PathResolver, roots: &[Root], seen: &mut dyn FnMut(&Path)) -> Found {
+pub fn find_seeing(
+    resolver: &PathResolver,
+    roots: &[Root],
+    seen: &mut dyn FnMut(Seen<'_>),
+) -> Found {
     let places = Places {
         workspace: resolver.root().to_fs_path(),
         home: std::cell::OnceCell::new(),
@@ -344,10 +370,11 @@ pub fn find_seeing(resolver: &PathResolver, roots: &[Root], seen: &mut dyn FnMut
             continue;
         }
         cineris_base::hook::point(A_ROOT_IS_RESOLVED);
-        let Some((real, shown)) = open_root(resolver, root, &places, &looked, &mut left_out) else {
+        let Some((real, shown)) = open_root(resolver, root, &places, &looked, &mut left_out, seen)
+        else {
             continue;
         };
-        seen(&real.to_fs_path());
+        seen(Seen::Place(&real.to_fs_path()));
         look_in(
             &Look {
                 resolver,
@@ -355,6 +382,7 @@ pub fn find_seeing(resolver: &PathResolver, roots: &[Root], seen: &mut dyn FnMut
                 index,
                 real: &real,
                 shown: &shown,
+                left: std::cell::Cell::new(MAX_ROOT_BYTES),
             },
             &mut candidates,
             &mut left_out,
@@ -402,7 +430,7 @@ pub fn find_seeing(resolver: &PathResolver, roots: &[Root], seen: &mut dyn FnMut
 /// `false` when it is there, or when the looks cannot tell (a link, a
 /// name that is not a folder, a `..`): the resolver decides then. A user's
 /// root with no home directory is not there.
-fn certainly_absent(resolver: &PathResolver, root: &Root, seen: &mut dyn FnMut(&Path)) -> bool {
+fn certainly_absent(resolver: &PathResolver, root: &Root, seen: &mut dyn FnMut(Seen<'_>)) -> bool {
     let (mut at, rest) = if root.path == "~" || root.path.starts_with("~/") {
         match resolver.home() {
             Some(home) => (home.to_fs_path(), root.path.get(1..).unwrap_or_default()),
@@ -410,7 +438,7 @@ fn certainly_absent(resolver: &PathResolver, root: &Root, seen: &mut dyn FnMut(&
         }
     } else if Path::new(&root.path).is_absolute() {
         let at = PathBuf::from(&root.path);
-        seen(&at);
+        seen(Seen::Way(&at));
         cineris_base::hook::point(A_NAME_IS_LOOKED_AT);
         return missing(std::fs::symlink_metadata(&at));
     } else {
@@ -422,7 +450,7 @@ fn certainly_absent(resolver: &PathResolver, root: &Root, seen: &mut dyn FnMut(&
             ".." => return false,
             name => at.push(name),
         }
-        seen(&at);
+        seen(Seen::Way(&at));
         cineris_base::hook::point(A_NAME_IS_LOOKED_AT);
         match std::fs::symlink_metadata(&at) {
             // A folder, and no link: the next name is looked at in it.
@@ -515,6 +543,8 @@ struct Look<'a> {
     real: &'a AbsPath,
     /// The root as it is shown.
     shown: &'a str,
+    /// What the root may still read of its `SKILL.md` files.
+    left: std::cell::Cell<u64>,
 }
 
 /// Resolves a root: its real location and how it is shown, or `None` when
@@ -526,12 +556,29 @@ fn open_root(
     places: &Places,
     looked: &[(PathBuf, String)],
     left_out: &mut Vec<LeftOut>,
+    seen: &mut dyn FnMut(Seen<'_>),
 ) -> Option<(AbsPath, String)> {
     let written = || visible(&root.path).into_owned();
     let resolved = match resolver.resolve(&root.path) {
         Ok(resolved) => resolved,
         // No home directory is known: there is no user's root to look in.
         Err(PathError::NoHome { .. }) => return None,
+        Err(PathError::DanglingLink { path }) => {
+            // Where the link leads, which is not there: named, so that the
+            // root made there later is seen.
+            let link = Path::new(&path);
+            if let Ok(target) = std::fs::read_link(link) {
+                let target = link
+                    .parent()
+                    .map_or(target.clone(), |parent| parent.join(&target));
+                seen(Seen::Way(&target));
+            }
+            left_out.push(LeftOut {
+                path: written(),
+                reason: Reason::Dangling,
+            });
+            return None;
+        }
         Err(error) => {
             left_out.push(LeftOut {
                 path: written(),
@@ -541,6 +588,9 @@ fn open_root(
         }
     };
     if !resolved.exists() {
+        // Where it would be, through the links on the way: named, so that a
+        // root made there later is seen.
+        seen(Seen::Way(&resolved.to_fs_path()));
         return None;
     }
     let real = resolved.to_fs_path();
@@ -596,7 +646,7 @@ fn look_in(
     look: &Look<'_>,
     candidates: &mut Vec<Candidate>,
     left_out: &mut Vec<LeftOut>,
-    seen: &mut dyn FnMut(&Path),
+    seen: &mut dyn FnMut(Seen<'_>),
 ) {
     let entries = match std::fs::read_dir(look.real.to_fs_path()) {
         Ok(entries) => entries,
@@ -638,7 +688,7 @@ fn look_in(
         let named = format!("{}/{}", look.shown, visible(&name.to_string_lossy()));
         // The entry itself, before it is looked into: a `SKILL.md` made in
         // it, or the folder swapped for a link, is a change.
-        seen(&look.real.to_fs_path().join(&name));
+        seen(Seen::Place(&look.real.to_fs_path().join(&name)));
         match skill_in(look, &name, &named, seen) {
             Ok(Some(skill)) => candidates.push(Candidate {
                 skill,
@@ -657,7 +707,7 @@ fn skill_in(
     look: &Look<'_>,
     name: &OsStr,
     named: &str,
-    seen: &mut dyn FnMut(&Path),
+    seen: &mut dyn FnMut(Seen<'_>),
 ) -> Result<Option<Skill>, LeftOut> {
     let left = |path: &str, reason: Reason| LeftOut {
         path: path.to_owned(),
@@ -688,7 +738,7 @@ fn skill_in(
     }
     // Where a folder reached through a link really is: what is made in it
     // is a change too.
-    seen(&folder.to_fs_path());
+    seen(Seen::Place(&folder.to_fs_path()));
     match std::fs::metadata(folder.to_fs_path()) {
         Ok(metadata) if metadata.is_dir() => {}
         // A link to a file inside the root: not a skill's folder.
@@ -711,9 +761,9 @@ fn skill_in(
     if !location_within(&file.to_fs_path(), &root) {
         return Err(left(&file_shown, Reason::LinkOut));
     }
-    seen(&file.to_fs_path());
+    seen(Seen::Place(&file.to_fs_path()));
     cineris_base::hook::point(A_SKILL_IS_READ);
-    let text = match read_capped(&file.to_fs_path()) {
+    let text = match read_capped(&file.to_fs_path(), &look.left) {
         Ok(Some(text)) => text,
         Ok(None) => return Ok(None),
         Err(reason) => return Err(left(&file_shown, reason)),
@@ -739,9 +789,11 @@ fn skill_in(
 }
 
 /// Reads a `SKILL.md` already resolved, opened so that nothing at the last
-/// name but a regular file is read. `None` when it is gone.
-fn read_capped(path: &Path) -> Result<Option<String>, Reason> {
-    let (file, _metadata) = match open_regular(path) {
+/// name but a regular file is read. `None` when it is gone. One larger than
+/// [`MAX_SKILL_BYTES`] by its length, or than what its root may still read
+/// (`left`), is refused unread; every byte read is taken from `left`.
+fn read_capped(path: &Path, left: &std::cell::Cell<u64>) -> Result<Option<String>, Reason> {
+    let (file, metadata) = match open_regular(path) {
         Ok(opened) => opened,
         Err(OpenError::NotFound) => return Ok(None),
         Err(OpenError::Directory | OpenError::NotAFile) => return Err(Reason::NotAFile),
@@ -749,14 +801,29 @@ fn read_capped(path: &Path) -> Result<Option<String>, Reason> {
         Err(OpenError::Link) => return Err(Reason::LinkOut),
         Err(error) => return Err(Reason::Unreadable(error.to_string())),
     };
-    // One byte past the cap says the file is larger, whatever its
-    // metadata said a moment before.
-    let mut bytes = Vec::new();
-    file.take(MAX_SKILL_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|error| Reason::Unreadable(error.to_string()))?;
-    if bytes.len() as u64 > MAX_SKILL_BYTES {
+    // One test of size for the length and for what is read past it.
+    let too_large = |len: u64| len > MAX_SKILL_BYTES;
+    if too_large(metadata.len()) {
         return Err(Reason::TooLarge);
+    }
+    if metadata.len() > left.get() {
+        return Err(Reason::PastTheRootsBytes);
+    }
+    // One byte past either cap says the file is larger, whatever its
+    // metadata said a moment before.
+    let before = left.get();
+    let mut bytes = Vec::new();
+    let read = file
+        .take(MAX_SKILL_BYTES.min(before) + 1)
+        .read_to_end(&mut bytes);
+    left.set(before.saturating_sub(bytes.len() as u64));
+    read.map_err(|error| Reason::Unreadable(error.to_string()))?;
+    if too_large(bytes.len() as u64) {
+        return Err(Reason::TooLarge);
+    }
+    if bytes.len() as u64 > before {
+        // It grew past what the root may read since its length was taken.
+        return Err(Reason::PastTheRootsBytes);
     }
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
