@@ -2683,3 +2683,1557 @@ find: match url[start..].find(['/', '?', '#']) {
 replace: match url[start..].find(['?', '#']) {
 caught-by:
     cineris-ext::it serve::a_fetch_call_prints_without_what_may_be_a_credential
+
+# From mutations/step-28-found.breaks (part `found`).
+# Step 28, how extensions are found (`cineris-ext`'s `discover`) and the
+# registration cache (`cineris-ext`'s `cache`): each rule broken once, with
+# the tests that must fail. Written with the code.
+
+# ------------------------------------------------------------ what an extension is
+
+[break] found-manifest-names-another-folder
+rule: An extension's manifest gives its folder's own name: one that gives another is left out with both names.
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: if manifest.name != text {
+replace: if manifest.name != text && false {
+caught-by:
+    discover::an_extension_whose_manifest_does_not_give_its_folders_name_is_left_out
+
+[break] found-files-beside-the-folders-read
+rule: A file beside the extensions' folders in a root is passed over without a word: an extension is a folder.
+file: crates/cineris-ext/src/discover.rs
+in: list
+find: (kind.is_dir() || kind.is_symlink()) && name.as_encoded_bytes().first() != Some(&b'.')
+replace: name.as_encoded_bytes().first() != Some(&b'.')
+caught-by:
+    discover::extensions_are_the_folders_directly_under_each_root_by_name
+
+[break] found-hidden-folders-read
+rule: A folder whose name begins with `.` is never an extension's (no extension's name begins with one), and is passed over unread.
+file: crates/cineris-ext/src/discover.rs
+in: list
+find: && name.as_encoded_bytes().first() != Some(&b'.')
+replace: && true
+caught-by:
+    discover::extensions_are_the_folders_directly_under_each_root_by_name
+
+# ------------------------------------------------------------ a root that is not there
+
+[break] found-absent-root-resolved
+rule: A root that is not there gives nothing at the cost of one look, before the path resolver is asked.
+file: crates/cineris-ext/src/discover.rs
+in: each_root
+find: if certainly_absent(root, below.as_deref(), &places.workspace) {
+replace: if false && certainly_absent(root, below.as_deref(), &places.workspace) {
+caught-by:
+    discover::a_root_that_is_not_there_gives_nothing_and_is_not_resolved
+
+[break] found-absent-project-root-looked-at-once
+rule: A project's root is looked at one name at a time below the workspace: a `.cineris` with no `extensions` in it is ruled out with a second look, not resolved.
+file: crates/cineris-ext/src/discover.rs
+in: certainly_absent
+find: Ok(found) if found.is_dir() => {}
+replace: Ok(found) if found.is_dir() => return false,
+caught-by:
+    discover::a_root_that_is_not_there_gives_nothing_and_is_not_resolved
+
+[break] found-look-follows-a-link
+rule: The look that rules a project's root out follows no link (on Windows a link to a share would send the account's credentials): a link sends the root to the resolver.
+file: crates/cineris-ext/src/discover.rs
+in: certainly_absent
+find: match fs::symlink_metadata(&at) {
+replace: match fs::metadata(&at) {
+caught-by:
+    discover::a_projects_root_that_leads_out_of_the_workspace_gives_nothing_and_says_why
+
+# ------------------------------------------------------------ where a root leads
+
+[break] found-users-root-kept-in-the-workspace
+rule: A user's root may be a link and lead anywhere: only a project's root must lead inside the workspace.
+file: crates/cineris-ext/src/discover.rs
+in: open_root
+find: if root.source == Source::Project && !location_within(&real, &places.workspace) {
+replace: if !location_within(&real, &places.workspace) {
+caught-by:
+    discover::extensions_are_the_folders_directly_under_each_root_by_name
+    discover::a_users_root_that_is_a_link_is_followed_wherever_it_leads
+
+[break] found-projects-root-out-of-the-workspace
+rule: A project's root that leads out of the workspace (a `.cineris/extensions` or a `.cineris` that is a link out of it, or a path with `..`) gives nothing, and says why.
+file: crates/cineris-ext/src/discover.rs
+in: open_root
+find: if root.source == Source::Project && !location_within(&real, &places.workspace) {
+replace: if root.source == Source::Project && false {
+caught-by:
+    discover::a_projects_root_that_leads_out_of_the_workspace_gives_nothing_and_says_why
+    discover::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
+
+[break] found-folder-through-a-link
+rule: An extension's folder reached through a link is refused, as a link inside one is: the folder is read where it is.
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: if kind.is_symlink() {
+replace: if false {
+caught-by:
+    discover::an_extension_folder_reached_through_a_link_is_refused
+
+# ------------------------------------------------------------ paths written other ways
+
+[break] found-tilde-taken-as-a-name
+rule: A root beginning with `~` is under the home directory, as the resolver reads it, and is never looked for as a folder named `~` in the workspace.
+file: crates/cineris-ext/src/discover.rs
+in: below_workspace
+find: if dir.components().next() == Some(Component::Normal(OsStr::new("~"))) {
+replace: if false {
+caught-by:
+    discover::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
+
+[break] found-dots-taken-as-nothing
+rule: A root with `..` is the resolver's to read (against the real folders): the look that rules a root out takes no `..`.
+file: crates/cineris-ext/src/discover.rs
+in: below_workspace
+find: Component::CurDir => {}
+replace: Component::CurDir | Component::ParentDir => {}
+caught-by:
+    discover::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
+
+[break] found-same-folder-twice
+rule: The same folder given as two roots, written two ways, is looked in once, as the first.
+file: crates/cineris-ext/src/discover.rs
+in: open_root
+find: .find(|(earlier, _)| same_location(earlier, &real))
+replace: .find(|(earlier, _)| same_location(earlier, &real) && false)
+caught-by:
+    discover::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
+
+[break] found-windows-real-location-resolved-as-written
+rule: A root under the workspace is resolved by its names below it, so that one given in the workspace's real location on Windows (`\\?\C:\…`), which the resolver does not take, is found.
+file: crates/cineris-ext/src/discover.rs
+in: open_root
+find: Some(names) if root.dir.is_absolute() =>
+replace: Some(names) if false =>
+os: windows
+caught-by:
+    discover::on_windows_a_root_in_another_case_and_with_backslashes_is_the_same_place
+
+# ------------------------------------------------------------ one name, two roots
+
+[break] found-one-name-across-sources
+rule: The user's and the project's extension of one name are both found: they are different extensions, keyed by source.
+file: crates/cineris-ext/src/discover.rs
+in: settle_names
+find: (one.source, one.manifest.name
+replace: (Source::User, one.manifest.name
+caught-by:
+    discover::one_name_from_the_users_root_and_the_projects_is_two_extensions
+    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
+
+[break] found-one-name-twice-in-one-source
+rule: Two roots of one source that each hold an extension of one name give it once, from the first root, and leave out the second with the first one's folder.
+file: crates/cineris-ext/src/discover.rs
+in: settle_names
+find: if position > 0 {
+replace: if position > 0 && false {
+caught-by:
+    discover::one_name_from_the_users_root_and_the_projects_is_two_extensions
+
+[break] found-names-in-another-case-both-kept
+rule: Within one source, names that differ only in case (`Tracker` and `tracker`, in one root or two) are refused on every system, not only on Windows, where they are one name.
+file: crates/cineris-ext/src/discover.rs
+in: settle_names
+find: one.manifest.name.to_ascii_lowercase()
+replace: one.manifest.name.clone()
+caught-by:
+    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
+
+[break] found-names-in-another-case-first-kept
+rule: None of names that differ only in case is kept, each left out naming the others, so that nothing depends on which was listed first.
+file: crates/cineris-ext/src/discover.rs
+in: settle_names
+find: .all(|&member| found[member].manifest.name == first.manifest.name);
+replace: .all(|&member| found[member].manifest.name.eq_ignore_ascii_case(&first.manifest.name));
+caught-by:
+    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
+
+# ------------------------------------------------------------ caps and order
+
+[break] found-more-than-64-a-root
+rule: At most 64 extension folders are read from a root; the rest are left out with their count.
+file: crates/cineris-ext/src/discover.rs
+in: look_in
+find: if read == MAX_PER_ROOT {
+replace: if read == MAX_PER_ROOT + 1 {
+caught-by:
+    discover::past_64_folders_a_root_the_rest_are_left_out_and_counted
+
+[break] found-not-by-name
+rule: A root's folders are read by name, so that the 64 read are the first by name and the order is fixed.
+file: crates/cineris-ext/src/discover.rs
+in: list
+find: names.sort_by(|one, other| one.0.cmp(&other.0));
+replace: names.sort_by(|one, other| other.0.cmp(&one.0));
+caught-by:
+    discover::extensions_are_the_folders_directly_under_each_root_by_name
+    discover::past_64_folders_a_root_the_rest_are_left_out_and_counted
+
+[break] found-more-than-1024-entries
+rule: At most 1024 entries of a root are listed; past them the rest is not looked at, and that is said.
+file: crates/cineris-ext/src/discover.rs
+in: list
+find: if names.len() == MAX_ENTRIES {
+replace: if names.len() == MAX_ENTRIES + 1 {
+caught-by:
+    discover::a_root_of_more_than_1024_entries_is_looked_at_only_so_far
+
+# ------------------------------------------------------------ what is shown
+
+[break] found-folder-name-shown-raw
+rule: A folder's name is shown with every character that acts unseen written as an escape: it comes from a repository.
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: visible(&name.to_string_lossy())
+replace: name.to_string_lossy()
+caught-by:
+    discover::every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape
+
+[break] found-manifest-refusal-shown-raw
+rule: A manifest's refusal, which quotes what the manifest says, is shown with every character that acts unseen written as an escape.
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: Manifest::of(&snapshot).map_err(|error| refused(&visible(&error.to_string())))?;
+replace: Manifest::of(&snapshot).map_err(|error| refused(&error.to_string()))?;
+caught-by:
+    discover::every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape
+
+# ------------------------------------------------------------ the cache, read strictly
+
+[break] cache-unknown-field-at-the-top-read
+rule: The registration cache is read strictly: a field this build does not know, at the top of the file, sets the whole file aside.
+file: crates/cineris-ext/src/cache.rs
+find: #[serde(deny_unknown_fields)] struct RawFile
+replace: struct RawFile
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-unknown-field-in-an-entry-read
+rule: The registration cache is read strictly: a field this build does not know, in an entry, sets the whole file aside.
+file: crates/cineris-ext/src/cache.rs
+find: #[serde(deny_unknown_fields)] struct RawEntry
+replace: struct RawEntry
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-newer-version-read
+rule: A registration cache of another version than this build's (a newer one) is set aside, never read.
+file: crates/cineris-ext/src/cache.rs
+in: parse
+find: if raw.version != VERSION {
+replace: if raw.version < VERSION {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-version-said-after-its-fields
+rule: A file of another version is set aside for its version, not for a field that version adds.
+file: crates/cineris-ext/src/cache.rs
+in: parse
+find: && version != VERSION
+replace: && false
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-key-not-a-hash-read
+rule: Every key of the entries is a content hash, 64 lowercase hexadecimal digits: any other sets the whole file aside.
+file: crates/cineris-ext/src/cache.rs
+find: while let Some(hash) = map.next_key::<ContentHash>()? {
+replace: while let Some(hash) = map.next_key::<String>()?.map(|text| ContentHash::from_hex(&text).unwrap_or(ContentHash::of(text.as_bytes()))) {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-key-twice-read
+rule: A key given twice, which no build writes, sets the whole file aside: the order must not decide which entry stands.
+file: crates/cineris-ext/src/cache.rs
+find: if entries.insert(hash, entry).is_some() {
+replace: if entries.insert(hash, entry).is_some() && false {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-more-than-1024-entries-read
+rule: A file of more than 1024 entries is set aside.
+file: crates/cineris-ext/src/cache.rs
+find: if entries.len() == MAX_ENTRIES {
+replace: if entries.len() == MAX_ENTRIES + 1 {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-past-the-caps-read
+rule: An entry past a registration's caps (its tools, commands or hooks, its prompt over 4 KiB) sets the whole file aside: what a session reads is what a live runtime could have registered.
+file: crates/cineris-ext/src/cache.rs
+in: parse
+find: entry.check().map_err(|problem| {
+replace: Ok::<(), String>(()).map_err(|problem| {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-larger-than-16-mib-read
+rule: A file larger than 16 MiB is set aside unread, for its size.
+file: crates/cineris-ext/src/cache.rs
+find: pub const MAX_BYTES: u64 = 16 * 1024 * 1024;
+replace: pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
+caught-by:
+    cache::a_file_larger_than_16_mib_is_set_aside_unread
+
+[break] cache-not-understood-read-as-empty-in-silence
+rule: A file that is not understood whole is an empty cache and set aside with its reason, never taken as empty in silence.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::load
+find: set_aside: Some(self.set_aside(&bad))
+replace: set_aside: None
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-set-aside-left-in-place
+rule: A file set aside is moved to `registered.json.set-aside`, while it is still the file that was read, so that the next write begins a new one.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::set_aside
+find: let moved = if still_it {
+replace: let moved = if false {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::a_put_over_a_file_not_understood_sets_it_aside_and_begins_a_new_one
+
+[break] cache-missing-file-set-aside
+rule: A missing file is an empty cache, not one set aside, and reading it makes nothing.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::read
+find: Err(OpenError::NotFound) =>
+replace: Err(OpenError::NotFound) if false =>
+caught-by:
+    cache::a_missing_file_is_an_empty_cache_and_reading_it_makes_nothing
+
+# ------------------------------------------------------------ the cache, written
+
+[break] cache-put-drops-the-other-entries
+rule: A put reads the file and keeps every other entry in it.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::put
+find: let mut cache = self.read_for_change();
+replace: let mut cache = Cache::default();
+caught-by:
+    cache::a_put_keeps_the_other_entries_and_replaces_its_own
+
+[break] cache-put-past-the-caps
+rule: A put of an entry past a registration's caps is refused and writes nothing: this build never writes a file it would set aside.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::put
+find: entry.check().map_err(|problem| CacheError::Entry {
+replace: Ok::<(), String>(()).map_err(|problem| CacheError::Entry {
+caught-by:
+    cache::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
+
+[break] cache-write-past-1024-entries
+rule: A put that would make a file of more than 1024 entries is refused and writes nothing.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::write
+find: if cache.len() > MAX_ENTRIES {
+replace: if false {
+caught-by:
+    cache::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
+
+[break] cache-write-past-16-mib
+rule: A put that would make a file larger than 16 MiB is refused and writes nothing.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::write
+find: if text.len() as u64 > MAX_BYTES {
+replace: if false {
+caught-by:
+    cache::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
+
+[break] cache-written-for-anyone
+rule: The registration cache is written owner-only, whatever the file was before.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::write
+find: owner_only: true
+replace: owner_only: false
+caught-by:
+    cache::every_write_is_owner_only_and_leaves_no_temporary_file
+
+[break] cache-folder-made-for-anyone
+rule: The registration cache's folder, when it is missing, is made owner-only.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::write
+find: private::create_dir_all(folder)
+replace: std::fs::create_dir_all(folder)
+caught-by:
+    cache::every_write_is_owner_only_and_leaves_no_temporary_file
+
+[break] cache-written-through-a-link
+rule: The registration cache is never written through a link at its name.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::write
+find: follow_links: false
+replace: follow_links: true
+caught-by:
+    cache::a_link_at_the_files_name_is_never_written_through
+
+[break] cache-prune-keeps-everything
+rule: A prune takes out every entry whose hash no pin names.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::prune
+find: cache.entries.retain(|hash, _| keep(hash));
+replace: cache.entries.retain(|hash, _| keep(hash) || true);
+caught-by:
+    cache::a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did
+
+[break] cache-prune-writes-when-nothing-changed
+rule: A prune that takes out nothing writes nothing.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::prune
+find: if removed > 0 {
+replace: if removed > 0 || true {
+caught-by:
+    cache::a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did
+
+# From mutations/step-28-pinned.breaks (part `pinned`).
+# Step 28, the extensions a session loads (`cineris-core`'s `ext::found`, and
+# the trust question's entries in `assemble`): the user's checked against
+# their pins, a project's through its trust question, what each registered
+# taken from the registration cache, an approved extension the cache misses
+# registered before the first turn, and the cache pruned by every pin. Each
+# rule broken once, with the tests that must fail. Written with the code.
+
+# ------------------------------------------------------------ where they are looked for
+
+[break] pinned-users-folder-not-looked-in
+rule: The user's folder of extensions, in the configuration directory as it is given (with `~`, relative, with `..`, through a link), is looked in.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: .map(|config| discover::discover(&[Root::user(config)], &inputs.resolver))
+replace: .filter(|_| false).map(|config| discover::discover(&[Root::user(config)], &inputs.resolver))
+caught-by:
+    extensions_found::a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started
+    extensions_found::the_users_folder_is_found_through_a_config_dir_given_with_a_tilde_relatively_or_with_dots
+    extensions_found::a_config_dir_that_is_a_link_is_followed
+
+[break] pinned-untrusted-projects-folder-looked-in
+rule: A session looks in its project's folder of extensions only while the project is trusted: one that is not is not looked in at all.
+file: crates/cineris-core/src/assemble.rs
+find: TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
+replace: TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun | TrustStanding::Untrusted
+caught-by:
+    extensions_found::a_projects_extensions_are_not_looked_in_while_it_is_not_trusted
+
+[break] pinned-left-out-not-said
+rule: What discovery left out is said to the session with its reason: a project's folder of extensions behind a link out of the workspace among it.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: .map(|left| sentence(&left.reason))
+replace: .filter(|_| false).map(|left| sentence(&left.reason))
+caught-by:
+    extensions_found::a_projects_folder_of_extensions_behind_a_link_out_of_the_workspace_is_not_looked_in
+
+# ------------------------------------------------------------ how each stands
+
+[break] pinned-changed-extension-loaded
+rule: An extension is loaded only when it stands approved: one changed since its pin, the user's or a project's, is not, and its script is never evaluated.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: if standing == Standing::Approved {
+replace: if standing != Standing::New {
+caught-by:
+    extensions_found::a_users_extension_changed_since_its_pin_is_not_loaded_and_says_how_to_approve_it
+    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+
+[break] pinned-new-extension-loaded
+rule: A user's extension never pinned is not loaded, and its script is never evaluated.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: if standing == Standing::Approved {
+replace: if standing != Standing::Changed {
+caught-by:
+    extensions_found::a_users_extension_never_pinned_is_not_loaded_and_says_how_to_approve_it
+
+[break] pinned-projects-judged-by-the-users-pins
+rule: A project's extension stands by the project's entry in the trust store, not by the user's own pins.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: project_standing(trust.get_or_insert_with(|| project_trust(inputs)), &inputs.for_the_run, &definition)
+replace: pins.get_or_insert_with(|| user_pins(inputs, &mut decided.told)).as_ref().map_or(Standing::New, |pins| pins.standing(&definition))
+caught-by:
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+
+[break] pinned-turned-off-loaded
+rule: The user's extension that `[extensions.<name>] enabled = false` turns off is not loaded, and nothing is said or asked of it.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: if inputs.disabled.contains(&found.manifest.name) {
+replace: if inputs.disabled.contains(&found.manifest.name) && false {
+caught-by:
+    extensions_found::a_users_extension_turned_off_is_not_loaded_and_nothing_is_asked
+
+[break] pinned-same-name-used
+rule: A project's extension that takes the name of one of the user's is not used, and the session says so.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: if users.takes(&found.manifest.name) {
+replace: if users.takes(&found.manifest.name) && false {
+caught-by:
+    extensions_found::a_projects_extension_of_a_users_name_is_not_used
+
+# ------------------------------------------------------------ what the session is told
+
+[break] pinned-not-told-the-command
+rule: The session is told of a user's extension it does not load, with the command that approves it.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: not_loaded
+in-string: `cineris ext add {shown}` shows it, to approve it.
+replace: It is not shown.
+caught-by:
+    extensions_found::a_users_extension_never_pinned_is_not_loaded_and_says_how_to_approve_it
+
+[break] pinned-folder-not-shown-under-home
+rule: A user's extension is named, in the command that approves it, by its folder as the user is shown it: under `~`.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: not_loaded
+find: let shown = &found.shown;
+replace: let shown = &found.folder.display().to_string();
+caught-by:
+    extensions_found::a_users_extension_changed_since_its_pin_is_not_loaded_and_says_how_to_approve_it
+    extensions_found::a_users_extension_never_pinned_is_not_loaded_and_says_how_to_approve_it
+
+# ------------------------------------------------------------ the cache
+
+[break] pinned-cache-hit-registered-again
+rule: An approved extension's registration is taken from the cache by its hash: nothing is evaluated, and no runtime made, before its first call.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: match loaded.cache.get(&hash) {
+replace: match loaded.cache.get(&hash).filter(|_| false) {
+caught-by:
+    extensions_found::a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started
+
+[break] pinned-entry-of-another-name-taken
+rule: A cache entry is the registration of the folder its hash is of, whose manifest names it: an entry under that hash that names another extension is no entry of it.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: Some(entry) if entry.name == found.manifest.name =>
+replace: Some(entry) =>
+caught-by:
+    extensions_found::a_cache_entry_of_another_name_is_no_entry_of_this_one
+
+[break] pinned-missing-entry-left-out
+rule: A missing entry fails closed: an approved extension the cache does not hold is registered when the session opens, not left out.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: _ => decided.missing.push(found)
+replace: _ => drop(found)
+caught-by:
+    extensions_found::an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits_for_it
+    extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
+
+[break] pinned-first-turn-does-not-wait
+rule: The session's first turn waits for its extensions: no turn starts while an approved extension's registration is missing. (`turn/start` waits, and so does the look at a turn's start, so the break is of the wait both use.)
+file: crates/cineris-core/src/ext/found.rs
+in: Ready::wait
+find: if self.done.load(Ordering::SeqCst) {
+replace: if true || self.done.load(Ordering::SeqCst) {
+caught-by:
+    extensions_found::an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits_for_it
+
+[break] pinned-registration-not-kept
+rule: A registration made because the cache missed it is written to the cache, so that the next session reads it.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Kept::keep
+find: for (hash, entry) in self.written {
+replace: for (hash, entry) in self.written.into_iter().take(0) {
+caught-by:
+    extensions_found::an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits_for_it
+    extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
+
+[break] pinned-set-aside-not-said
+rule: A registration cache set aside is said to the session, once.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: if let Some(why) = &loaded.set_aside {
+replace: if let Some(why) = loaded.set_aside.as_ref().filter(|_| false) {
+caught-by:
+    extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
+
+[break] pinned-cache-file-elsewhere
+rule: The registration cache is `extensions/registered.json` in the state directory.
+file: crates/cineris-config/src/state.rs
+in: StateDir::registration_cache_file
+in-string: registered.json
+replace: registrations.json
+caught-by:
+    state::tests::every_state_file_has_its_place
+
+# ------------------------------------------------------------ the cache, pruned
+
+[break] pinned-cache-never-pruned
+rule: The cache is pruned of the hashes no pin names.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Kept::keep
+find: cache.prune(|hash| pinned.contains(hash))
+replace: cache.prune(|_| true)
+caught-by:
+    extensions_found::pruning_the_cache_keeps_every_trusted_projects_entries
+
+[break] pinned-prune-drops-other-projects
+rule: The cache is pruned by every trusted project's pins as well as the user's: a cache that projects share does not drop another project's entries.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: pinned
+find: .pinned_hashes(&kind)
+replace: .pinned_hashes(&TrustResourceKind::Hook)
+caught-by:
+    extensions_found::pruning_the_cache_keeps_every_trusted_projects_entries
+
+[break] pinned-prune-drops-the-users-own
+rule: The cache keeps the hashes the user's own pins of extensions name.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: pinned
+find: .filter(|pin| pin.kind.as_str() == kind.as_str())
+replace: .filter(|pin| pin.kind.as_str() != kind.as_str())
+caught-by:
+    extensions_found::pruning_the_cache_keeps_every_trusted_projects_entries
+
+[break] pinned-unreadable-store-prunes-all
+rule: When a store of pins cannot be read, nothing is pruned: an entry it may pin is kept.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: pinned
+find: .pinned_hashes(&kind).ok()?
+replace: .pinned_hashes(&kind).unwrap_or_default()
+caught-by:
+    extensions_found::a_trust_store_that_cannot_be_read_prunes_nothing
+
+[break] pinned-hashes-of-every-kind
+rule: The hashes the trusted projects pin are given for the kind asked: a hook's pin keeps no extension's entry.
+file: crates/cineris-policy/src/trust.rs
+in: TrustStore::pinned_hashes
+find: .filter(|pin| pin.kind == kind.as_str())
+replace: .filter(|pin| !pin.kind.is_empty() || kind.as_str().is_empty())
+caught-by:
+    trust::tests::the_hashes_pinned_of_a_kind_are_every_trusted_projects
+
+# ------------------------------------------------------------ the trust question
+
+[break] pinned-question-lists-no-extension
+rule: The trust question lists the project's extensions that are not approved as they are now, each a resource of kind `extension`.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: resources.extend(extensions.resources);
+replace: drop(extensions.resources);
+caught-by:
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+
+[break] pinned-yes-pins-no-extension
+rule: A yes to the trust question pins each extension it listed, as it was read, with the project's other definitions.
+file: crates/cineris-core/src/assemble.rs
+in: kept_answer
+find: pin.extend(question.extensions.iter().cloned());
+replace: pin.extend(question.extensions.iter().take(0).cloned());
+caught-by:
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+
+[break] pinned-trusted-project-not-asked-about-its-extensions
+rule: A trusted project with nothing else new is asked about an extension in it that is new or changed.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: if quiet && extensions.pins.is_empty() {
+replace: if quiet {
+caught-by:
+    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+
+[break] pinned-change-not-flagged
+rule: An extension the project was trusted with at another hash is listed as changed.
+file: crates/cineris-core/src/ext/found.rs
+in: asked
+find: Standing::Changed => true
+replace: Standing::Changed => false
+caught-by:
+    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+
+[break] pinned-approved-asked-about-again
+rule: An extension approved as it is now is not listed by the trust question: a trusted project whose extensions are all approved is asked nothing.
+file: crates/cineris-core/src/ext/found.rs
+in: asked
+find: Standing::Approved => continue
+replace: Standing::Approved => false
+caught-by:
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+
+[break] pinned-same-name-asked-about
+rule: The trust question does not list a project's extension of a name the user's own has: it is not used whatever the answer.
+file: crates/cineris-core/src/ext/found.rs
+in: asked
+find: if users.takes(&found.manifest.name) {
+replace: if users.takes(&found.manifest.name) && false {
+caught-by:
+    extensions_found::a_projects_extension_of_a_users_name_is_not_used
+
+[break] pinned-words-not-escaped
+rule: Every text of the manifest that the trust question shows has what acts unseen written as an escape.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: visible(&quoted(description))
+replace: quoted(description)
+caught-by:
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+
+[break] pinned-words-say-the-network-wrong
+rule: The trust question says whether an extension's programs may reach the network, as its manifest says.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: if declared.exec_network {
+replace: if !declared.exec_network {
+caught-by:
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+
+[break] pinned-words-hide-what-a-hook-sees
+rule: The trust question says in words what each event an extension may hook lets it see.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: event.sees()
+replace: event.as_str()
+caught-by:
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+
+# ------------------------------------------------------------ the early review's findings
+
+[break] pinned-question-reads-the-store-again
+rule: The trust question is shaped by the one reading of the store the session's trust was worked out from: a second reading could differ, and a yes would turn on settings never shown.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: let Some(stored) = trust.stored.clone() else {
+replace: let Some(stored) = place.state.as_ref().and_then(|state| TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock)).project(&place.root.project_key()).ok()) else {
+caught-by:
+    extensions_trust::a_trust_taken_away_while_the_question_is_shaped_turns_on_nothing_unshown
+
+[break] pinned-description-first
+rule: The author's description comes after what the manifest lets the extension do, so that it cannot pose as the harness's sentences.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: words.push(format!(
+occurrence: 2
+replace: words.insert(0, format!(
+caught-by:
+    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+
+[break] pinned-description-closes-its-quote
+rule: The author's description is quoted so that it cannot close its quotes: a `"`, a backtick and a `\` in it are written with a `\` before them.
+file: crates/cineris-core/src/ext/found.rs
+in: quoted
+find: if matches!(character, '\\' | '"' | '`') {
+replace: if matches!(character, '\\') {
+caught-by:
+    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+    ext::found::tests::quoted_text_cannot_close_its_quotes
+
+[break] pinned-entries-not-escaped
+rule: The programs, globs and hosts the question shows are written with what acts unseen escaped.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: .map(|item| format!("`{}`", visible(item)))
+replace: .map(|item| format!("`{}`", item))
+caught-by:
+    extensions_trust::every_text_of_the_manifest_is_shown_escaped
+
+[break] pinned-version-not-escaped
+rule: The version the question shows is written with what acts unseen escaped.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: visible(&manifest.version)
+replace: manifest.version.as_str()
+caught-by:
+    extensions_trust::every_text_of_the_manifest_is_shown_escaped
+
+[break] pinned-manifest-takes-a-backtick
+rule: The manifest refuses a backtick in a program, a glob or the version, which would end the code an approval shows it as.
+file: crates/cineris-ext/src/manifest.rs
+in: check_shown
+find: if text.contains('`') {
+replace: if false {
+caught-by:
+    manifest::a_program_a_glob_or_the_version_with_a_backtick_or_too_long_is_refused
+
+[break] pinned-manifest-entry-unbounded
+rule: A program or glob a manifest lists is at most 256 bytes.
+file: crates/cineris-ext/src/manifest.rs
+in: check_shown
+find: if text.len() > MAX_ENTRY_BYTES {
+replace: if text.len() > MAX_ENTRY_BYTES * 2 {
+caught-by:
+    manifest::a_program_a_glob_or_the_version_with_a_backtick_or_too_long_is_refused
+
+[break] pinned-user-names-from-found-alone
+rule: A user's folder takes its name whether or not it could be used: a user's extension left out does not free its name for a project's.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::of
+find: .filter(|(source, _)| *source == Source::User)
+replace: .filter(|(source, name)| *source == Source::User && user.found.iter().any(|found| found.manifest.name == *name))
+caught-by:
+    extensions_trust::a_users_extension_left_out_keeps_its_name_from_a_projects
+
+[break] pinned-user-names-case-kept
+rule: A name is the user's with ASCII's case folded: a project's `probe` is not used beside the user's `Probe`.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::of
+find: .map(|(_, name)| name.to_ascii_lowercase())
+replace: .map(|(_, name)| name.clone())
+caught-by:
+    extensions_trust::a_users_extension_left_out_keeps_its_name_from_a_projects
+
+[break] pinned-user-names-cut-ignored
+rule: A user's folder of extensions that cannot be listed whole takes every name.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::takes
+find: self.cut || self.names.contains(&name.to_ascii_lowercase())
+replace: self.names.contains(&name.to_ascii_lowercase())
+os: linux
+caught-by:
+    extensions_trust::a_users_folder_that_cannot_be_listed_takes_every_name
+
+[break] pinned-turn-waits-for-the-cache
+rule: The first turn waits for the extensions' tools and not for the cache, which is written and pruned after.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: first
+find: extensions.ready.settle();
+replace: let _ = &extensions.ready;
+caught-by:
+    extensions_trust::a_turn_does_not_wait_for_the_cache_to_be_written
+
+[break] pinned-project-read-again
+rule: What the trust question read of the project's folder is handed to the session, which does not read it again.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: .map(|_| project_found.unwrap_or_else(|| in_project(&inputs.resolver)))
+replace: .map(|_| in_project(&inputs.resolver))
+caught-by:
+    extensions_trust::each_folder_is_read_once_when_a_session_opens
+
+[break] pinned-users-folder-read-for-its-names
+rule: The trust question only lists the user's folder for the names it takes, and reads none of its extensions.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::listed
+find: discover::names(&[Root::user(config)], resolver)
+replace: discover::discover(&[Root::user(config)], resolver)
+caught-by:
+    extensions_trust::each_folder_is_read_once_when_a_session_opens
+
+[break] pinned-never-looked-in
+rule: A project marked never is not looked in: the question's look is below the never.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: if stored.is_refused() ||
+replace: if false ||
+caught-by:
+    extensions_trust::a_project_marked_never_is_not_looked_in
+
+[break] pinned-not-now-looked-in
+rule: After not now, another session of the core asks nothing and does not look in the project's folder.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: .contains(&key)
+replace: .contains(&key) && false
+caught-by:
+    extensions_trust::after_not_now_another_session_of_the_core_does_not_look
+
+[break] pinned-unreadable-pins-prune
+rule: When the pin store cannot be read, nothing is pruned from the cache.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: pinned
+find: .pins().ok()?
+replace: .pins().unwrap_or_default()
+caught-by:
+    extensions_trust::an_unreadable_pin_store_loads_none_of_the_users_says_why_and_prunes_nothing
+
+[break] pinned-unreadable-pins-pin-nothing-said
+rule: A pin store that cannot be read is said to be why the user's extensions are not loaded, not that they were never approved.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: user_pins
+find: match PinStore::new(&file, Arc::clone(&inputs.clock)).pins() {
+replace: match PinStore::new(&file, Arc::clone(&inputs.clock)).pins().or_else(|_| Ok::<_, cineris_policy::PinError>(UserPins::default())) {
+caught-by:
+    extensions_trust::an_unreadable_pin_store_loads_none_of_the_users_says_why_and_prunes_nothing
+
+[break] pinned-pin-store-path-absolute
+rule: The pin store's message names its file under `~`, never the home directory's path.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: user_pins
+find: with_paths_shown(&error.to_string(), &[&file], inputs.home.as_deref())
+replace: error.to_string()
+caught-by:
+    extensions_trust::an_unreadable_pin_store_loads_none_of_the_users_says_why_and_prunes_nothing
+
+[break] pinned-set-aside-path-absolute
+rule: The registration cache's set-aside sentence names its files under `~`, never the home directory's path.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: with_paths_shown(why, &[&file, &aside], inputs.home.as_deref())
+replace: why.clone()
+caught-by:
+    extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
+
+[break] pinned-keep-asks-again-in-the-core
+rule: Keep trusting it, without a changed extension, is kept by the core for its run: it asks no more until the next start.
+file: crates/cineris-core/src/assemble.rs
+in: kept_answer
+find: if !question.extensions.is_empty() {
+replace: if false {
+caught-by:
+    extensions_trust::keeping_the_trust_without_a_changed_extension_leaves_it_off_until_the_next_start
+
+[break] pinned-trust-project-names-the-question
+rule: Under `--trust-project`, which puts no question, an unapproved project extension's notice names `cineris permissions trust`.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: not_loaded
+find: let project_remedy = if trust_project {
+replace: let project_remedy = if false && trust_project {
+caught-by:
+    extensions_trust::trust_for_the_run_approves_no_unpinned_extension_and_names_the_command
+
+[break] pinned-project-entry-turns-off-the-users
+rule: `[extensions.<name>]` is the user's alone: a project's entry does not turn off the user's extension.
+file: crates/cineris-config/src/schema/sections.rs
+find: [UserOnly, NextSession] pub enabled: bool = true
+occurrence: 1
+replace: [Preference, NextSession] pub enabled: bool = true
+packages: cineris-core
+caught-by:
+    extensions_trust::a_projects_entry_does_not_turn_off_the_users_extension
+
+[break] pinned-unkept-yes-drops-the-extensions
+rule: A yes the trust store cannot keep approves the extensions the question listed, by the hashes shown, for that session.
+file: crates/cineris-core/src/assemble.rs
+in: trusted_unkept
+find: extensions: question.extensions.clone()
+occurrence: 1
+replace: extensions: Vec::new()
+caught-by:
+    extensions_trust::a_yes_the_store_cannot_keep_loads_the_extensions_shown_for_the_session
+
+[break] pinned-unkept-yes-says-the-rules-alone
+rule: A yes the trust store cannot keep says that the rules and the extensions shown are trusted for this session only, and asked about again.
+file: crates/cineris-core/src/assemble.rs
+in: trusted_unkept
+in-string: its rules and the extensions you were shown
+replace: its rules
+caught-by:
+    extensions_trust::a_yes_the_store_cannot_keep_loads_the_extensions_shown_for_the_session
+
+[break] pinned-registering-unsaid
+rule: A turn that waits for an extension's registration says why.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+in-string: Registering the extension
+replace: Evaluating the extension
+caught-by:
+    extensions_found::an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits_for_it
+
+[break] pinned-changed-detail-unsaid
+rule: An extension listed as changed says so in its own detail, beside the flag.
+file: crates/cineris-core/src/ext/found.rs
+in: detail
+find: if changed {
+replace: if false {
+caught-by:
+    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+
+[break] pinned-dialog-calls-an-extension-rules
+rule: The dialog says the rules changed only of rules: a changed extension is no changed rule.
+file: crates/cineris-tui/src/view/dialog.rs
+in: trust
+find: changed |= resource.changed && resource.kind == TrustResourceKind::Rules;
+replace: changed |= resource.changed;
+caught-by:
+    app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
+
+[break] pinned-dialog-keep-names-the-rules
+rule: The keep answer is named by the kinds of what is new: rules and an extension are "these", not "the new rules".
+file: crates/cineris-tui/src/view/dialog.rs
+in: third_trust_answer
+find: (false, true, false) =>
+replace: (false, true, _) =>
+caught-by:
+    app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
+
+[break] pinned-dialog-keep-promises-no-more
+rule: The dialog does not promise that a keep of an extension asks no more: the next start asks again.
+file: crates/cineris-tui/src/view/dialog.rs
+in: trust_answers_said
+find: } else if request.trusted && extensions {
+replace: } else if false {
+caught-by:
+    app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
+
+[break] pinned-permissions-trust-pins-no-extension
+rule: `cineris permissions trust`, with the extensions approved, pins each as it was shown.
+file: crates/cineris-core/src/manage.rs
+in: Core::trust_project_with
+find: pin.extend(extensions.iter().map(|extension| extension.definition.clone()));
+replace: pin.extend(extensions.iter().take(0).map(|extension| extension.definition.clone()));
+packages: cineris-cli
+caught-by:
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+
+[break] pinned-permissions-trust-asks-nobody
+rule: `cineris permissions trust` approves a project's extensions only on a yes at a terminal, and with no terminal only with `--with-extensions`.
+file: crates/cineris-cli/src/commands.rs
+in: approves_extensions
+find: if at_terminal {
+replace: if !at_terminal {
+caught-by:
+    commands::tests::a_projects_extensions_are_approved_only_on_a_yes_or_the_flag
+
+[break] pinned-closed-session-goes-on
+rule: A session's end ends its extensions' finding: a closed session's registration does not go on.
+file: crates/cineris-core/src/core.rs
+find: live.extensions.stop();
+replace: let _ = &live.extensions;
+caught-by:
+    extensions_trust::a_session_closed_while_its_registration_waits_neither_blocks_nor_leaks
+
+# ------------------------------------------------------------ a change, at the next turn
+
+[break] pinned-turn-start-looks-at-nothing
+rule: A turn's start looks again at what the extensions were found in.
+file: crates/cineris-core/src/core.rs
+find: live.extensions.recheck().await;
+replace: let _ = &live.extensions;
+caught-by:
+    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
+    extensions_reload::an_extension_approved_in_a_session_is_loaded_at_the_next_turn
+
+[break] pinned-change-unseen
+rule: A place whose stamp differs from what it was is a change.
+file: crates/cineris-core/src/ext/watched.rs
+in: Watched::changed
+find: now != *stamp ||
+replace: false &&
+caught-by:
+    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
+    extensions_reload::a_change_is_seen_however_the_configuration_directory_is_given
+    ext::watched::tests::a_change_is_seen_and_nothing_is_looked_at_through_a_link
+
+[break] pinned-stamp-follows-a-link
+rule: A stamp looks at a place itself and never through a link, which a repository may put where a folder was.
+file: crates/cineris-core/src/ext/watched.rs
+in: Stamp::of
+find: std::fs::symlink_metadata(path)
+replace: std::fs::metadata(path)
+caught-by:
+    ext::watched::tests::a_change_is_seen_and_nothing_is_looked_at_through_a_link
+
+[break] pinned-withdrawn-kept
+rule: An extension that no longer stands approved as it was loaded is withdrawn: its tools leave the registry.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+find: self.registry.remove_source(&gone.1);
+replace: let _ = &gone.1;
+caught-by:
+    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
+    extensions_reload::a_projects_folder_swapped_for_a_link_out_is_withdrawn
+
+[break] pinned-pins-unwatched
+rule: The stores of the pins are watched: an approval made in another process loads the extension at the next turn.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: places
+find: places.push(state.pins_file());
+replace: let _ = state.pins_file();
+caught-by:
+    extensions_reload::an_extension_approved_in_a_session_is_loaded_at_the_next_turn
+
+[break] pinned-project-way-unwatched
+rule: The names on the way to the project's folder of extensions are watched, each itself: a folder swapped for a link out is seen.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: places
+find: for name in discover::PROJECT_FOLDER {
+replace: for name in discover::PROJECT_FOLDER.into_iter().take(0) {
+caught-by:
+    extensions_reload::a_projects_folder_swapped_for_a_link_out_is_withdrawn
+
+# ------------------------------------------------------------ start-up
+
+[break] pinned-open-waits-for-the-finding
+rule: Nothing of an extension is read on the path that opens the session: the finding runs after, and only the first turn waits for it.
+file: crates/cineris-core/src/core.rs
+find: let extensions = crate::ext::found::start(extensions);
+replace: let extensions = crate::ext::found::start(extensions); extensions.wait().await;
+caught-by:
+    extensions_reload::with_an_extension_nothing_of_it_is_read_until_the_session_is_open
+
+# From mutations/step-28-pins.breaks (part `pins`).
+# Step 28, the user's own pins (`pins.toml`, `cineris-policy`'s
+# `trust::PinStore`): read strictly, written owner-only and atomically under
+# a lock, one pin for each kind and name, and closed to every tool. Each
+# rule broken once, with the tests that must fail. Written with the code.
+
+# ------------------------------------------------------------ read strictly
+
+[break] pins-unknown-key-at-the-top-read
+rule: The pin store is read strictly: a key this build does not know, at the top of the file, refuses the whole file.
+file: crates/cineris-policy/src/trust/pins.rs
+find: #[serde(deny_unknown_fields)] struct File
+replace: struct File
+caught-by:
+    pins::a_pin_store_that_is_not_understood_pins_nothing_and_is_left_as_it_is
+
+[break] pins-unknown-key-in-a-pin-read
+rule: The pin store is read strictly: a key this build does not know, in a pin, refuses the whole file.
+file: crates/cineris-policy/src/trust/pins.rs
+find: #[serde(deny_unknown_fields)] pub struct UserPin
+replace: pub struct UserPin
+caught-by:
+    pins::a_pin_store_that_is_not_understood_pins_nothing_and_is_left_as_it_is
+
+[break] pins-newer-version-read
+rule: A pin store of a version this build does not read (a newer one) refuses the whole file.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::read
+find: if file.version != VERSION {
+replace: if file.version < VERSION {
+caught-by:
+    pins::a_pin_store_that_is_not_understood_pins_nothing_and_is_left_as_it_is
+
+[break] pins-two-of-one-kind-and-name-read
+rule: A pin store with two pins of one kind and name, which no build wrote, refuses the whole file: the order must not decide which stands.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::read
+find: .any(|earlier| earlier.is_of(&pin.kind, &pin.name))
+replace: .any(|earlier| earlier.is_of(&pin.kind, &pin.name) && false)
+caught-by:
+    pins::a_pin_store_that_is_not_understood_pins_nothing_and_is_left_as_it_is
+
+[break] pins-not-understood-read-as-empty
+rule: A pin store that is not understood is an error that says why, and is never read as pinning nothing and then written over.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::read
+find: .map_err(|error| self.not_understood(error.message().to_owned()))?;
+replace: .unwrap_or(File { version: VERSION, pins: Vec::new() });
+caught-by:
+    pins::a_pin_store_that_is_not_understood_pins_nothing_and_is_left_as_it_is
+
+[break] pins-missing-file-refused
+rule: A missing pin store pins nothing, and is not an error: the first pin makes it.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::read
+find: Err(error) if error.kind() == io::ErrorKind::NotFound => {
+replace: Err(error) if error.kind() == io::ErrorKind::NotFound && false => {
+caught-by:
+    pins::a_missing_file_pins_nothing_and_the_first_pin_makes_it
+
+# ------------------------------------------------------------ written owner-only
+
+[break] pins-written-open-to-others
+rule: The pin store is written owner-only on every write, a file made by hand that others could read included.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::write
+find: owner_only: true
+replace: owner_only: false
+caught-by:
+    pins::every_write_is_owner_only_and_leaves_no_temporary_file
+
+# ------------------------------------------------------------ the lock
+
+[break] pins-lock-let-go-at-once
+rule: A change to the pin store holds its lock from the read to the write; a lock taken and let go at once keeps no second writer out.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::update
+find: let _lock = store_lock::hold(&self.file)
+replace: let _ = store_lock::hold(&self.file)
+caught-by:
+    trust::pins::tests::every_change_to_the_pins_is_made_under_their_lock
+    pins::two_writers_at_once_both_keep_their_pins
+
+[break] pins-lock-let-go-before-the-write
+rule: The lock is held until the write is done: a second writer that reads before the first one's write and writes after it loses the first one's pin.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::update
+find: if changed { self.write(&file)?; }
+replace: drop(_lock); if changed { self.write(&file)?; }
+caught-by:
+    pins::two_writers_at_once_both_keep_their_pins
+
+[break] pins-no-lock-taken
+rule: Every change takes the lock, and a lock that cannot be taken stops the change.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::update
+find: store_lock::hold(&self.file).map_err
+replace: Ok::<Option<std::fs::File>, io::Error>(None).map_err
+caught-by:
+    pins::a_lock_that_cannot_be_taken_stops_every_change_and_no_read
+    pins::two_writers_at_once_both_keep_their_pins
+
+# ------------------------------------------------------------ one pin for each kind and name
+
+[break] pins-pin-added-beside-the-old
+rule: Pinning a definition again replaces the pin of the same kind and name; it never adds a second.
+file: crates/cineris-policy/src/trust/pins.rs
+in: PinStore::pin
+find: Some(index) => file.pins[index] = pin
+replace: Some(_) => file.pins.push(pin)
+caught-by:
+    pins::pinning_again_replaces_the_pin_of_the_same_kind_and_name
+
+[break] pins-kind-not-compared
+rule: A pin is of a kind and a name: the same name of another kind is another thing, neither approved nor replaced by it.
+file: crates/cineris-policy/src/trust/pins.rs
+in: UserPin::is_of
+find: self.kind.as_str() == kind.as_str() && self.name == name
+replace: self.name == name
+caught-by:
+    pins::a_definition_of_the_users_own_stands_by_its_pinned_hash
+    pins::pinning_again_replaces_the_pin_of_the_same_kind_and_name
+
+[break] pins-changed-definition-approved
+rule: A definition of the user's own whose hash is not the pinned one is changed, and not used.
+file: crates/cineris-policy/src/trust/pins.rs
+in: UserPins::standing
+find: Some(_) => Standing::Changed
+replace: Some(_) => Standing::Approved
+caught-by:
+    pins::a_definition_of_the_users_own_stands_by_its_pinned_hash
+    pins::pinning_again_replaces_the_pin_of_the_same_kind_and_name
+
+# ------------------------------------------------------------ the protection
+
+[break] state-directory-not-closed
+rule: The state directory is closed to every tool, whole: the user's pins and the trust store with it, so that no model can approve its own change.
+file: crates/cineris-core/src/assemble.rs
+find: protected = protected.closed(state);
+replace: let _ = state;
+packages: cineris-core
+caught-by:
+    cineris-core::it start::the_state_directory_is_closed_whole_to_every_tool
+
+# From mutations/step-28-state.breaks (part `state`).
+# Step 28, `cineris.state`: an extension's own values, its `session` ones in
+# the session's log (a resume has them as the session left them, a fork as
+# they were at its point) and its `project` ones in a file of the state
+# directory (read strictly, written owner-only and atomically), keyed by
+# where the extension comes from and its name, and held to their caps. Each
+# rule broken once, with the tests that must fail. Written with the code.
+
+# ------------------------------------------------------------- the contract
+
+[break] state-key-counted-in-characters
+rule: A key is at most 256 bytes, counted in bytes, not characters.
+file: crates/cineris-ext/src/host.rs
+in: check_key
+find: key.is_empty() || key.len() > STATE_MAX_KEY
+replace: key.is_empty() || key.chars().count() > STATE_MAX_KEY
+caught-by:
+    cineris-ext::it serve::a_key_is_one_to_256_bytes
+
+[break] state-key-may-be-empty
+rule: A key is at least one byte.
+file: crates/cineris-ext/src/host.rs
+in: check_key
+find: key.is_empty() || key.len() > STATE_MAX_KEY
+replace: key.len() > STATE_MAX_KEY
+caught-by:
+    cineris-ext::it serve::a_key_is_one_to_256_bytes
+
+[break] state-set-to-null-is-kept
+rule: A set to `null` removes the key: a stored value is never `null`.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: let value = value.filter(|value| !value.is_null());
+replace: let value = value.or(None);
+caught-by:
+    cineris-ext::it serve::a_value_needs_no_capability_and_a_set_to_null_removes_it
+
+[break] state-sets-without-end-in-a-call
+rule: A call of an extension makes at most a hundred `cineris.state.set` calls: each `session` one is a line of the session's log.
+file: crates/cineris-ext/src/engine/thread.rs
+find: const MAX_STATE_SET: u32 = 100;
+replace: const MAX_STATE_SET: u32 = 1000;
+packages: cineris-core
+caught-by:
+    cineris-core::it ext_state::a_call_sets_at_most_a_hundred_values
+
+[break] state-sets-counted-across-calls
+rule: Each call of an extension has its own hundred sets.
+file: crates/cineris-ext/src/engine/thread.rs
+in: Shared::begin
+find: self.stored = 0;
+replace: let _ = self.stored;
+packages: cineris-core
+caught-by:
+    cineris-core::it ext_state::a_call_sets_at_most_a_hundred_values
+
+# ---------------------------------------------------------- whose values
+
+[break] state-session-values-keyed-by-name-alone
+rule: An extension's `session` values are keyed by where it comes from and its name.
+file: crates/cineris-core/src/ext/state.rs
+in: Owner::id
+find: format!("{}/{}", self.source.as_str(), self.name)
+replace: self.name.clone()
+caught-by:
+    cineris-core::it ext_state::the_users_and_the_projects_extension_of_one_name_never_see_each_others_values
+    cineris-core ext::state::tests::an_extensions_values_are_keyed_by_where_it_comes_from_and_its_name
+
+[break] state-project-file-keyed-by-name-alone
+rule: An extension's `project` values are kept in a file named for where it comes from and its name.
+file: crates/cineris-core/src/ext/state.rs
+in: Owner::file_name
+find: Ok(format!("{}-{}.json", self.source.as_str(), self.name))
+replace: Ok(format!("{}.json", self.name))
+caught-by:
+    cineris-core::it ext_state::the_users_and_the_projects_extension_of_one_name_never_see_each_others_values
+    cineris-core ext::state::tests::an_extensions_values_are_keyed_by_where_it_comes_from_and_its_name
+
+[break] state-a-name-that-is-not-one-file-name-is-taken
+rule: A name that is not one plain file name keeps no `project` values.
+file: crates/cineris-core/src/ext/state.rs
+in: Owner::file_name
+find: && !self.name.starts_with('.')
+replace:
+caught-by:
+    cineris-core ext::state::tests::an_extensions_values_are_keyed_by_where_it_comes_from_and_its_name
+
+[break] state-a-call-is-served-the-users-values
+rule: A call is served the values of the extension that made it, by its source: a project's extension is never served the user's.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::call_tool
+find: source: self.approved.source
+replace: source: cineris_ext::source::Source::User
+caught-by:
+    cineris-core::it ext_state::the_users_and_the_projects_extension_of_one_name_never_see_each_others_values
+
+# ------------------------------------------------- the session's values
+
+[break] state-session-values-not-read-back
+rule: A session's values are read back from its log: a resume has them as the session left them, and a fork as they were at its point.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::session_values
+find: *slot = Some(self.read_session()?);
+replace: *slot = Some(SessionValues::default());
+caught-by:
+    cineris-core::it ext_state::a_resumed_session_has_its_values_as_it_left_them
+    cineris-core::it ext_state::a_fork_has_the_values_as_they_were_at_its_point_and_neither_sees_the_others_sets
+
+[break] state-session-change-not-in-the-log
+rule: Each change of a session's value is an `ext` record of its log.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::session_set
+find: if let Some(disk) = lock(log).disk() {
+replace: if let Some(disk) = lock(log).disk().filter(|_| false) {
+caught-by:
+    cineris-core::it ext_state::a_session_value_is_read_back_in_the_session_and_a_set_to_null_removes_it
+    cineris-core::it ext_state::a_resumed_session_has_its_values_as_it_left_them
+
+[break] state-session-change-not-kept-in-memory
+rule: A session's value is read back in the same session once it is set.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::session_set
+find: all.values.insert(id, after);
+replace: drop((id, after));
+caught-by:
+    cineris-core::it ext_state::a_session_value_is_read_back_in_the_session_and_a_set_to_null_removes_it
+
+[break] state-a-set-that-changes-nothing-is-written
+rule: A set that changes nothing writes nothing.
+file: crates/cineris-core/src/ext/state.rs
+in: apply
+find: if before.get(key) == value {
+replace: if before.get(key) == value && false {
+caught-by:
+    cineris-core ext::state::tests::a_set_that_changes_nothing_writes_nothing
+    cineris-core::it ext_state::a_session_value_is_read_back_in_the_session_and_a_set_to_null_removes_it
+
+[break] state-removal-read-back-as-null
+rule: A record that removes a key is read back as a removal, not as a `null` value.
+file: crates/cineris-core/src/ext/state.rs
+in: change_of
+find: state.get("value").filter(|value| !value.is_null())
+replace: state.get("value")
+caught-by:
+    cineris-core ext::state::tests::only_a_records_state_is_a_change_of_a_value
+
+# The session store's change: `Log::fork` copies the `ext` records written
+# before the fork's point, so the fork's log holds the values as they were
+# there, and a resume of the fork reads them from it.
+
+[break] fork-does-not-copy-the-extensions-records
+rule: `Log::fork` copies an extension's records written before the fork's point: the fork, and a resume of it, have its `session` values as they were there.
+file: crates/cineris-session/src/session.rs
+in: Log::fork
+find: copied.extend(self.record_indices(&Kind::Ext).into_iter().filter(|&index| until.is_none_or(|until| index < until)));
+replace: let _ = until;
+packages: cineris-session,cineris-core
+caught-by:
+    cineris-session::it tree::a_fork_copies_the_extensions_records_written_before_its_point
+    cineris-core::it ext_state::a_fork_has_the_values_as_they_were_at_its_point_and_neither_sees_the_others_sets
+    cineris-core::it ext_state::a_resumed_fork_has_the_values_as_they_were_at_the_fork
+
+[break] fork-copies-records-past-its-point
+rule: A fork has an extension's values as they were at its point, not as they are now.
+file: crates/cineris-session/src/session.rs
+in: Log::fork
+find: .filter(|&index| until.is_none_or(|until| index < until))
+replace: .filter(|&index| until.is_none_or(|_| index > 0))
+packages: cineris-session,cineris-core
+caught-by:
+    cineris-session::it tree::a_fork_copies_the_extensions_records_written_before_its_point
+    cineris-core::it ext_state::a_fork_has_the_values_as_they_were_at_its_point_and_neither_sees_the_others_sets
+    cineris-core::it ext_state::a_resumed_fork_has_the_values_as_they_were_at_the_fork
+
+[break] fork-stops-records-at-the-point-itself
+rule: An extension's record written after a fork's point, before the conversation went on, is still the state there.
+file: crates/cineris-session/src/session.rs
+in: Log::fork
+find: .and_then(|at| self.next_tree_index(at))
+replace: .and_then(|at| Some(at))
+caught-by:
+    cineris-session::it tree::a_fork_copies_the_extensions_records_written_before_its_point
+
+# ------------------------------------------------- the project's values
+
+[break] state-project-values-not-read
+rule: A project's values are read from its file: the next session of the project has them.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::project_get
+find: Ok(read_file(&path, &shown)?.remove(key))
+replace: Ok(read_file(&path, &shown)?.remove(key).filter(|_| false))
+caught-by:
+    cineris-core::it ext_state::a_project_value_is_seen_by_the_next_session_of_the_project
+
+[break] state-project-values-shared-by-every-project
+rule: A project's values are kept in that project's folder of the state directory: another project does not see them.
+file: crates/cineris-core/src/ext/state.rs
+in: ProjectStore::new
+find: let dir = state.project_dir(project)?.join("extensions");
+replace: let dir = state.project_dir(project)?.parent()?.join("extensions");
+caught-by:
+    cineris-core::it ext_state::a_project_value_is_not_seen_by_another_project
+
+[break] state-project-file-of-another-version-read
+rule: A project's file is read strictly: one of another version, a newer one among them, is refused and never read as this build's.
+file: crates/cineris-core/src/ext/state.rs
+in: parse_file
+find: Some(FILE_VERSION) => {}
+replace: Some(_) => {}
+caught-by:
+    cineris-core::it ext_state::a_project_file_this_build_did_not_write_is_refused_and_left_as_it_is
+    cineris-core ext::state::tests::a_file_this_build_did_not_write_is_refused_with_the_reason
+
+[break] state-project-file-unknown-field-taken
+rule: A project's file is read strictly: a field this build does not know refuses it.
+file: crates/cineris-core/src/ext/state.rs
+in: parse_file
+find: .find(|name| !matches!(name.as_str(), "version" | "values"))
+replace: .find(|_| false)
+caught-by:
+    cineris-core::it ext_state::a_project_file_this_build_did_not_write_is_refused_and_left_as_it_is
+    cineris-core ext::state::tests::a_file_this_build_did_not_write_is_refused_with_the_reason
+
+[break] state-project-file-read-past-its-bound
+rule: A project's file larger than any this build writes is refused, not read.
+file: crates/cineris-core/src/ext/state.rs
+in: read_file
+find: if bytes.len() as u64 > FILE_MAX_BYTES {
+replace: if false {
+caught-by:
+    cineris-core::it ext_state::a_project_file_this_build_did_not_write_is_refused_and_left_as_it_is
+
+[break] state-refused-file-read-as-empty
+rule: A project's file that is refused is not read as empty and written over: the call is refused, and the file is left as it is.
+file: crates/cineris-core/src/ext/state.rs
+in: read_file
+find: parse_file(&bytes).map_err(refused)
+replace: Ok(parse_file(&bytes).unwrap_or_default())
+caught-by:
+    cineris-core::it ext_state::a_project_file_this_build_did_not_write_is_refused_and_left_as_it_is
+
+[break] state-project-file-not-owner-only
+rule: A project's file is written owner-only.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::project_set
+find: owner_only: true
+replace: owner_only: false
+os: linux
+caught-by:
+    cineris-core::it ext_state::a_project_file_is_written_owner_only
+
+# ------------------------------------------------------------------ caps
+
+[break] state-cap-one-byte-past-the-edge
+rule: An extension keeps at most 64 KiB of values in a scope: one byte past it a set is refused, and nothing is kept.
+file: crates/cineris-core/src/ext/state.rs
+in: apply
+find: if would_be > STATE_MAX_BYTES && would_be > was {
+replace: if would_be > STATE_MAX_BYTES + 1 && would_be > was {
+caught-by:
+    cineris-core::it ext_state::the_values_of_a_scope_are_kept_to_64_kib_exactly
+    cineris-core ext::state::tests::the_values_are_kept_up_to_the_cap_and_no_further
+
+[break] state-cap-refuses-at-the-edge
+rule: An extension keeps 64 KiB of values in a scope: at the edge a set is kept.
+file: crates/cineris-core/src/ext/state.rs
+in: apply
+find: if would_be > STATE_MAX_BYTES && would_be > was {
+replace: if would_be >= STATE_MAX_BYTES && would_be > was {
+caught-by:
+    cineris-core::it ext_state::the_values_of_a_scope_are_kept_to_64_kib_exactly
+    cineris-core ext::state::tests::the_values_are_kept_up_to_the_cap_and_no_further
+
+[break] state-cap-refuses-what-shrinks
+rule: A set that does not grow the values is taken, even over the cap (a file put right by hand), so that they can be brought under it.
+file: crates/cineris-core/src/ext/state.rs
+in: apply
+find: if would_be > STATE_MAX_BYTES && would_be > was {
+replace: if would_be > STATE_MAX_BYTES {
+caught-by:
+    cineris-core ext::state::tests::the_values_are_kept_up_to_the_cap_and_no_further
+
+# ------------------------------------------- the session's log, bounded
+
+[break] state-session-records-unbounded
+rule: An extension's `session` records in one session's log are held to their budget (16 MiB): past it a set is refused, and nothing is written.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::session_set
+find: within_budget(written, bytes, self.session_budget)?;
+replace:
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+
+[break] state-session-records-one-byte-past-their-budget
+rule: At the budget of an extension's `session` records a set is kept, and one byte past it a set is refused.
+file: crates/cineris-core/src/ext/state.rs
+in: within_budget
+find: if would_be > budget {
+replace: if would_be > budget + 1 {
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+    cineris-core ext::state::tests::the_session_records_are_held_to_their_budget
+
+[break] state-session-records-budget-reset-by-a-resume
+rule: The budget of an extension's `session` records counts what the log already holds when the values are first read: a resume does not start it again.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::read_session
+find: *written = written.saturating_add(record_bytes(&record.ext, &record.data));
+replace: let _ = written;
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+
+[break] state-session-records-not-counted-once-written
+rule: Each record written counts against the budget of the extension's `session` records.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::session_set
+find: all.written.insert(id.clone(), written.saturating_add(bytes));
+replace:
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+
+[break] state-session-records-counted-without-their-line
+rule: A `session` record counts its `ext` and `data` and an allowance for the rest of its line, not its `ext` and `data` alone.
+file: crates/cineris-core/src/ext/state.rs
+in: record_bytes
+find: .saturating_add(LINE_ALLOWANCE)
+replace: .saturating_add(0)
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+    cineris-core ext::state::tests::the_session_records_are_held_to_their_budget
