@@ -117,7 +117,7 @@ pub struct HookReason {
 /// end the quoting. A client escapes what acts unseen as it draws the line.
 fn in_backticks(name: &str) -> String {
     let mut quoted = String::with_capacity(name.len());
-    for character in name.chars() {
+    for character in on_one_line(name).chars() {
         if matches!(character, '`' | '\\') {
             quoted.push('\\');
         }
@@ -126,14 +126,37 @@ fn in_backticks(name: &str) -> String {
     quoted
 }
 
+/// `text` on one line: every line break, and every other character that
+/// begins a line, a space. A line of `reasons` is one reason, so no text of
+/// a hook's can begin a line that reads as another's.
+fn on_one_line(text: &str) -> String {
+    text.chars()
+        .map(|character| {
+            if matches!(
+                character,
+                '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+            ) {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
 impl HookReason {
     /// The line of an approval's `reasons` that says this hook asked
     /// (since step 28): what a client that does not read `hooks` shows,
-    /// and one that does need not show again.
+    /// and one that does need not show again. One line: a line break in the
+    /// hook's name or reason is a space.
     #[must_use]
     pub fn asking_line(&self) -> String {
         match &self.reason {
-            Some(reason) => format!("The hook `{}` asks: {reason}", in_backticks(&self.hook)),
+            Some(reason) => format!(
+                "The hook `{}` asks: {}",
+                in_backticks(&self.hook),
+                on_one_line(reason)
+            ),
             None => format!(
                 "The hook `{}` asks about this call.",
                 in_backticks(&self.hook)

@@ -1265,11 +1265,11 @@ caught-by:
     app::tests::sessions::with_no_session_open_only_notices_of_the_one_closed_are_shown
 
 [break] give-back-expands-the-editors-chips
-rule: A prompt given back goes after what the editor holds, whose chips stay chips.
-file: crates/cineris-tui/src/app/state.rs
-in: App::give_back
-find: let mut now = self.input.editor().fragment();
-replace: let mut now = Fragment::text(self.input.editor().expanded());
+rule: A prompt given back goes after what the editor holds, whose chips stay chips. (Since step 28's review, in the input, which keeps an item edit.)
+file: crates/cineris-tui/src/input.rs
+in: Input::give_back_to_draft
+find: let mut now = draft.fragment();
+replace: let mut now = Fragment::text(draft.expanded());
 caught-by:
     app::tests::sessions::a_prompt_given_back_keeps_the_editors_chips
 

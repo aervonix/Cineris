@@ -389,6 +389,28 @@ impl Input {
         self.after_edit();
     }
 
+    /// Adds `text` to the prompt being written, on a line of its own after
+    /// what is there, and leaves an item edit under way as it is: the text
+    /// goes into the draft the edit set aside, which comes back when the
+    /// edit ends. Says whether it went there.
+    pub fn give_back_to_draft(&mut self, text: &str) -> bool {
+        let editing = self.item_edit.is_some();
+        let draft = match self.item_edit.as_mut() {
+            Some(edit) => &mut edit.draft,
+            None => &mut self.editor,
+        };
+        let mut now = draft.fragment();
+        if !now.is_empty() {
+            now.push(Fragment::text("\n"));
+        }
+        now.push(Fragment::text(text));
+        draft.set(now);
+        if !editing {
+            self.after_edit();
+        }
+        editing
+    }
+
     /// Ends an item edit with nothing saved, the draft back in the editor.
     /// Whether one was under way. For the caller, when what the item was
     /// of is gone (another session is open, the panel closed).

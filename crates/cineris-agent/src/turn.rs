@@ -812,6 +812,7 @@ impl Session {
                         turn,
                         prompt.input,
                         prompt.delivery,
+                        prompt.ticket,
                         Vec::new(),
                         hooks::RETURNED_UNASKED.to_owned(),
                     );
@@ -826,6 +827,7 @@ impl Session {
                         turn,
                         prompt.input,
                         prompt.delivery,
+                        prompt.ticket,
                         refused,
                         message.clone(),
                     );
@@ -863,6 +865,7 @@ impl Session {
         }
         // The epoch's map, before the prompt, when it is ready by then.
         self.give_map(turn).await?;
+        let ticket = prompt.ticket;
         let item = Item::UserMessage(UserMessageItem {
             id: self.item_ids.next_id(),
             parts: prompt.input,
@@ -870,6 +873,8 @@ impl Session {
             created_at: Some(self.clock.now().to_timestamp()),
         });
         self.record_shown(turn, item).await?;
+        // Recorded: the server may let its sender go.
+        self.env.emitter.settled(ticket);
         self.shared.lock().history = true;
         self.add_context(turn, context).await?;
         Ok(Begun::Ready)
@@ -915,12 +920,13 @@ impl Session {
     }
 
     /// Gives a prompt that was not sent back to the front end, for its
-    /// editor.
+    /// editor, with the server's ticket for it.
     fn give_back(
         &self,
         turn: &Turn,
         parts: Vec<Part>,
         delivery: Option<Delivery>,
+        ticket: Option<u64>,
         refused: Vec<HookReason>,
         message: String,
     ) {
@@ -931,6 +937,7 @@ impl Session {
                 parts,
                 delivery,
                 hooks: refused,
+                ticket,
             }),
         );
     }
@@ -1016,15 +1023,18 @@ impl Session {
         &mut self,
         turn: &Turn,
         input: Vec<Part>,
+        ticket: Option<u64>,
     ) -> Option<Result<(), StoreError>> {
         let mut context = Vec::new();
+        let steer = Some(Delivery::Steer);
         if self.wants_prompts() {
-            match self.submit(turn, &input, Some(Delivery::Steer)).await {
+            match self.submit(turn, &input, steer.clone()).await {
                 None => {
                     self.give_back(
                         turn,
                         input,
-                        Some(Delivery::Steer),
+                        steer,
+                        ticket,
                         Vec::new(),
                         hooks::RETURNED_UNASKED.to_owned(),
                     );
@@ -1032,7 +1042,7 @@ impl Session {
                 }
                 Some(Submitted::Deny(refused)) => {
                     let message = hooks::refused_prompt(&refused, true);
-                    self.give_back(turn, input, Some(Delivery::Steer), refused, message);
+                    self.give_back(turn, input, steer, ticket, refused, message);
                     return Some(Ok(()));
                 }
                 Some(Submitted::Pass(added)) => context = added,
@@ -1041,12 +1051,14 @@ impl Session {
         let item = Item::UserMessage(UserMessageItem {
             id: self.item_ids.next_id(),
             parts: input,
-            delivery: Some(Delivery::Steer),
+            delivery: steer,
             created_at: Some(self.clock.now().to_timestamp()),
         });
         if let Err(error) = self.record_shown(turn, item).await {
             return Some(Err(error));
         }
+        // Recorded: the server may let its sender go.
+        self.env.emitter.settled(ticket);
         Some(self.add_context(turn, context).await)
     }
 
@@ -1059,10 +1071,11 @@ impl Session {
         let mut kept = Vec::new();
         for pending in rest {
             match pending {
-                Pending::Steer(input) => self.give_back(
+                Pending::Steer { input, ticket } => self.give_back(
                     turn,
                     input,
                     Some(Delivery::Steer),
+                    ticket,
                     Vec::new(),
                     hooks::RETURNED_UNASKED.to_owned(),
                 ),
@@ -1091,13 +1104,15 @@ impl Session {
         let mut pending = std::mem::take(&mut self.shared.lock().pending);
         while let Some(next) = pending.pop_front() {
             let recorded = match next {
-                Pending::Steer(input) => match self.deliver_steer(turn, input).await {
-                    Some(recorded) => recorded,
-                    None => {
-                        self.return_pending(turn, pending);
-                        return Phase::Interrupted(None);
+                Pending::Steer { input, ticket } => {
+                    match self.deliver_steer(turn, input, ticket).await {
+                        Some(recorded) => recorded,
+                        None => {
+                            self.return_pending(turn, pending);
+                            return Phase::Interrupted(None);
+                        }
                     }
-                },
+                }
                 Pending::Notice { source, text } => self.record_notice(turn, source, text).await,
                 Pending::Compact(focus) => {
                     self.manual = true;
@@ -2211,15 +2226,16 @@ impl Session {
         let steering = inbox
             .pending
             .iter()
-            .position(|pending| matches!(pending, Pending::Steer(_)));
+            .position(|pending| matches!(pending, Pending::Steer { .. }));
         let (turn, prompt) = if let Some(position) = steering
-            && let Some(Pending::Steer(input)) = inbox.pending.remove(position)
+            && let Some(Pending::Steer { input, ticket }) = inbox.pending.remove(position)
         {
             let prompt = Prompt {
                 input,
                 delivery: Some(Delivery::Steer),
                 compact: None,
                 verify: false,
+                ticket,
             };
             (inbox.turn_ids.next_id(), prompt)
         } else if let Some(queued) = inbox.queue.pop_front() {
@@ -2255,6 +2271,7 @@ impl Session {
             delivery: None,
             compact: Some(focus),
             verify: false,
+            ticket: None,
         };
         let running = Running {
             id: inbox.turn_ids.next_id(),
@@ -2270,11 +2287,11 @@ impl Session {
     fn hold(inbox: &mut Inbox) {
         let (steering, notices): (Vec<Pending>, Vec<Pending>) = std::mem::take(&mut inbox.pending)
             .into_iter()
-            .partition(|pending| matches!(pending, Pending::Steer(_)));
+            .partition(|pending| matches!(pending, Pending::Steer { .. }));
         inbox.pending = notices.into();
         let mut held = std::mem::take(&mut inbox.held);
         for pending in steering {
-            if let Pending::Steer(input) = pending {
+            if let Pending::Steer { input, ticket } = pending {
                 held.push_back(Queued {
                     turn: inbox.turn_ids.next_id(),
                     prompt: Prompt {
@@ -2282,6 +2299,7 @@ impl Session {
                         delivery: Some(Delivery::Steer),
                         compact: None,
                         verify: false,
+                        ticket,
                     },
                 });
             }
