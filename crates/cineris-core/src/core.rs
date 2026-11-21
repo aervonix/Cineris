@@ -1672,6 +1672,10 @@ impl Core {
                 if !live.handle.turn_running() {
                     live.extensions.recheck().await;
                     crate::reload::at_turn_start(self, &live).await;
+                    // What a confined start changed that a session kept in
+                    // memory could not put back, told again while it is
+                    // still there (the third security fix).
+                    crate::sandbox::tell_what_is_kept_nowhere(&live).await;
                 }
                 // Refused with `history_changing` while a rewind is under
                 // way, under the session's own lock.

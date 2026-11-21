@@ -571,9 +571,11 @@ async fn look_after(
     let found = run_blocking(&free, move |_| {
         sandbox.follow_configured(&*git, &root);
         let keep = sandbox.kept_in().map(std::path::Path::to_path_buf);
-        sandbox
-            .protected()
-            .map(|watch| protected_changes(&watch, &before, &roots, keep.as_deref()))
+        sandbox.protected().map(|watch| {
+            let found = protected_changes(&watch, &before, &roots, keep.as_deref());
+            sandbox.remember_kept_nowhere(&before, &found);
+            found
+        })
     })
     .await
     .map_err(|error| HostError::Failed(format!("the protected paths were not looked at: {error}")))?

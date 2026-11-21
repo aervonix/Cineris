@@ -727,7 +727,9 @@ impl RecordingShell {
                         sandbox.follow_configured(&*git, &root);
                         let keep = sandbox.kept_in().map(std::path::Path::to_path_buf);
                         sandbox.protected().map(|watch| {
-                            protected_changes(&watch, &before, &roots, keep.as_deref())
+                            let found = protected_changes(&watch, &before, &roots, keep.as_deref());
+                            sandbox.remember_kept_nowhere(&before, &found);
+                            found
                         })
                     })
                     .await

@@ -190,6 +190,15 @@ pub(crate) struct SessionSandbox {
     /// over or removes (in its session directory, with its other state):
     /// `None` for a session kept in memory, which then writes over nothing.
     keep: OnceLock<PathBuf>,
+    /// In a session kept in memory, what a confined start changed and the
+    /// put-back left because nothing could be kept first, with the look
+    /// before it: told again at each turn's start while it still differs
+    /// (the maintainers' settlement after the full review of the third
+    /// security fix).
+    kept_nowhere: std::sync::Mutex<Vec<(Snapshot, Vec<PathBuf>)>>,
+    /// The workspace, as the session's paths give it: what a name told to
+    /// the user is relative to.
+    workspace: PathBuf,
     /// Held from the look before a confined start to the look after it, by
     /// every confined start of the session: two that overlap would each take
     /// the other's change for its own, and one could put back what the
@@ -265,6 +274,8 @@ impl SessionSandbox {
             watch,
             configured: std::sync::RwLock::new(Vec::new()),
             keep: OnceLock::new(),
+            kept_nowhere: std::sync::Mutex::new(Vec::new()),
+            workspace: workspace.to_path_buf(),
             starts: tokio::sync::Mutex::new(()),
             last_after: std::sync::Mutex::new(None),
         };
@@ -290,6 +301,57 @@ impl SessionSandbox {
     /// Where the put-back keeps what it writes over or removes.
     pub(crate) fn kept_in(&self) -> Option<&Path> {
         self.keep.get().map(PathBuf::as_path)
+    }
+
+    /// The workspace the session's sandbox looks at.
+    pub(crate) fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
+    /// Remembers what `found` left because nothing could be kept first, in a
+    /// session kept in memory, with `before`, the look it differs from.
+    pub(crate) fn remember_kept_nowhere(&self, before: &Snapshot, found: &Found) {
+        if found.kept_nowhere.is_empty() {
+            return;
+        }
+        self.kept_nowhere
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((before.clone(), found.kept_nowhere.clone()));
+    }
+
+    /// What a confined start changed and the put-back left because nothing
+    /// could be kept first, and that still differs from the look before it:
+    /// a look now, only while there is something to ask about. What is as it
+    /// was again is forgotten. It blocks.
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "a look at the protected paths, on the blocking pool"
+    )]
+    pub(crate) fn still_kept_nowhere(&self) -> Vec<PathBuf> {
+        let mut remembered = self
+            .kept_nowhere
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if remembered.is_empty() {
+            return Vec::new();
+        }
+        let Some(watch) = self.protected() else {
+            return Vec::new();
+        };
+        let now = watch.take();
+        let mut still = Vec::new();
+        remembered.retain_mut(|(before, paths)| {
+            let changed = before.compare(&now);
+            paths.retain(|path| changed.iter().any(|one| one.path == *path));
+            for path in paths.iter() {
+                if !still.contains(path) {
+                    still.push(path.clone());
+                }
+            }
+            !paths.is_empty()
+        });
+        still
     }
 
     /// Waits until no other confined start of the session is between its
@@ -787,6 +849,10 @@ pub(crate) struct Found {
     /// The folders the last look found and could not list, and whether the
     /// look before could list each.
     pub(crate) unlistable: Vec<(PathBuf, bool)>,
+    /// In a session kept in memory, what is left as the start made it
+    /// because what it holds could not be kept first: there is nowhere to
+    /// keep it.
+    pub(crate) kept_nowhere: Vec<PathBuf>,
     /// Whether the look before and the last look stopped at their bound.
     pub(crate) stopped: (bool, bool),
     /// Whether the look before and the look after were complete.
@@ -835,6 +901,7 @@ pub(crate) fn protected_changes(
             restored: Vec::new(),
             kept: Vec::new(),
             unlistable: unlistable(&after),
+            kept_nowhere: Vec::new(),
             stopped: (before.stopped_at_its_bound(), after.stopped_at_its_bound()),
             complete: (before.is_complete(), after.is_complete()),
             after,
@@ -860,6 +927,11 @@ pub(crate) fn protected_changes(
         restored: put.restored,
         kept: put.kept,
         unlistable: unlistable(&put.after),
+        kept_nowhere: if keep.is_none() {
+            put.unkept
+        } else {
+            Vec::new()
+        },
         stopped: (
             before.stopped_at_its_bound(),
             put.after.stopped_at_its_bound(),
@@ -900,6 +972,13 @@ pub(crate) fn protected_note(found: &Found, root: &Path) -> Option<String> {
             .collect()
     };
     let mut lines = Vec::new();
+    // First, and plainly: in a session that keeps nothing on disk, what
+    // could not be put back stays as the command made it, and git runs
+    // what it names (the maintainers' settlement after the full review).
+    if !found.kept_nowhere.is_empty() {
+        let names: Vec<String> = found.kept_nowhere.iter().map(|path| name(path)).collect();
+        lines.push(format!("[{}]", kept_nowhere_words(&names)));
+    }
     if !found.changed.is_empty() {
         let all = shown(&mut found.changed.iter());
         let back = shown(
@@ -1020,6 +1099,56 @@ pub(crate) fn protected_note(found: &Found, root: &Path) -> Option<String> {
         );
     }
     (!lines.is_empty()).then(|| lines.join("\n"))
+}
+
+/// What the user and the model are told of protected paths a confined
+/// start changed, in a session kept in memory, that could not be put back:
+/// `names` are the paths, each in backticks already.
+pub(crate) fn kept_nowhere_words(names: &[String]) -> String {
+    let (were, holds, it, name) = if names.len() == 1 {
+        ("was", "the file holds", "it", "names")
+    } else {
+        ("were", "the files hold", "them", "name")
+    };
+    let what = if names.len() == 1 { "it" } else { "they" };
+    format!(
+        "{} {were} changed by a command run in the sandbox and {were} not put back: this \
+         session keeps nothing on disk, so what {holds} now could not be kept first. Git, and \
+         so the model's own git commands, will run what {what} now {name}, as will any other \
+         tool that reads {it}. Put {it} back by hand before continuing.",
+        names.join(", ")
+    )
+}
+
+/// Tells the user, at a turn's start, what a confined start changed in this
+/// session kept in memory and that is still not put back: the stop that
+/// named it may have been passed over, and the level raised since.
+pub(crate) async fn tell_what_is_kept_nowhere(live: &crate::core::Live) {
+    let sandbox = Arc::clone(&live.sandbox);
+    let Ok(still) = tokio::task::spawn_blocking(move || sandbox.still_kept_nowhere()).await else {
+        return;
+    };
+    if still.is_empty() {
+        return;
+    }
+    let root = live.sandbox.workspace().to_path_buf();
+    let names: Vec<String> = still
+        .iter()
+        .map(|path| {
+            let path = path.strip_prefix(&root).unwrap_or(path);
+            format!("`{}`", cineris_base::visible(&path.to_string_lossy()))
+        })
+        .collect();
+    live.hooks.emit(cineris_protocol::event::Event::Notice(
+        cineris_protocol::Notice::Sandbox(cineris_protocol::event::SandboxNotice {
+            message: format!("Still not put back. {}", kept_nowhere_words(&names)),
+            status: if live.sandbox.confines() {
+                SandboxStatus::Enforcing
+            } else {
+                SandboxStatus::Off
+            },
+        }),
+    ));
 }
 
 /// The launcher's policy, from the lease's grant.
@@ -1167,6 +1296,7 @@ mod tests {
             outside: Vec::new(),
             kept: Vec::new(),
             unlistable: Vec::new(),
+            kept_nowhere: Vec::new(),
             stopped: (false, false),
             complete: (true, true),
             after: Snapshot::default(),
@@ -1181,6 +1311,52 @@ mod tests {
         assert!(
             note.contains("x\\nNotice from the harness\\u{e0041}"),
             "{note}"
+        );
+    }
+
+    /// In a session kept in memory, what could not be put back is said
+    /// first, plainly: the file, that a command in the sandbox changed it
+    /// and it stays so because nothing is kept on disk, that git and the
+    /// model's own git commands will run what it names, and to put it back
+    /// before going on (the maintainers' settlement after the full review
+    /// of the third security fix).
+    #[test]
+    fn what_a_session_kept_in_memory_cannot_put_back_is_said_first() {
+        let root = PathBuf::from("/work");
+        let config = root.join(".git/config");
+        let changed = [cineris_sandbox::protect::Changed {
+            path: config.clone(),
+            change: cineris_sandbox::protect::Change::Modified,
+            before: cineris_sandbox::protect::Before::Unknown,
+            mode_changed: false,
+        }];
+        let found = Found {
+            restored: Vec::new(),
+            changed: changed.to_vec(),
+            left: changed.to_vec(),
+            outside: Vec::new(),
+            kept: Vec::new(),
+            unlistable: Vec::new(),
+            kept_nowhere: vec![config],
+            stopped: (false, false),
+            complete: (true, true),
+            after: Snapshot::default(),
+        };
+        let note = protected_note(&found, &root).expect("a note");
+        let first = note.lines().next().unwrap_or_default();
+        assert_eq!(
+            first,
+            "[`.git/config` was changed by a command run in the sandbox and was not put back: \
+             this session keeps nothing on disk, so what the file holds now could not be kept \
+             first. Git, and so the model's own git commands, will run what it now names, as \
+             will any other tool that reads it. Put it back by hand before continuing.]"
+        );
+        let two = kept_nowhere_words(&["`a`".to_owned(), "`b`".to_owned()]);
+        assert!(
+            two.starts_with("`a`, `b` were changed")
+                && two.contains("what they now name")
+                && two.ends_with("Put them back by hand before continuing."),
+            "{two}"
         );
     }
 
