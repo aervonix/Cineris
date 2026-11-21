@@ -61,6 +61,8 @@ mod sandbox;
 mod secrets;
 mod settings;
 mod shell;
+#[cfg(feature = "scripts")]
+mod skill_reads;
 mod start;
 mod supervising;
 mod trust;

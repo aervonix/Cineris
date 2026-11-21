@@ -12,6 +12,17 @@
 //! What the skills and the loaded extensions give the system prompt is
 //! settled into the session's [`PromptParts`] before the work is settled,
 //! so that a turn that waits for it is built with them.
+//!
+//! **The folder of each of the user's own skills outside the workspace may
+//! be read unasked:** it is given to the session as a rule of its own, an
+//! allow for reading the folder and everything below it
+//! ([`crate::policy::reading_below`]), added as "allow for this session"
+//! adds one, with the source `session`, at each finding of the skills
+//! ([`super::reads`] says which folders, and how the rules follow them).
+//! The folder is where the skill really is, as `skills::find` judged it, so
+//! a skill whose folder is a link out of its root, which is not found, has
+//! none; a rule that holds reading back still wins, as it wins over any
+//! allow.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -133,6 +144,9 @@ struct Held {
     texts: Vec<(Key, String)>,
     /// Where sections 6 and 7 are settled.
     prompt: Arc<PromptParts>,
+    /// The session's rules for reading its skills' folders, changed on
+    /// the blocking pool by the work that makes them.
+    reads: Arc<Mutex<super::reads::SkillReads>>,
 }
 
 /// What the blocking look is given.
@@ -257,6 +271,7 @@ async fn first(extensions: &Extensions, finding: Finding) {
             skills_watched: Watched::default(),
             texts: Vec::new(),
             prompt,
+            reads: Arc::default(),
         };
         let kept = held.settle(project_found).await;
         held.find_skills().await;
@@ -485,12 +500,23 @@ impl Held {
     /// and settles section 6's part of them. On the blocking pool.
     async fn find_skills(&mut self) {
         let inputs = Arc::clone(&self.inputs);
-        let Some((found, watched)) = blocking(move || skills_found(&inputs)).await else {
+        let Some(((found, watched), home)) =
+            blocking(move || (skills_found(&inputs), real_home(&inputs.resolver))).await
+        else {
             return;
         };
         self.skills_watched = watched;
         self.prompt
             .set_skills(skills::render(&found, cineris_agent::SKILLS_CAP).text);
+        let workspace = self.inputs.resolver.root().to_fs_path();
+        let folders = super::reads::readable(&found.skills, &workspace, home.as_deref());
+        let reads = Arc::clone(&self.reads);
+        let policy = Arc::clone(&self.parts.policy);
+        // Off the core's thread: the change waits for a person's answer
+        // being stored for the project, if one is. The rules it makes are
+        // held by the same work, so none is left that the session does not
+        // know of.
+        let _ = blocking(move || lock(&reads).follow(&policy, folders)).await;
     }
 }
 
@@ -498,6 +524,16 @@ impl Held {
 /// leads when it is not there, itself, and three places an entry it looks
 /// at (`skills::find_seeing`): within what a root may stamp.
 const _: () = assert!(5 + 3 * skills::MAX_ENTRIES <= MAX_PLACES_PER_ROOT);
+
+/// Where the home directory really is, every link followed: what a skill's
+/// folder is held against. `None` when there is none. Blocks.
+fn real_home(resolver: &PathResolver) -> Option<PathBuf> {
+    resolver
+        .resolve("~")
+        .ok()
+        .filter(|home| home.exists())
+        .map(|home| home.to_fs_path())
+}
 
 /// The session's skills, found in their roots, and what they were found in,
 /// each place stamped before it was looked at or read. Blocks.
