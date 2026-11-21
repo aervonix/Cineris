@@ -231,7 +231,17 @@ impl Answer {
     /// Why it is not an answer to `event`, in a sentence that can follow
     /// "the hook's answer".
     pub fn read(event: Event, output: &[u8]) -> Result<Self, String> {
-        let fields = match value(output)? {
+        Self::of(event, value(output)?)
+    }
+
+    /// [`Answer::read`] of a value [`value`] read already: `None` for
+    /// nothing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Answer::read`].
+    pub fn of(event: Event, value: Option<Json>) -> Result<Self, String> {
+        let fields = match value {
             None | Some(Json::Null) => return Ok(Self::default()),
             Some(Json::Object(fields)) => fields,
             Some(_) => return Err("is not a JSON object".to_owned()),

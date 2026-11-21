@@ -940,6 +940,20 @@ impl Core {
             turn_start: tokio::sync::Mutex::new(()),
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
+        // The session's `session.start` hooks, now that it is open: the
+        // first turn waits for them (step 28).
+        #[cfg(feature = "scripts")]
+        {
+            let handle = live.handle.clone();
+            live.command_hooks
+                .start(
+                    live.handle.id(),
+                    Arc::new(move |text: String| {
+                        handle.notice(cineris_protocol::item::NoticeSource::Hook, text);
+                    }),
+                )
+                .await;
+        }
         // The client may have left, or a shutdown begun, while the session
         // was put together off this thread.
         self.still_wanted(client, &live, true).await?;
@@ -1135,6 +1149,12 @@ impl Core {
         if let Some(task) = task {
             let _ = task.await;
         }
+        // Its `session.end` hooks, given up to five seconds, before the
+        // close's look at the protected paths (step 28).
+        #[cfg(feature = "scripts")]
+        live.command_hooks
+            .end(live.handle.id(), &self.inner.options.timer)
+            .await;
         let log = Arc::clone(&live.log);
         let sandbox = Arc::clone(&live.sandbox);
         let closed = Self::blocking(move || {
@@ -1656,6 +1676,25 @@ impl Core {
             Op::TurnStart(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                // A prompt is text and images: what else a part may be is
+                // the model's or a tool's, never a person's, and a hook is
+                // given a prompt's text alone (the early review of the hook
+                // seam, L7).
+                if let Some(other) = params.input.iter().find(|part| {
+                    !matches!(
+                        part,
+                        cineris_protocol::Part::Text(_) | cineris_protocol::Part::Image(_)
+                    )
+                }) {
+                    return Err(error(
+                        ErrorKind::Usage,
+                        "invalid_prompt",
+                        format!(
+                            "A prompt holds text and images only, and this one holds a `{}` part.",
+                            cineris_base::visible(other.tag())
+                        ),
+                    ));
+                }
                 // One start at a time: no other client's prompt starts a
                 // turn between the look below and this prompt's handing to
                 // the loop, so the look at what the extensions were found
@@ -1668,6 +1707,10 @@ impl Core {
                 // misses included: a gate one of them holds is never
                 // skipped (step 28). At once once they are.
                 live.extensions.wait().await;
+                // Nor before its `session.start` hooks that are waited for
+                // have answered, up to their time.
+                #[cfg(feature = "scripts")]
+                live.command_hooks.started().await;
                 // The start of a turn is one of the moments the files are
                 // looked at (08-configuration, "How changes are noticed"):
                 // a prompt that steers a running turn starts none.
@@ -1685,7 +1728,9 @@ impl Core {
                     crate::sandbox::tell_what_is_still_by_hand(&live).await;
                 }
                 // Refused with `history_changing` while a rewind is under
-                // way, under the session's own lock.
+                // way, under the session's own lock. Who sent it is noted
+                // first: a hook may refuse it and give it back.
+                live.sink.sent_by(client.0, &params.input);
                 let result = live.handle.prompt(params.input, params.delivery)?;
                 Ok(OpResult::TurnStart(result))
             }

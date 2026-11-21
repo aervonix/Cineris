@@ -1293,7 +1293,15 @@ impl EnginePolicy {
         call: PlannedCall<'a>,
         host: Option<HostQuestion>,
     ) -> BoxFuture<'a, Verdict> {
-        let once_only = host.is_some();
+        // What the call's `tool.before` hooks said the question must show
+        // (step 28): a hook that asked puts the question even where the
+        // rules allow the call; a replacement of the arguments is new work
+        // nobody chose, offered only "allow once" and "deny", and answered
+        // only by a person (a `user` client), never by a supervisor's grant
+        // (the early review of the hook seam, M1).
+        let hooked = call.hooks;
+        let replaced = hooked.is_some_and(|hooks| hooks.replaced.is_some());
+        let once_only = host.is_some() || replaced;
         Box::pin(async move {
             if let Some(reason) = self.stopped(&call) {
                 return Verdict::Stop { reason };
@@ -1311,6 +1319,14 @@ impl EnginePolicy {
                         managed: false,
                     }
                 }
+                // A hook's question is put whatever the rules say: they had
+                // nothing to ask, and nothing to add.
+                Outcome::Allow { .. } if hooked.is_some() => Question {
+                    reasons: Vec::new(),
+                    lifts: Vec::new(),
+                    storable: false,
+                    managed: false,
+                },
                 Outcome::Allow { .. } => return Verdict::Allow,
                 Outcome::Deny { reason } => return Verdict::Deny { note: Some(reason) },
                 Outcome::Ask(question) => question,
@@ -1321,7 +1337,23 @@ impl EnginePolicy {
                 question.lifts.clear();
             }
             let subscribers = self.sink.subscribers();
-            let asked = self.clients.approvers(&subscribers);
+            // A replacement is put to the session's users alone.
+            let people = |clients: Vec<u64>| -> Vec<u64> {
+                if !replaced {
+                    return clients;
+                }
+                clients
+                    .into_iter()
+                    .filter(|client| {
+                        self.clients
+                            .info(crate::clients::ClientId(*client))
+                            .is_some_and(|info| {
+                                info.role == cineris_protocol::methods::ClientRole::User
+                            })
+                    })
+                    .collect()
+            };
+            let asked = people(self.clients.approvers(&subscribers));
             // A session kept with no client at all puts the question to
             // nobody: a `user` client that opens the session is put it
             // (`Clients::join`), until the time limit. One whose clients
@@ -1349,12 +1381,20 @@ impl EnginePolicy {
                 ),
                 choices: question.choices(),
                 // The engine's reasons, then what the host call adds: a
-                // program's input, which no rule judges.
+                // program's input, which no rule judges; then a line for
+                // each hook that asked and one for a replacement, so that a
+                // client that reads neither `hooks` nor `replaced` sees why
+                // it is asked, and that the call is not the model's.
                 reasons: question
                     .reasons
                     .iter()
                     .cloned()
                     .chain(host.as_ref().and_then(|host| host.extra.clone()))
+                    .chain(
+                        hooked
+                            .map(cineris_agent::HookQuestion::reasons)
+                            .unwrap_or_default(),
+                    )
                     .collect(),
                 adds: question
                     .lifts
@@ -1364,15 +1404,19 @@ impl EnginePolicy {
                         pattern: rule.pattern.clone(),
                     })
                     .collect(),
-                // From `call.hooks`, with the core's part of step 28.
-                hooks: Vec::new(),
-                replaced: None,
+                hooks: hooked.map(|hooks| hooks.asked.clone()).unwrap_or_default(),
+                replaced: hooked
+                    .and_then(|hooks| hooks.replaced.clone())
+                    .map(Box::new),
             };
+            // No grant answers a replacement: a supervisor's allow of it is
+            // not taken, and the request stays open for the users.
+            let judge = if replaced { None } else { self.judge(&call) };
             let (id, mut answer) = self.clients.ask(
                 call.session,
                 &asked,
                 |_| ServerRequest::Approval(request.clone()),
-                self.judge(&call),
+                judge,
             );
             // A client that opened the session from another thread between
             // the look at who may answer and the request being open found
@@ -1381,7 +1425,7 @@ impl EnginePolicy {
             // the review of step 27's core changes: with `keep_sessions` the
             // client that opens a session with nobody on it is the only one
             // who can answer.
-            for client in self.clients.approvers(&self.sink.subscribers()) {
+            for client in people(self.clients.approvers(&self.sink.subscribers())) {
                 if !asked.contains(&client) {
                     self.clients
                         .join(call.session, crate::clients::ClientId(client));
@@ -1437,7 +1481,9 @@ impl EnginePolicy {
             // its grant (taken as `allow_once`), or a denial. Nothing is
             // recorded for it.
             if by_supervisor {
-                return if response.choice == ApprovalChoice::AllowOnce {
+                // A replacement is a person's to allow, whatever a grant
+                // would cover; a supervisor's denial of it stands.
+                return if response.choice == ApprovalChoice::AllowOnce && !replaced {
                     if !once_only {
                         self.remember_allowed(&call, question);
                     }
