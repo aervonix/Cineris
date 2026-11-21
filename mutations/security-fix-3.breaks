@@ -88,8 +88,8 @@ caught-by:
 rule: What a confined start changed among the protected paths is put back at once, so that nothing of it runs later outside the sandbox.
 file: crates/cineris-core/src/sandbox.rs
 in: protected_changes
-find: let put = watch.put_back(before, &changed);
-replace: let put = cineris_sandbox::protect::PutBack { restored: Vec::new(), left: changed.clone(), after: after.clone() };
+find: let put = watch.put_back(before, &changed, &within);
+replace: let put = cineris_sandbox::protect::PutBack { changed: changed.clone(), restored: Vec::new(), left: changed.clone(), after: after.clone() };
 caught-by:
     cineris-core::it harness_git::sys_a_filter_a_confined_command_plants_never_runs_afterwards
     cineris-core::it ext_exec::confined::sys_a_filter_a_program_plants_never_runs_afterwards
@@ -218,45 +218,143 @@ caught-by:
 rule: The folder the repository's configuration names for its hooks is read before a confined command's look before it, so that a hook already there that the command changes is found.
 file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
-find: sandbox.follow_hooks(&*git, &root); sandbox.protected().map(|watch| watch.take())
+find: sandbox.follow_configured(&*git, &root); sandbox.protected().map(|watch| watch.take())
 replace: sandbox.protected().map(|watch| watch.take())
+occurrence: 2
 caught-by:
-    cineris-core::it harness_git::sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back
+    cineris-core::it harness_git::sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back
 
 [break] hooks-folder-not-read-again-after-the-command
 rule: The folder is read again before the look after a command, so that one the command named through a file the configuration includes is looked at too.
 file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
-find: sandbox.follow_hooks(&*git, &root); sandbox.protected().map(|watch| protected_changes(&watch, &before))
-replace: sandbox.protected().map(|watch| protected_changes(&watch, &before))
+find: sandbox.follow_configured(&*git, &root); sandbox.protected().map(|watch| protected_changes(&watch, &before, &roots))
+replace: sandbox.protected().map(|watch| protected_changes(&watch, &before, &roots))
 caught-by:
-    cineris-core::it harness_git::sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back
+    cineris-core::it harness_git::sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back
 
-[break] hooks-folder-the-harness-names-taken
-rule: The folder read is the one the repository's or the user's configuration names, not the harness's own `core.hooksPath` nowhere, given on its command line.
+[break] configured-the-harness-names-taken
+rule: What is read is what the repository's or the user's configuration files name, not the harness's own settings given on its command line.
 file: crates/cineris-tools/src/shell/changes.rs
-in: hooks_folder_from
-find: .filter(|pair| pair.len() == 2 && pair[0] != b"command")
-replace: .filter(|pair| pair.len() == 2)
+in: configured_from
+find: let Some(file) = origin.strip_prefix("file:") else { continue; };
+replace: let file = origin.strip_prefix("file:").unwrap_or(origin);
+caught-by:
+    cineris-tools shell::changes::tests::what_a_configuration_names_is_found_by_place
+
+[break] configured-programs-not-read
+rule: A path a key that names a program gives (a filter's `clean`) is watched.
+file: crates/cineris-tools/src/shell/changes.rs
+in: configured_from
+find: } else if names_a_program(&key, section, last) {
+replace: } else if false && names_a_program(&key, section, last) {
 packages: cineris-tools,cineris-core
 caught-by:
-    cineris-tools shell::changes::tests::the_hooks_folder_is_the_last_one_a_configuration_names
-    cineris-core::it harness_git::sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back
+    cineris-tools shell::changes::tests::what_a_configuration_names_is_found_by_place
+    cineris-core::it harness_git::sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back
+
+[break] configured-includes-not-read
+rule: A file the configuration includes is watched, an empty one included.
+file: crates/cineris-tools/src/shell/changes.rs
+in: configured_from
+find: let from = file.parent().unwrap_or(top);
+replace: let from = Path::new("/nowhere");
+packages: cineris-tools,cineris-core
+caught-by:
+    cineris-tools shell::changes::tests::what_a_configuration_names_is_found_by_place
+    cineris-core::it harness_git::sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back
 
 [break] hooks-folder-not-watched
 rule: The folder read is watched with the protected paths, everything under it.
 file: crates/cineris-core/src/sandbox.rs
 in: SessionSandbox::protected
-find: .map(|watch| watch.clone().with_more(hooks))
-replace: .map(|watch| { let _ = hooks; watch.clone() })
+find: .map(|watch| watch.clone().with_more(configured))
+replace: .map(|watch| { let _ = configured; watch.clone() })
 caught-by:
-    cineris-core::it harness_git::sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back
+    cineris-core::it harness_git::sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back
 
 [break] hooks-folder-not-read-around-a-program
 rule: The folder the repository's configuration names for its hooks is watched around an extension's program with a write root, as around a confined command.
 file: crates/cineris-core/src/ext/exec.rs
 in: look_after
-find: sandbox.follow_hooks(&*git, &root);
+find: sandbox.follow_configured(&*git, &root);
 replace: let _ = (&git, &root);
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_hook_a_program_plants_in_the_hooks_folder_is_put_back
+
+# ------------------------------------------------ the early review's fixes
+
+[break] an-unreadable-folder-taken-as-looked-at
+rule: A protected folder that is there and cannot be listed makes the look incomplete, so that what is in it is never taken for gone, nor hidden.
+file: crates/cineris-sandbox/src/protect.rs
+in: Look::list
+find: if error.kind() != std::io::ErrorKind::NotFound { self.complete = false; }
+replace:
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_hook_hidden_in_a_folder_made_unreadable_is_found_and_put_back
+
+[break] a-mode-put-back-through-a-read
+rule: A mode is put back through a descriptor that needs no right to read what it names, so that a folder a command made unreadable gets its mode back.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: chmod_at
+find: let flags = libc::O_PATH
+replace: let flags = libc::O_RDONLY
+packages: cineris-sandbox,cineris-core
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_hook_hidden_in_a_folder_made_unreadable_is_found_and_put_back
+    cineris-core::it sandbox::sys_a_hook_a_command_hides_in_a_folder_it_made_unreadable_is_put_back
+
+[break] one-round-only
+rule: The put-back goes on while a round shows what the one before could not, so that what a folder hid is put back once the folder is open again.
+file: crates/cineris-sandbox/src/protect.rs
+find: const ROUNDS: usize = 3;
+replace: const ROUNDS: usize = 1;
+packages: cineris-sandbox,cineris-core
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_hook_hidden_in_a_folder_made_unreadable_is_found_and_put_back
+    cineris-core::it sandbox::sys_a_hook_a_command_hides_in_a_folder_it_made_unreadable_is_put_back
+
+[break] a-directory-given-its-mode-first
+rule: A directory made again is open to its owner while what goes in it is put back, and given its own mode last.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: restore
+find: mkdir_at(&dir, &name, mode | 0o700)?;
+replace: mkdir_at(&dir, &name, mode)?;
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_directory_without_its_owners_write_right_gets_its_children_back
+
+[break] a-link-not-made-again
+rule: A link a command replaced is made again, to where it led.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: restore
+find: (Some(target), Now::Missing) => symlink_at(&dir, &name, target),
+replace: (Some(_), Now::Missing) => Ok(()),
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_link_a_command_replaced_is_made_again
+
+[break] a-mode-set-through-a-link
+rule: A mode is put back through a descriptor opened with no link followed at the name, so a link swapped in has no mode set where it leads.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: open_at
+find: flags | libc::O_NOFOLLOW | libc::O_CLOEXEC
+replace: flags | libc::O_CLOEXEC
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_directory_swapped_for_a_link_while_its_mode_is_put_back_sets_nothing_where_it_leads
+
+[break] changes-out-of-reach-put-back
+rule: Only what lies inside one of the start's own write roots is put back; a change elsewhere while it ran is told as from outside.
+file: crates/cineris-core/src/sandbox.rs
+in: protected_changes
+find: let within = |path: &Path| { roots.iter().any(|root| cineris_base::location_within(path, root)) };
+replace: let within = |path: &Path| { let _ = (path, roots); true };
+caught-by:
+    cineris-core::it sandbox::sys_a_change_outside_the_commands_reach_is_not_put_back
+
+[break] no-look-before-an-unconfined-start
+rule: A start that is not confined, after a confined start whose look after is kept, is compared with that look first.
+file: crates/cineris-core/src/checkpoints.rs
+in: RecordingShell::run_by
+find: if !looks && self.sandbox.enforces() && self.sandbox.has_last_after() {
+replace: if false && !looks && self.sandbox.enforces() && self.sandbox.has_last_after() {
+caught-by:
+    cineris-core::it ext_exec::confined::sys_at_unrestricted_a_change_after_a_programs_look_is_found_before_the_next_command

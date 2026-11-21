@@ -17,7 +17,14 @@
 //!
 //! - a path that was not there before is removed: a link at it is removed
 //!   itself, never what it leads to, and a directory only when it is empty;
-//! - a directory that went is made again, with its mode;
+//! - a directory that went is made again, open to its owner while what goes
+//!   in it is put back, and given its own mode last, deepest first, so that
+//!   a directory whose mode lacks the owner's write right still gets its
+//!   children back;
+//! - a link that was there before is made again, to where it led;
+//! - a mode is put back through a descriptor opened with no link followed
+//!   and with no right to read what it names (`O_PATH`), so that a
+//!   directory a command made unreadable gets its mode back too;
 //! - a file whose content was kept is written under a name of its own
 //!   beside it, made with no link followed, and renamed into place, so that
 //!   whatever is at the name (a link, another file) is replaced, never
@@ -74,7 +81,9 @@ mod linux {
         // What is in the way goes first, deepest first, so that what is
         // under a path goes before the path; then what was there is made
         // again, shallowest first, so that a directory is there before
-        // what goes in it.
+        // what goes in it; then each directory's own mode, deepest first,
+        // since a directory whose mode lacks the owner's write right would
+        // refuse what goes in it.
         paths.sort_by_key(|path| Reverse(path.components().count()));
         for path in &paths {
             let _ = clear(path, before.entries.get(*path));
@@ -85,15 +94,26 @@ mod linux {
                 let _ = restore(path, old);
             }
         }
+        paths.reverse();
+        for path in &paths {
+            if let Some(old) = before.entries.get(*path)
+                && old.kind == Kind::Directory
+            {
+                let _ = directory_mode(path, old);
+            }
+        }
     }
 
     /// Whether `old` can be made again: nothing (the path was not there), a
-    /// directory, or a file whose content was kept. Anything else is left
-    /// as it is now: removing it would lose what is there and put nothing
-    /// back.
+    /// directory, a file whose content was kept, or a link whose target was
+    /// read. Anything else is left as it is now: removing it would lose
+    /// what is there and put nothing back.
     fn can_be_made_again(old: Option<&Entry>) -> bool {
-        old.is_none_or(|old| {
-            old.kind == Kind::Directory || (old.kind == Kind::File && old.content.is_some())
+        old.is_none_or(|old| match old.kind {
+            Kind::Directory => true,
+            Kind::File => old.content.is_some(),
+            Kind::Link => old.link.is_some(),
+            Kind::Other => false,
         })
     }
 
@@ -111,6 +131,10 @@ mod linux {
             | (Some(Kind::Directory), Now::Directory)
             // A file is replaced by the rename that puts it back.
             | (Some(Kind::File), Now::File) => false,
+            // A link to where the old one led is the old one.
+            (Some(Kind::Link), Now::Other) => {
+                link_at(&dir, &name).ok() != old.and_then(|old| old.link.clone())
+            }
             _ => true,
         };
         if in_the_way {
@@ -125,13 +149,19 @@ mod linux {
         let (dir, name) = parent_of(path)?;
         cineris_base::hook::point(super::super::PUTTING_BACK);
         match (old.kind, &old.content) {
+            // Open to its owner until what goes in it is back: its own mode
+            // is given last ([`directory_mode`]).
             (Kind::Directory, _) => match kind_at(&dir, &name)? {
                 Now::Missing => {
-                    mkdir_at(&dir, &name, mode)?;
-                    chmod_at(&dir, &name, mode, Now::Directory)
+                    mkdir_at(&dir, &name, mode | 0o700)?;
+                    chmod_at(&dir, &name, mode | 0o700, Now::Directory)
                 }
-                Now::Directory => chmod_at(&dir, &name, mode, Now::Directory),
+                Now::Directory => chmod_at(&dir, &name, mode | 0o700, Now::Directory),
                 Now::File | Now::Other => Ok(()),
+            },
+            (Kind::Link, _) => match (&old.link, kind_at(&dir, &name)?) {
+                (Some(target), Now::Missing) => symlink_at(&dir, &name, target),
+                _ => Ok(()),
             },
             (Kind::File, Some(content)) => write_at(&dir, &name, content, mode),
             // Its content was not kept: only its mode can be put back.
@@ -140,6 +170,16 @@ mod linux {
             }
             _ => Ok(()),
         }
+    }
+
+    /// Gives the directory `path` the mode `old` had, once what goes in it
+    /// is back.
+    fn directory_mode(path: &Path, old: &Entry) -> io::Result<()> {
+        let (dir, name) = parent_of(path)?;
+        if kind_at(&dir, &name)? != Now::Directory {
+            return Ok(());
+        }
+        chmod_at(&dir, &name, old.stamp.mode & 0o7777, Now::Directory)
     }
 
     /// The directory `path` is in, opened with no link followed anywhere on
@@ -264,26 +304,73 @@ mod linux {
     }
 
     /// Gives `name` in `dir` the permission bits `mode`, when it is what
-    /// `kind` says: through a descriptor opened with no link followed, so a
-    /// link swapped in meanwhile is refused (`ELOOP`), never followed.
+    /// `kind` says: through a descriptor opened with no link followed and
+    /// with no right needed to read what it names (`O_PATH`), so that a
+    /// directory a command made unreadable gets its mode back, and a link
+    /// swapped in meanwhile is never followed (its descriptor is the link's,
+    /// which is not what `kind` says). The mode is set through the
+    /// descriptor's own entry in `/proc`, which names that very node.
     fn chmod_at(dir: &OwnedFd, name: &CString, mode: u32, kind: Now) -> io::Result<()> {
-        let flags = libc::O_RDONLY
-            | libc::O_NONBLOCK
+        cineris_base::hook::point(super::super::PUTTING_BACK_A_MODE);
+        let flags = libc::O_PATH
             | if kind == Now::Directory {
                 libc::O_DIRECTORY
             } else {
                 0
             };
-        let file = std::fs::File::from(open_at(dir, name, flags, 0)?);
-        let is_it = match kind {
-            Now::Directory => file.metadata()?.is_dir(),
-            _ => file.metadata()?.is_file(),
+        let node = open_at(dir, name, flags, 0)?;
+        // SAFETY: `stat` is a plain C struct; `fstat` fills it.
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: an open descriptor and a pointer to a `stat` this
+        // function owns.
+        if unsafe { libc::fstat(node.as_raw_fd(), std::ptr::addr_of_mut!(stat)) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let wanted = if kind == Now::Directory {
+            libc::S_IFDIR
+        } else {
+            libc::S_IFREG
         };
-        if !is_it {
+        if stat.st_mode & libc::S_IFMT != wanted {
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
         }
         use std::os::unix::fs::PermissionsExt;
-        file.set_permissions(std::fs::Permissions::from_mode(mode))
+        std::fs::set_permissions(
+            format!("/proc/self/fd/{}", node.as_raw_fd()),
+            std::fs::Permissions::from_mode(mode),
+        )
+    }
+
+    /// Where the link `name` in `dir` leads, as it is written.
+    fn link_at(dir: &OwnedFd, name: &CString) -> io::Result<std::path::PathBuf> {
+        let mut buffer = vec![0u8; libc::PATH_MAX as usize];
+        // SAFETY: an open directory, a NUL-terminated name, and a buffer of
+        // the length given, which `readlinkat` fills without a NUL.
+        let read = unsafe {
+            libc::readlinkat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                buffer.as_mut_ptr().cast(),
+                buffer.len(),
+            )
+        };
+        let read = usize::try_from(read).map_err(|_| io::Error::last_os_error())?;
+        buffer.truncate(read);
+        Ok(std::path::PathBuf::from(
+            <std::ffi::OsString as std::os::unix::ffi::OsStringExt>::from_vec(buffer),
+        ))
+    }
+
+    /// Makes the link `name` in `dir`, leading to `target`.
+    fn symlink_at(dir: &OwnedFd, name: &CString, target: &Path) -> io::Result<()> {
+        let target = c_name(target.as_os_str().as_bytes())?;
+        // SAFETY: a NUL-terminated target, an open directory and a
+        // NUL-terminated name.
+        let done = unsafe { libc::symlinkat(target.as_ptr(), dir.as_raw_fd(), name.as_ptr()) };
+        if done != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
     }
 
     /// Writes `content` as the file `name` in `dir`, with the permission

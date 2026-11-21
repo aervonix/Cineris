@@ -674,69 +674,164 @@ struct Repository {
     prefix: String,
 }
 
-/// The folder git runs the hooks of the repository the workspace `root` is
-/// in from, where the repository's configuration names one
-/// (`core.hooksPath`), as an absolute path: for the look at protected paths,
-/// which watches it as it watches `.git/hooks`, since a hook a confined
-/// command plants there runs at the next `git commit` outside the sandbox
-/// (the third security fix). `None` where the workspace is in no
-/// repository, nothing names a folder, or git gives no answer within `cap`.
+/// The files and folders inside which the repository the workspace `root`
+/// is in has git run or read what decides what runs: the folder it runs
+/// hooks from (`core.hooksPath`), every configuration file it reads (an
+/// `include.path` or `includeIf` file, at every level), and every path a
+/// key that names a program gives (a filter's `clean`, `smudge` or
+/// `process`, a `diff.<driver>.textconv` or `command`, `diff.external`, a
+/// `merge.<driver>.driver`, `core.fsmonitor`, `core.sshCommand`,
+/// `core.pager`, `core.editor`, a `credential.helper`, a `gpg` program, an
+/// alias that runs a program, and the like). For the look at protected
+/// paths, which watches what of these lies inside a write root as it
+/// watches `.git/hooks` and `.git/config`: a confined command could
+/// otherwise write a hook, a program or a configuration file of these that
+/// the model's own git at `unrestricted`, or the user's next commit, then
+/// runs outside the sandbox (step 28's review of protected writes; the
+/// third security fix). Empty where the workspace is in no repository, or
+/// git gives no answer within `cap`.
 ///
-/// Asked of the harness's own git, through `confinement`, which reads the
-/// configuration (its includes too) and runs no program it names: `git
-/// config` starts no filter and no monitor. The value the harness's own
-/// command line gives (`core.hooksPath` nowhere, in [`GIT_HARDENING`]) is
-/// the last, of the `command` scope, and is passed over: the folder is the
-/// one the repository's configuration, or the user's, names. A `~` is
-/// expanded by git (`--type=path`); a relative path is taken from the top of
-/// the working tree, where git runs a hook. It blocks.
+/// One git command reads all of it: `git config --null --show-origin
+/// --list`, through `confinement`, which follows every include and runs no
+/// program a configuration names (`git config` starts no filter and no
+/// monitor). The values the harness's own command line gives (the `command
+/// line:` origin, [`GIT_HARDENING`]) are passed over. A relative path in a
+/// program's command line is taken from the top of the working tree, where
+/// git runs it; a relative include from the folder of the file that names
+/// it; a `~/` from `HOME` as the confinement gives it. A program named by a
+/// bare word is found on `PATH`, and is not one of these. It blocks.
 #[must_use]
-pub fn hooks_folder(confinement: &dyn Confinement, root: &Path, cap: Duration) -> Option<PathBuf> {
+pub fn configured_paths(confinement: &dyn Confinement, root: &Path, cap: Duration) -> Vec<PathBuf> {
     // A directory, or for a worktree a file, named `.git`: with none, no
     // git is started.
-    let top = root
+    let Some(top) = root
         .ancestors()
-        .find(|directory| std::fs::symlink_metadata(directory.join(".git")).is_ok())?;
-    let child = cineris_base::git::start(
+        .find(|directory| std::fs::symlink_metadata(directory.join(".git")).is_ok())
+    else {
+        return Vec::new();
+    };
+    let Ok(child) = cineris_base::git::start(
         confinement,
         root,
-        &[
-            "config",
-            "--type=path",
-            "--null",
-            "--show-scope",
-            "--get-all",
-            "core.hooksPath",
-        ],
-    )
-    .ok()?;
-    // Git exits with a failure where nothing names the key.
-    let answer = brief::answer(child, cap).ok()?;
-    hooks_folder_from(&answer, top)
+        &["config", "--null", "--show-origin", "--list"],
+    ) else {
+        return Vec::new();
+    };
+    let Ok(answer) = brief::answer(child, cap) else {
+        return Vec::new();
+    };
+    let home = confinement
+        .inherited()
+        .into_iter()
+        .find(|(name, _)| name == "HOME")
+        .map(|(_, value)| PathBuf::from(value));
+    configured_from(&answer, top, home.as_deref())
 }
 
-/// The folder an answer of `git config --null --show-scope --get-all
-/// core.hooksPath` names, from the top of the working tree `top`: the last
-/// value of a scope other than `command`. Each value is its scope, a NUL,
-/// the value and a NUL.
-fn hooks_folder_from(answer: &[u8], top: &Path) -> Option<PathBuf> {
+/// What an answer of `git config --null --show-origin --list` names, from
+/// the top of the working tree `top`: each setting is its origin, a NUL,
+/// its key, a line feed and its value (or its key alone, for a key with no
+/// value), and a NUL.
+fn configured_from(answer: &[u8], top: &Path, home: Option<&Path>) -> Vec<PathBuf> {
     let fields: Vec<&[u8]> = answer.split(|byte| *byte == 0).collect();
-    let value = fields
-        .chunks(2)
-        .filter(|pair| pair.len() == 2 && pair[0] != b"command")
-        .map(|pair| pair[1])
-        .next_back()?;
-    let value = std::str::from_utf8(value).ok()?;
-    if value.is_empty() {
-        return None;
-    }
-    let named = Path::new(value);
-    let path = if named.is_absolute() {
-        named.to_path_buf()
-    } else {
-        top.join(named)
+    let mut found: Vec<PathBuf> = Vec::new();
+    let mut add = |path: PathBuf| {
+        let path = by_name(&path);
+        if !found.contains(&path) {
+            found.push(path);
+        }
     };
-    // `..` taken by name, so that the place judged is the place named.
+    let place = |text: &str, from: &Path| -> Option<PathBuf> {
+        if text.is_empty() {
+            return None;
+        }
+        Some(if let Some(rest) = text.strip_prefix("~/") {
+            home?.join(rest)
+        } else if Path::new(text).is_absolute() {
+            PathBuf::from(text)
+        } else {
+            from.join(text)
+        })
+    };
+    for pair in fields.chunks(2) {
+        let [origin, setting] = pair else { continue };
+        let (Ok(origin), Ok(setting)) = (std::str::from_utf8(origin), std::str::from_utf8(setting))
+        else {
+            continue;
+        };
+        // Only what a file says: the harness's own command line is not the
+        // repository's, and a blob or standard input is not a file here.
+        let Some(file) = origin.strip_prefix("file:") else {
+            continue;
+        };
+        let Some(file) = place(file, top) else {
+            continue;
+        };
+        add(file.clone());
+        let (key, value) = setting.split_once('\n').unwrap_or((setting, ""));
+        let key = key.to_ascii_lowercase();
+        let (section, last) = (
+            key.split('.').next().unwrap_or_default(),
+            key.rsplit('.').next().unwrap_or_default(),
+        );
+        if key == "core.hookspath" {
+            if let Some(folder) = place(value, top) {
+                add(folder);
+            }
+        } else if (section == "include" || section == "includeif") && last == "path" {
+            let from = file.parent().unwrap_or(top);
+            if let Some(included) = place(value, from) {
+                add(included);
+            }
+        } else if names_a_program(&key, section, last) {
+            for word in value.split_whitespace() {
+                let word = word
+                    .trim_start_matches('!')
+                    .trim_matches(|character| character == '"' || character == '\'');
+                if word.contains('/')
+                    && !word.contains("://")
+                    && let Some(program) = place(word, top)
+                {
+                    add(program);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Whether a setting's value is a command line git runs, by its key
+/// (lowercased), its section and its last part.
+fn names_a_program(key: &str, section: &str, last: &str) -> bool {
+    matches!(
+        key,
+        "core.fsmonitor"
+            | "core.sshcommand"
+            | "core.pager"
+            | "core.editor"
+            | "core.askpass"
+            | "core.gitproxy"
+            | "core.alternaterefscommand"
+            | "sequence.editor"
+            | "diff.external"
+            | "uploadpack.packobjectshook"
+            | "gpg.program"
+    ) || matches!(
+        (section, last),
+        ("filter", "clean" | "smudge" | "process")
+            | ("diff", "textconv" | "command")
+            | ("merge", "driver")
+            | ("credential", "helper")
+            | ("gpg", "program")
+            | ("remote", "receivepack" | "uploadpack" | "vcs")
+            | ("submodule", "update")
+            | ("pager" | "alias", _)
+    )
+}
+
+/// `path` with `.` and `..` taken by name, so that the place judged is the
+/// place named.
+fn by_name(path: &Path) -> PathBuf {
     let mut placed = PathBuf::new();
     for part in path.components() {
         match part {
@@ -747,7 +842,7 @@ fn hooks_folder_from(answer: &[u8], top: &Path) -> Option<PathBuf> {
             other => placed.push(other),
         }
     }
-    Some(placed)
+    placed
 }
 
 /// What `git status --porcelain=v2 --branch -z` said.
@@ -888,29 +983,40 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn the_hooks_folder_is_the_last_one_a_configuration_names() {
+    fn what_a_configuration_names_is_found_by_place() {
         let top = Path::new("/work/repo");
-        // The harness's own `-c core.hooksPath=/dev/null` comes last, of the
-        // `command` scope, and is passed over.
-        assert_eq!(
-            hooks_folder_from(
-                b"global\0/home/me/hooks\0local\0scripts/hooks\0command\0/dev/null\0",
-                top
-            ),
-            Some(PathBuf::from("/work/repo/scripts/hooks"))
+        let answer = concat!(
+            "file:/srv/me/.gitconfig\0user.name\nme\0",
+            "file:.git/config\0core.bare\nfalse\0",
+            "file:.git/config\0core.hookspath\nscripts/hooks\0",
+            "file:.git/config\0include.path\n../shared.gitconfig\0",
+            "file:.git/config\0filter.x.clean\n./tools/strip.sh %f\0",
+            "file:.git/config\0filter.lfs.clean\ngit-lfs clean -- %f\0",
+            "file:.git/config\0remote.origin.url\nhttps://example.invalid/r\0",
+            "file:.git/../shared.gitconfig\0diff.y.textconv\nsh \"scripts/conv.sh\"\0",
+            "file:.git/../shared.gitconfig\0alias.x\n!../outside.sh\0",
+            "file:.git/config\0core.bool\0",
+            "command line:\0core.hookspath\n/dev/null\0",
         );
+        let found = configured_from(answer.as_bytes(), top, Some(Path::new("/srv/me")));
         assert_eq!(
-            hooks_folder_from(b"local\0/abs/hooks\0command\0/dev/null\0", top),
-            Some(PathBuf::from("/abs/hooks"))
+            found,
+            [
+                "/srv/me/.gitconfig",
+                "/work/repo/.git/config",
+                "/work/repo/scripts/hooks",
+                "/work/repo/shared.gitconfig",
+                "/work/repo/tools/strip.sh",
+                "/work/repo/scripts/conv.sh",
+                "/work/outside.sh",
+            ]
+            .map(PathBuf::from)
         );
-        // `..` is taken by name.
-        assert_eq!(
-            hooks_folder_from(b"local\0./a/../.githooks\0", top),
-            Some(PathBuf::from("/work/repo/.githooks"))
+        // The harness's own command line names nothing.
+        assert!(
+            configured_from(b"command line:\0core.hookspath\n/dev/null\0", top, None).is_empty()
         );
-        // Only the harness's own: none.
-        assert_eq!(hooks_folder_from(b"command\0/dev/null\0", top), None);
-        assert_eq!(hooks_folder_from(b"", top), None);
+        assert!(configured_from(b"", top, None).is_empty());
     }
 
     #[test]

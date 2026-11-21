@@ -488,17 +488,18 @@ fn sys_a_git_that_fails_inside_the_sandbox_leaves_the_list_incomplete_and_says_w
     });
 }
 
-/// The folder the repository's configuration names for its hooks
-/// (`core.hooksPath`, here `scripts/hooks`) is looked at with the protected
-/// paths, and what a confined command changes there is put back: a hook it
-/// plants there, or one it changes, would run at the next `git commit`
-/// outside the sandbox, though neither the folder nor `.git/config` is on
-/// the protected list (step 28's review of protected writes; the third
-/// security fix). A folder the same command names through a file the
-/// configuration includes (`include.path`), which is not protected, is
-/// looked at by the look after it: the folder is read again first.
+/// What the repository's configuration names for git to run or read is
+/// looked at with the protected paths, and what a confined command changes
+/// there is put back (step 28's review of protected writes; the third
+/// security fix): the folder for hooks (`core.hooksPath`, here
+/// `scripts/hooks`), where a hook planted or changed would run at the next
+/// `git commit` outside the sandbox; a filter's program in the workspace
+/// (`./tools/strip.sh`), which the model's own `git status` would run; and
+/// a file the configuration includes (`include.path`). A folder the same
+/// command names through the included file is looked at by the look after
+/// it: what the configuration names is read again first.
 #[test]
-fn sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back() {
+fn sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back() {
     use std::os::unix::fs::PermissionsExt;
     if !enforcing_here() {
         return;
@@ -509,6 +510,11 @@ fn sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back() {
         &world.workspace,
         &["config", "core.hooksPath", "scripts/hooks"],
     );
+    git(
+        &world.workspace,
+        &["config", "filter.x.clean", "./tools/strip.sh"],
+    );
+    world.put("tools/strip.sh", "#!/bin/sh\ncat\n");
     let config = world.workspace.join(".git/config");
     let mut text = std::fs::read_to_string(&config).unwrap();
     text.push_str("[include]\n\tpath = ../shared.gitconfig\n");
@@ -522,7 +528,8 @@ fn sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back() {
         "plant.sh",
         "printf '#!/bin/sh\\nevil\\n' > scripts/hooks/pre-commit\n\
          printf '#!/bin/sh\\nevil\\n' > scripts/hooks/pre-push\n\
-         chmod +x scripts/hooks/pre-push\n",
+         chmod +x scripts/hooks/pre-push\n\
+         printf '#!/bin/sh\\nevil\\n' > tools/strip.sh\n",
     );
     world.put(
         "include.sh",
@@ -557,6 +564,7 @@ fn sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back() {
                 .2
                 .contains("`scripts/hooks/pre-commit` (modified)")
                 && results[0].2.contains("`scripts/hooks/pre-push` (created)")
+                && results[0].2.contains("`tools/strip.sh` (modified)")
                 && results[0].2.contains("They were put back"),
             "{results:?}"
         );
@@ -565,14 +573,20 @@ fn sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back() {
             Some("#!/bin/sh\necho ours\n")
         );
         assert!(world.read("scripts/hooks/pre-push").is_none());
+        assert_eq!(
+            world.read("tools/strip.sh").as_deref(),
+            Some("#!/bin/sh\ncat\n")
+        );
         front.turn("include").await;
         let results = front.results();
         assert!(
             results[1].2.contains("`elsewhere/pre-commit` (created)")
+                && results[1].2.contains("`shared.gitconfig` (modified)")
                 && results[1].2.contains("They were put back"),
             "{results:?}"
         );
         assert!(world.read("elsewhere/pre-commit").is_none());
+        assert_eq!(world.read("shared.gitconfig").as_deref(), Some(""));
         front.close().await;
     });
 }

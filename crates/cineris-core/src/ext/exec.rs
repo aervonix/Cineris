@@ -386,21 +386,30 @@ pub(crate) async fn run(
     };
 
     // 5. The look before it, with the folder the repository's
-    // configuration names for its hooks read first.
+    // configuration names for its hooks read first; one confined start of
+    // the session at a time from here to the look after it (the early
+    // review of the third security fix).
+    let one_at_a_time = match &watch {
+        Some(_) => Some(parts.sandbox.one_start_at_a_time().await),
+        None => None,
+    };
     let before = match &watch {
         Some(_) => {
             let (sandbox, git) = (Arc::clone(&parts.sandbox), Arc::clone(&parts.git));
             let root = cx.paths.root().to_fs_path();
             blocking(cx, move || {
-                sandbox.follow_hooks(&*git, &root);
+                sandbox.follow_configured(&*git, &root);
                 sandbox.protected().map(|watch| watch.take())
             })
             .await?
         }
         None => None,
     };
+    // Compared with the last look after a confined start at every level,
+    // `unrestricted` included: since the third security fix a start that
+    // ran as it is forgets that look, so one kept is the last confined
+    // start's.
     if let Some(before) = &before
-        && parts.sandbox.confines()
         && let Some(note) = changed_since_last_look(
             &parts.sandbox,
             parts.rounds.as_ref(),
@@ -481,10 +490,15 @@ pub(crate) async fn run(
 
     // 5. The look after it, then 7.: a protected path's exact record comes
     // first, as only the first record of a file in a round counts.
+    let roots: Vec<PathBuf> = launcher
+        .as_ref()
+        .map(|launcher| launcher.policy().write.clone())
+        .unwrap_or_default();
     let looked = match before {
-        Some(before) => look_after(parts, host, before, escaped).await,
+        Some(before) => look_after(parts, host, before, &roots, escaped).await,
         None => Ok(()),
     };
+    drop(one_at_a_time);
     if let (Some(detector), Some(before)) = (detector, changes_before) {
         record_changes(parts, cx, detector, before).await;
     }
@@ -542,6 +556,7 @@ async fn look_after(
     parts: &ExecParts,
     host: &CallHost<'_>,
     before: Snapshot,
+    roots: &[PathBuf],
     escaped: bool,
 ) -> Result<(), HostError> {
     let cx = host.cx;
@@ -552,11 +567,12 @@ async fn look_after(
     let free = CancelToken::new();
     let (sandbox, git) = (Arc::clone(&parts.sandbox), Arc::clone(&parts.git));
     let root = cx.paths.root().to_fs_path();
+    let roots = roots.to_vec();
     let found = run_blocking(&free, move |_| {
-        sandbox.follow_hooks(&*git, &root);
+        sandbox.follow_configured(&*git, &root);
         sandbox
             .protected()
-            .map(|watch| protected_changes(&watch, &before))
+            .map(|watch| protected_changes(&watch, &before, &roots))
     })
     .await
     .map_err(|error| HostError::Failed(format!("the protected paths were not looked at: {error}")))?
@@ -572,8 +588,8 @@ async fn look_after(
     }
     let (changed, complete) = (&found.changed, found.complete);
     let root = cx.paths.root().to_fs_path();
-    if let Some(note) = protected_note(changed, &found.left, complete, &root) {
-        if !changed.is_empty() || (complete.0 && !complete.1) {
+    if let Some(note) = protected_note(changed, &found.left, &found.outside, complete, &root) {
+        if !changed.is_empty() || !found.outside.is_empty() || (complete.0 && !complete.1) {
             // The turn stops, and the script's call with it: a script that
             // caught a refusal would go on as if nothing had changed.
             host.parts.policy.stop_turn(cx.turn, note.clone());

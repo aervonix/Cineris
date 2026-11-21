@@ -52,10 +52,11 @@ use cineris_sandbox::protect::{Changed, Limits, Snapshot, Watch};
 use cineris_sandbox::support::{Assessment, Support, Unconfined};
 use cineris_tools::process::{Argument, CommandLine, Direct, Exit, Launch, LaunchCx, Launcher};
 
-/// How long the read of the folder git runs hooks from may take
-/// ([`SessionSandbox::follow_hooks`]): a configuration that includes a file
-/// that stalls a read (a FIFO) gives up there, and nothing more is watched.
-const HOOKS_CAP: std::time::Duration = std::time::Duration::from_millis(500);
+/// How long the read of what the repository's configuration names may take
+/// ([`SessionSandbox::follow_configured`]): a configuration that includes a
+/// file that stalls a read (a FIFO) gives up there, and nothing more is
+/// watched.
+const CONFIGURED_CAP: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// What the core knows of the sandbox, once for its life.
 #[derive(Debug, Clone)]
@@ -153,11 +154,17 @@ pub(crate) struct SessionSandbox {
     /// The protected paths, looked at before and after each confined
     /// command, when the sandbox enforces.
     watch: Option<Watch>,
-    /// The folders the repository's configuration has named for its hooks
-    /// (`core.hooksPath`) in this session, where they lie inside a write
-    /// root: watched with the protected paths, read again before and after
-    /// each confined start ([`Self::follow_hooks`]; the third security fix).
-    hooks: std::sync::RwLock<Vec<PathBuf>>,
+    /// What the repository's configuration has named in this session for git
+    /// to run or read (the folder for hooks, the files it includes, the
+    /// programs its keys name), where it lies inside a write root: watched
+    /// with the protected paths, read again before and after each confined
+    /// start ([`Self::follow_configured`]; the third security fix).
+    configured: std::sync::RwLock<Vec<PathBuf>>,
+    /// Held from the look before a confined start to the look after it, by
+    /// every confined start of the session: two that overlap would each take
+    /// the other's change for its own, and one could put back what the
+    /// other planted (found by the early review of the third security fix).
+    starts: tokio::sync::Mutex<()>,
     /// The look taken after the last confined command, kept so that the
     /// next confined command, and the session's close, can tell whether a
     /// protected path changed in between — by a process a command left
@@ -226,7 +233,8 @@ impl SessionSandbox {
             confine: AtomicBool::new(false),
             temp,
             watch,
-            hooks: std::sync::RwLock::new(Vec::new()),
+            configured: std::sync::RwLock::new(Vec::new()),
+            starts: tokio::sync::Mutex::new(()),
             last_after: std::sync::Mutex::new(None),
         };
         sandbox.set_level(level);
@@ -240,6 +248,20 @@ impl SessionSandbox {
             .last_after
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(after);
+    }
+
+    /// Waits until no other confined start of the session is between its
+    /// look before and its look after, and holds that until the guard goes.
+    pub(crate) async fn one_start_at_a_time(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.starts.lock().await
+    }
+
+    /// Whether a look after a confined start is kept to compare with.
+    pub(crate) fn has_last_after(&self) -> bool {
+        self.last_after
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
     }
 
     /// Forgets the look after the last confined command, so the next one
@@ -370,35 +392,37 @@ impl SessionSandbox {
     /// The protected paths, wherever the sandbox enforces, whatever the
     /// level: for a caller that decided its start is confined (a command
     /// [`decide`](Self::decide)d so, an extension's program its own launcher
-    /// confines at every level). With them, the folder the repository's
-    /// configuration names for its hooks, as [`Self::follow_hooks`] last
-    /// read it.
+    /// confines at every level). With them, what the repository's
+    /// configuration names for git to run or read, as
+    /// [`Self::follow_configured`] last read it.
     pub(crate) fn protected(&self) -> Option<Watch> {
-        let hooks = self
-            .hooks
+        let configured = self
+            .configured
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .clone();
         self.watch
             .as_ref()
-            .map(|watch| watch.clone().with_more(hooks))
+            .map(|watch| watch.clone().with_more(configured))
     }
 
-    /// Reads again which folder the repository the workspace `root` is in
-    /// runs its hooks from (`core.hooksPath`), with the session's own git
-    /// `git`, and keeps it to watch where it lies inside one of the
-    /// session's write roots: a hook a confined start plants there runs at
-    /// the next `git commit` outside the sandbox, though neither the folder
-    /// nor `.git/config` is on the protected list (step 28's review of
-    /// protected writes; the third security fix). Before each confined
-    /// start's look and again before the look after it, so that a folder a
-    /// start names through a file the configuration includes is watched by
-    /// the look after the same start. A folder once watched stays watched
-    /// for the session: a look that dropped one would take what is in it for
-    /// gone, and watching one more folder only narrows. Nothing where the
-    /// sandbox does not enforce, where nothing is looked at. It blocks: it
-    /// may start git.
-    pub(crate) fn follow_hooks(&self, git: &dyn Confinement, root: &Path) {
+    /// Reads again what the repository the workspace `root` is in has git
+    /// run or read (`cineris_tools::shell::changes::configured_paths`: the
+    /// folder for its hooks, every configuration file it includes, every
+    /// path a key that names a program gives), with the session's own git
+    /// `git`, and keeps what lies inside one of the session's write roots
+    /// to watch: a hook, a program or an included file a confined start
+    /// writes there runs, or is read, at the next `git` outside the
+    /// sandbox, though none of them is on the protected list (step 28's
+    /// review of protected writes; the third security fix). One git command,
+    /// before each confined start's look and again before the look after
+    /// it, so that what a start names through a file the configuration
+    /// includes is watched by the look after the same start. What was once
+    /// watched stays watched for the session: a look that dropped a path
+    /// would take what is at it for gone, and watching one more only
+    /// narrows. Nothing where the sandbox does not enforce, where nothing is
+    /// looked at. It blocks: it may start git.
+    pub(crate) fn follow_configured(&self, git: &dyn Confinement, root: &Path) {
         if self.watch.is_none() {
             return;
         }
@@ -409,18 +433,22 @@ impl SessionSandbox {
             .as_ref()
             .map(|launcher| launcher.policy().write.clone())
             .unwrap_or_default();
-        let kept: Vec<PathBuf> = cineris_tools::shell::changes::hooks_folder(git, root, HOOKS_CAP)
-            .into_iter()
-            .filter(|folder| {
-                roots
-                    .iter()
-                    .any(|root| cineris_base::location_within(folder, root))
-            })
-            .collect();
-        let mut hooks = self.hooks.write().unwrap_or_else(PoisonError::into_inner);
-        for folder in kept {
-            if !hooks.contains(&folder) {
-                hooks.push(folder);
+        let kept: Vec<PathBuf> =
+            cineris_tools::shell::changes::configured_paths(git, root, CONFIGURED_CAP)
+                .into_iter()
+                .filter(|path| {
+                    roots
+                        .iter()
+                        .any(|root| cineris_base::location_within(path, root))
+                })
+                .collect();
+        let mut configured = self
+            .configured
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        for path in kept {
+            if !configured.contains(&path) {
+                configured.push(path);
             }
         }
     }
@@ -509,6 +537,14 @@ impl Decided {
     /// all the same.
     pub(crate) fn confines(&self) -> bool {
         self.launcher.is_some()
+    }
+
+    /// The roots a command started now may write: the decided launcher's.
+    pub(crate) fn write_roots(&self) -> Vec<PathBuf> {
+        self.launcher
+            .as_ref()
+            .map(|launcher| launcher.policy().write.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -690,11 +726,15 @@ fn reading(reader: &SandboxLauncher, git: &Path, arguments: Vec<OsString>) -> St
 /// and what of it was put back ([`protected_changes`]).
 #[derive(Debug)]
 pub(crate) struct Found {
-    /// What the start changed.
+    /// What the start changed, inside its own write roots.
     pub(crate) changed: Vec<Changed>,
     /// What still differs from the look before once the change was put
     /// back: what could not be, to be put back by hand.
     pub(crate) left: Vec<Changed>,
+    /// What changed while the start ran outside every root it could write:
+    /// not the start's, so not put back (the user's own hand, or a program
+    /// of the user's), and told as a change from outside.
+    pub(crate) outside: Vec<Changed>,
     /// Whether the look before and the look after were complete.
     pub(crate) complete: (bool, bool),
     /// The last look taken: after the put-back, where there was one. The
@@ -706,34 +746,62 @@ pub(crate) struct Found {
 /// and puts back at once what the start changed, from `before`'s own record
 /// ([`Watch::put_back`]): nothing a confined command, a project's check or
 /// an extension's program wrote in a protected path is kept, so nothing of
-/// it runs later outside the sandbox (the third security fix). It blocks.
-pub(crate) fn protected_changes(watch: &Watch, before: &Snapshot) -> Found {
-    let (changed, after) = watch.changes_since(before);
-    let complete = (before.is_complete(), after.is_complete());
+/// it runs later outside the sandbox (the third security fix). Only what
+/// lies inside one of the start's own write roots (`roots`) is its, and
+/// put back: a change elsewhere was made by something else while it ran,
+/// and is told as such, not undone (found by the early review of the third
+/// security fix: a protected path of the user's own outside the workspace
+/// was put back). Whether the looks were complete is told of the last look
+/// taken, after the put-back. It blocks.
+pub(crate) fn protected_changes(watch: &Watch, before: &Snapshot, roots: &[PathBuf]) -> Found {
+    let within = |path: &Path| {
+        roots
+            .iter()
+            .any(|root| cineris_base::location_within(path, root))
+    };
+    let (all, after) = watch.changes_since(before);
+    let (changed, mut outside): (Vec<Changed>, Vec<Changed>) =
+        all.into_iter().partition(|one| within(&one.path));
     if changed.is_empty() {
         return Found {
             changed,
             left: Vec::new(),
-            complete,
+            outside,
+            complete: (before.is_complete(), after.is_complete()),
             after,
         };
     }
-    let put = watch.put_back(before, &changed);
+    let put = watch.put_back(before, &changed, &within);
+    // What the last look still finds outside the start's roots is told as
+    // a change from outside: the put-back did not touch it.
+    for one in &put.left {
+        if !within(&one.path) && !outside.iter().any(|other| other.path == one.path) {
+            outside.push(one.clone());
+        }
+    }
+    let left = put
+        .left
+        .into_iter()
+        .filter(|one| within(&one.path))
+        .collect();
     Found {
-        changed,
-        left: put.left,
-        complete,
+        changed: put.changed,
+        left,
+        outside,
+        complete: (before.is_complete(), put.after.is_complete()),
         after: put.after,
     }
 }
 
 /// What the model and the user are told after a confined start changed
-/// protected paths, which were put back (`left`: what could not be), or
-/// when the look at them stopped at its bound. `None` when there is nothing
-/// to say.
+/// protected paths, which were put back (`left`: what could not be), after
+/// one changed outside the start's reach while it ran (`outside`), or when
+/// the look at them stopped at its bound. `None` when there is nothing to
+/// say.
 pub(crate) fn protected_note(
     changed: &[Changed],
     left: &[Changed],
+    outside: &[Changed],
     (complete_before, complete_after): (bool, bool),
     root: &Path,
 ) -> Option<String> {
@@ -782,6 +850,15 @@ pub(crate) fn protected_note(
              (`sandbox: false`), which the user is asked to allow once, or leave it to the \
              user. The turn stops here, so that the user can look.]",
             all.join(", "),
+        ));
+    }
+    if !outside.is_empty() {
+        lines.push(format!(
+            "[While the command ran, protected paths it could not write changed: {}. Something \
+             other than the command changed them (the user's own hand, or a program of the \
+             user's), so they are left as they are. The turn stops here, so that the user can \
+             look.]",
+            shown(&mut outside.iter()).join(", ")
         ));
     }
     if complete_before && !complete_after {
@@ -940,7 +1017,7 @@ mod tests {
             before: cineris_sandbox::protect::Before::Absent,
             mode_changed: false,
         }];
-        let note = protected_note(&changed, &[], (true, true), &root).expect("a note");
+        let note = protected_note(&changed, &[], &[], (true, true), &root).expect("a note");
         assert!(
             !note
                 .lines()
@@ -1099,6 +1176,49 @@ mod tests {
             .unwrap();
         assert_eq!(started.program, PathBuf::from("/usr/bin/git"));
         assert_eq!(started.stdin, None);
+    }
+
+    /// One confined start of a session at a time, from its look before to
+    /// its look after: a second waits for the first's guard to go (the
+    /// early review of the third security fix).
+    #[test]
+    fn confined_starts_take_their_turn_one_at_a_time() {
+        let workspace = std::env::temp_dir().join("cineris-core-one-at-a-time");
+        let root = cineris_base::AbsPath::from_os(&workspace).unwrap();
+        let grant = cineris_policy::default_sandbox(&root, &[], &[]);
+        let core = CoreSandbox::new(
+            Support::Landlock(8),
+            Some((
+                PathBuf::from("/opt/cineris"),
+                vec![OsString::from("__sandbox")],
+            )),
+        );
+        let (state, enforcing) = core.state(true);
+        let sandbox = SessionSandbox::new(
+            &core,
+            state,
+            enforcing.map(|(landlock, _)| landlock),
+            &Level::Autonomous,
+            &grant,
+            Temp {
+                path: workspace.join("tmp"),
+                made: false,
+            },
+            &workspace,
+            Limits::default(),
+        );
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let first = sandbox.one_start_at_a_time().await;
+            assert!(
+                sandbox.starts.try_lock().is_err(),
+                "a second start went ahead"
+            );
+            drop(first);
+            assert!(sandbox.starts.try_lock().is_ok());
+        });
     }
 
     /// After a command escapes its kill, the protected paths are looked at

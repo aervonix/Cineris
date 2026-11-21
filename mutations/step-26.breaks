@@ -243,8 +243,8 @@ caught-by:
 rule: Every confined command has its protected paths looked at before and after it.
 file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
-find: self.sandbox.protected().filter(|_| confined)
-replace: self.sandbox.protected().filter(|_| false)
+find: let looks = confined && self.sandbox.protected().is_some();
+replace: let looks = false && confined && self.sandbox.protected().is_some();
 caught-by:
     cineris-core::it sandbox::sys_a_protected_path_a_command_changes_is_put_back_and_stops_the_turn
 
@@ -459,8 +459,8 @@ caught-by:
 rule: A command that makes the look after it stop at its bound, where the look before did not, stops the turn.
 file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
-find: if !found.changed.is_empty() || (found.complete.0 && !found.complete.1) {
-replace: if !found.changed.is_empty() {
+find: if !found.changed.is_empty() || !found.outside.is_empty() || (found.complete.0 && !found.complete.1) {
+replace: if !found.changed.is_empty() || !found.outside.is_empty() {
 caught-by:
     cineris-core::it sandbox::sys_a_command_that_makes_the_look_stop_short_stops_the_turn
 

@@ -1561,6 +1561,57 @@ mod confined {
         });
     }
 
+    /// At `unrestricted` a program's own launcher confines it and the shell's
+    /// commands run as they are. A protected path that changes after such a
+    /// program's look after (a process it left running, or a change by
+    /// hand) is found before the next shell command, which is not confined
+    /// and so is not looked around: the command does not run, and the turn
+    /// stops (found by the early review of the third security fix: nothing
+    /// looked again there, where the escape's note promised it would).
+    #[test]
+    fn sys_at_unrestricted_a_change_after_a_programs_look_is_found_before_the_next_command() {
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_then_unconfined", []);
+        world.put(".github/README", "ci\n");
+        std::fs::create_dir_all(world.workspace.join("out")).unwrap();
+        let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\"out/**\"]");
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": "sh", "args": ["-c", "echo ran > out/ran.txt"]}),
+        ));
+        world.provider.push(says("Done."));
+        world.provider.push(calls(&[(
+            "c2",
+            "shell",
+            json!({"command": "echo two > two.txt"}),
+        )]));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Unrestricted).await;
+            front.turn("run it").await;
+            assert_eq!(world.read("out/ran.txt").as_deref(), Some("ran\n"));
+            // What a process the program left running would do.
+            world.put(".github/workflows/new.yml", "on: push\n");
+            front.turn("go on").await;
+            let results = front.results();
+            assert!(
+                results[1]
+                    .2
+                    .contains("A protected path changed since the last command"),
+                "{results:?}"
+            );
+            assert!(world.read("two.txt").is_none(), "{results:?}");
+            front.close().await;
+        });
+    }
+
     /// A program with a write root that plants a hook in the folder the
     /// repository's configuration names for its hooks (`core.hooksPath`),
     /// which is not on the protected list, has it found and put back, and
