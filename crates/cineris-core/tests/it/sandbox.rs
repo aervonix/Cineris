@@ -431,9 +431,14 @@ fn first_message(front: &Front) -> cineris_protocol::ItemId {
         .expect("an assistant message")
 }
 
+/// What a confined command changes among the protected paths is put back
+/// at once, before anything else runs, and the turn stops (since the third
+/// security fix: before it the change stayed until the turn was undone).
+/// The model is told how a change the user wants is made: outside the
+/// sandbox, which the user allows once, or by the user.
 #[cfg(target_os = "linux")]
 #[test]
-fn sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back() {
+fn sys_a_protected_path_a_command_changes_is_put_back_and_stops_the_turn() {
     if !enforcing_here() {
         return;
     }
@@ -469,7 +474,6 @@ fn sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back()
         .await
         .expect("the session starts");
         front.turn("get ready").await;
-        let keep = first_message(&front);
         let ended = front.turn("fix it").await;
         // The turn ended at the command: the model was not asked again.
         assert_eq!(world.provider.remaining(), 2, "the model was asked again");
@@ -478,16 +482,20 @@ fn sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back()
             "nothing was asked at autonomous"
         );
 
-        // Found and shown.
+        // Found, put back and shown.
         let results = front.results();
         let shown = &results[0].2;
         assert!(
             shown.contains("changed protected paths")
                 && shown.contains("`.git/hooks/pre-commit` (created)")
                 && shown.contains("`.git/config` (modified)")
-                && shown.contains("Undoing this turn puts them back"),
+                && shown.contains("They were put back as they were before it")
+                && shown.contains("`sandbox: false`"),
             "{results:?}"
         );
+        assert_eq!(world.read(".git/config").as_deref(), Some("[core]\n"));
+        assert!(world.read(".git/hooks/pre-commit").is_none());
+        assert!(world.read(".git/hooks/pre-commit.sample").is_some());
         // The turn, and the `turn.completed` front ends were sent, say
         // `denied`.
         assert_eq!(
@@ -496,27 +504,6 @@ fn sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back()
             "{ended:?}"
         );
         assert!(world.read("after.txt").is_none());
-        assert_eq!(
-            world.read(".git/hooks/pre-commit").as_deref(),
-            Some("evil\n")
-        );
-
-        // Undoing the turn puts both back.
-        front
-            .op(cineris_protocol::methods::Op::SessionRewind(
-                cineris_protocol::methods::SessionRewindParams {
-                    session_id: front.session.clone(),
-                    to: Some(keep),
-                    before: None,
-                    restore_files: true,
-                    plan: None,
-                },
-            ))
-            .await
-            .unwrap();
-        assert_eq!(world.read(".git/config").as_deref(), Some("[core]\n"));
-        assert!(world.read(".git/hooks/pre-commit").is_none());
-        assert!(world.read(".git/hooks/pre-commit.sample").is_some());
         front.close().await;
     });
 }
@@ -677,6 +664,185 @@ fn sys_a_change_of_level_takes_the_sandbox_with_it() {
     });
 }
 
+/// After a change to a protected path is put back, the look kept for the
+/// next confined command is the one taken after the put-back: the next
+/// command runs, and the put-back is not taken for a change from outside
+/// (the third security fix).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_after_a_put_back_the_next_command_runs() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("after_put_back", []);
+    world.put(".git/config", "[core]\n");
+    world.put(".git/hooks/pre-commit.sample", "#!/bin/sh\n");
+    world.put("fix.sh", "echo evil > .git/hooks/pre-commit\n");
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
+    world.provider.push(says("Stopped."));
+    world.provider.push(calls(&[(
+        "c2",
+        "shell",
+        json!({"command": "echo two > two.txt"}),
+    )]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("fix it").await;
+        assert!(world.read(".git/hooks/pre-commit").is_none());
+        let ended = front.turn("go on").await;
+        let results = front.results();
+        assert_eq!(
+            world.read("two.txt").as_deref(),
+            Some("two\n"),
+            "{results:?}"
+        );
+        assert!(
+            !results[1].2.contains("changed since the last command"),
+            "{results:?}"
+        );
+        assert_eq!(
+            ended.outcome,
+            cineris_protocol::event::TurnOutcome::Completed,
+            "{ended:?}"
+        );
+        front.close().await;
+    });
+}
+
+/// Sets the session's level, as a front end does.
+#[cfg(target_os = "linux")]
+async fn set_level(front: &Front, level: Level) {
+    front
+        .op(Op::SessionSet(
+            cineris_protocol::methods::SessionSetParams {
+                session_id: front.session.clone(),
+                settings: at(level),
+            },
+        ))
+        .await
+        .expect("the level is set");
+}
+
+/// One command in a session at `first`, whose level is set to `between`
+/// once the command's confinement is decided and its look before taken, and
+/// set back to `first` once it has run, before the look after it: each
+/// change made while the command is held at the core's point. The command,
+/// a script that names no path, writes a file outside the workspace and a
+/// git hook. What it gives: whether the file outside was written, what the
+/// command's result said, and the hook as it is at the end.
+#[cfg(target_os = "linux")]
+fn level_changed_twice(
+    test: &str,
+    first: &Level,
+    between: &Level,
+) -> (bool, String, Option<String>) {
+    let world = World::new(test, []);
+    world.put(".git/config", "[core]\n");
+    world.put(".git/hooks/pre-commit.sample", "#!/bin/sh\n");
+    let outside = world.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    world.put(
+        "act.sh",
+        format!(
+            "echo x > '{}/f'\necho evil > .git/hooks/pre-commit\n",
+            outside.display()
+        ),
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh act.sh"}))]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let starts = cineris_testkit::Hold::new(cineris_core::BEFORE_THE_COMMAND_STARTS);
+    let looks = cineris_testkit::Hold::new(cineris_core::BEFORE_THE_LOOK_AFTER);
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(first.clone()),
+        )
+        .await
+        .expect("the session starts");
+        let mut turn = std::pin::pin!(front.turn("go"));
+        starts.drive_until_reached(turn.as_mut()).await;
+        set_level(&front, between.clone()).await;
+        starts.release();
+        looks.drive_until_reached(turn.as_mut()).await;
+        set_level(&front, first.clone()).await;
+        looks.release();
+        turn.await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    (
+        outside.join("f").exists(),
+        shown,
+        world.read(".git/hooks/pre-commit"),
+    )
+}
+
+/// The open item's order: `unrestricted` when the command's looks before it
+/// are taken, lowered before it starts, raised again before the look after.
+/// It runs as it was decided, as it is, and is looked at as one that ran as
+/// it is: its start does not take the lowered level's launcher, which would
+/// have run it confined with no look at the protected paths it then wrote
+/// (the third security fix; `outstanding`'s
+/// `a-command-started-confined-between-two-changes-of-level`).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_command_decided_as_it_is_runs_as_it_is_when_the_level_is_lowered_then_raised() {
+    if !enforcing_here() {
+        return;
+    }
+    let (wrote_outside, shown, hook) =
+        level_changed_twice("decided_as_it_is", &Level::Unrestricted, &Level::Autonomous);
+    assert!(
+        wrote_outside,
+        "the command ran confined, where its looks were taken as for one that runs as it is: \
+         {shown}"
+    );
+    assert!(!shown.contains("protected paths"), "{shown}");
+    // At `unrestricted` what a command writes with the user's rights is not
+    // looked at: the user gave those rights.
+    assert_eq!(hook.as_deref(), Some("evil\n"));
+}
+
+/// The other order: confined when the looks before it are taken, raised to
+/// `unrestricted` before it starts, lowered again before the look after. It
+/// runs confined, as it was decided, and what it wrote in a protected path
+/// is found and put back.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_command_decided_confined_runs_confined_when_the_level_is_raised_then_lowered() {
+    if !enforcing_here() {
+        return;
+    }
+    let (wrote_outside, shown, hook) =
+        level_changed_twice("decided_confined", &Level::Autonomous, &Level::Unrestricted);
+    assert!(
+        !wrote_outside,
+        "the command ran as it is, where it was decided confined: {shown}"
+    );
+    assert!(
+        shown.contains("changed protected paths") && shown.contains("They were put back"),
+        "{shown}"
+    );
+    assert_eq!(hook, None);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn sys_a_stopped_turn_runs_no_more_commands_of_the_same_response() {
@@ -715,22 +881,28 @@ fn sys_a_stopped_turn_runs_no_more_commands_of_the_same_response() {
         .await
         .expect("the session starts");
         front.turn("fix it").await;
-        assert!(world.read(".git/hooks/pre-commit").is_some());
+        // Found and put back at once (since the third security fix).
+        assert!(
+            world.read(".git/hooks/pre-commit").is_none(),
+            "{:?}",
+            front.results()
+        );
         assert!(world.read("after.txt").is_none(), "{:?}", front.results());
         assert!(world.read("written.txt").is_none(), "{:?}", front.results());
     });
     let reached = reach.reached(&world);
-    assert_eq!(
-        reached.protected,
-        [".git/hooks/pre-commit (made)"],
-        "{reached:#?}"
-    );
+    assert_eq!(reached.protected, Vec::<String>::new(), "{reached:#?}");
     assert!(reached.nothing_outside(), "{reached:#?}");
 }
 
+/// A command swaps a protected directory and a protected file for links to
+/// a folder outside the workspace. The put-back removes each link itself,
+/// never what it leads to, and makes the directory and the file again; and
+/// an undo after it writes nothing outside either (step 26's finding 1;
+/// since the third security fix, the put-back comes first).
 #[cfg(target_os = "linux")]
 #[test]
-fn sys_undo_does_not_write_through_a_link_a_command_planted() {
+fn sys_a_link_a_command_planted_is_put_back_and_nothing_is_written_through_it() {
     if !enforcing_here() {
         return;
     }
@@ -776,14 +948,19 @@ fn sys_undo_does_not_write_through_a_link_a_command_planted() {
                     .contains("`.git/hooks/pre-commit.sample` (deleted)"),
             "{results:?}"
         );
-        // The note does not promise what undo will refuse: every one of
-        // them is reached through a link now.
         assert!(
             results[0]
                 .2
-                .contains("Undoing this turn does not put them back"),
+                .contains("They were put back as they were before it"),
             "{results:?}"
         );
+        // The links are gone, and what they stood in place of is back.
+        let hooks = std::fs::symlink_metadata(world.workspace.join(".git/hooks")).unwrap();
+        assert!(hooks.is_dir(), "{hooks:?}");
+        assert!(world.read(".git/hooks/pre-commit.sample").is_some());
+        let config = std::fs::symlink_metadata(world.workspace.join(".git/config")).unwrap();
+        assert!(config.is_file(), "{config:?}");
+        assert_eq!(world.read(".git/config").as_deref(), Some("[core]\n"));
         front
             .op(Op::SessionRewind(
                 cineris_protocol::methods::SessionRewindParams {

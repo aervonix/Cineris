@@ -1630,23 +1630,11 @@ caught-by:
 
 # ----------------------------------------- the git after a program
 
-[break] the-look-after-a-program-runs-git-at-the-sessions-level
-rule: The look at what a program changed runs git as the program was confined: inside the sandbox at every level after one its own launcher confined, so a filter it planted never runs with the user's rights.
-file: crates/cineris-core/src/ext/exec.rs
-in: run
-find: Arc::new(FollowingTheProgram(Arc::clone(&parts.git)))
-replace: Arc::clone(&parts.git) as Arc<dyn cineris_base::git::Confinement>
-caught-by:
-    cineris-core::it ext_exec::confined::sys_the_look_after_a_program_runs_git_confined_at_unrestricted
-
-[break] following-the-program-starts-git-as-the-session-does
-rule: The git that follows a confined program is started through the reading launcher whatever the session's level.
-file: crates/cineris-core/src/sandbox.rs
-in: FollowingTheProgram::start
-find: sandbox.start_git_confined(git, arguments)
-replace: Ok(sandbox.start_git(git, arguments))
-caught-by:
-    cineris-core::it ext_exec::confined::sys_the_look_after_a_program_runs_git_confined_at_unrestricted
+# The two breaks of `FollowingTheProgram` were taken out by the third
+# security fix, which folded it into the session's git: that git runs
+# inside the sandbox at every level wherever it enforces, and
+# `security-fix-3/harness-git-as-it-is-at-unrestricted` breaks it, caught
+# by `ext_exec::confined::sys_the_look_after_a_program_runs_git_confined_at_unrestricted`.
 
 # ----------------------------------------- the call's time, and its end
 
@@ -1762,10 +1750,10 @@ caught-by:
 
 [break] the-look-around-a-program-follows-the-sessions-level
 rule: The protected paths are looked at around a program with a write root wherever the sandbox enforces, at every level, as its launcher confines it at every level.
-file: crates/cineris-core/src/sandbox.rs
-in: SessionSandbox::extension_watch
-find: self.watch.as_ref()
-replace: self.watch()
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: .and_then(|_| parts.sandbox.protected())
+replace: .and_then(|_| parts.sandbox.protected().filter(|_| parts.sandbox.confines()))
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
 

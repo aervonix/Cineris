@@ -1,0 +1,163 @@
+# The third security fix (docs/steps/security-fix-3/answered.md): a change a
+# confined start makes to a protected path is put back at once; the
+# harness's own git runs inside the sandbox wherever it enforces, at every
+# level; a command's confinement is decided once; git takes no repository's
+# place from its environment; a write root that holds the harness's files is
+# left out.
+
+# ------------------------------------------- item 3: git's place variables
+
+[break] git-keeps-an-outer-gits-place
+rule: The harness's git is given none of the variables that name another repository's place, its index or an outer git's command-line settings.
+file: crates/cineris-base/src/git.rs
+find: env.retain(|(name, _)| !is_local(name));
+replace:
+caught-by:
+    cineris-base git::tests::sys_git_answers_about_its_own_repository_whatever_the_environment_names
+
+[break] git-dir-not-among-the-place-variables
+rule: `GIT_DIR` is among the variables the harness's git is not given, as git lists it.
+file: crates/cineris-base/src/git.rs
+in: LOCAL_ENV_VARS
+in-string: GIT_DIR
+replace: GIT_DIR_NOT
+occurrence: 1
+caught-by:
+    cineris-base git::tests::sys_git_answers_about_its_own_repository_whatever_the_environment_names
+    cineris-base git::tests::sys_the_local_variables_are_the_ones_git_lists
+
+[break] config-parameters-not-among-the-place-variables
+rule: An outer git's command-line settings (`GIT_CONFIG_PARAMETERS`) do not reach the harness's git, as git does not pass them into another repository.
+file: crates/cineris-base/src/git.rs
+in: LOCAL_ENV_VARS
+in-string: GIT_CONFIG_PARAMETERS
+replace: GIT_CONFIG_PARAMETERS_NOT
+caught-by:
+    cineris-base git::tests::sys_git_answers_about_its_own_repository_whatever_the_environment_names
+    cineris-base git::tests::sys_the_local_variables_are_the_ones_git_lists
+
+# ------------------------- the harness's git, inside the sandbox at every level
+
+[break] harness-git-as-it-is-at-unrestricted
+rule: Wherever the session's sandbox enforces, the harness's own git is started through the reading launcher at every level, `unrestricted` included.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::start_git
+find: match &self.reader {
+replace: match &self.reader.clone().filter(|_| self.confines()) {
+caught-by:
+    cineris-core sandbox::tests::the_harness_git_runs_inside_the_sandbox_reading_only
+    cineris-core::it harness_git::sys_at_unrestricted_the_harness_git_still_runs_inside_the_sandbox
+    cineris-core::it harness_git::sys_the_base_state_is_taken_by_a_git_inside_the_sandbox
+    cineris-core::it ext_exec::confined::sys_the_look_after_a_program_runs_git_confined_at_unrestricted
+
+[break] harness-git-says-it-follows-the-level
+rule: The session's git says it is confined wherever the sandbox enforces, whatever the level: a git that failed there is reported as one that failed inside the sandbox.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionGit::confines
+find: sandbox.enforces()
+replace: sandbox.confines()
+caught-by:
+    cineris-core sandbox::tests::the_harness_git_runs_inside_the_sandbox_reading_only
+
+# ------------------------------------------ item 4: confinement decided once
+
+[break] start-reads-the-level-again
+rule: A command starts through the launcher decided when the look before it was taken, not the one the level gives when it reaches the start.
+file: crates/cineris-core/src/checkpoints.rs
+in: RecordingShell::run_by
+find: let launcher: Arc<dyn cineris_tools::process::Launcher> = Arc::new(decided);
+replace: let launcher: Arc<dyn cineris_tools::process::Launcher> = Arc::clone(&self.sandbox) as Arc<dyn cineris_tools::process::Launcher>;
+caught-by:
+    cineris-core::it sandbox::sys_a_command_decided_as_it_is_runs_as_it_is_when_the_level_is_lowered_then_raised
+    cineris-core::it sandbox::sys_a_command_decided_confined_runs_confined_when_the_level_is_raised_then_lowered
+
+[break] shell-tool-starts-through-its-own-launcher
+rule: The shell tool starts a command through the launcher its caller decided on, not its own.
+file: crates/cineris-tools/src/shell/mod.rs
+in: ShellTool::run_through
+find: let launcher: Arc<dyn Launcher> = if call.confined { launcher } else {
+replace: let launcher: Arc<dyn Launcher> = if call.confined { Arc::clone(&self.launcher) } else {
+packages: cineris-tools,cineris-core
+caught-by:
+    cineris-core::it sandbox::sys_a_command_decided_as_it_is_runs_as_it_is_when_the_level_is_lowered_then_raised
+    cineris-core::it sandbox::sys_a_command_decided_confined_runs_confined_when_the_level_is_raised_then_lowered
+
+# ---------------------------------------- item 1: a protected change put back
+
+[break] nothing-put-back
+rule: What a confined start changed among the protected paths is put back at once, so that nothing of it runs later outside the sandbox.
+file: crates/cineris-core/src/sandbox.rs
+in: protected_changes
+find: let put = watch.put_back(before, &changed);
+replace: let put = cineris_sandbox::protect::PutBack { restored: Vec::new(), left: changed.clone(), after: after.clone() };
+caught-by:
+    cineris-core::it harness_git::sys_a_filter_a_confined_command_plants_never_runs_afterwards
+    cineris-core::it ext_exec::confined::sys_a_filter_a_program_plants_never_runs_afterwards
+    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_is_put_back_and_stops_the_turn
+    cineris-core::it adversary::sys_an_adversarial_command_reaches_only_what_it_may
+
+[break] last-look-taken-before-the-put-back
+rule: The look kept for the next confined start is the one taken after the put-back, so that the put-back is not taken for a change from outside.
+file: crates/cineris-core/src/sandbox.rs
+in: protected_changes
+find: after: put.after
+replace: after: after
+caught-by:
+    cineris-core::it sandbox::sys_after_a_put_back_the_next_command_runs
+
+[break] restore-does-nothing
+rule: The put-back makes each changed path as the look before found it.
+file: crates/cineris-sandbox/src/protect/restore.rs
+find: linux::put_back(before, changed);
+replace:
+caught-by:
+    cineris-sandbox protect::tests::putting_back::what_a_start_changed_is_made_as_it_was
+    cineris-sandbox protect::tests::putting_back::a_file_and_a_directory_that_went_are_made_again
+    cineris-sandbox protect::tests::putting_back::a_link_put_at_a_protected_path_is_removed_and_never_followed
+
+[break] restore-follows-a-link-on-the-way
+rule: The directory a path is put back in is opened with no symbolic link followed on its way: one that is a link now refuses the path, and nothing is written where it leads.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: open_dir
+find: how.resolve = libc::RESOLVE_NO_SYMLINKS;
+replace: how.resolve = 0;
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_path_whose_directory_is_a_link_now_is_left_alone
+
+[break] restore-writes-in-place
+rule: A file is put back under a name of its own and renamed into place, so that a link at its name is replaced, never written through.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: write_at
+find: let made = open_at(dir, &temporary, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL, 0o600)?;
+replace: let made = { let _ = &temporary; let fd = unsafe { libc::openat(dir.as_raw_fd(), name.as_ptr(), libc::O_WRONLY | libc::O_TRUNC | libc::O_CLOEXEC, 0o600) }; if fd < 0 { return Err(io::Error::last_os_error()); } unsafe { OwnedFd::from_raw_fd(fd) } }; return { let mut file = std::fs::File::from(made); file.write_all(content) };
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_file_swapped_for_a_link_while_it_is_put_back_is_replaced
+
+[break] restore-keeps-no-mode
+rule: A path put back has the mode it had before: a hook made executable is made as it was.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: restore
+find: let mode = old.stamp.mode & 0o7777;
+replace: let mode = 0o755;
+caught-by:
+    cineris-sandbox protect::tests::putting_back::what_a_start_changed_is_made_as_it_was
+    cineris-sandbox protect::tests::putting_back::a_file_and_a_directory_that_went_are_made_again
+
+[break] a-directory-made-again-is-left
+rule: A directory made again with its mode is as it was, though its inode is new: it is not named as one to put back by hand.
+file: crates/cineris-sandbox/src/protect.rs
+in: Watch::put_back
+find: !made_again
+replace: true
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_file_and_a_directory_that_went_are_made_again
+    cineris-sandbox protect::tests::putting_back::a_link_put_at_a_protected_path_is_removed_and_never_followed
+
+[break] the-way-out-not-told
+rule: The model is told that a change to a protected path is made outside the sandbox, with the user's allow once, or by the user.
+file: crates/cineris-core/src/sandbox.rs
+in: protected_note
+in-string: (`sandbox: false`)
+replace: (it)
+caught-by:
+    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_is_put_back_and_stops_the_turn

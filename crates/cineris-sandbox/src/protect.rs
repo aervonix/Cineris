@@ -8,7 +8,8 @@
 //! registry settings, the project's own `.cineris`), is therefore looked at
 //! before each sandboxed command and again after it. A change is found,
 //! not prevented, and the content from before is kept so that it can be put
-//! back.
+//! back: at once, after a confined start, by [`Watch::put_back`] (the third
+//! security fix).
 //!
 //! What is looked at:
 //!
@@ -243,6 +244,64 @@ impl Watch {
         let after = self.take();
         (before.compare(&after), after)
     }
+
+    /// Puts each path of `changed` back as `before` holds it, then looks
+    /// again: for a change a confined start made, so that nothing it wrote
+    /// in a protected path runs later outside the sandbox (the third
+    /// security fix). Nothing is written through a link: how, and what
+    /// cannot be put back, is in [`restore`]'s documentation. What still
+    /// differs from `before` after it (what could not be put back, or what
+    /// something else changed meanwhile) is [`PutBack::left`]. It blocks.
+    #[must_use]
+    pub fn put_back(&self, before: &Snapshot, changed: &[Changed]) -> PutBack {
+        restore::put_back(before, changed);
+        let (left, after) = self.changes_since(before);
+        // A directory made again is a directory with its mode, as it was,
+        // under another inode: what lies in it is compared on its own.
+        let left: Vec<Changed> = left
+            .into_iter()
+            .filter(|one| {
+                let made_again = one.change == Change::Modified
+                    && one.before == Before::Directory
+                    && before
+                        .entries
+                        .get(&one.path)
+                        .zip(after.entries.get(&one.path))
+                        .is_some_and(|(old, new)| {
+                            new.kind == Kind::Directory && new.stamp.mode == old.stamp.mode
+                        });
+                !made_again
+            })
+            .collect();
+        let restored = changed
+            .iter()
+            .filter(|one| !left.iter().any(|still| still.path == one.path))
+            .map(|one| one.path.clone())
+            .collect();
+        PutBack {
+            restored,
+            left,
+            after,
+        }
+    }
+}
+
+/// A point a test can stop at ([`cineris_base::hook`]): the directory a
+/// protected path lies in is open, with no link followed, and the path is
+/// not made again yet. A directory swapped for a link now must not carry
+/// the write elsewhere.
+pub const PUTTING_BACK: &str =
+    "protect: a path's directory is open and the path is not put back yet";
+
+/// What [`Watch::put_back`] did.
+#[derive(Debug, Clone)]
+pub struct PutBack {
+    /// The paths that are as they were before, again.
+    pub restored: Vec<PathBuf>,
+    /// What still differs from the look before: to be put back by hand.
+    pub left: Vec<Changed>,
+    /// The look taken after putting back.
+    pub after: Snapshot,
 }
 
 impl Snapshot {
@@ -738,6 +797,8 @@ fn stamp(metadata: &fs::Metadata) -> Stamp {
         ..Stamp::default()
     }
 }
+
+mod restore;
 
 #[cfg(test)]
 mod tests;

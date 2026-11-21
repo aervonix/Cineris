@@ -602,6 +602,26 @@ impl Tool for ShellTool {
         cx: &'a RunCx,
         out: &'a mut dyn ToolOutput,
     ) -> BoxFuture<'a, ToolResult> {
+        self.run_through(plan, cx, out, Arc::clone(&self.launcher))
+    }
+}
+
+impl ShellTool {
+    /// Runs a planned command as [`Tool::run`] does, started through
+    /// `launcher` in place of the tool's own ([`ShellTool::with_launcher`]).
+    /// For a caller that decided, once and before this, how the command is
+    /// confined and so how it is looked at: the start then follows that
+    /// decision, not whatever the session's level is at the moment the
+    /// command reaches its launcher (the third security fix). A call the
+    /// user let leave the sandbox is started as it is, whatever `launcher`
+    /// is.
+    pub fn run_through<'a>(
+        &'a self,
+        plan: Plan,
+        cx: &'a RunCx,
+        out: &'a mut dyn ToolOutput,
+        launcher: Arc<dyn Launcher>,
+    ) -> BoxFuture<'a, ToolResult> {
         Box::pin(async move {
             // A plan the permission engine marked read-only is a command it
             // vouches changes nothing: there is nothing to look for.
@@ -637,7 +657,7 @@ impl Tool for ShellTool {
 
             // A call the user let leave the sandbox is started as it is.
             let launcher: Arc<dyn Launcher> = if call.confined {
-                Arc::clone(&self.launcher)
+                launcher
             } else {
                 Arc::new(Direct)
             };

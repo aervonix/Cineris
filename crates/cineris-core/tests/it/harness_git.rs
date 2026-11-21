@@ -21,6 +21,7 @@ use cineris_protocol::Item;
 use cineris_protocol::lease::Level;
 use cineris_protocol::methods::{ConfigReloadParams, Op, OpResult};
 use cineris_protocol::session::{SandboxStatus, SessionSettings};
+use cineris_sandbox::support::Support;
 use cineris_testkit::scratch::git;
 use serde_json::{Value, json};
 
@@ -150,16 +151,15 @@ fn sys_a_filter_a_confined_command_plants_runs_inside_the_sandbox() {
     });
 }
 
-/// The control for the shell path: at `unrestricted`, where the after-look
-/// git is not confined, the same planted filter does run and writes
-/// outside. That is what shows the filter is one the harness's own git
-/// runs, so that its absence in the confined test means the sandbox stopped
-/// it, not that the filter never ran.
+/// The control for the shell path: where the sandbox does not enforce,
+/// where the after-look git is not confined, the same planted filter does
+/// run and writes outside. That is what shows the filter is one the
+/// harness's own git runs, so that its absence in the confined tests means
+/// the sandbox stopped it, not that the filter never ran. (Until the third
+/// security fix the control was `unrestricted`: there the harness's git now
+/// runs inside the sandbox too.)
 #[test]
-fn sys_at_unrestricted_the_after_look_git_runs_the_planted_filter() {
-    if !enforcing_here() {
-        return;
-    }
+fn sys_where_the_sandbox_does_not_enforce_the_after_look_git_runs_the_planted_filter() {
     let world = World::new("planted_filter_unconfined", []);
     repository(&world);
     let outside = world.dir.join("outside");
@@ -179,6 +179,7 @@ fn sys_at_unrestricted_the_after_look_git_runs_the_planted_filter() {
     world.provider.push(says("Done."));
     let core = world.core_with(|options| {
         options.launcher = Some(launcher());
+        options.sandbox = Some(Support::NoLandlock);
         options.trust_project = true;
     });
     world.run(async {
@@ -190,6 +191,7 @@ fn sys_at_unrestricted_the_after_look_git_runs_the_planted_filter() {
         )
         .await
         .expect("the session starts");
+        assert_eq!(front.state.sandbox, SandboxStatus::Off);
         front.turn("go").await;
         assert_eq!(shell_payload(&front)["changes"]["method"], "git");
         assert!(
@@ -201,24 +203,190 @@ fn sys_at_unrestricted_the_after_look_git_runs_the_planted_filter() {
     });
 }
 
+/// Moves the session to `level`.
+async fn set_level(front: &Front, level: Level) {
+    front
+        .op(Op::SessionSet(
+            cineris_protocol::methods::SessionSetParams {
+                session_id: front.session.clone(),
+                settings: at(level),
+            },
+        ))
+        .await
+        .expect("the level is set");
+}
+
+/// The script that plants the clean filter `touch <outside>/planted` in the
+/// repository's configuration (or in `config`, a file it names), sends
+/// every file through it, and makes the tracked file stale, so that the
+/// next `git status` runs the filter.
+fn planting(outside: &Path, config: &str) -> String {
+    format!(
+        "printf '[filter \"x\"]\\n\\tclean = touch {o}/planted; cat\\n' >> {config}\n\
+         echo '* filter=x' > .gitattributes\n\
+         touch -d @0 tracked.txt\n",
+        o = outside.display()
+    )
+}
+
+/// The open item's case, end to end (the third security fix;
+/// `outstanding`'s `a-filter-a-confined-program-plants-runs-unconfined-later`):
+/// a confined command plants a clean filter in a trusted repository's
+/// configuration. The look after it puts the configuration back and stops
+/// the turn. The user then moves the session to `unrestricted`, and the
+/// next turn runs a command, whose looks ask git, and the model's own `git
+/// status`, which runs with the user's rights: the filter's program never
+/// runs, because nothing names it any more.
+/// `sys_where_the_sandbox_does_not_enforce_the_after_look_git_runs_the_planted_filter`
+/// shows the same filter is one git runs.
+#[test]
+fn sys_a_filter_a_confined_command_plants_never_runs_afterwards() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("planted_then_unrestricted", []);
+    repository(&world);
+    let outside = world.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    world.put("fix.sh", planting(&outside, ".git/config"));
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
+    world.provider.push(says("Stopped."));
+    world.provider.push(calls(&[(
+        "c2",
+        "shell",
+        json!({"command": "echo two > two.txt"}),
+    )]));
+    world
+        .provider
+        .push(calls(&[("c3", "shell", json!({"command": "git status"}))]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| {
+        options.launcher = Some(launcher());
+        options.trust_project = true;
+    });
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("fix it").await;
+        let results = front.results();
+        assert!(
+            results[0].2.contains("`.git/config` (modified)")
+                && results[0].2.contains("They were put back"),
+            "{results:?}"
+        );
+        set_level(&front, Level::Unrestricted).await;
+        front.turn("go on").await;
+        let results = front.results();
+        assert_eq!(results.len(), 3, "{results:?}");
+        assert!(
+            !outside.join("planted").exists(),
+            "the filter a confined command planted ran with the user's rights: {results:?}"
+        );
+        assert!(
+            !world
+                .read(".git/config")
+                .unwrap_or_default()
+                .contains("filter"),
+            "{:?}",
+            world.read(".git/config")
+        );
+        front.close().await;
+    });
+}
+
+/// Since the third security fix the harness's own git runs inside the
+/// sandbox wherever it enforces, at every level, `unrestricted` included. A
+/// confined command writes a filter into a file the repository's
+/// configuration includes (`include.path`): not a protected path, so it is
+/// not put back. The user then moves the session to `unrestricted`. The
+/// looks around the next command ask git, and the filter git runs for them
+/// still runs inside the sandbox, and cannot write outside. (The model's own
+/// `git status` there would run it with the user's rights: a stated limit,
+/// `outstanding/files-git-runs-that-the-protected-list-does-not-name.md`.)
+#[test]
+fn sys_at_unrestricted_the_harness_git_still_runs_inside_the_sandbox() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("harness_git_unrestricted", []);
+    repository(&world);
+    let config = world.workspace.join(".git/config");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("[include]\n\tpath = ../shared.gitconfig\n");
+    std::fs::write(&config, text).unwrap();
+    world.put("shared.gitconfig", "");
+    let outside = world.dir.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    world.put("fix.sh", planting(&outside, "shared.gitconfig"));
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
+    world.provider.push(says("Done."));
+    world.provider.push(calls(&[(
+        "c2",
+        "shell",
+        json!({"command": "echo two > two.txt"}),
+    )]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| {
+        options.launcher = Some(launcher());
+        options.trust_project = true;
+    });
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("fix it").await;
+        assert!(!outside.join("planted").exists(), "{:?}", front.results());
+        set_level(&front, Level::Unrestricted).await;
+        front.turn("go on").await;
+        let results = front.results();
+        // The looks asked git, and git asked the filter.
+        let payload = front
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                Item::ToolResult(result) if result.tool == "shell" => result.payload.clone(),
+                _ => None,
+            })
+            .nth(1)
+            .expect("the second command's payload");
+        assert_eq!(payload["changes"]["method"], "git", "{payload}");
+        assert!(
+            !outside.join("planted").exists(),
+            "the harness's git ran, at unrestricted, a filter a confined command planted, with \
+             the user's rights: {results:?}"
+        );
+        front.close().await;
+    });
+}
+
 /// The same filter, already in the configuration when the session starts:
 /// the base state asks git about every changed file, and its git is the
-/// sandbox's too. At `unrestricted`, where nothing is confined, the same
-/// filter does run: that is what shows it is one git runs.
+/// sandbox's too, at every level where the sandbox enforces, `unrestricted`
+/// included (since the third security fix). Where the sandbox does not
+/// enforce, the same filter does run: that is what shows it is one git
+/// runs.
 #[test]
 fn sys_the_base_state_is_taken_by_a_git_inside_the_sandbox() {
     if !enforcing_here() {
         return;
     }
-    let ran = |level: Level| -> bool {
-        let world = World::new(
-            if level == Level::Unrestricted {
-                "base_filter_unconfined"
-            } else {
-                "base_filter_confined"
-            },
-            [],
-        );
+    let ran = |level: Level, name: &str, enforcing: bool| -> bool {
+        let world = World::new(name, []);
         repository(&world);
         let marker = world.dir.join("filter-ran");
         plant_filter(&world, &format!("touch {}; cat", marker.display()), false);
@@ -227,6 +395,9 @@ fn sys_the_base_state_is_taken_by_a_git_inside_the_sandbox() {
             options.launcher = Some(launcher());
             options.trust_project = true;
             options.base_capture = true;
+            if !enforcing {
+                options.sandbox = Some(Support::NoLandlock);
+            }
         });
         world.run(async {
             let front = Front::start_as(&world, &core, cineris_core::ClientInfo::user(), at(level))
@@ -250,12 +421,16 @@ fn sys_the_base_state_is_taken_by_a_git_inside_the_sandbox() {
         marker.exists()
     };
     assert!(
-        !ran(Level::Autonomous),
+        !ran(Level::Autonomous, "base_filter_confined", true),
         "the base state's git ran a filter outside the sandbox"
     );
     assert!(
-        ran(Level::Unrestricted),
-        "the control: at `unrestricted` git runs the filter"
+        !ran(Level::Unrestricted, "base_filter_unrestricted", true),
+        "at `unrestricted` the base state's git ran a filter outside the sandbox"
+    );
+    assert!(
+        ran(Level::Unrestricted, "base_filter_unconfined", false),
+        "the control: where the sandbox does not enforce, git runs the filter"
     );
 }
 
@@ -390,6 +565,12 @@ fn sys_a_filter_the_harness_git_runs_is_not_found_in_the_workspace() {
 /// `PATH` from then on, as the roots the session started with are: a
 /// filter a command could plant there is not the one git runs (step 28,
 /// which gave the harness's lookups the roots the sandbox holds now).
+///
+/// The filter is required, and says which one ran through git's own
+/// answer: the one outside passes the content on, the planted one fails,
+/// and none found fails too, so a complete list of changes means the one
+/// outside ran. (Its git runs inside the sandbox at `unrestricted` since the
+/// third security fix, where a filter can write nothing to say so.)
 #[test]
 fn sys_a_folder_a_reload_makes_writable_is_kept_out_of_the_harness_gits_path() {
     use std::os::unix::fs::PermissionsExt;
@@ -400,20 +581,18 @@ fn sys_a_folder_a_reload_makes_writable_is_kept_out_of_the_harness_gits_path() {
     repository(&world);
     let name = "cineris-planted-filter";
     let outside = world.dir.join("outside");
-    let seen = outside.join("seen");
     let bin = outside.join("bin");
     let extra = world.dir.join("extra");
-    let filter = |said: &str| format!("#!/bin/sh\necho {said} >> {}\ncat\n", seen.display());
-    for (dir, said) in [(&bin, "outside"), (&extra, "planted")] {
+    for (dir, script) in [(&bin, "#!/bin/sh\ncat\n"), (&extra, "#!/bin/sh\nexit 1\n")] {
         std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(dir.join(name), filter(said)).unwrap();
+        std::fs::write(dir.join(name), script).unwrap();
         std::fs::set_permissions(dir.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
     }
     world.put(
         "fix.sh",
         format!(
-            "printf '[filter \"x\"]\\n\\tclean = {name}\\n' >> .git/config\necho '* filter=x' > \
-             .gitattributes\ntouch -d @0 tracked.txt\n"
+            "printf '[filter \"x\"]\\n\\tclean = {name}\\n\\trequired = true\\n' >> .git/config\n\
+             echo '* filter=x' > .gitattributes\ntouch -d @0 tracked.txt\n"
         ),
     );
     world
@@ -450,18 +629,13 @@ fn sys_a_folder_a_reload_makes_writable_is_kept_out_of_the_harness_gits_path() {
         };
         assert!(reloaded.errors.is_empty(), "{reloaded:?}");
         front.turn("go").await;
-        assert_eq!(shell_payload(&front)["changes"]["method"], "git");
-        let text = std::fs::read_to_string(&seen).unwrap_or_else(|_| {
-            panic!(
-                "the harness's git ran neither filter: {:?}",
-                front.results()
-            )
-        });
-        assert!(
-            !text.contains("planted"),
-            "the harness's git ran the {name} in a folder the reload made writable: {text}"
+        let changes = &shell_payload(&front)["changes"];
+        assert_eq!(changes["method"], "git", "{changes}");
+        assert_eq!(
+            changes["complete"], true,
+            "the harness's git ran the {name} in a folder the reload made writable, or found \
+             none: {changes}"
         );
-        assert!(text.contains("outside"), "{text}");
         front.close().await;
     });
 }
