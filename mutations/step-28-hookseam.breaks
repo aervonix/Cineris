@@ -99,13 +99,12 @@ caught-by:
     cineris-agent::it hooks::while_its_hooks_are_asked_a_call_holds_back_what_could_conflict_with_it
 
 [break] a-call-decided-again-keeps-what-its-hooks-said
-rule: A call decided again drops what its hooks said before, at once.
+rule: A call decided again drops what its hooks said before, at once. Since the early review's fix (a result names a hook's arguments only once their question was answered), the mark of the answer, cleared in the same place, keeps a dropped replacement out of the call's result and item while it is planned again, and the new decision replaces what its hooks said when it comes: no test can see this guard alone. It is kept so that nothing else that reads it in that window finds an answer that no longer holds. `what_its_hooks_said_before_is_dropped_as_a_call_is_decided_again` holds the window.
 file: crates/cineris-agent/src/round.rs
 in: Round::decide_again
 find: if call.hooked.take().is_some() {
 replace: if call.hooked.is_some() {
-caught-by:
-    cineris-agent::it hooks::what_its_hooks_said_before_is_dropped_as_a_call_is_decided_again
+expect: survives
 
 [break] a-replacement-skips-the-schema
 rule: A replacement of the arguments is checked against the tool's schema.
