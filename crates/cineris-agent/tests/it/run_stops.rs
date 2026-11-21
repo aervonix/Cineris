@@ -135,17 +135,27 @@ fn a_run_that_stops_the_turn_keeps_the_calls_after_it_from_running() {
 /// only read is still looked around for protected paths, and the rig's
 /// `read` stands in for it. No call is decided again after it, so the
 /// round's own stop is all that keeps the write waiting for it, and
-/// written after it, from running.
+/// written after it, from running. The read waits at a gate until the
+/// write has been decided, so that the write is waiting, allowed, when
+/// the stop comes (without it, under some seeds, the read ended before the
+/// write was planned, and the planning's own look at the stop refused it;
+/// found by the review).
 #[test]
 fn a_run_that_changes_nothing_and_stops_the_turn_keeps_a_waiting_call_from_running() {
     let response = calls(&[
-        ("c1", "read", json!({"path": "a", "stop": REASON})),
+        (
+            "c1",
+            "read",
+            json!({"path": "a", "stop": REASON, "gate": "read"}),
+        ),
         ("c2", "write", json!({"path": "a"})),
     ]);
     let world = World::new("run_stop_read", [response, says("Unused.")]);
     let rig = Setup::new(&world).start(&world);
     world.run(async {
         rig.prompt("go");
+        rig.policy.decisions(2).await;
+        world.gates.open("read");
         rig.events.turns(1).await;
     });
 
