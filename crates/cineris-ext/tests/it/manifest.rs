@@ -100,6 +100,47 @@ fn programs_are_bare_names_or_absolute_paths() {
     }
 }
 
+/// What an approval shows as code holds no backtick, which would end the
+/// code and let what follows pose as the harness's words, and is at most
+/// 256 bytes (the early review of step 28's second part).
+#[test]
+fn a_program_a_glob_or_the_version_with_a_backtick_or_too_long_is_refused() {
+    for (capability, key) in [
+        ("exec = [\"gh`, `jq\"]", "capabilities.exec"),
+        (
+            "read = [\"src/**`. It reads no file. `x\"]",
+            "capabilities.read",
+        ),
+        ("write = [\"out`/**\"]", "capabilities.write"),
+    ] {
+        let text = refused(&manifest(capability));
+        assert!(
+            text.contains(key) && text.contains("backtick"),
+            "{capability}: {text}"
+        );
+    }
+    let text = refused(&manifest("").replace("version = \"0.1.0\"", "version = \"0.1`\""));
+    assert!(
+        text.contains("version") && text.contains("backtick"),
+        "{text}"
+    );
+    let long = "a".repeat(cineris_ext::manifest::MAX_ENTRY_BYTES + 1);
+    for (capability, key) in [
+        (format!("exec = [\"{long}\"]"), "capabilities.exec"),
+        (format!("read = [\"{long}/**\"]"), "capabilities.read"),
+        (format!("write = [\"{long}\"]"), "capabilities.write"),
+    ] {
+        let text = refused(&manifest(&capability));
+        assert!(
+            text.contains(key) && text.contains("longer than 256 bytes"),
+            "{key}: {text}"
+        );
+    }
+    // At the cap, and with no backtick, an entry is taken.
+    let at_cap = "a".repeat(cineris_ext::manifest::MAX_ENTRY_BYTES);
+    assert!(Manifest::parse(&manifest(&format!("exec = [\"{at_cap}\"]"))).is_ok());
+}
+
 #[test]
 fn globs_are_relative_to_the_workspace() {
     for bad in [
