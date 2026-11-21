@@ -148,3 +148,55 @@ The pull request's `pr-size` jobs in run 44884999537, each against `main`'s own 
 | Windows, `x86_64-pc-windows-msvc` | 19,471,360 bytes (18.57 MiB) | 18,990,592 bytes | + 480,768 bytes (469.5 KiB) | 25 MiB |
 
 On Linux the crates that grew most are `cineris_core` (+96 KiB, the pipeline, the trust question's words and `cineris.state`), the standard library (+64 KiB) and `cineris_ext` (+60 KiB, discovery and the cache), from `cargo xtask size` in `try --final` (run 44883274241). Neither binary holds a path under a home folder.
+
+## The fourth pull request: skills and the prompt
+
+<!-- written by cargo xtask ci-times, section "The fourth pull request: skills and the prompt": it replaces this up to the end mark -->
+Pull request 122, on `main` at `36d8266`. "Main" is main's own run at `36d8266` (run 44886379853).
+The PR's run is 44911679902, at `8f3eafe`.
+
+| Job | Main, `36d8266` | The PR at `8f3eafe` |
+|---|---|---|
+| `lint-linux` | 83 s | 74 s |
+| `test-linux` | 143 s | 135 s |
+| `lint-windows` | 108 s | 120 s |
+| `test-windows` | 255 s | 305 s |
+| `ts-client` (blocks nothing) | — | 0 s |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `8f3eafe` (4 ms) | Windows, main (6 ms) |
+|---|---|---|---|
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 11.4 s | 11.6 s | 19.7 s |
+| Tier 2, integration (40 s) | 22.9 s | 22.4 s | 42.9 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 51.8 s | 37.0 s | 78.3 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The fourth pull request: skills and the prompt" -->
+
+`test-windows` was cut by its time limit, 5 min 5 s, in the system tests, in run 44911679902 and again when its failed jobs were run again: both times every test of tiers 1 and 2 had passed (5,133), and 173 and then 197 of the 228 system tests had run, the only failures those the cut made. Both runners were about 1.3 times slower than `main`'s run's (the build 2 min 11 s and 2 min 15 s against 1 min 37 s, tiers 1 and 2 60.8 s against 46.7 s), and this pull request changes `cineris-base`, which rebuilds the whole workspace past the restored cache: on such a runner `main`'s own job would take about 330 s ([main-windows-tiers-over-budget-on-slow-runners](../../outstanding/main-windows-tiers-over-budget-on-slow-runners.md)). So `pr-size` and `ts-client` did not run. **Windows' tests, every tier, the system tests included,** ran on the pull request's head in `try` run 44912907727, on a runner at 5 ms a process start: all passed, the job in 3 min 5 s, tier 1 11.4 s (46%), tier 2 27.6 s (69%), tier 3 61.8 s (69%). `ts-client` was taken by the maintainers from the pinned compiler's check run locally, the protocol's conformance test and the declarations' one added value, and runs on the next pull request.
+
+## The fourth pull request, both trees on one runner
+
+`try --final`, Windows, the median of 5 runs each, both trees on one runner. Copied from `cargo xtask try-result`, as for the first pull request.
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| **Run 44908721047, at `ce14c68` (the pull request's code), a runner at 8 ms** | | | | |
+| 1, unit | 23.6 s (3,361 tests) | 22.2 s (3,312) | +1.4 s | 25 s |
+| 2, integration | 53.4 s (1,772 tests) | 50.8 s (1,740) | +2.6 s | 40 s |
+| 3, system | 90.5 s (228 tests) | 89.5 s (227) | +1.0 s | 90 s |
+| **Run 44906099811, at `b34751f` (before the skill folders' read rule's tests and its setting), a runner at 6 ms** | | | | |
+| 1, unit | 12.5 s (3,361 tests) | 12.8 s (3,312) | −0.3 s | 25 s |
+| 2, integration | 28.8 s (1,770 tests) | 28.2 s (1,740) | +0.6 s | 40 s |
+| 3, system | 58.3 s (228 tests) | 58.7 s (227) | −0.5 s | 90 s |
+
+On the slow runner the crates that moved in tier 2 were `cineris-core` (+1.67 s, the new tests of the prompt's sections and of the skill folders' read rule, 0.07 to 0.14 s each) and `cineris-agent` (+0.24 s); in tier 1 `cineris-ext`'s skills tests, now unit tests. The wall time of a round was 107.7 s against `main`'s 106.9 s. Tier 2 stays the conflict with its budget the part before recorded ([parts/pr2a1-found.md](parts/pr2a1-found.md), "The tests folded for Windows' tier 2"). The same runs' tests on Linux 22.04 used 81% to 92%, 71% to 72% and 72% to 74% of the three tiers' budgets.
+
+## The fourth pull request: the binary's size
+
+`try` run 44913243284 (`size --check --against-main`, the pull request's head `8f3eafe`), against `main`'s own size record at `36d8266` (run 44886379885), as the pull request's `pr-size` jobs did not run. The shipped `dist` build:
+
+| System | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| Linux, `x86_64-unknown-linux-musl` | 16,350,104 bytes (15.59 MiB) | 16,206,744 bytes | + 143,360 bytes (140 KiB) | 20 MiB |
+| Windows, `x86_64-pc-windows-msvc` | 19,663,360 bytes (18.75 MiB) | 19,471,360 bytes | + 192,000 bytes (187.5 KiB) | 25 MiB |
+
+On Linux the crates that grew most are the standard library (+30 KB), `cineris_ext` (+28 KB, the skills) and `cineris_core` (+21 KB). Neither binary holds a path under a home folder.
