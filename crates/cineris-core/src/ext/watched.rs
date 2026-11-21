@@ -26,7 +26,7 @@
     reason = "a look at each place found, on the blocking pool"
 )]
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -143,7 +143,13 @@ fn identity(_: &std::fs::Metadata) -> Option<(u64, i64, i64)> {
 #[derive(Debug, Default)]
 pub(crate) struct Watched {
     places: Vec<(PathBuf, Stamp, UtcTime)>,
-    known: HashSet<PathBuf>,
+    /// Each place stamped, with where it is in `places`.
+    known: HashMap<PathBuf, usize>,
+}
+
+/// Whether a stamp is of a place's kind alone ([`Watched::note_kind`]).
+fn by_kind(stamp: &Stamp) -> bool {
+    matches!(stamp, Stamp::Kind(_) | Stamp::LinkTo(_))
 }
 
 /// The most places stamped within the extensions of one root, their
@@ -174,13 +180,32 @@ impl Watched {
     }
 
     /// Stamps `place` now, after what is stamped already; a place stamped
-    /// already keeps its first stamp.
+    /// already keeps its first stamp, unless that was of its kind alone. A
+    /// name on the way to a place that is a place what was found depends on
+    /// too (a root of skills is looked at on the way to itself, before it
+    /// is resolved and listed) is stamped whole now, where it was in the
+    /// order: an entry made in it is a change.
     pub(crate) fn note(&mut self, place: PathBuf, clock: &SharedClock) {
-        if !self.known.insert(place.clone()) {
-            return;
+        match self.known.get(&place) {
+            Some(&at) => {
+                if let Some(entry) = self.places.get_mut(at)
+                    && by_kind(&entry.1)
+                {
+                    entry.1 = Stamp::of(&place);
+                    entry.2 = clock.now();
+                }
+            }
+            None => {
+                let stamp = Stamp::of(&place);
+                self.push(place, stamp, clock.now());
+            }
         }
-        let stamp = Stamp::of(&place);
-        self.places.push((place, stamp, clock.now()));
+    }
+
+    /// Adds a place not stamped before, after the others.
+    fn push(&mut self, place: PathBuf, stamp: Stamp, taken: UtcTime) {
+        self.known.insert(place.clone(), self.places.len());
+        self.places.push((place, stamp, taken));
     }
 
     /// Stamps `place` now by its kind alone: a name on the way to a place,
@@ -189,11 +214,11 @@ impl Watched {
     /// one pointed elsewhere is a change. A place stamped already keeps its
     /// first stamp.
     pub(crate) fn note_kind(&mut self, place: PathBuf, clock: &SharedClock) {
-        if !self.known.insert(place.clone()) {
+        if self.known.contains_key(&place) {
             return;
         }
         let stamp = Stamp::kind_of(&place);
-        self.places.push((place, stamp, clock.now()));
+        self.push(place, stamp, clock.now());
     }
 
     /// How many places are stamped.
@@ -265,11 +290,22 @@ impl Watched {
         true
     }
 
-    /// What is stamped in `other`, after what is stamped here.
+    /// What is stamped in `other`, after what is stamped here; a place
+    /// stamped in both keeps its stamp here, unless that was of its kind
+    /// alone and `other`'s is whole.
     pub(crate) fn extend(&mut self, other: Self) {
         for (place, stamp, taken) in other.places {
-            if self.known.insert(place.clone()) {
-                self.places.push((place, stamp, taken));
+            match self.known.get(&place) {
+                Some(&at) => {
+                    if let Some(entry) = self.places.get_mut(at)
+                        && by_kind(&entry.1)
+                        && !by_kind(&stamp)
+                    {
+                        entry.1 = stamp;
+                        entry.2 = taken;
+                    }
+                }
+                None => self.push(place, stamp, taken),
             }
         }
     }
@@ -279,9 +315,10 @@ impl Watched {
     /// at.
     pub(crate) fn changed(&self) -> Option<PathBuf> {
         self.places.iter().find_map(|(place, stamp, taken)| {
-            let now = match stamp {
-                Stamp::Kind(_) | Stamp::LinkTo(_) => Stamp::kind_of(place),
-                _ => Stamp::of(place),
+            let now = if by_kind(stamp) {
+                Stamp::kind_of(place)
+            } else {
+                Stamp::of(place)
             };
             (now != *stamp || unsettled(stamp, *taken)).then(|| place.clone())
         })
@@ -399,6 +436,73 @@ mod tests {
         std::fs::remove_dir_all(dir.join("way")).unwrap();
         std::fs::write(dir.join("way"), "a file now").unwrap();
         assert_eq!(watched.changed(), Some(dir.join("way")), "another kind");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Sets the folder `dir`'s modification time to a day after the epoch:
+    /// an entry made in it is then a change at once, whatever the step of
+    /// the file system's clock, which a test does not wait for.
+    #[expect(
+        clippy::disallowed_types,
+        reason = "a test opens a folder to set its time"
+    )]
+    fn age_folder(dir: &Path) {
+        let day = std::time::UNIX_EPOCH + Duration::from_secs(86_400);
+        #[cfg(unix)]
+        let folder = std::fs::File::open(dir).unwrap();
+        #[cfg(windows)]
+        let folder = {
+            use std::os::windows::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                // FILE_WRITE_ATTRIBUTES, and FILE_FLAG_BACKUP_SEMANTICS,
+                // without which a folder is not opened.
+                .access_mode(0x100)
+                .custom_flags(0x0200_0000)
+                .open(dir)
+                .unwrap()
+        };
+        folder.set_modified(day).unwrap();
+    }
+
+    /// A name stamped by its kind on the way to a place, and then as a place
+    /// what was found depends on (a root of skills, looked at on the way to
+    /// itself before it is resolved and listed), is stamped whole, where it
+    /// was: an entry made in it is a change. Stamped by its kind after that,
+    /// it stays whole.
+    #[test]
+    fn a_name_on_the_way_that_is_a_place_too_is_stamped_whole() {
+        let dir = std::env::temp_dir().join(format!("cineris-core-whole-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("skills/review")).unwrap();
+        let clock: SharedClock = Arc::new(FakeClock::starting_at("2001-01-01T00:00:00Z").unwrap());
+        let mut watched = Watched::default();
+        watched.note_kind(dir.join("skills"), &clock);
+        watched.note(dir.join("skills"), &clock);
+        watched.note(dir.join("skills/review"), &clock);
+        watched.note_kind(dir.join("skills"), &clock);
+        assert_eq!(watched.len(), 2);
+        assert!(
+            matches!(
+                watched.places[0].1,
+                Stamp::Present {
+                    kind: Kind::Folder,
+                    ..
+                }
+            ),
+            "{:?}",
+            watched.places[0]
+        );
+        assert_eq!(watched.changed(), None);
+        std::fs::create_dir(dir.join("skills/pdf")).unwrap();
+        age_folder(&dir.join("skills"));
+        assert_eq!(watched.changed(), Some(dir.join("skills")), "an entry made");
+        // Merged into a set that stamped it by its kind, it is whole there.
+        let mut other = Watched::default();
+        other.note_kind(dir.join("skills"), &clock);
+        let mut whole = Watched::default();
+        whole.note(dir.join("skills"), &clock);
+        other.extend(whole);
+        assert!(!by_kind(&other.places[0].1), "{:?}", other.places[0]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
