@@ -29,10 +29,10 @@ use serde_json::json;
 use crate::{Answering, Front, World, calls, poll_once, says};
 
 /// The name of every extension here.
-const NAME: &str = "probe";
+pub(crate) const NAME: &str = "probe";
 
 /// A turn whose model looks for the extension's tools, then ends.
-fn searches() -> [Response; 2] {
+pub(crate) fn searches() -> [Response; 2] {
     [
         calls(&[("s1", "tool_search", json!({"query": "probe/"}))]),
         says("Done."),
@@ -40,18 +40,18 @@ fn searches() -> [Response; 2] {
 }
 
 /// `count` turns that each look for the extension's tools.
-fn searches_times(count: usize) -> Vec<Response> {
+pub(crate) fn searches_times(count: usize) -> Vec<Response> {
     (0..count).flat_map(|_| searches()).collect()
 }
 
 /// Writes the extension `probe` in `folder`, with these capabilities and a
 /// tool `echo` described as `said`, which gives its arguments back.
-fn write_extension(folder: &Path, capabilities: &str, said: &str) {
+pub(crate) fn write_extension(folder: &Path, capabilities: &str, said: &str) {
     write_described(folder, "A test extension", capabilities, said);
 }
 
 /// [`write_extension`], with the manifest's description as TOML text.
-fn write_described(folder: &Path, description: &str, capabilities: &str, said: &str) {
+pub(crate) fn write_described(folder: &Path, description: &str, capabilities: &str, said: &str) {
     std::fs::create_dir_all(folder).unwrap();
     std::fs::write(
         folder.join("extension.toml"),
@@ -73,12 +73,12 @@ fn write_described(folder: &Path, description: &str, capabilities: &str, said: &
 
 /// The user's `probe`: in the folder of extensions of the world's
 /// configuration directory.
-fn users(world: &World) -> PathBuf {
+pub(crate) fn users(world: &World) -> PathBuf {
     world.dirs().config.unwrap().join("extensions").join(NAME)
 }
 
 /// The user's `probe` as the user is shown it: under `~`, with `/`.
-fn users_shown(world: &World) -> String {
+pub(crate) fn users_shown(world: &World) -> String {
     let below = users(world)
         .strip_prefix(&world.home)
         .unwrap()
@@ -90,22 +90,22 @@ fn users_shown(world: &World) -> String {
 }
 
 /// The project's `probe`.
-fn projects(world: &World) -> PathBuf {
+pub(crate) fn projects(world: &World) -> PathBuf {
     world.workspace.join(".cineris/extensions").join(NAME)
 }
 
-fn state(world: &World) -> StateDir {
+pub(crate) fn state(world: &World) -> StateDir {
     let state = StateDir::from_dirs(&world.dirs()).unwrap();
     std::fs::create_dir_all(state.root()).unwrap();
     state
 }
 
-fn clock(world: &World) -> SharedClock {
+pub(crate) fn clock(world: &World) -> SharedClock {
     Arc::new(world.clock.clone())
 }
 
 /// The definition of the extension in `folder`, as it is now.
-fn definition(folder: &Path) -> Definition {
+pub(crate) fn definition(folder: &Path) -> Definition {
     Definition {
         kind: TrustResourceKind::Extension,
         name: NAME.to_owned(),
@@ -115,21 +115,21 @@ fn definition(folder: &Path) -> Definition {
 
 /// Pins the user's extension in `folder` as it is now, as approving it
 /// does.
-fn pin(world: &World, folder: &Path) {
+pub(crate) fn pin(world: &World, folder: &Path) {
     PinStore::new(state(world).pins_file(), clock(world))
         .pin(&definition(folder))
         .unwrap();
 }
 
 /// The world's registration cache.
-fn cache_file(world: &World) -> RegistrationCache {
+pub(crate) fn cache_file(world: &World) -> RegistrationCache {
     RegistrationCache::new(state(world).registration_cache_file())
 }
 
 /// Registers the extension in `folder` as approving it does, in a
 /// throwaway runtime (one runtime made), and keeps what it registered in
 /// the cache. Its hash.
-fn cache(world: &World, folder: &Path) -> ContentHash {
+pub(crate) fn cache(world: &World, folder: &Path) -> ContentHash {
     let snapshot = Arc::new(Snapshot::read(folder).unwrap());
     let timer = FakeTimer::manual(&FakeClock::new(cineris_base::UtcTime::UNIX_EPOCH));
     let (manifest, registration) =
@@ -141,26 +141,26 @@ fn cache(world: &World, folder: &Path) -> ContentHash {
 }
 
 /// The project's key, as a session in the world's workspace has it.
-fn project_key(world: &World) -> ProjectKey {
+pub(crate) fn project_key(world: &World) -> ProjectKey {
     PathResolver::new(&world.workspace, PathOptions::new())
         .unwrap()
         .root()
         .project_key()
 }
 
-fn trust_store(world: &World) -> TrustStore {
+pub(crate) fn trust_store(world: &World) -> TrustStore {
     TrustStore::new(state(world).trust_file(), clock(world))
 }
 
 /// Trusts the project with `definitions` pinned, as a yes to its question
 /// pins them.
-fn trust(world: &World, definitions: &[Definition]) {
+pub(crate) fn trust(world: &World, definitions: &[Definition]) {
     trust_store(world)
         .trust(&project_key(world), "~/work/app", definitions, false)
         .unwrap();
 }
 
-fn yes() -> TrustResponse {
+pub(crate) fn yes() -> TrustResponse {
     TrustResponse {
         trusted: true,
         never: false,
@@ -171,12 +171,22 @@ fn yes() -> TrustResponse {
 /// Opens a session in the world's workspace as a user's front end that
 /// answers the trust question with `answer`: the front, and the questions
 /// it was asked.
-async fn open_answering(
+pub(crate) async fn open_answering(
     world: &World,
     core: &Core,
     answer: TrustResponse,
 ) -> (Front, Vec<TrustRequest>) {
-    let client = core.connect(ClientInfo::user());
+    open_as(world, core, ClientInfo::user(), answer).await
+}
+
+/// [`open_answering`], as a client of `info`.
+pub(crate) async fn open_as(
+    world: &World,
+    core: &Core,
+    info: ClientInfo,
+    answer: TrustResponse,
+) -> (Front, Vec<TrustRequest>) {
+    let client = core.connect(info);
     let opening = core.handle(
         client.id,
         Op::SessionNew(SessionNewParams {
@@ -231,7 +241,7 @@ async fn open_answering(
 }
 
 /// Whether the session's last `tool_search` found the extension's tool.
-fn found_probe(front: &Front) -> bool {
+pub(crate) fn found_probe(front: &Front) -> bool {
     let results = front.results();
     let (_, outcome, text) = results.last().expect("a tool ran");
     assert_eq!(*outcome, "success", "{results:?}");
@@ -239,7 +249,7 @@ fn found_probe(front: &Front) -> bool {
 }
 
 /// The notices that name the extension `probe`.
-fn about_probe(front: &Front) -> Vec<String> {
+pub(crate) fn about_probe(front: &Front) -> Vec<String> {
     front
         .notices()
         .into_iter()
@@ -254,7 +264,7 @@ fn about_probe(front: &Front) -> Vec<String> {
     clippy::print_stdout,
     reason = "a test that checks nothing on this machine says so, as the test runner shows it"
 )]
-fn make_link(target: &Path, link: &Path) -> bool {
+pub(crate) fn make_link(target: &Path, link: &Path) -> bool {
     #[cfg(unix)]
     let made = std::os::unix::fs::symlink(target, link);
     #[cfg(windows)]
@@ -404,6 +414,15 @@ fn an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits
             "a turn started before the extension was registered"
         );
         assert!(world.provider.requests().is_empty());
+        // A turn that waits says why.
+        assert!(
+            front
+                .notices()
+                .iter()
+                .any(|notice| notice.starts_with("Registering the extension `probe`")),
+            "{:?}",
+            front.notices()
+        );
         assert!(cache_file(&world).load().cache.get(&hash).is_none());
         assert_eq!(cineris_ext::engine::runtimes_made(), made);
         registering.release();
@@ -443,6 +462,11 @@ fn a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again() {
                 .collect();
             // Said by the session that found it set aside, and by no other.
             assert_eq!(said.len(), usize::from(session == 0), "{said:?}");
+            // With its files under `~`, never the home directory's path.
+            let home = world.home.display().to_string();
+            for said in &said {
+                assert!(said.contains("`~/") && !said.contains(&home), "{said}");
+            }
             front.close().await;
         }
     });
@@ -666,15 +690,17 @@ fn a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_afte
         assert!(!resource.changed);
         let detail = &resource.detail;
         for words in [
-            "In `.cineris/extensions/probe`.",
+            "`probe` in `.cineris/extensions/probe`.",
             "It may run `gh`, which may reach the network.",
             "It may read the workspace's files that match `src/**`.",
             "It may write the workspace's files that match `out/**`.",
             "It may reach `api.example.com`, `*.example.org`.",
             cineris_ext::event::Event::ToolBefore.sees(),
             "(`tool.before`)",
-            // What acts unseen is shown as an escape.
-            "Tracks issues\\nfor you\\u{202e}txt.exe",
+            "Its version is `1`.",
+            // What acts unseen is shown as an escape, inside the quotes of
+            // the author's words.
+            "Its author describes it, in their words: \"Tracks issues\\nfor you\\u{202e}txt.exe\"",
         ] {
             assert!(detail.contains(words), "{words:?} is not in {detail:?}");
         }
@@ -734,6 +760,13 @@ fn a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_abou
                 resource.changed
             ),
             (TrustResourceKind::Extension, NAME, true)
+        );
+        assert!(
+            resource
+                .detail
+                .contains("It has changed since you approved it."),
+            "{}",
+            resource.detail
         );
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());

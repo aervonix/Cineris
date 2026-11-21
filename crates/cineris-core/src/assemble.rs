@@ -392,6 +392,10 @@ fn sourced_rules(loaded: &Loaded) -> Vec<SourcedRule> {
 pub(crate) struct ForTheRun {
     pub(crate) pin: Definition,
     pub(crate) git: bool,
+    /// The project's extensions the question listed, by the hashes shown:
+    /// approved for this session alone (the maintainers' call on step 28's
+    /// early review). A folder changed since stands changed.
+    pub(crate) extensions: Vec<Definition>,
 }
 
 /// What was learned about the project's trust.
@@ -424,6 +428,15 @@ pub(crate) struct Trust {
     /// The project is trusted and is a repository, and git was never shown
     /// (nor declined): it is asked about.
     git_new: bool,
+    /// The project's trust as the store gave it when this was worked out:
+    /// `None` when the store was not read, or could not be. The trust
+    /// question is shaped by this one reading (the early review of step
+    /// 28's second part: a second reading could differ from the first).
+    stored: Option<cineris_policy::ProjectTrust>,
+    /// What the trust question found in the project's folder of
+    /// extensions, when it looked: the session's finding takes it in place
+    /// of reading the folder again.
+    found: Option<cineris_ext::discover::Discovered>,
 }
 
 /// The project's rules as trust pins them (the owner's answer of
@@ -631,35 +644,22 @@ pub(crate) fn look(
     wanted: &Wanted,
 ) -> Result<(Trust, Option<TrustQuestion>), Box<ErrorData>> {
     let place = place(inner, wanted)?;
-    let trust = trust(inner, place.state.as_ref(), &place.root, &place.load)?;
+    let mut trust = trust(inner, place.state.as_ref(), &place.root, &place.load)?;
     if inner.options.trust_project {
         return Ok((trust, None));
     }
-    // A trusted project is asked about only what is new in it: its rules
-    // changed and not kept out, git, now that it is a repository, or an
-    // extension not approved as it is now (step 28), looked for with a look
-    // at its folder of extensions, two when it has a `.cineris`.
-    let rules_new = !trust.rules && !trust.rules_declined;
-    let quiet = trust.standing != TrustStanding::Untrusted && !rules_new && !trust.git_new;
-    let looked_in = if quiet {
-        let found = crate::ext::found::in_project(&place.resolver);
-        if found.found.is_empty() {
-            return Ok((trust, None));
-        }
-        Some(found)
-    } else {
-        None
-    };
-    let key = place.root.project_key();
-    let Some(state) = place.state.as_ref() else {
-        return Ok((trust, None));
-    };
-    let store = TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock));
-    let Ok(stored) = store.project(&key) else {
+    // The question is shaped by the one reading of the store that the
+    // trust was worked out from, never by a second, which a change in
+    // between could make another (the early review of step 28's second
+    // part: settings held back by the first and not by the second would be
+    // turned on by a yes without having been shown).
+    cineris_base::hook::point(crate::ext::found::THE_QUESTIONS_TRUST_IS_READ);
+    let Some(stored) = trust.stored.clone() else {
         // A store that cannot be read is said, and nothing is asked: an
         // answer could not be kept.
         return Ok((trust, None));
     };
+    let key = place.root.project_key();
     if stored.is_refused()
         || inner
             .not_now
@@ -669,14 +669,27 @@ pub(crate) fn look(
     {
         return Ok((trust, None));
     }
-    // A project not trusted is looked in only now, for what a yes would
-    // trust it with.
-    let extensions = crate::ext::found::asked(
-        looked_in.unwrap_or_else(|| crate::ext::found::in_project(&place.resolver)),
-        &place.resolver,
-        place.load.dirs.config.as_deref(),
-        &stored,
-    );
+    // A trusted project is asked about only what is new in it: its rules
+    // changed and not kept out, git, now that it is a repository, or an
+    // extension not approved as it is now (step 28). The project's folder
+    // of extensions is looked in only now, below the never and the not
+    // now: a look when it has none, two when it has a `.cineris`. The
+    // user's folder is only listed, for the names it takes, and only when
+    // the project has an extension. What was read is handed to the
+    // session, which does not read it again.
+    let rules_new = !trust.rules && !trust.rules_declined;
+    let quiet = trust.standing != TrustStanding::Untrusted && !rules_new && !trust.git_new;
+    let found = crate::ext::found::in_project(&place.resolver);
+    let extensions = if found.found.is_empty() {
+        crate::ext::found::Asked::default()
+    } else {
+        let users = crate::ext::found::UserNames::listed(
+            &place.resolver,
+            place.load.dirs.config.as_deref(),
+        );
+        crate::ext::found::asked(&found, &users, &stored)
+    };
+    trust.found = Some(found);
     if quiet && extensions.pins.is_empty() {
         return Ok((trust, None));
     }
@@ -790,6 +803,22 @@ pub(crate) fn look(
 /// session alone, as `--trust-project` would, while its rules are still the
 /// ones shown; a never or a keep is taken as not now.
 pub(crate) fn answer_trust(
+    inner: &Inner,
+    wanted: &Wanted,
+    question: &TrustQuestion,
+    answer: TrustAnswer,
+    mut trust: Trust,
+) -> Result<Trust, Box<ErrorData>> {
+    // What the question found in the project's folder goes on to the
+    // session, whatever the answer made of the trust.
+    let found = trust.found.take();
+    let mut answered = kept_answer(inner, wanted, question, answer, trust)?;
+    answered.found = found;
+    Ok(answered)
+}
+
+/// [`answer_trust`], but for what the question found.
+fn kept_answer(
     inner: &Inner,
     wanted: &Wanted,
     question: &TrustQuestion,
@@ -927,6 +956,22 @@ fn trusted_unkept(
     git_before: bool,
 ) -> Result<Trust, Box<ErrorData>> {
     let repository = git_after_an_unkept_yes(question.git_shown, git_before);
+    // The store's reason, with its file under `~`.
+    let failure = match StateDir::from_dirs(&options.dirs) {
+        Some(state) => crate::ext::found::with_paths_shown(
+            &failure.to_string(),
+            &[&state.trust_file()],
+            inner.options.env.home().as_deref(),
+        ),
+        None => failure.to_string(),
+    };
+    // The extensions the question listed are trusted with the rest, by the
+    // hashes shown, for this session alone.
+    let what = if question.extensions.is_empty() {
+        "its rules"
+    } else {
+        "its rules and the extensions you were shown"
+    };
     let load = |trusted: bool, profile: Option<&str>| {
         let mut options = options.clone();
         options.trust = if trusted {
@@ -956,15 +1001,18 @@ fn trusted_unkept(
             for_the_run: Some(ForTheRun {
                 pin: question.pin.clone(),
                 git: repository,
+                extensions: question.extensions.clone(),
             }),
             problem: Some(format!(
-                "Your answer could not be kept, so this project is trusted for this session \
-                 only, and will be asked about again: {failure}"
+                "Your answer could not be kept, so this project, {what}, is trusted for this \
+                 session only, and will be asked about again when a session opens: {failure}"
             )),
             git_note: None,
             standing: TrustStanding::ForTheRun,
             rules_declined: false,
             git_new: false,
+            stored: None,
+            found: None,
         })
     } else {
         Ok(Trust {
@@ -975,16 +1023,20 @@ fn trusted_unkept(
             for_the_run: Some(ForTheRun {
                 pin: question.pin.clone(),
                 git: repository,
+                extensions: question.extensions.clone(),
             }),
             problem: Some(format!(
-                "Your answer could not be kept, so this project is trusted for this session \
-                 only; its permission rules changed while you were asked, so its settings and \
-                 its allow rules are set aside: {failure}"
+                "Your answer could not be kept, so this project, {what}, is trusted for this \
+                 session only, and will be asked about again when a session opens; its \
+                 permission rules changed while you were asked, so its settings and its allow \
+                 rules are set aside: {failure}"
             )),
             git_note: None,
             standing: TrustStanding::RulesChanged,
             rules_declined: false,
             git_new: false,
+            stored: None,
+            found: None,
         })
     }
 }
@@ -1056,6 +1108,8 @@ fn trust(
             standing: TrustStanding::ForTheRun,
             rules_declined: false,
             git_new: false,
+            stored: None,
+            found: None,
         });
     }
     let (stored, problem) = match state {
@@ -1068,13 +1122,21 @@ fn trust(
                     cineris_policy::ProjectTrust::untrusted(),
                     Some(format!(
                         "The trust store could not be read, so this project is treated as not \
-                         trusted: {error}"
+                         trusted: {}",
+                        crate::ext::found::with_paths_shown(
+                            &error.to_string(),
+                            &[&state.trust_file()],
+                            inner.options.env.home().as_deref(),
+                        )
                     )),
                 ),
             }
         }
         None => (cineris_policy::ProjectTrust::untrusted(), None),
     };
+    // What was read, for the trust question to be shaped by: none when the
+    // store was not read whole.
+    let read = (problem.is_none() && state.is_some()).then(|| stored.clone());
     if !stored.is_trusted() {
         // A project the user said never to trust is not asked about: the
         // session says so, with the command that changes it.
@@ -1102,6 +1164,8 @@ fn trust(
             standing,
             rules_declined: false,
             git_new: false,
+            stored: read,
+            found: None,
         });
     }
     // Git reads the repository's configuration only once it was shown and
@@ -1155,6 +1219,8 @@ fn trust(
             standing: TrustStanding::Trusted,
             rules_declined: false,
             git_new,
+            stored: read,
+            found: None,
         })
     } else {
         // The user still trusts the project; what they have not seen is
@@ -1179,6 +1245,8 @@ fn trust(
             standing: TrustStanding::RulesChanged,
             rules_declined,
             git_new,
+            stored: read,
+            found: None,
         })
     }
 }
@@ -2079,6 +2147,7 @@ pub(crate) fn assemble(
         problem,
         git_note,
         standing,
+        found: project_found,
         ..
     } = match looked {
         Some(trust) => trust,
@@ -2623,6 +2692,7 @@ pub(crate) fn assemble(
     let extensions = Some(crate::ext::found::Finding {
         resolver: Arc::clone(&resolver),
         config_dir: load.dirs.config.clone(),
+        home: env.home(),
         state: state_dir.clone(),
         // A project's folder of extensions is looked in only while the
         // project is trusted.
@@ -2631,6 +2701,12 @@ pub(crate) fn assemble(
             TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
         )
         .then(|| project.clone()),
+        project_found,
+        for_the_run: for_the_run
+            .as_ref()
+            .map(|run| run.extensions.clone())
+            .unwrap_or_default(),
+        trust_project: options.trust_project,
         disabled: settings
             .extensions
             .iter()
@@ -2642,7 +2718,9 @@ pub(crate) fn assemble(
         cancel: options.cancel.child(),
     });
     #[cfg(not(feature = "scripts"))]
-    let extensions = ();
+    let extensions = {
+        let _ = project_found;
+    };
     let mut toolbox = Toolbox::read_only(Arc::clone(&registry))
         .with(WriteTool::new(editing.clone()))
         .with(EditTool::new(editing))

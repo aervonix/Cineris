@@ -9,10 +9,10 @@
 
 [break] pinned-users-folder-not-looked-in
 rule: The user's folder of extensions, in the configuration directory as it is given (with `~`, relative, with `..`, through a link), is looked in.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: roots.push(Root::user(config));
-replace: let _ = config;
+find: .map(|config| discover::discover(&[Root::user(config)], &inputs.resolver))
+replace: .filter(|_| false).map(|config| discover::discover(&[Root::user(config)], &inputs.resolver))
 caught-by:
     extensions_found::a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started
     extensions_found::the_users_folder_is_found_through_a_config_dir_given_with_a_tilde_relatively_or_with_dots
@@ -28,7 +28,7 @@ caught-by:
 
 [break] pinned-left-out-not-said
 rule: What discovery left out is said to the session with its reason: a project's folder of extensions behind a link out of the workspace among it.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
 find: .map(|left| sentence(&left.reason))
 replace: .filter(|_| false).map(|left| sentence(&left.reason))
@@ -39,7 +39,7 @@ caught-by:
 
 [break] pinned-changed-extension-loaded
 rule: An extension is loaded only when it stands approved: one changed since its pin, the user's or a project's, is not, and its script is never evaluated.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
 find: if standing == Standing::Approved {
 replace: if standing != Standing::New {
@@ -49,7 +49,7 @@ caught-by:
 
 [break] pinned-new-extension-loaded
 rule: A user's extension never pinned is not loaded, and its script is never evaluated.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
 find: if standing == Standing::Approved {
 replace: if standing != Standing::Changed {
@@ -58,16 +58,16 @@ caught-by:
 
 [break] pinned-projects-judged-by-the-users-pins
 rule: A project's extension stands by the project's entry in the trust store, not by the user's own pins.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: trust.get_or_insert_with(|| project_trust(inputs)).standing(&definition)
-replace: pins.get_or_insert_with(|| user_pins(inputs, &mut decided.told)).standing(&definition)
+find: project_standing(trust.get_or_insert_with(|| project_trust(inputs)), &inputs.for_the_run, &definition)
+replace: pins.get_or_insert_with(|| user_pins(inputs, &mut decided.told)).as_ref().map_or(Standing::New, |pins| pins.standing(&definition))
 caught-by:
     extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
 
 [break] pinned-turned-off-loaded
 rule: The user's extension that `[extensions.<name>] enabled = false` turns off is not loaded, and nothing is said or asked of it.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
 find: if inputs.disabled.contains(&found.manifest.name) {
 replace: if inputs.disabled.contains(&found.manifest.name) && false {
@@ -76,10 +76,10 @@ caught-by:
 
 [break] pinned-same-name-used
 rule: A project's extension that takes the name of one of the user's is not used, and the session says so.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: .find(|(user, _)| *user == found.manifest.name)
-replace: .find(|(user, _)| *user == found.manifest.name && false)
+find: if users.takes(&found.manifest.name) {
+replace: if users.takes(&found.manifest.name) && false {
 caught-by:
     extensions_found::a_projects_extension_of_a_users_name_is_not_used
 
@@ -87,7 +87,7 @@ caught-by:
 
 [break] pinned-not-told-the-command
 rule: The session is told of a user's extension it does not load, with the command that approves it.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: not_loaded
 in-string: `cineris ext add {shown}` shows it, to approve it.
 replace: It is not shown.
@@ -96,7 +96,7 @@ caught-by:
 
 [break] pinned-folder-not-shown-under-home
 rule: A user's extension is named, in the command that approves it, by its folder as the user is shown it: under `~`.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: not_loaded
 find: let shown = &found.shown;
 replace: let shown = &found.folder.display().to_string();
@@ -108,7 +108,7 @@ caught-by:
 
 [break] pinned-cache-hit-registered-again
 rule: An approved extension's registration is taken from the cache by its hash: nothing is evaluated, and no runtime made, before its first call.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
 find: match loaded.cache.get(&hash) {
 replace: match loaded.cache.get(&hash).filter(|_| false) {
@@ -117,7 +117,7 @@ caught-by:
 
 [break] pinned-entry-of-another-name-taken
 rule: A cache entry is the registration of the folder its hash is of, whose manifest names it: an entry under that hash that names another extension is no entry of it.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
 find: Some(entry) if entry.name == found.manifest.name =>
 replace: Some(entry) =>
@@ -126,7 +126,7 @@ caught-by:
 
 [break] pinned-missing-entry-left-out
 rule: A missing entry fails closed: an approved extension the cache does not hold is registered when the session opens, not left out.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
 find: _ => decided.missing.push(found)
 replace: _ => drop(found)
@@ -135,26 +135,27 @@ caught-by:
     extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
 
 [break] pinned-first-turn-does-not-wait
-rule: The session's first turn waits for its extensions: no turn starts while an approved extension's registration is missing.
-file: crates/cineris-core/src/core.rs
-find: live.extensions.wait().await;
-replace: let _ = &live.extensions;
+rule: The session's first turn waits for its extensions: no turn starts while an approved extension's registration is missing. (`turn/start` waits, and so does the look at a turn's start, so the break is of the wait both use.)
+file: crates/cineris-core/src/ext/found.rs
+in: Ready::wait
+find: if self.done.load(Ordering::SeqCst) {
+replace: if true || self.done.load(Ordering::SeqCst) {
 caught-by:
     extensions_found::an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits_for_it
 
 [break] pinned-registration-not-kept
 rule: A registration made because the cache missed it is written to the cache, so that the next session reads it.
-file: crates/cineris-core/src/ext/found.rs
-in: keep
-find: for (hash, entry) in written {
-replace: for (hash, entry) in written.into_iter().take(0) {
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Kept::keep
+find: for (hash, entry) in self.written {
+replace: for (hash, entry) in self.written.into_iter().take(0) {
 caught-by:
     extensions_found::an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits_for_it
     extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
 
 [break] pinned-set-aside-not-said
 rule: A registration cache set aside is said to the session, once.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
 find: if let Some(why) = &loaded.set_aside {
 replace: if let Some(why) = loaded.set_aside.as_ref().filter(|_| false) {
@@ -174,8 +175,8 @@ caught-by:
 
 [break] pinned-cache-never-pruned
 rule: The cache is pruned of the hashes no pin names.
-file: crates/cineris-core/src/ext/found.rs
-in: keep
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Kept::keep
 find: cache.prune(|hash| pinned.contains(hash))
 replace: cache.prune(|_| true)
 caught-by:
@@ -183,7 +184,7 @@ caught-by:
 
 [break] pinned-prune-drops-other-projects
 rule: The cache is pruned by every trusted project's pins as well as the user's: a cache that projects share does not drop another project's entries.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: pinned
 find: .pinned_hashes(&kind)
 replace: .pinned_hashes(&TrustResourceKind::Hook)
@@ -192,7 +193,7 @@ caught-by:
 
 [break] pinned-prune-drops-the-users-own
 rule: The cache keeps the hashes the user's own pins of extensions name.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: pinned
 find: .filter(|pin| pin.kind.as_str() == kind.as_str())
 replace: .filter(|pin| pin.kind.as_str() != kind.as_str())
@@ -201,7 +202,7 @@ caught-by:
 
 [break] pinned-unreadable-store-prunes-all
 rule: When a store of pins cannot be read, nothing is pruned: an entry it may pin is kept.
-file: crates/cineris-core/src/ext/found.rs
+file: crates/cineris-core/src/ext/found/pipeline.rs
 in: pinned
 find: .pinned_hashes(&kind).ok()?
 replace: .pinned_hashes(&kind).unwrap_or_default()
@@ -232,7 +233,7 @@ caught-by:
 [break] pinned-yes-pins-no-extension
 rule: A yes to the trust question pins each extension it listed, as it was read, with the project's other definitions.
 file: crates/cineris-core/src/assemble.rs
-in: answer_trust
+in: kept_answer
 find: pin.extend(question.extensions.iter().cloned());
 replace: pin.extend(question.extensions.iter().take(0).cloned());
 caught-by:
@@ -269,8 +270,8 @@ caught-by:
 rule: The trust question does not list a project's extension of a name the user's own has: it is not used whatever the answer.
 file: crates/cineris-core/src/ext/found.rs
 in: asked
-find: if users.contains(&found.manifest.name) {
-replace: if users.contains(&found.manifest.name) && false {
+find: if users.takes(&found.manifest.name) {
+replace: if users.takes(&found.manifest.name) && false {
 caught-by:
     extensions_found::a_projects_extension_of_a_users_name_is_not_used
 
@@ -278,8 +279,8 @@ caught-by:
 rule: Every text of the manifest that the trust question shows has what acts unseen written as an escape.
 file: crates/cineris-core/src/ext/found.rs
 in: in_words
-find: let description = visible(manifest.description.trim());
-replace: let description = std::borrow::Cow::Borrowed(manifest.description.trim());
+find: visible(&quoted(description))
+replace: quoted(description)
 caught-by:
     extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
 
@@ -300,3 +301,367 @@ find: event.sees()
 replace: event.as_str()
 caught-by:
     extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+
+# ------------------------------------------------------------ the early review's findings
+
+[break] pinned-question-reads-the-store-again
+rule: The trust question is shaped by the one reading of the store the session's trust was worked out from: a second reading could differ, and a yes would turn on settings never shown.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: let Some(stored) = trust.stored.clone() else {
+replace: let Some(stored) = place.state.as_ref().and_then(|state| TrustStore::new(state.trust_file(), Arc::clone(&inner.options.clock)).project(&place.root.project_key()).ok()) else {
+caught-by:
+    extensions_trust::a_trust_taken_away_while_the_question_is_shaped_turns_on_nothing_unshown
+
+[break] pinned-description-first
+rule: The author's description comes after what the manifest lets the extension do, so that it cannot pose as the harness's sentences.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: words.push(format!(
+occurrence: 2
+replace: words.insert(0, format!(
+caught-by:
+    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+
+[break] pinned-description-closes-its-quote
+rule: The author's description is quoted so that it cannot close its quotes: a `"`, a backtick and a `\` in it are written with a `\` before them.
+file: crates/cineris-core/src/ext/found.rs
+in: quoted
+find: if matches!(character, '\\' | '"' | '`') {
+replace: if matches!(character, '\\') {
+caught-by:
+    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+    ext::found::tests::quoted_text_cannot_close_its_quotes
+
+[break] pinned-entries-not-escaped
+rule: The programs, globs and hosts the question shows are written with what acts unseen escaped.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: .map(|item| format!("`{}`", visible(item)))
+replace: .map(|item| format!("`{}`", item))
+caught-by:
+    extensions_trust::every_text_of_the_manifest_is_shown_escaped
+
+[break] pinned-version-not-escaped
+rule: The version the question shows is written with what acts unseen escaped.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: visible(&manifest.version)
+replace: manifest.version.as_str()
+caught-by:
+    extensions_trust::every_text_of_the_manifest_is_shown_escaped
+
+[break] pinned-manifest-takes-a-backtick
+rule: The manifest refuses a backtick in a program, a glob or the version, which would end the code an approval shows it as.
+file: crates/cineris-ext/src/manifest.rs
+in: check_shown
+find: if text.contains('`') {
+replace: if false {
+caught-by:
+    manifest::a_program_a_glob_or_the_version_with_a_backtick_or_too_long_is_refused
+
+[break] pinned-manifest-entry-unbounded
+rule: A program or glob a manifest lists is at most 256 bytes.
+file: crates/cineris-ext/src/manifest.rs
+in: check_shown
+find: if text.len() > MAX_ENTRY_BYTES {
+replace: if text.len() > MAX_ENTRY_BYTES * 2 {
+caught-by:
+    manifest::a_program_a_glob_or_the_version_with_a_backtick_or_too_long_is_refused
+
+[break] pinned-user-names-from-found-alone
+rule: A user's folder takes its name whether or not it could be used: a user's extension left out does not free its name for a project's.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::of
+find: .filter(|(source, _)| *source == Source::User)
+replace: .filter(|(source, name)| *source == Source::User && user.found.iter().any(|found| found.manifest.name == *name))
+caught-by:
+    extensions_trust::a_users_extension_left_out_keeps_its_name_from_a_projects
+
+[break] pinned-user-names-case-kept
+rule: A name is the user's with ASCII's case folded: a project's `probe` is not used beside the user's `Probe`.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::of
+find: .map(|(_, name)| name.to_ascii_lowercase())
+replace: .map(|(_, name)| name.clone())
+caught-by:
+    extensions_trust::a_users_extension_left_out_keeps_its_name_from_a_projects
+
+[break] pinned-user-names-cut-ignored
+rule: A user's folder of extensions that cannot be listed whole takes every name.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::takes
+find: self.cut || self.names.contains(&name.to_ascii_lowercase())
+replace: self.names.contains(&name.to_ascii_lowercase())
+os: linux
+caught-by:
+    extensions_trust::a_users_folder_that_cannot_be_listed_takes_every_name
+
+[break] pinned-turn-waits-for-the-cache
+rule: The first turn waits for the extensions' tools and not for the cache, which is written and pruned after.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: first
+find: extensions.ready.settle();
+replace: let _ = &extensions.ready;
+caught-by:
+    extensions_trust::a_turn_does_not_wait_for_the_cache_to_be_written
+
+[break] pinned-project-read-again
+rule: What the trust question read of the project's folder is handed to the session, which does not read it again.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: .map(|_| project_found.unwrap_or_else(|| in_project(&inputs.resolver)))
+replace: .map(|_| in_project(&inputs.resolver))
+caught-by:
+    extensions_trust::each_folder_is_read_once_when_a_session_opens
+
+[break] pinned-users-folder-read-for-its-names
+rule: The trust question only lists the user's folder for the names it takes, and reads none of its extensions.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::listed
+find: discover::names(&[Root::user(config)], resolver)
+replace: discover::discover(&[Root::user(config)], resolver)
+caught-by:
+    extensions_trust::each_folder_is_read_once_when_a_session_opens
+
+[break] pinned-never-looked-in
+rule: A project marked never is not looked in: the question's look is below the never.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: if stored.is_refused() ||
+replace: if false ||
+caught-by:
+    extensions_trust::a_project_marked_never_is_not_looked_in
+
+[break] pinned-not-now-looked-in
+rule: After not now, another session of the core asks nothing and does not look in the project's folder.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: .contains(&key)
+replace: .contains(&key) && false
+caught-by:
+    extensions_trust::after_not_now_another_session_of_the_core_does_not_look
+
+[break] pinned-unreadable-pins-prune
+rule: When the pin store cannot be read, nothing is pruned from the cache.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: pinned
+find: .pins().ok()?
+replace: .pins().unwrap_or_default()
+caught-by:
+    extensions_trust::an_unreadable_pin_store_loads_none_of_the_users_says_why_and_prunes_nothing
+
+[break] pinned-unreadable-pins-pin-nothing-said
+rule: A pin store that cannot be read is said to be why the user's extensions are not loaded, not that they were never approved.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: user_pins
+find: match PinStore::new(&file, Arc::clone(&inputs.clock)).pins() {
+replace: match PinStore::new(&file, Arc::clone(&inputs.clock)).pins().or_else(|_| Ok::<_, cineris_policy::PinError>(UserPins::default())) {
+caught-by:
+    extensions_trust::an_unreadable_pin_store_loads_none_of_the_users_says_why_and_prunes_nothing
+
+[break] pinned-pin-store-path-absolute
+rule: The pin store's message names its file under `~`, never the home directory's path.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: user_pins
+find: with_paths_shown(&error.to_string(), &[&file], inputs.home.as_deref())
+replace: error.to_string()
+caught-by:
+    extensions_trust::an_unreadable_pin_store_loads_none_of_the_users_says_why_and_prunes_nothing
+
+[break] pinned-set-aside-path-absolute
+rule: The registration cache's set-aside sentence names its files under `~`, never the home directory's path.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: with_paths_shown(why, &[&file, &aside], inputs.home.as_deref())
+replace: why.clone()
+caught-by:
+    extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
+
+[break] pinned-keep-asks-again-in-the-core
+rule: Keep trusting it, without a changed extension, is kept by the core for its run: it asks no more until the next start.
+file: crates/cineris-core/src/assemble.rs
+in: kept_answer
+find: if !question.extensions.is_empty() {
+replace: if false {
+caught-by:
+    extensions_trust::keeping_the_trust_without_a_changed_extension_leaves_it_off_until_the_next_start
+
+[break] pinned-trust-project-names-the-question
+rule: Under `--trust-project`, which puts no question, an unapproved project extension's notice names `cineris permissions trust`.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: not_loaded
+find: let project_remedy = if trust_project {
+replace: let project_remedy = if false && trust_project {
+caught-by:
+    extensions_trust::trust_for_the_run_approves_no_unpinned_extension_and_names_the_command
+
+[break] pinned-project-entry-turns-off-the-users
+rule: `[extensions.<name>]` is the user's alone: a project's entry does not turn off the user's extension.
+file: crates/cineris-config/src/schema/sections.rs
+find: [UserOnly, NextSession] pub enabled: bool = true
+occurrence: 1
+replace: [Preference, NextSession] pub enabled: bool = true
+packages: cineris-core
+caught-by:
+    extensions_trust::a_projects_entry_does_not_turn_off_the_users_extension
+
+[break] pinned-unkept-yes-drops-the-extensions
+rule: A yes the trust store cannot keep approves the extensions the question listed, by the hashes shown, for that session.
+file: crates/cineris-core/src/assemble.rs
+in: trusted_unkept
+find: extensions: question.extensions.clone()
+occurrence: 1
+replace: extensions: Vec::new()
+caught-by:
+    extensions_trust::a_yes_the_store_cannot_keep_loads_the_extensions_shown_for_the_session
+
+[break] pinned-unkept-yes-says-the-rules-alone
+rule: A yes the trust store cannot keep says that the rules and the extensions shown are trusted for this session only, and asked about again.
+file: crates/cineris-core/src/assemble.rs
+in: trusted_unkept
+in-string: its rules and the extensions you were shown
+replace: its rules
+caught-by:
+    extensions_trust::a_yes_the_store_cannot_keep_loads_the_extensions_shown_for_the_session
+
+[break] pinned-registering-unsaid
+rule: A turn that waits for an extension's registration says why.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+in-string: Registering the extension
+replace: Evaluating the extension
+caught-by:
+    extensions_found::an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits_for_it
+
+[break] pinned-changed-detail-unsaid
+rule: An extension listed as changed says so in its own detail, beside the flag.
+file: crates/cineris-core/src/ext/found.rs
+in: detail
+find: if changed {
+replace: if false {
+caught-by:
+    extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
+
+[break] pinned-dialog-calls-an-extension-rules
+rule: The dialog says the rules changed only of rules: a changed extension is no changed rule.
+file: crates/cineris-tui/src/view/dialog.rs
+in: trust
+find: changed |= resource.changed && resource.kind == TrustResourceKind::Rules;
+replace: changed |= resource.changed;
+caught-by:
+    app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
+
+[break] pinned-dialog-keep-names-the-rules
+rule: The keep answer is named by the kinds of what is new: rules and an extension are "these", not "the new rules".
+file: crates/cineris-tui/src/view/dialog.rs
+in: third_trust_answer
+find: (false, true, false) =>
+replace: (false, true, _) =>
+caught-by:
+    app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
+
+[break] pinned-dialog-keep-promises-no-more
+rule: The dialog does not promise that a keep of an extension asks no more: the next start asks again.
+file: crates/cineris-tui/src/view/dialog.rs
+in: trust_answers_said
+find: } else if request.trusted && extensions {
+replace: } else if false {
+caught-by:
+    app::tests::a_trusted_projects_question_offers_to_keep_its_trust_and_not_never
+
+[break] pinned-permissions-trust-pins-no-extension
+rule: `cineris permissions trust`, with the extensions approved, pins each as it was shown.
+file: crates/cineris-core/src/manage.rs
+in: Core::trust_project_with
+find: pin.extend(extensions.iter().map(|extension| extension.definition.clone()));
+replace: pin.extend(extensions.iter().take(0).map(|extension| extension.definition.clone()));
+packages: cineris-cli
+caught-by:
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+
+[break] pinned-permissions-trust-asks-nobody
+rule: `cineris permissions trust` approves a project's extensions only on a yes at a terminal, and with no terminal only with `--with-extensions`.
+file: crates/cineris-cli/src/commands.rs
+in: approves_extensions
+find: if at_terminal {
+replace: if !at_terminal {
+caught-by:
+    commands::tests::a_projects_extensions_are_approved_only_on_a_yes_or_the_flag
+
+[break] pinned-closed-session-goes-on
+rule: A session's end ends its extensions' finding: a closed session's registration does not go on.
+file: crates/cineris-core/src/core.rs
+find: live.extensions.stop();
+replace: let _ = &live.extensions;
+caught-by:
+    extensions_trust::a_session_closed_while_its_registration_waits_neither_blocks_nor_leaks
+
+# ------------------------------------------------------------ a change, at the next turn
+
+[break] pinned-turn-start-looks-at-nothing
+rule: A turn's start looks again at what the extensions were found in.
+file: crates/cineris-core/src/core.rs
+find: live.extensions.recheck().await;
+replace: let _ = &live.extensions;
+caught-by:
+    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
+    extensions_reload::an_extension_approved_in_a_session_is_loaded_at_the_next_turn
+
+[break] pinned-change-unseen
+rule: A place whose stamp differs from what it was is a change.
+file: crates/cineris-core/src/ext/watched.rs
+in: Watched::changed
+find: now != *stamp ||
+replace: false &&
+caught-by:
+    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
+    extensions_reload::a_change_is_seen_however_the_configuration_directory_is_given
+    ext::watched::tests::a_change_is_seen_and_nothing_is_looked_at_through_a_link
+
+[break] pinned-stamp-follows-a-link
+rule: A stamp looks at a place itself and never through a link, which a repository may put where a folder was.
+file: crates/cineris-core/src/ext/watched.rs
+in: Stamp::of
+find: std::fs::symlink_metadata(path)
+replace: std::fs::metadata(path)
+caught-by:
+    ext::watched::tests::a_change_is_seen_and_nothing_is_looked_at_through_a_link
+
+[break] pinned-withdrawn-kept
+rule: An extension that no longer stands approved as it was loaded is withdrawn: its tools leave the registry.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+find: self.registry.remove_source(&gone.1);
+replace: let _ = &gone.1;
+caught-by:
+    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
+    extensions_reload::a_projects_folder_swapped_for_a_link_out_is_withdrawn
+
+[break] pinned-pins-unwatched
+rule: The stores of the pins are watched: an approval made in another process loads the extension at the next turn.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: places
+find: places.push(state.pins_file());
+replace: let _ = state.pins_file();
+caught-by:
+    extensions_reload::an_extension_approved_in_a_session_is_loaded_at_the_next_turn
+
+[break] pinned-project-way-unwatched
+rule: The names on the way to the project's folder of extensions are watched, each itself: a folder swapped for a link out is seen.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: places
+find: for name in discover::PROJECT_FOLDER {
+replace: for name in discover::PROJECT_FOLDER.into_iter().take(0) {
+caught-by:
+    extensions_reload::a_projects_folder_swapped_for_a_link_out_is_withdrawn
+
+# ------------------------------------------------------------ start-up
+
+[break] pinned-open-waits-for-the-finding
+rule: Nothing of an extension is read on the path that opens the session: the finding runs after, and only the first turn waits for it.
+file: crates/cineris-core/src/core.rs
+find: let extensions = crate::ext::found::start(extensions);
+replace: let extensions = crate::ext::found::start(extensions); extensions.wait().await;
+caught-by:
+    extensions_reload::with_an_extension_nothing_of_it_is_read_until_the_session_is_open

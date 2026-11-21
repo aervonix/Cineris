@@ -61,7 +61,9 @@ pub use crate::clients::{ClientId, ClientInfo};
 pub use crate::core::{Client, Core, CoreOptions, OpError};
 pub use crate::events::{EventQueue, Outgoing, QUEUE_CAPACITY};
 pub use crate::knowledge::AFTER_THE_RULES;
-pub use crate::manage::{Project, ProjectFiles, ProviderCredential, TrustState, Trusted};
+pub use crate::manage::{
+    Project, ProjectExtension, ProjectFiles, ProviderCredential, TrustState, Trusted,
+};
 pub use crate::policy::{
     AFTER_THE_LOOK, BEFORE_THE_APPROVAL_IS_OPEN, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE, PermissionDenial,
 };

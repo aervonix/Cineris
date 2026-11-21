@@ -432,8 +432,15 @@ pub(crate) enum PermissionsCommand {
     List,
     /// `revoke ID…`
     Revoke { ids: Vec<String> },
-    /// `trust`: trust this project, or approve the change of its rules.
-    Trust,
+    /// `trust [--with-extensions]`: trust this project, or approve the
+    /// change of its rules; and its extensions, shown, on a yes at a
+    /// terminal, or with `--with-extensions` where there is none to ask at
+    /// (since step 28).
+    Trust {
+        /// `--with-extensions`: approve the extensions shown with no
+        /// terminal to ask at.
+        with_extensions: bool,
+    },
     /// `untrust`
     Untrust,
     /// `forget`: forget trust and never alike, so the next start asks
@@ -888,9 +895,11 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
         }
         Topic::Permissions => {
             let mut ids = Vec::new();
+            let mut with_extensions = false;
             while let Some(argument) = parser.next()? {
                 match argument {
                     Arg::Value(id) if action == "revoke" => ids.push(id.string()?),
+                    Arg::Long("with-extensions") if action == "trust" => with_extensions = true,
                     Arg::Short('h') | Arg::Long("help") => return Ok(Command::Help(topic)),
                     other => return Err(unexpected(&other)),
                 }
@@ -901,7 +910,9 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                     "'permissions revoke' takes the ids that 'permissions list' shows".to_owned(),
                 )),
                 "revoke" => Ok(Command::Permissions(PermissionsCommand::Revoke { ids })),
-                "trust" => Ok(Command::Permissions(PermissionsCommand::Trust)),
+                "trust" => Ok(Command::Permissions(PermissionsCommand::Trust {
+                    with_extensions,
+                })),
                 "untrust" => Ok(Command::Permissions(PermissionsCommand::Untrust)),
                 "forget" => Ok(Command::Permissions(PermissionsCommand::Forget)),
                 other => Err(wrong(other)),
