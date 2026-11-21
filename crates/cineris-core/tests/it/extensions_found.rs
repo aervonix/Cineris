@@ -26,7 +26,7 @@ use cineris_protocol::session::SessionSettings;
 use cineris_testkit::{FakeClock, FakeTimer, Hold, Response, block_on};
 use serde_json::json;
 
-use crate::{Answering, Front, World, calls, poll_once, says};
+use crate::{Answering, Front, World, calls, poll_once, says, settle};
 
 /// The name of every extension here.
 pub(crate) const NAME: &str = "probe";
@@ -538,6 +538,7 @@ fn the_registration_cache_is_taken_and_pruned_as_the_pins_say() {
         let results = front.results();
         assert!(found_probe(&front), "{results:?}");
         assert!(!results[0].2.contains("planted"), "{results:?}");
+        settle().await;
         front.close().await;
     });
     // Registered again, and kept as what it is.
@@ -571,6 +572,9 @@ fn the_registration_cache_is_taken_and_pruned_as_the_pins_say() {
         let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
+        // The cache is written and pruned after the turn, which waits for
+        // neither: let it be, before the session's end ends its work.
+        settle().await;
         front.close().await;
     });
     let kept = cache_file(&world).load().cache;
@@ -591,6 +595,9 @@ fn the_registration_cache_is_taken_and_pruned_as_the_pins_say() {
         let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
+        // The cache is written and pruned after the turn, which waits for
+        // neither: let it be, before the session's end ends its work.
+        settle().await;
         front.close().await;
     });
     assert!(cache_file(&world).load().cache.get(&unread).is_some());
