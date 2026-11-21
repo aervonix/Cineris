@@ -19,6 +19,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cineris-agent
 
 - [a-background-summary-past-its-turn-cannot-be-interrupted](a-background-summary-past-its-turn-cannot-be-interrupted.md): `interrupt` on an idle session does not stop a background summary request, which runs on and goes uncounted. Owner: step 32.
+- [a-break-of-a-refused-summarys-budget-that-its-tests-do-not-catch](a-break-of-a-refused-summarys-budget-that-its-tests-do-not-catch.md): The break that makes a summary request refused as too long teach nothing, `step-15-fixes/refused-summary-teaches-nothing`, is not caught by the tests it names, so the rule that such a refusal teaches the budget is not held by a test. Owner: the maintainers, a small-fix session.
 - [a-kept-run-adopted-after-its-call-moved](a-kept-run-adopted-after-its-call-moved.md): A read kept from a response sent again is used for its call even when the call was planned again onto another path: a stale result. Since step 28 no extension tool can reach it (an extension's tool always runs alone and is never started early); an MCP server's tool still could. Owner: step 30, or the next change to the round's cache.
 - [a-masked-instruction-notice-is-told-again](a-masked-instruction-notice-is-told-again.md): A masked instruction-file notice hashes differently on reload, so the file is announced as changed after every resume. Owner: a later step on instruction files, or step 32.
 - [a-prompt-past-the-trigger-on-a-small-window](a-prompt-past-the-trigger-on-a-small-window.md): On a small-window model the first estimate exceeds `context.compact_at`, so every turn ends `compaction_failed` unsent. Owner: a later step on local models, or step 33.
@@ -42,6 +43,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-cli
 
+- [a-break-of-headless-output-that-its-test-does-not-catch](a-break-of-headless-output-that-its-test-does-not-catch.md): The break that sends a headless run's words for a person to standard output, `step-13b/diagnostics-on-standard-output`, is not caught by the test it names, so the rule that standard output carries only the result is not held by a test. Owner: the maintainers, a small-fix session.
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
 - [rewind-and-fork-have-no-test-of-the-real-binary](rewind-and-fork-have-no-test-of-the-real-binary.md): `/rewind` and fork are tested through the application's scripted link and the core's own tests, not by the real binary under a pseudo-terminal, in process or under `cineris attach`. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
