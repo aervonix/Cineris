@@ -62,6 +62,7 @@ fn extension_running(
         .run(cineris_ext::engine::register(snapshot, &world.timer))
         .unwrap();
     ApprovedExtension {
+        source: cineris_ext::source::Source::User,
         folder,
         hash,
         manifest,
