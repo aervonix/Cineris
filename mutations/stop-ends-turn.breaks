@@ -71,7 +71,7 @@ find: result = result.stopping_turn(note);
 occurrence: 1
 replace: let _ = &note;
 caught-by:
-    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
+    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_is_put_back_and_stops_the_turn
     cineris-core::it adversary::sys_an_adversarial_command_reaches_only_what_it_may
 
 [break] the-shells-change-from-outside-is-not-marked

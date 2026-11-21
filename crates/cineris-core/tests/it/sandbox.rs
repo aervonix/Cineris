@@ -684,7 +684,6 @@ fn sys_after_a_put_back_the_next_command_runs() {
     world
         .provider
         .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
-    world.provider.push(says("Stopped."));
     world.provider.push(calls(&[(
         "c2",
         "shell",

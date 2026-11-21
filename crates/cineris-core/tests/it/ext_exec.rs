@@ -1707,7 +1707,6 @@ mod confined {
             "probe",
             &json!({"program": "sh", "args": ["-c", plant]}),
         ));
-        world.provider.push(says("Stopped."));
         world.provider.push(calls(&[(
             "c2",
             "shell",

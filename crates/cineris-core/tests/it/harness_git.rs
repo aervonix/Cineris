@@ -252,7 +252,6 @@ fn sys_a_filter_a_confined_command_plants_never_runs_afterwards() {
     world
         .provider
         .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
-    world.provider.push(says("Stopped."));
     world.provider.push(calls(&[(
         "c2",
         "shell",
@@ -522,13 +521,11 @@ fn sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back(
     world
         .provider
         .push(calls(&[("c1", "shell", json!({"command": "sh plant.sh"}))]));
-    world.provider.push(says("Stopped."));
     world.provider.push(calls(&[(
         "c2",
         "shell",
         json!({"command": "sh include.sh"}),
     )]));
-    world.provider.push(says("Stopped."));
     let core = world.core_with(|options| options.launcher = Some(launcher()));
     world.run(async {
         let front = Front::start_as(
@@ -610,7 +607,6 @@ fn sys_what_a_command_names_that_was_already_there_is_not_deleted() {
     world
         .provider
         .push(calls(&[("c1", "shell", json!({"command": "sh setup.sh"}))]));
-    world.provider.push(says("Stopped."));
     let core = world.core_with(|options| options.launcher = Some(launcher()));
     let shown = world.run(async {
         let front = Front::start_as(
@@ -666,7 +662,6 @@ fn sys_naming_the_working_tree_for_hooks_deletes_nothing() {
     world
         .provider
         .push(calls(&[("c1", "shell", json!({"command": "sh setup.sh"}))]));
-    world.provider.push(says("Stopped."));
     let core = world.core_with(|options| options.launcher = Some(launcher()));
     let shown = world.run(async {
         let front = Front::start_as(
@@ -717,7 +712,6 @@ fn sys_a_hook_planted_beside_a_folder_no_look_can_list_is_put_back() {
     world
         .provider
         .push(calls(&[("c1", "shell", json!({"command": "sh plant.sh"}))]));
-    world.provider.push(says("Stopped."));
     let core = world.core_with(|options| options.launcher = Some(launcher()));
     let shown = world.run(async {
         let front = Front::start_as(
