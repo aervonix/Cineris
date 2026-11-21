@@ -105,6 +105,13 @@ pub(crate) trait Runner: Send {
     /// Removes what earlier commands kept: called once the copies' lock is
     /// held, so that no other command's run is in them.
     fn forget_kept(&mut self) {}
+
+    /// The folder the runner's tests' scratch base shares with the other
+    /// jobs', which the command removes once all of them are done. None for
+    /// a runner whose base shares none.
+    fn shared_folder(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// What the run of a set's tests with nothing broken came to, with any
@@ -332,26 +339,12 @@ impl TestsBase {
     /// this command's, by its name, left by a run that was killed. Returns
     /// what could not be cleared, to be said; a folder that cannot be made
     /// is an error.
-    fn make(&self) -> Result<Option<String>> {
-        self.make_with(&mut |dir| fs::create_dir_all(dir))
-    }
-
-    /// [`TestsBase::make`], with `create` making the folder and its parents.
     ///
-    /// Made again once when a folder on the way was not found: another job
-    /// removes the command's folder when it has emptied it, and may do so
-    /// between the making of the command's folder and the making of this
-    /// one in it.
-    fn make_with(
-        &self,
-        create: &mut dyn FnMut(&Path) -> std::io::Result<()>,
-    ) -> Result<Option<String>> {
+    /// The command's folder it is made in is never removed while a job
+    /// runs ([`RemovedWhenDone`]).
+    fn make(&self) -> Result<Option<String>> {
         let note = crate::combine::remove_tree(&self.dir).err();
-        let made = match create(&self.dir) {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => create(&self.dir),
-            made => made,
-        };
-        made.map_err(|error| {
+        fs::create_dir_all(&self.dir).map_err(|error| {
             format!(
                 "could not make the tests' scratch folder {}: {error}",
                 self.dir.display()
@@ -372,8 +365,8 @@ impl TestsBase {
         self.dir.with_file_name(jobs::numbered(&place, earlier))
     }
 
-    /// Removes what earlier commands kept of this job's runs, and the
-    /// command's folder if nothing else is in it. Returns what could not be
+    /// Removes what earlier commands kept of this job's runs. The command's
+    /// folder stays, for the jobs about to run. Returns what could not be
     /// removed, to be said.
     fn forget_kept(&self) -> Vec<String> {
         let (Some(parent), Some(name)) = (self.dir.parent(), self.dir.file_name()) else {
@@ -390,24 +383,39 @@ impl TestsBase {
                 }
             }
         }
-        if let Some(named) = &self.named {
-            let _ = fs::remove_dir(named);
-        }
         notes
     }
 
-    /// Removes the folder, with whatever a test that failed left in it, and
-    /// the command's folder around it once no job's folder, and nothing
-    /// kept, is left there. Returns what could not be removed (a file a
-    /// process still holds on Windows), to be said: the next run of the job
-    /// removes it.
+    /// Removes the folder, with whatever a test that failed left in it.
+    /// Returns what could not be removed (a file a process still holds on
+    /// Windows), to be said: the next run of the job removes it. The
+    /// command's folder around it stays ([`RemovedWhenDone`]).
     fn remove(&self) -> Option<String> {
-        let failed = crate::combine::remove_tree(&self.dir).err();
-        if let Some(named) = &self.named {
-            // Fails while another job's folder is in it, and is left.
-            let _ = fs::remove_dir(named);
+        crate::combine::remove_tree(&self.dir)
+            .err()
+            .map(|error| format!("The tests' scratch folder was left: {error}"))
+    }
+}
+
+/// The folders the jobs' scratch bases share (each job's command folder),
+/// removed when this is dropped if nothing is left in them: when every job
+/// is done, and before the copies' lock is let go.
+///
+/// Never while a job runs. A job that removed the command's folder when it
+/// found it empty, between another job's runs, raced that job's making of
+/// its folder in it: on Windows a folder removed while something holds it
+/// open stays, being deleted, until the last handle goes, and a folder
+/// made in it meanwhile is refused (`Access is denied`), which stopped the
+/// command. On Linux the race only ever met a folder that was gone.
+struct RemovedWhenDone(Vec<PathBuf>);
+
+impl Drop for RemovedWhenDone {
+    fn drop(&mut self) {
+        for folder in &self.0 {
+            // Fails while something is left in it, a kept run's folder,
+            // and is left.
+            let _ = fs::remove_dir(folder);
         }
-        failed.map(|error| format!("The tests' scratch folder was left: {error}"))
     }
 }
 
@@ -640,6 +648,10 @@ impl Runner for CargoRunner {
     fn forget_kept(&mut self) {
         let notes = self.tests.forget_kept();
         self.note(&notes);
+    }
+
+    fn shared_folder(&self) -> Option<PathBuf> {
+        self.tests.named.clone()
     }
 }
 
@@ -1379,6 +1391,14 @@ pub(crate) fn drive_jobs(
     for runner in runners.iter_mut() {
         runner.forget_kept();
     }
+    // Declared after the lock, so removed before it is let go, and after
+    // every job is done whichever way the run ends.
+    let _shared = RemovedWhenDone(
+        runners
+            .iter()
+            .filter_map(|runner| runner.shared_folder())
+            .collect(),
+    );
     let files = tree_files(root)?;
     let code = code_hash(root, &files)?;
     let copies: Vec<PathBuf> = (0..runners.len())
@@ -2383,7 +2403,9 @@ replace: \"inside\"
         fs::set_permissions(&left, permissions).unwrap();
         assert_eq!(base.remove(), None);
         assert!(!base.dir.exists(), "the base is removed after the run");
-        assert!(!named.exists(), "and the command's folder with the last");
+        // The command's folder stays while the command runs, though no
+        // job's folder is in it: another job may be making its own there.
+        assert!(named.is_dir(), "the command's folder is left");
 
         // What a run that was killed left, or a run that was kept, is the
         // command's by its name, and is emptied before the next run.
@@ -2397,12 +2419,20 @@ replace: \"inside\"
             "what was left is gone before the run"
         );
 
-        // Another job's folder keeps the command's folder.
+        // Another job's folder is left.
         let other = named.join("job-2");
         fs::create_dir_all(&other).unwrap();
         assert_eq!(base.remove(), None);
         assert!(!base.dir.exists());
         assert!(other.is_dir(), "another job's folder is left");
+
+        // The command removes its folder once its jobs are done, and only
+        // when nothing is left in it.
+        drop(super::RemovedWhenDone(vec![named.clone()]));
+        assert!(other.is_dir() && named.is_dir());
+        fs::remove_dir(&other).unwrap();
+        drop(super::RemovedWhenDone(vec![named.clone()]));
+        assert!(!named.exists());
 
         // The caller's own `job-1` was never touched.
         assert_eq!(
@@ -2542,57 +2572,16 @@ replace: \"inside\"
         assert_eq!(what(&first), "the first failure");
         assert_eq!(what(&second), "the second failure");
 
-        // The next command removes them, and the command's folder once it
-        // is empty. The caller's own `job-1` stays.
+        // The next command removes them, and leaves the command's folder
+        // for its jobs. The caller's own `job-1` stays.
         runner.forget_kept();
         assert!(!first.exists() && !second.exists());
-        assert!(!named.exists());
+        assert!(named.is_dir());
+        assert_eq!(runner.shared_folder(), Some(named.clone()));
         assert_eq!(
             fs::read_to_string(root.join("job-1/the-callers.txt")).unwrap(),
             "not a job's"
         );
-        let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn a_scratch_base_whose_parent_went_meanwhile_is_made_again_once() {
-        let (root, base) = named_base("make-again");
-        let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
-
-        // Another job removed the command's folder between its making and
-        // the making of this one in it.
-        let mut tries = 0;
-        let made = base.make_with(&mut |dir| {
-            tries += 1;
-            if tries == 1 {
-                Err(not_found())
-            } else {
-                fs::create_dir_all(dir)
-            }
-        });
-        assert_eq!(made, Ok(None));
-        assert_eq!(tries, 2);
-        assert!(base.dir.is_dir());
-
-        // Not found twice, or any other error once, is the error.
-        let mut tries = 0;
-        let made = base.make_with(&mut |_| {
-            tries += 1;
-            Err(not_found())
-        });
-        assert!(
-            made.as_ref()
-                .is_err_and(|error| error.contains("could not make the tests' scratch folder")),
-            "{made:?}"
-        );
-        assert_eq!(tries, 2);
-        let mut tries = 0;
-        let made = base.make_with(&mut |_| {
-            tries += 1;
-            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
-        });
-        assert!(made.is_err());
-        assert_eq!(tries, 1);
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2653,6 +2642,10 @@ replace: \"inside\"
 
         fn forget_kept(&mut self) {
             self.real.forget_kept();
+        }
+
+        fn shared_folder(&self) -> Option<PathBuf> {
+            self.real.shared_folder()
         }
     }
 
@@ -2719,7 +2712,8 @@ replace: \"inside\"
         );
         assert!(!named.join("job-1").exists() && !named.join("job-2").exists());
 
-        // The next command removes it, once it holds the copies.
+        // The next command removes it, once it holds the copies, and its
+        // own folder once its jobs are done.
         go("none").unwrap();
         assert!(!kept.exists(), "{}", kept.display());
         assert!(!named.exists());
