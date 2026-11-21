@@ -60,9 +60,15 @@ const GO_ON: &str = "Continue the work from where it stands.";
 /// How many of the last rounds' artifacts are carried across.
 pub(crate) const ARTIFACT_ROUNDS: usize = 3;
 
-/// The request's last message: the instructions, and the user's focus.
-pub(crate) fn instructions_message(focus: Option<&str>) -> Message {
+/// The request's last message: the instructions; when the history it
+/// covers withdrew an extension's text, one sentence that names each such
+/// extension (`withdrawn`, as the notices named them) and asks the summary
+/// to leave its text out; and the user's focus.
+pub(crate) fn instructions_message(focus: Option<&str>, withdrawn: &[String]) -> Message {
     let mut text = format!("{NOTICE_LEAD}{SUMMARY_INSTRUCTIONS}");
+    if !withdrawn.is_empty() {
+        let _ = write!(text, "\n\n{}", super::summary_leaves_out(withdrawn));
+    }
     if let Some(focus) = focus.map(str::trim).filter(|focus| !focus.is_empty()) {
         let _ = write!(
             text,
@@ -386,13 +392,13 @@ mod tests {
 
     #[test]
     fn the_focus_follows_the_instructions() {
-        let message = instructions_message(Some("  the failing test  "));
+        let message = instructions_message(Some("  the failing test  "), &[]);
         let Part::Text(text) = &message.parts[0] else {
             panic!("text")
         };
         assert!(text.text.starts_with(NOTICE_LEAD));
         assert!(text.text.ends_with("keep in particular: the failing test"));
-        let Part::Text(plain) = &instructions_message(Some(" ")).parts[0] else {
+        let Part::Text(plain) = &instructions_message(Some(" "), &[]).parts[0] else {
             panic!("text")
         };
         assert!(plain.text.ends_with("no longer matters."));

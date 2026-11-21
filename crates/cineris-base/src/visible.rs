@@ -303,9 +303,94 @@ pub fn in_code(text: &str) -> Cow<'_, str> {
     Cow::Owned(visible(&escaped).into_owned())
 }
 
+/// `text` as one line with nothing in it that acts unseen, at most
+/// `max_bytes` long: for a name or a description from a repository that the
+/// system prompt shows on a line of its own (a skill's, a source of tools').
+///
+/// - White space of every kind (a line break, a tab, a vertical tab, a form
+///   feed, U+0085, U+2028) becomes one space, and a run of it one space;
+///   the ends are trimmed.
+/// - Every other character that acts unseen ([`acts_unseen`]) is taken
+///   out: the control characters, the format characters (`Cf`: the
+///   bidirectional controls U+202A to U+202E and U+2066 to U+2069, the
+///   zero-width characters, U+FEFF), and the characters that render as
+///   nothing. A variation selector stays only right after a character kept.
+/// - Text longer than `max_bytes` is cut between two grapheme clusters, so
+///   never inside a character, and ends with `…` within `max_bytes`.
+#[must_use]
+pub fn one_line(text: &str, max_bytes: usize) -> String {
+    let mut out = String::with_capacity(text.len().min(max_bytes.saturating_add(8)));
+    let mut space = false;
+    // Whether the last character kept may take a variation selector.
+    let mut base = false;
+    for character in text.chars() {
+        if character.is_whitespace() {
+            space = !out.is_empty();
+            base = false;
+        } else if is_selector(character) {
+            if base {
+                out.push(character);
+            }
+        } else if !acts_unseen(character) {
+            if space {
+                out.push(' ');
+                space = false;
+            }
+            out.push(character);
+            base = true;
+        }
+    }
+    if out.len() <= max_bytes {
+        return out;
+    }
+    let Some(room) = max_bytes.checked_sub(crate::text::ELLIPSIS.len()) else {
+        return crate::text::truncate_bytes(&out, max_bytes).to_owned();
+    };
+    let mut cut = crate::text::truncate_bytes(&out, room)
+        .trim_end()
+        .to_owned();
+    cut.push_str(crate::text::ELLIPSIS);
+    cut
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge() {
+        assert_eq!(
+            one_line("  a\tb\r\n\u{2028}c\u{1b}[31m d  ", 100),
+            "a b c[31m d"
+        );
+        // A vertical tab, a form feed and U+0085 are white space: a space.
+        assert_eq!(one_line("a\u{b}b\u{c}c\u{85}d", 100), "a b c d");
+        assert_eq!(
+            one_line("ad\u{202e}min\u{2066}\u{200d}\u{200b}\u{feff}\u{ad}x", 100),
+            "adminx"
+        );
+        // A variation selector after a character kept stays; alone, not.
+        assert_eq!(
+            one_line("\u{fe0f}\u{2764}\u{fe0f}", 100),
+            "\u{2764}\u{fe0f}"
+        );
+        // Cut between characters, never inside one, with the mark within
+        // the cap.
+        let ellipsis = crate::text::ELLIPSIS;
+        let cut = one_line(&"é".repeat(200), 300);
+        assert!(cut.len() <= 300 && cut.ends_with(ellipsis), "{}", cut.len());
+        assert_eq!(cut.trim_end_matches(ellipsis), "é".repeat(148));
+        // Nor inside a grapheme cluster: a flag of two characters, a letter
+        // and its combining accent.
+        for cluster in ["\u{1f1eb}\u{1f1f7}", "e\u{301}"] {
+            let cut = one_line(&cluster.repeat(100), 64);
+            assert!(cut.len() <= 64, "{}", cut.len());
+            let kept = cut.trim_end_matches(ellipsis);
+            assert_eq!(kept, cluster.repeat(kept.len() / cluster.len()), "{cut:?}");
+        }
+        assert_eq!(one_line("abcdef", 2), "ab");
+        assert_eq!(one_line("abc", 3), "abc");
+    }
 
     #[test]
     fn text_in_code_cannot_end_its_code() {

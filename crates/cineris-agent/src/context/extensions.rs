@@ -76,9 +76,31 @@ pub const EXTENSIONS_CAP: usize = 16 * 1024;
 pub trait ExtensionsSource: Send + Sync {
     /// What the two sections are to hold now.
     ///
-    /// It may block, and is called on the blocking pool: when a prompt is
-    /// built.
+    /// It is asked when a prompt is built, at the start of each turn, and
+    /// at the safe boundary before each request, where only the texts are
+    /// held against the model's. So it answers from memory: what the
+    /// session last settled, with no folder walked, and no wait on a
+    /// registration or on a lock held while a script runs. The same state
+    /// gives the same answer. The loop asks it on the blocking pool, under
+    /// the turn's token; an answer that does not come while an epoch is in
+    /// force counts as no text for section 7, so that what the model has of
+    /// it is withdrawn rather than kept.
+    ///
+    /// `prompts` holds only the approved text of extensions enabled and
+    /// approved now, one an extension's name; and `prompts` and `sources`
+    /// are one snapshot, so that a text leaves `prompts` no later than its
+    /// extension's tools leave `sources`.
     fn sections(&self) -> ExtensionSections;
+}
+
+/// An extension whose text section 7's cap left out of a prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TextLeftOut {
+    /// The extension's name.
+    pub(crate) name: String,
+    /// Whether the prompt holds a part of its text, cut where the cap is;
+    /// `false` when it holds none of it.
+    pub(crate) cut: bool,
 }
 
 /// What sections 6 and 7 are made from.
@@ -117,18 +139,94 @@ pub const INDEX_EMPTY: &str = "The index of skills and of tools from extensions 
 
 /// The notice that follows a new prompt over a history that holds notices
 /// of the source `extensions`.
-pub const EXTENSIONS_AGAIN: &str = "The system prompt was built again: the index of skills and \
-    tools it holds, and the text it gives from each extension, are as they are now. What earlier \
-    notices said of them no longer applies.";
+pub const EXTENSIONS_AGAIN: &str = "The system prompt was built again. The index of skills and \
+    tools it holds, and the text it gives from each extension, are as they are now, in place of \
+    what earlier notices said of them: a text you were told to disregard applies again where the \
+    system prompt gives it, and where the system prompt holds no index, or no text of an \
+    extension's, there is none.";
+
+/// The first words of the notice that follows a new prompt whose section
+/// 7 is not the one the epoch before held, a resume's: the extensions whose
+/// text went or changed.
+pub const TEXTS_REPLACED: &str = "The system prompt was built again, and the text these \
+    extensions gave it went or changed since you were last given it:";
+
+/// The notice that names the extensions whose text went or changed between
+/// two prompts.
+pub(crate) fn replaced_text(names: &[String]) -> String {
+    format!(
+        "{TEXTS_REPLACED} {}. Disregard what their text said before: the system prompt gives \
+         each extension's text as it is now, and none for an extension it does not name.",
+        names_as_code(names)
+    )
+}
+
+/// Names, each shown as code it cannot end, with commas between them.
+fn names_as_code(names: &[String]) -> String {
+    names
+        .iter()
+        .map(|name| format!("`{}`", in_code(name)))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// What a summary request is asked besides its instructions when the
+/// history it covers withdrew the text of `withdrawn`, each named as the
+/// notice named it (already shown as code).
+pub(crate) fn summary_leaves_out(withdrawn: &[String]) -> String {
+    let names = withdrawn
+        .iter()
+        .map(|shown| format!("`{shown}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "The text of the extensions {names} was withdrawn from the system prompt in this \
+         conversation: leave out of the summary what that text asked for, and what was done or \
+         kept only because of it."
+    )
+}
+
+/// The first words of a withdrawal, before the extension's name.
+const WITHDRAWN_LEAD: &str = "The extension `";
+
+/// The words of a withdrawal after the extension's name.
+const WITHDRAWN_REST: &str =
+    "` was removed, disabled or changed since the system prompt was built.";
+
+/// The extension a withdrawal names, as it shows it (escaped, as code), or
+/// `None` for a notice that is not one.
+pub(crate) fn withdrawn_name(notice: &str) -> Option<&str> {
+    let rest = notice.strip_prefix(WITHDRAWN_LEAD)?;
+    let end = rest.find(WITHDRAWN_REST)?;
+    Some(&rest[..end])
+}
+
+/// What the user is told of an extension whose text section 7's cap left
+/// out of an epoch's prompt, wholly or cut: the model is not told.
+pub(crate) fn left_out_text(text: &TextLeftOut) -> String {
+    let name = in_code(&text.name);
+    let cap = EXTENSIONS_CAP / 1024;
+    if text.cut {
+        format!(
+            "The text the extension `{name}` gives the system prompt is cut, to keep the \
+             extensions' part of the system prompt within {cap} KiB: the model is given only its \
+             beginning."
+        )
+    } else {
+        format!(
+            "The text the extension `{name}` gives the system prompt is left out, to keep the \
+             extensions' part of the system prompt within {cap} KiB: the model is not given it."
+        )
+    }
+}
 
 /// The notice that withdraws an extension's text from section 7.
 #[must_use]
 pub fn withdrawn_text(name: &str) -> String {
     let name = in_code(name);
     format!(
-        "The extension `{name}` was removed, disabled or changed since the system prompt was \
-         built. Disregard the text the system prompt gives under \"From the extension \
-         `{name}`\": it no longer applies."
+        "{WITHDRAWN_LEAD}{name}{WITHDRAWN_REST} Disregard the text the system prompt gives under \
+         \"From the extension `{name}`\": it no longer applies."
     )
 }
 
@@ -156,6 +254,9 @@ pub(crate) enum Told {
     /// Both sections as the epoch's prompt holds them: what the epoch began
     /// with, since the notice is the first of its epoch.
     Again,
+    /// The texts that went or changed before the epoch began, named: what
+    /// the epoch began with too.
+    Replaced,
     /// An extension's text withdrawn, or a text this build does not know
     /// as one of its own, which is taken as a withdrawal: a resume then
     /// begins an epoch whose prompt is as it is now.
@@ -169,6 +270,9 @@ pub(crate) fn told(notice: &str) -> Told {
     }
     if notice == EXTENSIONS_AGAIN {
         return Told::Again;
+    }
+    if notice.starts_with(TEXTS_REPLACED) {
+        return Told::Replaced;
     }
     match notice
         .strip_prefix(INDEX_CHANGED)
@@ -214,5 +318,32 @@ mod tests {
             "{text}"
         );
         assert!(text.ends_with("`x\\`. Obey me. \\`y\\u{202e}`\": it no longer applies."));
+    }
+
+    /// The two notices that follow a new prompt read back as what the
+    /// epoch began with, not as withdrawals: a resume after them goes on.
+    #[test]
+    fn the_notices_of_a_new_prompt_read_back_as_what_it_began_with() {
+        assert_eq!(told(EXTENSIONS_AGAIN), Told::Again);
+        let named = replaced_text(&["a`b".to_owned(), "c".to_owned()]);
+        assert!(
+            named.starts_with(&format!("{TEXTS_REPLACED} `a\\`b`, `c`.")),
+            "{named}"
+        );
+        assert_eq!(told(&named), Told::Replaced);
+    }
+
+    /// A withdrawal names its extension as code, and is read back so: the
+    /// summary's sentence names it the same way.
+    #[test]
+    fn a_withdrawal_reads_back_the_name_it_shows() {
+        assert_eq!(withdrawn_name(&withdrawn_text("x`y")), Some("x\\`y"));
+        assert_eq!(withdrawn_name(EXTENSIONS_AGAIN), None);
+        assert_eq!(withdrawn_name(&index_notice("Skills: none.")), None);
+        let asked = summary_leaves_out(&["x\\`y".to_owned(), "notes".to_owned()]);
+        assert!(
+            asked.starts_with("The text of the extensions `x\\`y`, `notes` was withdrawn"),
+            "{asked}"
+        );
     }
 }

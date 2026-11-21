@@ -53,7 +53,8 @@ pub use budget::{DEFAULT_RATIO, OUTPUT_RESERVE_CAP, limit_of};
 pub use compact::SUMMARY_INSTRUCTIONS;
 pub use extensions::{
     EXTENSION_TEXT_CAP, EXTENSIONS_AGAIN, EXTENSIONS_CAP, ExtensionPrompt, ExtensionSections,
-    ExtensionsSource, INDEX_CAP, INDEX_CHANGED, INDEX_EMPTY, SKILLS_CAP, withdrawn_text,
+    ExtensionsSource, INDEX_CAP, INDEX_CHANGED, INDEX_EMPTY, SKILLS_CAP, TEXTS_REPLACED,
+    withdrawn_text,
 };
 pub use history::{NOTICE_LEAD, append, project};
 pub use instructions::{
@@ -64,11 +65,15 @@ pub(crate) use map::Answered;
 pub use map::{MapAnswer, MapPending, MapSource, RepoMap};
 pub use prefix::{PrefixDifference, check_prefix};
 pub use profile::{PROFILE_CHANGED, PROFILE_EMPTY, ProfileSource};
-pub use prompt::{CORE_INSTRUCTIONS, Environment, GUIDED_NOTES, render_index};
+pub use prompt::{
+    CORE_INSTRUCTIONS, Environment, GUIDED_NOTES, TEXTS_END, TEXTS_LEAD, render_index,
+};
 
 pub(crate) use budget::{Budget, Pressure, fraction_of, pressure, summary_room};
 pub(crate) use compact::{ARTIFACT_ROUNDS, Carried, SUMMARY_CUT, Touched, instructions_message};
-pub(crate) use extensions::{index_hash, index_notice};
+pub(crate) use extensions::{
+    index_hash, index_notice, left_out_text, replaced_text, summary_leaves_out,
+};
 pub(crate) use history::{History, Source, message_bytes};
 pub(crate) use instructions::{
     Change, Discovered, Found, Given, Place, cap_text, date_text, discover, nested_dirs,
@@ -322,6 +327,10 @@ pub(crate) struct Context {
     /// Whether the epoch's history withdrew an extension's text: such an
     /// epoch is not gone on with when the session is read again.
     pub(crate) withdrew: bool,
+    /// The extensions whose text the history since the last summary
+    /// withdrew, each as the notice named it (as code): the next summary is
+    /// asked to leave out what that text asked for.
+    pub(crate) withdrawn: Vec<String>,
     pub(crate) budget: Budget,
     /// The date the epoch's history tells the model.
     pub(crate) date: Option<String>,
@@ -359,6 +368,7 @@ impl Context {
             given_index: None,
             given_texts: Vec::new(),
             withdrew: false,
+            withdrawn: Vec::new(),
             budget: Budget::default(),
             date: None,
             last_user: None,
@@ -488,12 +498,24 @@ impl Context {
                         extensions::Told::Index(index) => self.given_index = index,
                         // It is the first of its epoch's notices of the
                         // source: what it says is what the epoch began with.
-                        extensions::Told::Again => {}
+                        extensions::Told::Again | extensions::Told::Replaced => {}
                         extensions::Told::Withdrawn => self.withdrew = true,
                     }
                 }
             }
         }
+        // The texts withdrawn since the last summary, in every epoch since:
+        // what the next one is to leave out.
+        self.withdrawn = items
+            .iter()
+            .skip(summary.map_or(0, |at| at + 1))
+            .filter_map(|item| match item {
+                Item::Notice(notice) if notice.source == NoticeSource::Extensions => {
+                    extensions::withdrawn_name(&notice.text).map(str::to_owned)
+                }
+                _ => None,
+            })
+            .collect();
         // The date the history tells: its summary's, or its first user
         // message's, or a later notice's.
         self.date = None;
@@ -630,6 +652,8 @@ impl Context {
                 // What the provider counted was the old history's.
                 self.history = history;
                 self.budget.new_epoch();
+                // The summary left out what a withdrawn text asked for.
+                self.withdrawn.clear();
             }
             None if !keeps_prefix => {
                 self.history.project_all();

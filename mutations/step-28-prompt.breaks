@@ -21,8 +21,8 @@ caught-by:
 rule: Section 7 is inside `base`: a resume whose extensions' texts differ begins a new epoch.
 file: crates/cineris-agent/src/context/prompt.rs
 in: build
-find: if !texts.is_empty() { parts.push(texts); }
-replace: if !texts.is_empty() { outside.push(parts.len()); parts.push(texts); }
+find: if !texts.text.is_empty() { parts.push(texts.text); }
+replace: if !texts.text.is_empty() { outside.push(parts.len()); parts.push(texts.text); }
 caught-by:
     cineris-agent context::prompt::tests::the_base_hash_holds_section_seven
     cineris-agent::it extensions::a_resume_whose_texts_differ_begins_a_new_epoch
@@ -94,12 +94,12 @@ replace: source.name.as_str()
 caught-by:
     cineris-agent context::prompt::tests::a_name_is_shown_as_code_it_cannot_end
 
-[break] a-description-keeps-what-acts-unseen
-rule: A source's description is one line with nothing in it that acts unseen.
+[break] a-description-is-not-made-one-line
+rule: A source's description is one line with nothing in it that acts unseen, by `cineris_base::one_line`.
 file: crates/cineris-agent/src/context/prompt.rs
-in: one_line
-find: !acts_unseen(character)
-replace: true
+in: source_line
+find: cineris_base::one_line(first, SOURCE_DESCRIPTION_CAP)
+replace: first.to_owned()
 caught-by:
     cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
 
@@ -153,11 +153,11 @@ caught-by:
     cineris-agent context::prompt::tests::each_extensions_text_is_cut_to_4_kib_at_a_characters_edge
 
 [break] section-seven-past-its-cap
-rule: Section 7 is at most 16 KiB in all: the text that reaches it is cut there, and the extensions after it are left out.
+rule: The texts together are at most 16 KiB as their authors wrote them: the text that reaches the cap is cut there, and the extensions after it are left out.
 file: crates/cineris-agent/src/context/prompt.rs
 in: render_texts
-find: EXTENSIONS_CAP.saturating_sub(out.len() + gap + heading.len() + 2)
-replace: usize::MAX
+find: let taken = cut(&body, left);
+replace: let taken = body.clone();
 caught-by:
     cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
 
@@ -166,7 +166,7 @@ rule: A text the model has is held against its extension's own text, whether or 
 file: crates/cineris-agent/src/context/prompt.rs
 in: text_marks
 find: text_parts(prompts).into_iter().map(|(mark, _, _)| mark).collect()
-replace: render_texts(prompts).1
+replace: render_texts(prompts).marks
 caught-by:
     cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
     cineris-agent::it extensions::a_text_another_pushes_past_the_cap_is_not_withdrawn
@@ -244,7 +244,7 @@ caught-by:
 [break] a-text-is-not-withdrawn
 rule: During an epoch, an extension whose text the model has and that is removed, disabled or changed is withdrawn by a notice.
 file: crates/cineris-agent/src/turn/epochs.rs
-in: Session::extension_changes
+in: Session::withdraw_texts
 find: .filter(|given| !texts.contains(given))
 replace: .filter(|_| false)
 caught-by:
@@ -254,7 +254,7 @@ caught-by:
 [break] a-changed-text-is-not-withdrawn
 rule: An extension whose text changed is withdrawn too, not only one that is gone: a text is told apart by what the prompt holds of it.
 file: crates/cineris-agent/src/turn/epochs.rs
-in: Session::extension_changes
+in: Session::withdraw_texts
 find: .filter(|given| !texts.contains(given))
 replace: .filter(|given| !texts.iter().any(|now| now.name == given.name))
 caught-by:
@@ -353,3 +353,146 @@ find: NoticeSource::Map | NoticeSource::Profile | NoticeSource::Extensions
 replace: NoticeSource::Map | NoticeSource::Profile
 caught-by:
     cineris-agent::it extensions::a_compaction_builds_both_sections_as_they_are_and_replays_no_older_notice
+
+# The early review's fixes.
+
+[break] a-text-is-not-quoted
+rule: Each line of an extension's text is quoted in section 7, so that the only lines not quoted are the harness's: a heading of the author's, or one copying the harness's line for another extension, is inside its own part (H1).
+file: crates/cineris-agent/src/context/prompt.rs
+in: quoted
+find: format!("> {line}")
+replace: line.to_owned()
+caught-by:
+    cineris-agent context::prompt::tests::an_authors_headings_come_out_quoted_inside_its_own_part
+    cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
+
+[break] section-seven-has-no-edges
+rule: Section 7 begins with a lead line that says what follows, and ends with a line of its own, so that the user's appended text after it is no extension's (H1).
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_texts
+find: format!("{TEXTS_LEAD}\n\n{}\n\n{TEXTS_END}", parts.join("\n\n"))
+replace: parts.join("\n\n")
+caught-by:
+    cineris-agent context::prompt::tests::the_appended_text_stays_outside_section_seven
+    cineris-agent context::prompt::tests::an_authors_headings_come_out_quoted_inside_its_own_part
+
+[break] the-quoting-counts-in-the-cap
+rule: The caps are of the texts as their authors wrote them, before they are quoted: the quoting takes nothing of the 16 KiB.
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_texts
+find: left -= taken.len();
+replace: left = left.saturating_sub(quoted(&taken).len());
+caught-by:
+    cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
+
+[break] a-short-text-that-fits-is-dropped
+rule: A text that fits whole in what the cap leaves is taken, though less is left than a part is started for (L5).
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_texts
+find: left < LEAST_TEXT.min(body.len())
+replace: left < LEAST_TEXT
+caught-by:
+    cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
+
+[break] other-line-breaks-are-taken-out
+rule: A vertical tab, a form feed and U+0085 in an extension's text are line breaks, as `one_line` takes them for white space (L4).
+file: crates/cineris-agent/src/context/prompt.rs
+in: plain
+find: '\n' | '\u{b}' | '\u{c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+replace: '\n' | '\u{2028}' | '\u{2029}'
+caught-by:
+    cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
+
+[break] a-text-revoked-in-a-turn-stays-in-force
+rule: At the safe boundary before each request, a text the model has that is no longer in force is withdrawn: a headless run is one turn (M1).
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_before_request
+find: if self.context.epoch.is_some() && !self.context.given_texts.is_empty() {
+replace: if false {
+caught-by:
+    cineris-agent::it extensions::a_text_taken_back_during_a_turn_is_withdrawn_before_its_next_request
+
+[break] a-source-that-fails-withdraws-nothing
+rule: A source that fails while an epoch is in force holds no text: what the model has of section 7 is withdrawn, failing closed (L6).
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::withdraw_texts
+find: Asked::Failed => Vec::new(),
+replace: Asked::Failed => return Ok(()),
+caught-by:
+    cineris-agent::it extensions::a_source_that_fails_withdraws_the_texts_the_model_has
+
+[break] the-user-is-not-told-what-the-cap-left-out
+rule: The user is told of each extension whose text section 7's cap left out of the prompt an epoch begins with, once an epoch (L1).
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: self.warn_left_out(turn, &built);
+replace:
+caught-by:
+    cineris-agent::it extensions::what_the_cap_leaves_out_is_told_to_the_user_once_an_epoch
+
+[break] the-epoch-records-no-texts
+rule: An epoch records the extensions whose text its prompt holds, with the hash of each: what a resume names when its new prompt does not hold one as it was (L2).
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::epoch_start
+find: texts: built.texts.iter().map(|mark| (mark.name.clone(), mark.hash)).collect()
+replace: texts: Vec::new()
+caught-by:
+    cineris-agent::it extensions::a_resume_names_the_texts_that_went_or_changed_since_its_epoch
+
+[break] a-resume-names-no-text-that-went
+rule: A resume that begins an epoch whose prompt does not hold a text the epoch before held, as it was, names that extension, whether or not the history holds a notice of the source (L2).
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::context_turn_start
+find: if !gone.is_empty() {
+replace: if false {
+caught-by:
+    cineris-agent::it extensions::a_resume_names_the_texts_that_went_or_changed_since_its_epoch
+    cineris-agent::it extensions::a_resume_whose_texts_differ_begins_a_new_epoch
+
+[break] the-named-texts-read-back-as-a-withdrawal
+rule: The notice that names the texts that went before a new prompt reads back as what the epoch began with, not as a withdrawal: the epoch goes on when read again (L2).
+file: crates/cineris-agent/src/context/extensions.rs
+in: told
+find: if notice.starts_with(TEXTS_REPLACED) { return Told::Replaced; }
+replace:
+caught-by:
+    cineris-agent context::extensions::tests::the_notices_of_a_new_prompt_read_back_as_what_it_began_with
+    cineris-agent::it extensions::a_resume_names_the_texts_that_went_or_changed_since_its_epoch
+
+[break] a-summary-is-not-asked-to-leave-a-withdrawn-text-out
+rule: When the history a summary covers withdrew an extension's text, the summary request names the extension and asks to leave its text out (L3).
+file: crates/cineris-agent/src/context/compact.rs
+in: instructions_message
+find: if !withdrawn.is_empty() { let _ = write!(text, "\n\n{}", super::summary_leaves_out(withdrawn)); }
+replace:
+caught-by:
+    cineris-agent::it extensions::a_summary_is_asked_to_leave_out_a_withdrawn_text
+
+[break] a-summary-is-asked-again-after-it-left-the-text-out
+rule: A summary that left a withdrawn text out is the last asked to: the one after it, of a history that withdrew nothing more, is not (L3).
+file: crates/cineris-agent/src/context/mod.rs
+in: Context::begin
+find: self.withdrawn.clear();
+replace:
+caught-by:
+    cineris-agent::it extensions::a_summary_is_asked_to_leave_out_a_withdrawn_text
+
+[break] a-withdrawal-is-forgotten-when-read-again
+rule: A session read again knows the texts withdrawn since the last summary, from the history, for its next summary (L3).
+file: crates/cineris-agent/src/context/mod.rs
+in: Context::load
+find: extensions::withdrawn_name(&notice.text).map(str::to_owned)
+replace: None
+caught-by:
+    cineris-agent::it extensions::a_summary_is_asked_to_leave_out_a_withdrawn_text
+
+[break] one-line-keeps-what-acts-unseen
+rule: `one_line`, the one home of the rule a skill's name and description and a source's description are shown by, takes out every character that acts unseen (call 7).
+file: crates/cineris-base/src/visible.rs
+in: one_line
+find: !acts_unseen(character)
+replace: true
+packages: cineris-base,cineris-agent
+caught-by:
+    cineris-base visible::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
+    cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
