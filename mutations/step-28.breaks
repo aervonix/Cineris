@@ -5049,7 +5049,7 @@ caught-by:
 rule: The texts together are at most 16 KiB as their authors wrote them: the text that reaches the cap is cut there, and the extensions after it are left out.
 file: crates/cineris-agent/src/context/prompt.rs
 in: render_texts
-find: let taken = cut(&body, left);
+find: let taken = cut(&body, room);
 replace: let taken = body.clone();
 caught-by:
     cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
@@ -5263,8 +5263,8 @@ caught-by:
 rule: Section 7 begins with a lead line that says what follows, and ends with a line of its own, so that the user's appended text after it is no extension's (H1).
 file: crates/cineris-agent/src/context/prompt.rs
 in: render_texts
-find: format!("{TEXTS_LEAD}\n\n{}\n\n{TEXTS_END}", parts.join("\n\n"))
-replace: parts.join("\n\n")
+find: format!("{TEXTS_LEAD}{PART_GAP}{}{PART_GAP}{TEXTS_END}", parts.join(PART_GAP))
+replace: parts.join(PART_GAP)
 caught-by:
     cineris-agent context::prompt::tests::the_appended_text_stays_outside_section_seven
     cineris-agent context::prompt::tests::an_authors_headings_come_out_quoted_inside_its_own_part
@@ -5273,8 +5273,8 @@ caught-by:
 rule: The caps are of the texts as their authors wrote them, before they are quoted: the quoting takes nothing of the 16 KiB.
 file: crates/cineris-agent/src/context/prompt.rs
 in: render_texts
-find: left -= taken.len();
-replace: left = left.saturating_sub(quoted(&taken).len());
+find: left -= frame + taken.len();
+replace: left = left.saturating_sub(frame + quoted(&taken).len());
 caught-by:
     cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
 
@@ -5282,8 +5282,8 @@ caught-by:
 rule: A text that fits whole in what the cap leaves is taken, though less is left than a part is started for (L5).
 file: crates/cineris-agent/src/context/prompt.rs
 in: render_texts
-find: left < LEAST_TEXT.min(body.len())
-replace: left < LEAST_TEXT
+find: room < LEAST_TEXT.min(body.len())
+replace: room < LEAST_TEXT
 caught-by:
     cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
 
@@ -5571,10 +5571,38 @@ caught-by:
 rule: A place stamped by its kind is looked at again by its kind alone.
 file: crates/cineris-core/src/ext/watched.rs
 in: Watched::changed
-find: Stamp::Kind(_) => Stamp::kind_of(place),
-replace: Stamp::Kind(_) => Stamp::of(place),
+find: Stamp::Kind(_) | Stamp::LinkTo(_) => Stamp::kind_of(place),
+replace: Stamp::Kind(_) | Stamp::LinkTo(_) => Stamp::of(place),
 caught-by:
     cineris-core ext::watched::tests::a_name_stamped_by_its_kind_changes_only_with_its_kind
+
+[break] a-link-on-the-way-is-stamped-by-its-kind-alone
+rule: A link on the way to a place is stamped by where it points, read without following it: one pointed elsewhere is a change, though it is a link as before (L5 of the re-check).
+file: crates/cineris-core/src/ext/watched.rs
+in: Stamp::kind_of
+find: Ok(target) => Self::LinkTo(target),
+replace: Ok(_) => Self::Kind(Kind::Link),
+caught-by:
+    cineris-core ext::watched::tests::a_link_on_the_way_pointed_elsewhere_is_a_change
+
+[break] a-part-counts-only-its-text
+rule: Each part of section 7 counts its heading and the gaps around it against the 16 KiB, not its text alone: many short texts are held to the cap too (L1 of the re-check).
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_texts
+find: let frame = PART_GAP.len() + heading.len() + PART_GAP.len();
+replace: let frame = 0;
+caught-by:
+    cineris-agent context::prompt::tests::many_short_texts_are_held_to_16_kib_with_their_headings
+    cineris-agent context::prompt::tests::section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit
+
+[break] a-part-that-fills-the-cap-exactly-is-left-out
+rule: A part whose heading and text fill what is left of the 16 KiB exactly is taken whole.
+file: crates/cineris-agent/src/context/prompt.rs
+in: render_texts
+find: room < LEAST_TEXT.min(body.len())
+replace: room <= LEAST_TEXT.min(body.len())
+caught-by:
+    cineris-agent context::prompt::tests::many_short_texts_are_held_to_16_kib_with_their_headings
 
 [break] a-compaction-does-not-look-again
 rule: A compaction looks again at what the extensions were found in before it builds its epoch's prompt, as a turn's start does.

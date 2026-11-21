@@ -351,15 +351,16 @@ fn with_compat_skills_off_only_the_cineris_folders_of_skills_are_read() {
 }
 
 /// An extension whose text section 7's cap leaves out of an epoch's prompt
-/// is told to the user, by name, once an epoch: four texts of 4 KiB are
-/// the cap, and the fifth is left out.
+/// is told to the user, by name, once an epoch: four texts of about 4 KiB,
+/// each with the line that names it (53 bytes, with its gaps, for a name of
+/// two letters), are the cap, and the fifth is left out.
 #[test]
 fn what_the_cap_leaves_out_of_section_seven_is_told_to_the_user_once_an_epoch() {
     let world = World::new("prompt_cap_told", [says("One."), says("Two.")]);
     let root = world.dirs().config.unwrap().join("extensions");
     for name in ["ea", "eb", "ec", "ed", "ee"] {
         let folder = root.join(name);
-        write_with_prompt(&folder, name, &name.repeat(2048));
+        write_with_prompt(&folder, name, &name.repeat(2021));
         pin_named(&world, &folder, name);
         cache_with_prompt(&world, &folder);
     }
@@ -377,13 +378,17 @@ fn what_the_cap_leaves_out_of_section_seven_is_told_to_the_user_once_an_epoch() 
             said,
             [
                 "The text the extension `ee` gives the system prompt is left out, to keep the \
-              extensions' part of the system prompt within 16 KiB: the model is not given it."
+                 extensions' texts, with the line that names each one, within 16 KiB: the model \
+                 is not given it."
             ],
         );
         front.close().await;
     });
     let system = &systems(&world)[0];
-    assert!(system.contains("From the extension `ed`"));
+    assert!(
+        system.contains(&format!("> {}\n", "ed".repeat(2021))),
+        "the fourth whole"
+    );
     assert!(!system.contains("From the extension `ee`"));
 }
 

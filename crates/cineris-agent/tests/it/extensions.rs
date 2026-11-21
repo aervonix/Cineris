@@ -683,6 +683,19 @@ fn a_compaction_builds_both_sections_as_they_are_and_replays_no_older_notice() {
     );
 }
 
+/// What section 7's cap counts of a part besides its text, for an
+/// extension whose name is one letter: its heading's 48 bytes and the two
+/// gaps around it.
+const FRAME: usize = 52;
+
+/// A text of `letter` whose part, with its heading, is a quarter of section
+/// 7's 16 KiB: four of them are the cap exactly, all whole.
+fn quarter(letter: char) -> String {
+    letter
+        .to_string()
+        .repeat(cineris_agent::EXTENSION_TEXT_CAP - FRAME)
+}
+
 /// Section 7's cap is in all: an extension added during the epoch would
 /// push another past it in the prompt the harness would build now, which
 /// is no reason to withdraw that one, as it is as it was. One whose text
@@ -693,8 +706,8 @@ fn a_text_another_pushes_past_the_cap_is_not_withdrawn() {
         "extensions_past_the_cap",
         [says("One."), says("Two."), says("Three.")],
     );
-    // Four texts of 4 KiB: the cap, all whole.
-    let full = |letter: char| letter.to_string().repeat(cineris_agent::EXTENSION_TEXT_CAP);
+    // Four parts of 4 KiB, each text with its heading: the cap, all whole.
+    let full = quarter;
     let four: Vec<ExtensionPrompt> = ['b', 'c', 'd', 'e']
         .into_iter()
         .map(|letter| prompt(&letter.to_string(), &full(letter)))
@@ -806,7 +819,7 @@ fn what_the_cap_leaves_out_is_told_to_the_user_once_an_epoch() {
             says("Three."),
         ],
     );
-    let full = |letter: char| letter.to_string().repeat(cineris_agent::EXTENSION_TEXT_CAP);
+    let full = quarter;
     let sections = ExtensionSections {
         skills: SKILLS.to_owned(),
         sources: Vec::new(),
@@ -824,10 +837,11 @@ fn what_the_cap_leaves_out_is_told_to_the_user_once_an_epoch() {
     let rig = setup.start(&world);
     turn(&world, &rig, "first", 1);
     turn(&world, &rig, "second", 2);
-    // Four texts of 4 KiB are the cap: the fifth is left out.
+    // Four parts of 4 KiB are the cap: the fifth is left out.
     let told = [
         "The text the extension `f` gives the system prompt is left out, to keep the \
-         extensions' part of the system prompt within 16 KiB: the model is not given it."
+         extensions' texts, with the line that names each one, within 16 KiB: the model is not \
+         given it."
             .to_owned(),
     ];
     assert_eq!(infos(&rig), told, "once, as it began");
@@ -967,7 +981,7 @@ fn a_resume_whose_prompt_cuts_a_text_names_it() {
         "extensions_resume_cut",
         [says("One."), says("Two."), says("A summary.")],
     );
-    let full = |letter: char| letter.to_string().repeat(cineris_agent::EXTENSION_TEXT_CAP);
+    let full = quarter;
     let mut prompts: Vec<ExtensionPrompt> = ['b', 'c', 'd']
         .into_iter()
         .map(|letter| prompt(&letter.to_string(), &full(letter)))

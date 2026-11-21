@@ -23,6 +23,10 @@ use cineris_testkit::scratch::Scratch;
 use super::*;
 use crate::skills;
 
+/// The cap the skills are rendered within here: section 6's whole cap,
+/// larger than the skills' part the prompt's builder gives them.
+const INDEX_CAP: usize = 8 * 1024;
+
 /// The session's resolver: the workspace `home/proj`, and `~` for `home`.
 fn resolver(scratch: &Scratch) -> PathResolver {
     let workspace = scratch.dir("home/proj");
@@ -889,7 +893,6 @@ fn the_index_keeps_within_its_cap_and_counts_what_it_leaves_out() {
         not_listed: 7,
         left_out: Vec::new(),
     };
-    assert_eq!(INDEX_CAP, 8 * 1024);
     let index = skills::render(&found, INDEX_CAP);
     assert!(index.text.len() <= 8 * 1024, "{}", index.text.len());
     assert!(index.listed > 0 && index.listed < MAX_SKILLS);
