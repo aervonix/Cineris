@@ -440,12 +440,15 @@ impl EnginePolicy {
         self.in_force.get()
     }
 
-    /// Stops turn `turn` at its next call: a confined command changed
+    /// Stops turn `turn` during a call's run: a confined command changed
     /// protected paths, and the user is to look before anything else runs;
     /// or (since step 28) an extension's host call was answered with a stop,
     /// which a call of the round's own would have ended the turn with.
     /// Every call of it that has not started is decided again, and is
-    /// answered with the stop.
+    /// answered with the stop. The call whose run stopped it marks its
+    /// result so (`ToolResult::stopping_turn`), and the round ends at that
+    /// call: the model is not asked again, even when it was the last call
+    /// of its response.
     pub(crate) fn stop_turn(&self, turn: u32, reason: String) {
         *self.stopped.lock().unwrap_or_else(PoisonError::into_inner) =
             Some((u64::from(turn), reason));

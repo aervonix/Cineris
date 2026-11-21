@@ -375,7 +375,9 @@ fn sys_an_adversarial_command_reaches_only_what_it_may() {
         "{reached:#?}\n{result}"
     );
     assert!(result.contains("changed protected paths"), "{result}");
-    assert_eq!(outcome, TurnOutcome::Completed, "{result}");
+    // The command was the last call of its response, and the turn ends at
+    // it: `denied`, without the model being asked again.
+    assert_eq!(outcome, TurnOutcome::Denied, "{result}");
     assert_eq!(reached.survivors, Vec::<String>::new(), "{result}");
     // A connection is the network grant's to allow or refuse; it is
     // reported, and this command's is not asserted on.

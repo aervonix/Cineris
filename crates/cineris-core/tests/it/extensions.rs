@@ -826,6 +826,65 @@ fn a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call() {
     assert_eq!(world.read("after.txt"), None);
 }
 
+/// The same stop when the extension's call is the last of its response:
+/// the model is not asked again, and the turn, and the `turn.completed`
+/// front ends are sent, say `denied` (before, the model was asked once
+/// more, and a reply of text alone completed the turn).
+#[test]
+fn a_host_call_nobody_can_answer_as_the_last_call_ends_the_turn_without_asking_again() {
+    let world = World::new(
+        "ext_stop_last",
+        [
+            calls(&[(
+                "c1",
+                "tool_call",
+                json!({"tool": "probe/ci", "arguments": {}}),
+            )]),
+            says("Done anyway."),
+        ],
+    );
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let extension = approve(
+        &world.dir.join("ext"),
+        "write = [\".github/**\"]",
+        "cineris.tool({ name: 'ci', run: async () => { \
+           try { await cineris.fs.write('.github/workflows/ci.yml', 'on: push\\n') } catch (e) { } \
+           return 'went on' } });",
+    );
+    let core = world.core_with(|options| {
+        options.extensions = vec![extension];
+        options.fail_on_denial = true;
+    });
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::headless(),
+            cineris_protocol::session::SessionSettings::default(),
+        )
+        .await
+        .unwrap();
+        let end = front.turn("set up CI").await;
+        assert_eq!(
+            end.outcome,
+            cineris_protocol::event::TurnOutcome::Denied,
+            "{end:?}"
+        );
+        let error = end.error.as_ref().expect("a denied turn says why");
+        assert_eq!(error.code, "permission_denied", "{end:?}");
+        let results = front.results();
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(results[0].1, "denied", "{results:?}");
+        assert!(results[0].2.contains("stopped"), "{results:?}");
+        assert_eq!(core.permission_denials(&front.session).len(), 1);
+        assert_eq!(world.provider.remaining(), 1, "the model was asked again");
+        front.close().await;
+    });
+    assert_eq!(world.read(".github/workflows/ci.yml"), None);
+}
+
 /// An extension whose script did not stop when its time was up, and whose
 /// thread was left running, is not started again in this process: its next
 /// call fails at once, saying why and how it is started again, in that

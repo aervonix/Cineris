@@ -447,9 +447,11 @@ fn sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back()
         "echo evil > .git/hooks/pre-commit\nprintf '[core]\\n\\tfsmonitor = ./run\\n' > .git/config\n",
     );
     world.provider.push(says("Ready."));
+    // The command is the last call of its response.
     world
         .provider
         .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
+    // What the model would do next if it were asked again.
     world.provider.push(calls(&[(
         "c2",
         "shell",
@@ -469,6 +471,8 @@ fn sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back()
         front.turn("get ready").await;
         let keep = first_message(&front);
         let ended = front.turn("fix it").await;
+        // The turn ended at the command: the model was not asked again.
+        assert_eq!(world.provider.remaining(), 2, "the model was asked again");
         assert!(
             front.approvals().is_empty(),
             "nothing was asked at autonomous"
@@ -484,7 +488,8 @@ fn sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back()
                 && shown.contains("Undoing this turn puts them back"),
             "{results:?}"
         );
-        // The turn stopped at its next call, which did not run.
+        // The turn, and the `turn.completed` front ends were sent, say
+        // `denied`.
         assert_eq!(
             ended.outcome,
             cineris_protocol::event::TurnOutcome::Denied,
@@ -1002,9 +1007,12 @@ fn sys_a_change_between_two_commands_is_found_and_stops_the_turn() {
             cineris_protocol::event::TurnOutcome::Denied,
             "{ended:?}"
         );
-        // Neither command of the stopped turn ran.
+        // Neither command of the stopped turn ran, and the turn ended at the
+        // refused command, the last of its response: the model was not
+        // asked again.
         assert!(world.read("after.txt").is_none(), "the first command ran");
         assert!(world.read("more.txt").is_none(), "a later command ran");
+        assert_eq!(world.provider.remaining(), 2, "the model was asked again");
         front.close().await;
     });
 }

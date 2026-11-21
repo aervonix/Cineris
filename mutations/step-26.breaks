@@ -258,13 +258,13 @@ caught-by:
     cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
 
 [break] a-protected-change-does-not-stop-the-turn
-rule: A confined command that changed protected paths stops its turn at the next call.
+rule: A confined command that changed protected paths stops its turn, a project's check among them. (A call of the round's own also marks its result as the stop, which ends the round on its own: `stop-ends-turn/the-shells-protected-path-stop-is-not-marked`.)
 file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
-find: self.policy.stop_turn(cx.turn, note);
-replace: let _ = note;
+find: self.policy.stop_turn(cx.turn, note.clone());
+replace: let _ = &note;
 caught-by:
-    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
+    cineris-core::it verify::sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_back
 
 [break] a-stopped-turn-goes-on
 rule: Once a turn is stopped, no later call of it is decided as anything but a stop.

@@ -705,9 +705,12 @@ impl RecordingShell {
                     result = result.with_part(Part::text(note.clone()));
                     // A change, or a look the command itself made stop
                     // short, stops the turn; a workspace already past the
-                    // bound only warns.
+                    // bound only warns. The result is marked as the stop,
+                    // so that the round ends at this call, even when it
+                    // was the last of its response.
                     if !changed.is_empty() || (complete.0 && !complete.1) {
-                        self.policy.stop_turn(cx.turn, note);
+                        self.policy.stop_turn(cx.turn, note.clone());
+                        result = result.stopping_turn(note);
                     }
                 }
             }
@@ -730,6 +733,7 @@ impl RecordingShell {
                             protected paths are looked at again before the next command and at \
                             the session's close.]";
                 self.policy.stop_turn(cx.turn, note.to_owned());
+                result = result.stopping_turn(note);
             }
             result
         })
@@ -768,9 +772,7 @@ impl RecordingShell {
             &cx.paths.root().to_fs_path(),
         )
         .await?;
-        Some(ToolResult::denied(format!(
-            "The command was not run. {note}"
-        )))
+        Some(ToolResult::denied(format!("The command was not run. {note}")).stopping_turn(note))
     }
 }
 

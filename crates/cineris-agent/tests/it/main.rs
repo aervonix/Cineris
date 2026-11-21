@@ -52,6 +52,7 @@ mod redecide;
 mod retries;
 mod roles;
 mod rounds;
+mod run_stops;
 pub mod sessions;
 mod settings;
 mod speed;
@@ -448,6 +449,9 @@ pub enum Kind {
 /// - `record`: note in the table of seen files, as `read` does, that the
 ///   path was shown;
 /// - `fail`: end with an error result;
+/// - `stop`: a reason: mark the result as one whose run stopped the turn
+///   (`ToolResult::stopping_turn`), as a confined command that changed
+///   protected paths, or an extension's stopped host call, marks its own;
 /// - `session`: the call changes the session, as `plan` and `remember` do;
 /// - `link`: `[target, name]`: when it runs, make `name` in the workspace a
 ///   link to the directory `target`, as `ln -s target name` would;
@@ -471,6 +475,7 @@ struct ProbeArgs {
     graceful: bool,
     record: bool,
     fail: bool,
+    stop: Option<String>,
     /// The link to make, and the directory it leads to.
     link: Option<(PathBuf, String)>,
     payload: Option<Json>,
@@ -536,6 +541,7 @@ impl Tool for Probe {
                 graceful: args.get("graceful").is_some(),
                 record: args.get("record").is_some(),
                 fail: args.get("fail").is_some(),
+                stop: text("stop"),
                 link,
                 payload: args.get("payload").cloned(),
             },
@@ -617,11 +623,14 @@ impl Tool for Probe {
                 make_link(target, link);
             }
             self.log.push(format!("end {name} {label}"));
-            let result = if args.fail {
+            let mut result = if args.fail {
                 ToolResult::error(format!("{name} {label} failed"))
             } else {
                 ToolResult::success(format!("{name} {label} ok"))
             };
+            if let Some(reason) = args.stop {
+                result = result.stopping_turn(reason);
+            }
             match args.payload {
                 Some(payload) => result.with_payload(payload),
                 None => result,
