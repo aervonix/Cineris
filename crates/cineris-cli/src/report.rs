@@ -151,13 +151,14 @@ impl Collector {
 /// reported `denied`, with the error a denied turn has, so that the
 /// outcome and the exit code agree.
 ///
-/// A call of the round's own that nobody can answer ends the turn denied.
-/// An extension's host call that nobody can answer stops the turn too, but
-/// when its tool's call was the last of its response the model is asked
-/// once more, and a reply of text alone completes the turn (step 28; the
-/// loop's part is the owner's: `docs/outstanding/a-stopped-host-call-does-
-/// not-end-the-turn.md`). Any other end (a limit, a failure, an interrupt)
-/// is left as it is: it says something went wrong too.
+/// A call of the round's own that nobody can answer ends the turn denied,
+/// and so does an extension's host call that nobody can answer, whose
+/// tool's result is marked as the stop. One path still completes a turn
+/// with a denial recorded: a call refused in a response that fails part-way
+/// and is sent again. The stop goes with that response, and a reply of text
+/// alone completes the turn (`docs/architecture/03-agent-loop.md`, "Tool
+/// rounds"). Any other end (a limit, a failure, an interrupt) is left as it
+/// is: it says something went wrong too.
 pub(crate) fn held_to_its_denial(result: &mut HeadlessResult, fail_on_denial: bool) {
     let Some(first) = result.permission_denials.first() else {
         return;
@@ -299,9 +300,9 @@ mod tests {
     }
 
     /// Under `--fail-on-denial`, a turn that completed after a call nobody
-    /// could answer (an extension's host call, the last call of its
-    /// response) is reported denied; without the flag, or with no denial,
-    /// or at another end, the result is as the turn left it.
+    /// could answer (one of a response that was then sent again) is
+    /// reported denied; without the flag, or with no denial, or at another
+    /// end, the result is as the turn left it.
     #[test]
     fn a_turn_that_completed_after_a_denial_is_held_to_it() {
         let mut collector = Collector::new(SessionId::from("s_1"));
