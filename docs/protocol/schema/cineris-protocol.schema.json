@@ -220,7 +220,7 @@
               "type": "null"
             }
           ],
-          "description": "The arguments a hook put in place of the model's (since step 28),\nwith the model's own as `original`: the call would run with the\nhook's, and `summary` and `detail` describe it so. Such a question\nis always put, whatever the rules say, and offers only `allow_once`\nand `deny`."
+          "description": "The arguments a hook put in place of the model's (since step 28),\nwith the model's own as `original`: the call would run with the\nhook's, and `summary` and `detail` describe it so. Such a question\nis always put, whatever the rules say, and offers only `allow_once`\nand `deny`. (Boxed: it is rare, and every request would otherwise be\nits size.)"
         },
         "session_id": {
           "$ref": "#/$defs/SessionId",
