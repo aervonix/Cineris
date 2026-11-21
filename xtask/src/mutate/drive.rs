@@ -101,6 +101,10 @@ pub(crate) trait Runner: Send {
     fn kept(&self) -> Option<PathBuf> {
         None
     }
+
+    /// Removes what earlier commands kept: called once the copies' lock is
+    /// held, so that no other command's run is in them.
+    fn forget_kept(&mut self) {}
 }
 
 /// What the run of a set's tests with nothing broken came to, with any
@@ -221,8 +225,11 @@ pub(crate) struct CargoRunner {
     target: PathBuf,
     /// The tests' `CINERIS_TEST_TMPDIR` ([`tests_base`]).
     tests: TestsBase,
-    /// The tests' scratch base, when the last run kept it ([`keeps`]).
+    /// Where the last run's tests' scratch base was moved, when it was
+    /// kept ([`keeps`]).
     kept_base: Option<PathBuf>,
+    /// How many runs' bases this runner has kept.
+    kept_bases: usize,
     /// What cargo last printed. Every call writes it anew.
     log: PathBuf,
     /// Where the output of a call that failed is kept, one file a failure.
@@ -322,12 +329,29 @@ fn command_folder(scratch: &Path) -> String {
 
 impl TestsBase {
     /// Makes the folder for a run of the tests, empty: what is in it is
-    /// this command's, by its name, left by a run that was killed or kept
-    /// for a run with nothing broken that failed. Returns what could not be
-    /// cleared, to be said; a folder that cannot be made is an error.
+    /// this command's, by its name, left by a run that was killed. Returns
+    /// what could not be cleared, to be said; a folder that cannot be made
+    /// is an error.
     fn make(&self) -> Result<Option<String>> {
+        self.make_with(&mut |dir| fs::create_dir_all(dir))
+    }
+
+    /// [`TestsBase::make`], with `create` making the folder and its parents.
+    ///
+    /// Made again once when a folder on the way was not found: another job
+    /// removes the command's folder when it has emptied it, and may do so
+    /// between the making of the command's folder and the making of this
+    /// one in it.
+    fn make_with(
+        &self,
+        create: &mut dyn FnMut(&Path) -> std::io::Result<()>,
+    ) -> Result<Option<String>> {
         let note = crate::combine::remove_tree(&self.dir).err();
-        fs::create_dir_all(&self.dir).map_err(|error| {
+        let made = match create(&self.dir) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => create(&self.dir),
+            made => made,
+        };
+        made.map_err(|error| {
             format!(
                 "could not make the tests' scratch folder {}: {error}",
                 self.dir.display()
@@ -336,10 +360,47 @@ impl TestsBase {
         Ok(note.map(|error| format!("The tests' scratch folder was not emptied first: {error}")))
     }
 
+    /// Where a kept run's folder is moved, beside the job's: `job-<n>.kept`
+    /// for the first this command keeps, `job-<n>.kept-2` for the next. A
+    /// job's next run makes a new `job-<n>` and leaves it alone.
+    fn kept_place(&self, earlier: usize) -> PathBuf {
+        let name = self
+            .dir
+            .file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+        let place = format!("{name}.kept");
+        self.dir.with_file_name(jobs::numbered(&place, earlier))
+    }
+
+    /// Removes what earlier commands kept of this job's runs, and the
+    /// command's folder if nothing else is in it. Returns what could not be
+    /// removed, to be said.
+    fn forget_kept(&self) -> Vec<String> {
+        let (Some(parent), Some(name)) = (self.dir.parent(), self.dir.file_name()) else {
+            return Vec::new();
+        };
+        let kept = format!("{}.kept", name.to_string_lossy());
+        let mut notes = Vec::new();
+        if let Ok(entries) = fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&kept)
+                    && let Err(error) = crate::combine::remove_tree(&entry.path())
+                {
+                    notes.push(format!("An earlier run's kept folder was left: {error}"));
+                }
+            }
+        }
+        if let Some(named) = &self.named {
+            let _ = fs::remove_dir(named);
+        }
+        notes
+    }
+
     /// Removes the folder, with whatever a test that failed left in it, and
-    /// the command's folder around it once no job's is left there. Returns
-    /// what could not be removed (a file a process still holds on Windows),
-    /// to be said: the next run of the job removes it.
+    /// the command's folder around it once no job's folder, and nothing
+    /// kept, is left there. Returns what could not be removed (a file a
+    /// process still holds on Windows), to be said: the next run of the job
+    /// removes it.
     fn remove(&self) -> Option<String> {
         let failed = crate::combine::remove_tree(&self.dir).err();
         if let Some(named) = &self.named {
@@ -378,6 +439,7 @@ impl CargoRunner {
                 job,
             ),
             kept_base: None,
+            kept_bases: 0,
             target,
             log: scratch.join(format!("{}.log", jobs::numbered("last", job))),
             logs: scratch.join("logs"),
@@ -574,6 +636,11 @@ impl Runner for CargoRunner {
     fn kept(&self) -> Option<PathBuf> {
         self.kept_base.clone()
     }
+
+    fn forget_kept(&mut self) {
+        let notes = self.tests.forget_kept();
+        self.note(&notes);
+    }
 }
 
 impl CargoRunner {
@@ -588,32 +655,70 @@ impl CargoRunner {
         extra: &[String],
         unbroken: bool,
     ) -> Result<Tested> {
-        // What an earlier run kept is emptied now.
+        self.in_base(unbroken, |runner| {
+            runner.run_tests_in_base(tree, packages, extra)
+        })
+    }
+
+    /// Runs `run`, a run of the tests, in their scratch base: made empty
+    /// before it, and removed after it unless it is kept ([`keeps`];
+    /// `unbroken` is a run with nothing broken).
+    fn in_base(
+        &mut self,
+        unbroken: bool,
+        run: impl FnOnce(&mut Self) -> Result<Tested>,
+    ) -> Result<Tested> {
         self.kept_base = None;
         let cleared = self.tests.make()?;
-        let tested = self.run_tests_in_base(tree, packages, extra);
+        let tested = run(self);
         self.after_run(unbroken, &tested, cleared);
         tested
     }
 
-    /// What follows a run of the tests: their scratch base kept or removed,
-    /// and what could not be cleared before it or removed after it written
-    /// at the end of the job's log, after what cargo printed.
+    /// What follows a run of the tests: their scratch base kept, moved
+    /// aside where the job's next run does not touch it, or removed; and
+    /// what could not be cleared before it, moved or removed, noted.
     fn after_run(&mut self, unbroken: bool, tested: &Result<Tested>, cleared: Option<String>) {
         let mut notes: Vec<String> = cleared.into_iter().collect();
-        let keep = keeps(unbroken, tested);
-        self.kept_base = keep.then(|| self.tests.dir.clone());
-        if !keep {
+        if keeps(unbroken, tested) {
+            let place = self.tests.kept_place(self.kept_bases);
+            self.kept_bases += 1;
+            self.kept_base = Some(match fs::rename(&self.tests.dir, &place) {
+                Ok(()) => place,
+                Err(error) => {
+                    // Kept where it is, until the job's next run.
+                    notes.push(format!(
+                        "A kept scratch folder could not be moved to {}: {error}",
+                        place.display()
+                    ));
+                    self.tests.dir.clone()
+                }
+            });
+        } else {
+            self.kept_base = None;
             notes.extend(self.tests.remove());
         }
+        self.note(&notes);
+    }
+
+    /// Writes `notes` about the tests' scratch folders to
+    /// `logs/scratch-folders.log`, which nothing writes over. The file is
+    /// for a person: a note that cannot be written changes nothing of the
+    /// run.
+    fn note(&self, notes: &[String]) {
         if notes.is_empty() {
             return;
         }
-        // The log is for a person; a note that cannot be written there
-        // changes nothing of the run.
-        if let Ok(mut log) = OpenOptions::new().create(true).append(true).open(&self.log) {
-            for note in &notes {
-                let _ = writeln!(log, "xtask mutate: {note}");
+        let opened = fs::create_dir_all(&self.logs).and_then(|()| {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(self.logs.join("scratch-folders.log"))
+        });
+        if let Ok(mut log) = opened {
+            for note in notes {
+                // One write a line, so that two jobs' lines do not mix.
+                let _ = log.write_all(format!("{note}\n").as_bytes());
             }
         }
     }
@@ -1271,6 +1376,9 @@ pub(crate) fn drive_jobs(
         .map_err(|error| format!("could not create {}: {error}", scratch.display()))?;
     let pause = options.pause.unwrap_or(std::thread::sleep);
     let _lock = lock(scratch, &mut |time| pause(time))?;
+    for runner in runners.iter_mut() {
+        runner.forget_kept();
+    }
     let files = tree_files(root)?;
     let code = code_hash(root, &files)?;
     let copies: Vec<PathBuf> = (0..runners.len())
@@ -1319,10 +1427,16 @@ pub(crate) fn drive_jobs(
     // A set whose run stalled is run again with one job, once the others
     // are done: a stall is a machine with more on it than it can take.
     let test_set = |runner: &mut dyn Runner, copy: &Path, set: &(&[String], &str)| {
-        let tested = runner.test_unbroken(copy, set.0)?;
-        let mut baseline = known_flakes_again(runner, copy, set.0, tested, &options.flaky)?;
-        baseline.kept = runner.kept();
-        Ok::<_, String>(baseline)
+        let baseline = runner
+            .test_unbroken(copy, set.0)
+            .and_then(|tested| known_flakes_again(runner, copy, set.0, tested, &options.flaky));
+        match baseline {
+            Ok(mut baseline) => {
+                baseline.kept = runner.kept();
+                Ok(baseline)
+            }
+            Err(error) => Err(format!("{error}{}", kept_note(runner.kept()))),
+        }
     };
     let mut stalled = Vec::new();
     let finished = jobs::for_each(
@@ -1479,6 +1593,17 @@ pub(crate) fn drive_jobs(
     Ok(report(breaks, &keys, &results, say))
 }
 
+/// Where a run with nothing broken that failed left what its tests wrote,
+/// to be said with the failure; nothing when nothing was kept.
+fn kept_note(kept: Option<PathBuf>) -> String {
+    kept.map_or_else(String::new, |kept| {
+        format!(
+            "\nWhat its tests left is kept in {}; the next run removes it.",
+            kept.display()
+        )
+    })
+}
+
 /// What a run of a set's tests with nothing broken came to: kept in
 /// `results`, or `false` when it stalled and must be run again. A test that
 /// fails by itself, or a tree that does not build, is an error.
@@ -1494,13 +1619,7 @@ fn take_baseline(
         say(note);
     }
     let again = baseline.again;
-    // Where the tests' scratch folders are, for a run that failed.
-    let kept = baseline.kept.map_or_else(String::new, |kept| {
-        format!(
-            "\nWhat its tests left is kept in {}; the next run removes it.",
-            kept.display()
-        )
-    });
+    let kept = kept_note(baseline.kept);
     let cases = match baseline.tested {
         Tested::Ran(cases) => cases,
         Tested::Stalled(note) => {
@@ -2327,51 +2446,305 @@ replace: \"inside\"
         }
     }
 
+    /// The real runner of job 0, its scratch base the one given.
+    fn runner_with(scratch: &Path, base: &TestsBase) -> CargoRunner {
+        fs::create_dir_all(scratch).unwrap();
+        let mut runner = CargoRunner::new(scratch, 0);
+        runner.tests = base.clone();
+        runner
+    }
+
     #[test]
-    fn a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_logs_what_it_could_not() {
+    fn a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_notes_what_it_could_not() {
         let (root, base) = named_base("after-run");
         let scratch = root.join("scratch");
-        fs::create_dir_all(&scratch).unwrap();
-        let mut runner = CargoRunner::new(&scratch, 0);
-        runner.tests = base.clone();
+        let mut runner = runner_with(&scratch, &base);
+        let named = base.named.clone().unwrap();
         let failed = Ok(Tested::Ran(vec![one_case(true)]));
 
-        // With nothing broken, a failure's folders stay, and the runner
-        // says where.
+        // With nothing broken, a failure's folders are moved aside, and the
+        // runner says where.
         base.make().unwrap();
         runner.after_run(true, &failed, None);
-        assert!(base.dir.is_dir(), "kept");
-        assert_eq!(runner.kept(), Some(base.dir.clone()));
+        let kept = named.join("job-1.kept");
+        assert!(kept.is_dir(), "kept");
+        assert!(!base.dir.exists(), "moved aside");
+        assert_eq!(runner.kept(), Some(kept.clone()));
 
-        // A break's run that failed: removed, and nothing is kept.
+        // A break's run that failed: removed, and nothing is kept. The
+        // command's folder stays while a kept folder is in it.
+        base.make().unwrap();
         runner.after_run(false, &failed, None);
         assert!(!base.dir.exists(), "removed");
         assert_eq!(runner.kept(), None);
+        assert!(kept.is_dir() && named.is_dir());
 
-        // What could not be emptied or removed goes at the end of the job's
-        // log. A file where the folder is cannot be removed as one.
+        // What could not be emptied or removed is noted in a file nothing
+        // writes over, and never in the job's log, which the next call of
+        // cargo writes anew. A file where the folder is cannot be removed
+        // as one.
         fs::write(&runner.log, "what cargo printed\n").unwrap();
-        fs::create_dir_all(base.named.as_ref().unwrap()).unwrap();
         fs::write(&base.dir, "not a folder").unwrap();
         runner.after_run(
             false,
             &failed,
             Some("The tests' scratch folder was not emptied first: why".to_owned()),
         );
-        let log = fs::read_to_string(&runner.log).unwrap();
-        assert!(log.starts_with("what cargo printed\n"), "{log}");
+        let notes = fs::read_to_string(scratch.join("logs/scratch-folders.log")).unwrap();
         assert!(
-            log.contains("xtask mutate: The tests' scratch folder was not emptied first: why\n"),
-            "{log}"
+            notes.contains("The tests' scratch folder was not emptied first: why\n"),
+            "{notes}"
         );
         assert!(
-            log.contains(&format!(
-                "xtask mutate: The tests' scratch folder was left: could not remove {}: ",
+            notes.contains(&format!(
+                "The tests' scratch folder was left: could not remove {}: ",
                 base.dir.display()
             )),
-            "{log}"
+            "{notes}"
+        );
+        assert_eq!(
+            fs::read_to_string(&runner.log).unwrap(),
+            "what cargo printed\n"
         );
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_kept_folder_outlasts_the_jobs_next_runs_and_goes_with_the_next_command() {
+        let (root, base) = named_base("kept-folder");
+        let mut runner = runner_with(&root.join("scratch"), &base);
+        let named = base.named.clone().unwrap();
+        let run = |runner: &mut CargoRunner, unbroken: bool, failed: bool, what: &str| {
+            runner
+                .in_base(unbroken, |runner| {
+                    fs::write(runner.tests.dir.join("what.txt"), what).unwrap();
+                    Ok(Tested::Ran(vec![one_case(failed)]))
+                })
+                .unwrap();
+        };
+        let what = |folder: &Path| fs::read_to_string(folder.join("what.txt")).unwrap();
+
+        // A run with nothing broken fails: its folder is moved aside.
+        run(&mut runner, true, true, "the first failure");
+        let first = runner.kept().unwrap();
+        assert_eq!(first, named.join("job-1.kept"));
+        // The job's next runs, a baseline that passes and a break's, start
+        // in a new folder and leave the kept one alone.
+        run(&mut runner, true, false, "a pass");
+        assert_eq!(runner.kept(), None);
+        run(&mut runner, false, true, "a break's");
+        assert_eq!(what(&first), "the first failure");
+        assert!(!base.dir.exists());
+        // Another failure is kept beside it, never over it.
+        run(&mut runner, true, true, "the second failure");
+        let second = runner.kept().unwrap();
+        assert_eq!(second, named.join("job-1.kept-2"));
+        assert_eq!(what(&first), "the first failure");
+        assert_eq!(what(&second), "the second failure");
+
+        // The next command removes them, and the command's folder once it
+        // is empty. The caller's own `job-1` stays.
+        runner.forget_kept();
+        assert!(!first.exists() && !second.exists());
+        assert!(!named.exists());
+        assert_eq!(
+            fs::read_to_string(root.join("job-1/the-callers.txt")).unwrap(),
+            "not a job's"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_scratch_base_whose_parent_went_meanwhile_is_made_again_once() {
+        let (root, base) = named_base("make-again");
+        let not_found = || std::io::Error::from(std::io::ErrorKind::NotFound);
+
+        // Another job removed the command's folder between its making and
+        // the making of this one in it.
+        let mut tries = 0;
+        let made = base.make_with(&mut |dir| {
+            tries += 1;
+            if tries == 1 {
+                Err(not_found())
+            } else {
+                fs::create_dir_all(dir)
+            }
+        });
+        assert_eq!(made, Ok(None));
+        assert_eq!(tries, 2);
+        assert!(base.dir.is_dir());
+
+        // Not found twice, or any other error once, is the error.
+        let mut tries = 0;
+        let made = base.make_with(&mut |_| {
+            tries += 1;
+            Err(not_found())
+        });
+        assert!(
+            made.as_ref()
+                .is_err_and(|error| error.contains("could not make the tests' scratch folder")),
+            "{made:?}"
+        );
+        assert_eq!(tries, 2);
+        let mut tries = 0;
+        let made = base.make_with(&mut |_| {
+            tries += 1;
+            Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+        });
+        assert!(made.is_err());
+        assert_eq!(tries, 1);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// A runner with the real runner's scratch base, around tests that
+    /// write which set of packages they are into it. With nothing broken
+    /// the set `failing` fails, or cannot be run at all.
+    struct Scratching {
+        real: CargoRunner,
+        failing: &'static str,
+        cannot_run: bool,
+    }
+
+    impl Scratching {
+        fn new(run: &Run, job: usize, failing: &'static str) -> Self {
+            let mut real = CargoRunner::new(&run.scratch, job);
+            let named = run.scratch.join("tests").join("cineris-mutate-test");
+            real.tests = TestsBase {
+                dir: named.join(format!("job-{}", job + 1)),
+                named: Some(named),
+            };
+            Self {
+                real,
+                failing,
+                cannot_run: false,
+            }
+        }
+
+        fn run(&mut self, packages: &[String], unbroken: bool) -> Result<Tested> {
+            let set = packages.join(",");
+            let failing = unbroken && set == self.failing;
+            let cannot_run = self.cannot_run;
+            self.real.in_base(unbroken, |real| {
+                fs::write(real.tests.dir.join("set.txt"), &set).unwrap();
+                if failing && cannot_run {
+                    return Err("nextest could not be started".to_owned());
+                }
+                Ok(Tested::Ran(vec![one_case(failing)]))
+            })
+        }
+    }
+
+    impl Runner for Scratching {
+        fn compiles(&mut self, _: &Path, _: &[String]) -> Result<std::result::Result<(), String>> {
+            Ok(Ok(()))
+        }
+
+        fn test(&mut self, _: &Path, packages: &[String]) -> Result<Tested> {
+            self.run(packages, false)
+        }
+
+        fn test_unbroken(&mut self, _: &Path, packages: &[String]) -> Result<Tested> {
+            self.run(packages, true)
+        }
+
+        fn kept(&self) -> Option<PathBuf> {
+            self.real.kept()
+        }
+
+        fn forget_kept(&mut self) {
+            self.real.forget_kept();
+        }
+    }
+
+    fn scratching_options() -> Options {
+        Options {
+            again: false,
+            compile_check: true,
+            pause: Some(|_| {}),
+            flaky: Vec::new(),
+        }
+    }
+
+    /// The folder a run's message says it kept.
+    fn kept_in(error: &str) -> PathBuf {
+        error
+            .split_once("What its tests left is kept in ")
+            .and_then(|(_, rest)| rest.split_once("; the next run removes it."))
+            .map(|(path, _)| PathBuf::from(path))
+            .unwrap_or_else(|| panic!("no kept folder in: {error}"))
+    }
+
+    #[test]
+    fn with_two_jobs_a_failed_baselines_folder_is_still_there_when_the_run_stops() {
+        let run = Run::new("kept-with-jobs");
+        let text: String = ["pa", "pb", "pc", "pd", "pe"]
+            .iter()
+            .map(|set| {
+                format!(
+                    "[break] in-{set}\nrule: r\nfile: crates/demo/src/lib.rs\nfind: seconds > \
+                     budget\nreplace: seconds >= budget\npackages: {set}\n\n"
+                )
+            })
+            .collect();
+        let list = breaks("demo", &text);
+        let go = |failing| {
+            let mut first = Scratching::new(&run, 0, failing);
+            let mut second = Scratching::new(&run, 1, failing);
+            super::drive_jobs(
+                &run.root,
+                &run.scratch,
+                &list,
+                &scratching_options(),
+                &mut [&mut first, &mut second],
+                &mut || false,
+                &mut |_| {},
+            )
+        };
+        let named = run.scratch.join("tests").join("cineris-mutate-test");
+
+        // Five sets of tests with nothing broken, one of which fails: the
+        // job that ran it goes on to its next set before the run stops,
+        // and what the failure left is still there.
+        let error = go("pc").unwrap_err();
+        assert!(
+            error.contains("1 test(s) fail with nothing broken: demo tests::t"),
+            "{error}"
+        );
+        let kept = kept_in(&error);
+        assert_eq!(
+            fs::read_to_string(kept.join("set.txt")).unwrap(),
+            "pc",
+            "{}",
+            kept.display()
+        );
+        assert!(!named.join("job-1").exists() && !named.join("job-2").exists());
+
+        // The next command removes it, once it holds the copies.
+        go("none").unwrap();
+        assert!(!kept.exists(), "{}", kept.display());
+        assert!(!named.exists());
+    }
+
+    #[test]
+    fn a_run_with_nothing_broken_that_cannot_be_run_says_where_its_folder_is_kept() {
+        let run = Run::new("kept-error");
+        let mut only = Scratching::new(&run, 0, "demo");
+        only.cannot_run = true;
+
+        let error = super::drive_jobs(
+            &run.root,
+            &run.scratch,
+            &breaks("demo", LIST),
+            &scratching_options(),
+            &mut [&mut only],
+            &mut || false,
+            &mut |_| {},
+        )
+        .unwrap_err();
+
+        assert!(error.starts_with("nextest could not be started"), "{error}");
+        let kept = kept_in(&error);
+        assert_eq!(fs::read_to_string(kept.join("set.txt")).unwrap(), "demo");
     }
 
     #[test]

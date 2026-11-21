@@ -208,9 +208,9 @@ caught-by:
     mutate::drive::tests::each_jobs_cargo_is_given_the_jobs_own_scratch_base_for_its_tests
 
 [break] a-folder-left-there-is-trusted
-rule: A job's tests' scratch base is emptied before each run: what a killed or kept run left there is not trusted.
+rule: A job's tests' scratch base is emptied before each run: what a killed run left there is not trusted.
 file: xtask/src/mutate/drive.rs
-in: TestsBase::make
+in: TestsBase::make_with
 find: let note = crate::combine::remove_tree(&self.dir).err();
 replace: let note: Option<String> = None;
 caught-by:
@@ -224,7 +224,7 @@ find: let failed = crate::combine::remove_tree(&self.dir).err();
 replace: let failed: Option<String> = None;
 caught-by:
     mutate::drive::tests::the_tests_scratch_base_is_made_empty_before_a_run_and_removed_after_it
-    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_logs_what_it_could_not
+    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_notes_what_it_could_not
 
 [break] a-failed-baseline-folder-is-removed
 rule: A run with nothing broken in which a test failed keeps its tests' scratch base for whoever looks.
@@ -234,7 +234,7 @@ find: cases.iter().any(|case| case.failed)
 replace: cases.is_empty()
 caught-by:
     mutate::drive::tests::only_a_failed_run_with_nothing_broken_keeps_its_tests_folders
-    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_logs_what_it_could_not
+    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_notes_what_it_could_not
 
 [break] a-breaks-run-keeps-its-folder
 rule: A break's run, whose tests are meant to fail, never keeps its tests' scratch base.
@@ -254,14 +254,69 @@ replace:
 caught-by:
     mutate::drive::tests::a_run_with_nothing_broken_that_fails_says_where_its_tests_left_their_folders
 
-[break] a-folder-not-removed-is-not-logged
-rule: A scratch base that could not be emptied or removed is said in the job's log.
+[break] a-folder-not-removed-is-not-noted
+rule: A scratch base that could not be emptied or removed is noted in logs/scratch-folders.log.
 file: xtask/src/mutate/drive.rs
-in: CargoRunner::after_run
-find: let _ = writeln!(log, "xtask mutate: {note}");
+in: CargoRunner::note
+find: let _ = log.write_all(format!("{note}\n").as_bytes());
 replace: let _ = (&mut log, note);
 caught-by:
-    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_logs_what_it_could_not
+    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_notes_what_it_could_not
+
+[break] a-kept-folder-is-left-in-the-jobs-way
+rule: A kept run's folder is moved aside, so that the job's next run does not empty it before anyone looks.
+file: xtask/src/mutate/drive.rs
+in: CargoRunner::after_run
+find: fs::rename(&self.tests.dir, &place)
+replace: Err::<(), std::io::Error>(std::io::ErrorKind::Other.into())
+caught-by:
+    mutate::drive::tests::a_kept_folder_outlasts_the_jobs_next_runs_and_goes_with_the_next_command
+    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_notes_what_it_could_not
+
+[break] two-kept-runs-share-one-folder
+rule: A second kept run of one job is kept beside the first, never over it.
+file: xtask/src/mutate/drive.rs
+in: CargoRunner::after_run
+find: self.kept_bases += 1;
+replace:
+caught-by:
+    mutate::drive::tests::a_kept_folder_outlasts_the_jobs_next_runs_and_goes_with_the_next_command
+
+[break] kept-folders-are-not-found
+rule: The next command removes every folder an earlier one kept of its job, and nothing else.
+file: xtask/src/mutate/drive.rs
+in: TestsBase::forget_kept
+find: .starts_with(&kept)
+replace: .starts_with("nothing of ours")
+caught-by:
+    mutate::drive::tests::a_kept_folder_outlasts_the_jobs_next_runs_and_goes_with_the_next_command
+
+[break] the-next-command-leaves-what-was-kept
+rule: A command removes what earlier ones kept once it holds the copies' lock.
+file: xtask/src/mutate/drive.rs
+in: drive_jobs
+find: runner.forget_kept();
+replace:
+caught-by:
+    mutate::drive::tests::with_two_jobs_a_failed_baselines_folder_is_still_there_when_the_run_stops
+
+[break] a-baseline-that-cannot-run-hides-its-folder
+rule: A run with nothing broken that cannot be run says where its tests' scratch folders are kept.
+file: xtask/src/mutate/drive.rs
+in: drive_jobs
+find: format!("{error}{}", kept_note(runner.kept()))
+replace: error
+caught-by:
+    mutate::drive::tests::a_run_with_nothing_broken_that_cannot_be_run_says_where_its_folder_is_kept
+
+[break] a-base-whose-parent-went-is-not-made-again
+rule: A scratch base whose command folder another job removed meanwhile is made again once.
+file: xtask/src/mutate/drive.rs
+in: TestsBase::make_with
+find: error.kind() == std::io::ErrorKind::NotFound
+replace: false
+caught-by:
+    mutate::drive::tests::a_scratch_base_whose_parent_went_meanwhile_is_made_again_once
 
 [break] watch-limit-of-a-system-test
 rule: The watch gives a system test the 60 s nextest gives it.
