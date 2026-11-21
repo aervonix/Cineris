@@ -1,6 +1,7 @@
 //! Integration tests (tier 2) of the extension host: the folder, the
-//! manifest, the capabilities, the order a host call is checked in, and
-//! the engine. No test waits: time is the fake timer's.
+//! manifest, the capabilities, the order a host call is checked in, the
+//! engine, finding extensions and the registration cache. No test waits:
+//! time is the fake timer's.
 
 #![allow(
     clippy::disallowed_methods,
@@ -11,7 +12,9 @@
     reason = "an integration test prepares real files, fails by panicking, and says when it skips"
 )]
 
+mod cache;
 mod capability;
+mod discover;
 mod engine;
 mod folder;
 mod manifest;
