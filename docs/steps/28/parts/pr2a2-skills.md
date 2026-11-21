@@ -1,0 +1,62 @@
+# Step 28, its parts: skills and the prompt
+
+The second part of step 28's second pull request ([answered.md](../answered.md), "The design, before building", point 7, "Sections 6 and 7 of the system prompt"): the skills a session finds, section 6 of the system prompt (the index of skills and tool sources) and section 7 (the extensions' own texts), held to the epoch and told in notices of a new source, `extensions`. The skill folders' read rule, the design's last point there and the owner's call, is the part's last commit, so that it can be dropped whole.
+
+## What was built
+
+- **Skills found** (`cineris_ext::skills`).
+  `SKILL.md` one folder down in `.cineris/skills/`, `.agents/skills/` and `.claude/skills/`, the project's and the home's, the last two under `compat.skills`; the front matter's name and description, one line each, cut and with nothing that acts unseen; the project's taken over the user's for one name; 100 listed, 1,000 entries and 8 MiB read a root ([12-extensions.md](../../../architecture/12-extensions.md), "Tier 2: skills").
+  **They need no trust,** as instruction files need none, as the pages settle; whether a project's text for the model, both together, should wait for trust is the owner's question ([whether-a-projects-text-for-the-model-waits-for-trust](../../../outstanding/whether-a-projects-text-for-the-model-waits-for-trust.md)).
+- **Sections 6 and 7** (`cineris-agent`'s `context::prompt` and `context::extensions`).
+  Section 6, outside `base`: the skills' part within 7 KiB, then each source of dynamic tools in a line, then a line on `tool_search`, 8 KiB in all. Section 7, inside `base`: each enabled extension's approved text under the harness's heading, every line of it quoted, between a lead line and an end line, 4 KiB a text and 16 KiB in all, the user told of what the cap cut or left out ([07-sessions-and-context.md](../../../architecture/07-sessions-and-context.md), "As built in step 28").
+- **The epoch rule and the notices** (the loop's `turn::epochs`; `NoticeSource::Extensions`, an addition to the protocol).
+  A change to the index told whole at the next turn's start; a text removed, disabled or changed withdrawn by name, at a turn's start and before each request; a resume whose section 7 differs a new epoch, and one whose index differs told; a resume naming the texts that went; a summary asked to leave a withdrawn text out.
+- **The log:** the `epoch` entry's `index` and `texts`, optional fields.
+- **The core's fill** (`ext::prompt`, `ext::found`, `ext::watched`).
+  The skills found with the extensions on the session's finding, off the path that opens it; one snapshot of the texts and the tool sources, which a withdrawal leaves before the registry does; the skills' places stamped as the extensions' are; `session/compact` waiting for the finding and looking again, as `turn/start` does.
+- **One home for the one-line rule:** `cineris_base::one_line`, which skills and the agent's index both use.
+- **The breaks:** the parts' lists (`step-28-prompt`, `step-28-skills`) are put together in the step's, [mutations/step-28.breaks](../../../../mutations/step-28.breaks).
+
+**Settled by the maintainers during the build:**
+
+1. Skills keep the pages' rule and need no trust; the question of a project's text and trust is the owner's item above.
+2. `NoticeSource::Extensions` is an additive value of an open enumeration ([11-rpc-protocol.md](../../../architecture/11-rpc-protocol.md), "Handshake and versioning": a new enumeration value and a new notice kind are not breaking); the TypeScript declarations are generated again.
+3. **The log's `epoch` entry gains `index` and `texts` without a new version,** by the precedent of steps 15 (`reason`, `base`, `instructions`) and 17 (`profile`): the log's reader skips a field it does not know ([07-sessions-and-context.md](../../../architecture/07-sessions-and-context.md), "The log"). An older build that resumes such a log works out a `base` without section 7, and so begins a new epoch where the prompt held an extension's text; one whose prompt held only section 6 goes on with the prompt recorded, as a build before step 17 did with a profile.
+4. After the early review (below): section 7's edges, the lead line, every line quoted and the end line, before any log held a section 7; texts held to every request, in context assembly; the texts' names and hashes on the `epoch` entry, and a resume naming what went; the summary request naming the withdrawn extensions to leave out, the summary's instructions otherwise unchanged; `one_line` in `cineris_base`.
+5. An extension that section 7's cap cuts or leaves out is told to the user, not the model, once an epoch, by name.
+6. A resume after any withdrawal begins a new epoch, even with the text back as it was: a notice cannot give back the system prompt's authority. An extension loaded during an epoch has its tools in the index at once and its text at the next epoch, and the page says so. Section 6 keeps a fixed 1 KiB for tool sources.
+7. Skills need the `scripts` feature for now, since the finding that finds them is built only with it; the shipped build has it, and the page says so.
+8. Section 7 stays a prefix by name: a text left out by the cap leaves out the ones after it, a shorter one too, so that which texts are in force does not depend on their lengths.
+9. The skills a session left out are said by `cineris ext list` and the status method, the step's third pull request.
+10. A change on disk during a turn takes effect at the next turn's start, as an extension's tools do: a headless run, one turn, does not see one made while it runs. `cineris ext disable`, in the third pull request, is to change the snapshot at once, so that the check before each request acts within the turn there.
+
+## What was measured
+
+| What | Measured | Where |
+|---|---|---|
+| A turn's start with no extension and no skill | Medians of 663 to 684 µs over three runs of 401 turns, against `main`'s 644 to 701 µs; 10th percentiles 405 to 413 µs, against 404 to 409: no change beyond the runs' spread. A release build, on an otherwise idle reference machine | Measured during the build; no `perf_` test keeps it |
+| Opening a session with no skill folder | Nothing of skills read on the path that opens it. The finding, after the open: a look at the first name of each of the six roots (seven with a `.cineris` and no `skills` in it), nothing resolved or read | `cineris-core::it extensions_reload::with_no_extension_…`, and `extensions_trust::each_folder_is_read_once_when_a_session_opens`, which holds each `SKILL.md` read once |
+| Windows' tiers, both trees on one runner (`try --final` 44898244075, medians of 5) | Tier 1 21.5 s against 20.3; **tier 2 47.6 s against 46.6**, `cineris-core` +0.69 s and `cineris-agent` +0.23 s; tier 3 86.1 s against 85.3. The runner was a slow one, where `main`'s own tier 2 is over its 40 s | [ci.md](../ci.md) once the pull request runs |
+| `cineris-core`'s tiers as a runner would report them (`ci --tiers --like-runner`, on an otherwise idle reference machine) | Tier 2: 10.0 s before the core's fill, 10.1 s at the end; the runners' estimates, Linux 6.7 s and Windows 12.8 to 12.9 s | Measured during the build |
+| The binary | +116 KB on `main` for the part (`cineris_ext` +28 KB, `cineris_agent` +21 KB) | `try --final`'s size check |
+
+**Tier 2 on Windows** adds about 1 s to a tier that is over its budget on slow runners in `main` itself: the conflict and its lever, a session's open and first turn on Windows, are those of [main-windows-tiers-over-budget-on-slow-runners](../../../outstanding/main-windows-tiers-over-budget-on-slow-runners.md) and [the part before](pr2a1-found.md), "The tests folded for Windows' tier 2". The new core tests were built that way from the start: in-memory sessions in one world, the two flows that are one story chained as turns of one session.
+
+## The early review
+
+An independent reviewer read sections 6 and 7 and the epoch rule before the core filled them. It found that the escaping, the stripping of what acts unseen, the caps' cuts (between grapheme clusters), `base`, the epoch paths and the protocol's and log's compatibility held, and:
+
+- **High: section 7's parts had no edges.** A text's own `##` heading, a forged ``## From the extension `zzz` `` line, or the user's appended text after it could not be told from a part of the section, so a withdrawal did not reliably cover what it named. Fixed by the lead line, every line of a text quoted after `> `, and the end line (`an_authors_headings_come_out_quoted_inside_its_own_part`, `the_appended_text_stays_outside_section_seven`).
+- **Medium: within a turn a revoked text stayed in force.** Texts are now held against the model's at the safe boundary before each request too (`a_text_taken_back_during_a_turn_is_withdrawn_before_its_next_request`).
+- **Low,** each fixed with a test: the user told of what the cap leaves out; a resume naming the texts that went (the `epoch` entry's `texts`); a summary asked to leave a withdrawn text out; a vertical tab, a form feed and U+0085 kept as line breaks; a short text that would fit no longer dropped; a source that fails withdrawing what the model has, and the wait for it cancellable; the contract's documentation; a store nothing read; grapheme clusters at every cap's edge, and an `epoch` line read without the new fields.
+
+## The review of the core's fill
+
+A second, fresh reviewer read the early review's fixes and the core's fill. It found one medium, fixed: a turn interrupted as it began built its epoch with neither section, since the ask that builds a prompt stopped with the turn; it now runs to its end, and only the asks that withdraw stop with the turn (`an_epoch_begun_by_an_interrupted_turn_holds_both_sections`). Its lows, each fixed: a root through a link to where nothing is yet was not watched; skills had no byte budget; names on the way were stamped by their times, so another tool's file in `~/.claude` was a change; a compaction neither took the turn-start lock nor looked again; a resume did not name a text its new prompt cuts; the names a resume gave were not for the summary to leave out.
+
+## What is left open, and where
+
+- **The skill folders' read rule** (the design's point 7, "Reading a skill", the owner's call) is the part's last commit, with its own tests and breaks, so that the owner can drop it whole; without it, reading a skill outside the workspace is asked about, as reading any file there is.
+- **The skills a session left out** are said by the third pull request's `cineris ext list` and status method (settled point 9).
+- **No break shows** the turn's token cancelling the asks that withdraw, a resume that goes on asking once, the core rendering within `SKILLS_CAP`, or a summary in the background dropped on a withdrawal; each has its test. One break survives as its list expects: that the snapshot is told of a withdrawal before the registry is, an order no test can see from outside.
+- **A Windows flake seen in this part's runs, not of it:** a terminal's reply typed into the input box on a busy machine, now an item of step 32's ([a-terminals-reply-typed-into-the-input-box-on-a-busy-windows-machine](../../../outstanding/a-terminals-reply-typed-into-the-input-box-on-a-busy-windows-machine.md)).
