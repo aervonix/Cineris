@@ -1013,6 +1013,10 @@ fn a_root_that_is_not_there_costs_a_look_a_name_and_no_resolve() {
     let resolved = cineris_testkit::Hold::new(A_ROOT_IS_RESOLVED).skipping(usize::MAX);
     let mut seen: Vec<PathBuf> = Vec::new();
     let found = find_seeing(&resolver, &Root::standard(true), &mut |place| {
+        // Each a name on the way, looked at for its kind alone.
+        let Seen::Way(place) = place else {
+            panic!("{place:?} is no name on the way");
+        };
         seen.push(place.to_path_buf());
     });
     assert_eq!(found, Found::default());
@@ -1058,6 +1062,7 @@ fn each_place_is_named_before_it_is_looked_at_or_read() {
     // How many `SKILL.md` files had been read as each was named.
     let mut read_then: Vec<usize> = Vec::new();
     let found = find_seeing(&resolver, &Root::standard(false), &mut |place| {
+        let (Seen::Way(place) | Seen::Place(place)) = place;
         seen.push(place.to_path_buf());
         if place.ends_with(FILE_NAME) {
             read_then.push(reads.arrivals());
@@ -1088,4 +1093,94 @@ fn each_place_is_named_before_it_is_looked_at_or_read() {
             "{seen:#?}"
         );
     }
+}
+
+/// A root reached through a link where nothing is yet (the review of step
+/// 28's sections): where it would be is named, so that a root made there
+/// later is seen, whether the link leads to a folder with no `skills` in
+/// it, or to nothing.
+#[test]
+fn a_root_through_a_link_is_named_where_it_would_be() {
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_root_through_a_link_is_named_where_it_would_be",
+    );
+    let dotfiles = scratch.dir("home/dotfiles/claude");
+    let home = scratch.join("home");
+    if !make_link(&dotfiles, &home.join(".claude"), true)
+        || !make_link(
+            &scratch.join("home/dotfiles/agents"),
+            &home.join(".agents"),
+            true,
+        )
+    {
+        return;
+    }
+    let resolver = resolver(&scratch);
+    let mut ways: Vec<PathBuf> = Vec::new();
+    let found = find_seeing(&resolver, &Root::standard(true), &mut |place| {
+        if let Seen::Way(place) = place {
+            ways.push(place.to_path_buf());
+        }
+    });
+    assert!(found.skills.is_empty(), "{found:?}");
+    let real = |path: PathBuf| {
+        let parent = std::fs::canonicalize(path.parent().unwrap()).unwrap();
+        parent.join(path.file_name().unwrap())
+    };
+    let would_be = real(dotfiles.join("skills"));
+    assert!(
+        ways.iter()
+            .any(|way| cineris_base::same_location(way, &would_be)),
+        "{would_be:?} is not named: {ways:#?}"
+    );
+    // The link to nothing: where it leads.
+    let leads = scratch.join("home/dotfiles/agents");
+    assert!(
+        ways.iter().any(|way| way == &leads),
+        "{leads:?} is not named: {ways:#?}"
+    );
+    assert_eq!(
+        found.left_out,
+        [LeftOut {
+            path: "~/.agents/skills".to_owned(),
+            reason: Reason::Dangling
+        }]
+    );
+}
+
+/// A root reads at most 8 MiB of `SKILL.md` files, every byte read
+/// counting: the skills past it are left out, unread, with the reason.
+#[test]
+fn a_root_reads_at_most_its_bytes_of_skills() {
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_root_reads_at_most_its_bytes_of_skills",
+    );
+    // 130 skills of a little under 64 KiB each: about 8.1 MiB.
+    let padding = "x".repeat(64 * 1024 - 200);
+    for n in 0..130 {
+        scratch.file(
+            format!("home/proj/.cineris/skills/s{n:03}/SKILL.md"),
+            format!("---\nname: s{n:03}\ndescription: One.\n---\n{padding}\n"),
+        );
+    }
+    let found = find(&scratch, &Root::standard(false));
+    let past: Vec<&LeftOut> = found
+        .left_out
+        .iter()
+        .filter(|left| left.reason == Reason::PastTheRootsBytes)
+        .collect();
+    assert!(!past.is_empty(), "{:?}", found.left_out);
+    let read = found.skills.len() + found.not_listed;
+    assert_eq!(read + past.len(), 130);
+    let size = (padding.len() + 40) as u64;
+    assert!((read as u64) * size <= MAX_ROOT_BYTES, "{read}");
+    assert!(((read + 1) as u64) * size > MAX_ROOT_BYTES - size, "{read}");
+    // By name: the first ones were read, the last ones left out.
+    assert!(
+        past.iter()
+            .all(|left| left.path.as_str() > ".cineris/skills/s099/SKILL.md"),
+        "{past:?}"
+    );
 }

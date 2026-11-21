@@ -494,18 +494,21 @@ impl Held {
     }
 }
 
-/// A root gives at most the names on the way to it, itself, and three
-/// places an entry it looks at (`skills::find_seeing`): within what a root
-/// may stamp.
-const _: () = assert!(4 + 3 * skills::MAX_ENTRIES <= MAX_PLACES_PER_ROOT);
+/// A root gives at most the names on the way to it, where it would be or
+/// leads when it is not there, itself, and three places an entry it looks
+/// at (`skills::find_seeing`): within what a root may stamp.
+const _: () = assert!(5 + 3 * skills::MAX_ENTRIES <= MAX_PLACES_PER_ROOT);
 
 /// The session's skills, found in their roots, and what they were found in,
 /// each place stamped before it was looked at or read. Blocks.
 fn skills_found(inputs: &Inputs) -> (skills::Found, Watched) {
     let clock = &inputs.clock;
     let mut watched = Watched::default();
-    let found = skills::find_seeing(&inputs.resolver, &inputs.skills, &mut |place| {
-        watched.note(place.to_path_buf(), clock);
+    let found = skills::find_seeing(&inputs.resolver, &inputs.skills, &mut |place| match place {
+        // A name on the way by its kind alone: `~/.claude`, which another
+        // tool writes in, is no change each time it does.
+        skills::Seen::Way(way) => watched.note_kind(way.to_path_buf(), clock),
+        skills::Seen::Place(place) => watched.note(place.to_path_buf(), clock),
     });
     (found, watched)
 }

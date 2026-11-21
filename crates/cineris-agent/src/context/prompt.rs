@@ -1038,13 +1038,16 @@ mod tests {
     /// started for.
     #[test]
     fn section_seven_is_cut_to_16_kib_in_all_and_leaves_out_what_does_not_fit() {
-        // Four texts of 4,000 bytes, given out of order; a fifth of accents
-        // that the cap cuts; a sixth left out.
+        // Four texts of about 4,000 bytes, given out of order; a fifth of
+        // letters with their accents, which the cap cuts inside a cluster
+        // (385 bytes are left for it, a letter past 128 clusters); a sixth
+        // left out.
         let full = "é".repeat(2000);
+        let one_short = format!("{}x", "é".repeat(1999));
         let accents = "e\u{301}".repeat(1365);
         let mut prompts: Vec<ExtensionPrompt> = ["d", "c", "b", "a"]
             .into_iter()
-            .map(|name| prompt(name, &full))
+            .map(|name| prompt(name, if name == "d" { &one_short } else { &full }))
             .collect();
         prompts.push(prompt("f", "The last."));
         prompts.push(prompt("e", &accents));
@@ -1058,7 +1061,10 @@ mod tests {
             .into_iter()
             .map(|name| body_of(&texts, name).len())
             .sum();
+        // The cut fills the cap, but for less than a cluster and the mark
+        // of a cut: the quoting takes nothing of it.
         assert!(bodies <= EXTENSIONS_CAP, "{bodies}");
+        assert!(EXTENSIONS_CAP - bodies < 3 + ELLIPSIS.len(), "{bodies}");
         let fifth = body_of(&texts, "e");
         assert!(fifth.ends_with(ELLIPSIS) && fifth.len() < accents.len());
         let kept = fifth.trim_end_matches(ELLIPSIS);

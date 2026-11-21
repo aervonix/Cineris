@@ -89,10 +89,10 @@ caught-by:
     cineris-ext skills::tests::a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out
 
 [break] a-skill-file-past-its-cap-is-read
-rule: A `SKILL.md` larger than 64 KiB is left out.
+rule: A `SKILL.md` larger than 64 KiB is left out: by its length, unread, or by what was read past it if it grew.
 file: crates/cineris-ext/src/skills.rs
 in: read_capped
-find: bytes.len() as u64 > MAX_SKILL_BYTES
+find: len > MAX_SKILL_BYTES
 replace: false
 caught-by:
     cineris-ext skills::tests::a_skill_file_larger_than_64_kib_is_left_out

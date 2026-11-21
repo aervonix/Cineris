@@ -480,6 +480,7 @@ fn a_resume_after_a_withdrawal_begins_a_new_epoch_and_says_the_prompt_is_current
             says("Three."),
             says("Four."),
             says("Five."),
+            says("A summary."),
         ],
     );
     let source = Scripted::new(two());
@@ -525,6 +526,19 @@ fn a_resume_after_a_withdrawal_begins_a_new_epoch_and_says_the_prompt_is_current
     turn(&world, &third, "fifth", 1);
     assert_eq!(third.store.epochs().len(), 2);
     assert_eq!(told(&third).len(), 2);
+    // Its summary is still asked to leave out what `notes`' text asked for
+    // while it was withdrawn, read back from the withdrawal: the turns of
+    // then went on without it. The text the prompt gives now applies.
+    third.handle.compact(None).expect("a compaction");
+    world.run(async {
+        third.events.turns(2).await;
+    });
+    let summary = world.provider.requests().last().unwrap().clone();
+    let asked = summary.messages.last().map(text).unwrap_or_default();
+    assert!(
+        asked.contains("The text of the extensions `notes` was withdrawn"),
+        "{asked}"
+    );
 }
 
 /// A resume that begins an epoch for another reason (its tools changed)
@@ -891,7 +905,12 @@ fn a_text_taken_back_during_a_turn_is_withdrawn_before_its_next_request() {
 fn a_resume_names_the_texts_that_went_or_changed_since_its_epoch() {
     let world = World::new(
         "extensions_resume_named",
-        [says("One."), says("Two."), says("Three.")],
+        [
+            says("One."),
+            says("Two."),
+            says("Three."),
+            says("A summary."),
+        ],
     );
     let rig = with_extensions(&world, &Scripted::new(two())).start(&world);
     turn(&world, &rig, "first", 1);
@@ -924,6 +943,93 @@ fn a_resume_names_the_texts_that_went_or_changed_since_its_epoch() {
     turn(&world, &third, "third", 1);
     assert_eq!(third.store.epochs().len(), 2);
     assert_eq!(told(&third).len(), 1);
+    // And the summary is asked to leave out what their text asked for, as
+    // for a text withdrawn during a session (the review of step 28's
+    // sections), read back from the notice.
+    third.handle.compact(None).expect("a compaction");
+    world.run(async {
+        third.events.turns(2).await;
+    });
+    let summary = world.provider.requests().last().unwrap().clone();
+    let asked = summary.messages.last().map(text).unwrap_or_default();
+    assert!(
+        asked.contains("The text of the extensions `notes`, `tracker` was withdrawn"),
+        "{asked}"
+    );
+}
+
+/// A resume whose new prompt cuts a text the epoch before held whole names
+/// it too (the review of step 28's sections): its mark, of the text
+/// standing alone, is as it was, and the rest of it no longer applies.
+#[test]
+fn a_resume_whose_prompt_cuts_a_text_names_it() {
+    let world = World::new(
+        "extensions_resume_cut",
+        [says("One."), says("Two."), says("A summary.")],
+    );
+    let full = |letter: char| letter.to_string().repeat(cineris_agent::EXTENSION_TEXT_CAP);
+    let mut prompts: Vec<ExtensionPrompt> = ['b', 'c', 'd']
+        .into_iter()
+        .map(|letter| prompt(&letter.to_string(), &full(letter)))
+        .collect();
+    prompts.push(prompt("e", &"e".repeat(4000)));
+    let sections = |prompts: Vec<ExtensionPrompt>| ExtensionSections {
+        skills: SKILLS.to_owned(),
+        sources: Vec::new(),
+        prompts,
+    };
+    let rig = with_extensions(&world, &Scripted::new(sections(prompts.clone()))).start(&world);
+    turn(&world, &rig, "first", 1);
+    assert!(systems(&world)[0].contains(&format!("> {}", "e".repeat(4000))));
+    // `a`, first by name, leaves `e` less than its whole.
+    prompts.push(prompt("a", &"a".repeat(100)));
+    let resumed = again(&world, &rig, sections(prompts)).start(&world);
+    turn(&world, &resumed, "second", 1);
+    assert_eq!(resumed.store.epochs().len(), 2);
+    let named = told(&resumed);
+    assert_eq!(named.len(), 1, "{named:#?}");
+    assert!(
+        named[0].starts_with(&format!("{TEXTS_REPLACED} `e`.")),
+        "{}",
+        named[0]
+    );
+    // The summary is asked to leave out what the rest of it asked for.
+    resumed.handle.compact(None).expect("a compaction");
+    world.run(async {
+        resumed.events.turns(2).await;
+    });
+    let summary = world.provider.requests().last().unwrap().clone();
+    let asked = summary.messages.last().map(text).unwrap_or_default();
+    assert!(
+        asked.contains("The text of the extensions `e` was withdrawn"),
+        "{asked}"
+    );
+}
+
+/// A turn interrupted as it begins still has its epoch's prompt built
+/// whole (the review of step 28's sections): the source is asked to its
+/// end whatever the turn's token says, so the next turn's requests hold the
+/// extensions' texts.
+#[test]
+fn an_epoch_begun_by_an_interrupted_turn_holds_both_sections() {
+    let world = World::new("extensions_interrupted_start", [says("Two.")]);
+    let rig = with_extensions(&world, &Scripted::new(two())).start(&world);
+    world.run(async {
+        // Interrupted before the loop takes it up.
+        rig.prompt("first");
+        let _ = rig.handle.interrupt();
+        rig.events.turns(1).await;
+        rig.prompt("second");
+        rig.events.turns(2).await;
+    });
+    let systems = systems(&world);
+    assert_eq!(systems.len(), 1, "the first turn sent nothing");
+    assert!(
+        systems[0].contains(NOTES) && systems[0].contains(TRACKER),
+        "{}",
+        systems[0]
+    );
+    assert_eq!(rig.store.epochs().len(), 1);
 }
 
 /// A compaction's summary is asked to leave out what a text withdrawn in
