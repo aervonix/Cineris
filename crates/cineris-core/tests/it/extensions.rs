@@ -1060,9 +1060,9 @@ fn a_host_call_nobody_can_answer_as_the_last_call_ends_the_turn_without_asking_a
     );
     let extension = approve(
         &world.dir.join("ext"),
-        "write = [\".github/**\"]",
+        "write = [\".env\"]",
         "cineris.tool({ name: 'ci', run: async () => { \
-           try { await cineris.fs.write('.github/workflows/ci.yml', 'on: push\\n') } catch (e) { } \
+           try { await cineris.fs.write('.env', 'TOKEN=1\\n') } catch (e) { } \
            return 'went on' } });",
     );
     let core = world.core_with(|options| {
@@ -1094,7 +1094,7 @@ fn a_host_call_nobody_can_answer_as_the_last_call_ends_the_turn_without_asking_a
         assert_eq!(world.provider.remaining(), 1, "the model was asked again");
         front.close().await;
     });
-    assert_eq!(world.read(".github/workflows/ci.yml"), None);
+    assert_eq!(world.read(".env"), None);
 }
 
 /// An extension whose script did not stop when its time was up, and whose
