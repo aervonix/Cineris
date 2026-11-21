@@ -532,7 +532,12 @@ impl Held {
         // being stored for the project, if one is. The rules it makes are
         // held by the same work, so none is left that the session does not
         // know of.
-        let _ = blocking(move || lock(&reads).follow(&policy, folders)).await;
+        let made = blocking(move || lock(&reads).follow(&policy, folders)).await;
+        // The user is told once, when the first rules are made, in a notice
+        // of the session's: the model is not told.
+        if let Some(count) = made.flatten() {
+            (self.parts.tell)(super::reads::told(count));
+        }
     }
 }
 

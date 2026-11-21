@@ -68,7 +68,7 @@ pub use crate::policy::{
     AFTER_THE_LOOK, BEFORE_THE_APPROVAL_IS_OPEN, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE, PermissionDenial,
 };
 pub use crate::provider::{ANTHROPIC_KEY_ENV, Connector, EFFORT_ALIASES, KeyFound};
-pub use crate::reload::{CHOICE_BEING_KEPT, TRUST_JUDGED};
+pub use crate::reload::{CHOICE_BEING_KEPT, SKILL_FOLDERS_STAY, TRUST_JUDGED};
 pub use crate::repo_map::Probe;
 pub use crate::rules::parse_rule;
 pub use crate::usage::AGGREGATES_READ;

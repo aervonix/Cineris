@@ -703,7 +703,7 @@
         },
         "read_skill_folders": {
           "default": false,
-          "description": "Let the model read the files in your own skill folders (in your home directory, outside the workspace) without asking. Secret-looking files there, such as a `.env` a skill's scripts use, are read too, and sent to the model's provider. Off: each such read is asked about. The user's alone: a project's file may not set it.",
+          "description": "Let the model read the files of your own skills without asking: those found in your home directory's skill folders, wherever they lead (never in or around the workspace). Secret-looking files there, such as a `.env` a skill's scripts use, are read too, and sent to the model's provider. Off: each such read is asked about. The user's alone: a project's file may not set it.",
           "type": "boolean",
           "x-cineris-effect": "next session",
           "x-cineris-trust": "user only"

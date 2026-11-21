@@ -1396,6 +1396,13 @@ fn unrestricted_reason() -> String {
 /// was put in force. It is applied again, from what is in force now.
 struct Moved;
 
+/// What a reload that turns `permissions.read_skill_folders` off says
+/// besides that the key waits: the session's rules stay, and follow the
+/// skills found, until they are revoked or a new session is opened.
+pub const SKILL_FOLDERS_STAY: &str = "This session still reads your skill folders without \
+    asking, including skills added to them later: revoke those approvals with /permissions, or \
+    start a new session with /new.";
+
 /// What the person is told of the keys that wait.
 fn waiting_notes(
     waiting: &BTreeMap<KeyPath, Effect>,
@@ -1466,6 +1473,13 @@ fn waiting_notes(
                  session. Start one with /new for it to protect what you are working on.",
                 what.join(" and ")
             ));
+        }
+        // So is turning the skills' read rules off: this session goes on
+        // reading the user's skill folders unasked.
+        if in_force.settings.permissions.read_skill_folders
+            && !latest.settings.permissions.read_skill_folders
+        {
+            notes.push(SKILL_FOLDERS_STAY.to_owned());
         }
     }
     let restart = named(Effect::Restart);
