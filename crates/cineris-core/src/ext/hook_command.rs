@@ -833,6 +833,18 @@ pub struct HookRun {
 }
 
 impl crate::Core {
+    /// The prompt tickets the session `session` has handed out, and the
+    /// senders it keeps now (`SessionSink::sent_by`): for the tests that a
+    /// session with no `prompt.submit` hook keeps none.
+    ///
+    /// # Errors
+    ///
+    /// When the session is not open.
+    #[doc(hidden)]
+    pub fn prompt_tickets(&self, session: &SessionId) -> Result<(u64, usize), crate::OpError> {
+        Ok(self.live(session)?.sink.tickets())
+    }
+
     /// Runs the hook command `name` of the session `session` for one
     /// event, as the loop's points will, and says how it ended: for the
     /// tests of a hook command's start, until the loop calls hooks.

@@ -392,7 +392,9 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
 /// H1, found that one gated every call): with a refused `tool.before`
 /// entry and a refused `prompt.submit` one in it, the prompt is sent and
 /// the call runs as with no hooks at all, and the user is told of neither,
-/// nor warned of an entry of it that relies on `{path}`.
+/// nor warned of an entry of it that relies on `{path}`. A session with no
+/// `prompt.submit` hook keeps nobody's prompt for giving back (M5): it
+/// hands the loop no ticket.
 #[test]
 fn an_untrusted_projects_refused_entries_change_nothing() {
     let world = World::new(
@@ -421,6 +423,7 @@ fn an_untrusted_projects_refused_entries_change_nothing() {
         let front = start(&world, &core).await;
         let ended = front.turn("read it").await;
         assert_eq!(ended.outcome, TurnOutcome::Completed, "{ended:?}");
+        assert_eq!(core.prompt_tickets(&front.session).unwrap(), (0, 0));
         let results = front.results();
         let [(tool, outcome, text)] = results.as_slice() else {
             panic!("{results:?}");
@@ -602,6 +605,11 @@ fn a_projects_hooks_reach_a_session_only_through_trust() {
         assert_eq!(other_seq, seq, "one event, one seq");
         assert!(theirs.parts.is_empty(), "{theirs:?}");
         assert!(!format!("{theirs:?}").contains("1234"));
+        assert_eq!(
+            core.prompt_tickets(&front.session).unwrap(),
+            (1, 0),
+            "the sender of a prompt given back is kept"
+        );
         front.close().await;
     });
 
