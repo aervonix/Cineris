@@ -3289,7 +3289,7 @@ in: decide
 find: .map(|config| in_users(inputs, config, &mut decided.watched))
 replace: .filter(|_| false).map(|config| in_users(inputs, config, &mut decided.watched))
 caught-by:
-    extensions_found::a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started
+    extensions_found::a_users_extension_stands_by_its_pin
     extensions_reload::a_change_is_seen_however_the_configuration_directory_is_given
 
 [break] pinned-untrusted-projects-folder-looked-in
@@ -3318,7 +3318,7 @@ in: decide
 find: if standing == Standing::Approved {
 replace: if standing != Standing::New {
 caught-by:
-    extensions_found::a_users_extension_changed_since_its_pin_is_not_loaded_and_says_how_to_approve_it
+    extensions_found::a_users_extension_stands_by_its_pin
     extensions_found::a_projects_extension_changed_since_it_was_approved_is_disabled_and_asked_about_as_changed
 
 [break] pinned-new-extension-loaded
@@ -3328,7 +3328,7 @@ in: decide
 find: if standing == Standing::Approved {
 replace: if standing != Standing::Changed {
 caught-by:
-    extensions_found::a_users_extension_never_pinned_is_not_loaded_and_says_how_to_approve_it
+    extensions_found::a_users_extension_stands_by_its_pin
 
 [break] pinned-projects-judged-by-the-users-pins
 rule: A project's extension stands by the project's entry in the trust store, not by the user's own pins.
@@ -3346,7 +3346,7 @@ in: decide
 find: if inputs.disabled.contains(&listed.manifest.name) {
 replace: if inputs.disabled.contains(&listed.manifest.name) && false {
 caught-by:
-    extensions_found::a_users_extension_turned_off_is_not_loaded_and_nothing_is_asked
+    extensions_found::a_users_extension_stands_by_its_pin
 
 [break] pinned-same-name-used
 rule: A project's extension that takes the name of one of the user's is not used, and the session says so.
@@ -3366,7 +3366,7 @@ in: not_loaded
 in-string: `cineris ext add {shown}` shows it, to approve it.
 replace: It is not shown.
 caught-by:
-    extensions_found::a_users_extension_never_pinned_is_not_loaded_and_says_how_to_approve_it
+    extensions_found::a_users_extension_stands_by_its_pin
 
 [break] pinned-folder-not-shown-under-home
 rule: A user's extension is named, in the command that approves it, by its folder as the user is shown it: under `~`.
@@ -3375,8 +3375,7 @@ in: not_loaded
 find: let shown = &found.shown;
 replace: let shown = &found.folder.display().to_string();
 caught-by:
-    extensions_found::a_users_extension_changed_since_its_pin_is_not_loaded_and_says_how_to_approve_it
-    extensions_found::a_users_extension_never_pinned_is_not_loaded_and_says_how_to_approve_it
+    extensions_found::a_users_extension_stands_by_its_pin
 
 # ------------------------------------------------------------ the cache
 
@@ -3387,7 +3386,7 @@ in: decide
 find: .and_then(|(_, loaded)| loaded.cache.get(&listed.hash));
 replace: .and_then(|(_, loaded)| loaded.cache.get(&listed.hash).filter(|_| false));
 caught-by:
-    extensions_found::a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started
+    extensions_found::a_users_extension_stands_by_its_pin
 
 [break] pinned-entry-of-another-name-taken
 rule: A cache entry is taken for an extension only when it fits the extension as it was read: its name, its `api`, hooks the manifest allows and its prompt file's text. A misfit is missing, and the extension is registered again.
@@ -3396,7 +3395,7 @@ in: decide
 find: Some(entry) if entry.fits(&listed.manifest, against).is_ok() =>
 replace: Some(entry) =>
 caught-by:
-    extensions_found::a_cache_entry_of_another_name_is_no_entry_of_this_one
+    extensions_found::the_registration_cache_is_taken_and_pruned_as_the_pins_say
     extensions_review::a_cached_entry_that_does_not_fit_the_extension_is_not_used
 
 [break] pinned-missing-entry-left-out
@@ -3455,7 +3454,7 @@ in: Kept::keep
 find: cache.prune(|hash| pinned.contains(hash))
 replace: cache.prune(|_| true)
 caught-by:
-    extensions_found::pruning_the_cache_keeps_every_trusted_projects_entries
+    extensions_found::the_registration_cache_is_taken_and_pruned_as_the_pins_say
 
 [break] pinned-prune-drops-other-projects
 rule: The cache is pruned by every trusted project's pins as well as the user's: a cache that projects share does not drop another project's entries.
@@ -3464,7 +3463,7 @@ in: pinned
 find: .pinned_hashes(&kind)
 replace: .pinned_hashes(&TrustResourceKind::Hook)
 caught-by:
-    extensions_found::pruning_the_cache_keeps_every_trusted_projects_entries
+    extensions_found::the_registration_cache_is_taken_and_pruned_as_the_pins_say
 
 [break] pinned-prune-drops-the-users-own
 rule: The cache keeps the hashes the user's own pins of extensions name.
@@ -3473,7 +3472,7 @@ in: pinned
 find: .filter(|pin| pin.kind.as_str() == kind.as_str())
 replace: .filter(|pin| pin.kind.as_str() != kind.as_str())
 caught-by:
-    extensions_found::pruning_the_cache_keeps_every_trusted_projects_entries
+    extensions_found::the_registration_cache_is_taken_and_pruned_as_the_pins_say
 
 [break] pinned-unreadable-store-prunes-all
 rule: When a store of pins cannot be read, nothing is pruned: an entry it may pin is kept.
@@ -3482,7 +3481,7 @@ in: pinned
 find: .pinned_hashes(&kind).ok()?
 replace: .pinned_hashes(&kind).unwrap_or_default()
 caught-by:
-    extensions_found::a_trust_store_that_cannot_be_read_prunes_nothing
+    extensions_found::the_registration_cache_is_taken_and_pruned_as_the_pins_say
 
 [break] pinned-hashes-of-every-kind
 rule: The hashes the trusted projects pin are given for the kind asked: a hook's pin keeps no extension's entry.
@@ -3707,7 +3706,7 @@ in: look
 find: if stored.is_refused() ||
 replace: if false ||
 caught-by:
-    extensions_trust::a_project_marked_never_is_not_looked_in
+    extensions_trust::the_question_does_not_look_below_a_never_or_a_not_now
 
 [break] pinned-not-now-looked-in
 rule: After not now, another session of the core asks nothing and does not look in the project's folder.
@@ -3716,7 +3715,7 @@ in: look
 find: .contains(&key)
 replace: .contains(&key) && false
 caught-by:
-    extensions_trust::after_not_now_another_session_of_the_core_does_not_look
+    extensions_trust::the_question_does_not_look_below_a_never_or_a_not_now
 
 [break] pinned-unreadable-pins-prune
 rule: When the pin store cannot be read, nothing is pruned from the cache.

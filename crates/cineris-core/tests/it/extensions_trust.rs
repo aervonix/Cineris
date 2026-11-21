@@ -224,33 +224,16 @@ fn each_folder_is_read_once_when_a_session_opens() {
 
 // ------------------------------------------------------------ never, not now
 
-/// A project marked never is not looked in: its question is not put, so
-/// its folder of extensions is not read.
+/// The question's look is below the never and the not now (folded for
+/// Windows' tier 2, one world): after "not now", another session of the
+/// same core asks nothing and does not look in the project's folder of
+/// extensions; and a project marked never is not looked in.
 #[test]
-fn a_project_marked_never_is_not_looked_in() {
-    let world = World::new("found_never", []);
+fn the_question_does_not_look_below_a_never_or_a_not_now() {
+    let world = World::new("found_never_not_now", []);
     write_extension(&projects(&world), "", "the projects");
-    trust_store(&world)
-        .refuse(&project_key(&world), "~/work/app")
-        .unwrap();
-    let core = world.core();
     let reads = counting(AN_EXTENSION_IS_READ);
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, yes()).await;
-        assert!(asked.is_empty(), "{asked:?}");
-        front.close().await;
-    });
-    assert_eq!(reads.arrivals(), 0);
-}
-
-/// After "not now", another session of the same core asks nothing and does
-/// not look in the project's folder of extensions.
-#[test]
-fn after_not_now_another_session_of_the_core_does_not_look() {
-    let world = World::new("found_not_now", []);
-    write_extension(&projects(&world), "", "the projects");
     let core = world.core();
-    let reads = counting(AN_EXTENSION_IS_READ);
     world.run(async {
         let (front, asked) = open_answering(&world, &core, not_now()).await;
         assert_eq!(asked.len(), 1);
@@ -261,6 +244,20 @@ fn after_not_now_another_session_of_the_core_does_not_look() {
         front.close().await;
     });
     assert_eq!(reads.arrivals(), 1, "not read again");
+    trust_store(&world)
+        .refuse(&project_key(&world), "~/work/app")
+        .unwrap();
+    let core = world.core();
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, yes()).await;
+        assert!(asked.is_empty(), "{asked:?}");
+        front.close().await;
+    });
+    assert_eq!(
+        reads.arrivals(),
+        1,
+        "a project marked never is not looked in"
+    );
 }
 
 // ------------------------------------------------------------ the pin store
