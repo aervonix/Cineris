@@ -18,6 +18,8 @@ mod exec;
 #[cfg(feature = "scripts")]
 mod host;
 #[cfg(feature = "scripts")]
+mod state;
+#[cfg(feature = "scripts")]
 mod tools;
 
 use std::path::PathBuf;
@@ -28,6 +30,8 @@ use cineris_ext::registration::Registration;
 
 #[cfg(feature = "scripts")]
 pub(crate) use exec::{ExecParts, HarnessFiles};
+#[cfg(feature = "scripts")]
+pub(crate) use state::{ExtState, ProjectStore};
 #[cfg(feature = "scripts")]
 pub(crate) use tools::{HostParts, register};
 

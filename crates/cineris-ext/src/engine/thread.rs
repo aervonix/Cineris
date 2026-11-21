@@ -676,6 +676,9 @@ struct Shared {
     progressed: u32,
     logged: u32,
     asked: u32,
+    /// `cineris.state.set` calls: each `session` one is a line of the
+    /// session's log, which this keeps bounded.
+    stored: u32,
 }
 
 /// A host call waiting for its answer.
@@ -712,6 +715,7 @@ impl Shared {
             progressed: 0,
             logged: 0,
             asked: 0,
+            stored: 0,
         }
     }
 
@@ -722,6 +726,7 @@ impl Shared {
         self.progressed = 0;
         self.logged = 0;
         self.asked = 0;
+        self.stored = 0;
     }
 
     /// The call has ended: its host calls that were not answered never
@@ -803,6 +808,7 @@ impl Shared {
             "progress" => (&mut self.progressed, MAX_PROGRESS, "progress lines"),
             "log" => (&mut self.logged, MAX_LOG, "lines of the log"),
             "ask" => (&mut self.asked, MAX_ASK, "questions"),
+            "state.set" => (&mut self.stored, MAX_STATE_SET, "`cineris.state.set` calls"),
             _ => return Ok(outbox),
         };
         if *count >= most {
@@ -875,6 +881,10 @@ const MAX_PROGRESS: u32 = 100;
 const MAX_LOG: u32 = 100;
 /// The most questions one call of the extension puts.
 const MAX_ASK: u32 = 5;
+/// The most `cineris.state.set` calls in one call of the extension: each
+/// `session` one is a line of the session's log, up to 64 KiB, so a script
+/// that sets in a loop cannot grow the log without end.
+const MAX_STATE_SET: u32 = 100;
 
 /// The largest arguments of a host call of `kind`, as the JSON text the
 /// prelude passes: room for what the call may carry, escaped.
