@@ -256,7 +256,7 @@ caught-by:
 [break] a-relative-program-is-taken
 rule: A program is a bare name or an absolute path; a relative path is refused.
 file: crates/cineris-ext/src/manifest.rs
-in: program
+in: Program::parse
 find: if !entry.contains('/') && !entry.contains('\\') {
 replace: if !entry.starts_with('/') {
 caught-by:
@@ -1775,8 +1775,8 @@ caught-by:
 rule: On Windows a program the session's shell calls read-only is asked about, whatever the shell: Windows' lookup finds the program, not the shell's.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: read_only_asks: cfg!(windows)
-replace: read_only_asks: false
+find: let read_only_asks = cfg!(windows)
+replace: let read_only_asks = false
 os: windows
 caught-by:
     cineris-core::it ext_exec::windows::sys_in_bash_on_windows_a_program_the_shell_calls_read_only_is_asked_about
@@ -3514,8 +3514,8 @@ caught-by:
 rule: A trusted project with nothing else new is asked about an extension in it that is new or changed.
 file: crates/cineris-core/src/assemble.rs
 in: look
-find: if quiet && extensions.pins.is_empty() {
-replace: if quiet {
+find: if quiet && extensions.pins.is_empty() && hooks.pins.is_empty() {
+replace: if quiet && hooks.pins.is_empty() {
 caught-by:
     extensions_found::a_projects_extension_walks_through_its_trust
 
@@ -3754,8 +3754,8 @@ caught-by:
 rule: Keep trusting it, without a changed extension, is kept by the core for its run: it asks no more until the next start.
 file: crates/cineris-core/src/assemble.rs
 in: kept_answer
-find: if !question.extensions.is_empty() {
-replace: if false {
+find: if !question.extensions.is_empty() || !question.hooks.is_empty() {
+replace: if !question.hooks.is_empty() {
 caught-by:
     extensions_trust::keeping_the_trust_without_a_changed_extension_leaves_it_off_until_the_next_start
 

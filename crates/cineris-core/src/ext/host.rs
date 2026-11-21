@@ -148,7 +148,9 @@ impl Host for CallHost<'_> {
     }
 
     fn exec(&self, request: ExecRequest) -> HostFuture<'_, Result<ExecOutput, HostError>> {
-        Box::pin(async move { super::exec::run(&self.parts.exec, request, self).await })
+        Box::pin(async move {
+            super::exec::run(&self.parts.exec, request, self, &super::exec::Decided::Host).await
+        })
     }
 
     fn read(

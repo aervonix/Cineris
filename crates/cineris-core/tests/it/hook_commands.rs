@@ -269,6 +269,7 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
 #[test]
 fn a_projects_hook_is_listed_pinned_and_never_passes_a_question() {
     use crate::extensions_found::{open_answering, yes};
+    use crate::extensions_trust::not_now;
     use cineris_protocol::methods::TrustResourceKind;
 
     let world = World::new("hook_project_trust", []);
@@ -285,6 +286,17 @@ fn a_projects_hook_is_listed_pinned_and_never_passes_a_question() {
         ]
         .concat(),
     );
+    let core = world.core();
+    // Not now: a project not trusted runs none of its hooks.
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, not_now()).await;
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        let none = core
+            .run_hook_command(&front.session, "lint", for_edit(&["src/a.rs"]))
+            .await;
+        assert!(none.is_err(), "{none:?}");
+        front.close().await;
+    });
     let core = world.core();
     world.run(async {
         let (front, asked) = open_answering(&world, &core, yes()).await;
@@ -362,7 +374,7 @@ fn a_users_hook_is_held_back_by_a_deny_or_a_managed_ask() {
         let world = World::new(name, []);
         world.user_config(&format!(
             "{user}{}",
-            entry("gate", "tool.before", &this_binary("hang", &[]), "")
+            entry("gate", "tool.before", &this_binary("fail", &[]), "")
         ));
         if !managed.is_empty() {
             let file = world.dirs().managed_config.unwrap();
@@ -388,6 +400,34 @@ fn a_users_hook_is_held_back_by_a_deny_or_a_managed_ask() {
             front.close().await;
         });
     }
+}
+
+/// An event of more than 1 MiB is no hook's input: the hook has failed,
+/// and nothing is started.
+#[test]
+fn an_event_past_its_cap_starts_nothing() {
+    let world = World::new("hook_event_cap", []);
+    world.user_config(&entry("gate", "turn.end", &this_binary("fail", &[]), ""));
+    let core = world.core();
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let ran = core
+            .run_hook_command(
+                &front.session,
+                "gate",
+                HookRun {
+                    input: json!({"text": "a".repeat(1024 * 1024)}),
+                    ..HookRun::default()
+                },
+            )
+            .await
+            .unwrap();
+        let HookOutcome::Failed(why) = &ran else {
+            panic!("{ran:?}");
+        };
+        assert!(why.contains("a hook is given at most 1 MiB"), "{why}");
+        front.close().await;
+    });
 }
 
 #[cfg(target_os = "linux")]
@@ -450,6 +490,30 @@ mod confined {
             };
             assert!(note.contains(".github/workflows"), "{note}");
             assert!(world.read(".github/workflows/x.yml").is_some());
+            // The turn is stopped: no more of its hooks starts.
+            let again = core
+                .run_hook_command(&front.session, "reader", after())
+                .await
+                .unwrap();
+            assert!(matches!(again, HookOutcome::Stopped(_)), "{again:?}");
+            // In the next turn, a protected path changed by hand since the
+            // last look refuses the next start that has a write root.
+            world.put(".github/workflows/new.yml", "on: push\n");
+            let next = core
+                .run_hook_command(
+                    &front.session,
+                    "scribble",
+                    HookRun {
+                        turn: Some("t_2".to_owned()),
+                        ..after()
+                    },
+                )
+                .await
+                .unwrap();
+            let HookOutcome::Stopped(note) = &next else {
+                panic!("{next:?}");
+            };
+            assert!(note.contains("changed since the last command"), "{note}");
             front.close().await;
         });
     }

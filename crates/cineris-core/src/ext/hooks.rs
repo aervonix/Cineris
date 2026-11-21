@@ -490,5 +490,37 @@ mod tests {
         // The user's run whatever the project's trust.
         let mine = in_session(user, false, None, &[]);
         assert_eq!(names(&mine), ["mine"]);
+
+        // By the store's pin: the hash shown is approved, another is a
+        // change.
+        let scratch = cineris_testkit::Scratch::outside("cineris-core-unit", "hooks_pinned");
+        let clock: cineris_base::SharedClock = std::sync::Arc::new(
+            cineris_testkit::FakeClock::starting_at("2026-11-21T10:00:00Z").unwrap(),
+        );
+        let key =
+            cineris_base::PathResolver::new(&scratch.dir("work"), cineris_base::PathOptions::new())
+                .unwrap()
+                .root()
+                .project_key();
+        let store = |name: &str, pinned: &Definition| {
+            let store = cineris_policy::TrustStore::new(scratch.join(name), clock.clone());
+            store
+                .trust(&key, "~/work", std::slice::from_ref(pinned), false)
+                .unwrap();
+            store.project(&key).unwrap()
+        };
+        let approved = store("approved.toml", &definition);
+        let pinned = in_session(configured.clone(), true, Some(&approved), &[]);
+        assert_eq!(names(&pinned), ["lint"]);
+        let elsewhere = store(
+            "changed.toml",
+            &Definition {
+                hash: cineris_base::ContentHash::of(b"another"),
+                ..definition.clone()
+            },
+        );
+        let changed = in_session(configured, true, Some(&elsewhere), &[]);
+        assert!(changed.hooks.is_empty());
+        assert!(changed.told[0].contains("has changed since you approved it"));
     }
 }

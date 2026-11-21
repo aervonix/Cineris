@@ -50,7 +50,7 @@
 //!    [`EXEC_OUTPUT_CAP`] with a flag when cut.
 //!
 //! **A hook command** (`super::hook_command`) is started through
-//! [`run_as`]: all of the above but its decision, which never asks
+//! [`run`] too: all of the above but its decision, which never asks
 //! ([`Decided::Unasked`]), and what it writes, which is not recorded in
 //! the round's checkpoint.
 
@@ -162,24 +162,16 @@ pub(crate) struct ToDecide<'a> {
     pub(crate) read_only_asks: bool,
 }
 
-/// Runs `request` for the call `host` serves.
+/// Runs `request` for the call `host` serves, its start decided as `how`
+/// says: everything else (the program's lookup, the line, the
+/// launcher, the looks at the protected paths before and after it, the
+/// environment and the run) is the same, for an extension's program
+/// ([`Decided::Host`]) and a hook command's ([`Decided::Unasked`]).
 pub(crate) async fn run(
     parts: &ExecParts,
     request: ExecRequest,
     host: &CallHost<'_>,
-) -> Result<ExecOutput, HostError> {
-    run_as(parts, request, host, &Decided::Host).await
-}
-
-/// [`run`], its start decided as `decided` says: everything else (the
-/// program's lookup, the line, the launcher, the looks at the protected
-/// paths before and after it, the environment and the run) is the same,
-/// for an extension's program and a hook command's.
-pub(crate) async fn run_as(
-    parts: &ExecParts,
-    request: ExecRequest,
-    host: &CallHost<'_>,
-    decided: &Decided<'_>,
+    how: &Decided<'_>,
 ) -> Result<ExecOutput, HostError> {
     let cx = host.cx;
     // The call's time is reckoned from here: `call_left` is what was left
@@ -336,7 +328,7 @@ pub(crate) async fn run_as(
             "`{named}` was not started: the call ended while it was being decided"
         ))
     };
-    if let Decided::Unasked(decide) = decided {
+    if let Decided::Unasked(decide) = how {
         decide(ToDecide {
             line: &line,
             cwd: &cwd,
@@ -373,7 +365,7 @@ pub(crate) async fn run_as(
         let left = request
             .call_left
             .saturating_sub(host.parts.clock.monotonic().saturating_sub(arrived));
-        let answer = if left.is_zero() || cx.cancel.is_cancelled() {
+        let decided = if left.is_zero() || cx.cancel.is_cancelled() {
             None
         } else {
             let mut decision = std::pin::pin!(decision);
@@ -392,7 +384,7 @@ pub(crate) async fn run_as(
             })
             .await
         };
-        answer.ok_or_else(not_started)??;
+        decided.ok_or_else(not_started)??;
     }
     let watch = launcher
         .as_ref()
@@ -480,7 +472,7 @@ pub(crate) async fn run_as(
     // the repository's configuration in its write roots (the review of the
     // extensions' process starts). A hook command's writes are not
     // recorded: the page says undo does not put them back.
-    let records = matches!(decided, Decided::Host);
+    let records = matches!(how, Decided::Host);
     let detector = (records && (!write_roots.is_empty() || launcher.is_none())).then(|| {
         let git: Arc<dyn cineris_base::git::Confinement> = if launcher.is_some() {
             Arc::new(FollowingTheProgram(Arc::clone(&parts.git)))

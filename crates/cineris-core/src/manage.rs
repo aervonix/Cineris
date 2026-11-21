@@ -401,7 +401,7 @@ impl Core {
     /// When the project's configuration is invalid, or the trust store
     /// cannot be read or written.
     pub fn trust_project(&self, project: &Project) -> Result<Trusted, OpError> {
-        self.trust_project_with(project, &[])
+        self.trust_project_with(project, &[], &[])
     }
 
     /// What trusting the project would turn the sandbox off with, in the
@@ -536,29 +536,15 @@ impl Core {
             .collect())
     }
 
-    /// [`trust_project`](Self::trust_project), approving `extensions` with
-    /// it (from [`project_extensions`](Self::project_extensions), which
-    /// the person was shown): each pinned as it was read to be shown.
+    /// [`trust_project`](Self::trust_project), approving `extensions` and
+    /// `hooks` with it (from [`project_extensions`](Self::project_extensions)
+    /// and [`project_hook_commands`](Self::project_hook_commands), which the
+    /// person was shown): each pinned as it was read to be shown.
     ///
     /// # Errors
     ///
     /// As [`trust_project`](Self::trust_project).
     pub fn trust_project_with(
-        &self,
-        project: &Project,
-        extensions: &[ProjectExtension],
-    ) -> Result<Trusted, OpError> {
-        self.trust_project_approving(project, extensions, &[])
-    }
-
-    /// [`trust_project_with`](Self::trust_project_with), approving `hooks`
-    /// too (from [`project_hook_commands`](Self::project_hook_commands),
-    /// which the person was shown): each pinned as it was read to be shown.
-    ///
-    /// # Errors
-    ///
-    /// As [`trust_project`](Self::trust_project).
-    pub fn trust_project_approving(
         &self,
         project: &Project,
         extensions: &[ProjectExtension],
