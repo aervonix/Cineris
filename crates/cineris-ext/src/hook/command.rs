@@ -12,8 +12,14 @@
 //!   the four, and `{path}` or `{tool}` on an event that is not a tool's.
 //! - **`{path}`** is filled with each file the call's plan reads or writes,
 //!   resolved and in the system's plain form, one argument each, at most
-//!   [`MAX_PATHS`]; for a call that names none (a shell command) the
-//!   argument is dropped.
+//!   [`MAX_PATHS`]. **An entry that uses it does not run for a call that
+//!   names none** (a shell command): it says nothing there, and narrows
+//!   nothing (settled by the maintainers, after the early review of the
+//!   hook commands: `find {path} -delete` must not become `find -delete`).
+//!   A gating entry that uses it with no `tools` is warned of
+//!   ([`CommandHook::warning`]).
+//! - **`{tool}`** is filled only with a tool's name: one that begins with
+//!   `-`, or is not of a name's shape, fails the hook.
 //! - **At most [`EXEC_MAX_ARGS`] arguments** of [`EXEC_MAX_ARG_BYTES`] each,
 //!   written and filled.
 //! - **Its time:** [`WAITED_DEFAULT`] for a hook that is waited for, at most
@@ -291,15 +297,43 @@ impl CommandHook {
         self.filter.matches(tool, named)
     }
 
-    /// Its arguments, each placeholder filled from `with`.
+    /// Whether its command uses `{path}`.
+    #[must_use]
+    pub fn uses_path(&self) -> bool {
+        self.args.contains(&Arg::Path)
+    }
+
+    /// What the configuration's check says of it once, when it is read: a
+    /// `tool.before` hook that is waited for, uses `{path}` and lists no
+    /// `tools` does not run for a call that names no file, so it does not
+    /// gate a shell command. `None` for any other.
+    #[must_use]
+    pub fn warning(&self) -> Option<String> {
+        (self.event == Event::ToolBefore
+            && !self.observe
+            && self.uses_path()
+            && self.filter.is_every())
+        .then(|| {
+            format!(
+                "The hook `{}` uses `{PATH}` and lists no `tools`: it does not run for a call                  that names no file, such as a shell command, so it gates none of those. For it                  to gate every call, list the tools in `tools` and do not rely on `{PATH}`.",
+                in_code(&self.name)
+            )
+        })
+    }
+
+    /// Its arguments, each placeholder filled from `with`: `None` when it
+    /// uses `{path}` and the call names no file, where it does not run.
     ///
     /// # Errors
     ///
     /// When `{path}` would be more than [`MAX_PATHS`] files, the arguments
     /// more than [`EXEC_MAX_ARGS`], or one of them longer than
     /// [`EXEC_MAX_ARG_BYTES`]; or a tool's placeholder has no tool to fill
-    /// it.
-    pub fn expand(&self, with: &Expansion<'_>) -> Result<Vec<String>, String> {
+    /// it, or one that is not of a tool name's shape.
+    pub fn expand(&self, with: &Expansion<'_>) -> Result<Option<Vec<String>>, String> {
+        if self.uses_path() && with.paths.is_empty() {
+            return Ok(None);
+        }
         let mut args = Vec::with_capacity(self.args.len());
         for arg in &self.args {
             match arg {
@@ -314,11 +348,20 @@ impl CommandHook {
                     }
                     args.extend(with.paths.iter().cloned());
                 }
-                Arg::Tool => args.push(
-                    with.tool
-                        .ok_or_else(|| format!("`{TOOL}` has no tool to name"))?
-                        .to_owned(),
-                ),
+                Arg::Tool => {
+                    let tool = with
+                        .tool
+                        .ok_or_else(|| format!("`{TOOL}` has no tool to name"))?;
+                    // A tool's name, never an option: `-` cannot begin one,
+                    // and the registry's names have this shape.
+                    if tool.starts_with('-') || Filter::new(vec![tool.to_owned()]).is_err() {
+                        return Err(format!(
+                            "`{TOOL}` would be `{}`, which is not a tool's name",
+                            in_code(cineris_base::text::truncate_bytes(tool, 80))
+                        ));
+                    }
+                    args.push(tool.to_owned());
+                }
                 Arg::Workspace => args.push(with.workspace.to_owned()),
                 Arg::Event => args.push(self.event.as_str().to_owned()),
             }
@@ -335,7 +378,7 @@ impl CommandHook {
                 EXEC_MAX_ARG_BYTES / 1024
             ));
         }
-        Ok(args)
+        Ok(Some(args))
     }
 
     /// The command as its entry wrote it, each word as code would show it
@@ -421,14 +464,20 @@ impl CommandHook {
                 }
             )
         });
+        if self.uses_path() {
+            words.push(format!(
+                "It does not run for a call that names no file, as `{PATH}` would be empty."
+            ));
+        }
         words.push(if confined {
             format!(
-                "Its program is confined: it reads what the session's commands may read, {}, and \
-                 {}.",
+                "Its program is confined: it reads what the session's commands may read, writes \
+                 {}, and {}.",
                 if self.write {
-                    "writes the workspace, and what it writes is not recorded for undo"
+                    "the workspace and the session's temporary folder, and what it writes in the \
+                     workspace is not recorded for undo"
                 } else {
-                    "writes nothing"
+                    "only the session's temporary folder"
                 },
                 if self.network {
                     "may reach the network"
@@ -439,6 +488,7 @@ impl CommandHook {
         } else {
             NOT_CONFINED.to_owned()
         });
+        words.push(ITS_ENVIRONMENT.to_owned());
         words.push(
             "Each start is decided by the permission rules as a command; one they would ask \
              about does not run."
@@ -447,6 +497,12 @@ impl CommandHook {
         words.join(" ")
     }
 }
+
+/// What a hook's program is given of the user's environment, said of
+/// every hook before the yes (the maintainers' words): it is a shell
+/// command's, the providers' keys and `shell.env_remove` taken out, and
+/// whatever else it holds is the hook's to read.
+pub const ITS_ENVIRONMENT: &str = "It runs with your environment, including any tokens in it.";
 
 /// The words for a hook whose program is not confined on this system
 /// (Windows, no Landlock, the sandbox turned off): its `write` and
@@ -654,7 +710,7 @@ mod tests {
                 workspace: "/w",
             }
         }
-        let filled = hook.expand(&with(&paths)).unwrap();
+        let filled = hook.expand(&with(&paths)).unwrap().unwrap();
         assert_eq!(filled.len(), MAX_PATHS + 1);
         assert_eq!(filled[1], "/w/0", "one argument each");
         let more: Vec<String> = (0..=MAX_PATHS).map(|index| format!("/w/{index}")).collect();
@@ -663,8 +719,8 @@ mod tests {
                 .unwrap_err()
                 .contains("at most 64")
         );
-        // A call that names no file drops the argument.
-        assert_eq!(hook.expand(&with(&[])).unwrap(), ["--"]);
+        // A call that names no file does not run it (the maintainers' (b)).
+        assert_eq!(hook.expand(&with(&[])).unwrap(), None);
 
         let mut near = vec!["fmt"; EXEC_MAX_ARGS];
         near.push("{path}");
@@ -681,14 +737,45 @@ mod tests {
         ))
         .unwrap();
         let paths = ["/w/a b.rs".to_owned()];
-        let filled = hook
-            .expand(&Expansion {
-                tool: Some("tracker/find"),
+        let fill = |tool: &str| {
+            hook.expand(&Expansion {
+                tool: Some(tool),
                 paths: &paths,
                 workspace: "/w",
             })
-            .unwrap();
-        assert_eq!(filled, ["tracker/find", "/w", "tool.before", "/w/a b.rs"]);
+        };
+        assert_eq!(
+            fill("tracker/find").unwrap().unwrap(),
+            ["tracker/find", "/w", "tool.before", "/w/a b.rs"]
+        );
+        // `{tool}` is only ever a tool's name.
+        for not in ["-rf", "--x=1", "a b", "", "a/b/c", "é"] {
+            let refused = fill(not).unwrap_err();
+            assert!(refused.contains("not a tool's name"), "{not}: {refused}");
+        }
+    }
+
+    #[test]
+    fn a_gating_hook_that_relies_on_path_for_every_tool_is_warned_of() {
+        let warned = |entry: Entry| compile(&entry).unwrap().warning();
+        let gate = entry("tool.before", &["check", "{path}"]);
+        let said = warned(gate.clone()).expect("warned");
+        assert!(said.contains("gates none of those"), "{said}");
+        assert!(said.contains("`fmt`"), "{said}");
+        for quiet in [
+            Entry {
+                tools: vec!["edit".to_owned()],
+                ..gate.clone()
+            },
+            Entry {
+                observe: true,
+                ..gate.clone()
+            },
+            entry("tool.after", &["check", "{path}"]),
+            entry("tool.before", &["check", "{tool}"]),
+        ] {
+            assert_eq!(warned(quiet.clone()), None, "{quiet:?}");
+        }
     }
 
     #[test]
@@ -773,7 +860,28 @@ mod tests {
         assert!(words.contains("writes the workspace"), "{words}");
         assert!(words.contains("does not reach the network"), "{words}");
         assert!(words.contains("for at most 5 seconds"), "{words}");
+        assert!(
+            words.contains("does not run for a call that names no file"),
+            "{words}"
+        );
         let open = hook.in_words(false);
         assert!(open.contains(NOT_CONFINED), "{open}");
+        // What it may read and write, and the environment it is given,
+        // said before the yes, confined or not (the maintainers' words).
+        let reader = compile(&entry("tool.after", &["lint"])).unwrap();
+        let read = reader.in_words(true);
+        assert!(
+            read.contains(
+                "it reads what the session's commands may read, writes only the session's \
+                 temporary folder"
+            ),
+            "{read}"
+        );
+        for said in [&words, &open, &read] {
+            assert!(
+                said.contains("It runs with your environment, including any tokens in it."),
+                "{said}"
+            );
+        }
     }
 }

@@ -14,16 +14,26 @@
 //!
 //! - **Its arguments**: the entry's, each placeholder filled as a whole
 //!   argument (`cineris_ext::hook::CommandHook::expand`), `{path}` with
-//!   each file the call's plan reads or writes, resolved, in the system's
-//!   plain form.
+//!   each file the call's plan reads or writes **within the workspace**,
+//!   judged by place, resolved, in the system's plain form: a file outside
+//!   it is left out, and the hook is told of none (the early review of the
+//!   hook commands: a user's hook is not handed a file the model chose
+//!   outside the workspace before the call's own question is answered).
+//!   An entry that uses `{path}` does not run for a call that names no
+//!   file within it.
 //! - **Its decision**: every start is decided by the permission engine as
 //!   an `exec` of the expanded line in the workspace (and `network` beside
 //!   it with `network = true`), and never asks: [`hook_may_run`].
-//! - **Its confinement**: reads, no write root and no network, unless the
-//!   entry says `write = true` (the workspace) or `network = true`.
+//! - **Its confinement**: the session's reads, and as its only write root
+//!   the session's temporary folder, and no network, unless the entry says
+//!   `write = true` (the workspace too, but never at `read-only`) or
+//!   `network = true`. **Starts with a write root run one at a time,** as
+//!   they share one baseline of the look at the protected paths.
 //! - **Its input and answer**: the event's JSON on standard input, at most
 //!   1 MiB; standard output read up to 1 MiB, the answer at most 64 KiB,
-//!   read strictly (`cineris_ext::hook::Answer::read`).
+//!   one JSON value with no key twice at any depth
+//!   (`cineris_ext::hook::answer::value`), which the loop reads by its
+//!   event's contract.
 //! - **Its writes** are not recorded in the round's checkpoint, and the
 //!   model's table of files is not told of them.
 //!
@@ -33,10 +43,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use cineris_agent::{Decision, PlannedCall, Policy as _};
+use cineris_agent::{Decision, PlannedCall};
 use cineris_base::{CancelToken, PathResolver, in_code, visible};
 use cineris_ext::hook::answer::MAX_OUTPUT;
-use cineris_ext::hook::{Answer, CommandHook, Expansion};
+use cineris_ext::hook::{CommandHook, Expansion};
 use cineris_ext::host::{EXEC_MAX_STDIN, ExecOutput, ExecRequest, HostError};
 use cineris_ext::source::Source;
 use cineris_protocol::ids::{CallId, ItemId};
@@ -157,9 +167,12 @@ pub(crate) struct HookCx {
 /// What became of a hook command's run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HookOutcome {
-    /// A hook that is waited for ran and answered: its answer, read
-    /// strictly.
-    Answered(Answer),
+    /// A hook that is waited for ran and answered this JSON value, with no
+    /// key twice at any depth: the loop reads it by the event's contract.
+    Answered(Json),
+    /// A hook that is waited for ran and answered nothing; or it does not
+    /// run for this call, as it uses `{path}` and the call names no file.
+    Nothing,
     /// An observer ran: its answer is not read.
     Observed,
     /// It failed, and why: refused, not started, past its time, an exit
@@ -172,21 +185,18 @@ pub enum HookOutcome {
 }
 
 /// A session's hook commands: those it runs, the entries it refused, and
-/// what runs them. The loop's points call them (the step's next part).
+/// what runs them, as the loop's points (`super::hook_points`) and the
+/// session's own (`session.start`, `session.end`) reach them.
 #[derive(Debug)]
 pub(crate) struct SessionHooks {
     /// The user's own, then the project's approved ones.
     pub(crate) hooks: Vec<CommandHook>,
-    /// The entries that do not run because they were refused: one that
-    /// would gate counts as a failed hook on its event.
-    #[allow(
-        dead_code,
-        reason = "the loop's points count a refused gate as a failed hook, in the step's next \
-                  part"
-    )]
+    /// The entries that do not run because they were refused, or changed
+    /// since they were approved: each is on its event all the same, as a
+    /// hook that fails ([`super::hooks::Refused`]).
     pub(crate) refused: Vec<super::hooks::Refused>,
     /// What runs them.
-    pub(crate) commands: HookCommands,
+    pub(crate) commands: Arc<HookCommands>,
     /// The session's path resolver.
     pub(crate) paths: Arc<PathResolver>,
 }
@@ -196,6 +206,14 @@ pub(crate) struct SessionHooks {
 pub(crate) struct HookCommands {
     parts: Arc<HostParts>,
     content: Arc<dyn ContentStore>,
+    /// One start with a write root at a time: they share one baseline of
+    /// the look at the protected paths, which two at once would each take
+    /// the other's change for its own.
+    writing: tokio::sync::Mutex<()>,
+    /// A stop a hook's look made, for the next prompt: the user is told at
+    /// once, and the next prompt is refused with it, whether or not a turn
+    /// was running when it was made (the early review's M2).
+    stop: Mutex<Option<String>>,
 }
 
 impl std::fmt::Debug for HookCommands {
@@ -208,7 +226,54 @@ impl HookCommands {
     /// The hook commands of a session with `parts` and the store of
     /// versions and artifacts `content`.
     pub(crate) fn new(parts: Arc<HostParts>, content: Arc<dyn ContentStore>) -> Self {
-        Self { parts, content }
+        Self {
+            parts,
+            content,
+            writing: tokio::sync::Mutex::new(()),
+            stop: Mutex::new(None),
+        }
+    }
+
+    /// The session's policy, whose lease names the protected paths.
+    pub(crate) fn policy(&self) -> &Arc<EnginePolicy> {
+        &self.parts.policy
+    }
+
+    /// Whether a hook's look stopped a turn and the next prompt is to be
+    /// refused for it.
+    pub(crate) fn stop_pending(&self) -> bool {
+        self.stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_some()
+    }
+
+    /// The stop left for the next prompt, taken: it refuses one prompt.
+    pub(crate) fn take_stop(&self) -> Option<String> {
+        self.stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
+    /// What a hook's look found that stopped a turn, `note`: the user is
+    /// told at once, and the next prompt is refused with it. On any event,
+    /// observer or not, so that a stop made outside a running turn (an
+    /// observer that ends late, `turn.end`, `session.start`) is not lost on
+    /// a turn that is over or has not begun.
+    pub(crate) fn stopped(&self, hook: &str, note: &str) {
+        (self.parts.tell)(format!(
+            "The hook `{}` was stopped by the look at the protected paths: {note}",
+            in_code(hook)
+        ));
+        *self
+            .stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!(
+            "The hook `{}` stopped a turn: {note} The prompt was not sent, so that you can look \
+             first. Send it again to go on.",
+            in_code(hook)
+        ));
     }
 
     /// Runs `hook` for `event`, in the session and turn its context names.
@@ -226,6 +291,7 @@ impl HookCommands {
         let mut paths = Vec::new();
         for effect in event.effects {
             if let Effect::Read(path) | Effect::Write(path) = effect
+                && path.is_inside_workspace()
                 && !keys.contains(&path.abs().key().to_owned())
             {
                 keys.push(path.abs().key().to_owned());
@@ -238,7 +304,9 @@ impl HookCommands {
             paths: &paths,
             workspace: &workspace,
         }) {
-            Ok(args) => args,
+            Ok(Some(args)) => args,
+            // It uses `{path}`, and the call names no file: it does not run.
+            Ok(None) => return HookOutcome::Nothing,
             Err(why) => return failed(why),
         };
         let input = match serde_json::to_vec(event.input) {
@@ -261,11 +329,21 @@ impl HookCommands {
             // Its decision and the looks before it are within its time.
             call_left: hook.timeout,
             network: hook.network,
-            write_roots: if hook.write {
+            // Never at `read-only`, where nothing writes the workspace.
+            write_roots: if hook.write
+                && *self.parts.policy.engine().level() != cineris_protocol::lease::Level::ReadOnly
+            {
                 vec![cx.paths.root().clone()]
             } else {
                 Vec::new()
             },
+        };
+        // One start with a write root at a time: the wait is within the
+        // hook's own time, which began when it was asked.
+        let _writing = if request.write_roots.is_empty() {
+            None
+        } else {
+            Some(self.writing.lock().await)
         };
         let run_cx = RunCx::new(
             Arc::clone(&cx.paths),
@@ -295,7 +373,10 @@ impl HookCommands {
         let ran = exec::run(&self.parts.exec, request, &host, &Decided::Unasked(&decide)).await;
         match ran {
             Ok(output) => outcome(hook, &output).unwrap_or_else(failed),
-            Err(HostError::Stopped(note)) => HookOutcome::Stopped(note),
+            Err(HostError::Stopped(note)) => {
+                self.stopped(&hook.name, &note);
+                HookOutcome::Stopped(note)
+            }
             Err(HostError::Denied(why) | HostError::Failed(why) | HostError::NotHere(why)) => {
                 failed(why.trim_end_matches('.').to_owned())
             }
@@ -418,24 +499,48 @@ fn decide(
         arguments: &arguments,
         plan: &plan,
         preview: None,
+        hooks: None,
     };
-    let decision = policy.decide(&planned);
-    // Whether an `ask` rule of the managed configuration is among what
-    // asks: that holds the user's own hook back too, as the user's own
-    // check (step 19).
-    let managed = decision == Decision::Ask
-        && matches!(
-            policy.outcome(&planned),
-            cineris_policy::Outcome::Ask(question) if question.managed
-        );
+    // One answer of the engine, of which everything is read: whether the
+    // turn is stopped, then the outcome, and of a question whether an `ask`
+    // rule of the managed configuration is among what asks, which holds
+    // the user's own hook back too, as the user's own check (step 19). No
+    // second asking could answer otherwise (the early review's L4).
+    let (decision, managed) = match policy.stopped_turn(turn_number(&cx.turn)) {
+        Some(reason) => (Decision::Stop { reason }, false),
+        None => match policy.outcome(&planned) {
+            cineris_policy::Outcome::Allow { read_only: true } => (Decision::AllowReadOnly, false),
+            cineris_policy::Outcome::Allow { read_only: false } => (Decision::Allow, false),
+            cineris_policy::Outcome::Ask(question) => (Decision::Ask, question.managed),
+            cineris_policy::Outcome::Deny { reason } => (
+                Decision::Deny {
+                    reason: Some(reason),
+                },
+                false,
+            ),
+        },
+    };
     hook_may_run(&decision, managed, start.read_only_asks, hook.source).map_err(|not| match not {
         NotRun::Stopped(reason) => HostError::Stopped(reason),
         NotRun::Denied(reason) => HostError::Denied(format!(
             "it was not started: a permission rule refuses it: {}",
             visible(&reason)
         )),
-        NotRun::WouldAsk(why) => HostError::Denied(format!("it was not started: {why}")),
+        NotRun::WouldAsk(why) => {
+            HostError::Denied(format!("it was not started: {why}{}", needs_network(hook)))
+        }
     })
+}
+
+/// What a hook's start, refused because the engine would ask, says it
+/// needs: for a project's hook that may reach the network, an `allow`
+/// rule of `network` too.
+fn needs_network(hook: &CommandHook) -> &'static str {
+    if hook.network {
+        " and, as it may reach the network, a rule that allows `network` too"
+    } else {
+        ""
+    }
 }
 
 /// What a hook's run comes to: an observer's is not read; a waited-for
@@ -472,9 +577,11 @@ fn outcome(hook: &CommandHook, output: &ExecOutput) -> Result<HookOutcome, Strin
             MAX_OUTPUT / (1024 * 1024)
         ));
     }
-    Answer::read(hook.event, &output.stdout)
-        .map(HookOutcome::Answered)
-        .map_err(|why| format!("its answer {why}"))
+    match cineris_ext::hook::answer::value(&output.stdout) {
+        Ok(Some(answer)) => Ok(HookOutcome::Answered(answer)),
+        Ok(None) => Ok(HookOutcome::Nothing),
+        Err(why) => Err(format!("its answer {why}")),
+    }
 }
 
 /// What a failure quotes of a hook's standard error: its first line, cut,
@@ -596,14 +703,23 @@ mod tests {
         let Ok(HookOutcome::Answered(answer)) = answered else {
             panic!("{answered:?}");
         };
-        assert_eq!(answer.decision, Some(cineris_ext::hook::Decision::Deny));
+        assert_eq!(answer["decision"], "deny");
         assert_eq!(
-            outcome(&gate, &ran(Some(0), "", "")),
-            Ok(HookOutcome::Answered(Answer::default()))
+            outcome(&gate, &ran(Some(0), " \n", "")),
+            Ok(HookOutcome::Nothing)
         );
-        let strict = outcome(&gate, &ran(Some(0), r#"{"decision":"maybe"}"#, "")).unwrap_err();
+        // A key given twice is refused here: the loop is handed one value.
+        let strict = outcome(
+            &gate,
+            &ran(Some(0), r#"{"decision":"deny","decision":"allow"}"#, ""),
+        )
+        .unwrap_err();
         assert!(
-            strict.starts_with("its answer has the decision"),
+            strict.starts_with("its answer is not one JSON value"),
+            "{strict}"
+        );
+        assert!(
+            strict.contains("the key `decision` is given twice"),
             "{strict}"
         );
         let exited =

@@ -18,7 +18,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cineris_core::ext::{HookOutcome, HookRun};
-use cineris_ext::hook::Decision;
 use serde_json::{Value, json};
 
 use crate::{Front, HOOK, World};
@@ -102,7 +101,7 @@ fn for_edit(paths: &[&str]) -> HookRun {
 }
 
 /// The answer of a hook that answered.
-fn answered(outcome: &HookOutcome) -> &cineris_ext::hook::Answer {
+fn answered(outcome: &HookOutcome) -> &Value {
     let HookOutcome::Answered(answer) = outcome else {
         panic!("the hook did not answer: {outcome:?}");
     };
@@ -169,8 +168,8 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
             .await
             .unwrap();
         let answer = answered(&ran);
-        assert_eq!(answer.decision, Some(Decision::Deny));
-        assert_eq!(answer.reason.as_deref(), Some("generated"));
+        assert_eq!(answer["decision"], "deny");
+        assert_eq!(answer["reason"], "generated");
         let given: Value =
             serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
         let args: Vec<&str> = given["args"]
@@ -210,11 +209,8 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
             .await
             .unwrap();
         let answer = answered(&ran);
-        assert_eq!(
-            answer.arguments.clone().map(Value::Object),
-            Some(json!({"command": "echo replaced"}))
-        );
-        assert_eq!(answer.decision, None);
+        assert_eq!(answer["arguments"], json!({"command": "echo replaced"}));
+        assert_eq!(answer.get("decision"), None);
 
         // One that fails.
         let broken = core

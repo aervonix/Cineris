@@ -263,7 +263,7 @@ caught-by:
     cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
 
 [break] a-session-runs-an-untrusted-projects-hooks
-rule: A session runs a project's hooks only while the project is trusted. Survives: the trust store gives every definition of a project not trusted the standing `Untrusted`, so `in_session` approves none of its hooks without this check either.
+rule: A session runs a project's hooks only while the project is trusted. Survives: a session of a project not trusted has the store's own reading of it, which gives each of its definitions the standing `Untrusted`, or, when the store could not be read, no reading at all (it is read again only under `--trust-project`), so `in_session` approves none of its hooks without this check either.
 file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: let trusted = matches!(
