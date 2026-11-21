@@ -16,7 +16,8 @@ use std::path::Path;
 
 use cineris_protocol::lease::{Effect, RuleAction};
 use cineris_protocol::methods::{
-    ApprovalScope, Op, OpResult, PermissionsRevokeParams, SessionRef, StoredApproval,
+    ApprovalScope, ConfigReloadParams, Op, OpResult, PermissionsRevokeParams, SessionRef,
+    StoredApproval,
 };
 use serde_json::json;
 
@@ -25,6 +26,19 @@ use crate::{Front, World, calls, says};
 
 /// The user's configuration that turns the skills' read rule on.
 const ON: &str = "[permissions]\nread_skill_folders = true\n\n";
+
+/// The words of the notice that tells the user the skills made rules.
+const TOLD: &str = "of your skill folders may be read without asking, because \
+    `permissions.read_skill_folders` is on";
+
+/// The notices so far that tell the user the skills made rules.
+fn told(front: &Front) -> Vec<String> {
+    front
+        .notices()
+        .into_iter()
+        .filter(|notice| notice.contains(TOLD))
+        .collect()
+}
 
 /// Writes the skill `name` in the folder of skills `root`.
 fn skill(root: &Path, name: &str) {
@@ -243,6 +257,10 @@ fn a_users_skill_folder_is_read_unasked_and_its_rule_follows_the_skills_found() 
             "the denied file was read"
         );
         assert_eq!(the_rule(&front).await, format!("{}/**", real(&folder)));
+        // The user is told, once, that the rule is the skills' and why.
+        let said = told(&front);
+        assert_eq!(said.len(), 1, "{said:#?}");
+        assert!(said[0].starts_with(&format!("1 {TOLD}")), "{}", said[0]);
         // Reads only: a write there is asked about, as it was.
         assert_eq!(front.turn_denying("write there").await, ["write"]);
         assert_eq!(
@@ -289,6 +307,7 @@ fn a_users_skill_folder_is_read_unasked_and_its_rule_follows_the_skills_found() 
         std::fs::write(root.join("pdf/SKILL.md"), written).unwrap();
         age_folder(&root.join("pdf"));
         assert_eq!(front.turn_denying("read it again").await, ["read"]);
+        assert_eq!(told(&front).len(), 1, "told once a session");
         let approvals = approvals(&front).await;
         assert!(approvals.is_empty(), "{approvals:#?}");
         front.close().await;
@@ -325,6 +344,7 @@ fn the_rule_is_off_by_default_and_a_project_may_not_turn_it_on() {
         assert_eq!(front.turn_denying("read the skill").await, ["read"]);
         let approvals = approvals(&front).await;
         assert!(approvals.is_empty(), "{approvals:#?}");
+        assert_eq!(told(&front), Vec::<String>::new());
         let notices = front.notices();
         assert!(
             notices
@@ -332,6 +352,58 @@ fn the_rule_is_off_by_default_and_a_project_may_not_turn_it_on() {
                 .any(|notice| notice.contains("read_skill_folders")
                     && notice.contains("may not set this")),
             "{notices:#?}"
+        );
+        front.close().await;
+    });
+}
+
+/// Turned off in the user's file during a session, the setting waits for
+/// the next session, and the reload says so, and says with more weight that
+/// this session still reads the skill folders unasked, and how to stop it:
+/// the rule is still in force.
+#[test]
+fn turning_it_off_during_a_session_says_that_this_session_still_reads_them() {
+    let world = World::new("skill_reads_turned_off", []);
+    world.user_config(ON);
+    let root = world.home.join(".claude/skills");
+    skill(&root, "review");
+    for _ in 0..2 {
+        world
+            .provider
+            .push(reading(&[read("c1", &root.join("review/SKILL.md"))]));
+        world.provider.push(says("Read."));
+    }
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("read the skill").await;
+        world.user_config("");
+        let OpResult::ConfigReload(result) = front
+            .op(Op::ConfigReload(ConfigReloadParams::default()))
+            .await
+            .unwrap()
+        else {
+            panic!("not the result of config/reload");
+        };
+        assert!(
+            result
+                .pending
+                .contains(&"permissions.read_skill_folders".to_owned()),
+            "{result:?}"
+        );
+        let said = result.notes.join("\n");
+        assert!(
+            said.contains(
+                "`permissions.read_skill_folders` takes effect in sessions opened from now on"
+            ),
+            "{said}"
+        );
+        assert!(said.contains(cineris_core::SKILL_FOLDERS_STAY), "{said}");
+        // As it says: the rule is still in force.
+        front.turn("read it again").await;
+        assert_eq!(
+            the_rule(&front).await,
+            format!("{}/**", real(&root.join("review")))
         );
         front.close().await;
     });

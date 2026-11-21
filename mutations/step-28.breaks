@@ -6090,3 +6090,30 @@ packages: cineris-config, cineris-core
 caught-by:
     cineris-core::it skill_reads::the_rule_is_off_by_default_and_a_project_may_not_turn_it_on
     cineris-config::it trust::every_key_has_a_trust_class
+
+[break] turning-the-skills-rule-off-says-nothing-more
+rule: A reload that turns `permissions.read_skill_folders` off says, besides that it waits, that this session still reads the skill folders unasked, and how to stop it (L1 of the gate's review).
+file: crates/cineris-core/src/reload.rs
+in: waiting_notes
+find: if in_force.settings.permissions.read_skill_folders && !latest.settings.permissions.read_skill_folders
+replace: if false
+caught-by:
+    cineris-core::it skill_reads::turning_it_off_during_a_session_says_that_this_session_still_reads_them
+
+[break] the-skills-rules-are-not-told
+rule: The user is told, in a notice of the session's, when the skills' first rules are made, so that they are not taken for approvals the user gave (L2 of the gate's review).
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::find_skills
+find: (self.parts.tell)(super::reads::told(count));
+replace: drop(count);
+caught-by:
+    cineris-core::it skill_reads::a_users_skill_folder_is_read_unasked_and_its_rule_follows_the_skills_found
+
+[break] the-skills-rules-are-told-at-each-change
+rule: The user is told of the skills' rules once a session, not at each change of them.
+file: crates/cineris-core/src/ext/found/reads.rs
+in: SkillReads::follow
+find: self.told = true;
+replace: self.told = false;
+caught-by:
+    cineris-core::it skill_reads::a_users_skill_folder_is_read_unasked_and_its_rule_follows_the_skills_found

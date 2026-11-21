@@ -53,6 +53,19 @@ pub(super) struct SkillReads {
     /// The folders whose rule the user revoked: given none again in the
     /// session.
     revoked: Vec<AbsPath>,
+    /// Whether the user was told that the skills made rules ([`told`]).
+    told: bool,
+}
+
+/// What the user is told, once a session, when the skills' first rules are
+/// made, so that they are not taken for approvals the user gave: `count`
+/// folders may be read unasked, why, and where they are.
+pub(super) fn told(count: usize) -> String {
+    format!(
+        "{count} of your skill folders may be read without asking, because \
+         `permissions.read_skill_folders` is on. Each is an approval of this session's, which \
+         /permissions lists and can revoke."
+    )
 }
 
 impl SkillReads {
@@ -64,8 +77,10 @@ impl SkillReads {
     /// rule of the skills' that the engine no longer holds, which the user
     /// revoked, has its folder kept as revoked. Folders are told apart by
     /// where they are (`cineris_base::same_location`). What it makes is
-    /// held before it returns. Blocks: call this off the core's thread.
-    pub(super) fn follow(&mut self, policy: &EnginePolicy, folders: Vec<AbsPath>) {
+    /// held before it returns. The first time in the session that a rule
+    /// is held, it says how many are, for the user to be told ([`told`]).
+    /// Blocks: call this off the core's thread.
+    pub(super) fn follow(&mut self, policy: &EnginePolicy, folders: Vec<AbsPath>) -> Option<usize> {
         let same =
             |one: &AbsPath, other: &AbsPath| same_location(&one.to_fs_path(), &other.to_fs_path());
         let ours: Vec<ApprovalId> = self.held.iter().filter_map(|(_, id)| id.clone()).collect();
@@ -92,7 +107,7 @@ impl SkillReads {
             }
         }
         if gone.is_empty() && added.is_empty() {
-            return;
+            return None;
         }
         let take_back: Vec<ApprovalId> = gone.into_iter().filter_map(|(_, id)| id).collect();
         let mut given = Vec::new();
@@ -105,6 +120,12 @@ impl SkillReads {
         }
         let ids = policy.follow_reads(&rules, &take_back);
         self.held.extend(given.into_iter().zip(ids));
+        let made = self.held.iter().filter(|(_, id)| id.is_some()).count();
+        if self.told || made == 0 {
+            return None;
+        }
+        self.told = true;
+        Some(made)
     }
 }
 
