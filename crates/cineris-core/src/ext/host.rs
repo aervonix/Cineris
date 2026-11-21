@@ -487,7 +487,16 @@ impl CallHost<'_> {
         .await
         .map_err(|error| HostError::Failed(error.to_string()))?;
         match refused {
-            Some(why) => Err(HostError::Denied(why)),
+            Some(why) => {
+                // Nobody is asked, and the script may catch the error: the
+                // log says it.
+                tracing::warn!(
+                    extension = self.extension,
+                    path = %path.data(),
+                    "refused an extension's write of a protected path"
+                );
+                Err(HostError::Denied(why))
+            }
             None => Ok(()),
         }
     }

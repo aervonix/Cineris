@@ -33,8 +33,8 @@ caught-by:
 rule: A target is compared with each protected path by place, so the extended-length form, either separator and another case on Windows are one place.
 file: crates/cineris-core/src/ext/protected.rs
 in: entry_of
-find: .find(|place| style.location_within(target, &place.at))
-replace: .find(|place| target.starts_with(&place.at))
+find: style.location_within(target, &place.at)
+replace: target.starts_with(&place.at)
 caught-by:
     ext::protected::tests::on_windows_a_protected_path_is_found_whatever_its_form_and_case
 
@@ -42,7 +42,7 @@ caught-by:
 rule: Each of the lease's protected paths, and what is below it, is refused: a CI workflow, `.husky`, a shell's start-up file.
 file: crates/cineris-core/src/ext/protected.rs
 in: entry_of
-find: .find(|place| style.location_within(target, &place.at))
+find: .find(|place| style.location_within(target, &place.at) || folded(&place.entry))
 replace: .find(|place| place.at.as_os_str().is_empty())
 caught-by:
     ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
@@ -89,7 +89,7 @@ caught-by:
 rule: `.cargo/config.toml` and `.cargo/config` are refused at any depth.
 file: crates/cineris-core/src/ext/protected.rs
 in: entry_of
-find: same(&names[at - 1], ".cargo")
+find: same(names[at - 1], ".cargo")
 replace: false
 caught-by:
     ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
@@ -105,11 +105,11 @@ caught-by:
     ext::protected::tests::everything_in_a_folder_git_takes_for_a_repository_is_refused
 
 [break] a-folder-with-part-of-a-repository-is-taken-for-one
-rule: A folder is a repository only when it holds all of `HEAD`, `objects` and `refs`.
+rule: A folder is a repository only when it holds all of `HEAD`, `objects` and `refs` (or would, by the write).
 file: crates/cineris-core/src/ext/protected.rs
 in: repository_on_the_way
-find: .all(|part| std::fs::symlink_metadata(folder.join(part)).is_ok())
-replace: .any(|part| std::fs::symlink_metadata(folder.join(part)).is_ok())
+find: BESIDE_HEAD.iter().all(|part| there(folder.join(part)))
+replace: BESIDE_HEAD.iter().any(|part| there(folder.join(part)))
 caught-by:
     ext::protected::tests::everything_in_a_folder_git_takes_for_a_repository_is_refused
 
@@ -139,3 +139,58 @@ find: cineris_base::in_code(&target.data()).into_owned()
 replace: target.data()
 caught-by:
     ext::protected::tests::everything_in_a_folder_git_takes_for_a_repository_is_refused
+
+[break] a-protected-path-in-another-case-gets-past-a-mount-that-ignores-case
+rule: A protected path in the workspace is matched by its names without regard to case too, for a mount on Linux that ignores case, where the resolver keeps the script's spelling.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: below.len() >= protected.len()
+replace: false && below.len() >= protected.len()
+caught-by:
+    ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked
+
+[break] a-protected-path-that-is-a-link-to-nothing-protects-nothing-there
+rule: A protected path that is a link to nothing protects where its target's name leads, which a write could make.
+file: crates/cineris-core/src/ext/protected.rs
+in: leading
+find: link.and_then(|(link, rest)| lexical_target(&link, &rest))
+replace: link.and_then(|(link, rest)| lexical_target(&link, &rest)).filter(|_| false)
+caught-by:
+    ext::protected::tests::a_protected_path_that_is_a_link_protects_where_it_leads
+
+[break] the-workspaces-own-folders-are-not-judged-by-their-names
+rule: The names protected at any depth are judged among the workspace's own folders too: a workspace in a `.git` folder, or that is a `.cargo`.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: above.iter().chain(below.iter())
+replace: above.iter().filter(|_| false).chain(below.iter())
+caught-by:
+    ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
+
+[break] a-repository-above-the-workspace-is-not-looked-for
+rule: A workspace in a folder git takes for a repository refuses every write.
+file: crates/cineris-core/src/ext/protected.rs
+in: repository_on_the_way
+find: workspace.ancestors().skip(1).find(|folder| repository(folder))
+replace: workspace.ancestors().skip(1).find(|_| false)
+caught-by:
+    ext::protected::tests::a_workspace_that_is_or_is_in_a_repository_refuses_every_write
+
+[break] a-repository-is-put-together-one-write-at-a-time
+rule: A write that would give a folder holding `HEAD` its `objects` or `refs` is refused.
+file: crates/cineris-core/src/ext/protected.rs
+in: repository_on_the_way
+find: .any(|part| name.eq_ignore_ascii_case(part))
+replace: .any(|part| name.eq_ignore_ascii_case(part) && false)
+caught-by:
+    ext::protected::tests::everything_in_a_folder_git_takes_for_a_repository_is_refused
+
+[break] a-refusal-is-not-in-the-log
+rule: Each refusal is in the harness's log at `warn`, naming the extension and the path, since nobody is asked.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::refuse_protected
+find: tracing::warn!(
+replace: tracing::debug!(
+caught-by:
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked

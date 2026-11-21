@@ -31,7 +31,9 @@ pub enum HostError {
     /// The extension's manifest does not allow it.
     #[error("{0}")]
     Refused(#[from] Refusal),
-    /// The permission engine, or the person asked, did not allow it.
+    /// It is not allowed: the permission engine or the person asked did not
+    /// allow it, or the host refuses it whatever they would say (a write of
+    /// a protected path, an address the fetch client refuses).
     #[error("not allowed: {0}")]
     Denied(String),
     /// What the call asked for is not allowed here: a question in a hook,
