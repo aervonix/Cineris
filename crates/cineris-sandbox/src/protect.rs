@@ -343,6 +343,7 @@ impl Watch {
         let mut keeper = restore::Keeper {
             dir: keep.map(Path::to_path_buf),
             kept: Vec::new(),
+            unkept: Vec::new(),
         };
         let mut seen: Vec<Changed> = changed.to_vec();
         let mut round: Vec<Changed> = changed.to_vec();
@@ -386,11 +387,17 @@ impl Watch {
                     .filter(|one| after.covers(&one.path))
                     .map(|one| one.path.clone())
                     .collect();
+                let unkept = keeper
+                    .unkept
+                    .into_iter()
+                    .filter(|path| left.iter().any(|still| still.path == *path))
+                    .collect();
                 return PutBack {
                     changed: seen,
                     restored,
                     left,
                     kept: keeper.kept,
+                    unkept,
                     after,
                 };
             }
@@ -438,6 +445,9 @@ pub struct PutBack {
     /// What a path held when it was written over or removed, and where that
     /// is kept: each changed path the put-back touched, before it did.
     pub kept: Vec<(PathBuf, PathBuf)>,
+    /// What is left as it is, of `left`, because what it holds could not be
+    /// kept first: too large, or nowhere to keep it.
+    pub unkept: Vec<PathBuf>,
     /// The look taken after putting back.
     pub after: Snapshot,
 }

@@ -912,6 +912,105 @@ fn sys_what_the_put_back_writes_over_is_kept_in_the_sessions_folder() {
     );
 }
 
+/// A session kept in memory only (`--no-session`), with `settings`.
+#[cfg(target_os = "linux")]
+async fn start_kept_in_memory(
+    world: &World,
+    core: &cineris_core::Core,
+    settings: SessionSettings,
+) -> Front {
+    let client = core.connect(cineris_core::ClientInfo::user());
+    let open = core.handle(
+        client.id,
+        Op::SessionNew(cineris_protocol::methods::SessionNewParams {
+            cwd: None,
+            workspace: world.workspace.to_str().unwrap().to_owned(),
+            settings,
+            title: None,
+            config: serde_json::Map::new(),
+            ephemeral: true,
+        }),
+    );
+    let (result, read) = crate::not_now(core, &client, open).await;
+    let OpResult::SessionNew(result) = result.expect("the session starts") else {
+        panic!("not the result of session/new");
+    };
+    Front {
+        core: core.clone(),
+        client,
+        session: result.session.session_id.clone(),
+        state: result.session,
+        seen: std::cell::RefCell::new(read),
+        answered: std::cell::RefCell::new(Vec::new()),
+        answering: std::cell::RefCell::new(crate::Answering::default()),
+    }
+}
+
+/// A session kept in memory (`--no-session`) has nowhere to keep what a
+/// file holds, so a protected file a confined command changed is not put
+/// back. The stop says so first, plainly; and the next turn's start says it
+/// again while the change is still there, at `unrestricted` too, where the
+/// model's own git runs outside the sandbox, until the file is put back by
+/// hand (the maintainers' settlement after the full review of the third
+/// security fix).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("kept_nowhere", []);
+    world.put(".git/config", "[core]\n");
+    world.put(
+        "plant.sh",
+        "printf '[core]\\n\\tfsmonitor = ./evil.sh\\n' > .git/config\n",
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh plant.sh"}))]));
+    world.provider.push(says("Next."));
+    world.provider.push(says("Again."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    world.run(async {
+        let front = start_kept_in_memory(&world, &core, at(Level::Autonomous)).await;
+        front.turn("plant").await;
+        let shown = front.results()[0].2.clone();
+        let first = "[`.git/config` was changed by a command run in the sandbox and was not put \
+                     back: this session keeps nothing on disk, so what the file holds now could \
+                     not be kept first. Git, and so the model's own git commands, will run what \
+                     it now names, as will any other tool that reads it. Put it back by hand \
+                     before continuing.]";
+        let said = shown.find(first).expect("the note says it");
+        let rest = shown
+            .find("[The command changed protected paths")
+            .expect("and then the rest");
+        assert!(said < rest, "{shown}");
+        assert!(
+            world
+                .read(".git/config")
+                .unwrap_or_default()
+                .contains("fsmonitor")
+        );
+        // The next turn, at `unrestricted`, is told again at its start.
+        let again = |notices: Vec<String>| -> usize {
+            notices
+                .iter()
+                .filter(|notice| {
+                    notice.starts_with("Still not put back. `.git/config` was changed")
+                })
+                .count()
+        };
+        set_level(&front, Level::Unrestricted).await;
+        front.turn("go on").await;
+        assert_eq!(again(front.notices()), 1, "{:?}", front.notices());
+        // Put back by hand: nothing more is said.
+        world.put(".git/config", "[core]\n");
+        front.turn("and again").await;
+        assert_eq!(again(front.notices()), 1, "{:?}", front.notices());
+        front.close().await;
+    });
+}
+
 /// Sets the session's level, as a front end does.
 #[cfg(target_os = "linux")]
 async fn set_level(front: &Front, level: Level) {

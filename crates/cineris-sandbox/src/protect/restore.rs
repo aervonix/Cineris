@@ -65,6 +65,16 @@ pub(super) struct Keeper {
     pub(super) dir: Option<PathBuf>,
     /// Each path whose content was kept, and its copy.
     pub(super) kept: Vec<(PathBuf, PathBuf)>,
+    /// Each path left as it is because what it holds could not be kept.
+    pub(super) unkept: Vec<PathBuf>,
+}
+
+impl Keeper {
+    fn could_not_keep(&mut self, path: &Path) {
+        if !self.unkept.iter().any(|known| known == path) {
+            self.unkept.push(path.to_owned());
+        }
+    }
 }
 
 /// Puts back each path of `changed` as `before` holds it, as far as it
@@ -134,6 +144,7 @@ mod linux {
                 clear(path, before.entries.get(*path), keeper),
                 Ok(Cleared::Refused)
             ) {
+                keeper.could_not_keep(path);
                 refused.push(path);
             }
         }
@@ -282,8 +293,9 @@ mod linux {
             },
             (Kind::File, Some(content)) => {
                 // What is there now is kept first, or the path is left.
-                if kind_at(&dir, &name)? == Now::File {
-                    keep(keeper, &dir, &name, path)?;
+                if kind_at(&dir, &name)? == Now::File && keep(keeper, &dir, &name, path).is_err() {
+                    keeper.could_not_keep(path);
+                    return Ok(());
                 }
                 write_at(&dir, &name, content, mode)
             }

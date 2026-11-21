@@ -88,7 +88,7 @@ rule: What a confined start changed among the protected paths is put back at onc
 file: crates/cineris-core/src/sandbox.rs
 in: protected_changes
 find: let put = watch.put_back(before, &changed, &within, keep);
-replace: let put = cineris_sandbox::protect::PutBack { changed: changed.clone(), restored: Vec::new(), left: changed.clone(), kept: Vec::new(), after: after.clone() };
+replace: let put = cineris_sandbox::protect::PutBack { changed: changed.clone(), restored: Vec::new(), left: changed.clone(), kept: Vec::new(), unkept: Vec::new(), after: after.clone() };
 caught-by:
     cineris-core::it harness_git::sys_a_filter_a_confined_command_plants_never_runs_afterwards
     cineris-core::it ext_exec::confined::sys_a_filter_a_program_plants_never_runs_afterwards
@@ -510,8 +510,8 @@ caught-by:
 rule: What a file holds is kept before the put-back writes over it.
 file: crates/cineris-sandbox/src/protect/restore.rs
 in: restore
-find: keep(keeper, &dir, &name, path)?;
-replace: let _ = &keeper;
+find: if kind_at(&dir, &name)? == Now::File && keep(keeper, &dir, &name, path).is_err() {
+replace: if kind_at(&dir, &name)? == Now::File && false {
 packages: cineris-sandbox,cineris-core
 caught-by:
     cineris-sandbox protect::tests::putting_back::what_a_file_held_is_kept_and_one_too_large_is_left
@@ -572,3 +572,51 @@ replace: if true {
 caught-by:
     cineris-core::it harness_git::sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back
     cineris-core::it ext_exec::confined::sys_a_hook_a_program_plants_in_a_folder_it_names_is_told_and_the_naming_put_back
+
+# ------------------------------------- a session kept in memory, settled
+
+[break] what-cannot-be-put-back-not-said-first
+rule: In a session kept in memory, what could not be put back is said first, plainly: the file, why, that git will run what it names, and to put it back before continuing.
+file: crates/cineris-core/src/sandbox.rs
+in: protected_note
+find: if !found.kept_nowhere.is_empty() {
+replace: if false && !found.kept_nowhere.is_empty() {
+caught-by:
+    cineris-core sandbox::tests::what_a_session_kept_in_memory_cannot_put_back_is_said_first
+    cineris-core::it sandbox::sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again
+
+[break] what-could-not-be-kept-not-recorded
+rule: The put-back records each path it left because what it holds could not be kept first.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: restore
+find: keeper.could_not_keep(path);
+replace: let _ = &keeper;
+packages: cineris-sandbox,cineris-core
+caught-by:
+    cineris-core::it sandbox::sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again
+
+[break] kept-nowhere-not-remembered
+rule: What a session kept in memory could not put back is remembered, with the look before it, to be told again.
+file: crates/cineris-core/src/checkpoints.rs
+in: RecordingShell::run_by
+find: sandbox.remember_kept_nowhere(&before, &found);
+replace: let _ = &before;
+caught-by:
+    cineris-core::it sandbox::sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again
+
+[break] kept-nowhere-not-told-at-a-turns-start
+rule: At a turn's start, what a session kept in memory could not put back, and that is still so, is told again.
+file: crates/cineris-core/src/core.rs
+find: crate::sandbox::tell_what_is_kept_nowhere(&live).await;
+replace:
+caught-by:
+    cineris-core::it sandbox::sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again
+
+[break] kept-nowhere-told-once-put-back
+rule: What is as it was again is not told any more.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::still_kept_nowhere
+find: paths.retain(|path| changed.iter().any(|one| one.path == *path));
+replace: paths.retain(|_| true);
+caught-by:
+    cineris-core::it sandbox::sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again
