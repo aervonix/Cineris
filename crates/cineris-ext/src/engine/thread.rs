@@ -38,8 +38,9 @@ use crate::folder::Snapshot;
 use crate::host::{FetchCall, HostAnswer, HostCall, Phase, Scope};
 use crate::manifest::Manifest;
 use crate::registration::{
-    CommandDef, HookDef, MAX_ARGUMENTS, MAX_COMMANDS, MAX_DESCRIPTION, MAX_FILTER_ENTRY,
-    MAX_HOOK_TOOLS, MAX_HOOKS, MAX_SCHEMA_BYTES, MAX_TOOLS, Registration, ToolDef,
+    CommandDef, HookDef, MAX_ARGUMENTS, MAX_COMMANDS, MAX_HOOK_TOOLS, MAX_HOOKS, MAX_TOOLS,
+    Registration, ToolDef, check_allowed, check_description, check_filter, check_name,
+    check_schema, check_timeout,
 };
 
 /// How many runtimes this process has made: the start-up test holds it at
@@ -50,8 +51,6 @@ pub(crate) static RUNTIMES_MADE: AtomicUsize = AtomicUsize::new(0);
 pub(crate) const MAX_RESULT_BYTES: usize = 1024 * 1024;
 /// The longest description of a thrown error.
 const MAX_THROWN: usize = 4096;
-/// The longest a hook's time may be set, in milliseconds: an observer's.
-const MAX_HOOK_TIME_MS: u64 = 600_000;
 
 type Builtins = (
     intrinsic::Date,
@@ -1107,98 +1106,6 @@ fn parse_call(kind: &str, payload: &Json) -> Result<HostCall, String> {
     })
 }
 
-/// A name of a tool or a command: what the registry takes.
-fn check_name(name: &str) -> Result<(), String> {
-    let fine = !name.is_empty()
-        && name.len() <= 64
-        && name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
-        });
-    if fine {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{}` cannot be a name: 1 to 64 of ASCII letters, digits, `_`, `-` and `.`",
-            shown(name)
-        ))
-    }
-}
-
-/// A text of the script's as an error shows it: cut, and nothing in it
-/// acting unseen.
-fn shown(text: &str) -> String {
-    cineris_base::visible(cineris_base::text::truncate_bytes(text, 80)).into_owned()
-}
-
-/// Whether `text` holds a character that acts unseen (a control, a format
-/// character such as a direction override), a line break and a tab apart:
-/// text a script registers is shown to the model and the user as written.
-fn hides_something(text: &str) -> bool {
-    // Shown as written only if nothing would be escaped: a control, a
-    // format character, and a run of variation selectors, which hide data
-    // past the first (the review of step 28's fixes).
-    cineris_base::visible_keeping(text, &['\n', '\t']) != text
-}
-
-fn check_description(description: &str) -> Result<(), String> {
-    if description.len() > MAX_DESCRIPTION {
-        Err("a description is at most 2 KiB".to_owned())
-    } else if hides_something(description) {
-        Err(
-            "a description holds a character that acts unseen (a control or a format character)"
-                .to_owned(),
-        )
-    } else {
-        Ok(())
-    }
-}
-
-/// One entry of a hook's filter: a tool's registry name, or a source's
-/// tools (`source/*`).
-fn check_filter(entry: &str) -> Result<(), String> {
-    let fine = !entry.is_empty()
-        && entry.len() <= MAX_FILTER_ENTRY
-        && entry.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.' | '/' | '*')
-        });
-    if fine {
-        Ok(())
-    } else {
-        Err(format!(
-            "`{}` cannot be a tool in a hook's filter: 1 to {MAX_FILTER_ENTRY} of ASCII letters, \
-             digits, `_`, `-`, `.`, `/` and `*`",
-            shown(entry)
-        ))
-    }
-}
-
-/// Every text of a schema, its keys included, shown as written.
-fn check_schema_text(schema: &Json) -> Result<(), String> {
-    let bad = |text: &str| hides_something(text);
-    let found = match schema {
-        Json::String(text) => bad(text),
-        Json::Array(items) => return items.iter().try_for_each(check_schema_text),
-        Json::Object(fields) => {
-            for (key, value) in fields {
-                if bad(key) {
-                    return Err(SCHEMA_HIDES.to_owned());
-                }
-                check_schema_text(value)?;
-            }
-            false
-        }
-        _ => false,
-    };
-    if found {
-        Err(SCHEMA_HIDES.to_owned())
-    } else {
-        Ok(())
-    }
-}
-
-const SCHEMA_HIDES: &str =
-    "`input` holds a character that acts unseen (a control or a format character)";
-
 /// A list of texts from `def[key]`, at most `most` of them: its length is
 /// read before any of it is taken into the harness's memory, which the
 /// runtime's limit does not count (the review of step 28).
@@ -1305,12 +1212,7 @@ fn read_entry<'js>(
                 let schema = from_js(ctx, input).map_err(|failure| {
                     refuse(format!("`input` must be a JSON Schema: {failure}"))
                 })?;
-                if !schema.is_object() || schema.to_string().len() > MAX_SCHEMA_BYTES {
-                    return Err(refuse(
-                        "`input` must be a JSON Schema object of at most 16 KiB".to_owned(),
-                    ));
-                }
-                check_schema_text(&schema).map_err(refuse)?;
+                check_schema(&schema).map_err(refuse)?;
                 schema
             };
             let read_only = def.get::<_, Option<bool>>("readOnly")?.unwrap_or(false);
@@ -1362,11 +1264,7 @@ fn read_entry<'js>(
             }
             let observe = def.get::<_, Option<bool>>("observe")?.unwrap_or(false);
             let timeout_ms = def.get::<_, Option<u64>>("timeout")?;
-            if timeout_ms.is_some_and(|time| time == 0 || time > MAX_HOOK_TIME_MS) {
-                return Err(refuse(
-                    "a hook's `timeout` is from 1 to 600000 (milliseconds)".to_owned(),
-                ));
-            }
+            check_timeout(timeout_ms).map_err(refuse)?;
             let function =
                 function.ok_or_else(|| refuse("a hook needs a function to run".to_owned()))?;
             Ok(Entry::Hook(
@@ -1419,14 +1317,7 @@ impl Shared {
                 self.registration.commands.push(definition);
             }
             Entry::Hook(definition, event, function) => {
-                if !self.hooks_allowed.contains(&event) {
-                    return Err(format!(
-                        "the extension's manifest does not allow a hook on `{}`, which lets it see \
-                         {} (`capabilities.hooks`)",
-                        definition.event,
-                        event.sees()
-                    ));
-                }
+                check_allowed(&definition.event, event, &self.hooks_allowed)?;
                 if self.registration.hooks.len() >= MAX_HOOKS {
                     return Err(format!("an extension registers at most {MAX_HOOKS} hooks"));
                 }

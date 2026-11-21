@@ -6,8 +6,10 @@ use std::path::PathBuf;
 
 use cineris_base::{ContentHash, private};
 use cineris_ext::cache::{
-    CacheError, Entry, Loaded, MAX_BYTES, MAX_ENTRIES, RegistrationCache, VERSION,
+    BEFORE_IT_IS_SET_ASIDE, BEFORE_IT_IS_WRITTEN, CacheError, Entry, Loaded, MAX_BYTES,
+    MAX_ENTRIES, RegistrationCache, VERSION,
 };
+use cineris_ext::manifest::Manifest;
 use cineris_ext::registration::{CommandDef, HookDef, Registration, ToolDef};
 use cineris_testkit::scratch;
 use cineris_testkit::scratch::Scratch;
@@ -57,6 +59,37 @@ fn entry(name: &str) -> Entry {
 /// The text of an entry as the file holds it.
 fn entry_json(name: &str) -> String {
     format!(r#"{{"name": "{name}", "api": 1, "tools": [], "commands": [], "hooks": []}}"#)
+}
+
+/// The text of an entry of the extension `t` with these tools, commands and
+/// hooks, each list's JSON without its brackets.
+fn entry_of(tools: &str, commands: &str, hooks: &str) -> String {
+    format!(
+        r#"{{"name": "t", "api": 1, "tools": [{tools}], "commands": [{commands}], "hooks": [{hooks}]}}"#
+    )
+}
+
+/// A tool's JSON.
+fn tool_json(name: &str, description: &str, input: &str) -> String {
+    format!(r#"{{"name": "{name}", "description": "{description}", "input": {input}}}"#)
+}
+
+/// A command's JSON.
+fn command_json(name: &str, arguments: &str) -> String {
+    format!(r#"{{"name": "{name}", "description": "", "arguments": [{arguments}]}}"#)
+}
+
+/// A hook's JSON.
+fn hook_json(event: &str, tools: &str, timeout: &str) -> String {
+    format!(r#"{{"event": "{event}", "tools": [{tools}], "timeout_ms": {timeout}}}"#)
+}
+
+/// `count` texts `"<stem><n>"`, as a JSON list's items.
+fn texts(stem: &str, count: usize) -> String {
+    (0..count)
+        .map(|index| format!(r#""{stem}{index}""#))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// A file of the given entries, each `(key, entry's JSON)`.
@@ -261,7 +294,8 @@ fn a_file_not_understood_whole_is_set_aside_and_read_as_empty() {
                     tools.join(", ")
                 ),
             )]),
-            "is past a registration's caps: it has 65 tools, and an extension registers at most 64",
+            "is not one a live runtime could have registered: it has 65 tools, and an extension \
+             registers at most 64",
         ),
         (
             "an entry with a prompt over 4 KiB",
@@ -275,6 +309,160 @@ fn a_file_not_understood_whole_is_set_aside_and_read_as_empty() {
             "its prompt is 4097 bytes, more than the 4096 a prompt file may hold",
         ),
     ];
+    // Each check a live registration meets, met again by an entry read.
+    let one = |entry: String| file_of(&[(key.clone(), entry)]);
+    let fine_tool = tool_json("find", "", "{}");
+    let fine_command = command_json("go", "");
+    let fine_hook = hook_json("tool.before", "", "null");
+    let long = "d".repeat(2049);
+    let checks: Vec<(&str, String, &str)> = vec![
+        (
+            "a tool's description over 2 KiB",
+            one(entry_of(&tool_json("find", &long, "{}"), "", "")),
+            "its tool `find`: a description is at most 2 KiB",
+        ),
+        (
+            "a tool's description with an escape character",
+            one(entry_of(&tool_json("find", "a\\u001bb", "{}"), "", "")),
+            "its tool `find`: a description holds a character that acts unseen",
+        ),
+        (
+            "a tool's schema that is not an object",
+            one(entry_of(&tool_json("find", "", "[]"), "", "")),
+            "its tool `find`: `input` must be a JSON Schema object of at most 16 KiB",
+        ),
+        (
+            "a tool's schema over 16 KiB",
+            one(entry_of(
+                &tool_json(
+                    "find",
+                    "",
+                    &format!(r#"{{"description": "{}"}}"#, "s".repeat(16 * 1024)),
+                ),
+                "",
+                "",
+            )),
+            "its tool `find`: `input` must be a JSON Schema object of at most 16 KiB",
+        ),
+        (
+            "a tool's schema with a key that acts unseen",
+            one(entry_of(
+                &tool_json("find", "", r#"{"properties": {"a\u202eb": {}}}"#),
+                "",
+                "",
+            )),
+            "its tool `find`: `input` holds a character that acts unseen",
+        ),
+        (
+            "a tool's name that is not a name",
+            one(entry_of(&tool_json("find issue", "", "{}"), "", "")),
+            "`find issue` cannot be a name",
+        ),
+        (
+            "a tool's name twice",
+            one(entry_of(&format!("{fine_tool}, {fine_tool}"), "", "")),
+            "a tool `find` is registered twice",
+        ),
+        (
+            "a command's name that is not a name",
+            one(entry_of("", &command_json("go/now", ""), "")),
+            "its command `go/now`: `go/now` cannot be a name",
+        ),
+        (
+            "a command's description over 2 KiB",
+            one(entry_of(
+                "",
+                &format!(r#"{{"name": "go", "description": "{long}", "arguments": []}}"#),
+                "",
+            )),
+            "its command `go`: a description is at most 2 KiB",
+        ),
+        (
+            "a command of 17 arguments",
+            one(entry_of("", &command_json("go", &texts("a", 17)), "")),
+            "its command `go`: `arguments` lists at most 16, and this lists 17",
+        ),
+        (
+            "a command's argument that is not a name",
+            one(entry_of("", &command_json("go", r#""a b""#), "")),
+            "its command `go`: `a b` cannot be a name",
+        ),
+        (
+            "a command's name twice",
+            one(entry_of("", &format!("{fine_command}, {fine_command}"), "")),
+            "a command `go` is registered twice",
+        ),
+        (
+            "a hook on what is not an event",
+            one(entry_of("", "", &hook_json("tool.during", "", "null"))),
+            "its hook on `tool.during`: `tool.during` is not an event",
+        ),
+        (
+            "a hook whose filter lists 65 tools",
+            one(entry_of(
+                "",
+                "",
+                &hook_json("tool.before", &texts("t", 65), "null"),
+            )),
+            "its hook on `tool.before`: `tools` lists at most 64, and this lists 65",
+        ),
+        (
+            "a hook's filter naming what is not a tool",
+            one(entry_of(
+                "",
+                "",
+                &hook_json("tool.before", r#""a b""#, "null"),
+            )),
+            "its hook on `tool.before`: `a b` cannot be a tool in a hook's filter",
+        ),
+        (
+            "a hook's filter entry over 129 bytes",
+            one(entry_of(
+                "",
+                "",
+                &hook_json("tool.before", &format!(r#""{}""#, "t".repeat(130)), "null"),
+            )),
+            "cannot be a tool in a hook's filter: 1 to 129",
+        ),
+        (
+            "a hook's time of nothing",
+            one(entry_of("", "", &hook_json("tool.before", "", "0"))),
+            "its hook on `tool.before`: a hook's `timeout` is from 1 to 600000 (milliseconds)",
+        ),
+        (
+            "a hook's time over ten minutes",
+            one(entry_of("", "", &hook_json("tool.before", "", "600001"))),
+            "its hook on `tool.before`: a hook's `timeout` is from 1 to 600000 (milliseconds)",
+        ),
+        (
+            "an entry with 33 hooks",
+            one(entry_of("", "", &[fine_hook.as_str(); 33].join(", "))),
+            "it has 33 hooks, and an extension registers at most 32",
+        ),
+        (
+            "an entry whose name is not an extension's",
+            file_of(&[(
+                key.clone(),
+                r#"{"name": ".hidden", "api": 1, "tools": [], "commands": [], "hooks": []}"#
+                    .to_owned(),
+            )]),
+            "`.hidden` is not an extension's name",
+        ),
+    ];
+    // Each of them alone is fine.
+    for fine in [
+        one(entry_of(&fine_tool, &fine_command, &fine_hook)),
+        one(entry_of(
+            &tool_json("find", &"d".repeat(2048), "{}"),
+            &command_json("go", &texts("a", 16)),
+            &hook_json("tool.before", &texts("t", 64), "600000"),
+        )),
+    ] {
+        scratch.file(file(&scratch), &fine);
+        let loaded = cache.load();
+        assert_eq!((loaded.cache.len(), loaded.set_aside), (1, None), "{fine}");
+    }
+    let cases = cases.into_iter().chain(checks);
     let aside = cache.set_aside_path();
     for (label, text, says) in cases {
         scratch.file(file(&scratch), &text);
@@ -381,26 +569,167 @@ fn every_write_is_owner_only_and_leaves_no_temporary_file() {
     assert_eq!(scratch.listing("state/extensions"), ["registered.json"]);
 }
 
+/// A link at the file's name, or a folder, is moved aside as it is (the
+/// link, never what it leads to), so that the cache can be written again:
+/// left there, no write could replace it, and every session would register
+/// every approved extension again.
 #[test]
-fn a_link_at_the_files_name_is_never_written_through() {
-    let scratch = scratch!("a_link_at_the_files_name_is_never_written_through");
+fn a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed() {
+    let scratch = scratch!("a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed");
     let cache = cache(&scratch);
+    let aside = cache.set_aside_path();
     let target = scratch.file("elsewhere.json", "kept");
     scratch.dir("state/extensions");
     if !crate::make_link(&target, &file(&scratch), false) {
         return;
     }
-    let error = cache.put(&hash("one"), entry("one")).unwrap_err();
+    let reason = cache.load().set_aside.unwrap();
+    assert!(
+        reason.contains("it could not be read: it is a link"),
+        "{reason}"
+    );
+    assert!(
+        reason.ends_with(&format!(
+            " It was moved to `{}` as it is (a link is moved, and what it leads to is left \
+             alone), so that the next write makes the file anew.",
+            aside.display()
+        )),
+        "{reason}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&aside)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(!file(&scratch).exists());
+    assert_eq!(scratch.read_text("elsewhere.json"), "kept");
+    // The next write makes the file anew, owner-only, and reads back.
+    cache.put(&hash("one"), entry("one")).unwrap();
+    assert!(std::fs::symlink_metadata(file(&scratch)).unwrap().is_file());
+    assert!(private::is_private(&file(&scratch)).unwrap());
+    assert_eq!(cache.load().cache.get(&hash("one")), Some(&entry("one")));
+    assert_eq!(scratch.read_text("elsewhere.json"), "kept");
+
+    // A folder at the name, met by a put: moved aside, and the put goes on.
+    std::fs::remove_file(file(&scratch)).unwrap();
+    scratch.file("state/extensions/registered.json/inside", "the user's");
+    cache.put(&hash("two"), entry("two")).unwrap();
+    assert_eq!(scratch.read_text(aside.join("inside")), "the user's");
+    assert_eq!(cache.load().cache.get(&hash("two")), Some(&entry("two")));
+}
+
+/// A cache another session writes between the look that says the file is
+/// still the one read and its move aside is moved, seen to be another file,
+/// and put back.
+#[test]
+fn a_cache_written_while_one_is_set_aside_is_put_back() {
+    let scratch = scratch!("a_cache_written_while_one_is_set_aside_is_put_back");
+    let cache = cache(&scratch);
+    // What another session's put writes, made beside it.
+    let other = RegistrationCache::new(scratch.join("other/registered.json"));
+    other.put(&hash("fresh"), entry("fresh")).unwrap();
+    let fresh = scratch.read(scratch.join("other/registered.json"));
+    scratch.file(file(&scratch), r#"{"version": 1, "entries": {"#);
+
+    let hold = cineris_testkit::Hold::new(BEFORE_IT_IS_SET_ASIDE);
+    let reader = {
+        let cache = cache.clone();
+        std::thread::spawn(move || cache.load())
+    };
+    hold.reach();
+    // Another session's write: a new file renamed over the name.
+    let written = scratch.file("state/extensions/next.tmp", &fresh);
+    std::fs::rename(&written, file(&scratch)).unwrap();
+    hold.let_one_go();
+    let loaded = reader.join().unwrap();
+    let reason = loaded.set_aside.unwrap();
+    assert!(
+        reason.ends_with(" It was left as it is: another session had just written it again."),
+        "{reason}"
+    );
+    assert_eq!(
+        cache.load().cache.get(&hash("fresh")),
+        Some(&entry("fresh"))
+    );
+    assert!(!cache.set_aside_path().exists());
+}
+
+/// A link made at the name after the file was read and before it is
+/// written is not written through: the write refuses it.
+#[test]
+fn a_link_made_just_before_the_write_is_never_written_through() {
+    let scratch = scratch!("a_link_made_just_before_the_write_is_never_written_through");
+    let cache = cache(&scratch);
+    let target = scratch.file("elsewhere.json", "kept");
+    scratch.dir("state/extensions");
+    let hold = cineris_testkit::Hold::new(BEFORE_IT_IS_WRITTEN);
+    let writer = {
+        let cache = cache.clone();
+        std::thread::spawn(move || cache.put(&hash("one"), entry("one")))
+    };
+    hold.reach();
+    let made = crate::make_link(&target, &file(&scratch), false);
+    hold.let_one_go();
+    let written = writer.join().unwrap();
+    if !made {
+        return;
+    }
+    let error = written.unwrap_err();
     assert!(
         matches!(&error, CacheError::Write { .. }) && error.to_string().contains("is a link"),
         "{error}"
     );
     assert_eq!(scratch.read_text("elsewhere.json"), "kept");
-    // Read, it is not followed either: set aside, and left where it is.
-    let reason = cache.load().set_aside.unwrap();
-    assert!(reason.contains("it is a link"), "{reason}");
-    assert!(reason.ends_with(" It was left as it is."), "{reason}");
-    assert_eq!(scratch.read_text("elsewhere.json"), "kept");
+}
+
+/// The engine's own checks are the cache's: an entry is used only for the
+/// extension it fits, its hooks among those the manifest allows.
+#[test]
+fn an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has() {
+    let snapshot = crate::snapshot(&[
+        (
+            "extension.toml",
+            "api = 1\nname = \"tracker\"\nversion = \"0.1.0\"\nmain = \"main.js\"\nprompt = \
+             \"prompt.md\"\n\n[capabilities]\nhooks = [\"tool.before\"]\n",
+        ),
+        ("main.js", "1"),
+        ("prompt.md", "Use tracker's tools for issues."),
+    ]);
+    let manifest = Manifest::of(&snapshot).unwrap();
+    let fits = |entry: &Entry| entry.fits(&manifest, &snapshot);
+    let tracker = entry("tracker");
+    assert_eq!(fits(&tracker), Ok(()));
+
+    let mut other = tracker.clone();
+    other.name = "trackr".to_owned();
+    assert_eq!(
+        fits(&other),
+        Err("the entry is of `trackr`, and the extension is `tracker`".to_owned())
+    );
+    let mut newer = tracker.clone();
+    newer.api = 2;
+    assert_eq!(
+        fits(&newer),
+        Err("the entry is of `api = 2`, and this build knows 1".to_owned())
+    );
+    let mut sees_more = tracker.clone();
+    sees_more.registration.hooks[0].event = "prompt.submit".to_owned();
+    let refused = fits(&sees_more).unwrap_err();
+    assert!(
+        refused.starts_with(
+            "the extension's manifest does not allow a hook on `prompt.submit`, which lets it see"
+        ),
+        "{refused}"
+    );
+    for prompt in [None, Some("Another text.".to_owned())] {
+        let mut changed = tracker.clone();
+        changed.prompt = prompt;
+        assert_eq!(
+            fits(&changed),
+            Err("the entry's prompt is not the text of the extension's prompt file".to_owned())
+        );
+    }
 }
 
 #[test]
@@ -446,14 +775,6 @@ fn a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing() {
         Some("again")
     );
 
-    // An entry whose text would make the file larger than 16 MiB.
-    std::fs::remove_file(file(&scratch)).unwrap();
-    let mut huge = entry("huge");
-    huge.registration.tools[0].description = "d".repeat(usize::try_from(MAX_BYTES).unwrap());
-    let error = cache.put(&hash("huge"), huge).unwrap_err();
-    assert!(
-        matches!(error, CacheError::TooLarge { bytes, .. } if bytes as u64 > MAX_BYTES),
-        "{error}"
-    );
-    assert!(!file(&scratch).exists(), "nothing was written");
+    // An entry within every cap cannot make the file larger than 16 MiB
+    // alone: the write's cap is held by `cache::tests`, at a smaller cap.
 }
