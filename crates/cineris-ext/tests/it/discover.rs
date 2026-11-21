@@ -871,3 +871,32 @@ fn on_windows_a_root_in_another_case_and_with_backslashes_is_the_same_place() {
         );
     }
 }
+
+/// Every folder's name is kept, read or not and an extension or not, with
+/// where each root really is; and `names` gives them reading no folder.
+#[test]
+fn every_folders_name_is_kept_and_names_reads_no_folder() {
+    let scratch = scratch!("every_folders_name_is_kept_and_names_reads_no_folder");
+    extension(&scratch, "home/cfg/extensions/fine", "fine");
+    // Not an extension: a manifest of another name.
+    extension(&scratch, "home/cfg/extensions/Other", "else");
+    scratch.file("home/cfg/extensions/notes.txt", "a file beside the folders");
+    scratch.dir("home/cfg/extensions/.git");
+    let wanted = [
+        (Source::User, "Other".to_owned()),
+        (Source::User, "fine".to_owned()),
+    ];
+    let discovered = discover(&scratch, &[user(&scratch)]);
+    assert_eq!(found(&discovered).len(), 1);
+    assert_eq!(discovered.names, wanted);
+    assert!(discovered.cut.is_empty());
+    let real = std::fs::canonicalize(scratch.join("home/cfg/extensions")).unwrap();
+    assert_eq!(discovered.roots.len(), 1);
+    assert!(cineris_base::same_location(&discovered.roots[0].1, &real));
+
+    let read = cineris_testkit::Hold::new(discover::AN_EXTENSION_IS_READ).skipping(usize::MAX);
+    let named = discover::names(&[user(&scratch)], &resolver(&scratch));
+    assert_eq!(read.arrivals(), 0, "no folder is read");
+    assert!(named.found.is_empty());
+    assert_eq!(named.names, wanted);
+}
