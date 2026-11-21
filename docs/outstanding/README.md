@@ -57,7 +57,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-core
 
-- [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it; one CI flake. Owner: the next step that changes the base capture, or step 32.
+- [a-base-capture-beside-the-turns-git](a-base-capture-beside-the-turns-git.md): A session's base capture can come out incomplete when the turn's own git runs beside it, or not be recorded at all when it is slower than the close waits for under load; flakes of both forms. Owner: the next step that changes the base capture, or step 32.
 - [a-break-of-a-closed-sessions-questions-that-its-test-does-not-catch](a-break-of-a-closed-sessions-questions-that-its-test-does-not-catch.md): The break that leaves a closed session's open questions in place, `step-23-fixes/a-closed-sessions-question-is-not-withdrawn`, is not caught by the test it names, so the rule that a session's end withdraws its open trust and rewind questions is not held by a test. Owner: the maintainers, a small-fix session.
 - [a-break-of-the-statistics-pruning-that-its-test-does-not-catch](a-break-of-the-statistics-pruning-that-its-test-does-not-catch.md): The break that makes `cineris stats` prune what it shows, `step-16/showing-the-statistics-prunes`, is not caught by the test it names, so the rule that showing the statistics deletes nothing is not held by a test. Owner: the maintainers, a small-fix session.
 - [a-days-time-limit](a-days-time-limit.md): `limits.day.time` is accepted and not enforced, and a session open across midnight draws on the day it began in. Owner: step 37 (task leases' budgets), or a step the owner names.
