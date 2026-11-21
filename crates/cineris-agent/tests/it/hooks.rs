@@ -621,6 +621,47 @@ fn a_call_decided_again_is_shown_to_its_hooks_again_with_the_models_arguments() 
     assert_eq!(results(&rig)[1].replaced, None);
 }
 
+/// What a call's hooks said is dropped when it is decided again, at once:
+/// interrupted while its hooks are asked the second time, the call's result
+/// says nothing of the replacement its hooks made the first time.
+#[test]
+fn what_its_hooks_said_before_is_dropped_as_a_call_is_decided_again() {
+    let response = calls(&[
+        ("c1", "plain", json!({"id": "q"})),
+        ("c2", "write", json!({"path": "b"})),
+    ]);
+    let Hooked {
+        world,
+        rig,
+        hooks,
+        timer,
+    } = hooked("hook_redecide_dropped", [response, says("Unused.")]);
+    rig.policy.decide_for("plain q", Decision::Ask);
+    rig.policy.wait_at(&world.gates);
+    rig.policy.answer_for("plain", Verdict::Allow);
+    let hook = hooks.add(
+        FakeHook::on("swap", HookEvent::ToolBefore)
+            .tool("write")
+            .replies([answer(json!({"arguments": {"path": "c"}})), Reply::Never]),
+    );
+    world.run(async {
+        rig.prompt("go");
+        rig.policy.questions(1).await;
+        hook.runs(1).await;
+        crate::settle().await;
+        rig.policy.narrow();
+        world.gates.open("ask plain");
+        hook.runs(2).await;
+        timer.sleeping().await;
+        let _ = rig.handle.interrupt();
+        rig.events.turns(1).await;
+    });
+    let result = &results(&rig)[1];
+    assert_eq!(result.outcome, ToolOutcome::Interrupted);
+    assert_eq!(result.replaced, None);
+    assert!(!text(result).contains("`swap`"), "{}", text(result));
+}
+
 // -------------------------------------------------------------- replacing
 
 /// A replacement from one hook is checked against the schema, planned by

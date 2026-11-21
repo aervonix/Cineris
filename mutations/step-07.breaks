@@ -124,8 +124,8 @@ caught-by:
 rule: Steering messages and notices are delivered at the boundary between a round and the next request.
 file: crates/cineris-agent/src/turn.rs
 in: Session::prepare
-find: self.shared.lock().pending.drain(..).collect()
-replace: Vec::new()
+find: std::mem::take(&mut self.shared.lock().pending)
+replace: std::collections::VecDeque::new()
 caught-by:
     steering::a_steering_message_is_delivered_after_the_round_and_before_the_next_request
     steering::an_edit_to_the_plan_reaches_the_model_as_a_notice_at_the_next_boundary

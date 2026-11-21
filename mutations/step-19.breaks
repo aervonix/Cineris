@@ -561,8 +561,8 @@ caught-by:
 rule: A turn that only verifies records nothing in the history.
 file: crates/cineris-agent/src/turn.rs
 in: Session::turn
-find: Ok(()) if turn.only_verify => Ok(()),
-replace:
+find: Ok(()) if turn.only_verify => Ok(Begun::Ready)
+replace: Ok(()) if false => Ok(Begun::Ready)
 caught-by:
     cineris-agent::it verifying::a_turn_that_only_verifies_runs_one_round_and_sends_and_records_nothing
 
@@ -606,8 +606,8 @@ caught-by:
 rule: A time limit that is spent ends a turn that only verifies before any check starts.
 file: crates/cineris-agent/src/turn.rs
 in: Session::turn
-find: Ok(()) if turn.only_verify => match self.ledger.out_of_time() {
-replace: Ok(()) if turn.only_verify => match None::<LimitReached> {
+find: Ok(Begun::Ready) if turn.only_verify => match self.ledger.out_of_time() {
+replace: Ok(Begun::Ready) if turn.only_verify => match None::<LimitReached> {
 caught-by:
     cineris-agent::it verifying::a_turn_that_only_verifies_with_its_time_spent_ends_at_the_limit_and_runs_nothing
 
