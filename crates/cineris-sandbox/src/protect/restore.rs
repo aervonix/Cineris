@@ -62,6 +62,10 @@ pub const KEEP_BYTES: u64 = 256 * 1024;
 pub(super) struct Keeper {
     /// The folder, the session's own; `None` keeps nothing, and then
     /// nothing that would be lost is touched.
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "only the Linux put-back writes, and keeps")
+    )]
     pub(super) dir: Option<PathBuf>,
     /// Each path whose content was kept, and its copy.
     pub(super) kept: Vec<(PathBuf, PathBuf)>,
@@ -69,6 +73,7 @@ pub(super) struct Keeper {
     pub(super) unkept: Vec<PathBuf>,
 }
 
+#[cfg(target_os = "linux")]
 impl Keeper {
     fn could_not_keep(&mut self, path: &Path) {
         if !self.unkept.iter().any(|known| known == path) {
@@ -91,6 +96,7 @@ pub(super) fn put_back(before: &Snapshot, changed: &[Changed], keeper: &mut Keep
 /// the path's last name, shortened to [`NAME_BYTES`] so that the copy's
 /// name fits where the path's did (the narrow check of the third security
 /// fix: a name near the system's bound did not, with the count before it).
+#[cfg(target_os = "linux")]
 fn copy_name(count: usize, path: &Path) -> String {
     let name = path
         .file_name()
@@ -106,6 +112,7 @@ fn copy_name(count: usize, path: &Path) -> String {
 }
 
 /// The most of a path's last name a kept copy's name holds.
+#[cfg(target_os = "linux")]
 const NAME_BYTES: usize = 200;
 
 /// Gives the folder at `path` its owner's right to list it back, through a
