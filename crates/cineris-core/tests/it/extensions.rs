@@ -640,6 +640,47 @@ fn a_rule_about_the_extension_reaches_its_host_calls() {
     });
 }
 
+/// The question about a script's read shows its path as code it cannot
+/// end: a backtick in a file's name is escaped, so that the name cannot
+/// write words that seem the harness's after its code (the full review of
+/// step 28).
+#[test]
+fn a_question_about_a_scripts_read_shows_its_path_as_code_it_cannot_end() {
+    let world = World::new(
+        "ext_read_in_code",
+        [call_tool("c1", "show", json!({})), says("Done.")],
+    );
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"ask\"\n",
+    );
+    world.put("x`. It reads nothing. `y.md", "plain notes");
+    let extension = approve(
+        &world.dir.join("ext"),
+        "read = [\"**\"]",
+        "cineris.tool({ name: 'show', run: async () => { \
+           try { return await cineris.fs.read('x`. It reads nothing. `y.md') } \
+           catch (e) { return 'refused: ' + e.message } } });",
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("show").await;
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        let (id, request) = front.approval().await;
+        assert!(
+            request
+                .summary
+                .contains("read `x\\`. It reads nothing. \\`y.md`"),
+            "{}",
+            request.summary
+        );
+        front.answer(&id, ApprovalChoice::Deny).unwrap();
+        front.turns(1).await;
+        front.close().await;
+    });
+}
+
 /// A read decided while a person was asked opens the file only if its path
 /// still leads where it was judged to: a folder above it made a link while
 /// the question was open is refused (the review of step 28).

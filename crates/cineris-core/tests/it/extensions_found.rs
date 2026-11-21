@@ -186,6 +186,18 @@ pub(crate) async fn open_as(
     info: ClientInfo,
     answer: TrustResponse,
 ) -> (Front, Vec<TrustRequest>) {
+    open_doing(world, core, info, &|| {}, answer).await
+}
+
+/// [`open_as`], doing `meanwhile` while each trust question is open,
+/// before it is answered.
+pub(crate) async fn open_doing(
+    world: &World,
+    core: &Core,
+    info: ClientInfo,
+    meanwhile: &dyn Fn(),
+    answer: TrustResponse,
+) -> (Front, Vec<TrustRequest>) {
     let client = core.connect(info);
     let opening = core.handle(
         client.id,
@@ -209,6 +221,7 @@ pub(crate) async fn open_as(
                         request: ServerRequest::Trust(request),
                     }) => {
                         asked.push(request);
+                        meanwhile();
                         core.respond(client.id, &id, ServerResponse::Trust(answer.clone()))
                             .expect("the question is open");
                     }
@@ -689,23 +702,28 @@ fn a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_afte
         assert_eq!(resource.name, NAME);
         assert!(!resource.changed);
         let detail = &resource.detail;
+        // This session's programs are not confined (the test's core has no
+        // launcher, as on Windows): said before anything else.
+        let first = format!(
+            "`probe` in `.cineris/extensions/probe`. {} It may run `gh`.",
+            cineris_core::ext::NOT_CONFINED
+        );
+        assert!(detail.starts_with(&first), "{detail:?}");
         for words in [
-            "`probe` in `.cineris/extensions/probe`.",
-            "It may run `gh`, which may reach the network.",
             "It may read the workspace's files that match `src/**`.",
             "It may write the workspace's files that match `out/**`.",
-            "It may reach `api.example.com`, `*.example.org`.",
+            "It may reach `api.example.com`; any host under `example.org`.",
             cineris_ext::event::Event::ToolBefore.sees(),
             "(`tool.before`)",
             "Its version is `1`.",
             // What acts unseen is shown as an escape, inside the quotes of
-            // the author's words.
-            "Its author describes it, in their words: \"Tracks issues\\nfor you\\u{202e}txt.exe\"",
+            // the author's words, on a line of their own.
+            "\nIts author describes it, in their words:\n\"Tracks issues\\nfor you\\u{202e}txt.exe\"",
         ] {
             assert!(detail.contains(words), "{words:?} is not in {detail:?}");
         }
         assert!(
-            !detail.contains('\u{202e}') && !detail.contains('\n'),
+            !detail.contains('\u{202e}') && !detail.contains("issues\nfor"),
             "{detail:?}"
         );
         // The yes pinned it as it was listed; the session registers it,

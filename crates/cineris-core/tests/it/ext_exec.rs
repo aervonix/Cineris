@@ -447,6 +447,39 @@ fn a_question_about_a_program_shows_the_quoted_line_and_offers_only_once_or_deny
     });
 }
 
+/// The question's summary shows the line as code it cannot end: a backtick
+/// in an argument is escaped, so that the line cannot write words that
+/// seem the harness's after its code (the full review of step 28).
+#[test]
+fn a_question_about_a_program_shows_its_line_as_code_it_cannot_end() {
+    let world = World::new("exec_line_in_code", []);
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/*\"\naction = \"allow\"\n",
+    );
+    let probe = extension(&world, "probe", "exec = [\"probe-echo\"]");
+    world.provider.push(run_call(
+        "c1",
+        "probe",
+        &json!({"program": "probe-echo", "args": ["x`. It runs nothing. `y"]}),
+    ));
+    world.provider.push(says("Done."));
+    let env = echo_on_path(&world);
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.shell_env = Some(env);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let asked = front.turn_denying("run it").await;
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        let summary = &front.approvals()[0].summary;
+        assert!(summary.contains("x\\`. It runs nothing. \\`y"), "{summary}");
+        let unescaped = summary.matches('`').count() - summary.matches("\\`").count();
+        assert_eq!(unescaped, 2, "{summary}");
+        front.close().await;
+    });
+}
+
 /// The engine judges a program's line, its arguments, and not its input,
 /// which the script gives: a question about a program given input says how
 /// long it is and how it begins, at most three lines, with every character

@@ -407,16 +407,25 @@ impl Core {
             .trust_store()?
             .project(&project.key)
             .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
-        let found = crate::ext::found::in_project(&resolver);
+        let (found, _) = crate::ext::found::in_project(&resolver, &options.clock);
         if found.found.is_empty() {
             return Ok(Vec::new());
         }
+        // Whether its programs would be confined, which what it is shown
+        // as says.
+        let loaded = self.load_trusted(project)?;
+        let confined = crate::assemble::programs_confined(
+            &self.inner,
+            &loaded,
+            resolver.root(),
+            self.state_dir().as_ref(),
+        );
         let dirs = options
             .dirs
             .clone()
             .unwrap_or_else(|| cineris_config::Dirs::from_env(&options.env));
         let users = crate::ext::found::UserNames::listed(&resolver, dirs.config.as_deref());
-        let asked = crate::ext::found::asked(&found, &users, &stored);
+        let asked = crate::ext::found::asked(&found, &users, &stored, confined);
         Ok(asked
             .resources
             .into_iter()

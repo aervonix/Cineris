@@ -28,8 +28,14 @@ mod host;
 mod state;
 #[cfg(feature = "scripts")]
 mod tools;
-#[cfg(feature = "scripts")]
-mod watched;
+#[cfg_attr(
+    not(feature = "scripts"),
+    allow(
+        dead_code,
+        reason = "what is watched is looked at again by the scripts' session alone"
+    )
+)]
+pub(crate) mod watched;
 
 use std::path::PathBuf;
 
@@ -38,7 +44,8 @@ use cineris_ext::manifest::Manifest;
 use cineris_ext::registration::Registration;
 
 pub use found::{
-    BEFORE_AN_EXTENSION_IS_REGISTERED, BEFORE_THE_CACHE_IS_KEPT, THE_QUESTIONS_TRUST_IS_READ,
+    ANY_HOST, BEFORE_AN_EXTENSION_IS_REGISTERED, BEFORE_THE_CACHE_IS_KEPT, NOT_CONFINED,
+    THE_QUESTIONS_TRUST_IS_READ, WAIT_SAID_AFTER, WAITING,
 };
 
 #[cfg(feature = "scripts")]

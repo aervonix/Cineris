@@ -77,16 +77,22 @@
 //! the cache is shared by every project. When either store cannot be read,
 //! nothing is pruned.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
-use cineris_base::{PathResolver, strip_location_prefix, visible};
-use cineris_ext::discover::{self, Discovered, Found, Root};
+use cineris_base::{
+    ContentHash, PathResolver, SharedClock, in_code, strip_location_prefix, visible,
+};
+use cineris_ext::discover::{self, Discovered, Found, LeftOut, Root, Seen};
+use cineris_ext::folder::Snapshot;
 use cineris_ext::manifest::{HostPattern, Manifest};
 use cineris_ext::source::Source;
 use cineris_policy::{Definition, ProjectTrust, Standing};
 use cineris_protocol::methods::{TrustResource, TrustResourceKind};
+
+use super::watched::Watched;
 
 #[cfg(feature = "scripts")]
 pub(crate) use pipeline::{Finding, start};
@@ -110,6 +116,16 @@ pub const BEFORE_THE_CACHE_IS_KEPT: &str =
 pub const THE_QUESTIONS_TRUST_IS_READ: &str =
     "ext: the trust question has read the project's trust, and is not yet shaped";
 
+/// How long a turn waits for the session's extensions before the session
+/// says what it waits for (the full review of step 28).
+pub const WAIT_SAID_AFTER: Duration = Duration::from_secs(3);
+
+/// What the session is told when a turn has waited [`WAIT_SAID_AFTER`] for
+/// its extensions.
+pub const WAITING: &str = "This turn waits for the session's extensions to be found and \
+                           registered, so that a gate one of them holds is not skipped. It \
+                           starts once they are.";
+
 /// Whether a session's extensions are settled: found, judged, registered
 /// where the cache missed one, and their tools in the session's registry.
 #[derive(Debug, Default)]
@@ -122,6 +138,10 @@ impl Ready {
     fn settle(&self) {
         self.done.store(true, Ordering::SeqCst);
         self.settled.notify_waiters();
+    }
+
+    fn is_settled(&self) -> bool {
+        self.done.load(Ordering::SeqCst)
     }
 
     async fn wait(&self) {
@@ -154,8 +174,34 @@ impl Extensions {
     }
 
     /// Waits until the session's extensions are settled: at once when they
-    /// are.
+    /// are. A wait of more than [`WAIT_SAID_AFTER`], on the session's timer,
+    /// is said, once, and goes on: a turn does not start while an approved
+    /// extension's registration is missing, and each evaluation is bounded
+    /// by the engine's own time.
     pub(crate) async fn wait(&self) {
+        if self.ready.is_settled() {
+            return;
+        }
+        #[cfg(feature = "scripts")]
+        if let Some((timer, tell)) = self.held.waiting() {
+            let mut said = timer.sleep(WAIT_SAID_AFTER);
+            let mut ready = std::pin::pin!(self.ready.wait());
+            let done = std::future::poll_fn(|context| {
+                if ready.as_mut().poll(context).is_ready() {
+                    return std::task::Poll::Ready(true);
+                }
+                if said.as_mut().poll(context).is_ready() {
+                    return std::task::Poll::Ready(false);
+                }
+                std::task::Poll::Pending
+            })
+            .await;
+            if !done {
+                tell(WAITING.to_owned());
+                ready.await;
+            }
+            return;
+        }
         self.ready.wait().await;
     }
 
@@ -191,6 +237,92 @@ pub(crate) fn start(_pending: Pending) -> Arc<Extensions> {
     Extensions::none()
 }
 
+/// An extension as the trust question found it, handed to the session
+/// without its bytes: where it is, how it is shown, the hash it was read
+/// at, and its manifest (the early review: a project's folders were held
+/// whole, up to 64 of 4 MiB each, from the question to the session's
+/// registration). The session reads it again only to register it, and then
+/// only at this hash.
+#[cfg_attr(
+    not(feature = "scripts"),
+    expect(
+        dead_code,
+        reason = "without the script engine nothing takes the question's findings on"
+    )
+)]
+#[derive(Debug, Clone)]
+pub(crate) struct Listed {
+    pub(crate) source: Source,
+    pub(crate) folder: PathBuf,
+    pub(crate) shown: String,
+    pub(crate) hash: ContentHash,
+    pub(crate) manifest: Manifest,
+    /// The manifest's prompt file alone, as it was read ([`prompt_alone`]):
+    /// what a cached entry is checked against when the rest of the folder's
+    /// bytes are not kept.
+    pub(crate) prompt: Snapshot,
+}
+
+impl Listed {
+    /// What is kept of a found extension.
+    pub(crate) fn of(found: &Found) -> Self {
+        Self {
+            source: found.source,
+            folder: found.folder.clone(),
+            shown: found.shown.clone(),
+            hash: found.snapshot.hash(),
+            manifest: found.manifest.clone(),
+            prompt: prompt_alone(&found.manifest, &found.snapshot),
+        }
+    }
+
+    /// The definition it is pinned by.
+    #[cfg(feature = "scripts")]
+    pub(crate) fn definition(&self) -> Definition {
+        Definition {
+            kind: TrustResourceKind::Extension,
+            name: self.manifest.name.clone(),
+            hash: self.hash,
+        }
+    }
+}
+
+/// What the trust question found in the project's folder of extensions,
+/// handed to the session: each extension without its bytes, what was left
+/// out, and every place stamped as it was **before** it was read, so that a
+/// change made while the question was open is a change at the session's
+/// first look (the full review of step 28).
+#[cfg_attr(
+    not(feature = "scripts"),
+    expect(
+        dead_code,
+        reason = "without the script engine nothing takes the question's findings on"
+    )
+)]
+#[derive(Debug, Default)]
+pub(crate) struct Looked {
+    pub(crate) found: Vec<Listed>,
+    pub(crate) left_out: Vec<LeftOut>,
+    pub(crate) watched: Watched,
+}
+
+/// The manifest's prompt file alone, out of `snapshot`, for the cache's
+/// check that an entry's prompt is the file's text (`Entry::fits`, which
+/// looks at nothing else of the snapshot): the rest of the folder's bytes
+/// are not kept. A file longer than any prompt an entry may hold is kept
+/// to one byte past that, which no entry's prompt equals, as none equals
+/// the whole file.
+pub(crate) fn prompt_alone(manifest: &Manifest, snapshot: &Snapshot) -> Snapshot {
+    let mut files = std::collections::BTreeMap::new();
+    if let Some(path) = manifest.prompt.as_deref()
+        && let Some(bytes) = snapshot.file(path)
+    {
+        let kept = &bytes[..bytes.len().min(cineris_ext::manifest::MAX_PROMPT_BYTES + 1)];
+        files.insert(path.to_owned(), kept.to_vec());
+    }
+    Snapshot::from_files(files)
+}
+
 /// The definition a found extension is pinned by: its kind, its name, and
 /// the hash of its folder read whole, which is what was approved.
 pub(crate) fn definition(found: &Found) -> Definition {
@@ -202,9 +334,66 @@ pub(crate) fn definition(found: &Found) -> Definition {
 }
 
 /// The project's folder of extensions, looked in: `.cineris/extensions`
-/// under the workspace's real location. Blocks.
-pub(crate) fn in_project(resolver: &PathResolver) -> Discovered {
-    discover::discover(&[Root::project(&resolver.root().to_fs_path())], resolver)
+/// under the workspace's real location. Each place is stamped before it is
+/// looked at or read (the names on the way, as written and to where the
+/// folder really is; each extension's folder, the folders in it and its
+/// files), no stamp following a link. Blocks.
+pub(crate) fn in_project(resolver: &PathResolver, clock: &SharedClock) -> (Discovered, Watched) {
+    let workspace = resolver.root().to_fs_path();
+    let mut watched = Watched::default();
+    // The names on the way as written, each looked at itself: one that is a
+    // link, or not there, is the last (a look through it would follow it).
+    let mut at = workspace.clone();
+    for name in discover::PROJECT_FOLDER {
+        at.push(name);
+        watched.note(at.clone(), clock);
+        match stat_itself(&at) {
+            Some(metadata) if metadata.is_dir() => {}
+            _ => break,
+        }
+    }
+    let discovered = discover::discover_seeing(
+        &[Root::project(&workspace)],
+        resolver,
+        &mut |seen| match seen {
+            // Where the folder really is, each name from the workspace down
+            // to it: a folder on the way swapped for a link is a change,
+            // and nothing is looked at through it.
+            Seen::Root(_, real) => {
+                if let Some(rest) = strip_location_prefix(real, &workspace) {
+                    let mut at = workspace.clone();
+                    for name in rest.components() {
+                        at.push(name);
+                        watched.note(at.clone(), clock);
+                    }
+                }
+                watched.note(real.to_path_buf(), clock);
+            }
+            Seen::Extension(_, folder) => watched.note_tree(folder, clock),
+        },
+    );
+    for left in &discovered.left_out {
+        watched.note(left.folder.clone(), clock);
+    }
+    (discovered, watched)
+}
+
+/// A look at `path` itself, following no link. Blocks.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "a look at one name on the way to the project's folder, on the blocking pool"
+)]
+fn stat_itself(path: &Path) -> Option<std::fs::Metadata> {
+    std::fs::symlink_metadata(path).ok()
+}
+
+/// What the trust question found, as the session is handed it.
+pub(crate) fn looked(discovered: &Discovered, watched: Watched) -> Looked {
+    Looked {
+        found: discovered.found.iter().map(Listed::of).collect(),
+        left_out: discovered.left_out.clone(),
+        watched,
+    }
 }
 
 /// The names the user's folder of extensions takes, with ASCII's case
@@ -268,8 +457,14 @@ pub(crate) struct Asked {
 /// not approved as it is now, in words, `changed` when it was approved with
 /// another hash. One whose name the user's own folder of extensions takes
 /// is not listed: it is not used whatever the answer, and the session says
-/// so.
-pub(crate) fn asked(project: &Discovered, users: &UserNames, stored: &ProjectTrust) -> Asked {
+/// so. `confined`: whether the programs an extension runs are confined on
+/// this system ([`in_words`]).
+pub(crate) fn asked(
+    project: &Discovered,
+    users: &UserNames,
+    stored: &ProjectTrust,
+    confined: bool,
+) -> Asked {
     let mut asked = Asked::default();
     for found in &project.found {
         if users.takes(&found.manifest.name) {
@@ -284,7 +479,7 @@ pub(crate) fn asked(project: &Discovered, users: &UserNames, stored: &ProjectTru
         asked.resources.push(TrustResource {
             kind: TrustResourceKind::Extension,
             name: visible(&found.manifest.name).into_owned(),
-            detail: detail(found, changed),
+            detail: detail(found, changed, confined),
             changed,
         });
         asked.pins.push(definition);
@@ -295,34 +490,72 @@ pub(crate) fn asked(project: &Discovered, users: &UserNames, stored: &ProjectTru
 /// What the trust question, and `cineris permissions trust`, show of one
 /// extension: its name and folder, whether it changed, and what its
 /// manifest lets it do in words.
-pub(crate) fn detail(found: &Found, changed: bool) -> String {
+pub(crate) fn detail(found: &Found, changed: bool, confined: bool) -> String {
     format!(
         "`{}` in `{}`.{} {}",
-        visible(&found.manifest.name),
+        in_code(&found.manifest.name),
         found.shown,
         if changed {
             " It has changed since you approved it."
         } else {
             ""
         },
-        in_words(&found.manifest)
+        in_words(&found.manifest, confined)
     )
 }
 
-/// What an extension's manifest lets it do, in words for the person asked:
-/// the programs it may run (and whether they may reach the network), the
-/// files it may read and write, the hosts it may reach, what each event it
-/// may hook lets it see, whether it adds to the system prompt, its version;
-/// and last its author's description, labelled as the author's and quoted,
-/// so that it cannot pose as the harness's own sentences. Every text of the
-/// manifest's is shown with what acts unseen escaped ([`visible`]); the
-/// manifest refuses a backtick in a program, a glob or the version, which
-/// would end the code each is shown as.
-pub(crate) fn in_words(manifest: &Manifest) -> String {
+/// The exact words of an approval where the programs an extension runs are
+/// not confined: said before anything else (the maintainers' wording).
+pub const NOT_CONFINED: &str = "Programs this extension runs are not confined on this system. \
+                                They can do anything you can, including changing Cineris's own \
+                                settings and approvals.";
+
+/// What a `net` pattern of `*` is said as (the maintainers' wording).
+pub const ANY_HOST: &str =
+    "any host on the internet, including addresses on your own network that have public addresses";
+
+/// The folder a `write` glob gives its programs where they are confined:
+/// the glob's folders before its first wildcard (`out/**` gives `out`;
+/// `**/*.rs` the workspace), as the launcher's write roots are made.
+fn write_folder(glob: &str) -> Option<String> {
+    let folders: Vec<&str> = glob
+        .split('/')
+        .take_while(|name| !name.contains(['*', '?', '[', '{']))
+        .collect();
+    // A glob with no wildcard names one file: its folder.
+    let folders = if folders.len() == glob.split('/').count() {
+        &folders[..folders.len().saturating_sub(1)]
+    } else {
+        &folders[..]
+    };
+    (!folders.is_empty()).then(|| folders.join("/"))
+}
+
+/// What an extension's manifest lets it do, in words for the person asked.
+///
+/// - **Where its programs are not confined** (`confined` false: Windows, no
+///   Landlock, the sandbox turned off), and it has any, [`NOT_CONFINED`]
+///   comes before anything else (the full review of step 28: the words
+///   below are of the script's own calls, and a program that is not
+///   confined is bound by none of them). Where they are, it says what
+///   their confinement is: the session's reads, and writes only in the
+///   folders its `write` globs give.
+/// - Then the programs it may run (and whether they may reach the
+///   network), the files it may read and write, the hosts it may reach, what
+///   each event it may hook lets it see, whether it adds to the system
+///   prompt, and its version.
+/// - Last, on a line of its own, its author's description, labelled as the
+///   author's and quoted so that it cannot close the quote, nor pose as the
+///   harness's own sentences.
+///
+/// Every text of the manifest's is shown escaped: as code ([`in_code`])
+/// where it is between backticks, and with what acts unseen escaped
+/// ([`visible`]) everywhere.
+pub(crate) fn in_words(manifest: &Manifest, confined: bool) -> String {
     let listed = |items: &[String]| {
         items
             .iter()
-            .map(|item| format!("`{}`", visible(item)))
+            .map(|item| format!("`{}`", in_code(item)))
             .collect::<Vec<_>>()
             .join(", ")
     };
@@ -333,10 +566,10 @@ pub(crate) fn in_words(manifest: &Manifest) -> String {
         .iter()
         .map(|program| program.as_str().to_owned())
         .collect();
-    words.push(if programs.is_empty() {
-        "It runs no program.".to_owned()
-    } else {
-        format!(
+    if programs.is_empty() {
+        words.push("It runs no program.".to_owned());
+    } else if confined {
+        words.push(format!(
             "It may run {}, {}.",
             listed(&programs),
             if declared.exec_network {
@@ -344,8 +577,32 @@ pub(crate) fn in_words(manifest: &Manifest) -> String {
             } else {
                 "which may not reach the network"
             }
-        )
-    });
+        ));
+        let folders: Vec<String> = declared
+            .write
+            .iter()
+            .map(|glob| {
+                write_folder(glob).map_or_else(
+                    || "the workspace".to_owned(),
+                    |folder| format!("`{}`", in_code(&folder)),
+                )
+            })
+            .collect();
+        words.push(if folders.is_empty() {
+            "Its programs are confined: they read what the session's commands may read, and \
+             write only in the session's own temporary folder."
+                .to_owned()
+        } else {
+            format!(
+                "Its programs are confined: they read what the session's commands may read, and \
+                 write only in {} and the session's own temporary folder.",
+                folders.join(", ")
+            )
+        });
+    } else {
+        words.push(NOT_CONFINED.to_owned());
+        words.push(format!("It may run {}.", listed(&programs)));
+    }
     words.push(if declared.read.is_empty() {
         "It reads no file.".to_owned()
     } else {
@@ -369,12 +626,15 @@ pub(crate) fn in_words(manifest: &Manifest) -> String {
             .net
             .iter()
             .map(|host| match host {
-                HostPattern::Any => "any host".to_owned(),
-                HostPattern::Under(domain) => format!("`*{}`", visible(domain)),
-                HostPattern::Exact(name) => format!("`{}`", visible(name)),
+                HostPattern::Any => ANY_HOST.to_owned(),
+                HostPattern::Under(domain) => format!(
+                    "any host under `{}`",
+                    in_code(domain.trim_start_matches('.'))
+                ),
+                HostPattern::Exact(name) => format!("`{}`", in_code(name)),
             })
             .collect();
-        format!("It may reach {}.", hosts.join(", "))
+        format!("It may reach {}.", hosts.join("; "))
     });
     words.push(if declared.hooks.is_empty() {
         "It hooks no event.".to_owned()
@@ -389,17 +649,19 @@ pub(crate) fn in_words(manifest: &Manifest) -> String {
     if manifest.prompt.is_some() {
         words.push("It adds text of its author's to the system prompt.".to_owned());
     }
-    words.push(format!("Its version is `{}`.", visible(&manifest.version)));
+    words.push(format!("Its version is `{}`.", in_code(&manifest.version)));
+    let mut said = words.join(" ");
+    // Quoted first, then escaped: an escape `visible` writes is never read
+    // as one of the quote's. On a line of its own, so that a typographic
+    // quote in it cannot seem to close it either.
     let description = manifest.description.trim();
     if !description.is_empty() {
-        // Quoted first, then escaped: an escape `visible` writes is never
-        // read as one of the quote's.
-        words.push(format!(
-            "Its author describes it, in their words: \"{}\"",
+        said.push_str(&format!(
+            "\nIts author describes it, in their words:\n\"{}\"",
             visible(&quoted(description))
         ));
     }
-    words.join(" ")
+    said
 }
 
 /// Text put between double quotes it cannot close: a `\`, a `"` and a
@@ -469,6 +731,50 @@ mod pipeline;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What an approval says of an extension's programs follows whether
+    /// they are confined on the system (the full review of step 28): where
+    /// they are not, the maintainers' words before anything else, and no
+    /// claim of a limit the programs do not have; where they are, what
+    /// their confinement is.
+    #[test]
+    fn what_an_extension_may_do_is_said_as_its_programs_are_confined_or_not() {
+        let manifest = Manifest::parse(
+            "api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n[capabilities]\n\
+             exec = [\"gh\"]\nwrite = [\"out/**\", \"**/*.rs\", \"docs/index.md\"]\nnet = \
+             [\"*\", \"*.example.org\"]\n",
+        )
+        .unwrap();
+        let unconfined = in_words(&manifest, false);
+        assert!(unconfined.starts_with(NOT_CONFINED), "{unconfined}");
+        assert!(
+            !unconfined.contains("may not reach the network") && !unconfined.contains("confined:"),
+            "{unconfined}"
+        );
+        let confined = in_words(&manifest, true);
+        assert!(!confined.contains(NOT_CONFINED), "{confined}");
+        assert!(
+            confined.starts_with(
+                "It may run `gh`, which may not reach the network. Its programs are confined: \
+                 they read what the session's commands may read, and write only in `out`, the \
+                 workspace, `docs` and the session's own temporary folder."
+            ),
+            "{confined}"
+        );
+        for said in [&unconfined, &confined] {
+            assert!(
+                said.contains(&format!(
+                    "It may reach {ANY_HOST}; any host under `example.org`."
+                )),
+                "{said}"
+            );
+        }
+        // An extension that runs no program says nothing of confinement.
+        let none =
+            Manifest::parse("api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n")
+                .unwrap();
+        assert!(in_words(&none, false).starts_with("It runs no program."));
+    }
 
     #[cfg(feature = "scripts")]
     #[test]

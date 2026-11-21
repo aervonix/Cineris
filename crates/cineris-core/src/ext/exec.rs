@@ -276,7 +276,8 @@ pub(crate) async fn run(
         effects.push(Effect::Network(NetworkTarget::Any));
     }
     let decision = host.decide(
-        format!("{}: run `{line}`", host.full_name),
+        // The line as code it cannot end (the full review of step 28).
+        format!("{}: run `{}`", host.full_name, cineris_base::in_code(&line)),
         json!({
             "program": named,
             "args": request.args,
