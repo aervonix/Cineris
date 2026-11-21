@@ -316,7 +316,7 @@ mod tests {
     fn every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it() {
         let style = PathStyle::Posix;
         let ws = "/work/app";
-        let places = placed(ws, style, &["/work/app/deploy/keys", "/home/someone/.ssh"]);
+        let places = placed(ws, style, &["/work/app/deploy/keys", "/srv/keys"]);
         let refused = |target: &str| judged(&format!("{ws}/{target}"), ws, &places, style);
         for name in PROTECTED_IN_WORKSPACE {
             assert_eq!(refused(name).as_deref(), Some(name), "{name}");
