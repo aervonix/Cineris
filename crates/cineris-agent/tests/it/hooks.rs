@@ -26,8 +26,7 @@ use serde_json::json;
 use tokio::sync::Notify;
 
 use crate::{
-    Kind, Probe, Rig, Setup, World, assert_valid_history, calls, last_request, lock, says,
-    text_of,
+    Kind, Probe, Rig, Setup, World, assert_valid_history, calls, last_request, lock, says, text_of,
 };
 
 // ------------------------------------------------------------ fake hooks
@@ -314,9 +313,12 @@ fn reason(hook: &str, reason: &str) -> HookReason {
 /// what a hook's filter and a replacement are held to for `tool_call` is by
 /// its name and its `tool` argument.
 fn with_tool_call(world: &World) -> Toolbox {
-    world
-        .toolbox()
-        .with(Probe::new("tool_call", Kind::Plain, &world.log, &world.gates))
+    world.toolbox().with(Probe::new(
+        "tool_call",
+        Kind::Plain,
+        &world.log,
+        &world.gates,
+    ))
 }
 
 // ---------------------------------------------------------- no hook at all
@@ -368,7 +370,11 @@ fn with_no_hook_that_matches_every_point_is_passed_and_nothing_changes() {
     assert_eq!(with_none, without);
     assert_eq!(with_others, without);
     for hooks in [&empty, &elsewhere] {
-        assert_eq!(hooks.matched.load(Ordering::SeqCst), 0, "no hook was listed");
+        assert_eq!(
+            hooks.matched.load(Ordering::SeqCst),
+            0,
+            "no hook was listed"
+        );
         assert!(
             hooks.wanted.load(Ordering::SeqCst) >= 5,
             "every point asked: three calls and two prompts"
@@ -443,7 +449,10 @@ fn a_hook_that_asks_turns_an_allowed_call_into_a_question_with_its_reason() {
     });
     let asked = rig.policy.asked_with();
     assert_eq!(asked.len(), 1, "the allowed call was asked about");
-    let shown = asked[0].hooks.clone().expect("the question shows its hooks");
+    let shown = asked[0]
+        .hooks
+        .clone()
+        .expect("the question shows its hooks");
     assert_eq!(shown.asked, [reason("look-first", "a write outside src")]);
     assert_eq!(shown.replaced, None);
     assert_eq!(world.log.count("end write a"), 1, "allowed, it ran");
@@ -489,7 +498,8 @@ fn a_call_the_policy_denied_or_stopped_is_not_shown_to_hooks() {
         world, rig, hooks, ..
     } = hooked("hook_not_shown", [response, says("Unused.")]);
     let hook = hooks.add(FakeHook::on("all", HookEvent::ToolBefore));
-    rig.policy.decide_for("write", Decision::Deny { reason: None });
+    rig.policy
+        .decide_for("write", Decision::Deny { reason: None });
     rig.policy.decide_for(
         "shell",
         Decision::Stop {
@@ -512,17 +522,21 @@ fn hooks_answers_combine_as_deny_over_ask_over_allow_in_any_order() {
         let response = calls(&[("c1", "write", json!({"path": "a"}))]);
         let Hooked {
             world, rig, hooks, ..
-        } = hooked(&format!("hook_combine_{reversed}"), [response, says("Fine.")]);
+        } = hooked(
+            &format!("hook_combine_{reversed}"),
+            [response, says("Fine.")],
+        );
         hooks.reversed.store(reversed, Ordering::SeqCst);
         // The first is held until the others have been run: they run
         // together, not one after another.
         let held = Gate::new();
-        let first = hooks.add(
-            FakeHook::on("a-allow", HookEvent::ToolBefore).replies([Reply::AtGate(
-                held.clone(),
-                HookOutcome::Answer(json!({"decision": "allow"})),
-            )]),
-        );
+        let first =
+            hooks.add(
+                FakeHook::on("a-allow", HookEvent::ToolBefore).replies([Reply::AtGate(
+                    held.clone(),
+                    HookOutcome::Answer(json!({"decision": "allow"})),
+                )]),
+            );
         let asks = hooks.add(
             FakeHook::on("b-ask", HookEvent::ToolBefore)
                 .replies([answer(json!({"decision": "ask"}))]),
@@ -540,7 +554,11 @@ fn hooks_answers_combine_as_deny_over_ask_over_allow_in_any_order() {
             rig.events.turns(1).await;
         });
         let results = results(&rig);
-        assert_eq!(results[0].outcome, ToolOutcome::Denied, "reversed: {reversed}");
+        assert_eq!(
+            results[0].outcome,
+            ToolOutcome::Denied,
+            "reversed: {reversed}"
+        );
         assert!(text(&results[0]).contains("`c-deny` refused it: no"));
         assert!(rig.policy.asked().is_empty(), "a denial is not asked about");
     }
@@ -575,7 +593,10 @@ fn while_its_hooks_are_asked_a_call_holds_back_what_could_conflict_with_it() {
     });
     let lines = world.log.lines();
     let wrote = lines.iter().position(|line| line == "end write a").unwrap();
-    let read = lines.iter().position(|line| line == "start read a").unwrap();
+    let read = lines
+        .iter()
+        .position(|line| line == "start read a")
+        .unwrap();
     assert!(wrote < read, "{lines:?}");
 }
 
@@ -616,8 +637,16 @@ fn a_call_decided_again_is_shown_to_its_hooks_again_with_the_models_arguments() 
         assert_eq!(input["arguments"], json!({"path": "b"}), "the model's own");
     }
     assert_eq!(world.log.count("end write b"), 1);
-    assert_eq!(world.log.count("start write c"), 0, "the replacement was dropped");
-    assert_eq!(rig.policy.asked(), ["plain q"], "the replacement was never asked about");
+    assert_eq!(
+        world.log.count("start write c"),
+        0,
+        "the replacement was dropped"
+    );
+    assert_eq!(
+        rig.policy.asked(),
+        ["plain q"],
+        "the replacement was never asked about"
+    );
     assert_eq!(results(&rig)[1].replaced, None);
 }
 
@@ -676,19 +705,33 @@ fn a_replacement_is_planned_decided_checked_and_always_put_to_the_user() {
     let Hooked {
         world, rig, hooks, ..
     } = hooked("hook_replaces", [response, says("Done.")]);
-    let hook = hooks.add(FakeHook::on("elsewhere", HookEvent::ToolBefore).replies([answer(
-        json!({"arguments": {"path": "b"}, "reason": "b is the copy"}),
-    )]));
+    let hook = hooks.add(
+        FakeHook::on("elsewhere", HookEvent::ToolBefore).replies([answer(
+            json!({"arguments": {"path": "b"}, "reason": "b is the copy"}),
+        )]),
+    );
     rig.policy.answer_for("write", Verdict::Allow);
     world.run(async {
         rig.prompt("go");
         rig.events.turns(1).await;
     });
-    assert_eq!(hook.inputs().len(), 1, "the hooks were not run on the replacement");
-    assert_eq!(rig.policy.decided(), ["write a", "write b"], "decided again");
+    assert_eq!(
+        hook.inputs().len(),
+        1,
+        "the hooks were not run on the replacement"
+    );
+    assert_eq!(
+        rig.policy.decided(),
+        ["write a", "write b"],
+        "decided again"
+    );
     assert_eq!(hooks.checked(), ["write b"], "checked before it was put");
     let asked = rig.policy.asked_with();
-    assert_eq!(asked.len(), 1, "put to the user though the policy allows it");
+    assert_eq!(
+        asked.len(),
+        1,
+        "put to the user though the policy allows it"
+    );
     assert_eq!(asked[0].summary, "write b");
     assert_eq!(asked[0].arguments, json!({"path": "b"}));
     let replaced = asked[0]
@@ -704,12 +747,18 @@ fn a_replacement_is_planned_decided_checked_and_always_put_to_the_user() {
     assert_eq!(world.log.count("end write b"), 1);
     assert_eq!(world.log.count("start write a"), 0);
     let result = &results(&rig)[0];
-    let item = result.replaced.clone().expect("the item names the replacement");
+    let item = result
+        .replaced
+        .clone()
+        .expect("the item names the replacement");
     assert_eq!(item.hook, "elsewhere");
     assert_eq!(item.arguments, json!({"path": "b"}));
     assert_eq!(item.original, None, "the model's own are in its call");
     let said = text(result);
-    assert!(said.starts_with("The hook `elsewhere` put these arguments"), "{said}");
+    assert!(
+        said.starts_with("The hook `elsewhere` put these arguments"),
+        "{said}"
+    );
     assert!(said.contains(r#"{"path":"b"}"#), "{said}");
     assert!(said.contains("write b ok"), "{said}");
     // The model is told it in the next request.
@@ -754,7 +803,10 @@ fn a_replacement_the_policy_denies_or_stops_stands() {
         let response = calls(&[("c1", "write", json!({"path": "a"}))]);
         let Hooked {
             world, rig, hooks, ..
-        } = hooked(&format!("hook_replace_policy_{stops}"), [response, says("Done.")]);
+        } = hooked(
+            &format!("hook_replace_policy_{stops}"),
+            [response, says("Done.")],
+        );
         hooks.add(
             FakeHook::on("elsewhere", HookEvent::ToolBefore)
                 .replies([answer(json!({"arguments": {"path": "b"}}))]),
@@ -778,7 +830,11 @@ fn a_replacement_the_policy_denies_or_stops_stands() {
         assert_eq!(world.log.count("start write"), 0);
         let result = &results(&rig)[0];
         assert_eq!(result.outcome, ToolOutcome::Denied);
-        assert!(text(result).contains("b is out of bounds"), "{}", text(result));
+        assert!(
+            text(result).contains("b is out of bounds"),
+            "{}",
+            text(result)
+        );
         let outcome = &rig.events.ends()[0].outcome;
         if stops {
             assert_eq!(*outcome, TurnOutcome::Denied);
@@ -823,7 +879,10 @@ fn a_replacement_the_schema_or_its_tool_refuses_is_refused() {
 fn a_tool_call_replacement_may_not_name_another_tool() {
     for (replacement, refused) in [
         (json!({"tool": "tracker/delete", "arguments": {}}), true),
-        (json!({"tool": "tracker/find", "arguments": {"q": "x"}}), false),
+        (
+            json!({"tool": "tracker/find", "arguments": {"q": "x"}}),
+            false,
+        ),
     ] {
         let response = calls(&[(
             "c1",
@@ -832,9 +891,13 @@ fn a_tool_call_replacement_may_not_name_another_tool() {
         )]);
         let Hooked {
             world, rig, hooks, ..
-        } = hooked_with("hook_tool_call", [response, says("Done.")], |world, setup| {
-            setup.toolbox = Some(with_tool_call(world));
-        });
+        } = hooked_with(
+            "hook_tool_call",
+            [response, says("Done.")],
+            |world, setup| {
+                setup.toolbox = Some(with_tool_call(world));
+            },
+        );
         // A filter on the tool a `tool_call` names matches it.
         let hook = hooks.add(
             FakeHook::on("narrow", HookEvent::ToolBefore)
@@ -1041,14 +1104,21 @@ fn a_prompt_a_hook_refuses_ends_its_turn_denied_unrecorded_and_is_given_back() {
         rig.prompt("use the key sk-123");
         rig.events.turns(1).await;
     });
-    assert_eq!(world.provider.requests().len(), 0, "the model was sent nothing");
+    assert_eq!(
+        world.provider.requests().len(),
+        0,
+        "the model was sent nothing"
+    );
     assert!(rig.store.items().is_empty(), "nothing was recorded");
     let end = &rig.events.ends()[0];
     assert_eq!(end.outcome, TurnOutcome::Denied);
     let error = end.error.as_ref().expect("it says why");
     assert_eq!(error.kind, ErrorKind::Permission);
     assert_eq!(error.code, code::PROMPT_DENIED);
-    assert!(error.message.contains("`no-keys`: it names a key"), "{error:?}");
+    assert!(
+        error.message.contains("`no-keys`: it names a key"),
+        "{error:?}"
+    );
     let returned = returned(&rig);
     assert_eq!(returned.len(), 1);
     assert_eq!(returned[0].parts, [Part::text("use the key sk-123")]);
@@ -1105,8 +1175,9 @@ fn a_hooks_context_follows_the_prompt_as_a_notice_naming_the_hook() {
         world, rig, hooks, ..
     } = hooked("hook_context", [says("Seen.")]);
     hooks.add(
-        FakeHook::on("ticket", HookEvent::PromptSubmit)
-            .replies([answer(json!({"context": "Ticket 42 is about the login page."}))]),
+        FakeHook::on("ticket", HookEvent::PromptSubmit).replies([answer(
+            json!({"context": "Ticket 42 is about the login page."}),
+        )]),
     );
     hooks.add(FakeHook::on("quiet", HookEvent::PromptSubmit));
     world.run(async {
@@ -1122,12 +1193,23 @@ fn a_hooks_context_follows_the_prompt_as_a_notice_naming_the_hook() {
         panic!("a notice follows the prompt: {items:?}");
     };
     assert_eq!(notice.source, NoticeSource::Hook);
-    assert!(notice.text.starts_with("The hook `ticket` adds this"), "{}", notice.text);
+    assert!(
+        notice.text.starts_with("The hook `ticket` adds this"),
+        "{}",
+        notice.text
+    );
     assert!(notice.text.ends_with("Ticket 42 is about the login page."));
-    assert_eq!(items.len(), prompt + 3, "the prompt, one notice, the answer");
+    assert_eq!(
+        items.len(),
+        prompt + 3,
+        "the prompt, one notice, the answer"
+    );
     let request = last_request(&world.provider);
     let sent: Vec<String> = request.messages.iter().map(text_of).collect();
-    assert!(sent.iter().any(|text| text.contains("Ticket 42")), "{sent:?}");
+    assert!(
+        sent.iter().any(|text| text.contains("Ticket 42")),
+        "{sent:?}"
+    );
 }
 
 /// A prompt hook that fails or does not answer in its time refuses the
@@ -1237,10 +1319,19 @@ fn hooks_across_the_turns_of_one_session() {
         rig.events.turns(3).await;
     });
 
-    let outcomes: Vec<TurnOutcome> = rig.events.ends().into_iter().map(|end| end.outcome).collect();
+    let outcomes: Vec<TurnOutcome> = rig
+        .events
+        .ends()
+        .into_iter()
+        .map(|end| end.outcome)
+        .collect();
     assert_eq!(
         outcomes,
-        [TurnOutcome::Completed, TurnOutcome::Denied, TurnOutcome::Completed]
+        [
+            TurnOutcome::Completed,
+            TurnOutcome::Denied,
+            TurnOutcome::Completed
+        ]
     );
     assert_eq!(world.log.count("end write copy"), 1);
     assert_eq!(world.log.count("end shell test"), 1);

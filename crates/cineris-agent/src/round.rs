@@ -894,10 +894,7 @@ impl Round {
         }
         // A call that runs with a hook's arguments is not the call the model
         // wrote: a kept run of the model's own is not it, nor the other way.
-        if let Some(replaced) = hooked
-            .as_ref()
-            .and_then(|hooked| hooked.replaced.as_ref())
-        {
+        if let Some(replaced) = hooked.as_ref().and_then(|hooked| hooked.replaced.as_ref()) {
             call.key = format!(
                 "{}\u{0}{}\u{0}{}",
                 call.name, call.arguments, replaced.arguments
@@ -1410,9 +1407,10 @@ impl Round {
         let item = call.item_id.clone();
         // A call whose arguments a hook replaced is asked about with the
         // hook's: they are what would run, and its plan is theirs.
-        let arguments = call
-            .replaced()
-            .map_or_else(|| call.arguments.clone(), |replaced| replaced.arguments.clone());
+        let arguments = call.replaced().map_or_else(
+            || call.arguments.clone(),
+            |replaced| replaced.arguments.clone(),
+        );
         let hooked = call.hooked.clone();
         let name = call.name.clone();
         let cancel = call.cancel.clone();
@@ -1760,7 +1758,8 @@ impl Planning {
         let arguments = self.arguments.clone();
         // Planning may ask the file system where a path leads, which
         // blocks.
-        let planned = run_blocking(&self.cx.cancel, move |_| planner.plan(&arguments, &plan_cx)).await;
+        let planned =
+            run_blocking(&self.cx.cancel, move |_| planner.plan(&arguments, &plan_cx)).await;
         let (result, stat) = match planned {
             Ok(Ok(plan)) => {
                 let decision = self.policy.decide(&PlannedCall {
@@ -1831,9 +1830,11 @@ impl Planning {
             Decision::Allow | Decision::AllowReadOnly | Decision::Ask
         );
         let target = ToolTarget::of(&self.name, &self.arguments);
-        let Some(set) = self.hooks.as_ref().filter(|set| {
-            narrowable && set.hooks.wants(HookEvent::ToolBefore, Some(target))
-        }) else {
+        let Some(set) = self
+            .hooks
+            .as_ref()
+            .filter(|set| narrowable && set.hooks.wants(HookEvent::ToolBefore, Some(target)))
+        else {
             return self.planned(plan, decision);
         };
         let matched = set.hooks.matching(HookEvent::ToolBefore, Some(target));
