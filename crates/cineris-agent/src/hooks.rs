@@ -842,7 +842,11 @@ pub(crate) async fn ask_all(
                         "it did not answer within {} s",
                         limit.as_secs_f64()
                     )),
-                    Some(HookOutcome::Failed(why)) => Err(capped(why)),
+                    // On one line, as a reason is: a failure is written into
+                    // the harness's own sentences (a refusal, a prompt given
+                    // back, a notice), and a script's exception may break a
+                    // line (the re-check of the hook seam's fixes).
+                    Some(HookOutcome::Failed(why)) => Err(on_one_line(capped(why))),
                     Some(HookOutcome::Nothing) => Ok(Answer::default()),
                     Some(HookOutcome::Answer(value)) => read(event, value),
                 };
@@ -1385,6 +1389,13 @@ mod tests {
     /// given back, a hook's context as a notice, the `reasons` lines of a
     /// question hooks put, and the note that begins the result of a call
     /// that ran with a hook's arguments (the review of the hook seam).
+    ///
+    /// **This ties the transcript's example text to the server's wording:**
+    /// those lines follow the functions that write them, and are changed
+    /// only with them, in the same change (`cineris-protocol`'s
+    /// `src/tests.rs` says so too). A change of wording that makes this
+    /// fail changes the transcript's line with it; the line is never
+    /// changed alone.
     #[test]
     fn the_golden_transcripts_hook_lines_are_what_the_loop_writes() {
         const GOLDEN: &str = include_str!("../../cineris-protocol/tests/golden/v1-session.jsonl");
