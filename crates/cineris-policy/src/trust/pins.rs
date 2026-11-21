@@ -44,6 +44,10 @@
 //!   asks about.
 //! - **A missing file pins nothing,** and the first pin makes it, with its
 //!   folder, owner-only.
+//! - **A link at its name is not followed,** as at the registration
+//!   cache's and an extension's values' (since the review of step 28): the
+//!   store is not read through it, so it pins nothing and says why, and no
+//!   change writes through it, so what it names is left as it is.
 //! - **No tool can reach it.** It is in the state directory, which the
 //!   built-in protection closes to every tool, to reading and to writing,
 //!   at every level.
@@ -56,7 +60,9 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use cineris_base::{AtomicWriteError, AtomicWriteOptions, ContentHash, SharedClock, write_atomic};
+use cineris_base::{
+    AtomicWriteError, AtomicWriteOptions, ContentHash, OpenError, SharedClock, write_atomic,
+};
 use cineris_protocol::ids::Timestamp;
 use cineris_protocol::methods::TrustResourceKind;
 use serde::{Deserialize, Serialize};
@@ -295,22 +301,28 @@ impl PinStore {
             path: self.file.display().to_string(),
             source,
         };
-        let size = match std::fs::metadata(&self.file) {
-            Ok(found) => found.len(),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+        // A link at the store's name is not followed: what it names is not
+        // the user's pins, and it is refused, as a folder there is.
+        let (opened, found) = match cineris_base::open_regular(&self.file) {
+            Ok(opened) => opened,
+            Err(OpenError::NotFound) => {
                 return Ok(File {
                     version: VERSION,
                     pins: Vec::new(),
                 });
             }
-            Err(error) => return Err(read_error(error)),
+            Err(OpenError::Io(error)) => return Err(read_error(error)),
+            Err(other) => return Err(read_error(io::Error::other(other.to_string()))),
         };
+        let size = found.len();
         if size > MAX_BYTES {
             return Err(self.not_understood(format!(
                 "it is {size} bytes, more than a pin store could be"
             )));
         }
-        let text = std::fs::read_to_string(&self.file).map_err(read_error)?;
+        let mut text = String::new();
+        io::Read::read_to_string(&mut io::Read::take(opened, MAX_BYTES), &mut text)
+            .map_err(read_error)?;
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let file: File = toml::from_str(text)
             .map_err(|error| self.not_understood(error.message().to_owned()))?;
@@ -342,8 +354,11 @@ impl PinStore {
         let text = toml::to_string(file).map_err(|error| {
             self.not_understood(format!("it could not be written out: {error}"))
         })?;
+        // A link at the store's name is not written through: the write is
+        // refused, and what the link names is left as it is.
         let options = AtomicWriteOptions {
             owner_only: true,
+            follow_links: false,
             ..AtomicWriteOptions::default()
         };
         write_atomic(&self.file, text.as_bytes(), &options, &*self.clock)?;
@@ -381,5 +396,43 @@ mod tests {
         );
         assert!(!is_held(&file));
         assert!(store.pins().unwrap().is_empty());
+    }
+
+    /// A link put at the store's name after it was read, before it is
+    /// written, is not written through: the change fails, and what the link
+    /// names is left as it is.
+    #[test]
+    fn a_link_put_at_the_stores_name_after_its_read_is_not_written_through() {
+        let scratch = Scratch::new();
+        std::fs::create_dir_all(&scratch.0).unwrap();
+        let file = scratch.0.join("pins.toml");
+        let named = scratch.0.join("elsewhere.toml");
+        std::fs::write(&named, "the user's own file").unwrap();
+        let clock: SharedClock = Arc::new(FakeClock::starting_at("2026-11-21T10:00:00Z").unwrap());
+        let store = PinStore::new(&file, clock);
+        let mut put = false;
+        let written = store.update(|pins| {
+            #[cfg(unix)]
+            let made = std::os::unix::fs::symlink(&named, &file);
+            #[cfg(windows)]
+            let made = std::os::windows::fs::symlink_file(&named, &file);
+            match made {
+                Ok(()) => put = true,
+                Err(error) if std::env::var_os("GITHUB_ACTIONS").is_some() => {
+                    panic!("the CI runner cannot make a link: {error}")
+                }
+                Err(error) => println!("skipped: cannot make a link here ({error})"),
+            }
+            pins.pins.clear();
+            ((), true)
+        });
+        if !put {
+            return;
+        }
+        assert!(written.is_err(), "{written:?}");
+        assert_eq!(
+            std::fs::read_to_string(&named).unwrap(),
+            "the user's own file"
+        );
     }
 }

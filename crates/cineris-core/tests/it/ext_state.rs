@@ -868,11 +868,13 @@ fn a_project_file_this_build_did_not_write_is_refused_and_left_as_it_is() {
 }
 
 /// A project's file is the user's alone, written whole: no other user can
-/// open it, and nothing half-written is left beside it.
-#[cfg(unix)]
+/// open it, and nothing half-written is left beside it. On Linux its mode
+/// is `0600` and its folder's `0700`; on Windows its access list allows the
+/// user alone and takes nothing from its folder, which a file written
+/// without being made owner-only would (`cineris_base::private::is_private`
+/// reads either).
 #[test]
 fn a_project_file_is_written_owner_only() {
-    use std::os::unix::fs::PermissionsExt as _;
     let world = World::new(
         "ext_state_private",
         [
@@ -887,10 +889,22 @@ fn a_project_file_is_written_owner_only() {
         front.close().await;
     });
     let file = project_files(&world).remove(0);
-    let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode(&file), 0o600);
-    assert_eq!(mode(file.parent().unwrap()), 0o700);
-    let mut beside: Vec<String> = std::fs::read_dir(file.parent().unwrap())
+    let folder = file.parent().unwrap();
+    for path in [&file, folder, &cineris_base::private::lock_path(&file)] {
+        assert!(
+            cineris_base::private::is_private(path).unwrap(),
+            "{} is open to other users",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&file), 0o600);
+        assert_eq!(mode(folder), 0o700);
+    }
+    let mut beside: Vec<String> = std::fs::read_dir(folder)
         .unwrap()
         .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
         .collect();

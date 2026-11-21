@@ -176,6 +176,11 @@ pub(crate) struct ExtState {
     /// Where the project's values are kept: `None` with no state directory.
     project: Option<ProjectStore>,
     clock: SharedClock,
+    /// What runs once between a project's file being read and written: a
+    /// test's other writer, or a link put in the file's place, meeting the
+    /// change there.
+    #[cfg(test)]
+    between: Mutex<Option<Box<dyn FnOnce() + Send>>>,
 }
 
 impl std::fmt::Debug for ExtState {
@@ -205,6 +210,8 @@ impl ExtState {
             }),
             project,
             clock,
+            #[cfg(test)]
+            between: Mutex::new(None),
         }
     }
 
@@ -370,6 +377,15 @@ impl ExtState {
         };
         let bytes = serde_json::to_vec(&json!({"version": FILE_VERSION, "values": after}))
             .map_err(|error| failed(format!("the values cannot be written: {error}")))?;
+        #[cfg(test)]
+        {
+            let meet = lock(&self.between).take();
+            if let Some(meet) = meet {
+                meet();
+            }
+        }
+        // A link put at the file's name since it was read is not written
+        // through: the write is refused, and what the link names is left.
         let options = AtomicWriteOptions {
             owner_only: true,
             follow_links: false,
@@ -597,7 +613,16 @@ pub(crate) fn parse_file(bytes: &[u8]) -> Result<Values, String> {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    reason = "the tests plant files, links and a second lock in a scratch folder"
+)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use cineris_testkit::Scratch;
+
     use super::*;
 
     #[test]
@@ -731,5 +756,153 @@ mod tests {
         ] {
             assert_eq!(change_of(&record(other)), None);
         }
+    }
+
+    /// The `project` store of a session of the project whose folder of
+    /// values is in `scratch`, as each session has one of its own.
+    fn session_of_the_project(scratch: &Scratch) -> Arc<ExtState> {
+        let clock: SharedClock =
+            Arc::new(cineris_base::FakeClock::starting_at("2026-11-21T10:00:00Z").unwrap());
+        let store = ProjectStore {
+            dir: scratch.join("extensions"),
+            shown: "extensions".to_owned(),
+        };
+        Arc::new(ExtState::new(Some(store), clock, None))
+    }
+
+    /// Whether another holder of the lock of the file at `file` holds it:
+    /// a try of its own, as a second session's would be.
+    fn lock_is_held(file: &Path) -> bool {
+        let Ok(other) = std::fs::File::open(cineris_base::private::lock_path(file)) else {
+            return false;
+        };
+        match other.try_lock() {
+            Ok(()) => false,
+            Err(std::fs::TryLockError::WouldBlock) => true,
+            Err(std::fs::TryLockError::Error(error)) => panic!("{error}"),
+        }
+    }
+
+    /// Makes `link` a link to the file `target`; `false`, said, where links
+    /// cannot be made (a Windows account without the right), except on a CI
+    /// runner, which must make one.
+    fn file_link(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        let made = std::os::unix::fs::symlink(target, link);
+        #[cfg(windows)]
+        let made = std::os::windows::fs::symlink_file(target, link);
+        match made {
+            Ok(()) => true,
+            Err(error) if std::env::var_os("GITHUB_ACTIONS").is_none() => {
+                println!("skipped: cannot make a link here ({error})");
+                false
+            }
+            Err(error) => panic!("the CI runner cannot make a link: {error}"),
+        }
+    }
+
+    /// Two sessions of a project change its file at once, and both values
+    /// are kept: each holds the file's lock from its read to its write. The
+    /// second meets the first between the first's read and its write: it
+    /// finds the lock held, so it goes once the first is done, as its own
+    /// lock would make it. Without the lock it would go there and then, and
+    /// the first would write back what it read before, losing the second's
+    /// value. No thread waits on another: one would wait in the system's
+    /// lock, where a test cannot see it.
+    #[test]
+    fn two_writers_of_a_projects_file_keep_both_values() {
+        let scratch = Scratch::outside("cineris-core-unit", "ext_state_two_writers");
+        // The folder is there, as after any earlier change.
+        scratch.dir("extensions");
+        let first = session_of_the_project(&scratch);
+        let second = session_of_the_project(&scratch);
+        let owner = Owner::new(Source::User, "probe");
+        let (path, _) = first.project_file(&owner).unwrap();
+        let waited = Arc::new(AtomicBool::new(false));
+        *lock(&first.between) = Some(Box::new({
+            let (waited, second, owner, path) = (
+                Arc::clone(&waited),
+                Arc::clone(&second),
+                owner.clone(),
+                path.clone(),
+            );
+            move || {
+                if lock_is_held(&path) {
+                    waited.store(true, Ordering::SeqCst);
+                } else {
+                    second.project_set(&owner, "b", Some(json!(2))).unwrap();
+                }
+            }
+        }));
+        first.project_set(&owner, "a", Some(json!(1))).unwrap();
+        if waited.load(Ordering::SeqCst) {
+            second.project_set(&owner, "b", Some(json!(2))).unwrap();
+        }
+        let values = read_file(&path, "the file").unwrap();
+        assert_eq!(
+            values.get("b"),
+            Some(&json!(2)),
+            "the second's value was lost: {values:?}"
+        );
+        assert_eq!(values.get("a"), Some(&json!(1)), "{values:?}");
+    }
+
+    /// A link at the name of a project's file is neither read through nor
+    /// written through: both calls are refused, and the file it names and
+    /// the link itself are left as they are.
+    #[test]
+    fn a_link_at_a_projects_file_is_neither_read_nor_written_through() {
+        let scratch = Scratch::outside("cineris-core-unit", "ext_state_link");
+        scratch.dir("extensions");
+        let outside = r#"{"version":1,"values":{"p":"from the file it names"}}"#;
+        let named = scratch.file("outside.json", outside);
+        let state = session_of_the_project(&scratch);
+        let owner = Owner::new(Source::User, "probe");
+        let (path, _) = state.project_file(&owner).unwrap();
+        if !file_link(&named, &path) {
+            return;
+        }
+        let read = state.project_get(&owner, "p");
+        assert!(
+            matches!(&read, Err(HostError::Failed(why)) if why.contains("link")),
+            "{read:?}"
+        );
+        let written = state.project_set(&owner, "p", Some(json!("set")));
+        assert!(written.is_err(), "{written:?}");
+        assert_eq!(std::fs::read_to_string(&named).unwrap(), outside);
+        assert!(
+            std::fs::symlink_metadata(&path)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
+
+    /// A link put at a project's file's name after it was read is not
+    /// written through: the write is refused, and the file the link names
+    /// is left as it is.
+    #[test]
+    fn a_link_put_at_a_projects_file_after_its_read_is_not_written_through() {
+        let scratch = Scratch::outside("cineris-core-unit", "ext_state_link_late");
+        scratch.dir("extensions");
+        let named = scratch.file("outside.txt", "the user's own file");
+        if !file_link(&named, &scratch.join("probe-link")) {
+            return;
+        }
+        let state = session_of_the_project(&scratch);
+        let owner = Owner::new(Source::User, "probe");
+        let (path, _) = state.project_file(&owner).unwrap();
+        let put = Arc::new(AtomicBool::new(false));
+        *lock(&state.between) = Some(Box::new({
+            let (put, named, path) = (Arc::clone(&put), named.clone(), path.clone());
+            move || put.store(file_link(&named, &path), Ordering::SeqCst)
+        }));
+        let written = state.project_set(&owner, "p", Some(json!(1)));
+        assert!(put.load(Ordering::SeqCst), "the link was put there");
+        assert!(written.is_err(), "{written:?}");
+        assert_eq!(
+            std::fs::read_to_string(&named).unwrap(),
+            "the user's own file"
+        );
     }
 }
