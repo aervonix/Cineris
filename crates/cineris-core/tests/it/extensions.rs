@@ -353,7 +353,7 @@ fn a_host_writes_question_offers_allow_once_only_and_keeps_no_rule() {
 /// The harness's log at `warn` and above, each event as its fields' text,
 /// for a test on the thread that set it.
 #[derive(Clone, Default)]
-struct Warnings(Arc<std::sync::Mutex<Vec<String>>>);
+pub(crate) struct Warnings(pub(crate) Arc<std::sync::Mutex<Vec<String>>>);
 
 impl tracing::Subscriber for Warnings {
     fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {

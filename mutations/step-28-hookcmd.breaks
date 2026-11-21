@@ -708,3 +708,32 @@ find: network: hook.network
 replace: network: true
 caught-by:
     cineris-core::it hook_wiring::confined::sys_a_hook_reaches_the_network_only_with_network
+
+# --------------------------------------------- round 2: to close it
+
+[break] hooks-with-a-write-root-run-at-once
+rule: Hook starts with a write root run one at a time: they share one baseline of the look at the protected paths.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: Some(self.writing.lock().await)
+replace: None::<tokio::sync::MutexGuard<'_, ()>>
+caught-by:
+    cineris-core::it hook_wiring::hooks_with_a_write_root_run_one_at_a_time
+
+[break] a-write-hook-has-a-write-root-at-read-only
+rule: At `read-only` a hook with `write = true` is given no write root.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: && *self.parts.policy.engine().level() != cineris_protocol::lease::Level::ReadOnly
+replace: && true
+caught-by:
+    cineris-core::it hook_wiring::a_write_hook_has_no_write_root_at_read_only
+
+[break] a-failing-start-observer-is-not-logged
+rule: A failing observer of `session.start`, never waited for, is logged.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: SessionHooks::start
+find: tracing::warn!(hook = %name, %why, "a `session.start` observer failed");
+replace: let _ = (&name, &why);
+caught-by:
+    cineris-core::it hook_wiring::a_failing_observer_of_session_start_is_logged
