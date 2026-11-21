@@ -59,27 +59,35 @@ fn told(front: &Front, words: &str) -> bool {
 }
 
 /// Polls `operation` while the runtime runs every other task as far as it
-/// can: what a test does to show that something does not happen.
-async fn run_beside<F: std::future::Future>(mut operation: std::pin::Pin<&mut F>) {
+/// can: what a test does to show that something does not happen. Whether
+/// the operation finished meanwhile (it is not polled after).
+async fn run_beside<F: std::future::Future>(mut operation: std::pin::Pin<&mut F>) -> bool {
     for _ in 0..64 {
         let mut once = std::pin::pin!(tokio::task::yield_now());
-        std::future::poll_fn(|context| {
-            let _ = operation.as_mut().poll(context);
-            once.as_mut().poll(context)
+        let finished = std::future::poll_fn(|context| {
+            if operation.as_mut().poll(context).is_ready() {
+                return std::task::Poll::Ready(true);
+            }
+            once.as_mut().poll(context).map(|()| false)
         })
         .await;
+        if finished {
+            return true;
+        }
     }
+    false
 }
 
 /// A user's hooks that start nothing, in one world: a rule refuses every
 /// start of this binary, so that each hook is told apart by why it failed.
 ///
 /// The first session, at `supervised`:
-/// - its first turn waits for its `session.start` hook that is waited for
-///   (one the rule refuses, which the user is told of) before the model is
-///   asked;
-/// - a refused entry that lists no `tools` holds `tool.before` for every
-///   call, with why; and a reload that takes it out leaves it in force,
+/// - its first prompt waits for its `session.start` hook that is waited
+///   for (one the rule refuses, which the user is told of) before the loop
+///   has it;
+/// - a refused entry whose `tools` cannot be read holds `tool.before` for
+///   every call (failing closed), with why; and a reload that takes it out
+///   leaves it in force,
 ///   the hooks' configuration taking effect in the next session, so that
 ///   no gate lapses and none is given that the session was not opened
 ///   with;
@@ -102,6 +110,11 @@ async fn run_beside<F: std::future::Future>(mut operation: std::pin::Pin<&mut F>
 ///
 /// The third, at `read-only`: a hook with `write = true` is given no write
 /// root, so its start does not take the baseline.
+///
+/// The fourth closes while an observer of its `session.start` is still at
+/// work (held at the point after it takes the baseline): the close waits
+/// for it, as for every run of the session's hooks (the review of step
+/// 28's second pull request, M1 and M3).
 ///
 /// And an observer of `session.start` that fails, never waited for, is
 /// logged.
@@ -141,12 +154,18 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
             no_start_of_this_binary(),
             [
                 if gate {
-                    refused_entry("gate", "tool.before", "")
+                    refused_entry("gate", "tool.before", "tools = [\"not a name\"]\n")
                 } else {
                     String::new()
                 },
                 entry("ready", "session.start", &fails, ""),
                 entry("watch", "session.start", &fails, "observe = true"),
+                entry(
+                    "scribe",
+                    "session.start",
+                    &fails,
+                    "observe = true\nwrite = true"
+                ),
                 entry(
                     "per-file",
                     "tool.before",
@@ -175,17 +194,18 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
             let hears =
                 cineris_testkit::Hold::new(cineris_core::ext::A_SESSION_START_HOOK_IS_HEARD);
             let front = start(&world, &core).await;
-            // The first turn waits for the `session.start` hook.
-            let mut first = std::pin::pin!(front.turn("look"));
+            // The first prompt waits for the `session.start` hook.
+            let mut first = std::pin::pin!(front.prompt("look"));
             hears.drive_until_reached(first.as_mut()).await;
-            run_beside(first.as_mut()).await;
+            let sent = run_beside(first.as_mut()).await;
             assert!(
-                world.provider.requests().is_empty(),
-                "the first turn did not wait for the `session.start` hook"
+                !sent && world.provider.requests().is_empty(),
+                "the first prompt did not wait for the `session.start` hook"
             );
             hears.release();
             drop(hears);
             first.await;
+            front.turns(1).await;
             assert!(
                 told(&front, "The hook `ready` failed"),
                 "{:?}",
@@ -345,6 +365,17 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
             assert!(matches!(ran, Ok(HookOutcome::Failed(_))), "{ran:?}");
             assert_eq!(writes.arrivals(), 0, "a write root at read-only");
             front.close().await;
+            drop(writes);
+
+            // The close waits for a run still at work.
+            let writes = cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES);
+            let front = start(&world, &core).await;
+            let mut close = std::pin::pin!(front.close());
+            writes.drive_until_reached(close.as_mut()).await;
+            let closed = run_beside(close.as_mut()).await;
+            assert!(!closed, "the close did not wait for a hook still at work");
+            writes.release();
+            close.await;
         });
     });
     let logged = logged.lock().unwrap();
@@ -730,8 +761,19 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
         world.timer.sleeping_for(Duration::from_secs(600)).await;
         let lingering = lingers.started();
         front.turn("hello").await;
-        let notice = front
-            .items()
+        let items = front.items();
+        let at = |notice: bool| {
+            items.iter().position(|item| match item {
+                Item::Notice(_) => notice,
+                Item::UserMessage(_) => !notice,
+                _ => false,
+            })
+        };
+        assert!(
+            at(true) < at(false),
+            "the first prompt went before the `session.start` hook: {items:?}"
+        );
+        let notice = items
             .into_iter()
             .find_map(|item| match item {
                 Item::Notice(notice) => Some(notice.text),

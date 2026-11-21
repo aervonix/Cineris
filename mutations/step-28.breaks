@@ -6904,14 +6904,13 @@ caught-by:
     cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
 
 [break] the-close-waits-for-no-hook
-rule: The close stops what of the session's hooks still runs, and waits for every run, before the `session.end` hooks and the close's look (M1).
-os: linux
+rule: The close stops what of the session's hooks still runs, and waits for every run, before the `session.end` hooks and the close's look (M1, M3).
 file: crates/cineris-core/src/core.rs
 in: Core::end
 find: live.command_hooks.close().await;
 replace:
 caught-by:
-    cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-hook-of-a-stopped-turn-is-a-stop-of-its-own
 rule: A hook not started because its turn is stopped has failed, and is no stop of its own: it is not told as one, and holds back no second prompt (M2).
@@ -6997,15 +6996,16 @@ caught-by:
     cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
 
 [break] the-first-turn-does-not-wait-for-session-start
-rule: The first turn waits for the `session.start` hooks that are waited for.
+rule: The first prompt waits for the `session.start` hooks that are waited for. Caught where a `session.start` hook's stop must refuse the first prompt: without the wait, the prompt reaches the loop while the hook still runs. The tests that hold the hook show the wait, but cannot show its absence without a wait of real time, as the prompt's own looks at the files take some.
+os: linux
 file: crates/cineris-core/src/core.rs
 find: live.command_hooks.started().await;
 replace:
 caught-by:
-    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+    cineris-core::it hook_wiring::confined::sys_a_hooks_stop_outside_a_turn_is_told_and_refuses_the_next_prompt
 
 [break] a-hook-of-no-tools-is-on-no-call
-rule: A hook that lists no `tools` is on every call.
+rule: A refused entry whose `tools` cannot be read is on every call: it fails closed.
 file: crates/cineris-core/src/ext/hook_points.rs
 in: on_target
 find: (None, Some(_)) => true,
