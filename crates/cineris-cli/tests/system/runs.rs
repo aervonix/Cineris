@@ -202,6 +202,66 @@ fn sys_exit_4_5_and_8_for_the_provider_the_model_and_the_context() {
     );
 }
 
+/// Under `--fail-on-denial`, an extension's host call nobody can answer
+/// stops its turn from inside its tool's run. When that call was the last
+/// of its response the model is not asked again: the turn itself ends
+/// `denied`, and the outcome and exit code 6 agree with it.
+#[test]
+fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_denial() {
+    let machine = Machine::new("sys_exit_6_host_call");
+    let folder = machine.workspace.join(".cineris/extensions/probe");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("extension.toml"),
+        "api = 1\nname = \"probe\"\nversion = \"1\"\ndescription = \"A test extension\"\nmain = \
+         \"main.js\"\n[capabilities]\nwrite = [\".github/**\"]\n",
+    )
+    .unwrap();
+    // A script that catches the refusal and would go on: the stop ends its
+    // call all the same.
+    std::fs::write(
+        folder.join("main.js"),
+        "cineris.tool({ name: 'ci', run: async () => { try { await \
+         cineris.fs.write('.github/workflows/ci.yml', 'on: push\\n') } catch (e) { } return \
+         'went on' } });\n",
+    )
+    .unwrap();
+    machine
+        .run(&["permissions", "trust", "--with-extensions"])
+        .expect_code(0);
+
+    machine.reply_tool(
+        "toolu_1",
+        "tool_call",
+        &json!({"tool": "probe/ci", "arguments": {}}),
+    );
+    // What the model would say if it were asked again.
+    machine.reply_text("Done anyway.");
+    let run = machine.run(&[
+        "-p",
+        "set up CI",
+        "--output",
+        "json",
+        "--fail-on-denial",
+        "--allow",
+        "ext probe/*",
+    ]);
+    let record = run.expect_code(6).json();
+    assert_eq!(record["outcome"], "denied", "{record}");
+    assert_eq!(record["error"]["code"], "permission_denied", "{record}");
+    assert_eq!(
+        record["permission_denials"][0]["tool"], "probe/ci",
+        "{record}"
+    );
+    assert_eq!(
+        machine.server.requests().len(),
+        1,
+        "the model was asked again: {record}"
+    );
+    assert_eq!(record["requests"], 1, "{record}");
+    assert!(!machine.workspace.join(".github/workflows/ci.yml").exists());
+}
+
 #[test]
 fn sys_exit_6_with_fail_on_denial_and_a_denial_listed_without_it() {
     let machine = Machine::new("sys_exit_6");

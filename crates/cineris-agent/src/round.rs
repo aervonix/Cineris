@@ -29,7 +29,10 @@
 //! - once the policy has said to stop the turn, nothing the model wrote
 //!   after the refused call starts, and nothing more is asked. A call it
 //!   wrote before the refused one, and that was allowed, still starts:
-//!   the turn stops at the refused call, in the model's order;
+//!   the turn stops at the refused call, in the model's order. A call
+//!   whose run stopped the turn (its result is marked so,
+//!   [`ToolResult::stopping_turn`]) stops it in the same way, at that
+//!   call;
 //! - a call waits for every call it conflicts with that is running, a
 //!   later one too: a call decided again may be scheduled otherwise than
 //!   it was at first.
@@ -236,6 +239,9 @@ struct Outcome {
     queued: Duration,
     /// How long it waited for the user's answer.
     approval: Duration,
+    /// Why its run stopped the turn, if it did
+    /// ([`ToolResult::turn_stop`]).
+    turn_stop: Option<String>,
 }
 
 /// When things happened to a call, on the monotonic clock: what its time
@@ -366,7 +372,7 @@ pub(crate) struct Round {
     draining: Vec<Draining>,
     /// The open question: the call's token, and the task that asks.
     asking: Option<(u64, AbortHandle)>,
-    /// The stop, once the policy has stopped the turn.
+    /// The stop, once the policy, or a call's run, has stopped the turn.
     stopped: Option<Stopped>,
     /// How many calls that may have changed the file system have finished:
     /// what a decision is dated by ([`Dated`]).
@@ -374,7 +380,9 @@ pub(crate) struct Round {
     next_token: u64,
 }
 
-/// The policy stopped the turn over a call.
+/// The turn was stopped at a call: the policy refused it and said to
+/// stop, or its run stopped the turn (its result is marked so,
+/// [`ToolResult::stopping_turn`]).
 ///
 /// The turn stops *at that call*, in the model's order, as it would if the
 /// calls ran one after another: a call the model wrote before it, and that
@@ -382,10 +390,14 @@ pub(crate) struct Round {
 /// stopped turn did does not depend on which answer arrived first.
 struct Stopped {
     /// The block index of the call: the first one in the model's order,
-    /// if the policy stopped the turn over several.
+    /// if the turn was stopped at several.
     at: u32,
     /// Why, from the first stop to arrive.
     reason: String,
+    /// Whether the first stop to arrive came from a call's run rather than
+    /// from the policy: what a call it keeps from running is told
+    /// ([`Round::kept_from_running`]).
+    by_a_run: bool,
 }
 
 /// The text of the result of a call that never ran because the turn was
@@ -434,8 +446,9 @@ impl Round {
         }
     }
 
-    /// Why the policy stopped the turn, if it did: the turn then ends with
-    /// the outcome `denied` once the round is settled and recorded.
+    /// Why the turn was stopped, by the policy or by a call's run, if it
+    /// was: the turn then ends with the outcome `denied` once the round is
+    /// settled and recorded, and the model is not asked again.
     pub(crate) fn stopped(&self) -> Option<&str> {
         self.stopped.as_ref().map(|stopped| stopped.reason.as_str())
     }
@@ -816,6 +829,11 @@ impl Round {
         self.emit_started(call);
         if let CallState::Done(outcome) = &call.state {
             self.emit_completed(&outcome.item);
+            // A kept run that stopped the turn stops it when it is used.
+            if let Some(reason) = outcome.turn_stop.clone() {
+                let index = call.index;
+                self.stop_at(index, reason, true);
+            }
         }
     }
 
@@ -884,10 +902,13 @@ impl Round {
             return;
         }
         let index = self.calls[position].index;
-        let stopped_at = self.stopped.as_ref().map(|stopped| stopped.at);
-        if stopped_at.is_some_and(|at| index > at) {
+        if self
+            .stopped
+            .as_ref()
+            .is_some_and(|stopped| index > stopped.at)
+        {
             // The model wrote this call after the one the turn stopped at.
-            self.not_run(position, NOT_RUN_STOPPED);
+            self.kept_from_running(position);
             return;
         }
         match decision {
@@ -928,28 +949,60 @@ impl Round {
             position,
             format!("This call was not allowed to run, and the turn was stopped. Reason: {reason}"),
         );
+        self.stop_at(at, reason, false);
+    }
+
+    /// The turn stops at the call of block `at`: the policy refused it
+    /// ([`stop`](Self::stop)), or its run stopped the turn and the call has
+    /// its own result ([`finished`](Self::finished)). The rest is the same
+    /// for both: what the model wrote after it does not start, and the open
+    /// question is withdrawn.
+    fn stop_at(&mut self, at: u32, reason: String, by_a_run: bool) {
         let at = match &mut self.stopped {
             Some(stopped) => {
                 stopped.at = stopped.at.min(at);
                 stopped.at
             }
             None => {
-                self.stopped = Some(Stopped { at, reason });
+                self.stopped = Some(Stopped {
+                    at,
+                    reason,
+                    by_a_run,
+                });
                 at
             }
         };
         if let Some((token, question)) = self.asking.take() {
             question.abort();
             if let Some(asked) = self.position(token) {
-                self.not_run(asked, NOT_RUN_STOPPED);
+                self.kept_from_running(asked);
             }
         }
         for other in 0..self.calls.len() {
             if matches!(self.calls[other].state, CallState::Ready(_))
                 && self.calls[other].index > at
             {
-                self.not_run(other, NOT_RUN_STOPPED);
+                self.kept_from_running(other);
             }
+        }
+    }
+
+    /// Gives the call at `position` its result for not running because the
+    /// turn was stopped. After the policy's stop of another call, it says
+    /// it did not run. After a call's run stopped the turn, it is the
+    /// denial the policy gives every call of a stopped turn when it decides
+    /// it again: the same result whichever of the two reaches the call
+    /// first.
+    fn kept_from_running(&mut self, position: usize) {
+        match &self.stopped {
+            Some(stopped) if stopped.by_a_run => {
+                let text = format!(
+                    "This call was not allowed to run, and the turn was stopped. Reason: {}",
+                    stopped.reason
+                );
+                self.deny(position, text);
+            }
+            _ => self.not_run(position, NOT_RUN_STOPPED),
         }
     }
 
@@ -1028,6 +1081,7 @@ impl Round {
         stat: ToolStatOutcome,
     ) {
         debug_assert!(result.is_bounded(), "every result passes the output policy");
+        let turn_stop = result.turn_stop().map(str::to_owned);
         if self
             .asking
             .as_ref()
@@ -1067,13 +1121,20 @@ impl Round {
                 call.times.approval += now.saturating_sub(asked);
             }
             let (queued, approval) = (call.times.queued(), call.times.approval);
+            let index = call.index;
             call.state = CallState::Done(Outcome {
                 item,
                 stat,
                 duration,
                 queued,
                 approval,
+                turn_stop: turn_stop.clone(),
             });
+            // Its run stopped the turn: the round ends here, as at a call
+            // the policy stopped, and the model is not asked again.
+            if let Some(reason) = turn_stop {
+                self.stop_at(index, reason, true);
+            }
         } else if let Some(position) = self.cache.iter().position(|cached| cached.token == token) {
             // A kept run finished. Nobody is shown it unless the next
             // response asks for the same call, whose id then replaces the
@@ -1092,6 +1153,7 @@ impl Round {
                 duration,
                 queued: Duration::ZERO,
                 approval: Duration::ZERO,
+                turn_stop,
             });
         } else if let Some(position) = self.draining.iter().position(|run| run.token == token) {
             let run = self.draining.swap_remove(position);
@@ -1270,7 +1332,7 @@ impl Round {
             match &self.calls[position].state {
                 CallState::Pending if self.calls[position].footprint.is_none() => return,
                 CallState::NeedsAnswer(_) if self.stopped.is_some() => {
-                    self.not_run(position, NOT_RUN_STOPPED);
+                    self.kept_from_running(position);
                 }
                 CallState::NeedsAnswer(_) => {
                     self.ask(position);

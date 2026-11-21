@@ -87,8 +87,8 @@ caught-by:
 rule: Once the policy has said to stop the turn, a call the model wrote after the refused one does not run, even if it is planned after the stop.
 file: crates/cineris-agent/src/round.rs
 in: Round::planned
-find: stopped_at.is_some_and(|at| index > at)
-replace: stopped_at.is_some_and(|at| index < at)
+find: self.stopped.as_ref().is_some_and(|stopped| index > stopped.at)
+replace: self.stopped.as_ref().is_some_and(|stopped| index < stopped.at)
 caught-by:
     denials::a_stop_while_the_response_is_arriving_lets_nothing_more_start
 

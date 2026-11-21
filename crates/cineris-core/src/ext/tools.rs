@@ -215,11 +215,14 @@ impl LoadedExtension {
             Err(CallError::Cancelled) => {
                 ToolResult::interrupted(format!("`{full_name}` was interrupted."))
             }
-            // A host call found the turn stopped: the script's call ended
-            // there, and nothing more of it ran.
+            // A host call found the turn stopped, or stopped it: the
+            // script's call ended there, and nothing more of it ran. The
+            // result is marked as the stop, so that the round ends at this
+            // call, even when it was the last of its response.
             Err(CallError::Stopped(reason)) => ToolResult::denied(format!(
                 "`{full_name}` was stopped, and the turn with it. Reason: {reason}"
-            )),
+            ))
+            .stopping_turn(reason),
             Err(error) => ToolResult::error(format!("`{full_name}` failed: {error}")),
         }
     }

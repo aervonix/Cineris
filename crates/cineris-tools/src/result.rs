@@ -28,6 +28,16 @@ pub struct ToolResult {
     payload: Option<Json>,
     artifacts: Vec<ArtifactRef>,
     bounded: bool,
+    /// Why the call's run stopped its turn, when it did
+    /// ([`stopping_turn`](Self::stopping_turn)). Behind a box: a result is
+    /// the error of many functions, and is kept small, and a stop is rare.
+    turn_stop: Option<Box<TurnStop>>,
+}
+
+/// Why a call's run stopped its turn ([`ToolResult::stopping_turn`]).
+#[derive(Debug, Clone, PartialEq)]
+struct TurnStop {
+    reason: String,
 }
 
 impl ToolResult {
@@ -38,6 +48,7 @@ impl ToolResult {
             payload: None,
             artifacts: Vec::new(),
             bounded: false,
+            turn_stop: None,
         }
     }
 
@@ -88,6 +99,31 @@ impl ToolResult {
     pub fn with_artifact(mut self, artifact: ArtifactRef) -> Self {
         self.artifacts.push(artifact);
         self
+    }
+
+    /// Marks the result as one whose run stopped its turn, and why: a
+    /// confined command that changed protected paths, or an extension's
+    /// host call answered with a stop. The loop ends the round on it as it
+    /// does on the policy's stop of a call: no call the model wrote after
+    /// this one starts, the model is not asked again, and the turn ends
+    /// `denied` (`docs/architecture/03-agent-loop.md`, "Tool rounds").
+    ///
+    /// The mark is kept by everything that adds to a result and by the
+    /// output policy, whatever the result's outcome: a command that changed
+    /// a protected path may itself have succeeded.
+    #[must_use]
+    pub fn stopping_turn(mut self, reason: impl Into<String>) -> Self {
+        self.turn_stop = Some(Box::new(TurnStop {
+            reason: reason.into(),
+        }));
+        self
+    }
+
+    /// Why the call's run stopped its turn, if it did
+    /// ([`stopping_turn`](Self::stopping_turn)).
+    #[must_use]
+    pub fn turn_stop(&self) -> Option<&str> {
+        self.turn_stop.as_ref().map(|stop| stop.reason.as_str())
     }
 
     /// How the call ended.
@@ -250,6 +286,18 @@ mod tests {
         assert_eq!(content.len(), 2);
         assert!(payload.is_some());
         assert!(artifacts.is_empty());
+    }
+
+    #[test]
+    fn a_stop_mark_is_kept_by_what_adds_to_a_result() {
+        assert_eq!(ToolResult::success("ran").turn_stop(), None);
+        let marked = ToolResult::success("ran")
+            .stopping_turn("a protected path changed")
+            .with_part(Part::text("[a note]"))
+            .with_payload(serde_json::json!({"exit": 0}))
+            .bounded_with(vec![Part::text("cut")], None);
+        assert_eq!(marked.turn_stop(), Some("a protected path changed"));
+        assert_eq!(marked.outcome(), &ToolOutcome::Success);
     }
 
     #[test]
