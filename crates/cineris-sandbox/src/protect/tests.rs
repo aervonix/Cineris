@@ -640,3 +640,250 @@ fn a_cargo_link_leading_outside_is_not_followed() {
         "the look followed the link outside the workspace: {paths:?}"
     );
 }
+
+/// Putting back what a confined start changed (the third security fix):
+/// each path is made as the look before found it, never through a link, and
+/// a look taken after says what is left. Links are planted at the path, at
+/// a directory on its way, above it, and swapped in while it is put back.
+#[cfg(target_os = "linux")]
+mod putting_back {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    use super::*;
+
+    fn mode(path: &Path) -> u32 {
+        fs::symlink_metadata(path).unwrap().permissions().mode() & 0o7777
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+    }
+
+    /// Looks, makes `change`, and puts back what changed: what it was
+    /// given, and what it did.
+    fn put_back_after(ws: &Path, change: impl FnOnce(&Path)) -> (Vec<Changed>, PutBack) {
+        let watch = unhurried_watch(ws);
+        let before = watch.take();
+        assert!(before.is_complete());
+        change(ws);
+        let (changed, _) = watch.changes_since(&before);
+        assert!(!changed.is_empty(), "the change was not found");
+        let put = watch.put_back(&before, &changed);
+        (changed, put)
+    }
+
+    /// The names in a directory, which a put-back must leave nothing of its
+    /// own in.
+    fn names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn what_a_start_changed_is_made_as_it_was() {
+        let scratch = workspace("put_back");
+        let ws = scratch.join("ws");
+        set_mode(&ws.join(".git/hooks/pre-commit.sample"), 0o644);
+        let (changed, put) = put_back_after(&ws, |ws| {
+            fs::write(ws.join(".git/config"), "[filter \"x\"]\n\tclean = evil\n").unwrap();
+            fs::write(ws.join(".git/hooks/pre-commit"), "#!/bin/sh\nevil\n").unwrap();
+            set_mode(&ws.join(".git/hooks/pre-commit"), 0o755);
+            // A change of mode alone.
+            set_mode(&ws.join(".git/hooks/pre-commit.sample"), 0o755);
+            fs::create_dir_all(ws.join(".github/workflows")).unwrap();
+            fs::write(ws.join(".github/workflows/ci.yml"), "on: push\n").unwrap();
+            fs::create_dir_all(ws.join(".git/info")).unwrap();
+            fs::write(ws.join(".git/info/attributes"), "* filter=x\n").unwrap();
+        });
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        assert_eq!(put.restored.len(), changed.len(), "{:?}", put.restored);
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/config")).unwrap(),
+            "[core]\n"
+        );
+        assert!(!ws.join(".git/hooks/pre-commit").exists());
+        assert_eq!(mode(&ws.join(".git/hooks/pre-commit.sample")), 0o644);
+        assert!(!ws.join(".github/workflows").exists());
+        assert!(!ws.join(".git/info").exists());
+        // Nothing of the put-back's own is left beside what it wrote.
+        assert_eq!(names(&ws.join(".git/hooks")), ["pre-commit.sample"]);
+        assert!(
+            !names(&ws.join(".git"))
+                .iter()
+                .any(|name| name.contains("cineris")),
+            "{:?}",
+            names(&ws.join(".git"))
+        );
+    }
+
+    #[test]
+    fn a_file_and_a_directory_that_went_are_made_again() {
+        let scratch = workspace("put_back_gone");
+        let ws = scratch.join("ws");
+        set_mode(&ws.join(".git/hooks"), 0o750);
+        set_mode(&ws.join(".git/config"), 0o640);
+        let (_, put) = put_back_after(&ws, |ws| {
+            fs::remove_dir_all(ws.join(".git/hooks")).unwrap();
+            fs::remove_file(ws.join(".git/config")).unwrap();
+        });
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/config")).unwrap(),
+            "[core]\n"
+        );
+        assert_eq!(mode(&ws.join(".git/config")), 0o640);
+        assert_eq!(mode(&ws.join(".git/hooks")), 0o750);
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/hooks/pre-commit.sample")).unwrap(),
+            "#!/bin/sh\n"
+        );
+    }
+
+    /// A link put at a protected file, at a directory on the way to one, or
+    /// where nothing was, is removed itself: what it leads to, outside the
+    /// workspace, is never written, and the path is made again.
+    #[test]
+    fn a_link_put_at_a_protected_path_is_removed_and_never_followed() {
+        let scratch = workspace("put_back_links");
+        let ws = scratch.join("ws");
+        let outside = scratch.join("outside");
+        scratch.file("outside/config", "outside\n");
+        scratch.file("outside/hooks/pre-commit", "outside hook\n");
+        let (_, put) = put_back_after(&ws, |ws| {
+            fs::remove_file(ws.join(".git/config")).unwrap();
+            symlink(outside.join("config"), ws.join(".git/config")).unwrap();
+            fs::remove_dir_all(ws.join(".git/hooks")).unwrap();
+            symlink(outside.join("hooks"), ws.join(".git/hooks")).unwrap();
+            symlink(outside.join("nowhere"), ws.join(".cineris")).unwrap();
+        });
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        let config = fs::symlink_metadata(ws.join(".git/config")).unwrap();
+        assert!(config.is_file(), "{config:?}");
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/config")).unwrap(),
+            "[core]\n"
+        );
+        assert!(
+            fs::symlink_metadata(ws.join(".git/hooks"))
+                .unwrap()
+                .is_dir()
+        );
+        assert_eq!(names(&ws.join(".git/hooks")), ["pre-commit.sample"]);
+        assert!(fs::symlink_metadata(ws.join(".cineris")).is_err());
+        // What the links led to is as it was.
+        assert_eq!(
+            fs::read_to_string(outside.join("config")).unwrap(),
+            "outside\n"
+        );
+        assert_eq!(names(&outside.join("hooks")), ["pre-commit"]);
+        assert_eq!(
+            fs::read_to_string(outside.join("hooks/pre-commit")).unwrap(),
+            "outside hook\n"
+        );
+        assert!(!outside.join("nowhere").exists());
+    }
+
+    /// A path whose directory, above the protected one, is a link now
+    /// (`.git` itself, to a folder outside with a configuration of its own)
+    /// is not put back: nothing is written where the link leads, and the
+    /// path is left, to be put back by hand.
+    #[test]
+    fn a_path_whose_directory_is_a_link_now_is_left_alone() {
+        let scratch = workspace("put_back_through");
+        let ws = scratch.join("ws");
+        let planted = "[filter \"x\"]\n\tclean = evil\n";
+        scratch.file("outside/git/config", planted);
+        let (_, put) = put_back_after(&ws, |ws| {
+            fs::rename(ws.join(".git"), scratch.join("moved-git")).unwrap();
+            symlink(scratch.join("outside/git"), ws.join(".git")).unwrap();
+        });
+        assert_eq!(
+            fs::read_to_string(scratch.join("outside/git/config")).unwrap(),
+            planted
+        );
+        assert_eq!(names(&scratch.join("outside/git")), ["config"]);
+        assert!(
+            put.left
+                .iter()
+                .any(|one| one.path == ws.join(".git/config")),
+            "{:?}",
+            put.left
+        );
+    }
+
+    /// The directory a path lies in is swapped for a link to a folder
+    /// outside after it was opened and before the path is written: the
+    /// write goes to the directory that was opened, never where the link
+    /// leads, and the path, reached through a link now, is left.
+    #[test]
+    fn a_directory_swapped_for_a_link_while_it_is_put_back_takes_nothing_elsewhere() {
+        let scratch = workspace("put_back_race_dir");
+        let ws = scratch.join("ws");
+        let outside = scratch.dir("outside");
+        let watch = unhurried_watch(&ws);
+        let before = watch.take();
+        fs::write(ws.join(".git/hooks/pre-commit.sample"), "evil\n").unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let hold = cineris_testkit::Hold::new(PUTTING_BACK);
+        let putting = std::thread::spawn({
+            let watch = watch.clone();
+            move || watch.put_back(&before, &changed)
+        });
+        hold.reach();
+        fs::rename(ws.join(".git/hooks"), ws.join(".git/hooks-moved")).unwrap();
+        symlink(&outside, ws.join(".git/hooks")).unwrap();
+        hold.release();
+        let put = putting.join().unwrap();
+        assert!(
+            names(&outside).is_empty(),
+            "the write went through the link: {:?}",
+            names(&outside)
+        );
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/hooks-moved/pre-commit.sample")).unwrap(),
+            "#!/bin/sh\n"
+        );
+        assert!(!put.left.is_empty(), "{:?}", put.restored);
+    }
+
+    /// The file itself is swapped for a link to a file outside after its
+    /// directory was opened: the link is replaced, and what it led to is
+    /// not written.
+    #[test]
+    fn a_file_swapped_for_a_link_while_it_is_put_back_is_replaced() {
+        let scratch = workspace("put_back_race_file");
+        let ws = scratch.join("ws");
+        let target = scratch.file("outside/target", "outside\n");
+        let watch = unhurried_watch(&ws);
+        let before = watch.take();
+        fs::write(ws.join(".git/config"), "[filter \"x\"]\n\tclean = evil\n").unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let hold = cineris_testkit::Hold::new(PUTTING_BACK);
+        let putting = std::thread::spawn({
+            let watch = watch.clone();
+            move || watch.put_back(&before, &changed)
+        });
+        hold.reach();
+        fs::remove_file(ws.join(".git/config")).unwrap();
+        symlink(&target, ws.join(".git/config")).unwrap();
+        hold.release();
+        let put = putting.join().unwrap();
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        assert!(
+            fs::symlink_metadata(ws.join(".git/config"))
+                .unwrap()
+                .is_file()
+        );
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/config")).unwrap(),
+            "[core]\n"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "outside\n");
+    }
+}

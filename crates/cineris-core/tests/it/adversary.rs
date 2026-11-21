@@ -369,12 +369,19 @@ fn sys_an_adversarial_command_reaches_only_what_it_may() {
         return;
     };
     assert!(reached.nothing_outside(), "{reached:#?}\n{result}");
+    // The hook it wrote is found, and put back at once (since the third
+    // security fix): by the end of the turn nothing protected was reached.
     assert_eq!(
         reached.protected,
-        [".git/hooks/pre-commit (made)"],
+        Vec::<String>::new(),
         "{reached:#?}\n{result}"
     );
-    assert!(result.contains("changed protected paths"), "{result}");
+    assert!(
+        result.contains("changed protected paths")
+            && result.contains("`.git/hooks/pre-commit` (created)")
+            && result.contains("They were put back"),
+        "{result}"
+    );
     // The command was the last call of its response, and the turn ends at
     // it: `denied`, without the model being asked again.
     assert_eq!(outcome, TurnOutcome::Denied, "{result}");

@@ -5,11 +5,11 @@
 # because a confined command could have planted them.
 
 [break] harness-git-not-confined
-rule: While commands are confined, the harness's own git runs inside the sandbox, so a program a confined command named in the repository's configuration cannot run unconfined.
+rule: While commands are confined (and, since the third security fix, wherever the sandbox enforces, at every level), the harness's own git runs inside the sandbox, so a program a confined command named in the repository's configuration cannot run unconfined.
 file: crates/cineris-core/src/sandbox.rs
 in: SessionSandbox::start_git
-find: self.reader.as_ref().filter(|_| self.confines())
-replace: self.reader.as_ref().filter(|_| false)
+find: match &self.reader {
+replace: match &Option::<SandboxLauncher>::None {
 packages: cineris-core
 caught-by:
     cineris-core::it harness_git::sys_a_filter_a_confined_command_plants_runs_inside_the_sandbox

@@ -88,6 +88,47 @@ pub const GIT_ENV: [(&str, &str); 3] = [
     ("GIT_NO_LAZY_FETCH", "1"),
 ];
 
+/// The variables that tell git where a repository is, its index, its
+/// objects and its command-line settings, which the harness's own git is
+/// never given: what `git rev-parse --local-env-vars` lists (git's own
+/// `local_repo_env`, which git takes out itself before it runs a command in
+/// another repository, a submodule's). A harness started inside a git hook,
+/// a `rebase --exec` or a `submodule foreach` inherits them from that git,
+/// and its own git would then answer about that repository and index, not
+/// the one the harness found by walking up from the workspace (the harness's
+/// own processes' fixes; the third security fix). The user's own settings,
+/// `GIT_CONFIG_GLOBAL`, `GIT_CONFIG_SYSTEM`, `GIT_CONFIG_NOSYSTEM`, `HOME` and
+/// `XDG_CONFIG_HOME`, are not among them and pass as they came.
+///
+/// Written here, not asked of git at every start, which would cost a process
+/// before each one; `git::tests::sys_the_local_variables_are_the_ones_git_lists`
+/// compares it with the installed git's list.
+pub const LOCAL_ENV_VARS: [&str; 15] = [
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CONFIG",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_IMPLICIT_WORK_TREE",
+    "GIT_GRAFT_FILE",
+    "GIT_INDEX_FILE",
+    "GIT_NO_REPLACE_OBJECTS",
+    "GIT_REPLACE_REF_BASE",
+    "GIT_PREFIX",
+    "GIT_SHALLOW_FILE",
+    "GIT_COMMON_DIR",
+];
+
+/// Whether `name` is one of [`LOCAL_ENV_VARS`], by the system's rule for a
+/// variable's name (case folded on Windows).
+fn is_local(name: &std::ffi::OsStr) -> bool {
+    LOCAL_ENV_VARS
+        .iter()
+        .any(|local| crate::child_env::is_named(name, local, cfg!(windows)))
+}
+
 /// The setting that turns git's file-system monitor off, as a name and a
 /// value: for a command the harness does not start itself and so cannot
 /// give [`GIT_HARDENING`] (a shell command the model wrote), where it goes
@@ -207,7 +248,8 @@ pub enum StartError {
 /// environment is built, not inherited: the confinement's
 /// ([`Confinement::inherited`]) without the providers' key variables and
 /// with a `PATH` of absolute directories only
-/// ([`crate::child_env::for_harness`]), then [`GIT_ENV`]. A program git
+/// ([`crate::child_env::for_harness`]), without the variables that name
+/// another repository's place ([`LOCAL_ENV_VARS`]), then [`GIT_ENV`]. A program git
 /// starts in turn (a filter a repository's configuration names) is given
 /// the same, so it never sees a key, and never finds a workspace file by a
 /// bare name through an empty or relative `PATH` entry. A launcher that
@@ -233,12 +275,15 @@ pub fn start(
     let started = confinement
         .start(&git, all)
         .map_err(StartError::NotConfined)?;
-    let env = crate::child_env::for_harness(
+    let mut env = crate::child_env::for_harness(
         confinement.inherited(),
         &confinement.withheld(),
         &confinement.avoid(),
         cfg!(windows),
     );
+    // Git finds the repository from `dir`, as the harness did, never from
+    // a place an outer git left in the environment.
+    env.retain(|(name, _)| !is_local(name));
     let mut command = Command::new(&started.program);
     command
         .args(&started.arguments)
@@ -522,6 +567,147 @@ mod tests {
         // Named by an absolute entry, it runs: the filter is one git runs.
         assert!(ran(format!("{}:{real}", dir.display())));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A harness started inside an outer git (a hook, a `rebase --exec`)
+    /// inherits that git's place: `GIT_DIR` and `GIT_WORK_TREE` name another
+    /// repository, `GIT_INDEX_FILE` its index, `GIT_CONFIG_PARAMETERS` a
+    /// setting given on that git's command line. The harness's git answers
+    /// about the repository it is started in all the same, and still reads
+    /// the user's own configuration, which `GIT_CONFIG_GLOBAL` names (the
+    /// third security fix; `outstanding`'s
+    /// `the-harness-git-reads-the-repository-git-names-in-the-environment`).
+    #[test]
+    fn sys_git_answers_about_its_own_repository_whatever_the_environment_names() {
+        use crate::rng::{Rng, SystemRng};
+        let Some(git) = crate::program::git() else {
+            assert!(std::env::var_os("CI").is_none(), "CI has git");
+            return;
+        };
+        let base = std::env::temp_dir().join(format!(
+            "cineris-base-git-place-{:016x}",
+            SystemRng::new().next_u64()
+        ));
+        let ours = base.join("ours");
+        let other = base.join("other");
+        for dir in [&ours, &other] {
+            std::fs::create_dir_all(dir).unwrap();
+            let status = Command::new(git)
+                .args(["init", "--quiet"])
+                .current_dir(dir)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success());
+        }
+        let global = base.join("global.gitconfig");
+        std::fs::write(&global, "[cineris]\n\tmark = global\n").unwrap();
+        let other_git = other.join(".git");
+        let mut inherited: Vec<(OsString, OsString)> = std::env::vars_os()
+            .filter(|(name, _)| !is_local(name) && name != "GIT_CONFIG_GLOBAL")
+            .collect();
+        inherited.extend([
+            ("GIT_DIR".into(), other_git.clone().into_os_string()),
+            ("GIT_WORK_TREE".into(), other.clone().into_os_string()),
+            (
+                "GIT_INDEX_FILE".into(),
+                other_git.join("index").into_os_string(),
+            ),
+            (
+                "GIT_CONFIG_PARAMETERS".into(),
+                "'cineris.mark=parameters'".into(),
+            ),
+            ("GIT_CONFIG_GLOBAL".into(), global.clone().into_os_string()),
+        ]);
+        let given = Given {
+            inherited,
+            withheld: Vec::new(),
+        };
+        let answer = |arguments: &[&str]| -> String {
+            let output = start(&given, &ours, arguments)
+                .unwrap()
+                .wait_with_output()
+                .unwrap();
+            assert!(output.status.success(), "git {arguments:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        let top = PathBuf::from(answer(&["rev-parse", "--show-toplevel"]));
+        assert!(
+            crate::same_location(
+                &std::fs::canonicalize(&top).unwrap(),
+                &std::fs::canonicalize(&ours).unwrap()
+            ),
+            "the harness's git answered about {} for a start in {}",
+            top.display(),
+            ours.display()
+        );
+        assert_eq!(
+            answer(&["rev-parse", "--git-path", "index"]),
+            ".git/index",
+            "the harness's git took the index the environment named"
+        );
+        assert_eq!(
+            answer(&["config", "--get", "cineris.mark"]),
+            "global",
+            "an outer git's command-line setting reached the harness's git, or the user's own \
+             configuration did not"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// [`LOCAL_ENV_VARS`] holds every variable the installed git lists as
+    /// one of a repository's place: a git that adds one fails here, naming
+    /// it. A name the list has that this git does not list is said, not
+    /// failed: an older git lists fewer.
+    #[test]
+    fn sys_the_local_variables_are_the_ones_git_lists() {
+        let Some(git) = crate::program::git() else {
+            assert!(std::env::var_os("CI").is_none(), "CI has git");
+            return;
+        };
+        let output = Command::new(git)
+            .args(["rev-parse", "--local-env-vars"])
+            .current_dir(std::env::temp_dir())
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&output.stdout);
+        let listed: std::collections::BTreeSet<&str> = text.lines().map(str::trim).collect();
+        let is_variable = |name: &&str| {
+            name.starts_with("GIT_")
+                && name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte == b'_')
+        };
+        if !output.status.success() || listed.is_empty() || !listed.iter().all(is_variable) {
+            eprintln!(
+                "skipped: this git ({}) is too old to list the variables of a repository's \
+                 place (`git rev-parse --local-env-vars` printed {text:?}), so LOCAL_ENV_VARS \
+                 was not compared with it",
+                git.display()
+            );
+            assert!(
+                std::env::var_os("CI").is_none(),
+                "CI's git lists the variables of a repository's place"
+            );
+            return;
+        }
+        let ours: std::collections::BTreeSet<&str> = LOCAL_ENV_VARS.into_iter().collect();
+        let missing: Vec<&&str> = listed.difference(&ours).collect();
+        let extra: Vec<&&str> = ours.difference(&listed).collect();
+        assert!(
+            missing.is_empty(),
+            "git lists variables of a repository's place that LOCAL_ENV_VARS leaves out, so the \
+             harness's git would still take them from its environment: missing {missing:?}; \
+             extra (in LOCAL_ENV_VARS, not listed by this git) {extra:?}"
+        );
+        if !extra.is_empty() {
+            eprintln!(
+                "LOCAL_ENV_VARS has variables this git does not list (an older git): {extra:?}"
+            );
+        }
     }
 
     #[test]

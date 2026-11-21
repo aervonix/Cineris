@@ -50,7 +50,7 @@ use cineris_tools::{
 };
 
 use crate::policy::EnginePolicy;
-use crate::sandbox::{SessionSandbox, protected_note};
+use crate::sandbox::{SessionSandbox, protected_changes, protected_note};
 
 /// The checkpoint of the tool round that is running, shared by the tools
 /// that fill it and the session store that writes it.
@@ -399,6 +399,26 @@ impl Tool for StopsWithTurn {
     }
 }
 
+/// A command's confinement is decided and the look at protected paths
+/// before it taken, and it is not started: a test changes the level here,
+/// which must not change how the command runs (the third security fix). An
+/// awaited point ([`cineris_base::hook::await_point!`]), on the turn's task.
+pub const BEFORE_THE_COMMAND_STARTS: &str = "shell: a command's confinement is decided and its look before is taken, and it has not started";
+
+/// A command has run, and the look at protected paths after it is not
+/// taken: a test changes the level here, which must not change how the
+/// command is looked at. An awaited point, on the turn's task.
+pub const BEFORE_THE_LOOK_AFTER: &str =
+    "shell: a command has run, and the look at protected paths after it is not taken";
+
+/// This command stopped its turn (it changed a protected path, made the
+/// look stop short, or left a process the kill could not clear), and its
+/// result has not gone back to the round: another call of the turn starting
+/// now must find the turn stopped. An awaited point, on the turn's task;
+/// reached only by a command that stopped its turn.
+pub const AFTER_THE_TURN_IS_STOPPED: &str =
+    "shell: a command has stopped its turn, and its result has not gone back to the round";
+
 /// The shell tool, with what each command changed recorded in the round's
 /// checkpoint when the command is over, and the protected paths looked at
 /// around each confined command (`docs/architecture/06-permissions-and-sandbox.md`,
@@ -601,7 +621,18 @@ impl RecordingShell {
                 })
             });
             let read_only = matches!(plan.concurrency, cineris_tools::Concurrency::ReadOnly);
-            let watch = self.sandbox.watch().filter(|_| !unconfined).cloned();
+            // How the command runs is decided once, here, before the look:
+            // its start, the looks before and after it, what is put back
+            // and what the observer is told all follow this one decision,
+            // whatever the level does meanwhile. A level lowered before the
+            // start and raised again before the look after can no longer
+            // leave a confined command unlooked at (the third security
+            // fix). A level changed after this applies from the next
+            // command.
+            let decided = self.sandbox.decide();
+            let session_confines = decided.confines();
+            let confined = session_confines && !unconfined;
+            let watch = self.sandbox.protected().filter(|_| confined).cloned();
             let before = match &watch {
                 Some(watch) => {
                     let watch = watch.clone();
@@ -621,28 +652,34 @@ impl RecordingShell {
             {
                 return stop;
             }
+            cineris_base::hook::await_point!(BEFORE_THE_COMMAND_STARTS);
             // The command itself runs on this thread, the core's: the
             // kernel's death signal is tied to the thread that started it.
-            let mut result = self.tool.run(plan, cx, out).await;
+            // It starts through the launcher decided above, not the one the
+            // level gives when it gets there.
+            let launcher: Arc<dyn cineris_tools::process::Launcher> = Arc::new(decided);
+            let mut result = self.tool.run_through(plan, cx, out, launcher).await;
+            cineris_base::hook::await_point!(BEFORE_THE_LOOK_AFTER);
+            // What the command changed among the protected paths is put
+            // back at once, from the look before's own record: a confined
+            // command never keeps a change there (the third security fix).
             let found = match (watch, before) {
-                (Some(watch), Some(before)) => tokio::task::spawn_blocking(move || {
-                    let (changed, after) = watch.changes_since(&before);
-                    let complete = (before.is_complete(), after.is_complete());
-                    (changed, complete, after)
-                })
-                .await
-                .ok(),
+                (Some(watch), Some(before)) => {
+                    tokio::task::spawn_blocking(move || protected_changes(&watch, &before))
+                        .await
+                        .ok()
+                }
                 _ => None,
             };
             // The look after this command is kept for the next command's
             // and the close's continuity check, and the harness-touched set
             // is forgotten: the after-look already holds their new state.
-            if let Some((_, _, after)) = &found {
-                self.sandbox.remember_after(after.clone());
+            if let Some(found) = &found {
+                self.sandbox.remember_after(found.after.clone());
                 if let Some(rounds) = &self.rounds {
                     rounds.clear_touched();
                 }
-            } else if unconfined && self.sandbox.watch().is_some() {
+            } else if unconfined && session_confines {
                 // A command the user let leave the sandbox is not looked at,
                 // so its own approved changes to a protected path are not
                 // recorded. The next confined command's continuity check must
@@ -668,7 +705,7 @@ impl RecordingShell {
                     cwd,
                     result.payload(),
                     changes.as_ref(),
-                    !unconfined && self.sandbox.confines(),
+                    confined,
                     read_only,
                 );
                 match by {
@@ -676,41 +713,44 @@ impl RecordingShell {
                     By::Harness => knowledge.observed_check(&run),
                 }
             }
-            let mut by_hand = found
-                .as_ref()
-                .map(|(changed, _, _)| changed.iter().map(|one| one.path.clone()).collect())
-                .unwrap_or_default();
             if let Some(rounds) = &self.rounds {
                 let rounds = Arc::clone(rounds);
-                let protected = found.as_ref().map(|(changed, _, _)| changed.clone());
+                // What is left of the change, which was not put back, is
+                // recorded for undo where it can be; what was put back is
+                // as it was, and has nothing to undo.
+                let left = found.as_ref().map(|found| found.left.clone());
                 // Not cancelled: the command ran, and what it changed is
                 // recorded whether or not the turn goes on.
                 let recorded = tokio::task::spawn_blocking(move || {
-                    let by_hand = protected.map(|protected| rounds.record_protected(&protected));
+                    if let Some(left) = left {
+                        let _ = rounds.record_protected(&left);
+                    }
                     if let Some(changes) = changes {
                         rounds.record_changes(&changes);
                     }
-                    by_hand
                 })
                 .await;
-                match recorded {
-                    Ok(Some(not_kept)) => by_hand = not_kept,
-                    Ok(None) => {}
-                    Err(_) => tracing::warn!("what a shell command changed could not be recorded"),
+                if recorded.is_err() {
+                    tracing::warn!("what a shell command changed could not be recorded");
                 }
             }
-            if let Some((changed, complete, _)) = found {
+            // Whether this command stopped the turn, for the point below.
+            let mut stopped = false;
+            if let Some(found) = found {
                 let root = cx.paths.root().to_fs_path();
-                if let Some(note) = protected_note(&changed, complete, &root, &by_hand) {
+                if let Some(note) =
+                    protected_note(&found.changed, &found.left, found.complete, &root)
+                {
                     result = result.with_part(Part::text(note.clone()));
                     // A change, or a look the command itself made stop
                     // short, stops the turn; a workspace already past the
                     // bound only warns. The result is marked as the stop,
                     // so that the round ends at this call, even when it
                     // was the last of its response.
-                    if !changed.is_empty() || (complete.0 && !complete.1) {
+                    if !found.changed.is_empty() || (found.complete.0 && !found.complete.1) {
                         self.policy.stop_turn(cx.turn, note.clone());
                         result = result.stopping_turn(note);
+                        stopped = true;
                     }
                 }
             }
@@ -724,7 +764,7 @@ impl RecordingShell {
                 .and_then(|payload| payload.get("escaped"))
                 .and_then(Json::as_bool)
                 .unwrap_or(false);
-            if escaped && self.sandbox.watch().is_some() {
+            if escaped && session_confines {
                 let note = "[A process the command started kept forking and could not all be \
                             killed. It may still be running inside the sandbox and may change a \
                             protected path after this check — a git hook (`.git/hooks`), git's \
@@ -734,6 +774,10 @@ impl RecordingShell {
                             the session's close.]";
                 self.policy.stop_turn(cx.turn, note.to_owned());
                 result = result.stopping_turn(note);
+                stopped = true;
+            }
+            if stopped {
+                cineris_base::hook::await_point!(AFTER_THE_TURN_IS_STOPPED);
             }
             result
         })

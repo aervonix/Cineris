@@ -1561,6 +1561,87 @@ mod confined {
         });
     }
 
+    /// The open item's case through an extension's program, end to end
+    /// (the third security fix; `outstanding`'s
+    /// `a-filter-a-confined-program-plants-runs-unconfined-later`): at
+    /// `unrestricted` a program its own launcher confines plants a clean
+    /// filter in a trusted repository's configuration. The look after it
+    /// puts the configuration back and stops the turn. The next turn runs a
+    /// shell command, whose looks ask git, and the model's own `git status`,
+    /// which at `unrestricted` runs with the user's rights: the filter's
+    /// program never runs, because nothing names it any more.
+    #[test]
+    fn sys_a_filter_a_program_plants_never_runs_afterwards() {
+        use cineris_testkit::scratch::git;
+
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_planted_then_status", []);
+        world.put("tracked.txt", "one\n");
+        git(
+            &world.workspace,
+            &["init", "--quiet", "--initial-branch=main"],
+        );
+        git(&world.workspace, &["add", "--all"]);
+        git(
+            &world.workspace,
+            &["commit", "--quiet", "--message", "first"],
+        );
+        let marker = world.dir.join("filter-ran");
+        let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\"**\"]");
+        let plant = format!(
+            "printf '[filter \"x\"]\\n\\tclean = touch {m}; cat\\n' >> .git/config; echo '* \
+             filter=x' > .gitattributes; touch -d @0 tracked.txt",
+            m = marker.display()
+        );
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": "sh", "args": ["-c", plant]}),
+        ));
+        world.provider.push(says("Stopped."));
+        world.provider.push(calls(&[(
+            "c2",
+            "shell",
+            json!({"command": "echo two > two.txt"}),
+        )]));
+        world
+            .provider
+            .push(calls(&[("c3", "shell", json!({"command": "git status"}))]));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+            options.trust_project = true;
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Unrestricted).await;
+            front.turn("run it").await;
+            let answer = stopped(&front, 0);
+            assert!(
+                answer.contains(".git/config") && answer.contains("They were put back"),
+                "{answer}"
+            );
+            front.turn("go on").await;
+            let results = front.results();
+            assert_eq!(results.len(), 3, "{results:?}");
+            assert!(
+                !marker.exists(),
+                "the filter the program planted ran with the user's rights: {results:?}"
+            );
+            assert!(
+                !world
+                    .read(".git/config")
+                    .unwrap_or_default()
+                    .contains("filter"),
+                "{:?}",
+                world.read(".git/config")
+            );
+            front.close().await;
+        });
+    }
+
     /// How a program that wrote a protected path is ended, for
     /// [`a_program_ended_early_is_looked_at`].
     enum Ending {
@@ -1658,7 +1739,12 @@ mod confined {
                 answer.contains("changed protected paths") && answer.contains(".github/workflows"),
                 "{answer}"
             );
-            assert!(world.read(".github/workflows/x.yml").is_some());
+            // Put back at once (since the third security fix), whatever
+            // ended the program.
+            assert!(
+                world.read(".github/workflows/x.yml").is_none(),
+                "what the program made in a protected path was not put back: {answer}"
+            );
             front
                 .op(Op::SessionRewind(SessionRewindParams {
                     session_id: front.session.clone(),

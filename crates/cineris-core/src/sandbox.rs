@@ -15,13 +15,18 @@
 //! - **The temporary directory** is made, open to the user alone, when the
 //!   session starts, given to every confined command as `TMPDIR`, and
 //!   removed when the session ends.
-//! - **The harness's own git** runs inside the sandbox too while commands
-//!   are confined, with no write root and no network ([`SessionGit`]): a
-//!   confined command may write the repository's configuration, which
-//!   can name a program for git to run (found by the third review of step
-//!   26). After an extension's program, which its own launcher confines at
-//!   every level, the look at what it changed runs git inside the sandbox
-//!   at every level too (`FollowingTheProgram`).
+//! - **The harness's own git** runs inside the sandbox wherever the
+//!   session's sandbox enforces, at every level, `unrestricted` included,
+//!   with no write root and no network ([`SessionGit`]): a confined command,
+//!   or an extension's program, may write the repository's configuration,
+//!   which can name a program for git to run, and a look taken later, at
+//!   any level, would run it (found by the third review of step 26; at
+//!   every level since the third security fix, which folded in the rule
+//!   that followed an extension's program).
+//! - **A command's confinement is decided once** ([`SessionSandbox::decide`]),
+//!   when the look before it is taken: the start and both looks follow that
+//!   one decision, whatever the level does meanwhile (the third security
+//!   fix).
 
 #![allow(
     clippy::disallowed_methods,
@@ -336,10 +341,27 @@ impl SessionSandbox {
         self.confine.store(confine, Ordering::Release);
     }
 
-    /// What to look at before and after a command that runs now: the
-    /// protected paths, when the command is confined.
-    pub(crate) fn watch(&self) -> Option<&Watch> {
-        self.watch.as_ref().filter(|_| self.confines())
+    /// How a command started from here runs, decided now, once: the
+    /// launcher as it is now while commands are confined, or none. Its
+    /// start and the looks before and after it all follow this one value,
+    /// so that a level changed in between (lowered before the start and
+    /// raised again before the look after) cannot leave a confined command
+    /// unlooked at, nor have a command looked at as confined that ran as
+    /// it is (the third security fix; `outstanding`'s
+    /// `a-command-started-confined-between-two-changes-of-level`). A level
+    /// changed after it applies from the next command.
+    pub(crate) fn decide(&self) -> Decided {
+        Decided {
+            launcher: self.launcher(),
+        }
+    }
+
+    /// The protected paths, wherever the sandbox enforces, whatever the
+    /// level: for a caller that decided its start is confined (a command
+    /// [`decide`](Self::decide)d so, an extension's program its own launcher
+    /// confines at every level).
+    pub(crate) fn protected(&self) -> Option<&Watch> {
+        self.watch.as_ref()
     }
 
     /// The launcher an extension's program is started through
@@ -389,19 +411,12 @@ impl SessionSandbox {
         ))
     }
 
-    /// What to look at before and after an extension's program that may
-    /// write: the protected paths, wherever the sandbox enforces, at every
-    /// level, as its launcher confines it at every level.
-    #[cfg(feature = "scripts")]
-    pub(crate) fn extension_watch(&self) -> Option<&Watch> {
-        self.watch.as_ref()
-    }
-
-    /// What to start in place of the harness's own `git` with `arguments`
-    /// now: the reading launcher while commands are confined, git as it is
-    /// otherwise.
+    /// What to start in place of the harness's own `git` with `arguments`:
+    /// the reading launcher wherever the sandbox enforces, at every level;
+    /// git as it is where it does not, where nothing was confined to write
+    /// what it reads.
     fn start_git(&self, git: &Path, arguments: Vec<OsString>) -> Started {
-        match self.reader.as_ref().filter(|_| self.confines()) {
+        match &self.reader {
             Some(reader) => reading(reader, git, arguments),
             None => Started {
                 program: git.to_owned(),
@@ -409,20 +424,6 @@ impl SessionSandbox {
                 stdin: None,
             },
         }
-    }
-
-    /// What to start in place of the harness's own `git` with `arguments`
-    /// at every level, `unrestricted` included: the reading launcher.
-    /// After a program that something other than the session's level
-    /// confined (an extension's, by its own launcher), so that git follows
-    /// the program's confinement, not the session's commands'.
-    #[cfg(feature = "scripts")]
-    fn start_git_confined(&self, git: &Path, arguments: Vec<OsString>) -> Result<Started, String> {
-        let reader = self
-            .reader
-            .as_ref()
-            .ok_or_else(|| "the sandbox does not enforce in this session".to_owned())?;
-        Ok(reading(reader, git, arguments))
     }
 
     /// Removes the temporary directory and everything in it, if the
@@ -434,9 +435,38 @@ impl SessionSandbox {
     }
 }
 
+/// How one command runs, decided once ([`SessionSandbox::decide`]): through
+/// the session's launcher as it was at the decision, or as it is.
+#[derive(Debug, Clone)]
+pub(crate) struct Decided {
+    launcher: Option<SandboxLauncher>,
+}
+
+impl Decided {
+    /// Whether the command is confined: the session confined commands at
+    /// the decision. A call the user let leave the sandbox runs as it is
+    /// all the same.
+    pub(crate) fn confines(&self) -> bool {
+        self.launcher.is_some()
+    }
+}
+
+/// A launcher read again at each start, for a caller that does not decide
+/// first: the shell tool's own, which [`RecordingShell`](crate::checkpoints::RecordingShell)
+/// passes over with its decision.
 impl Launcher for SessionSandbox {
     fn launch(&self, command: CommandLine, cx: &LaunchCx<'_>) -> Result<Launch, String> {
-        let Some(launcher) = self.launcher() else {
+        self.decide().launch(command, cx)
+    }
+
+    fn explain(&self, exit: Option<Exit>, output: &str) -> Option<String> {
+        self.decide().explain(exit, output)
+    }
+}
+
+impl Launcher for Decided {
+    fn launch(&self, command: CommandLine, cx: &LaunchCx<'_>) -> Result<Launch, String> {
+        let Some(launcher) = &self.launcher else {
             return Direct.launch(command, cx);
         };
         let arguments: Vec<OsString> = command
@@ -465,7 +495,7 @@ impl Launcher for SessionSandbox {
     }
 
     fn explain(&self, exit: Option<Exit>, output: &str) -> Option<String> {
-        let launcher = self.launcher()?;
+        let launcher = self.launcher.as_ref()?;
         let code = match exit {
             Some(Exit::Code(code)) => Some(code),
             _ => None,
@@ -475,9 +505,19 @@ impl Launcher for SessionSandbox {
 }
 
 /// Where a session's own git runs, and with what: inside its sandbox,
-/// reading only, while its commands are confined; never a git inside the
-/// workspace, or inside a write root a confined command could have planted
-/// one in; and without the providers' key variables.
+/// reading only, wherever the sandbox enforces, at every level; never a git
+/// inside the workspace, or inside a write root a confined command could
+/// have planted one in; and without the providers' key variables.
+///
+/// **At every level, `unrestricted` included** (the third security fix):
+/// what a repository's configuration makes git run (a filter, a submodule's
+/// own filter, a program no list foresaw) is planted by a confined command
+/// or an extension's program, and the look that runs it may come at any
+/// later level. So git does not follow the level: where the sandbox
+/// enforces, whatever its configuration names runs with no write root and
+/// no network. What it costs: a filter that must write or reach the network
+/// (git-lfs's) fails at `unrestricted` too, and the list of what a command
+/// changed says it is incomplete, as it does below `unrestricted`.
 ///
 /// The session's checkpoints need their git before its sandbox can be
 /// made (the sandbox needs the lease), so this is made first and given the
@@ -526,8 +566,9 @@ impl SessionGit {
 }
 
 impl Confinement for SessionGit {
+    /// Wherever the sandbox enforces, whatever the level.
     fn confines(&self) -> bool {
-        self.sandbox.get().is_some_and(|sandbox| sandbox.confines())
+        self.sandbox.get().is_some_and(|sandbox| sandbox.enforces())
     }
 
     /// Git on the `PATH` of the environment it inherits, outside every one
@@ -584,59 +625,56 @@ fn reading(reader: &SandboxLauncher, git: &Path, arguments: Vec<OsString>) -> St
     }
 }
 
-/// The session's git after a program an extension's own launcher confined:
-/// started inside the sandbox, reading only, at every level, as the program
-/// was confined at every level (the review of step 28's process starts).
-/// At `unrestricted` the session's git runs as it is, after commands that
-/// ran as they are; but a program confined by its launcher may have
-/// written the repository's configuration inside its write roots, and a
-/// filter it names would then run, with the user's full rights, in the
-/// look at what the program changed. Where the sandbox does not enforce,
-/// nothing is started: no program was confined there to follow.
-#[cfg(feature = "scripts")]
+/// What the look after a confined start found among the protected paths,
+/// and what of it was put back ([`protected_changes`]).
 #[derive(Debug)]
-pub(crate) struct FollowingTheProgram(pub(crate) Arc<SessionGit>);
+pub(crate) struct Found {
+    /// What the start changed.
+    pub(crate) changed: Vec<Changed>,
+    /// What still differs from the look before once the change was put
+    /// back: what could not be, to be put back by hand.
+    pub(crate) left: Vec<Changed>,
+    /// Whether the look before and the look after were complete.
+    pub(crate) complete: (bool, bool),
+    /// The last look taken: after the put-back, where there was one. The
+    /// next confined start compares with it.
+    pub(crate) after: Snapshot,
+}
 
-#[cfg(feature = "scripts")]
-impl Confinement for FollowingTheProgram {
-    fn confines(&self) -> bool {
-        true
+/// Looks at the protected paths after a confined start, against `before`,
+/// and puts back at once what the start changed, from `before`'s own record
+/// ([`Watch::put_back`]): nothing a confined command, a project's check or
+/// an extension's program wrote in a protected path is kept, so nothing of
+/// it runs later outside the sandbox (the third security fix). It blocks.
+pub(crate) fn protected_changes(watch: &Watch, before: &Snapshot) -> Found {
+    let (changed, after) = watch.changes_since(before);
+    let complete = (before.is_complete(), after.is_complete());
+    if changed.is_empty() {
+        return Found {
+            changed,
+            left: Vec::new(),
+            complete,
+            after,
+        };
     }
-
-    fn git_program(&self) -> Option<PathBuf> {
-        self.0.git_program()
-    }
-
-    fn withheld(&self) -> Vec<String> {
-        self.0.withheld()
-    }
-
-    fn avoid(&self) -> Vec<PathBuf> {
-        self.0.avoid()
-    }
-
-    fn inherited(&self) -> Vec<(OsString, OsString)> {
-        self.0.inherited()
-    }
-
-    fn start(&self, git: &Path, arguments: Vec<OsString>) -> Result<Started, String> {
-        let sandbox = self
-            .0
-            .sandbox
-            .get()
-            .ok_or_else(|| "the session's sandbox is not made yet".to_owned())?;
-        sandbox.start_git_confined(git, arguments)
+    let put = watch.put_back(before, &changed);
+    Found {
+        changed,
+        left: put.left,
+        complete,
+        after: put.after,
     }
 }
 
-/// What the model and the user are told after a confined command changed
-/// protected paths, or when the look at them stopped at its bound. `None`
-/// when there is nothing to say.
+/// What the model and the user are told after a confined start changed
+/// protected paths, which were put back (`left`: what could not be), or
+/// when the look at them stopped at its bound. `None` when there is nothing
+/// to say.
 pub(crate) fn protected_note(
     changed: &[Changed],
+    left: &[Changed],
     (complete_before, complete_after): (bool, bool),
     root: &Path,
-    by_hand: &[PathBuf],
 ) -> Option<String> {
     let shown = |paths: &mut dyn Iterator<Item = &Changed>| -> Vec<String> {
         paths
@@ -655,23 +693,33 @@ pub(crate) fn protected_note(
     let mut lines = Vec::new();
     if !changed.is_empty() {
         let all = shown(&mut changed.iter());
-        let not_undone = shown(&mut changed.iter().filter(|one| by_hand.contains(&one.path)));
-        let undo = if not_undone.is_empty() {
-            "Undoing this turn puts them back.".to_owned()
-        } else if not_undone.len() == all.len() {
-            "Undoing this turn does not put them back: what they were is not kept (a link, a \
-             file too large, a change of mode, a directory, a path outside the workspace, or a \
-             session that keeps no checkpoints), so they must be put back by hand."
-                .to_owned()
+        let not_back = shown(&mut left.iter());
+        let none_back = changed
+            .iter()
+            .all(|one| left.iter().any(|still| still.path == one.path));
+        let back = if not_back.is_empty() {
+            "They were put back as they were before it.".to_owned()
+        } else if none_back {
+            format!(
+                "They could not be put back (a link on the way, what they held not kept, or a \
+                 directory that is not empty), and must be put back by hand: {}.",
+                not_back.join(", ")
+            )
         } else {
             format!(
-                "Undoing this turn puts back the others; these must be put back by hand: {}.",
-                not_undone.join(", ")
+                "The others were put back as they were before it; these could not be, and must \
+                 be put back by hand: {}.",
+                not_back.join(", ")
             )
         };
+        // The owner's decision of 2026-11-21: a change a confined start
+        // makes there is never kept, an approved one included.
         lines.push(format!(
             "[The command changed protected paths, which decide what runs later outside the \
-             sandbox: {}. The turn stops here, so that the user can look at the change. {undo}]",
+             sandbox: {}. {back} Nothing run inside the sandbox keeps a change to a protected \
+             path. If the user wants this change, make it with a command outside the sandbox \
+             (`sandbox: false`), which the user is asked to allow once, or leave it to the \
+             user. The turn stops here, so that the user can look.]",
             all.join(", "),
         ));
     }
@@ -831,7 +879,7 @@ mod tests {
             before: cineris_sandbox::protect::Before::Absent,
             mode_changed: false,
         }];
-        let note = protected_note(&changed, (true, true), &root, &[]).expect("a note");
+        let note = protected_note(&changed, &[], (true, true), &root).expect("a note");
         assert!(
             !note
                 .lines()
@@ -891,9 +939,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The harness's own git, while commands are confined, is started by the
-    /// launcher under a policy that writes nothing and reaches no network;
-    /// at `unrestricted` it is started as it is.
+    /// The harness's own git, wherever the sandbox enforces, is started by
+    /// the launcher under a policy that writes nothing and reaches no
+    /// network, at `unrestricted` too (the third security fix); where the
+    /// sandbox does not enforce it is started as it is.
     #[test]
     fn the_harness_git_runs_inside_the_sandbox_reading_only() {
         let workspace = std::env::temp_dir().join("cineris-core-git-policy");
@@ -951,9 +1000,42 @@ mod tests {
             }
         );
 
+        // At `unrestricted`, where commands run as they are, git is still
+        // the sandbox's: what it reads a confined start may have written.
         sandbox.set_level(&Level::Unrestricted);
-        assert!(!git.confines());
-        let started = git.start(Path::new("/usr/bin/git"), arguments).unwrap();
+        assert!(!sandbox.confines());
+        assert!(git.confines());
+        let started = git
+            .start(Path::new("/usr/bin/git"), arguments.clone())
+            .unwrap();
+        assert_eq!(started.program, PathBuf::from("/opt/cineris"));
+        assert_eq!(
+            Policy::decode(&started.stdin.expect("the policy"))
+                .unwrap()
+                .write,
+            Vec::<PathBuf>::new()
+        );
+
+        // Where the sandbox does not enforce, git runs as it is.
+        let off = Arc::new(SessionSandbox::new(
+            &core,
+            SandboxState::NotEnforcing(NoSandbox::TurnedOff),
+            None,
+            &Level::Supervised,
+            &grant,
+            Temp {
+                path: workspace.join("tmp"),
+                made: false,
+            },
+            &workspace,
+            Limits::default(),
+        ));
+        let as_it_is = SessionGit::new(Vec::new(), Arc::default(), None);
+        as_it_is.set(off);
+        assert!(!as_it_is.confines());
+        let started = as_it_is
+            .start(Path::new("/usr/bin/git"), arguments)
+            .unwrap();
         assert_eq!(started.program, PathBuf::from("/usr/bin/git"));
         assert_eq!(started.stdin, None);
     }
@@ -1002,12 +1084,12 @@ mod tests {
         // Nothing to compare with yet: the close re-check finds nothing.
         assert!(sandbox.continuity_at_close().is_none());
         // A command runs; the look after it is remembered.
-        let after = sandbox.watch().expect("a watch").take();
+        let after = sandbox.protected().expect("a watch").take();
         sandbox.remember_after(after);
         // A process the command left running writes a hook after the turn.
         std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\ncurl evil\n").unwrap();
         // The next command's look finds the change against the after-look.
-        let now = sandbox.watch().expect("a watch").take();
+        let now = sandbox.protected().expect("a watch").take();
         let changed = sandbox.continuity(&now).expect("a comparison");
         assert!(
             changed

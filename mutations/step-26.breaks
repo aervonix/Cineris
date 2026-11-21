@@ -243,19 +243,15 @@ caught-by:
 rule: Every confined command has its protected paths looked at before and after it.
 file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
-find: .filter(|_| !unconfined)
-replace: .filter(|_| false)
+find: self.sandbox.protected().filter(|_| confined)
+replace: self.sandbox.protected().filter(|_| false)
 caught-by:
-    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
+    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_is_put_back_and_stops_the_turn
 
-[break] a-protected-change-is-not-kept-for-undo
-rule: What a changed protected path held before the command is kept in the round's checkpoint, so undo puts it back.
-file: crates/cineris-core/src/checkpoints.rs
-in: RecordingShell::run_by
-find: rounds.record_protected(&protected)
-replace: { let _ = protected; Vec::new() }
-caught-by:
-    cineris-core::it sandbox::sys_a_protected_path_a_command_changes_stops_the_turn_and_undo_puts_it_back
+# `a-protected-change-is-not-kept-for-undo` was taken out by the third
+# security fix: a protected change is put back at once since then
+# (`security-fix-3/nothing-put-back`), and what is left of it cannot be put
+# back by undo either.
 
 [break] a-protected-change-does-not-stop-the-turn
 rule: A confined command that changed protected paths stops its turn, a project's check among them. (A call of the round's own also marks its result as the stop, which ends the round on its own: `stop-ends-turn/the-shells-protected-path-stop-is-not-marked`.)
@@ -373,7 +369,6 @@ replace: Ok(metadata) if metadata.file_type().is_symlink() => return Ok(false)
 packages: cineris-session, cineris-core
 caught-by:
     cineris-session snapshot::tests::a_path_reached_through_a_link_is_not_put_back
-    cineris-core::it sandbox::sys_undo_does_not_write_through_a_link_a_command_planted
 
 [break] a-stopped-turn-runs-another-command
 rule: Once a command stopped the turn, no call of the turn that changes anything runs, even one decided before the stop. This is the only guard of a call the round has already started (its task spawned, its tool not yet called) when another call's run stops the turn: neither the round's stop nor the policy's decision again reaches a running call. Only a command found to only read can be running then, beside another. No test reaches it, and none did before the stop-ends-turn step either: the test this break named passed with it made (found by that step's review). A test can be written with `cineris_agent::BEFORE_A_CALL_RUNS`: `docs/outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md`.
@@ -464,19 +459,15 @@ caught-by:
 rule: A command that makes the look after it stop at its bound, where the look before did not, stops the turn.
 file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
-find: if !changed.is_empty() || (complete.0 && !complete.1) {
-replace: if !changed.is_empty() {
+find: if !found.changed.is_empty() || (found.complete.0 && !found.complete.1) {
+replace: if !found.changed.is_empty() {
 caught-by:
     cineris-core::it sandbox::sys_a_command_that_makes_the_look_stop_short_stops_the_turn
 
-[break] the-note-promises-undo-through-a-link
-rule: The note never says undo puts back a path that undo will refuse: one now reached through a link.
-file: crates/cineris-core/src/checkpoints.rs
-in: Rounds::record_protected
-find: if !recorded || changed.mode_changed || reached_through_a_link(&self.root, &file) {
-replace: if !recorded || changed.mode_changed {
-caught-by:
-    cineris-core::it sandbox::sys_undo_does_not_write_through_a_link_a_command_planted
+# `the-note-promises-undo-through-a-link` was taken out by the third security
+# fix: the note says what was put back at once and what is left to put back
+# by hand, from a look taken after the put-back, and no longer what undo
+# would do (`security-fix-3/restore-follows-a-link-on-the-way`).
 
 [break] a-change-of-mode-loses-the-content
 rule: A protected file whose content and mode a command changed keeps its content for undo; the mode is put back by hand.

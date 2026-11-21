@@ -36,8 +36,9 @@
 //!    either stops the turn, and the script's call with it. Both looks are
 //!    made whatever became of the run: ended by the call's cancellation or
 //!    its time, or by a start that failed after the process was made.
-//!    What the program changed in the workspace is looked at with a git
-//!    that follows its confinement ([`FollowingTheProgram`]).
+//!    What the program changed in the workspace is looked at with the
+//!    session's git, inside the sandbox wherever it enforces, at every
+//!    level ([`SessionGit`]).
 //! 6. **Its environment** is a shell command's
 //!    ([`cineris_tools::shell::command_env`]): no provider key, no
 //!    `shell.env_remove` variable, an absolute `PATH`; `TMPDIR` the
@@ -65,7 +66,7 @@ use serde_json::json;
 use super::host::{CallHost, HostQuestion};
 use crate::checkpoints::{Rounds, changed_since_last_look, note_changed};
 use crate::programs::{self, Search};
-use crate::sandbox::{FollowingTheProgram, SessionGit, SessionSandbox, protected_note};
+use crate::sandbox::{SessionGit, SessionSandbox, protected_changes, protected_note};
 
 /// What a session runs an extension's programs with.
 #[derive(Debug)]
@@ -101,9 +102,9 @@ pub(crate) struct ExecParts {
     /// The shell's settings a reload changes: whether the look at what a
     /// program changed may ask git.
     pub(crate) live: Arc<ShellLive>,
-    /// How that look's git is run: the session's, inside the sandbox while
-    /// commands are confined; after a program the extension's own launcher
-    /// confined, inside the sandbox at every level ([`FollowingTheProgram`]).
+    /// How that look's git is run: the session's, inside the sandbox
+    /// wherever it enforces, at every level, as the program's own launcher
+    /// confines it there at every level.
     pub(crate) git: Arc<SessionGit>,
 }
 
@@ -338,7 +339,7 @@ pub(crate) async fn run(
     let watch = launcher
         .as_ref()
         .filter(|_| !write_roots.is_empty())
-        .and_then(|_| parts.sandbox.extension_watch())
+        .and_then(|_| parts.sandbox.protected())
         .cloned();
     let launch = match &launcher {
         Some(launcher) => {
@@ -416,16 +417,12 @@ pub(crate) async fn run(
     // is: a program that may write it (one with a write root, or one
     // nothing confines) has what it changed put in the round's checkpoint,
     // so that undo puts it back, and the model's table of files told. The
-    // look's git follows the program's confinement: inside the sandbox at
-    // every level after one its launcher confined, which may have written
-    // the repository's configuration in its write roots (the review of the
-    // extensions' process starts).
+    // look's git is the session's, inside the sandbox wherever it enforces,
+    // at every level: a program its launcher confined may have written the
+    // repository's configuration in its write roots (the review of the
+    // extensions' process starts; every look since the third security fix).
     let detector = (!write_roots.is_empty() || launcher.is_none()).then(|| {
-        let git: Arc<dyn cineris_base::git::Confinement> = if launcher.is_some() {
-            Arc::new(FollowingTheProgram(Arc::clone(&parts.git)))
-        } else {
-            Arc::clone(&parts.git) as Arc<dyn cineris_base::git::Confinement>
-        };
+        let git = Arc::clone(&parts.git) as Arc<dyn cineris_base::git::Confinement>;
         Arc::new(
             ChangeDetector::new(cx.paths.root().to_native_string())
                 .trusting_the_repository(parts.live.repository_trusted())
@@ -529,12 +526,13 @@ async fn record_changes(
 }
 
 /// The look at the protected paths after a program that had a write root:
-/// kept for the next confined start's comparison, what changed recorded in
-/// the round's checkpoint, and the turn stopped, with the script's call
-/// stopped naming the change, when a protected path changed or the look
-/// stopped short where the one before did not. A program that left a
-/// process the kill could not clear stops the turn too: it may still write
-/// one.
+/// what the program changed put back at once (the third security fix), the
+/// last look kept for the next confined start's comparison, what could not
+/// be put back recorded in the round's checkpoint, and the turn stopped,
+/// with the script's call stopped naming the change, when a protected path
+/// changed or the look stopped short where the one before did not. A
+/// program that left a process the kill could not clear stops the turn
+/// too: it may still write one.
 async fn look_after(
     parts: &ExecParts,
     host: &CallHost<'_>,
@@ -546,31 +544,23 @@ async fn look_after(
     // Not cancelled: the program ran, and what it changed is looked at
     // whatever became of the call since.
     let free = CancelToken::new();
-    let (changed, complete, after) = run_blocking(&free, move |_| {
-        let (changed, after) = watch.changes_since(&before);
-        let complete = (before.is_complete(), after.is_complete());
-        (changed, complete, after)
-    })
-    .await
-    .map_err(|error| {
-        HostError::Failed(format!("the protected paths were not looked at: {error}"))
-    })?;
-    parts.sandbox.remember_after(after);
+    let found = run_blocking(&free, move |_| protected_changes(&watch, &before))
+        .await
+        .map_err(|error| {
+            HostError::Failed(format!("the protected paths were not looked at: {error}"))
+        })?;
+    parts.sandbox.remember_after(found.after.clone());
     if let Some(rounds) = &parts.rounds {
         rounds.clear_touched();
-    }
-    let by_hand: Vec<PathBuf> = match &parts.rounds {
-        Some(rounds) if !changed.is_empty() => {
+        if !found.left.is_empty() {
             let rounds = Arc::clone(rounds);
-            let recorded: Vec<Changed> = changed.clone();
-            run_blocking(&free, move |_| rounds.record_protected(&recorded))
-                .await
-                .unwrap_or_else(|_| changed.iter().map(|one| one.path.clone()).collect())
+            let left: Vec<Changed> = found.left.clone();
+            let _ = run_blocking(&free, move |_| rounds.record_protected(&left)).await;
         }
-        _ => changed.iter().map(|one| one.path.clone()).collect(),
-    };
+    }
+    let (changed, complete) = (&found.changed, found.complete);
     let root = cx.paths.root().to_fs_path();
-    if let Some(note) = protected_note(&changed, complete, &root, &by_hand) {
+    if let Some(note) = protected_note(changed, &found.left, complete, &root) {
         if !changed.is_empty() || (complete.0 && !complete.1) {
             // The turn stops, and the script's call with it: a script that
             // caught a refusal would go on as if nothing had changed.
