@@ -57,7 +57,7 @@ use std::sync::Arc;
 use cineris_base::CancelToken;
 use cineris_base::child_env::Withheld;
 use cineris_ext::host::{EXEC_OUTPUT_CAP, ExecOutput, ExecRequest, HostError};
-use cineris_sandbox::protect::{Changed, Snapshot, Watch};
+use cineris_sandbox::protect::{Changed, Snapshot};
 use cineris_tools::process::{Argument, CommandLine, Ending, Exit, Launch, Runner, Start};
 use cineris_tools::shell::ChangeDetector;
 use cineris_tools::{Effect, NetworkTarget, Shell, ShellKind, ShellLive, run_blocking};
@@ -339,8 +339,7 @@ pub(crate) async fn run(
     let watch = launcher
         .as_ref()
         .filter(|_| !write_roots.is_empty())
-        .and_then(|_| parts.sandbox.protected())
-        .cloned();
+        .and_then(|_| parts.sandbox.protected());
     let launch = match &launcher {
         Some(launcher) => {
             let arguments = command
@@ -386,11 +385,17 @@ pub(crate) async fn run(
         },
     };
 
-    // 5. The look before it.
+    // 5. The look before it, with the folder the repository's
+    // configuration names for its hooks read first.
     let before = match &watch {
-        Some(watch) => {
-            let watch = watch.clone();
-            Some(blocking(cx, move || watch.take()).await?)
+        Some(_) => {
+            let (sandbox, git) = (Arc::clone(&parts.sandbox), Arc::clone(&parts.git));
+            let root = cx.paths.root().to_fs_path();
+            blocking(cx, move || {
+                sandbox.follow_hooks(&*git, &root);
+                sandbox.protected().map(|watch| watch.take())
+            })
+            .await?
         }
         None => None,
     };
@@ -476,9 +481,9 @@ pub(crate) async fn run(
 
     // 5. The look after it, then 7.: a protected path's exact record comes
     // first, as only the first record of a file in a round counts.
-    let looked = match (watch, before) {
-        (Some(watch), Some(before)) => look_after(parts, host, watch, before, escaped).await,
-        _ => Ok(()),
+    let looked = match before {
+        Some(before) => look_after(parts, host, before, escaped).await,
+        None => Ok(()),
     };
     if let (Some(detector), Some(before)) = (detector, changes_before) {
         record_changes(parts, cx, detector, before).await;
@@ -536,19 +541,26 @@ async fn record_changes(
 async fn look_after(
     parts: &ExecParts,
     host: &CallHost<'_>,
-    watch: Watch,
     before: Snapshot,
     escaped: bool,
 ) -> Result<(), HostError> {
     let cx = host.cx;
     // Not cancelled: the program ran, and what it changed is looked at
-    // whatever became of the call since.
+    // whatever became of the call since. The folder for hooks is read again
+    // first: the program may have named another through a file the
+    // configuration includes.
     let free = CancelToken::new();
-    let found = run_blocking(&free, move |_| protected_changes(&watch, &before))
-        .await
-        .map_err(|error| {
-            HostError::Failed(format!("the protected paths were not looked at: {error}"))
-        })?;
+    let (sandbox, git) = (Arc::clone(&parts.sandbox), Arc::clone(&parts.git));
+    let root = cx.paths.root().to_fs_path();
+    let found = run_blocking(&free, move |_| {
+        sandbox.follow_hooks(&*git, &root);
+        sandbox
+            .protected()
+            .map(|watch| protected_changes(&watch, &before))
+    })
+    .await
+    .map_err(|error| HostError::Failed(format!("the protected paths were not looked at: {error}")))?
+    .ok_or_else(|| HostError::Failed("the protected paths were not looked at".to_owned()))?;
     parts.sandbox.remember_after(found.after.clone());
     if let Some(rounds) = &parts.rounds {
         rounds.clear_touched();

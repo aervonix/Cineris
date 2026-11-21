@@ -1561,6 +1561,52 @@ mod confined {
         });
     }
 
+    /// A program with a write root that plants a hook in the folder the
+    /// repository's configuration names for its hooks (`core.hooksPath`),
+    /// which is not on the protected list, has it found and put back, and
+    /// its call stopped: the folder is watched around a program as around
+    /// a confined command (the third security fix).
+    #[test]
+    fn sys_a_hook_a_program_plants_in_the_hooks_folder_is_put_back() {
+        use cineris_testkit::scratch::git;
+
+        if !enforcing_here() {
+            return;
+        }
+        let world = World::new("exec_hooks_folder", []);
+        world.put("tracked.txt", "one\n");
+        git(
+            &world.workspace,
+            &["init", "--quiet", "--initial-branch=main"],
+        );
+        git(&world.workspace, &["config", "core.hooksPath", ".githooks"]);
+        let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\"**\"]");
+        world.provider.push(run_call(
+            "c1",
+            "probe",
+            &json!({"program": "sh", "args": [
+                "-c", "mkdir -p .githooks && printf 'evil\\n' > .githooks/pre-push"
+            ]}),
+        ));
+        world.provider.push(says("Done."));
+        let core = world.core_with(|options| {
+            options.extensions = vec![probe];
+            options.launcher = Some(launcher());
+        });
+        world.run(async {
+            let front = front_at(&world, &core, cineris_protocol::lease::Level::Unrestricted).await;
+            front.turn("run it").await;
+            let answer = stopped(&front, 0);
+            assert!(
+                answer.contains("`.githooks/pre-push` (created)")
+                    && answer.contains("They were put back"),
+                "{answer}"
+            );
+            assert!(world.read(".githooks/pre-push").is_none());
+            front.close().await;
+        });
+    }
+
     /// The open item's case through an extension's program, end to end
     /// (the third security fix; `outstanding`'s
     /// `a-filter-a-confined-program-plants-runs-unconfined-later`): at

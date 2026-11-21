@@ -47,6 +47,7 @@ One record per significant choice. Each says what the options were, what was cho
 | [0039](0039-the-binary-s-budgets-are-20-mib-on-linux-and-25-on-windows.md) | The binary's budgets are 20 MiB on Linux and 25 on Windows | Accepted by the owner on 2026-11-19. Replaces the reserve of [decision 0036](0036-the-shipped-binary-is-optimised-for-size.md). |
 | [0040](0040-extensions-run-in-a-runtime-each-checked-by-their-manifest-and-then-the-permission-engine.md) | Extensions run in a runtime each, checked by their manifest and then the permission engine | Accepted by the maintainers, 2026-11-20 (step 28) |
 | [0041](0041-an-extension-s-state-is-kept-in-the-session-s-records-and-a-project-file-read-strictly-within-fixed-bounds.md) | An extension's state is kept in the session's records and a project file read strictly, within fixed bounds | Accepted by the maintainers during step 28's build. |
+| [0042](0042-a-sandbox-write-entry-that-holds-the-harness-s-own-files-is-left-out-and-the-sandbox-stays-on.md) | A sandbox.write entry that holds the harness's own files is left out, and the sandbox stays on | Accepted by the owner on 2026-11-21, in the third security fix |
 
 The owner's answers are dated 2026-11-12 unless a row says otherwise, and are recorded in the [build plan](../build-plan.md) and, from step 4 on, in each step's [records](../steps/README.md).
 
