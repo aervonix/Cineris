@@ -11,8 +11,10 @@
 //! **Read strictly** (the answer decides, so it is enforced): a field that
 //! is not one of these, a field its event does not take, a field given
 //! twice, a decision that is not one of its event's, or anything but one
-//! object is a failure, which on a gating event counts as `deny`. The
-//! answer is at most [`MAX_ANSWER`] bytes.
+//! object is a failure, which on a gating event counts as `deny`. So is an
+//! object anywhere in `arguments` that holds a key twice: a reader that
+//! takes the first and one that takes the last would see two calls. The
+//! answer is at most [`MAX_ANSWER`] bytes, its `arguments` with it.
 
 use serde::Deserialize;
 use serde_json::Value as Json;
@@ -105,7 +107,9 @@ impl<'de> Deserialize<'de> for Written {
                     match key.as_str() {
                         "decision" => written.decision = map.next_value()?,
                         "reason" => written.reason = map.next_value()?,
-                        "arguments" => written.arguments = map.next_value()?,
+                        "arguments" => {
+                            written.arguments = map.next_value::<Option<Strict>>()?.map(|it| it.0);
+                        }
                         "context" => written.context = map.next_value()?,
                         other => return Err(A::Error::unknown_field(other, FIELDS)),
                     }
@@ -115,6 +119,85 @@ impl<'de> Deserialize<'de> for Written {
             }
         }
         deserializer.deserialize_map(Fields)
+    }
+}
+
+/// A JSON value read with no object in it, at any depth, holding a key
+/// twice.
+struct Strict(Json);
+
+impl<'de> Deserialize<'de> for Strict {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        deserializer.deserialize_any(StrictValue).map(Strict)
+    }
+}
+
+/// Reads one JSON value of any kind, refusing a key given twice.
+struct StrictValue;
+
+impl<'de> serde::de::Visitor<'de> for StrictValue {
+    type Value = Json;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Json, E> {
+        Ok(Json::Bool(value))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Json, E> {
+        Ok(Json::from(value))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Json, E> {
+        Ok(Json::from(value))
+    }
+
+    fn visit_f64<E: serde::de::Error>(self, value: f64) -> Result<Json, E> {
+        serde_json::Number::from_f64(value)
+            .map(Json::Number)
+            .ok_or_else(|| E::custom("a number JSON cannot hold"))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Json, E> {
+        Ok(Json::String(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Json, E> {
+        Ok(Json::String(value))
+    }
+
+    fn visit_unit<E>(self) -> Result<Json, E> {
+        Ok(Json::Null)
+    }
+
+    fn visit_none<E>(self) -> Result<Json, E> {
+        Ok(Json::Null)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<Json, A::Error> {
+        let mut items = Vec::new();
+        while let Some(Strict(item)) = seq.next_element::<Strict>()? {
+            items.push(item);
+        }
+        Ok(Json::Array(items))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut map: A) -> Result<Json, A::Error> {
+        use serde::de::Error as _;
+        let mut object = serde_json::Map::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if object.contains_key(&key) {
+                return Err(A::Error::custom(format_args!(
+                    "duplicate key `{}` in `arguments`",
+                    cineris_base::in_code(cineris_base::text::truncate_bytes(&key, 40))
+                )));
+            }
+            let Strict(value) = map.next_value::<Strict>()?;
+            object.insert(key, value);
+        }
+        Ok(Json::Object(object))
     }
 }
 
@@ -230,6 +313,16 @@ mod tests {
         assert_eq!(answer.decision, Some(Decision::Ask));
         assert_eq!(answer.reason.as_deref(), Some("a generated file"));
         assert_eq!(answer.arguments.unwrap()["path"], "b");
+        // Every kind of value reads as it is written.
+        let deep = read(
+            Event::ToolBefore,
+            r#"{"arguments": {"a": [1, -2, 2.5, true, null, "x", {"b": {}}], "c": []}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            Json::Object(deep.arguments.unwrap()),
+            serde_json::json!({"a": [1, -2, 2.5, true, null, "x", {"b": {}}], "c": []})
+        );
         let denied = read(Event::PromptSubmit, r#"{"decision":"deny","context":"x"}"#).unwrap();
         assert_eq!(denied.decision, Some(Decision::Deny));
         assert_eq!(denied.context.as_deref(), Some("x"));
@@ -261,6 +354,16 @@ mod tests {
                 "not one JSON object",
             ),
             (Event::ToolBefore, r#"{"arguments":[1]}"#, "not an object"),
+            (
+                Event::ToolBefore,
+                r#"{"arguments":{"command":"ls","command":"rm -rf x"}}"#,
+                "duplicate key `command` in `arguments`",
+            ),
+            (
+                Event::ToolBefore,
+                r#"{"arguments":{"edits":[{"path":"a","path":"b"}]}}"#,
+                "duplicate key `path` in `arguments`",
+            ),
             (Event::ToolBefore, r#"["deny"]"#, "not one JSON object"),
             (Event::ToolBefore, r#"{} {}"#, "not one JSON object"),
             (Event::ToolBefore, "deny", "not one JSON object"),
