@@ -68,9 +68,13 @@ fn the_documented_classes_hold() {
         assert_eq!(class_of(key), Trust::RaisesCost, "{key}");
     }
     // Can run code.
-    for key in ["hooks.*", "extensions.*", "mcp.*"] {
+    for key in ["hooks.*", "mcp.*"] {
         assert_eq!(class_of(key), Trust::RunsCode, "{key}");
     }
+    // An extension's entry only turns it off, and is the user's alone: a
+    // project's extension is kept out by not trusting the project, and a
+    // project may not turn the user's own off (step 28).
+    assert_eq!(class_of("extensions.*.enabled"), Trust::UserOnly);
     // Can stop every command.
     assert_eq!(class_of("shell.env_remove"), Trust::StopsCommands);
     // The project's checks (step 19): a project may turn them down and
