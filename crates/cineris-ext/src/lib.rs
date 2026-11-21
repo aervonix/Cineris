@@ -4,6 +4,8 @@
 //! Being built in step 28 (`docs/build-plan.md`; the design is in
 //! `docs/steps/28/answered.md`). What is always here:
 //!
+//! - [`discover`]: the extensions in the user's folder of extensions and
+//!   the project's, each folder read whole and its manifest checked;
 //! - [`folder`]: an extension's folder read whole into a snapshot, and its
 //!   hash, which is what is pinned;
 //! - [`manifest`]: `extension.toml`, read strictly;
@@ -12,12 +14,16 @@
 //! - [`host`]: the host functions' contract, and [`host::serve`], which
 //!   checks the manifest before the session's side is asked;
 //! - [`registration`]: what a script registers;
+//! - [`cache`]: the registration cache, what each approved extension
+//!   registered, kept by its hash;
 //! - [`event`]: the seven events hooks run on.
 //!
 //! Behind the `scripts` feature, [`engine`]: QuickJS, one runtime an
 //! extension on a thread of its own.
 
+pub mod cache;
 pub mod capability;
+pub mod discover;
 #[cfg(feature = "scripts")]
 pub mod engine;
 pub mod event;
