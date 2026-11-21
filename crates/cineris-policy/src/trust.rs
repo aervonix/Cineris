@@ -783,6 +783,26 @@ impl TrustStore {
             .collect())
     }
 
+    /// Every hash that a trusted project has pinned for a definition of
+    /// `kind`, of every project and whatever its name (since step 28): what
+    /// a store kept by hash and shared by projects, the registration cache
+    /// of extensions, may keep. A project not trusted pins nothing.
+    ///
+    /// # Errors
+    ///
+    /// When the file cannot be read or is not understood. The caller keeps
+    /// what it holds, rather than drop another project's.
+    pub fn pinned_hashes(&self, kind: &TrustResourceKind) -> Result<Vec<ContentHash>, TrustError> {
+        Ok(self
+            .read()?
+            .projects
+            .into_iter()
+            .flat_map(|project| project.pinned)
+            .filter(|pin| pin.kind == kind.as_str())
+            .map(|pin| pin.hash)
+            .collect())
+    }
+
     /// Reads the file, changes it and writes it if `change` says it changed
     /// (the second of what it returns), with the lock held throughout. Every
     /// change to the file goes through here.
@@ -950,6 +970,56 @@ mod tests {
         assert!(!forgotten.is_trusted() && !forgotten.is_refused());
         assert!(!again.forget(&key).unwrap());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_hashes_pinned_of_a_kind_are_every_trusted_projects() {
+        use crate::store_lock::tests::Scratch;
+
+        let scratch = Scratch::new();
+        let clock: SharedClock = std::sync::Arc::new(
+            cineris_base::FakeClock::starting_at("2026-11-21T10:00:00Z").unwrap(),
+        );
+        let store = TrustStore::new(scratch.0.join("trust.toml"), clock);
+        let extension =
+            |name: &str, text: &str| Definition::of(TrustResourceKind::Extension, name, [text]);
+        let (one, other, gone) = (
+            extension("tracker", "one"),
+            extension("tracker", "other"),
+            extension("deploy", "gone"),
+        );
+        let (first, second, third) = (
+            ProjectKey::new("first"),
+            ProjectKey::new("second"),
+            ProjectKey::new("third"),
+        );
+        store
+            .trust(&first, "~/a", &[one.clone(), hook("format", &["x"])], false)
+            .unwrap();
+        store
+            .trust(&second, "~/b", std::slice::from_ref(&other), false)
+            .unwrap();
+        store
+            .trust(&third, "~/c", std::slice::from_ref(&gone), false)
+            .unwrap();
+        // A project whose trust is taken away pins nothing.
+        store.revoke(&third).unwrap();
+        let mut pinned = store.pinned_hashes(&TrustResourceKind::Extension).unwrap();
+        pinned.sort();
+        let mut expected = vec![one.hash, other.hash];
+        expected.sort();
+        assert_eq!(
+            pinned, expected,
+            "of every trusted project, of the kind asked"
+        );
+        assert_eq!(
+            store.pinned_hashes(&TrustResourceKind::Hook).unwrap(),
+            [hook("format", &["x"]).hash]
+        );
+        // A file that is not understood says so: nothing is taken as pinned
+        // by a caller that would drop what it holds.
+        std::fs::write(store.path(), "version = 9\n").unwrap();
+        assert!(store.pinned_hashes(&TrustResourceKind::Extension).is_err());
     }
 
     #[test]
