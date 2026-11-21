@@ -11,7 +11,7 @@ use std::time::Duration;
 use cineris_core::ClientInfo;
 use cineris_ext::discover::AN_EXTENSION_IS_READ;
 use cineris_policy::{Definition, PinStore, Standing};
-use cineris_protocol::methods::{ApprovalChoice, TrustResourceKind};
+use cineris_protocol::methods::{ApprovalChoice, TrustResource, TrustResourceKind};
 use cineris_testkit::Hold;
 use serde_json::json;
 
@@ -713,5 +713,54 @@ fn perf_a_crafted_folder_of_extensions_is_looked_at_within_its_bounds() {
     ] {
         cineris_testkit::numbers::report(what, took.as_secs_f64() * 1e3, "ms");
         assert!(took < bound, "{what}: {took:?}");
+    }
+}
+
+/// The trust question warns, before the yes, of a write root of the
+/// project's own configuration that holds the harness's files, which
+/// trusting it would turn the sandbox off with (the maintainers, after the
+/// fresh review of step 28): `~/.cargo`, with the launcher in
+/// `~/.cargo/bin`. An ordinary write root, a folder in the workspace, gets
+/// no such words.
+#[test]
+fn the_trust_question_warns_of_a_write_root_that_would_turn_the_sandbox_off() {
+    let warned = "This project's configuration asks to write in `~/.cargo`, which holds \
+                  Cineris's own files. If you trust it, its sessions run without the sandbox.";
+    for (test, root) in [
+        ("review_warns_of_the_cargo_folder", "~/.cargo"),
+        ("review_warns_of_nothing_ordinary", "build"),
+    ] {
+        let world = World::new(test, []);
+        let bin = world.home.join(".cargo/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("cineris"), "the launcher").unwrap();
+        world.project_config(&format!("[sandbox]\nwrite = [\"{root}\"]\n"));
+        let core = world.core_with(|options| {
+            options.launcher = Some((bin.join("cineris"), Vec::new()));
+            options.sandbox = Some(cineris_sandbox::support::Support::Landlock(8));
+        });
+        world.run(async {
+            let (front, asked) = open_answering(&world, &core, not_now()).await;
+            assert_eq!(asked.len(), 1, "{test}");
+            let said: Vec<&TrustResource> = asked[0]
+                .resources
+                .iter()
+                .filter(|resource| resource.detail.contains("run without the sandbox"))
+                .collect();
+            if root == "~/.cargo" {
+                assert_eq!(said.len(), 1, "{test}: {:#?}", asked[0].resources);
+                assert_eq!(said[0].kind, TrustResourceKind::Settings);
+                assert_eq!(said[0].detail, warned);
+                // Said before anything else the question lists.
+                assert!(
+                    std::ptr::eq(said[0], &asked[0].resources[0]),
+                    "{test}: {:#?}",
+                    asked[0].resources
+                );
+            } else {
+                assert!(said.is_empty(), "{test}: {said:#?}");
+            }
+            front.close().await;
+        });
     }
 }

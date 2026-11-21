@@ -252,8 +252,7 @@ fn read_into(
             if files.len() >= MAX_FILES {
                 return Err(FolderError::TooManyFiles);
             }
-            let content = read_file(&path, &relative)?;
-            *total += content.len() as u64;
+            let content = read_file(&path, &relative, total)?;
             if *total > MAX_TOTAL_BYTES {
                 return Err(FolderError::TooLarge);
             }
@@ -265,10 +264,14 @@ fn read_into(
     Ok(())
 }
 
-/// One file, opened without following a link and read to at most one byte
-/// past its cap.
-fn read_file(path: &Path, relative: &str) -> Result<Vec<u8>, FolderError> {
-    let (file, _metadata) = open_regular(path).map_err(|error| match error {
+/// One file, opened without following a link, refused by its length before
+/// it is read when that is past its cap or the folder's, and otherwise read
+/// to at most one byte past its cap. Every byte read is added to `total`, a
+/// read that fails, or finds the file grown past its cap, included (the
+/// re-check of step 28's fresh review: a file over 1 MiB was read whole and
+/// not counted).
+fn read_file(path: &Path, relative: &str, total: &mut u64) -> Result<Vec<u8>, FolderError> {
+    let (file, metadata) = open_regular(path).map_err(|error| match error {
         OpenError::Link => FolderError::Link(relative.to_owned()),
         OpenError::NotAFile | OpenError::Directory => FolderError::NotRegular(relative.to_owned()),
         other => FolderError::Unreadable {
@@ -276,13 +279,19 @@ fn read_file(path: &Path, relative: &str) -> Result<Vec<u8>, FolderError> {
             reason: other.to_string(),
         },
     })?;
+    if metadata.len() > MAX_FILE_BYTES {
+        return Err(FolderError::FileTooLarge(relative.to_owned()));
+    }
+    if total.saturating_add(metadata.len()) > MAX_TOTAL_BYTES {
+        return Err(FolderError::TooLarge);
+    }
     let mut content = Vec::new();
-    file.take(MAX_FILE_BYTES + 1)
-        .read_to_end(&mut content)
-        .map_err(|error| FolderError::Unreadable {
-            path: relative.to_owned(),
-            reason: error.to_string(),
-        })?;
+    let read = file.take(MAX_FILE_BYTES + 1).read_to_end(&mut content);
+    *total += content.len() as u64;
+    read.map_err(|error| FolderError::Unreadable {
+        path: relative.to_owned(),
+        reason: error.to_string(),
+    })?;
     if content.len() as u64 > MAX_FILE_BYTES {
         return Err(FolderError::FileTooLarge(relative.to_owned()));
     }
@@ -298,6 +307,35 @@ mod tests {
             .iter()
             .map(|(path, content)| ((*path).to_owned(), content.as_bytes().to_vec()))
             .collect()
+    }
+
+    /// What a read reports it read: a file past its cap, or one that would
+    /// take the folder past its own, is refused by its length and not read;
+    /// what was read before a refusal counts (the re-check of step 28's
+    /// fresh review).
+    #[test]
+    fn a_read_reports_every_byte_it_read_and_reads_no_file_past_a_cap() {
+        let dir = std::env::temp_dir().join(format!("cineris-ext-counted-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("large")).unwrap();
+        fs::write(dir.join("large/big.bin"), vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        let (read, bytes) = Snapshot::read_counted(&dir.join("large"));
+        assert_eq!(read, Err(FolderError::FileTooLarge("big.bin".to_owned())));
+        assert_eq!(bytes, 0, "refused by its length, unread");
+        // Five files of 1 MiB: four are read, and the fifth is refused
+        // before it is.
+        fs::create_dir_all(dir.join("many")).unwrap();
+        for file in 0..5 {
+            fs::write(
+                dir.join(format!("many/{file}.bin")),
+                vec![b'x'; usize::try_from(MAX_FILE_BYTES).unwrap()],
+            )
+            .unwrap();
+        }
+        let (read, bytes) = Snapshot::read_counted(&dir.join("many"));
+        assert_eq!(read, Err(FolderError::TooLarge));
+        assert_eq!(bytes, MAX_TOTAL_BYTES);
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
