@@ -2818,7 +2818,7 @@ find: Some(names) if root.dir.is_absolute() =>
 replace: Some(names) if false =>
 os: windows
 caught-by:
-    discover::on_windows_a_root_in_another_case_and_with_backslashes_is_the_same_place
+    cineris-ext discover::tests::on_windows_a_root_in_another_case_and_with_backslashes_is_the_same_place
 
 # ------------------------------------------------------------ one name, two roots
 
