@@ -100,7 +100,7 @@ rule: A session's values are read back from its log: a resume has them as the se
 file: crates/cineris-core/src/ext/state.rs
 in: ExtState::session_values
 find: *slot = Some(self.read_session()?);
-replace: *slot = Some(HashMap::new());
+replace: *slot = Some(SessionValues::default());
 caught-by:
     cineris-core::it ext_state::a_resumed_session_has_its_values_as_it_left_them
     cineris-core::it ext_state::a_fork_has_the_values_as_they_were_at_its_point_and_neither_sees_the_others_sets
@@ -119,7 +119,7 @@ caught-by:
 rule: A session's value is read back in the same session once it is set.
 file: crates/cineris-core/src/ext/state.rs
 in: ExtState::session_set
-find: all.insert(id, after);
+find: all.values.insert(id, after);
 replace: drop((id, after));
 caught-by:
     cineris-core::it ext_state::a_session_value_is_read_back_in_the_session_and_a_set_to_null_removes_it
@@ -143,16 +143,21 @@ replace: state.get("value")
 caught-by:
     cineris-core ext::state::tests::only_a_records_state_is_a_change_of_a_value
 
-[break] fork-copies-no-extension-records
-rule: A fork copies an extension's records written before its point: its `session` values are there as they were.
+# The session store's change: `Log::fork` copies the `ext` records written
+# before the fork's point, so the fork's log holds the values as they were
+# there, and a resume of the fork reads them from it.
+
+[break] fork-does-not-copy-the-extensions-records
+rule: `Log::fork` copies an extension's records written before the fork's point: the fork, and a resume of it, have its `session` values as they were there.
 file: crates/cineris-session/src/session.rs
 in: Log::fork
-find: .filter(|&index| until.is_none_or(|until| index < until))
-replace: .filter(|_| false)
+find: copied.extend(self.record_indices(&Kind::Ext).into_iter().filter(|&index| until.is_none_or(|until| index < until)));
+replace: let _ = until;
 packages: cineris-session,cineris-core
 caught-by:
     cineris-session::it tree::a_fork_copies_the_extensions_records_written_before_its_point
     cineris-core::it ext_state::a_fork_has_the_values_as_they_were_at_its_point_and_neither_sees_the_others_sets
+    cineris-core::it ext_state::a_resumed_fork_has_the_values_as_they_were_at_the_fork
 
 [break] fork-copies-records-past-its-point
 rule: A fork has an extension's values as they were at its point, not as they are now.
@@ -164,6 +169,7 @@ packages: cineris-session,cineris-core
 caught-by:
     cineris-session::it tree::a_fork_copies_the_extensions_records_written_before_its_point
     cineris-core::it ext_state::a_fork_has_the_values_as_they_were_at_its_point_and_neither_sees_the_others_sets
+    cineris-core::it ext_state::a_resumed_fork_has_the_values_as_they_were_at_the_fork
 
 [break] fork-stops-records-at-the-point-itself
 rule: An extension's record written after a fork's point, before the conversation went on, is still the state there.
@@ -272,3 +278,52 @@ find: if would_be > STATE_MAX_BYTES && would_be > was {
 replace: if would_be > STATE_MAX_BYTES {
 caught-by:
     cineris-core ext::state::tests::the_values_are_kept_up_to_the_cap_and_no_further
+
+# ------------------------------------------- the session's log, bounded
+
+[break] state-session-records-unbounded
+rule: An extension's `session` records in one session's log are held to their budget (16 MiB): past it a set is refused, and nothing is written.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::session_set
+find: within_budget(written, bytes, self.session_budget)?;
+replace:
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+
+[break] state-session-records-one-byte-past-their-budget
+rule: At the budget of an extension's `session` records a set is kept, and one byte past it a set is refused.
+file: crates/cineris-core/src/ext/state.rs
+in: within_budget
+find: if would_be > budget {
+replace: if would_be > budget + 1 {
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+    cineris-core ext::state::tests::the_session_records_are_held_to_their_budget
+
+[break] state-session-records-budget-reset-by-a-resume
+rule: The budget of an extension's `session` records counts what the log already holds when the values are first read: a resume does not start it again.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::read_session
+find: *written = written.saturating_add(record_bytes(&record.ext, &record.data));
+replace: let _ = written;
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+
+[break] state-session-records-not-counted-once-written
+rule: Each record written counts against the budget of the extension's `session` records.
+file: crates/cineris-core/src/ext/state.rs
+in: ExtState::session_set
+find: all.written.insert(id.clone(), written.saturating_add(bytes));
+replace:
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+
+[break] state-session-records-counted-without-their-line
+rule: A `session` record counts its `ext` and `data` and an allowance for the rest of its line, not its `ext` and `data` alone.
+file: crates/cineris-core/src/ext/state.rs
+in: record_bytes
+find: .saturating_add(LINE_ALLOWANCE)
+replace: .saturating_add(0)
+caught-by:
+    cineris-core::it ext_state::a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume
+    cineris-core ext::state::tests::the_session_records_are_held_to_their_budget
