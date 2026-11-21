@@ -291,6 +291,7 @@ rule: A tool hook's input gives the plan in one line as `plan`.
 file: crates/cineris-agent/src/hooks.rs
 in: HookInput::to_json
 in-string: plan
+occurrence: 1
 replace: summary
 caught-by:
     cineris-agent::it hooks::a_hook_that_denies_refuses_a_call_the_policy_allowed
@@ -353,3 +354,235 @@ find: turn.cancel.race(hooks::ask_all(set, matched, input)).await?
 replace: Some(hooks::ask_all(set, matched, input).await)?
 caught-by:
     cineris-agent::it hooks::an_interrupt_while_the_prompts_hooks_are_asked_gives_the_prompt_back
+
+# Round 2: the events that only add (`tool.after`, `turn.end`,
+# `compaction.before`), the reasons lines, and the terminal's view of it.
+
+[break] a-tool-after-note-is-dropped
+rule: A `tool.after` hook's text ends the call's result.
+file: crates/cineris-agent/src/round.rs
+in: Round::finished
+find: item.content.extend(notes);
+occurrence: 1
+replace: drop(notes);
+caught-by:
+    cineris-agent::it hooks::a_tool_after_hooks_note_ends_the_result_under_a_line_naming_it
+    cineris-agent::it hooks::a_tool_after_hook_is_waited_for
+
+[break] a-tool-after-note-is-not-labelled
+rule: A `tool.after` hook's note is under a line that names the hook and says the text is the hook's.
+file: crates/cineris-agent/src/hooks.rs
+in: result_note
+in-string: adds this note to the result above
+replace: says
+caught-by:
+    cineris-agent::it hooks::a_tool_after_hooks_note_ends_the_result_under_a_line_naming_it
+
+[break] a-tool-after-hook-is-skipped
+rule: A call's `tool.after` hooks are asked once it has run, and waited for, before its result is recorded.
+file: crates/cineris-agent/src/round.rs
+in: Round::start
+find: Some(after) => after.notes(&result, &cx.cancel).await
+replace: Some(_) => Vec::new()
+caught-by:
+    cineris-agent::it hooks::a_tool_after_hook_is_waited_for
+    cineris-agent::it hooks::a_tool_after_hooks_note_ends_the_result_under_a_line_naming_it
+
+[break] a-tool-after-failure-is-not-shown
+rule: On `tool.after`, a hook that fails is shown to the user.
+file: crates/cineris-agent/src/round.rs
+in: After::notes
+find: for failed in added.failed {
+replace: for failed in added.failed.into_iter().filter(|_| false) {
+caught-by:
+    cineris-agent::it hooks::a_tool_after_hook_that_fails_is_shown_and_adds_nothing
+
+[break] a-tool-after-hook-sees-the-models-arguments
+rule: A `tool.after` hook is shown the arguments the call ran with: a hook's replacement, if one was allowed.
+file: crates/cineris-agent/src/round.rs
+in: Round::start
+find: .map_or_else(|| call.arguments.clone(), |replaced| replaced.arguments.clone())
+replace: .map_or_else(|| call.arguments.clone(), |_| call.arguments.clone())
+caught-by:
+    cineris-agent::it hooks::tool_after_sees_the_calls_that_ran_with_the_arguments_they_ran_with
+
+[break] an-event-that-only-adds-takes-a-decision
+rule: An event that only adds takes `context` alone: a decision is outside its contract.
+file: crates/cineris-agent/src/hooks.rs
+in: read
+find: ("decision", HookEvent::PromptSubmit | HookEvent::ToolBefore) =>
+replace: ("decision", _) =>
+caught-by:
+    cineris-agent hooks::tests::an_answer_is_read_strictly_by_its_events_contract
+    cineris-agent::it hooks::a_tool_after_hook_that_fails_is_shown_and_adds_nothing
+    cineris-agent::it hooks::a_turn_end_hook_that_fails_is_shown_and_adds_nothing
+
+[break] an-event-that-only-adds-takes-a-reason
+rule: An event that only adds takes `context` alone: a reason is outside its contract.
+file: crates/cineris-agent/src/hooks.rs
+in: read
+find: ("reason", HookEvent::PromptSubmit | HookEvent::ToolBefore) =>
+replace: ("reason", _) =>
+caught-by:
+    cineris-agent hooks::tests::an_answer_is_read_strictly_by_its_events_contract
+    cineris-agent::it hooks::a_tool_after_hook_that_fails_is_shown_and_adds_nothing
+
+[break] a-turn-end-notice-is-dropped
+rule: A `turn.end` hook's text is a notice for the next turn.
+file: crates/cineris-agent/src/turn.rs
+in: Session::turn_ended
+find: inbox.pending.push_back(
+replace: std::mem::drop(
+caught-by:
+    cineris-agent::it hooks::a_turn_end_hooks_notice_is_given_at_the_next_turns_start
+    cineris-agent::it hooks::a_turn_end_hooks_late_notice_comes_at_the_next_safe_boundary
+    cineris-agent::it hooks::the_events_that_only_add_across_the_turns_of_one_session
+
+[break] a-turn-end-notice-is-not-labelled
+rule: A `turn.end` hook's notice is under a line that names the hook and says the text is the hook's.
+file: crates/cineris-agent/src/hooks.rs
+in: turn_end_notice
+in-string: adds this after the turn before ended
+replace: says
+caught-by:
+    cineris-agent::it hooks::a_turn_end_hooks_notice_is_given_at_the_next_turns_start
+
+[break] a-turn-end-failure-is-not-shown
+rule: On `turn.end`, a hook that fails is shown to the user.
+file: crates/cineris-agent/src/turn.rs
+in: Session::turn_ended
+find: for failed in added.failed {
+replace: for failed in added.failed.into_iter().filter(|_| false) {
+caught-by:
+    cineris-agent::it hooks::a_turn_end_hook_that_fails_is_shown_and_adds_nothing
+
+[break] a-turn-end-hook-is-not-told-the-outcome
+rule: A `turn.end` hook's input says how the turn ended, as `outcome`.
+file: crates/cineris-agent/src/hooks.rs
+in: HookInput::to_json
+in-string: outcome
+occurrence: 2
+replace: result
+caught-by:
+    cineris-agent::it hooks::a_turn_end_hooks_notice_is_given_at_the_next_turns_start
+
+[break] compaction-instructions-are-dropped
+rule: A `compaction.before` hook's text goes into the summary request's instructions.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::compacting
+find: add_instructions(&mut request, instructions.as_deref().unwrap_or_default());
+replace: let _ = &instructions;
+caught-by:
+    cineris-agent::it hooks::a_compaction_hooks_instructions_go_into_the_summary_request_naming_it
+    cineris-agent::it hooks::the_events_that_only_add_across_the_turns_of_one_session
+
+[break] compaction-instructions-are-not-labelled
+rule: A `compaction.before` hook's instructions are under a line that names the hook and says they are not the user's.
+file: crates/cineris-agent/src/hooks.rs
+in: summary_instructions
+in-string: Instructions for the summary from the hook
+replace: From
+caught-by:
+    cineris-agent::it hooks::a_compaction_hooks_instructions_go_into_the_summary_request_naming_it
+    cineris-agent::it hooks::a_background_summarys_hooks_are_asked_before_it_is_requested
+
+[break] a-background-summary-skips-its-hooks
+rule: A summary prepared in the background has its `compaction.before` hooks asked before it is requested.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::start_background
+find: let asked = self.compaction_ask(turn, crate::hooks::CompactionTrigger::Background, None);
+replace: let asked: Option<CompactionAsk> = None;
+caught-by:
+    cineris-agent::it hooks::a_background_summarys_hooks_are_asked_before_it_is_requested
+
+[break] a-manual-compaction-is-told-otherwise
+rule: A `compaction.before` hook is told what set the compaction off: by hand, `manual`.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::compacting
+find: crate::hooks::CompactionTrigger::Manual
+replace: crate::hooks::CompactionTrigger::Threshold
+caught-by:
+    cineris-agent::it hooks::a_compaction_hooks_instructions_go_into_the_summary_request_naming_it
+
+[break] a-compaction-failure-is-not-shown
+rule: On `compaction.before`, a hook that fails is shown to the user.
+file: crates/cineris-agent/src/turn/epochs.rs
+in: Session::compaction_hooks
+find: for failed in added.failed {
+replace: for failed in added.failed.into_iter().filter(|_| false) {
+caught-by:
+    cineris-agent::it hooks::a_compaction_hook_that_fails_is_shown_and_adds_nothing
+
+[break] the-reasons-say-nothing-of-a-replacement
+rule: The reasons lines of a question about a replacement say that a hook changed the call, for a client that does not read `replaced`.
+file: crates/cineris-agent/src/hooks.rs
+in: HookQuestion::reasons
+find: .chain(self.replaced.as_ref().map(ReplacedArguments::reason_line))
+replace: .chain(None)
+caught-by:
+    cineris-agent hooks::tests::a_questions_reasons_name_each_hook_and_the_replacement
+
+[break] the-dialog-hides-the-models-arguments
+rule: The approval dialog shows the model's own arguments beside a hook's replacement.
+file: crates/cineris-tui/src/view/dialog.rs
+in: approval
+find: detail.extend(indented(&arguments(replaced.original.as_ref()), code, 6, width));
+replace: let _ = replaced.original.as_ref();
+caught-by:
+    cineris-tui view::dialog::tests::a_replacement_shows_the_hook_and_both_sets_of_arguments
+    cineris-tui app::tests::an_approval_a_hook_changed_shows_both_sets_of_arguments
+
+[break] the-dialog-draws-a-replacements-line-twice
+rule: The line of `reasons` that says a hook changed the call is drawn once, in the warning colour.
+file: crates/cineris-tui/src/view/dialog.rs
+in: approval
+find: if replaced_line.as_ref() == Some(reason) {
+replace: if false {
+caught-by:
+    cineris-tui view::dialog::tests::a_replacement_shows_the_hook_and_both_sets_of_arguments
+    cineris-tui app::tests::an_approval_a_hook_changed_shows_both_sets_of_arguments
+
+[break] the-dialog-hides-a-hook-that-asked
+rule: The approval dialog names each hook that asked, when its reasons do not.
+file: crates/cineris-tui/src/view/dialog.rs
+in: approval
+find: if !request.reasons.contains(&asks) {
+replace: if false {
+caught-by:
+    cineris-tui view::dialog::tests::a_hook_that_asked_is_named_when_the_reasons_do_not_say_it
+
+[break] the-dialog-draws-a-hooks-reason-unescaped
+rule: What a hook gave is drawn with what acts unseen escaped.
+file: crates/cineris-tui/src/view/dialog.rs
+in: approval
+find: &sanitize(&said)
+replace: &said
+caught-by:
+    cineris-tui view::dialog::tests::what_a_hook_gave_is_drawn_escaped
+
+[break] the-transcript-forgets-the-hook
+rule: A call that ran with a hook's arguments names the hook on its line in the transcript.
+file: crates/cineris-tui/src/app/tools.rs
+in: finish
+find: call.hook = Some(replaced.hook.clone());
+replace: let _ = &replaced.hook;
+caught-by:
+    cineris-tui app::tools::tests::a_result_a_hook_changed_names_the_hook_and_its_target
+
+[break] the-round-line-drops-the-hook
+rule: The round's line of a call a hook changed says so, after its measure.
+file: crates/cineris-tui/src/view/round.rs
+in: call_line
+find: if let Some(hook) = &call.hook {
+replace: if let Some(hook) = call.hook.as_ref().filter(|_| false) {
+caught-by:
+    cineris-tui view::round::tests::a_call_a_hook_changed_names_the_hook_on_its_line
+
+[break] a-returned-prompt-is-not-put-back
+rule: A prompt a hook refused comes back into the editor.
+file: crates/cineris-tui/src/app/state.rs
+in: App::event
+find: self.give_back(&text.join("\n"));
+replace: let _ = &text;
+caught-by:
+    cineris-tui app::tests::a_prompt_a_hook_refused_comes_back_into_the_editor_with_why
