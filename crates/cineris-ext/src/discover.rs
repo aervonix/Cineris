@@ -979,3 +979,6 @@ fn extension_in(
         manifest,
     }))
 }
+
+#[cfg(test)]
+mod tests;

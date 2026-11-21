@@ -26,7 +26,7 @@ use cineris_protocol::session::SessionSettings;
 use cineris_testkit::{FakeClock, FakeTimer, Hold, Response, block_on};
 use serde_json::json;
 
-use crate::{Answering, Front, World, calls, poll_once, says};
+use crate::{Answering, Front, World, calls, poll_once, says, settle};
 
 /// The name of every extension here.
 pub(crate) const NAME: &str = "probe";
@@ -179,6 +179,15 @@ pub(crate) async fn open_answering(
     open_as(world, core, ClientInfo::user(), answer).await
 }
 
+/// Opens a session in the world's workspace as a user's front end that
+/// answers a trust question not now: the extensions' tests' own start, a
+/// session kept in memory only ([`open_doing`]).
+pub(crate) async fn start(world: &World, core: &Core) -> Front {
+    open_answering(world, core, TrustResponse::default())
+        .await
+        .0
+}
+
 /// [`open_answering`], as a client of `info`.
 pub(crate) async fn open_as(
     world: &World,
@@ -207,7 +216,9 @@ pub(crate) async fn open_doing(
             settings: SessionSettings::default(),
             title: None,
             config: serde_json::Map::new(),
-            ephemeral: false,
+            // Kept in memory only: what these tests check is not the log,
+            // and its writes are much of a session's cost on Windows.
+            ephemeral: true,
         }),
     );
     let mut asked = Vec::new();
@@ -294,31 +305,56 @@ pub(crate) fn make_link(target: &Path, link: &Path) -> bool {
 
 // ------------------------------------------------------------ the user's own
 
+/// A user's extension stands by its pin, a session after another in one
+/// world and one core (folded for Windows' tier 2):
+/// - never pinned, it is not loaded, and the session says so with the
+///   command that approves it, its folder under `~`;
+/// - pinned, it is loaded from the cache with no engine started, and its
+///   first call makes its runtime, from the folder whose hash is pinned;
+/// - changed since its pin, it is not loaded, its script never evaluated,
+///   and the session says so with the command;
+/// - turned off by `[extensions.probe] enabled = false`, it is not loaded,
+///   and nothing is said or asked.
 #[test]
-fn a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started() {
-    let mut responses = searches().to_vec();
+fn a_users_extension_stands_by_its_pin() {
+    let mut responses = searches_times(2);
     responses.push(calls(&[(
         "c1",
         "tool_call",
         json!({"tool": "probe/echo", "arguments": {"x": 1}}),
     )]));
     responses.push(says("Done."));
-    let world = World::new("found_pinned", responses);
-    write_extension(&users(&world), "", "Gives its arguments back");
-    pin(&world, &users(&world));
-    cache(&world, &users(&world));
+    responses.extend(searches_times(2));
+    let world = World::new("found_users_standing", responses);
+    let folder = users(&world);
+    let command = format!("`cineris ext add {}`", users_shown(&world));
+    write_extension(&folder, "", "Gives its arguments back");
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        // Never pinned.
+        let front = start(&world, &core).await;
+        front.turn("look for the probe").await;
+        assert!(!found_probe(&front), "{:?}", front.results());
+        let told = about_probe(&front);
+        assert_eq!(told.len(), 1, "{told:?}");
+        assert!(told[0].contains("you have not approved it"), "{told:?}");
+        assert!(told[0].contains(&command), "{told:?}");
+        front.close().await;
+    });
+    assert_eq!(cineris_ext::engine::runtimes_made(), made);
+    pin(&world, &folder);
+    cache(&world, &folder);
+    let made = cineris_ext::engine::runtimes_made();
+    world.run(async {
+        // Pinned: found, judged and registered from the cache, no runtime
+        // made and no script evaluated.
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
-        // Found, judged and registered from the cache: no runtime was made,
-        // and no script evaluated.
         assert_eq!(cineris_ext::engine::runtimes_made(), made);
         assert!(about_probe(&front).is_empty(), "{:?}", front.notices());
-        // Its first call makes its runtime, from the folder whose hash is
-        // the pinned one.
+        // Its first call makes its runtime.
         front.answering(Answering::allow_all());
         front.turn("echo").await;
         let results = front.results();
@@ -327,21 +363,11 @@ fn a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started() {
         front.close().await;
     });
     assert_eq!(cineris_ext::engine::runtimes_made(), made + 1);
-}
-
-#[test]
-fn a_users_extension_changed_since_its_pin_is_not_loaded_and_says_how_to_approve_it() {
-    let world = World::new("found_changed", searches());
-    let folder = users(&world);
-    write_extension(&folder, "", "the first");
-    pin(&world, &folder);
-    cache(&world, &folder);
     // Changed after it was approved.
     write_extension(&folder, "", "the second");
-    let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         let told = about_probe(&front);
@@ -350,45 +376,19 @@ fn a_users_extension_changed_since_its_pin_is_not_loaded_and_says_how_to_approve
             told[0].contains("has changed since you approved it"),
             "{told:?}"
         );
-        let command = format!("`cineris ext add {}`", users_shown(&world));
         assert!(told[0].contains(&command), "{told:?}");
         front.close().await;
     });
     // The changed script was never evaluated.
     assert_eq!(cineris_ext::engine::runtimes_made(), made);
-}
-
-#[test]
-fn a_users_extension_never_pinned_is_not_loaded_and_says_how_to_approve_it() {
-    let world = World::new("found_never_pinned", searches());
-    write_extension(&users(&world), "", "never approved");
-    let core = world.core();
-    let made = cineris_ext::engine::runtimes_made();
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        front.turn("look for the probe").await;
-        assert!(!found_probe(&front), "{:?}", front.results());
-        let told = about_probe(&front);
-        assert_eq!(told.len(), 1, "{told:?}");
-        assert!(told[0].contains("you have not approved it"), "{told:?}");
-        let command = format!("`cineris ext add {}`", users_shown(&world));
-        assert!(told[0].contains(&command), "{told:?}");
-        front.close().await;
-    });
-    assert_eq!(cineris_ext::engine::runtimes_made(), made);
-}
-
-#[test]
-fn a_users_extension_turned_off_is_not_loaded_and_nothing_is_asked() {
-    let world = World::new("found_turned_off", searches());
+    // Turned off, though pinned as it is now.
     world.user_config("[extensions.probe]\nenabled = false\n");
-    write_extension(&users(&world), "", "turned off");
-    pin(&world, &users(&world));
-    cache(&world, &users(&world));
-    let core = world.core();
+    pin(&world, &folder);
+    cache(&world, &folder);
     let made = cineris_ext::engine::runtimes_made();
+    let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         // Nothing is said of it, and nothing asked: it is the user's word.
@@ -412,7 +412,7 @@ fn an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits
     let made = cineris_ext::engine::runtimes_made();
     let registering = Hold::new(cineris_core::ext::BEFORE_AN_EXTENSION_IS_REGISTERED);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut prompt = std::pin::pin!(front.prompt("look for the probe"));
         registering.drive_until_reached(prompt.as_mut()).await;
         // The registration is held: the prompt waits for it, no turn has
@@ -465,7 +465,7 @@ fn a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again() {
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
         for session in 0..2 {
-            let front = Front::start(&world, &core).await;
+            let front = start(&world, &core).await;
             front.turn("look for the probe").await;
             assert!(found_probe(&front), "{:?}", front.results());
             let said: Vec<String> = front
@@ -491,25 +491,67 @@ fn a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again() {
     assert!(kept.set_aside_path().exists());
 }
 
+/// The cache is taken and kept as the pins say, a session after another in
+/// one world and one core (folded for Windows' tier 2):
+/// - an entry under the extension's hash that names another extension is no
+///   entry of it: the extension is registered again, and kept as it is;
+/// - pruning keeps every trusted project's entries, since projects share
+///   the cache, and takes out a hash no pin names;
+/// - a trust store that cannot be read prunes nothing.
 #[test]
-fn pruning_the_cache_keeps_every_trusted_projects_entries() {
-    let world = World::new("found_pruned", searches());
+fn the_registration_cache_is_taken_and_pruned_as_the_pins_say() {
+    let world = World::new("found_cache_kept", searches_times(3));
     let folder = users(&world);
     write_extension(&folder, "", "Gives its arguments back");
     pin(&world, &folder);
-    let mine = cache(&world, &folder);
-    // Another project's extension, trusted there; and one no pin names.
-    let entry = |name: &str| {
+    let entry = |name: &str, tools: Vec<cineris_ext::registration::ToolDef>| {
         let manifest = Manifest::parse(&format!(
             "api = 1\nname = \"{name}\"\nversion = \"1\"\ndescription = \"x\"\nmain = \"main.js\"\n"
         ))
         .unwrap();
         Entry::new(
             &manifest,
-            cineris_ext::registration::Registration::default(),
+            cineris_ext::registration::Registration {
+                tools,
+                ..cineris_ext::registration::Registration::default()
+            },
             None,
         )
     };
+    // Under the extension's hash, an entry that names another extension and
+    // another tool: not what this folder registered.
+    let mine = definition(&folder).hash;
+    let planted = vec![cineris_ext::registration::ToolDef {
+        name: "planted".to_owned(),
+        description: "planted".to_owned(),
+        input: json!({"type": "object"}),
+        read_only: true,
+    }];
+    cache_file(&world)
+        .put(&mine, entry("other", planted))
+        .unwrap();
+    let core = world.core();
+    let made = cineris_ext::engine::runtimes_made();
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("look for the probe").await;
+        let results = front.results();
+        assert!(found_probe(&front), "{results:?}");
+        assert!(!results[0].2.contains("planted"), "{results:?}");
+        settle().await;
+        front.close().await;
+    });
+    // Registered again, and kept as what it is.
+    assert_eq!(cineris_ext::engine::runtimes_made(), made + 1);
+    assert_eq!(
+        cache_file(&world)
+            .load()
+            .cache
+            .get(&mine)
+            .map(|entry| entry.name.as_str()),
+        Some(NAME)
+    );
+    // Another project's extension, trusted there; and one no pin names.
     let theirs = Definition::of(TrustResourceKind::Extension, "tracker", ["theirs"]);
     trust_store(&world)
         .trust(
@@ -521,14 +563,18 @@ fn pruning_the_cache_keeps_every_trusted_projects_entries() {
         .unwrap();
     let gone = Definition::of(TrustResourceKind::Extension, "gone", ["old"]).hash;
     cache_file(&world)
-        .put(&theirs.hash, entry("tracker"))
+        .put(&theirs.hash, entry("tracker", Vec::new()))
         .unwrap();
-    cache_file(&world).put(&gone, entry("gone")).unwrap();
-    let core = world.core();
+    cache_file(&world)
+        .put(&gone, entry("gone", Vec::new()))
+        .unwrap();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
+        // The cache is written and pruned after the turn, which waits for
+        // neither: let it be, before the session's end ends its work.
+        settle().await;
         front.close().await;
     });
     let kept = cache_file(&world).load().cache;
@@ -538,85 +584,23 @@ fn pruning_the_cache_keeps_every_trusted_projects_entries() {
         "another trusted project's is kept"
     );
     assert!(kept.get(&gone).is_none(), "one no pin names is pruned");
-}
-
-#[test]
-fn a_trust_store_that_cannot_be_read_prunes_nothing() {
-    let world = World::new("found_not_pruned", searches());
-    let folder = users(&world);
-    write_extension(&folder, "", "Gives its arguments back");
-    pin(&world, &folder);
-    cache(&world, &folder);
-    // An entry no pin the session can read names: another project's,
-    // perhaps, in a trust store this build does not understand.
-    let manifest = Manifest::parse(
-        "api = 1\nname = \"tracker\"\nversion = \"1\"\ndescription = \"x\"\nmain = \"main.js\"\n",
-    )
-    .unwrap();
-    let theirs = Definition::of(TrustResourceKind::Extension, "tracker", ["theirs"]).hash;
+    // An entry no pin the session can read names, in a trust store this
+    // build does not understand: nothing is pruned.
+    let unread = Definition::of(TrustResourceKind::Extension, "tracker", ["unread"]).hash;
     cache_file(&world)
-        .put(
-            &theirs,
-            Entry::new(
-                &manifest,
-                cineris_ext::registration::Registration::default(),
-                None,
-            ),
-        )
+        .put(&unread, entry("tracker", Vec::new()))
         .unwrap();
     std::fs::write(state(&world).trust_file(), "version = 9\n").unwrap();
-    let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
+        // The cache is written and pruned after the turn, which waits for
+        // neither: let it be, before the session's end ends its work.
+        settle().await;
         front.close().await;
     });
-    assert!(cache_file(&world).load().cache.get(&theirs).is_some());
-}
-
-#[test]
-fn a_cache_entry_of_another_name_is_no_entry_of_this_one() {
-    let world = World::new("found_other_name", searches());
-    let folder = users(&world);
-    write_extension(&folder, "", "Gives its arguments back");
-    pin(&world, &folder);
-    // Under the extension's hash, an entry that names another extension and
-    // another tool: not what this folder registered.
-    let manifest = Manifest::parse(
-        "api = 1\nname = \"other\"\nversion = \"1\"\ndescription = \"x\"\nmain = \"main.js\"\n",
-    )
-    .unwrap();
-    let registration = cineris_ext::registration::Registration {
-        tools: vec![cineris_ext::registration::ToolDef {
-            name: "planted".to_owned(),
-            description: "planted".to_owned(),
-            input: json!({"type": "object"}),
-            read_only: true,
-        }],
-        ..cineris_ext::registration::Registration::default()
-    };
-    let hash = definition(&folder).hash;
-    cache_file(&world)
-        .put(&hash, Entry::new(&manifest, registration, None))
-        .unwrap();
-    let core = world.core();
-    let made = cineris_ext::engine::runtimes_made();
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        front.turn("look for the probe").await;
-        let results = front.results();
-        assert!(found_probe(&front), "{results:?}");
-        assert!(!results[0].2.contains("planted"), "{results:?}");
-        front.close().await;
-    });
-    // Registered again, and kept as what it is.
-    assert_eq!(cineris_ext::engine::runtimes_made(), made + 1);
-    let kept = cache_file(&world).load();
-    assert_eq!(
-        kept.cache.get(&hash).map(|entry| entry.name.as_str()),
-        Some(NAME)
-    );
+    assert!(cache_file(&world).load().cache.get(&unread).is_some());
 }
 
 // ------------------------------------------------------------ a project's
@@ -641,7 +625,7 @@ fn a_projects_extensions_are_not_looked_in_while_it_is_not_trusted() {
                     settings: SessionSettings::default(),
                     title: None,
                     config: serde_json::Map::new(),
-                    ephemeral: false,
+                    ephemeral: true,
                 }),
             )
             .await;
@@ -841,71 +825,6 @@ fn a_projects_extension_of_a_users_name_is_not_used() {
 // ------------------------------------------------------------ where they are
 
 #[test]
-fn the_users_folder_is_found_through_a_config_dir_given_with_a_tilde_relatively_or_with_dots() {
-    let world = World::new("found_config_dir_forms", searches_times(3));
-    let real = world.home.join("cfg");
-    let folder = real.join("extensions").join(NAME);
-    write_extension(&folder, "", "Gives its arguments back");
-    pin(&world, &folder);
-    cache(&world, &folder);
-    let with_dots = world.dir.join("work").join("..").join("home").join("cfg");
-    for given in [
-        PathBuf::from("~/cfg"),
-        // Relative to the workspace, `<dir>/work/app`, as the session's
-        // resolver takes a relative path.
-        PathBuf::from("../../home/cfg"),
-        with_dots,
-    ] {
-        let core = world.core_with(|options| {
-            let mut dirs = world.dirs();
-            dirs.config = Some(given.clone());
-            options.dirs = Some(dirs);
-        });
-        world.run(async {
-            let front = Front::start(&world, &core).await;
-            front.turn("look for the probe").await;
-            assert!(
-                found_probe(&front),
-                "{given:?}: {:?} {:?}",
-                front.results(),
-                front.notices()
-            );
-            front.close().await;
-        });
-    }
-}
-
-#[test]
-fn a_config_dir_that_is_a_link_is_followed() {
-    let world = World::new("found_config_dir_link", searches());
-    let real = world.dir.join("elsewhere").join("cfg");
-    let folder = real.join("extensions").join(NAME);
-    write_extension(&folder, "", "Gives its arguments back");
-    pin(&world, &folder);
-    cache(&world, &folder);
-    let linked = world.home.join("linked-cfg");
-    if !make_link(&real, &linked) {
-        return;
-    }
-    let core = world.core_with(|options| {
-        let mut dirs = world.dirs();
-        dirs.config = Some(linked.clone());
-        options.dirs = Some(dirs);
-    });
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        front.turn("look for the probe").await;
-        assert!(
-            found_probe(&front),
-            "{:?} {:?}",
-            front.results(),
-            front.notices()
-        );
-        front.close().await;
-    });
-}
-
-#[test]
 fn a_projects_folder_of_extensions_behind_a_link_out_of_the_workspace_is_not_looked_in() {
     let world = World::new("found_project_link_out", searches());
     let outside = world.dir.join("outside").join("extensions");
@@ -922,7 +841,7 @@ fn a_projects_folder_of_extensions_behind_a_link_out_of_the_workspace_is_not_loo
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         assert!(
