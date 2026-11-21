@@ -448,10 +448,7 @@ mod tests {
         }));
         finish(&mut call, &ran, "");
         assert_eq!(call.hook.as_deref(), Some("offline"));
-        assert_eq!(
-            call.target,
-            Target::Text("cargo test --offline".to_owned())
-        );
+        assert_eq!(call.target, Target::Text("cargo test --offline".to_owned()));
         let mut plain = started("shell");
         finish(
             &mut plain,

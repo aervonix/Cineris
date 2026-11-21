@@ -121,7 +121,7 @@ use crate::config::Workspace;
 use crate::events::Emitter;
 use crate::guarded::Guarded;
 use crate::hooks::{
-    self, Before, HookEvent, HookInput, HookQuestion, HookSubject, LoopHooks, ToolTarget,
+    self, Before, HookEvent, HookInput, HookQuestion, HookSubject, LoopHooks, Observers, ToolTarget,
 };
 use crate::policy::{Decision, PlannedCall, Policy, Verdict};
 use crate::stats::ToolStatOutcome;
@@ -341,6 +341,9 @@ struct Call {
     /// What its hooks said that its question shows, from its last
     /// decision: dropped when it is decided again.
     hooked: Option<Box<HookQuestion>>,
+    /// Whether the question of its last decision was answered: only then
+    /// does its result say the user was asked about a hook's arguments.
+    answered: bool,
 }
 
 impl Call {
@@ -349,6 +352,12 @@ impl Call {
         self.hooked
             .as_ref()
             .and_then(|hooked| hooked.replaced.as_ref())
+    }
+
+    /// The arguments a hook put in place of the model's, when the user was
+    /// asked about them and answered: what its result and its item say.
+    fn replaced_and_asked(&self) -> Option<&ReplacedArguments> {
+        self.replaced().filter(|_| self.answered)
     }
 }
 
@@ -659,7 +668,7 @@ impl Round {
         match self.env.tools.get(&name) {
             Some(tool) => {
                 call.decided = self.now_dated();
-                self.plan(&call, &tool);
+                self.plan(&call, &tool, Observers::Run);
                 call.tool = Some(tool);
             }
             None => {
@@ -722,6 +731,7 @@ impl Round {
             replanned: None,
             moved: false,
             hooked: None,
+            answered: false,
         }
     }
 
@@ -754,12 +764,13 @@ impl Round {
         call.state = CallState::Pending;
         call.replanned = call.footprint.take().map(|footprint| footprint.paths);
         // Its hooks are shown it again, with the model's own arguments, and
-        // what they said before is dropped.
+        // what they said before is dropped, the answer to it with it.
+        call.answered = false;
         if call.hooked.take().is_some() {
             call.key = format!("{}\u{0}{}", call.name, call.arguments);
         }
         let call = &self.calls[position];
-        self.plan(call, &tool);
+        self.plan(call, &tool, Observers::Skip);
     }
 
     /// The call at `position` was planned again onto other paths, and a
@@ -782,9 +793,12 @@ impl Round {
     }
 
     /// Starts the task that plans a call, shows the plan to the policy, and
-    /// shows what the policy did not refuse to the call's hooks.
-    fn plan(&self, call: &Call, tool: &Arc<dyn Tool>) {
+    /// shows what the policy did not refuse to the call's hooks: its
+    /// observers too at its first decision, and not when it is decided
+    /// again.
+    fn plan(&self, call: &Call, tool: &Arc<dyn Tool>, observers: Observers) {
         let planning = Planning {
+            observers,
             token: call.token,
             tool: Arc::clone(tool),
             policy: Arc::clone(&self.env.policy),
@@ -1057,6 +1071,8 @@ impl Round {
             self.not_run(position, NOT_RUN);
             return;
         }
+        // Somebody answered it: its result may say so.
+        self.calls[position].answered = true;
         match verdict {
             Verdict::Allow => {
                 let call = &mut self.calls[position];
@@ -1140,7 +1156,7 @@ impl Round {
                 &call.name,
                 result,
                 duration,
-                call.replaced(),
+                call.replaced_and_asked(),
             );
             // What its `tool.after` hooks added, after the tool's own.
             item.content.extend(notes);
@@ -1517,9 +1533,10 @@ impl Round {
                 call_id: call.call_id.clone(),
                 // What it runs with: a hook's arguments, if they were
                 // allowed.
-                arguments: call
-                    .replaced()
-                    .map_or_else(|| call.arguments.clone(), |replaced| replaced.arguments.clone()),
+                arguments: call.replaced().map_or_else(
+                    || call.arguments.clone(),
+                    |replaced| replaced.arguments.clone(),
+                ),
                 model_arguments: call.arguments.clone(),
                 summary: plan.summary.clone(),
                 effects: plan.effects.clone(),
@@ -1610,7 +1627,10 @@ impl Round {
                     footprint,
                     cancel: call.cancel,
                     outcome,
-                    replaced: call.hooked.and_then(|hooked| hooked.replaced),
+                    replaced: call
+                        .hooked
+                        .and_then(|hooked| hooked.replaced)
+                        .filter(|_| call.answered),
                 });
             }
         }
@@ -1777,6 +1797,8 @@ impl Drop for Round {
 /// policy's decision, and what the call's `tool.before` hooks say of what
 /// the policy did not refuse.
 struct Planning {
+    /// Whether its observers are run: at a call's first decision only.
+    observers: Observers,
     token: u64,
     tool: Arc<dyn Tool>,
     policy: Arc<dyn Policy>,
@@ -1833,7 +1855,8 @@ impl After {
                 result: result.text(),
             },
         };
-        let Some(heard) = cancel.race(hooks::ask_all(&self.set, matched, input)).await else {
+        let asked = hooks::ask_all(&self.set, matched, input, Observers::Run);
+        let Some(heard) = cancel.race(asked).await else {
             return Vec::new();
         };
         let added = hooks::added(HookEvent::ToolAfter, heard);
@@ -1960,7 +1983,7 @@ impl Planning {
         let Some(heard) = self
             .cx
             .cancel
-            .race(hooks::ask_all(set, matched, input))
+            .race(hooks::ask_all(set, matched, input, self.observers))
             .await
         else {
             return self
@@ -2005,12 +2028,25 @@ impl Planning {
         reason: Option<String>,
         asked: Vec<HookReason>,
     ) -> Report {
+        // The hook's name as the harness writes it inside backticks.
+        let shown = cineris_base::in_code(&hook).into_owned();
         if let Some(other) = hooks::names_another_tool(&self.name, &self.arguments, &replacement) {
             return self.refused(
                 plan,
                 format!(
-                    "the hook `{hook}` replaced its arguments with ones that call another tool \
-                     (`{other}`), which a hook may not do"
+                    "the hook `{shown}` replaced its arguments with ones that call another tool \
+                     (`{}`), which a hook may not do",
+                    cineris_base::in_code(&other)
+                ),
+            );
+        }
+        if let Some(size) = hooks::too_large(&replacement) {
+            return self.refused(
+                plan,
+                format!(
+                    "the hook `{shown}` replaced its arguments with {size} bytes of JSON, more \
+                     than the {} a replacement may have",
+                    hooks::ARGUMENTS_CAP
                 ),
             );
         }
@@ -2020,7 +2056,7 @@ impl Planning {
             return self.refused(
                 plan,
                 format!(
-                    "the hook `{hook}` replaced its arguments with ones that do not fit the \
+                    "the hook `{shown}` replaced its arguments with ones that do not fit the \
                      tool's schema:\n{mismatch}"
                 ),
             );
@@ -2032,7 +2068,7 @@ impl Planning {
                 return self.refused(
                     plan,
                     format!(
-                        "the hook `{hook}` replaced its arguments with ones its tool refuses: \
+                        "the hook `{shown}` replaced its arguments with ones its tool refuses: \
                          {error}"
                     ),
                 );
@@ -2060,7 +2096,7 @@ impl Planning {
         match decision {
             Decision::Deny { reason } => {
                 let mut why = format!(
-                    "the hook `{hook}` replaced its arguments, and the call they make is not \
+                    "the hook `{shown}` replaced its arguments, and the call they make is not \
                      allowed"
                 );
                 if let Some(reason) = reason {
@@ -2075,7 +2111,7 @@ impl Planning {
                 Err(refused) => self.refused(
                     replanned,
                     format!(
-                        "the hook `{hook}` replaced its arguments with ones that may not be put \
+                        "the hook `{shown}` replaced its arguments with ones that may not be put \
                          to the user: {refused}"
                     ),
                 ),

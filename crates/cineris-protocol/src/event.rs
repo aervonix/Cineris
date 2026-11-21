@@ -288,8 +288,11 @@ pub struct PromptReturnedNotice {
     pub message: String,
     /// The prompt, as it was sent.
     pub parts: Vec<Part>,
-    /// How it was sent: `steer` for a steering message. Absent for a prompt
-    /// that started a turn.
+    /// How it was sent while a turn ran, as its user message would have
+    /// said: `steer` for a steering message, whether it was refused at a
+    /// boundary of the running turn or as the prompt of a turn of its own
+    /// (one that found no boundary); `queue` for a queued prompt. Absent
+    /// for a prompt sent to an idle session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
     /// The hooks that refused it, each with its reason or its failure.

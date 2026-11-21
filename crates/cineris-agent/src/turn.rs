@@ -51,7 +51,7 @@ use crate::context::{Context, ContextParts, Pressure};
 use crate::events::{Emitter, EventSink};
 use crate::guard::{Repetition, RepetitionGuard};
 use crate::guarded::Guarded;
-use crate::hooks::{self, HookEvent, HookInput, HookSubject, LoopHooks, Submitted};
+use crate::hooks::{self, HookEvent, HookInput, HookSubject, LoopHooks, Observers, Submitted};
 use crate::ledger::{Ledger, LimitReached};
 use crate::policy::Policy;
 use crate::round::{Report, Round, RoundEnv, Stage};
@@ -420,7 +420,9 @@ impl Session {
             emitter: Arc::clone(&emitter),
             clock: Arc::clone(&clock),
             max_parallel: config.max_parallel_tools.max(1),
-            hooks,
+            // Their observers run under the session's token: none outlives
+            // it.
+            hooks: hooks.map(|set| set.for_session(&cancel)),
         });
         let model = models.main().clone();
         let catalog_version = models.catalog_version().to_owned();
@@ -816,7 +818,10 @@ impl Session {
                     return Ok(Begun::Ended(Phase::Interrupted(None)));
                 }
                 Some(Submitted::Deny(refused)) => {
-                    let message = hooks::refused_prompt(&refused, false);
+                    // A steering message that found no boundary is its own
+                    // turn's prompt, and still a steering message.
+                    let steering = prompt.delivery == Some(Delivery::Steer);
+                    let message = hooks::refused_prompt(&refused, steering);
                     self.give_back(
                         turn,
                         prompt.input,
@@ -904,7 +909,7 @@ impl Session {
         };
         let heard = turn
             .cancel
-            .race(hooks::ask_all(set, matched, input))
+            .race(hooks::ask_all(set, matched, input, Observers::Run))
             .await?;
         Some(hooks::submitted(heard))
     }
@@ -960,7 +965,7 @@ impl Session {
         tokio::spawn(async move {
             let Some(heard) = shared
                 .cancel
-                .race(hooks::ask_all(&set, matched, input))
+                .race(hooks::ask_all(&set, matched, input, Observers::Run))
                 .await
             else {
                 return;

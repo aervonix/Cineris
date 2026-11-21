@@ -1364,7 +1364,7 @@ export interface ProjectUpdated {
 
 /** Notice: a prompt given back to the front end, for its editor, and never sent to the model (since step 28). A `prompt.submit` hook refused it, and `hooks` names each that did, with its reason; or the turn was interrupted while its hooks were asked, and `hooks` is empty. A prompt that would have started a turn ends that turn `denied` (or `interrupted`); a steering message is dropped, and the running turn goes on. */
 export interface PromptReturnedNotice {
-  /** How it was sent: `steer` for a steering message. Absent for a prompt that started a turn. */
+  /** How it was sent while a turn ran, as its user message would have said: `steer` for a steering message, whether it was refused at a boundary of the running turn or as the prompt of a turn of its own (one that found no boundary); `queue` for a queued prompt. Absent for a prompt sent to an idle session. */
   delivery?: Delivery | null;
   /** The hooks that refused it, each with its reason or its failure. */
   hooks?: Array<HookReason>;
