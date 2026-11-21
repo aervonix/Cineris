@@ -243,7 +243,7 @@ impl ExtState {
             });
             disk.session
                 .append(turn, record)
-                .map_err(|error| failed(format!("the value could not be kept: {error}")))?;
+                .map_err(|error| unseen_path("the session's log could not be written", &error))?;
         }
         // In memory only once the log has it: what is read is what a resume
         // would read.
@@ -276,7 +276,7 @@ impl ExtState {
         let records = disk
             .session
             .records(&Kind::Ext)
-            .map_err(|error| failed(format!("the session's values could not be read: {error}")))?;
+            .map_err(|error| unseen_path("the session's log could not be read", &error))?;
         let mut all: HashMap<String, Values> = HashMap::new();
         for entry in records {
             let Body::Ext(record) = entry.body else {
@@ -308,8 +308,12 @@ impl ExtState {
         // From before the read until after the write: another session of
         // the project changing the file meanwhile would otherwise have its
         // change written over (it makes the folder, owner-only).
-        let _held = cineris_base::private::hold_lock(&path)
-            .map_err(|error| failed(format!("`{shown}` cannot be changed: {error}")))?;
+        let _held = cineris_base::private::hold_lock(&path).map_err(|error| {
+            unseen_path(
+                &format!("`{shown}` in the state directory cannot be locked"),
+                &error,
+            )
+        })?;
         let before = read_file(&path, &shown)?;
         let Some(after) = apply(&before, key, value.as_ref())? else {
             return Ok(());
@@ -322,8 +326,10 @@ impl ExtState {
             ..AtomicWriteOptions::default()
         };
         write_atomic(&path, &bytes, &options, self.clock.as_ref()).map_err(|error| {
-            tracing::warn!(path = %path.display(), %error, "an extension's values were not kept");
-            failed(format!("the value could not be kept in `{shown}`: {error}"))
+            unseen_path(
+                &format!("`{shown}` in the state directory could not be written"),
+                &error,
+            )
         })
     }
 
@@ -338,6 +344,17 @@ impl ExtState {
             })?
             .file(owner)
     }
+}
+
+/// The failure `what`, for the script, with `error` in the harness's log
+/// alone: its text names where the user's files are (the session's log,
+/// the state directory, under their home), which is not the script's to
+/// learn or to hand to the model.
+fn unseen_path(what: &str, error: &dyn std::fmt::Display) -> HostError {
+    tracing::warn!(%error, "{what}");
+    failed(format!(
+        "the value could not be kept or read: {what} (the harness's log says why)"
+    ))
 }
 
 /// Runs `work` on the blocking pool, with a token of its own that is never
