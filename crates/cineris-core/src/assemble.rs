@@ -2717,10 +2717,11 @@ pub(crate) fn assemble(
         parts: ext_parts,
         cancel: options.cancel.child(),
     });
+    // Without the script engine there is nothing to load.
     #[cfg(not(feature = "scripts"))]
-    let extensions = {
-        let _ = project_found;
-    };
+    drop(project_found);
+    #[cfg(not(feature = "scripts"))]
+    let extensions = ();
     let mut toolbox = Toolbox::read_only(Arc::clone(&registry))
         .with(WriteTool::new(editing.clone()))
         .with(EditTool::new(editing))

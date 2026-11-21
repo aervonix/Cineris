@@ -241,6 +241,7 @@ impl UserNames {
 
     /// Whether the user's folder could not be listed whole, so that every
     /// name may be the user's.
+    #[cfg(feature = "scripts")]
     pub(crate) fn cut(&self) -> bool {
         self.cut
     }
