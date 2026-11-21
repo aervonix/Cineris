@@ -215,6 +215,100 @@ impl EngineInForce {
         cineris_base::hook::point(CHANGING_APPROVALS);
         engine.record(question, choice)
     }
+
+    /// Takes back the session's approvals `take_back`, then allows `add`
+    /// for the session, in the engine in force and in one change of it:
+    /// the rules for reading the folders of the session's skills, which
+    /// follow the skills found (step 28). Each rule is added as "allow for
+    /// this session" adds one ([`Engine::record`]), and taken back as one
+    /// is ([`Engine::revoke`]): it is a session rule, listed with the
+    /// session's approvals and kept over a change of level, and nothing is
+    /// written. The rules are added as one answer, so that the set is
+    /// compiled again once, however many skills there are. A rule an
+    /// approval already holds is not added again, and is not claimed: it is
+    /// not the skills' to take back. Says the id of
+    /// the approval made for each of `add`, or `None`. Waits for a person's
+    /// answer being stored for the project: call this off the core thread.
+    #[cfg(feature = "scripts")]
+    pub(crate) fn follow_reads(
+        &self,
+        add: &[cineris_protocol::lease::Rule],
+        take_back: &[cineris_protocol::ids::ApprovalId],
+    ) -> Vec<Option<cineris_protocol::ids::ApprovalId>> {
+        let _changing = self.changing.lock().unwrap_or_else(PoisonError::into_inner);
+        let engine = self.get();
+        cineris_base::hook::point(CHANGING_APPROVALS);
+        if !take_back.is_empty() {
+            // Session approvals alone: no file is written, and nothing fails.
+            let _ = engine.revoke(take_back);
+        }
+        let held = engine.approvals();
+        let new: Vec<cineris_protocol::lease::Rule> = add
+            .iter()
+            .filter(|rule| !held.iter().any(|approval| approval.rule == **rule))
+            .cloned()
+            .collect();
+        // One answer for them all: the rules are compiled again once.
+        let made = if new.is_empty() {
+            Vec::new()
+        } else {
+            let question = Question {
+                reasons: Vec::new(),
+                lifts: new,
+                storable: false,
+                managed: false,
+            };
+            engine
+                .record(&question, &ApprovalChoice::AllowSession)
+                .map(|recorded| recorded.added)
+                .unwrap_or_default()
+        };
+        add.iter()
+            .map(|rule| {
+                made.iter()
+                    .find(|approval| approval.rule == *rule)
+                    .map(|approval| approval.id.clone())
+            })
+            .collect()
+    }
+}
+
+/// The rule that lets the session read `folder` and everything below it,
+/// unasked: a skill's folder where it really is, as the skills were found
+/// (step 28). It is written as the engine writes the lift for a read of one
+/// path: the folder's name in the file system's own spelling, as a
+/// resolved path has it and as an allow rule is matched, every character a
+/// path glob reads as a pattern taken as itself, then `/**`. `None` when
+/// the pattern would not compile, which no name is known to make: a rule
+/// that did not compile would leave the session's approvals as they are
+/// from then on, since each later one compiles the set again and keeps the
+/// rules in force when that fails.
+#[cfg(feature = "scripts")]
+pub(crate) fn reading_below(folder: &AbsPath) -> Option<cineris_protocol::lease::Rule> {
+    let mut pattern = String::with_capacity(folder.as_str().len() + 3);
+    for character in folder.as_str().chars() {
+        match character {
+            '*' | '?' | '[' | '{' | '}' => {
+                pattern.push('[');
+                pattern.push(character);
+                pattern.push(']');
+            }
+            ']' => pattern.push_str("[]]"),
+            other => pattern.push(other),
+        }
+    }
+    pattern.push_str("/**");
+    let anchors = cineris_policy::glob::Anchors {
+        workspace: folder,
+        home: None,
+    };
+    cineris_policy::glob::PathGlob::compile(&pattern, anchors, cineris_policy::glob::Case::Exact)
+        .ok()?;
+    Some(cineris_protocol::lease::Rule {
+        effect: EffectKind::Read,
+        pattern,
+        action: RuleAction::Allow,
+    })
 }
 
 /// One session's engine, adapted.
@@ -416,6 +510,31 @@ impl EnginePolicy {
         ids: &[cineris_protocol::ids::ApprovalId],
     ) -> Result<usize, cineris_policy::ApprovalError> {
         self.in_force.revoke(ids)
+    }
+
+    /// The session's rules for reading its skills' folders, followed
+    /// ([`EngineInForce::follow_reads`]). Call this off the core thread.
+    #[cfg(feature = "scripts")]
+    pub(crate) fn follow_reads(
+        &self,
+        add: &[cineris_protocol::lease::Rule],
+        take_back: &[cineris_protocol::ids::ApprovalId],
+    ) -> Vec<Option<cineris_protocol::ids::ApprovalId>> {
+        self.in_force.follow_reads(add, take_back)
+    }
+
+    /// Which of `ids` the engine in force holds no approval of: taken back
+    /// since they were made, as `permissions/revoke` takes one back.
+    #[cfg(feature = "scripts")]
+    pub(crate) fn not_held(
+        &self,
+        ids: &[cineris_protocol::ids::ApprovalId],
+    ) -> Vec<cineris_protocol::ids::ApprovalId> {
+        let held = self.engine().approvals();
+        ids.iter()
+            .filter(|id| !held.iter().any(|approval| approval.id == **id))
+            .cloned()
+            .collect()
     }
 
     /// Whether a person allowed `question` for `call`, as it is planned
@@ -1440,6 +1559,68 @@ mod tests {
     use cineris_policy::{Access, Outcome, Request};
 
     use super::*;
+
+    /// A skill's rule compiles whatever its folder is named, and matches
+    /// its folder and what is below it alone: names that hold what a path
+    /// glob reads as a pattern (a brace open or closed, a set, a negated
+    /// set, `**`, a comma), on both systems' paths.
+    #[cfg(feature = "scripts")]
+    #[test]
+    fn a_skills_rule_compiles_and_matches_its_own_folder_alone() {
+        use cineris_policy::glob::{Anchors, Case, PathGlob};
+        let names = [
+            "{a", "a}", "{a,b}", "]", "[!x", "[a]", "**", "a,b", "*", "?", "plain",
+        ];
+        let mut checked = 0;
+        for (base, style) in [
+            ("/w/skills", PathStyle::Posix),
+            ("C:\\w\\skills", PathStyle::Windows),
+        ] {
+            let base = AbsPath::parse(base, style).unwrap();
+            for name in names {
+                // `*` and `?` cannot be in a name on Windows.
+                let Ok(folder) = base.join(name) else {
+                    assert_eq!(style, PathStyle::Windows, "{name}");
+                    continue;
+                };
+                let rule = reading_below(&folder).expect(name);
+                let anchors = Anchors {
+                    workspace: &base,
+                    home: None,
+                };
+                let glob = PathGlob::compile(&rule.pattern, anchors, Case::Exact).unwrap();
+                let below = folder.join("SKILL.md").unwrap();
+                let deep = folder.join("a").unwrap().join("b.md").unwrap();
+                for inside in [&folder, &below, &deep] {
+                    assert!(glob.matches(inside), "{}: {inside}", rule.pattern);
+                }
+                for other in names.iter().chain(&["x", "a", "b", "w"]) {
+                    for beside in [other.to_string(), format!("{name}x"), format!("x{name}")] {
+                        let Ok(beside) = base.join(&beside) else {
+                            continue;
+                        };
+                        if beside == folder {
+                            continue;
+                        }
+                        let file = beside.join("f").unwrap();
+                        assert!(
+                            !glob.matches(&beside) && !glob.matches(&file),
+                            "{}: {beside}",
+                            rule.pattern
+                        );
+                    }
+                }
+                assert!(!glob.matches(&base), "{}", rule.pattern);
+                checked += 1;
+            }
+        }
+        // Every name on Posix paths; on Windows' those without `*` or `?`.
+        let not_on_windows = names
+            .iter()
+            .filter(|name| name.contains(['*', '?']))
+            .count();
+        assert_eq!(checked, 2 * names.len() - not_on_windows);
+    }
 
     /// An approval names what a call touches wherever its `ext` effect
     /// stands: a host call's plan, and `tool_call`'s, which MCP's tools
