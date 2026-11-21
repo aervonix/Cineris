@@ -1249,7 +1249,9 @@ pub struct TrustResource {
     pub name: String,
     /// What it would do, in full: the command, the rules.
     pub detail: String,
-    /// Whether it was trusted before and has changed since.
+    /// Whether it was approved before and has changed since: a project's
+    /// rules trusted as other rules, or (since step 28) an extension
+    /// approved at another hash, whose `detail` says so too.
     #[serde(default)]
     pub changed: bool,
 }
@@ -1265,9 +1267,11 @@ pub struct TrustRequest {
     /// What it asks to be trusted with.
     pub resources: Vec<TrustResource>,
     /// The project is trusted already, and the question is about what is
-    /// new in it: its rules changed (each resource marked `changed`), or
-    /// git, now that it is a repository. `never` is not an answer to it;
-    /// `keep` is (since the follow-ups of step 23).
+    /// new in it: its rules changed (each resource marked `changed`), git,
+    /// now that it is a repository, or (since step 28) an extension new in
+    /// it or changed since it was approved (`changed`). `never` is not an
+    /// answer to it; `keep` is (since the follow-ups of step 23), which of
+    /// an extension is kept by the core for its run alone.
     #[serde(default, skip_serializing_if = "is_false")]
     pub trusted: bool,
 }

@@ -589,7 +589,7 @@ caught-by:
 [break] not-now-forgotten
 rule: A project answered "not now" is not asked about again in the same process.
 file: crates/cineris-core/src/assemble.rs
-in: answer_trust
+in: kept_answer
 find: .insert(question.key.clone());
 replace: .contains(&question.key);
 caught-by:
@@ -598,7 +598,7 @@ caught-by:
 [break] never-not-kept
 rule: "Never for this project" is kept in the trust store, so that later starts do not ask either.
 file: crates/cineris-core/src/assemble.rs
-in: answer_trust
+in: kept_answer
 find: .refuse(&question.key, &question.root)
 replace: .forget(&question.key).map(|_| ())
 caught-by:
@@ -906,7 +906,7 @@ caught-by:
 [break] never-waits-for-the-next-start
 rule: Never is in force in the session it was said in, as at a later start.
 file: crates/cineris-core/src/assemble.rs
-in: answer_trust
+in: kept_answer
 find: self::trust(inner, place.state.as_ref(), &place.root, &place.load)
 occurrence: 4
 replace: Ok(trust)
