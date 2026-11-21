@@ -153,13 +153,14 @@ caught-by:
     cineris-ext::it engine::registering_after_the_first_evaluation_is_refused
 
 [break] a-hook-on-an-event-the-manifest-does-not-list
-rule: A script hooks only the events its manifest lists.
-file: crates/cineris-ext/src/engine/thread.rs
-in: Shared::add
-find: if !self.hooks_allowed.contains(&event) {
-replace: if self.hooks_allowed.contains(&event) && false {
+rule: A script hooks only the events its manifest lists, and a cached entry is used only for an extension whose manifest lists its hooks' events.
+file: crates/cineris-ext/src/registration.rs
+in: check_allowed
+find: if allowed.contains(&event) {
+replace: if allowed.contains(&event) || true {
 caught-by:
     cineris-ext::it engine::a_hook_on_an_event_the_manifest_does_not_list_refuses_the_extension
+    cineris-ext::it cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
 
 [break] a-changed-folder-is-evaluated
 rule: A runtime is made only from a snapshot whose hash is the pinned one.
@@ -1548,22 +1549,24 @@ caught-by:
     cineris-ext::it engine::what_a_script_registers_is_bounded_before_it_is_taken
 
 [break] a-description-may-hide-text
-rule: A description a script registers holds no character that acts unseen.
-file: crates/cineris-ext/src/engine/thread.rs
+rule: A description a script registers, or a cached entry holds, holds no character that acts unseen.
+file: crates/cineris-ext/src/registration.rs
 in: check_description
 find: } else if hides_something(description) {
 replace: } else if hides_something(description) && description.is_empty() {
 caught-by:
     cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
+    cineris-ext::it cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] a-schema-may-hide-text
-rule: A tool's schema holds no character that acts unseen, in its keys or its values.
-file: crates/cineris-ext/src/engine/thread.rs
-in: read_entry
-find: check_schema_text(&schema).map_err(refuse)?;
-replace: let _ = &schema;
+rule: A tool's schema, registered or cached, holds no character that acts unseen, in its keys or its values.
+file: crates/cineris-ext/src/registration.rs
+in: check_schema
+find: check_schema_text(schema)
+replace: Ok(())
 caught-by:
     cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
+    cineris-ext::it cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] a-glob-may-hold-a-backslash
 rule: A manifest's glob splits its folders by `/` alone: a backslash is refused on every system.
@@ -1838,7 +1841,7 @@ caught-by:
 
 [break] a-run-of-selectors-is-shown-as-written
 rule: Text a script registers is refused when anything in it would be escaped to be shown: a control, a format character, a run of variation selectors.
-file: crates/cineris-ext/src/engine/thread.rs
+file: crates/cineris-ext/src/registration.rs
 in: hides_something
 find: cineris_base::visible_keeping(text, &['\n', '\t']) != text
 replace: text.chars().any(|character| !matches!(character, '\n' | '\t') && cineris_base::acts_unseen(character))
@@ -2967,7 +2970,7 @@ caught-by:
     cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-past-the-caps-read
-rule: An entry past a registration's caps (its tools, commands or hooks, its prompt over 4 KiB) sets the whole file aside: what a session reads is what a live runtime could have registered.
+rule: An entry a live runtime could not have registered (the registration's own checks, its name, its prompt over 4 KiB) sets the whole file aside: what a session reads is what a live runtime could have registered.
 file: crates/cineris-ext/src/cache.rs
 in: parse
 find: entry.check().map_err(|problem| {
@@ -2996,8 +2999,8 @@ caught-by:
 rule: A file set aside is moved to `registered.json.set-aside`, while it is still the file that was read, so that the next write begins a new one.
 file: crates/cineris-ext/src/cache.rs
 in: RegistrationCache::set_aside
-find: let moved = if still_it {
-replace: let moved = if false {
+find: At::Read(Some(read)) if FileIdentity::at(&self.file).ok() != Some(read) =>
+replace: At::Read(Some(read)) if FileIdentity::at(&self.file).ok() == Some(read) =>
 caught-by:
     cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
     cache::a_put_over_a_file_not_understood_sets_it_aside_and_begins_a_new_one
@@ -3041,13 +3044,13 @@ caught-by:
     cache::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
 
 [break] cache-write-past-16-mib
-rule: A put that would make a file larger than 16 MiB is refused and writes nothing.
+rule: A put that would make a file larger than the cap (16 MiB) is refused and writes nothing.
 file: crates/cineris-ext/src/cache.rs
 in: RegistrationCache::write
-find: if text.len() as u64 > MAX_BYTES {
+find: if text.len() as u64 > self.max_bytes {
 replace: if false {
 caught-by:
-    cache::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
+    cache::tests::a_put_that_would_make_the_file_larger_than_its_cap_writes_nothing
 
 [break] cache-written-for-anyone
 rule: The registration cache is written owner-only, whatever the file was before.
@@ -3068,13 +3071,13 @@ caught-by:
     cache::every_write_is_owner_only_and_leaves_no_temporary_file
 
 [break] cache-written-through-a-link
-rule: The registration cache is never written through a link at its name.
+rule: The registration cache is never written through a link at its name, one made after the file was read included.
 file: crates/cineris-ext/src/cache.rs
 in: RegistrationCache::write
 find: follow_links: false
 replace: follow_links: true
 caught-by:
-    cache::a_link_at_the_files_name_is_never_written_through
+    cache::a_link_made_just_before_the_write_is_never_written_through
 
 [break] cache-prune-keeps-everything
 rule: A prune takes out every entry whose hash no pin names.
@@ -3093,6 +3096,181 @@ find: if removed > 0 {
 replace: if removed > 0 || true {
 caught-by:
     cache::a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did
+
+# ------------------------------------------------------------ an entry checked as a live registration is (the review of 2a-1, M6)
+
+[break] cache-entry-tools-unchecked
+rule: Each tool of a cached entry meets the checks a live registration meets (its name, description and schema).
+file: crates/cineris-ext/src/registration.rs
+in: Registration::check
+find: tool.check()
+replace: Ok::<(), String>(())
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-commands-unchecked
+rule: Each command of a cached entry meets the checks a live registration meets (its name, description and arguments).
+file: crates/cineris-ext/src/registration.rs
+in: Registration::check
+find: command.check()
+replace: Ok::<(), String>(())
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-hooks-unchecked
+rule: Each hook of a cached entry meets the checks a live registration meets (its event, its filter and its time).
+file: crates/cineris-ext/src/registration.rs
+in: Registration::check
+find: hook.check()
+replace: Ok::<Event, String>(Event::ToolBefore)
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-a-tool-twice
+rule: No tool name is registered twice, live or cached.
+file: crates/cineris-ext/src/registration.rs
+in: Registration::check
+find: .any(|earlier| earlier.name == tool.name)
+replace: .any(|earlier| earlier.name == tool.name && false)
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-a-name-unchecked
+rule: A name of a tool, a command or an argument is 1 to 64 of ASCII letters, digits, `_`, `-` and `.`, live or cached.
+file: crates/cineris-ext/src/registration.rs
+in: check_name
+find: let fine = !name.is_empty()
+replace: let fine = true || !name.is_empty()
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-description-unbounded
+rule: A description, live or cached, is at most 2 KiB.
+file: crates/cineris-ext/src/registration.rs
+in: check_description
+find: if description.len() > MAX_DESCRIPTION {
+replace: if false {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-schema-unbounded
+rule: A tool's schema, live or cached, is an object of at most 16 KiB as JSON.
+file: crates/cineris-ext/src/registration.rs
+in: check_schema
+find: if !schema.is_object() || schema.to_string().len() > MAX_SCHEMA_BYTES {
+replace: if !schema.is_object() {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-arguments-unbounded
+rule: A command names at most 16 arguments, live or cached.
+file: crates/cineris-ext/src/registration.rs
+in: CommandDef::check
+find: if self.arguments.len() > MAX_ARGUMENTS {
+replace: if false {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-filter-unbounded
+rule: A hook's filter lists at most 64 tools, live or cached.
+file: crates/cineris-ext/src/registration.rs
+in: HookDef::check
+find: if self.tools.len() > MAX_HOOK_TOOLS {
+replace: if false {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-filter-entry-unchecked
+rule: An entry of a hook's filter is a tool's name or `source/*`, of at most 129 bytes, live or cached.
+file: crates/cineris-ext/src/registration.rs
+in: check_filter
+find: let fine = !entry.is_empty()
+replace: let fine = true || !entry.is_empty()
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-time-unbounded
+rule: A hook's time, live or cached, is from 1 ms to 10 minutes.
+file: crates/cineris-ext/src/registration.rs
+in: check_timeout
+find: if timeout_ms.is_some_and(|time| time == 0 || time > MAX_HOOK_TIME_MS) {
+replace: if timeout_ms.is_some_and(|time| time == 0) {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-name-not-an-extensions
+rule: A cached entry's own name is an extension's name.
+file: crates/cineris-ext/src/cache.rs
+in: Entry::check
+find: if !manifest::is_name(&self.name) {
+replace: if false {
+caught-by:
+    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+
+[break] cache-entry-fits-another-name
+rule: An entry fits only the extension of its name.
+file: crates/cineris-ext/src/cache.rs
+in: Entry::fits
+find: if self.name != manifest.name {
+replace: if false {
+caught-by:
+    cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+
+[break] cache-entry-fits-another-api
+rule: An entry fits only an extension of this build's `api`.
+file: crates/cineris-ext/src/cache.rs
+in: Entry::fits
+find: if self.api != manifest::API {
+replace: if false {
+caught-by:
+    cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+
+[break] cache-entry-fits-hooks-the-manifest-does-not-list
+rule: An entry fits only an extension whose manifest's `capabilities.hooks` lists every event its hooks are on: the cache, with no manifest, cannot ask it when it reads the file.
+file: crates/cineris-ext/src/cache.rs
+in: Entry::fits
+find: .check_hooks(&manifest.capabilities.hooks)?;
+replace: .check_hooks(&crate::event::Event::ALL)?;
+caught-by:
+    cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+
+[break] cache-entry-fits-another-prompt
+rule: An entry fits only the extension whose prompt file holds its prompt's text: section 7 is the approved text.
+file: crates/cineris-ext/src/cache.rs
+in: Entry::fits
+find: if self.prompt.as_deref() != prompt.as_deref() {
+replace: if false {
+caught-by:
+    cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+
+# ------------------------------------------------------------ what stands at the file's name (the review of 2a-1, L9)
+
+[break] cache-link-at-the-name-left-there
+rule: A link at the file's name, a folder or anything else that is not a regular file is moved aside as it is (a link, never what it leads to), so that the cache can be written again.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::read
+find: at: At::NotAFile
+replace: at: At::InUse
+caught-by:
+    cache::a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed
+
+[break] cache-old-set-aside-not-replaced
+rule: What is set aside replaces what was set aside before, unless that is a folder: a folder at the name moves over a link set aside before.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::move_aside
+find: std::fs::remove_file(aside)?;
+replace: let _ = aside;
+caught-by:
+    cache::a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed
+
+[break] cache-written-meanwhile-moved-away
+rule: A cache another session writes between the look and the move aside is put back, not moved away with the file it replaced.
+file: crates/cineris-ext/src/cache.rs
+in: RegistrationCache::set_aside
+find: Ok(()) if FileIdentity::at(&aside).ok() == Some(read) =>
+replace: Ok(()) if FileIdentity::at(&aside).ok() == Some(read) || true =>
+caught-by:
+    cache::a_cache_written_while_one_is_set_aside_is_put_back
 
 # From mutations/step-28-pinned.breaks (part `pinned`).
 # Step 28, the extensions a session loads (`cineris-core`'s `ext::found`, and

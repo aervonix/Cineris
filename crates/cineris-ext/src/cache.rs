@@ -31,20 +31,44 @@
 //!   command or a hook), a value of the wrong type, a key that is not a
 //!   content hash (64 lowercase hexadecimal digits), a key given twice, a
 //!   `version` other than [`VERSION`], more than [`MAX_ENTRIES`] entries,
-//!   an entry past a registration's caps, or a file larger than
-//!   [`MAX_BYTES`] or that is not a regular file sets **the whole file**
-//!   aside: a file that cannot be read in full is not read in part. A
-//!   version other than this one is said as such, not as a field it adds.
+//!   an entry a live runtime could not have registered, or a file larger
+//!   than [`MAX_BYTES`] or that is not a regular file sets **the whole
+//!   file** aside: a file that cannot be read in full is not read in part.
+//!   A version other than this one is said as such, not as a field it adds.
+//! - **An entry is checked by the code a live registration meets**
+//!   ([`Registration::check`], in [`crate::registration`]): every tool's and
+//!   command's name, description (2 KiB, nothing that acts unseen) and
+//!   schema (an object of 16 KiB, every text shown as written), a command's
+//!   arguments (16, each a name), a hook's event, its filter (64 entries,
+//!   each a tool's name or `source/*`) and its time (1 ms to 10 minutes),
+//!   the counts (64 tools, 32 commands, 32 hooks), no tool or command name
+//!   twice; and the entry's own name (an extension's) and prompt (4 KiB).
+//!   Whether its hooks are ones the manifest allows cannot be asked here,
+//!   with no manifest: [`Entry::fits`] asks it, with the name, the `api` and
+//!   the prompt's text, of the manifest and snapshot of the extension the
+//!   entry is taken for, which the core does before any runtime starts.
 //! - **Set aside** is two things: the cache is taken as empty, and the
-//!   caller is told why ([`Loaded::set_aside`]); and the file is moved to
-//!   `registered.json.set-aside` beside it (replacing one moved there
-//!   before), so that the next write starts a new file and the old one is
-//!   there for whoever wants to see what was in it. It is moved only while
-//!   it is still the file that was read, so a cache another session has
-//!   just written is not moved for what the one before it held. A newer
-//!   build's file is set aside too: a user who went back to this build
-//!   would otherwise have no cache, and the newer build registers again
-//!   what it misses.
+//!   caller is told why ([`Loaded::set_aside`]); and what stands at the
+//!   name is moved to `registered.json.set-aside` beside it (replacing a
+//!   file moved there before), so that the next write starts a new file and
+//!   the old one is there for whoever wants to see what was in it.
+//!   - **A file is moved only while it is still the file that was read,** so
+//!     a cache another session has just written is not moved for what the
+//!     one before it held. The look and the move are two steps: a cache
+//!     another session writes between them is moved, seen to be another
+//!     file, and put back by a hard link, which is made only where the name
+//!     is free. Only the harness's own sessions write the state directory,
+//!     which every tool is closed to, so the race is theirs alone, and what
+//!     it could cost is a cache lost and every extension registered again.
+//!   - **A link at the name, a folder, a FIFO, or a file this user may not
+//!     open** is moved aside as it is (the link itself, never what it leads
+//!     to): it is nothing the cache can read, and with it at the name no
+//!     write could replace it, so that every session would register every
+//!     approved extension again. A file another program holds open (on
+//!     Windows) is left alone.
+//!   - **A newer build's file is set aside too:** a user who went back to
+//!     this build would otherwise have no cache, and the newer build
+//!     registers again what it misses.
 //! - **A missing entry fails closed.** The caller registers an approved
 //!   extension the cache does not hold when the session opens, off the
 //!   start-up path, and the first turn waits for it, so a gate it holds is
@@ -94,10 +118,9 @@ use cineris_base::{
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::folder::Snapshot;
 use crate::manifest::{self, Manifest};
-use crate::registration::{
-    CommandDef, HookDef, MAX_COMMANDS, MAX_HOOKS, MAX_TOOLS, Registration, ToolDef,
-};
+use crate::registration::{CommandDef, HookDef, Registration, ToolDef};
 
 /// The version of the file's format: the only one this build reads, and
 /// the one it writes.
@@ -121,11 +144,15 @@ pub const MAX_ENTRIES: usize = 1024;
 /// planted file makes a session read before the file is set aside.
 pub const MAX_BYTES: u64 = 16 * 1024 * 1024;
 
-/// The longest name an entry may have: a manifest's name, at most 64.
-const MAX_NAME: usize = 64;
-
 /// What is added to the file's name for the file set aside.
 pub const SET_ASIDE_SUFFIX: &str = ".set-aside";
+
+/// A point of the cache's: a file that cannot be read in full, looked at
+/// and still the one that was read, is about to be moved aside.
+pub const BEFORE_IT_IS_SET_ASIDE: &str = "cache: a file read and refused is about to be set aside";
+
+/// A point of the cache's: the file is about to be written.
+pub const BEFORE_IT_IS_WRITTEN: &str = "cache: the file is about to be written";
 
 /// What one approved extension registered: the part of the cache a
 /// session reads instead of starting the engine.
@@ -156,25 +183,20 @@ impl Entry {
         }
     }
 
-    /// Whether the entry is one the cache keeps: within the caps a
-    /// registration has, so that what a session reads is what a live
-    /// runtime could have registered. Said as why it is not.
+    /// Whether the entry is one the cache keeps: what a live runtime could
+    /// have registered, checked by the same code a live registration meets
+    /// ([`Registration::check`]: every name, description, schema, filter
+    /// and time, and the caps), an extension's name, and a prompt of at
+    /// most 4 KiB. Said as why it is not.
     fn check(&self) -> Result<(), String> {
-        let registration = &self.registration;
-        if self.name.is_empty() || self.name.len() > MAX_NAME {
-            return Err(format!("its name is empty or longer than {MAX_NAME} bytes"));
+        if !manifest::is_name(&self.name) {
+            return Err(format!(
+                "`{}` is not an extension's name: 1 to 64 of ASCII letters, digits, `_`, `-` and \
+                 `.`, not starting with `.`",
+                visible(cineris_base::text::truncate_bytes(&self.name, 80))
+            ));
         }
-        for (what, count, most) in [
-            ("tools", registration.tools.len(), MAX_TOOLS),
-            ("commands", registration.commands.len(), MAX_COMMANDS),
-            ("hooks", registration.hooks.len(), MAX_HOOKS),
-        ] {
-            if count > most {
-                return Err(format!(
-                    "it has {count} {what}, and an extension registers at most {most}"
-                ));
-            }
-        }
+        self.registration.check()?;
         if let Some(prompt) = &self.prompt
             && prompt.len() > manifest::MAX_PROMPT_BYTES
         {
@@ -183,6 +205,47 @@ impl Entry {
                 prompt.len(),
                 manifest::MAX_PROMPT_BYTES
             ));
+        }
+        Ok(())
+    }
+
+    /// Whether the entry is the registration of the extension with this
+    /// manifest and snapshot, which it is kept under the hash of: its name
+    /// is the manifest's, its `api` this build's, every hook on an event the
+    /// manifest's `capabilities.hooks` allows (which the cache cannot ask
+    /// when it reads the file, having no manifest), and its prompt the text
+    /// of the snapshot's prompt file. The core asks it as it takes an entry
+    /// for an extension, before any runtime starts.
+    ///
+    /// # Errors
+    ///
+    /// What does not fit, in words.
+    pub fn fits(&self, manifest: &Manifest, snapshot: &Snapshot) -> Result<(), String> {
+        if self.name != manifest.name {
+            return Err(format!(
+                "the entry is of `{}`, and the extension is `{}`",
+                visible(&self.name),
+                manifest.name
+            ));
+        }
+        if self.api != manifest::API {
+            return Err(format!(
+                "the entry is of `api = {}`, and this build knows {}",
+                self.api,
+                manifest::API
+            ));
+        }
+        self.registration
+            .check_hooks(&manifest.capabilities.hooks)?;
+        let prompt = manifest
+            .prompt
+            .as_deref()
+            .and_then(|file| snapshot.file(file))
+            .map(String::from_utf8_lossy);
+        if self.prompt.as_deref() != prompt.as_deref() {
+            return Err(
+                "the entry's prompt is not the text of the extension's prompt file".to_owned(),
+            );
         }
         Ok(())
     }
@@ -233,7 +296,7 @@ pub struct Loaded {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CacheError {
-    /// The entry is past a registration's caps.
+    /// The entry is not one a live runtime could have registered.
     #[error("the registration of `{name}` is not one the registration cache keeps: {problem}")]
     Entry {
         /// The extension's name, escaped.
@@ -287,6 +350,8 @@ pub enum CacheError {
 pub struct RegistrationCache {
     file: PathBuf,
     clock: SharedClock,
+    /// The largest file read or written: [`MAX_BYTES`], less in a test.
+    max_bytes: u64,
 }
 
 impl RegistrationCache {
@@ -296,6 +361,7 @@ impl RegistrationCache {
         Self {
             file: file.into(),
             clock: Arc::new(SystemClock::new()),
+            max_bytes: MAX_BYTES,
         }
     }
 
@@ -346,9 +412,10 @@ impl RegistrationCache {
     ///
     /// # Errors
     ///
-    /// When the entry is past a registration's caps, when the file would be
-    /// one that is set aside when read (too large, too many entries), or
-    /// when it cannot be written. The file is then as it was.
+    /// When the entry is not one a live runtime could have registered, when
+    /// the file would be one that is set aside when read (too large, too
+    /// many entries), or when it cannot be written. The file is then as it
+    /// was.
     pub fn put(&self, hash: &ContentHash, entry: Entry) -> Result<(), CacheError> {
         entry.check().map_err(|problem| CacheError::Entry {
             name: visible(&entry.name).into_owned(),
@@ -396,58 +463,119 @@ impl RegistrationCache {
         let (file, metadata) = match open_regular(&self.file) {
             Ok(opened) => opened,
             Err(OpenError::NotFound) => return Ok(Cache::default()),
+            // Held open by another program, on Windows: nothing is wrong
+            // with it, and it is left alone.
+            Err(error) if error.is_in_use() => {
+                return Err(Bad {
+                    problem: format!("it could not be read: {error}"),
+                    at: At::InUse,
+                });
+            }
+            // A link, a folder, a FIFO, or a file this user may not open:
+            // nothing the cache can read or write, moved aside as it is.
             Err(error) => {
                 return Err(Bad {
                     problem: format!("it could not be read: {error}"),
-                    identity: None,
+                    at: At::NotAFile,
                 });
             }
         };
         let identity = FileIdentity::of(&file).ok();
-        let bad = |problem: String| Bad { problem, identity };
+        let bad = |problem: String| Bad {
+            problem,
+            at: At::Read(identity),
+        };
         let too_large = |bytes: u64| {
             bad(format!(
-                "it is {bytes} bytes, more than the {MAX_BYTES} a registration cache may be"
+                "it is {bytes} bytes, more than the {} a registration cache may be",
+                self.max_bytes
             ))
         };
-        if metadata.len() > MAX_BYTES {
+        if metadata.len() > self.max_bytes {
             return Err(too_large(metadata.len()));
         }
         // One byte past the cap says the file grew past it since its size
         // was asked.
         let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-        file.take(MAX_BYTES + 1)
+        file.take(self.max_bytes + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| bad(format!("it could not be read: {error}")))?;
-        if bytes.len() as u64 > MAX_BYTES {
+        if bytes.len() as u64 > self.max_bytes {
             return Err(too_large(bytes.len() as u64));
         }
         parse(&bytes).map_err(bad)
     }
 
-    /// Sets a file that cannot be read in full aside: moves it to
-    /// [`set_aside_path`](Self::set_aside_path) while it is still the file
-    /// that was read. Gives the sentence that says why and where.
+    /// Sets what cannot be read in full aside: moves it to
+    /// [`set_aside_path`](Self::set_aside_path), a file only while it is
+    /// still the file that was read, and anything else that stands at the
+    /// name (a link, moved and never followed; a folder) as it is. Gives the
+    /// sentence that says why and where.
     fn set_aside(&self, bad: &Bad) -> String {
         let aside = self.set_aside_path();
-        let still_it = bad
-            .identity
-            .is_some_and(|read| FileIdentity::at(&self.file).ok() == Some(read));
-        let moved = if still_it {
-            match std::fs::rename(&self.file, &aside) {
-                Ok(()) => format!(" It was moved to `{}`.", aside.display()),
-                Err(error) => {
-                    format!(" It could not be moved aside ({error}), and is left as it is.")
+        let again = " It was left as it is: another session had just written it again.";
+        let moved = match bad.at {
+            At::InUse => " It was left as it is: another program holds it open.".to_owned(),
+            // Not known: it cannot be told from a cache written since.
+            At::Read(None) => " It was left as it is.".to_owned(),
+            At::Read(Some(read)) if FileIdentity::at(&self.file).ok() != Some(read) => {
+                again.to_owned()
+            }
+            At::Read(Some(read)) => {
+                cineris_base::hook::point(BEFORE_IT_IS_SET_ASIDE);
+                match self.move_aside(&aside) {
+                    Err(error) => {
+                        format!(" It could not be moved aside ({error}), and is left as it is.")
+                    }
+                    Ok(()) if FileIdentity::at(&aside).ok() == Some(read) => {
+                        format!(" It was moved to `{}`.", aside.display())
+                    }
+                    // Another session wrote the file between the look and
+                    // the move: what was moved is that session's cache,
+                    // put back while the name is still free (a hard link
+                    // is made only where nothing is).
+                    Ok(()) => match std::fs::hard_link(&aside, &self.file) {
+                        Ok(()) => {
+                            let _ = std::fs::remove_file(&aside);
+                            again.to_owned()
+                        }
+                        Err(_) => format!(
+                            " A cache another session had just written was moved with it, to `{}`.",
+                            aside.display()
+                        ),
+                    },
                 }
             }
-        } else {
-            " It was left as it is.".to_owned()
+            At::NotAFile => match self.move_aside(&aside) {
+                Ok(()) => format!(
+                    " It was moved to `{}` as it is (a link is moved, and what it leads to is left \
+                     alone), so that the next write makes the file anew.",
+                    aside.display()
+                ),
+                Err(error) => format!(
+                    " It could not be moved aside ({error}): until it is, the cache cannot be \
+                     written, and every session registers each approved extension again."
+                ),
+            },
         };
         format!(
             "the registration cache `{}` was set aside, and every extension it held is registered again: {}.{moved}",
             self.shown(),
             bad.problem
         )
+    }
+
+    /// Moves what stands at the file's name to `aside`, replacing what was
+    /// set aside before, unless that is a folder. A rename moves a name, so
+    /// a link is moved, never what it leads to.
+    fn move_aside(&self, aside: &Path) -> io::Result<()> {
+        // A rename replaces a file but, on Linux, not with a folder.
+        if let Ok(found) = std::fs::symlink_metadata(aside)
+            && !found.is_dir()
+        {
+            std::fs::remove_file(aside)?;
+        }
+        std::fs::rename(&self.file, aside)
     }
 
     fn write(&self, cache: Cache) -> Result<(), CacheError> {
@@ -466,7 +594,7 @@ impl RegistrationCache {
         };
         let text =
             serde_json::to_vec(&file).map_err(|error| CacheError::Encode(error.to_string()))?;
-        if text.len() as u64 > MAX_BYTES {
+        if text.len() as u64 > self.max_bytes {
             return Err(CacheError::TooLarge {
                 path: self.shown(),
                 bytes: text.len(),
@@ -488,6 +616,7 @@ impl RegistrationCache {
             follow_links: false,
             ..AtomicWriteOptions::default()
         };
+        cineris_base::hook::point(BEFORE_IT_IS_WRITTEN);
         write_atomic(&self.file, &text, &options, &*self.clock).map_err(|source| {
             CacheError::Write {
                 path: self.shown(),
@@ -497,10 +626,22 @@ impl RegistrationCache {
     }
 }
 
-/// A file that cannot be read in full: why, and which file it was.
+/// What cannot be read in full: why, and what stands at the name.
 struct Bad {
     problem: String,
-    identity: Option<FileIdentity>,
+    at: At,
+}
+
+/// What stands at the file's name, when it cannot be read in full.
+enum At {
+    /// A regular file, read, by its identity when the system gave one.
+    Read(Option<FileIdentity>),
+    /// Something the cache can neither read nor write: a link, a folder, a
+    /// FIFO, a file this user may not open.
+    NotAFile,
+    /// A file another program holds open (only Windows refuses an open for
+    /// that), left alone.
+    InUse,
 }
 
 /// The entries of a file's text, or why the file is set aside.
@@ -528,7 +669,7 @@ fn parse(bytes: &[u8]) -> Result<Cache, String> {
         let entry = Entry::from(raw);
         entry.check().map_err(|problem| {
             format!(
-                "its entry `{hash}` (`{}`) is past a registration's caps: {problem}",
+                "its entry `{hash}` (`{}`) is not one a live runtime could have registered: {problem}",
                 visible(&entry.name)
             )
         })?;
@@ -637,5 +778,59 @@ impl From<RawEntry> for Entry {
             },
             prompt: raw.prompt,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cineris_testkit::scratch::Scratch;
+
+    use super::*;
+
+    fn entry(description: &str) -> Entry {
+        Entry {
+            name: "tracker".to_owned(),
+            api: manifest::API,
+            registration: Registration {
+                tools: vec![ToolDef {
+                    name: "find".to_owned(),
+                    description: description.to_owned(),
+                    input: serde_json::json!({"type": "object"}),
+                    read_only: false,
+                }],
+                ..Registration::default()
+            },
+            prompt: None,
+        }
+    }
+
+    /// One entry within every cap is far below 16 MiB, so the write's cap
+    /// is held here, at a smaller one.
+    #[test]
+    fn a_put_that_would_make_the_file_larger_than_its_cap_writes_nothing() {
+        let scratch = Scratch::outside(
+            "cineris-ext-cache",
+            "a_put_that_would_make_the_file_larger_than_its_cap_writes_nothing",
+        );
+        let cache = RegistrationCache {
+            max_bytes: 1024,
+            ..RegistrationCache::new(scratch.join("registered.json"))
+        };
+        let small = ContentHash::of(b"small");
+        cache.put(&small, entry("short")).unwrap();
+        let before = scratch.read("registered.json");
+        let error = cache
+            .put(&ContentHash::of(b"large"), entry(&"d".repeat(2000)))
+            .unwrap_err();
+        assert!(
+            matches!(error, CacheError::TooLarge { bytes, .. } if bytes > 1024),
+            "{error}"
+        );
+        assert_eq!(
+            scratch.read("registered.json"),
+            before,
+            "nothing was written"
+        );
+        assert_eq!(cache.load().cache.len(), 1);
     }
 }
