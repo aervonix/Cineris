@@ -1225,6 +1225,7 @@ impl CoreVerifier {
                 arguments: &arguments,
                 plan: &plan,
                 preview: None,
+                hooks: None,
             };
             let decision = policy.decide(&planned_call);
             // Whether an `ask` rule of the managed configuration is among

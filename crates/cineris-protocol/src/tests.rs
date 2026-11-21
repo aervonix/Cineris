@@ -265,7 +265,9 @@ fn the_golden_transcript_covers_every_method_event_and_variant() {
 }
 
 /// Free-form JSON: a field added inside one of these is data, and is kept.
-const FREE_FORM: [&str; 4] = ["config", "arguments", "payload", "details"];
+/// `original` is the model's arguments beside a hook's replacement of them
+/// (step 28).
+const FREE_FORM: [&str; 5] = ["config", "arguments", "payload", "details", "original"];
 
 /// Enforced values: a field added inside one of these makes the value
 /// invalid. `enforced_values_fail_closed` and its neighbours cover them.

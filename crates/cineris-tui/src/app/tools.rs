@@ -402,6 +402,7 @@ mod tests {
             artifacts: Vec::new(),
             duration_ms: Some(3400),
             created_at: None,
+            replaced: None,
         }
     }
 

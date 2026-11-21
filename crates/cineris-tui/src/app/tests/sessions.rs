@@ -161,6 +161,7 @@ fn shell_result(id: &str, call: &str, outcome: ToolOutcome) -> Item {
         artifacts: Vec::new(),
         duration_ms: Some(1000),
         created_at: None,
+        replaced: None,
     })
 }
 

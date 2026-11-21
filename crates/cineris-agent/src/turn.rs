@@ -27,13 +27,14 @@ use std::time::Duration;
 use cineris_base::{AbsPath, CancelToken, Classified, IdCounter, SharedClock};
 use cineris_llm::error::ProviderError;
 use cineris_llm::{CooldownChange, ModelEvent, ModelRequest, SpeedCooldowns, SpeedMove, Usage};
+use cineris_protocol::error::code;
 use cineris_protocol::event::{
     Event, InfoNotice, ItemCompleted, ItemDelta, ItemKind, ItemRef, ItemStarted, LimitNotice,
-    Notice, RetryNotice, SessionIdle, TurnCompleted, TurnOutcome, TurnStarted, UsageUpdated,
-    Verification, VerificationNotice,
+    Notice, PromptReturnedNotice, RetryNotice, SessionIdle, TurnCompleted, TurnOutcome,
+    TurnStarted, UsageUpdated, Verification, VerificationNotice,
 };
 use cineris_protocol::item::{
-    AssistantMessageItem, Delivery, NoticeItem, NoticeSource, UserMessageItem,
+    AssistantMessageItem, Delivery, HookReason, NoticeItem, NoticeSource, UserMessageItem,
 };
 use cineris_protocol::message::Origin;
 use cineris_protocol::model::ModelRole;
@@ -50,6 +51,7 @@ use crate::context::{Context, ContextParts, Pressure};
 use crate::events::{Emitter, EventSink};
 use crate::guard::{Repetition, RepetitionGuard};
 use crate::guarded::Guarded;
+use crate::hooks::{self, HookEvent, HookInput, HookSubject, LoopHooks, Submitted};
 use crate::ledger::{Ledger, LimitReached};
 use crate::policy::Policy;
 use crate::round::{Report, Round, RoundEnv, Stage};
@@ -109,6 +111,9 @@ pub struct SessionParts {
     pub cancel: CancelToken,
     /// Told of every change of state.
     pub observer: Option<Arc<dyn Observer>>,
+    /// The session's hooks, and the timer their times are kept on. `None`:
+    /// the session has none, and every hook point is passed at once.
+    pub hooks: Option<LoopHooks>,
 }
 
 impl std::fmt::Debug for SessionParts {
@@ -326,6 +331,15 @@ enum Phase {
     Interrupted(Option<Box<(Live, Round)>>),
 }
 
+/// How a turn's start went.
+enum Begun {
+    /// What the turn begins with is recorded: it goes on.
+    Ready,
+    /// It ended before anything was recorded: the prompt's hooks refused
+    /// it, or the turn was interrupted while they were asked.
+    Ended(Phase),
+}
+
 /// What ended a wait while a response arrives.
 enum Woke {
     Cancelled,
@@ -390,6 +404,7 @@ impl Session {
             config,
             cancel,
             observer,
+            hooks,
         } = parts;
         let opened = store.open().await?;
         let mut context = Context::new(context, &tools.specs());
@@ -405,6 +420,7 @@ impl Session {
             emitter: Arc::clone(&emitter),
             clock: Arc::clone(&clock),
             max_parallel: config.max_parallel_tools.max(1),
+            hooks,
         });
         let model = models.main().clone();
         let catalog_version = models.catalog_version().to_owned();
@@ -714,7 +730,7 @@ impl Session {
         let begun = match ready {
             // A turn that only verifies records nothing: no epoch, no
             // notice, no prompt. The notices waiting stay for the next turn.
-            Ok(()) if turn.only_verify => Ok(()),
+            Ok(()) if turn.only_verify => Ok(Begun::Ready),
             Ok(()) => self.begin(&turn, prompt).await,
             Err(error) => Err(error),
         };
@@ -723,17 +739,20 @@ impl Session {
         // again for that request (the review of step 18).
         self.map_turn_started();
         let mut phase = match begun {
+            // The prompt's hooks refused it, or the turn was interrupted
+            // while they were asked.
+            Ok(Begun::Ended(phase)) => phase,
             // A time limit that is spent ends a turn that only verifies
             // before any check starts, as it ends a turn before its request.
-            Ok(()) if turn.only_verify => match self.ledger.out_of_time() {
+            Ok(Begun::Ready) if turn.only_verify => match self.ledger.out_of_time() {
                 Some(reached) => self.limit_reached(&mut turn, &reached).await,
                 None => Phase::Verifying,
             },
-            Ok(()) if only => Phase::Compacting(Prep {
+            Ok(Begun::Ready) if only => Phase::Compacting(Prep {
                 only: true,
                 ..Prep::default()
             }),
-            Ok(()) => Phase::Preparing(Prep::default()),
+            Ok(Begun::Ready) => Phase::Preparing(Prep::default()),
             Err(error) => Phase::Finishing(End::store(&error)),
         };
         loop {
@@ -772,9 +791,48 @@ impl Session {
 
     /// The first thing a turn records: what its context needs (the epoch,
     /// changed instruction files, the date), the notices that were waiting
-    /// for it, then the prompt. A turn that only compacts records no
-    /// prompt.
-    async fn begin(&mut self, turn: &Turn, prompt: Prompt) -> Result<(), StoreError> {
+    /// for it, then the prompt, and what its hooks added after it. A turn
+    /// that only compacts records no prompt.
+    ///
+    /// **The prompt's `prompt.submit` hooks are asked first.** A prompt they
+    /// refuse is not recorded, and nor is anything else of the turn: it is
+    /// given back to the front end with their reasons, and the turn ends
+    /// `denied`.
+    async fn begin(&mut self, turn: &Turn, prompt: Prompt) -> Result<Begun, StoreError> {
+        let mut context = Vec::new();
+        if prompt.compact.is_none() && self.wants_prompts() {
+            match self.submit(turn, &prompt.input, prompt.delivery.clone()).await {
+                None => {
+                    self.give_back(
+                        turn,
+                        prompt.input,
+                        prompt.delivery,
+                        Vec::new(),
+                        hooks::RETURNED_UNASKED.to_owned(),
+                    );
+                    return Ok(Begun::Ended(Phase::Interrupted(None)));
+                }
+                Some(Submitted::Deny(refused)) => {
+                    let message = hooks::refused_prompt(&refused, false);
+                    self.give_back(
+                        turn,
+                        prompt.input,
+                        prompt.delivery,
+                        refused,
+                        message.clone(),
+                    );
+                    return Ok(Begun::Ended(Phase::Finishing(End {
+                        outcome: TurnOutcome::Denied,
+                        error: Some(ErrorData::new(
+                            ErrorKind::Permission,
+                            code::PROMPT_DENIED,
+                            message,
+                        )),
+                    })));
+                }
+                Some(Submitted::Pass(added)) => context = added,
+            }
+        }
         self.context_turn_start(turn).await?;
         let notices: Vec<Pending> = {
             let mut inbox = self.shared.lock();
@@ -793,7 +851,7 @@ impl Session {
         if let Some(focus) = prompt.compact {
             self.manual = true;
             self.manual_focus = focus;
-            return Ok(());
+            return Ok(Begun::Ready);
         }
         // The epoch's map, before the prompt, when it is ready by then.
         self.give_map(turn).await?;
@@ -805,7 +863,150 @@ impl Session {
         });
         self.record_shown(turn, item).await?;
         self.shared.lock().history = true;
+        self.add_context(turn, context).await?;
+        Ok(Begun::Ready)
+    }
+
+    /// Whether any `prompt.submit` hook wants a prompt: asked before any
+    /// await, so that a session with none passes the point at once.
+    fn wants_prompts(&self) -> bool {
+        self.env
+            .hooks
+            .as_ref()
+            .is_some_and(|set| set.hooks.wants(HookEvent::PromptSubmit, None))
+    }
+
+    /// Asks a prompt's `prompt.submit` hooks, and combines what they say.
+    /// `None` when the turn was interrupted before they all answered.
+    /// (`&mut`, so that the future is `Send`: the session is not `Sync`.)
+    async fn submit(
+        &mut self,
+        turn: &Turn,
+        parts: &[Part],
+        delivery: Option<Delivery>,
+    ) -> Option<Submitted> {
+        let Some(set) = self.env.hooks.as_ref() else {
+            return Some(Submitted::Pass(Vec::new()));
+        };
+        let matched = set.hooks.matching(HookEvent::PromptSubmit, None);
+        let input = HookInput {
+            event: HookEvent::PromptSubmit,
+            session: self.shared.info.id.clone(),
+            turn: turn.id.clone(),
+            workspace: self.env.workspace.paths.root().clone(),
+            subject: HookSubject::Prompt {
+                parts: parts.to_vec(),
+                delivery,
+            },
+        };
+        let heard = turn
+            .cancel
+            .race(hooks::ask_all(set, matched, input))
+            .await?;
+        Some(hooks::submitted(heard))
+    }
+
+    /// Gives a prompt that was not sent back to the front end, for its
+    /// editor.
+    fn give_back(
+        &self,
+        turn: &Turn,
+        parts: Vec<Part>,
+        delivery: Option<Delivery>,
+        refused: Vec<HookReason>,
+        message: String,
+    ) {
+        self.notify(
+            turn,
+            Notice::PromptReturned(PromptReturnedNotice {
+                message,
+                parts,
+                delivery,
+                hooks: refused,
+            }),
+        );
+    }
+
+    /// Records what a prompt's hooks added, each after the prompt under a
+    /// line that names the hook.
+    async fn add_context(
+        &mut self,
+        turn: &Turn,
+        context: Vec<(String, String)>,
+    ) -> Result<(), StoreError> {
+        for (hook, text) in context {
+            self.record_notice(turn, NoticeSource::Hook, hooks::context_notice(&hook, &text))
+                .await?;
+        }
         Ok(())
+    }
+
+    /// Delivers a steering message at a safe boundary, once its
+    /// `prompt.submit` hooks allow it: one they refuse is given back with
+    /// their reasons, and the turn goes on without it. `None` when the turn
+    /// was interrupted while they were asked; the message is given back.
+    async fn deliver_steer(
+        &mut self,
+        turn: &Turn,
+        input: Vec<Part>,
+    ) -> Option<Result<(), StoreError>> {
+        let mut context = Vec::new();
+        if self.wants_prompts() {
+            match self.submit(turn, &input, Some(Delivery::Steer)).await {
+                None => {
+                    self.give_back(
+                        turn,
+                        input,
+                        Some(Delivery::Steer),
+                        Vec::new(),
+                        hooks::RETURNED_UNASKED.to_owned(),
+                    );
+                    return None;
+                }
+                Some(Submitted::Deny(refused)) => {
+                    let message = hooks::refused_prompt(&refused, true);
+                    self.give_back(turn, input, Some(Delivery::Steer), refused, message);
+                    return Some(Ok(()));
+                }
+                Some(Submitted::Pass(added)) => context = added,
+            }
+        }
+        let item = Item::UserMessage(UserMessageItem {
+            id: self.item_ids.next_id(),
+            parts: input,
+            delivery: Some(Delivery::Steer),
+            created_at: Some(self.clock.now().to_timestamp()),
+        });
+        if let Err(error) = self.record_shown(turn, item).await {
+            return Some(Err(error));
+        }
+        Some(self.add_context(turn, context).await)
+    }
+
+    /// What was taken to be delivered at a boundary and was not, because
+    /// the turn was interrupted while a steering message's hooks were
+    /// asked: a steering message is given back, as an interrupt gives back
+    /// those still waiting; a notice waits for the next turn; a compaction
+    /// is dropped, as an interrupt drops one.
+    fn return_pending(&self, turn: &Turn, rest: std::collections::VecDeque<Pending>) {
+        let mut kept = Vec::new();
+        for pending in rest {
+            match pending {
+                Pending::Steer(input) => self.give_back(
+                    turn,
+                    input,
+                    Some(Delivery::Steer),
+                    Vec::new(),
+                    hooks::RETURNED_UNASKED.to_owned(),
+                ),
+                Pending::Notice { .. } => kept.push(pending),
+                Pending::Compact(_) => {}
+            }
+        }
+        let mut inbox = self.shared.lock();
+        for pending in kept.into_iter().rev() {
+            inbox.pending.push_front(pending);
+        }
     }
 
     // ----------------------------------------------------------- preparing
@@ -820,18 +1021,16 @@ impl Session {
 
         // This is a safe boundary: no tool round is open. Steering
         // messages and notices are delivered here, in the order they came.
-        let pending: Vec<Pending> = self.shared.lock().pending.drain(..).collect();
-        for pending in pending {
-            let recorded = match pending {
-                Pending::Steer(input) => {
-                    let item = Item::UserMessage(UserMessageItem {
-                        id: self.item_ids.next_id(),
-                        parts: input,
-                        delivery: Some(Delivery::Steer),
-                        created_at: Some(self.clock.now().to_timestamp()),
-                    });
-                    self.record_shown(turn, item).await
-                }
+        let mut pending = std::mem::take(&mut self.shared.lock().pending);
+        while let Some(next) = pending.pop_front() {
+            let recorded = match next {
+                Pending::Steer(input) => match self.deliver_steer(turn, input).await {
+                    Some(recorded) => recorded,
+                    None => {
+                        self.return_pending(turn, pending);
+                        return Phase::Interrupted(None);
+                    }
+                },
                 Pending::Notice { source, text } => self.record_notice(turn, source, text).await,
                 Pending::Compact(focus) => {
                     self.manual = true;

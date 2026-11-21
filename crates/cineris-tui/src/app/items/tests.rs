@@ -117,6 +117,7 @@ impl Rig {
             artifacts: Vec::new(),
             duration_ms: Some(1200),
             created_at: None,
+            replaced: None,
         }));
     }
 

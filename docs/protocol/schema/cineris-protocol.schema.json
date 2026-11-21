@@ -197,12 +197,30 @@
           "$ref": "#/$defs/ApprovalDetail",
           "description": "Exactly what would happen."
         },
+        "hooks": {
+          "description": "The `tool.before` hooks that put the question (since step 28): each\nthat answered `ask`, with its reason. A hook only narrows, so it may\nput a question about a call the rules alone would have allowed.",
+          "items": {
+            "$ref": "#/$defs/HookReason"
+          },
+          "type": "array"
+        },
         "reasons": {
           "description": "Why the call needs an answer, a reason an entry: the rule that asks,\nthe part of a command that is not on a safe list, a protected path.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "replaced": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReplacedArguments"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The arguments a hook put in place of the model's (since step 28),\nwith the model's own as `original`: the call would run with the\nhook's, and `summary` and `detail` describe it so. Such a question\nis always put, whatever the rules say, and offers only `allow_once`\nand `deny`."
         },
         "session_id": {
           "$ref": "#/$defs/SessionId",
@@ -2668,6 +2686,26 @@
       ],
       "type": "object"
     },
+    "HookReason": {
+      "description": "A hook, named where what it answered shows: a hook that asked, refused\nor replaced something (since step 28,\n`docs/architecture/12-extensions.md`, \"Tier 3: hooks\").",
+      "properties": {
+        "hook": {
+          "description": "The hook's name: its `[hooks.<name>]`, or the one an extension's\nscript hook is shown by.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "What it gave as its reason, or how it failed. Absent when it gave\nnone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hook"
+      ],
+      "type": "object"
+    },
     "ImagePart": {
       "description": "An image. Input only.",
       "properties": {
@@ -3917,6 +3955,25 @@
           "description": "The project's checks: a round starting or ended, or checks offered (since step 19)."
         },
         {
+          "allOf": [
+            {
+              "properties": {
+                "kind": {
+                  "const": "prompt_returned"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "type": "object"
+            },
+            {
+              "$ref": "#/$defs/PromptReturnedNotice"
+            }
+          ],
+          "description": "A prompt given back, not sent to the model: a hook refused it (since step 28)."
+        },
+        {
           "description": "A variant this version of the protocol does not know. Receivers skip it or show it generically.",
           "properties": {
             "kind": {
@@ -3930,7 +3987,8 @@
                   "speed_fallback",
                   "speed_cooldown",
                   "info",
-                  "verification"
+                  "verification",
+                  "prompt_returned"
                 ]
               },
               "type": "string"
@@ -4016,6 +4074,10 @@
         {
           "const": "extensions",
           "description": "What extensions give the system prompt changed since the model was given it: the index of skills and tool sources, given whole, or an extension's text, withdrawn (since step 28)."
+        },
+        {
+          "const": "hook",
+          "description": "Text a hook added to the conversation: a `prompt.submit` hook's `context`, after the prompt it was given, under a line that names the hook (since step 28)."
         },
         {
           "description": "A value this version of the protocol does not know. Receivers need a default branch.",
@@ -4991,6 +5053,45 @@
       },
       "type": "object"
     },
+    "PromptReturnedNotice": {
+      "description": "Notice: a prompt given back to the front end, for its editor, and never\nsent to the model (since step 28). A `prompt.submit` hook refused it,\nand `hooks` names each that did, with its reason; or the turn was\ninterrupted while its hooks were asked, and `hooks` is empty. A prompt\nthat would have started a turn ends that turn `denied` (or\n`interrupted`); a steering message is dropped, and the running turn goes\non.",
+      "properties": {
+        "delivery": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Delivery"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "How it was sent: `steer` for a steering message. Absent for a prompt\nthat started a turn."
+        },
+        "hooks": {
+          "description": "The hooks that refused it, each with its reason or its failure.",
+          "items": {
+            "$ref": "#/$defs/HookReason"
+          },
+          "type": "array"
+        },
+        "message": {
+          "description": "The notice in words: which hooks refused the prompt, and why.",
+          "type": "string"
+        },
+        "parts": {
+          "description": "The prompt, as it was sent.",
+          "items": {
+            "$ref": "#/$defs/Part"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "message",
+        "parts"
+      ],
+      "type": "object"
+    },
     "ProviderBlockPart": {
       "description": "Something the provider produced that the neutral model does not name:\nserver-side tool use and its results, compaction blocks, fallback markers.",
       "properties": {
@@ -5252,6 +5353,33 @@
       },
       "required": [
         "provider"
+      ],
+      "type": "object"
+    },
+    "ReplacedArguments": {
+      "description": "Arguments a `tool.before` hook put in place of the ones the model wrote\n(since step 28). Such a call is always put to the user, who may allow it\nonce or refuse it.",
+      "properties": {
+        "arguments": {
+          "description": "The arguments the call runs with: the hook's."
+        },
+        "hook": {
+          "description": "The hook that replaced them.",
+          "type": "string"
+        },
+        "original": {
+          "description": "The arguments the model wrote, where the message that carries the\ncall is not at hand: in an approval request. Absent in a tool\nresult, whose call in the assistant message has them."
+        },
+        "reason": {
+          "description": "What the hook gave as its reason.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "hook",
+        "arguments"
       ],
       "type": "object"
     },
@@ -7440,6 +7568,17 @@
         },
         "payload": {
           "description": "A structured payload for front ends, whose shape belongs to the tool:\na diff, an exit status, match counts."
+        },
+        "replaced": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReplacedArguments"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The arguments a hook put in place of the model's, when one did and\nthe call was put to the user with them (since step 28): what ran, if\nit ran, and which hook chose it. The model's own are in its call.\n(Boxed: it is rare, and every item would otherwise be its size.)"
         },
         "tool": {
           "description": "The tool's name.",

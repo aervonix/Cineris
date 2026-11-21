@@ -828,6 +828,7 @@ fn edit_result(call: &str, path: &str, added: u64, removed: u64) -> Inbound {
             artifacts: Vec::new(),
             duration_ms: Some(10),
             created_at: None,
+            replaced: None,
         }),
     }))
 }
@@ -845,6 +846,7 @@ fn failed_edit(call: &str, path: &str) -> Inbound {
             artifacts: Vec::new(),
             duration_ms: Some(10),
             created_at: None,
+            replaced: None,
         }),
     }))
 }
@@ -861,6 +863,7 @@ fn shell_result(call: &str) -> Inbound {
             artifacts: Vec::new(),
             duration_ms: Some(10),
             created_at: None,
+            replaced: None,
         }),
     }))
 }

@@ -564,6 +564,7 @@ impl Partial {
                 artifacts: Vec::new(),
                 duration_ms: None,
                 created_at: None,
+                replaced: None,
             })),
             // Nothing else streams.
             _ => None,

@@ -53,6 +53,19 @@
 //! after it that could conflict with it starts, and no question after it
 //! is put.
 //!
+//! # Hooks
+//!
+//! A call the policy allowed, allowed as read-only, or will ask about is
+//! shown to its `tool.before` hooks ([`crate::hooks`]) in the task that
+//! planned it, before it reports: so while they are asked the call is one
+//! whose plan is not known yet, and nothing that could conflict with it
+//! starts. A call the policy denied or stopped is not shown to them. What
+//! they say only narrows: a `deny` refuses the call, an `ask` puts the
+//! question about a call the policy allowed, and a replacement of the
+//! arguments is planned, decided and checked again and then always put to
+//! the user. A call decided again is shown to them again, with the model's
+//! own arguments; what they said before is dropped.
+//!
 //! Two rules keep the model's order when a decision changes:
 //!
 //! - while a call that may change the file system runs, and an answer may
@@ -93,7 +106,7 @@ use cineris_base::{AbsPath, CancelToken, IdCounter, SharedClock};
 use cineris_protocol::event::{
     Delta, Event, ItemCompleted, ItemDelta, ItemKind, ItemRef, ItemStarted, TextDelta,
 };
-use cineris_protocol::item::{ToolOutcome, ToolResultItem};
+use cineris_protocol::item::{HookReason, ReplacedArguments, ToolOutcome, ToolResultItem};
 use cineris_protocol::{CallId, Item, ItemId, Part, SessionId, TurnId};
 use cineris_tools::{
     BlockingError, CallRef, Concurrency, Effect, Json, Plan, RunCx, Tool, ToolError, ToolOutput,
@@ -106,6 +119,9 @@ use crate::assistant::EndedCall;
 use crate::config::Workspace;
 use crate::events::Emitter;
 use crate::guarded::Guarded;
+use crate::hooks::{
+    self, Before, HookEvent, HookInput, HookQuestion, HookSubject, LoopHooks, ToolTarget,
+};
 use crate::policy::{Decision, PlannedCall, Policy, Verdict};
 use crate::stats::ToolStatOutcome;
 use crate::toolset::ToolSet;
@@ -120,15 +136,22 @@ pub(crate) struct RoundEnv {
     pub(crate) clock: SharedClock,
     /// The most calls that run at once.
     pub(crate) max_parallel: usize,
+    /// The session's hooks, when it has any.
+    pub(crate) hooks: Option<LoopHooks>,
 }
 
 /// A report from one of the round's tasks.
 pub(crate) enum Report {
-    /// A call was planned, and the policy has looked at the plan.
+    /// A call was planned, and the policy, and the call's hooks, have
+    /// looked at the plan.
     Planned {
         token: u64,
         plan: Plan,
         decision: Decision,
+        /// What its hooks said that puts the question: whatever the
+        /// decision, the call is asked about. With a replacement, `plan`
+        /// and `decision` are the replacement's.
+        hooked: Option<Box<HookQuestion>>,
     },
     /// A question was answered.
     Answered {
@@ -279,8 +302,9 @@ enum CallState {
     Ready(Plan),
     /// Running.
     Running,
-    /// It has its result.
-    Done(Outcome),
+    /// It has its result. (Boxed: a result is many times the size of the
+    /// other states.)
+    Done(Box<Outcome>),
 }
 
 struct Call {
@@ -310,6 +334,18 @@ struct Call {
     replanned: Option<Vec<AbsPath>>,
     /// Whether a later plan of it names other paths than an earlier one.
     moved: bool,
+    /// What its hooks said that its question shows, from its last
+    /// decision: dropped when it is decided again.
+    hooked: Option<Box<HookQuestion>>,
+}
+
+impl Call {
+    /// The arguments a hook put in place of the model's, when one did.
+    fn replaced(&self) -> Option<&ReplacedArguments> {
+        self.hooked
+            .as_ref()
+            .and_then(|hooked| hooked.replaced.as_ref())
+    }
 }
 
 /// A run from a response that was thrown away, kept in case the next
@@ -323,6 +359,8 @@ struct Cached {
     cancel: CancelToken,
     /// `None` while it is still running.
     outcome: Option<Outcome>,
+    /// The arguments a hook put in place of the model's, which it ran with.
+    replaced: Option<ReplacedArguments>,
 }
 
 /// A discarded run that has been cancelled and has not reported yet. Until
@@ -677,6 +715,7 @@ impl Round {
             decided: Dated::default(),
             replanned: None,
             moved: false,
+            hooked: None,
         }
     }
 
@@ -708,6 +747,11 @@ impl Round {
         };
         call.state = CallState::Pending;
         call.replanned = call.footprint.take().map(|footprint| footprint.paths);
+        // Its hooks are shown it again, with the model's own arguments, and
+        // what they said before is dropped.
+        if call.hooked.take().is_some() {
+            call.key = format!("{}\u{0}{}", call.name, call.arguments);
+        }
         let call = &self.calls[position];
         self.plan(call, &tool);
     }
@@ -731,70 +775,24 @@ impl Round {
         );
     }
 
-    /// Starts the task that plans a call and shows the plan to the policy.
+    /// Starts the task that plans a call, shows the plan to the policy, and
+    /// shows what the policy did not refuse to the call's hooks.
     fn plan(&self, call: &Call, tool: &Arc<dyn Tool>) {
-        let token = call.token;
-        let tool = Arc::clone(tool);
-        let policy = Arc::clone(&self.env.policy);
-        let session = self.env.session.clone();
-        let turn = self.turn.clone();
-        let call_id = call.call_id.clone();
-        let item = call.item_id.clone();
-        let arguments = call.arguments.clone();
-        let name = call.name.clone();
-        let cx = self.run_cx(call.cancel.clone());
-        self.spawn(token, &call.name, async move {
-            let planner = Arc::clone(&tool);
-            let plan_cx = cx.plan_cx();
-            let plan_arguments = arguments.clone();
-            // Planning may ask the file system where a path leads, which
-            // blocks.
-            let planned =
-                run_blocking(&cx.cancel, move |_| planner.plan(&plan_arguments, &plan_cx)).await;
-            let (result, stat) = match planned {
-                Ok(Ok(plan)) => {
-                    let decision = policy.decide(&PlannedCall {
-                        session: &session,
-                        turn: &turn,
-                        call_id: &call_id,
-                        item: &item,
-                        spec: tool.spec(),
-                        arguments: &arguments,
-                        plan: &plan,
-                        preview: None,
-                    });
-                    return Report::Planned {
-                        token,
-                        plan,
-                        decision,
-                    };
-                }
-                Ok(Err(error)) => {
-                    let stat = match &error {
-                        ToolError::Internal(_) => ToolStatOutcome::Failed,
-                        ToolError::UnknownTool(_) => ToolStatOutcome::UnknownTool,
-                        _ => ToolStatOutcome::InvalidArguments,
-                    };
-                    (error.into_result(), stat)
-                }
-                Err(BlockingError::Cancelled) => (
-                    ToolResult::interrupted(NOT_RUN),
-                    ToolStatOutcome::Interrupted,
-                ),
-                Err(BlockingError::Panicked(message)) => (
-                    ToolResult::error(format!(
-                        "internal error: planning the call panicked ({message})."
-                    )),
-                    ToolStatOutcome::Failed,
-                ),
-            };
-            Report::Finished {
-                token,
-                result: bound(result, &name, &cx).await,
-                duration: Duration::ZERO,
-                stat,
-            }
-        });
+        let planning = Planning {
+            token: call.token,
+            tool: Arc::clone(tool),
+            policy: Arc::clone(&self.env.policy),
+            hooks: self.env.hooks.clone(),
+            session: self.env.session.clone(),
+            turn: self.turn.clone(),
+            call_id: call.call_id.clone(),
+            item: call.item_id.clone(),
+            arguments: call.arguments.clone(),
+            name: call.name.clone(),
+            root: self.env.workspace.paths.root().clone(),
+            cx: self.run_cx(call.cancel.clone()),
+        };
+        self.spawn(call.token, &call.name, planning.run());
     }
 
     /// The call at `position` may start, and a run of the same call was kept
@@ -821,7 +819,7 @@ impl Round {
         call.state = match cached.outcome {
             Some(mut outcome) => {
                 outcome.item.call_id = call.call_id.clone();
-                CallState::Done(outcome)
+                CallState::Done(Box::new(outcome))
             }
             None => CallState::Running,
         };
@@ -845,7 +843,8 @@ impl Round {
                 token,
                 plan,
                 decision,
-            } => self.planned(token, plan, decision),
+                hooked,
+            } => self.planned(token, plan, decision, hooked),
             Report::Answered {
                 token,
                 plan,
@@ -864,7 +863,13 @@ impl Round {
         self.calls.iter().position(|call| call.token == token)
     }
 
-    fn planned(&mut self, token: u64, mut plan: Plan, decision: Decision) {
+    fn planned(
+        &mut self,
+        token: u64,
+        mut plan: Plan,
+        decision: Decision,
+        hooked: Option<Box<HookQuestion>>,
+    ) {
         // A call of a response that was thrown away meanwhile: nothing to do.
         let Some(position) = self.position(token) else {
             return;
@@ -887,6 +892,18 @@ impl Round {
         if let Some(earlier) = call.replanned.take() {
             call.moved |= earlier != footprint.paths;
         }
+        // A call that runs with a hook's arguments is not the call the model
+        // wrote: a kept run of the model's own is not it, nor the other way.
+        if let Some(replaced) = hooked
+            .as_ref()
+            .and_then(|hooked| hooked.replaced.as_ref())
+        {
+            call.key = format!(
+                "{}\u{0}{}\u{0}{}",
+                call.name, call.arguments, replaced.arguments
+            );
+        }
+        call.hooked = hooked;
         let call = &self.calls[position];
         // A kept run of another call that touched the same files is not what
         // the model was shown: it goes before this call can meet what it
@@ -911,15 +928,20 @@ impl Round {
             self.kept_from_running(position);
             return;
         }
+        // A hook that asked, or replaced the arguments, puts the question
+        // whatever the policy said: a hook only narrows.
+        let hooks_ask = self.calls[position].hooked.is_some();
         match decision {
-            Decision::Allow | Decision::AllowReadOnly => {
+            Decision::Allow | Decision::AllowReadOnly if !hooks_ask => {
                 let now = self.now();
                 let call = &mut self.calls[position];
                 call.state = CallState::Ready(plan);
                 // A call decided again was allowed when it was first.
                 call.times.ready.get_or_insert(now);
             }
-            Decision::Ask => self.calls[position].state = CallState::NeedsAnswer(plan),
+            Decision::Allow | Decision::AllowReadOnly | Decision::Ask => {
+                self.calls[position].state = CallState::NeedsAnswer(plan);
+            }
             Decision::Deny { reason } => {
                 let mut text = "This call was not allowed to run.".to_owned();
                 if let Some(reason) = reason {
@@ -1107,7 +1129,14 @@ impl Round {
             {
                 self.changes += 1;
             }
-            let item = self.item(&call.item_id, &call.call_id, &call.name, result, duration);
+            let item = self.item(
+                &call.item_id,
+                &call.call_id,
+                &call.name,
+                result,
+                duration,
+                call.replaced(),
+            );
             if !call.shown {
                 self.emit_started(call);
             }
@@ -1122,14 +1151,14 @@ impl Round {
             }
             let (queued, approval) = (call.times.queued(), call.times.approval);
             let index = call.index;
-            call.state = CallState::Done(Outcome {
+            call.state = CallState::Done(Box::new(Outcome {
                 item,
                 stat,
                 duration,
                 queued,
                 approval,
                 turn_stop: turn_stop.clone(),
-            });
+            }));
             // Its run stopped the turn: the round ends here, as at a call
             // the policy stopped, and the model is not asked again.
             if let Some(reason) = turn_stop {
@@ -1146,6 +1175,7 @@ impl Round {
                 &cached.name,
                 result,
                 duration,
+                cached.replaced.as_ref(),
             );
             self.cache[position].outcome = Some(Outcome {
                 item,
@@ -1162,6 +1192,10 @@ impl Round {
         // Anything else is a report for a call that no longer exists.
     }
 
+    /// A call's result as the item front ends see and the log keeps. A call
+    /// whose arguments a hook replaced says so: its result begins with the
+    /// line that tells the model which hook put what in their place, and
+    /// the item names the hook and the arguments.
     fn item(
         &self,
         item_id: &ItemId,
@@ -1169,8 +1203,12 @@ impl Round {
         name: &str,
         result: ToolResult,
         duration: Duration,
+        replaced: Option<&ReplacedArguments>,
     ) -> ToolResultItem {
-        let (outcome, content, payload, artifacts) = result.into_parts();
+        let (outcome, mut content, payload, artifacts) = result.into_parts();
+        if let Some(replaced) = replaced {
+            content.insert(0, Part::text(hooks::replaced_note(replaced)));
+        }
         ToolResultItem {
             id: item_id.clone(),
             call_id: call_id.clone(),
@@ -1181,6 +1219,15 @@ impl Round {
             artifacts,
             duration_ms: Some(u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)),
             created_at: Some(self.env.clock.now().to_timestamp()),
+            // The model's own arguments are in its call.
+            replaced: replaced.map(|replaced| {
+                Box::new(ReplacedArguments {
+                    hook: replaced.hook.clone(),
+                    arguments: replaced.arguments.clone(),
+                    original: None,
+                    reason: replaced.reason.clone(),
+                })
+            }),
         }
     }
 
@@ -1361,7 +1408,12 @@ impl Round {
         let turn = self.turn.clone();
         let call_id = call.call_id.clone();
         let item = call.item_id.clone();
-        let arguments = call.arguments.clone();
+        // A call whose arguments a hook replaced is asked about with the
+        // hook's: they are what would run, and its plan is theirs.
+        let arguments = call
+            .replaced()
+            .map_or_else(|| call.arguments.clone(), |replaced| replaced.arguments.clone());
+        let hooked = call.hooked.clone();
         let name = call.name.clone();
         let cancel = call.cancel.clone();
         let cx = self.run_cx(cancel);
@@ -1384,6 +1436,7 @@ impl Round {
                     arguments: &arguments,
                     plan: &plan,
                     preview: preview.as_ref(),
+                    hooks: hooked.as_deref(),
                 })
                 .await;
             Report::Answered {
@@ -1494,7 +1547,7 @@ impl Round {
             }
             let outcome = match call.state {
                 CallState::Running => None,
-                CallState::Done(outcome) if call.ran => Some(outcome),
+                CallState::Done(outcome) if call.ran => Some(*outcome),
                 _ => {
                     // Not started: nothing to keep. A plan in progress stops.
                     call.cancel.cancel();
@@ -1512,6 +1565,7 @@ impl Round {
                     footprint,
                     cancel: call.cancel,
                     outcome,
+                    replaced: call.hooked.and_then(|hooked| hooked.replaced),
                 });
             }
         }
@@ -1602,6 +1656,7 @@ impl Round {
                     debug_assert!(false, "every call of a settled round has its result");
                     return None;
                 };
+                let outcome = *outcome;
                 // What the call changed, from its result: a command's
                 // declared write of the whole workspace is not a change,
                 // and a write that found its content there made none
@@ -1670,6 +1725,306 @@ impl Drop for Round {
         for cached in &self.cache {
             cached.cancel.cancel();
         }
+    }
+}
+
+/// A call's planning, as the task that does it sees it: the plan, the
+/// policy's decision, and what the call's `tool.before` hooks say of what
+/// the policy did not refuse.
+struct Planning {
+    token: u64,
+    tool: Arc<dyn Tool>,
+    policy: Arc<dyn Policy>,
+    hooks: Option<LoopHooks>,
+    session: SessionId,
+    turn: TurnId,
+    call_id: CallId,
+    item: ItemId,
+    /// The arguments, as the model wrote them.
+    arguments: Json,
+    name: String,
+    /// The workspace's root, for the hooks' input.
+    root: AbsPath,
+    cx: RunCx,
+}
+
+/// What became of a replacement of a call's arguments on the blocking pool:
+/// the replacement and its plan, the policy's decision of it, and whether
+/// it may be put to the user.
+type Replanned = (Json, Plan, Decision, Result<(), String>);
+
+impl Planning {
+    async fn run(self) -> Report {
+        let planner = Arc::clone(&self.tool);
+        let plan_cx = self.cx.plan_cx();
+        let arguments = self.arguments.clone();
+        // Planning may ask the file system where a path leads, which
+        // blocks.
+        let planned = run_blocking(&self.cx.cancel, move |_| planner.plan(&arguments, &plan_cx)).await;
+        let (result, stat) = match planned {
+            Ok(Ok(plan)) => {
+                let decision = self.policy.decide(&PlannedCall {
+                    session: &self.session,
+                    turn: &self.turn,
+                    call_id: &self.call_id,
+                    item: &self.item,
+                    spec: self.tool.spec(),
+                    arguments: &self.arguments,
+                    plan: &plan,
+                    preview: None,
+                    hooks: None,
+                });
+                return self.hooked(plan, decision).await;
+            }
+            Ok(Err(error)) => {
+                let stat = match &error {
+                    ToolError::Internal(_) => ToolStatOutcome::Failed,
+                    ToolError::UnknownTool(_) => ToolStatOutcome::UnknownTool,
+                    _ => ToolStatOutcome::InvalidArguments,
+                };
+                (error.into_result(), stat)
+            }
+            Err(BlockingError::Cancelled) => (
+                ToolResult::interrupted(NOT_RUN),
+                ToolStatOutcome::Interrupted,
+            ),
+            Err(BlockingError::Panicked(message)) => (
+                ToolResult::error(format!(
+                    "internal error: planning the call panicked ({message})."
+                )),
+                ToolStatOutcome::Failed,
+            ),
+        };
+        self.finished(result, stat).await
+    }
+
+    /// A result the call gets without running, through the output policy.
+    async fn finished(&self, result: ToolResult, stat: ToolStatOutcome) -> Report {
+        Report::Finished {
+            token: self.token,
+            result: bound(result, &self.name, &self.cx).await,
+            duration: Duration::ZERO,
+            stat,
+        }
+    }
+
+    /// The report of a call its hooks did not narrow, or refused.
+    fn planned(&self, plan: Plan, decision: Decision) -> Report {
+        Report::Planned {
+            token: self.token,
+            plan,
+            decision,
+            hooked: None,
+        }
+    }
+
+    fn refused(&self, plan: Plan, why: String) -> Report {
+        self.planned(plan, Decision::Deny { reason: Some(why) })
+    }
+
+    /// Shows the call to its `tool.before` hooks, when the policy did not
+    /// refuse it and any hook is on it, and acts on what they say. With no
+    /// such hook the decision stands, and nothing is awaited.
+    async fn hooked(self, plan: Plan, decision: Decision) -> Report {
+        let narrowable = matches!(
+            decision,
+            Decision::Allow | Decision::AllowReadOnly | Decision::Ask
+        );
+        let target = ToolTarget::of(&self.name, &self.arguments);
+        let Some(set) = self.hooks.as_ref().filter(|set| {
+            narrowable && set.hooks.wants(HookEvent::ToolBefore, Some(target))
+        }) else {
+            return self.planned(plan, decision);
+        };
+        let matched = set.hooks.matching(HookEvent::ToolBefore, Some(target));
+        let input = HookInput {
+            event: HookEvent::ToolBefore,
+            session: self.session.clone(),
+            turn: self.turn.clone(),
+            workspace: self.root.clone(),
+            subject: HookSubject::Call {
+                tool: self.name.clone(),
+                call_id: self.call_id.clone(),
+                arguments: self.arguments.clone(),
+                summary: plan.summary.clone(),
+                effects: plan.effects.clone(),
+            },
+        };
+        let Some(heard) = self
+            .cx
+            .cancel
+            .race(hooks::ask_all(set, matched, input))
+            .await
+        else {
+            return self
+                .finished(
+                    ToolResult::interrupted(NOT_RUN),
+                    ToolStatOutcome::Interrupted,
+                )
+                .await;
+        };
+        match hooks::before(heard) {
+            Before::Pass => self.planned(plan, decision),
+            Before::Ask(asked) => Report::Planned {
+                token: self.token,
+                plan,
+                decision,
+                hooked: Some(Box::new(HookQuestion {
+                    asked,
+                    replaced: None,
+                })),
+            },
+            Before::Deny(why) => self.refused(plan, why),
+            Before::Replace {
+                hook,
+                arguments,
+                reason,
+                asked,
+            } => self.replace(plan, hook, arguments, reason, asked).await,
+        }
+    }
+
+    /// One hook replaced the call's arguments. The replacement is held to
+    /// what the model's call is held to (the tool's schema, its tool, the
+    /// policy), and to what only it is: a `tool_call` may not be turned
+    /// into a call of another tool, and nothing it writes may be a
+    /// protected path. Then it is put to the user, whatever the policy said
+    /// of it: the report asks. A refusal stands, and a stop stops the turn.
+    async fn replace(
+        self,
+        plan: Plan,
+        hook: String,
+        replacement: Json,
+        reason: Option<String>,
+        asked: Vec<HookReason>,
+    ) -> Report {
+        if let Some(other) = hooks::names_another_tool(&self.name, &self.arguments, &replacement) {
+            return self.refused(
+                plan,
+                format!(
+                    "the hook `{hook}` replaced its arguments with ones that call another tool \
+                     (`{other}`), which a hook may not do"
+                ),
+            );
+        }
+        if let Err(mismatch) =
+            cineris_tools::schema::validate(&self.tool.spec().parameters, &replacement)
+        {
+            return self.refused(
+                plan,
+                format!(
+                    "the hook `{hook}` replaced its arguments with ones that do not fit the \
+                     tool's schema:\n{mismatch}"
+                ),
+            );
+        }
+        let checked = self.replan(replacement).await;
+        let (replacement, replanned, decision, checked) = match checked {
+            Ok(Ok(replanned)) => replanned,
+            Ok(Err(error)) => {
+                return self.refused(
+                    plan,
+                    format!(
+                        "the hook `{hook}` replaced its arguments with ones its tool refuses: \
+                         {error}"
+                    ),
+                );
+            }
+            Err(BlockingError::Cancelled) => {
+                return self
+                    .finished(
+                        ToolResult::interrupted(NOT_RUN),
+                        ToolStatOutcome::Interrupted,
+                    )
+                    .await;
+            }
+            Err(BlockingError::Panicked(message)) => {
+                return self
+                    .finished(
+                        ToolResult::error(format!(
+                            "internal error: planning the call a hook replaced panicked \
+                             ({message})."
+                        )),
+                        ToolStatOutcome::Failed,
+                    )
+                    .await;
+            }
+        };
+        match decision {
+            Decision::Deny { reason } => {
+                let mut why = format!(
+                    "the hook `{hook}` replaced its arguments, and the call they make is not \
+                     allowed"
+                );
+                if let Some(reason) = reason {
+                    why.push_str(": ");
+                    why.push_str(&reason);
+                }
+                self.refused(replanned, why)
+            }
+            // A stop stands, as the policy gave it.
+            Decision::Stop { .. } => self.planned(replanned, decision),
+            _ => match checked {
+                Err(refused) => self.refused(
+                    replanned,
+                    format!(
+                        "the hook `{hook}` replaced its arguments with ones that may not be put \
+                         to the user: {refused}"
+                    ),
+                ),
+                Ok(()) => Report::Planned {
+                    token: self.token,
+                    plan: replanned,
+                    decision,
+                    hooked: Some(Box::new(HookQuestion {
+                        asked,
+                        replaced: Some(ReplacedArguments {
+                            hook,
+                            arguments: replacement,
+                            original: Some(self.arguments),
+                            reason,
+                        }),
+                    })),
+                },
+            },
+        }
+    }
+
+    /// Plans the replacement, has the policy decide it, and, unless it
+    /// refused it, asks the hooks whether it may be put to the user: on
+    /// the blocking pool, where planning may ask the file system where a
+    /// path leads, and the check may read it.
+    async fn replan(
+        &self,
+        replacement: Json,
+    ) -> Result<Result<Replanned, ToolError>, BlockingError> {
+        let tool = Arc::clone(&self.tool);
+        let policy = Arc::clone(&self.policy);
+        let hooks = self.hooks.as_ref().map(|set| Arc::clone(&set.hooks));
+        let plan_cx = self.cx.plan_cx();
+        let (session, turn) = (self.session.clone(), self.turn.clone());
+        let (call_id, item) = (self.call_id.clone(), self.item.clone());
+        run_blocking(&self.cx.cancel, move |_| {
+            let replanned = tool.plan(&replacement, &plan_cx)?;
+            let call = PlannedCall {
+                session: &session,
+                turn: &turn,
+                call_id: &call_id,
+                item: &item,
+                spec: tool.spec(),
+                arguments: &replacement,
+                plan: &replanned,
+                preview: None,
+                hooks: None,
+            };
+            let decision = policy.decide(&call);
+            let checked = match (&decision, &hooks) {
+                (Decision::Deny { .. } | Decision::Stop { .. }, _) | (_, None) => Ok(()),
+                (_, Some(hooks)) => hooks.check_replacement(&call),
+            };
+            Ok((replacement, replanned, decision, checked))
+        })
+        .await
     }
 }
 

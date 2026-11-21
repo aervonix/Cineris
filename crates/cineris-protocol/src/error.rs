@@ -139,6 +139,10 @@ pub mod code {
     /// not know. It is refused whole: a restriction that is not understood
     /// cannot be enforced, and must not be dropped.
     pub const LEASE_NOT_UNDERSTOOD: &str = "lease_not_understood";
+    /// A `prompt.submit` hook refused the prompt that would have started the
+    /// turn, which ended `denied` with nothing recorded; the prompt was
+    /// given back to the front end (since step 28).
+    pub const PROMPT_DENIED: &str = "prompt_denied";
 
     /// What a code that is not a plain one is kept as, where a provider's
     /// code would be kept: the statistics.

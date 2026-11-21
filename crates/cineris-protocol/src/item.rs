@@ -90,7 +90,46 @@ open_enum! {
         /// was given it: the index of skills and tool sources, given whole,
         /// or an extension's text, withdrawn (since step 28).
         Extensions => "extensions",
+        /// Text a hook added to the conversation: a `prompt.submit` hook's
+        /// `context`, after the prompt it was given, under a line that names
+        /// the hook (since step 28).
+        Hook => "hook",
     }
+}
+
+/// A hook, named where what it answered shows: a hook that asked, refused
+/// or replaced something (since step 28,
+/// `docs/architecture/12-extensions.md`, "Tier 3: hooks").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HookReason {
+    /// The hook's name: its `[hooks.<name>]`, or the one an extension's
+    /// script hook is shown by.
+    pub hook: String,
+    /// What it gave as its reason, or how it failed. Absent when it gave
+    /// none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// Arguments a `tool.before` hook put in place of the ones the model wrote
+/// (since step 28). Such a call is always put to the user, who may allow it
+/// once or refuse it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ReplacedArguments {
+    /// The hook that replaced them.
+    pub hook: String,
+    /// The arguments the call runs with: the hook's.
+    pub arguments: Value,
+    /// The arguments the model wrote, where the message that carries the
+    /// call is not at hand: in an approval request. Absent in a tool
+    /// result, whose call in the assistant message has them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<Value>,
+    /// What the hook gave as its reason.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// A message from the user.
@@ -184,6 +223,12 @@ pub struct ToolResultItem {
     /// When it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<Timestamp>,
+    /// The arguments a hook put in place of the model's, when one did and
+    /// the call was put to the user with them (since step 28): what ran, if
+    /// it ran, and which hook chose it. The model's own are in its call.
+    /// (Boxed: it is rare, and every item would otherwise be its size.)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<Box<ReplacedArguments>>,
 }
 
 /// A message the harness added to the conversation. The model sees it.
