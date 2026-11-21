@@ -179,6 +179,15 @@ pub(crate) async fn open_answering(
     open_as(world, core, ClientInfo::user(), answer).await
 }
 
+/// Opens a session in the world's workspace as a user's front end that
+/// answers a trust question not now: the extensions' tests' own start, a
+/// session kept in memory only ([`open_doing`]).
+pub(crate) async fn start(world: &World, core: &Core) -> Front {
+    open_answering(world, core, TrustResponse::default())
+        .await
+        .0
+}
+
 /// [`open_answering`], as a client of `info`.
 pub(crate) async fn open_as(
     world: &World,
@@ -207,7 +216,9 @@ pub(crate) async fn open_doing(
             settings: SessionSettings::default(),
             title: None,
             config: serde_json::Map::new(),
-            ephemeral: false,
+            // Kept in memory only: what these tests check is not the log,
+            // and its writes are much of a session's cost on Windows.
+            ephemeral: true,
         }),
     );
     let mut asked = Vec::new();
@@ -310,7 +321,7 @@ fn a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started() {
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         // Found, judged and registered from the cache: no runtime was made,
@@ -341,7 +352,7 @@ fn a_users_extension_changed_since_its_pin_is_not_loaded_and_says_how_to_approve
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         let told = about_probe(&front);
@@ -365,7 +376,7 @@ fn a_users_extension_never_pinned_is_not_loaded_and_says_how_to_approve_it() {
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         let told = about_probe(&front);
@@ -388,7 +399,7 @@ fn a_users_extension_turned_off_is_not_loaded_and_nothing_is_asked() {
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         // Nothing is said of it, and nothing asked: it is the user's word.
@@ -412,7 +423,7 @@ fn an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits
     let made = cineris_ext::engine::runtimes_made();
     let registering = Hold::new(cineris_core::ext::BEFORE_AN_EXTENSION_IS_REGISTERED);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut prompt = std::pin::pin!(front.prompt("look for the probe"));
         registering.drive_until_reached(prompt.as_mut()).await;
         // The registration is held: the prompt waits for it, no turn has
@@ -465,7 +476,7 @@ fn a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again() {
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
         for session in 0..2 {
-            let front = Front::start(&world, &core).await;
+            let front = start(&world, &core).await;
             front.turn("look for the probe").await;
             assert!(found_probe(&front), "{:?}", front.results());
             let said: Vec<String> = front
@@ -526,7 +537,7 @@ fn pruning_the_cache_keeps_every_trusted_projects_entries() {
     cache_file(&world).put(&gone, entry("gone")).unwrap();
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         front.close().await;
@@ -567,7 +578,7 @@ fn a_trust_store_that_cannot_be_read_prunes_nothing() {
     std::fs::write(state(&world).trust_file(), "version = 9\n").unwrap();
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         front.close().await;
@@ -603,7 +614,7 @@ fn a_cache_entry_of_another_name_is_no_entry_of_this_one() {
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         let results = front.results();
         assert!(found_probe(&front), "{results:?}");
@@ -641,7 +652,7 @@ fn a_projects_extensions_are_not_looked_in_while_it_is_not_trusted() {
                     settings: SessionSettings::default(),
                     title: None,
                     config: serde_json::Map::new(),
-                    ephemeral: false,
+                    ephemeral: true,
                 }),
             )
             .await;
@@ -841,71 +852,6 @@ fn a_projects_extension_of_a_users_name_is_not_used() {
 // ------------------------------------------------------------ where they are
 
 #[test]
-fn the_users_folder_is_found_through_a_config_dir_given_with_a_tilde_relatively_or_with_dots() {
-    let world = World::new("found_config_dir_forms", searches_times(3));
-    let real = world.home.join("cfg");
-    let folder = real.join("extensions").join(NAME);
-    write_extension(&folder, "", "Gives its arguments back");
-    pin(&world, &folder);
-    cache(&world, &folder);
-    let with_dots = world.dir.join("work").join("..").join("home").join("cfg");
-    for given in [
-        PathBuf::from("~/cfg"),
-        // Relative to the workspace, `<dir>/work/app`, as the session's
-        // resolver takes a relative path.
-        PathBuf::from("../../home/cfg"),
-        with_dots,
-    ] {
-        let core = world.core_with(|options| {
-            let mut dirs = world.dirs();
-            dirs.config = Some(given.clone());
-            options.dirs = Some(dirs);
-        });
-        world.run(async {
-            let front = Front::start(&world, &core).await;
-            front.turn("look for the probe").await;
-            assert!(
-                found_probe(&front),
-                "{given:?}: {:?} {:?}",
-                front.results(),
-                front.notices()
-            );
-            front.close().await;
-        });
-    }
-}
-
-#[test]
-fn a_config_dir_that_is_a_link_is_followed() {
-    let world = World::new("found_config_dir_link", searches());
-    let real = world.dir.join("elsewhere").join("cfg");
-    let folder = real.join("extensions").join(NAME);
-    write_extension(&folder, "", "Gives its arguments back");
-    pin(&world, &folder);
-    cache(&world, &folder);
-    let linked = world.home.join("linked-cfg");
-    if !make_link(&real, &linked) {
-        return;
-    }
-    let core = world.core_with(|options| {
-        let mut dirs = world.dirs();
-        dirs.config = Some(linked.clone());
-        options.dirs = Some(dirs);
-    });
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        front.turn("look for the probe").await;
-        assert!(
-            found_probe(&front),
-            "{:?} {:?}",
-            front.results(),
-            front.notices()
-        );
-        front.close().await;
-    });
-}
-
-#[test]
 fn a_projects_folder_of_extensions_behind_a_link_out_of_the_workspace_is_not_looked_in() {
     let world = World::new("found_project_link_out", searches());
     let outside = world.dir.join("outside").join("extensions");
@@ -922,7 +868,7 @@ fn a_projects_folder_of_extensions_behind_a_link_out_of_the_workspace_is_not_loo
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         assert!(

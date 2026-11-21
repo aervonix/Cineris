@@ -17,11 +17,11 @@ use serde_json::json;
 
 use crate::extensions_found::{
     about_probe, cache, cache_file, clock, definition, found_probe, make_link, open_answering,
-    open_doing, pin, project_key, projects, searches, searches_times, state, trust, trust_store,
-    users, write_extension, yes,
+    open_doing, pin, project_key, projects, searches, searches_times, start, state, trust,
+    trust_store, users, write_extension, yes,
 };
-use crate::extensions_trust::{counting, listed_detail, not_now};
-use crate::{Front, World, calls, poll_once, says, settle};
+use crate::extensions_trust::{counting, listed_detail, named_definition, not_now, write_named};
+use crate::{World, calls, poll_once, says, settle};
 
 /// Pins something else of the user's: `pins.toml` changes, and the next
 /// turn's look finds a change.
@@ -199,7 +199,7 @@ fn a_file_changed_as_its_folder_is_read_is_seen_at_the_first_turn() {
     let core = world.core();
     let read = Hold::new(cineris_ext::discover::AN_EXTENSION_WAS_READ);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut waiting = std::pin::pin!(std::future::pending::<()>());
         read.drive_until_reached(waiting.as_mut()).await;
         write_extension(&folder, "", "the second, and changed");
@@ -229,7 +229,7 @@ fn a_file_put_in_an_empty_folder_of_an_extension_is_a_change() {
     cache(&world, &folder);
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         std::fs::write(folder.join("lib/deep/more.js"), "// more").unwrap();
@@ -365,7 +365,7 @@ fn registration_evaluates_the_snapshot_whose_hash_is_pinned() {
     let core = world.core();
     let registering = Hold::new(cineris_core::ext::BEFORE_AN_EXTENSION_IS_REGISTERED);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut waiting = std::pin::pin!(std::future::pending::<()>());
         registering.drive_until_reached(waiting.as_mut()).await;
         write_extension(&folder, "", "the second, and changed");
@@ -398,7 +398,7 @@ fn a_registration_that_fails_is_said_once_and_not_evaluated_again() {
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         pin_something_else(&world, "unrelated");
         front.turn("look for the probe").await;
@@ -426,7 +426,7 @@ fn a_turn_that_waits_for_the_extensions_says_so_after_a_few_seconds() {
     let core = world.core();
     let registering = Hold::new(cineris_core::ext::BEFORE_AN_EXTENSION_IS_REGISTERED);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut prompt = std::pin::pin!(front.prompt("look for the probe"));
         registering.drive_until_reached(prompt.as_mut()).await;
         assert!(poll_once(prompt.as_mut()).await.is_pending());
@@ -513,7 +513,7 @@ fn what_the_session_was_told_is_not_said_again_at_a_later_look() {
     let core = world.core();
     let reads = counting(AN_EXTENSION_IS_READ);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         pin_something_else(&world, "another");
         front.turn("look for the probe").await;
@@ -537,21 +537,37 @@ fn what_the_session_was_told_is_not_said_again_at_a_later_look() {
 /// question kept its prompt file to check it by.
 #[test]
 fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
-    for (test, misfit, of_the_user) in [
-        ("review_misfit_hook_users", "hook", true),
-        ("review_misfit_prompt_users", "prompt", true),
-        ("review_misfit_hook_projects", "hook", false),
-        ("review_misfit_prompt_projects", "prompt", false),
-        ("review_fits_users", "none", true),
-        ("review_fits_projects", "none", false),
-    ] {
-        let world = World::new(test, searches());
-        let folder = if of_the_user {
-            users(&world)
+    // Six extensions side by side in one world, each its own name: for the
+    // user and for a trusted project, one whose entry has a hook the
+    // manifest does not list, one whose prompt is not its file's, and one
+    // that fits.
+    let world = World::new(
+        "review_misfits",
+        [
+            calls(&[("s1", "tool_search", json!({"query": "echo"}))]),
+            says("Done."),
+        ],
+    );
+    let root = |of_the_user: bool| {
+        if of_the_user {
+            world.dirs().config.unwrap().join("extensions")
         } else {
-            projects(&world)
-        };
-        write_extension(&folder, "", "Gives its arguments back");
+            world.workspace.join(".cineris/extensions")
+        }
+    };
+    let cases = [
+        ("uhook", "hook", true),
+        ("uprompt", "prompt", true),
+        ("ufits", "none", true),
+        ("phook", "hook", false),
+        ("pprompt", "prompt", false),
+        ("pfits", "none", false),
+    ];
+    let mut trusted = Vec::new();
+    let mut hashes = Vec::new();
+    for (name, misfit, of_the_user) in cases {
+        let folder = root(of_the_user).join(name);
+        write_named(&folder, name, "Gives its arguments back");
         let manifest_file = folder.join("extension.toml");
         let manifest = std::fs::read_to_string(&manifest_file).unwrap().replace(
             "main = \"main.js\"\n",
@@ -559,10 +575,13 @@ fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
         );
         std::fs::write(&manifest_file, manifest).unwrap();
         std::fs::write(folder.join("prompt.md"), "Use the probe.").unwrap();
+        let defined = named_definition(&folder, name);
         if of_the_user {
-            pin(&world, &folder);
+            PinStore::new(state(&world).pins_file(), clock(&world))
+                .pin(&defined)
+                .unwrap();
         } else {
-            trust(&world, &[definition(&folder)]);
+            trusted.push(defined);
         }
         let hash = cache(&world, &folder);
         let mut entry = cache_file(&world).load().cache.get(&hash).unwrap().clone();
@@ -584,24 +603,31 @@ fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
             _ => entry.prompt = Some("Use the probe.".to_owned()),
         }
         cache_file(&world).put(&hash, entry).unwrap();
-        let core = world.core();
-        let made = cineris_ext::engine::runtimes_made();
-        world.run(async {
-            let (front, _) = open_answering(&world, &core, not_now()).await;
-            front.turn("look for the probe").await;
-            assert!(found_probe(&front), "{test}: {:?}", front.results());
-            front.close().await;
-        });
-        let again = usize::from(misfit != "none");
-        assert_eq!(
-            cineris_ext::engine::runtimes_made(),
-            made + again,
-            "{test}: registered again only when it did not fit"
-        );
-        let kept = cache_file(&world).load().cache;
+        hashes.push((name, hash));
+    }
+    trust(&world, &trusted);
+    let core = world.core();
+    let made = cineris_ext::engine::runtimes_made();
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("look for the tools").await;
+        let results = front.results();
+        let (_, _, found) = results.last().expect("the search ran");
+        for (name, _, _) in cases {
+            assert!(found.contains(&format!("{name}/echo")), "{name}: {found}");
+        }
+        front.close().await;
+    });
+    assert_eq!(
+        cineris_ext::engine::runtimes_made(),
+        made + 4,
+        "registered again only where the entry did not fit"
+    );
+    let kept = cache_file(&world).load().cache;
+    for (name, hash) in hashes {
         let entry = kept.get(&hash).expect("kept");
-        assert_eq!(entry.prompt.as_deref(), Some("Use the probe."), "{test}");
-        assert!(entry.registration.hooks.is_empty(), "{test}");
+        assert_eq!(entry.prompt.as_deref(), Some("Use the probe."), "{name}");
+        assert!(entry.registration.hooks.is_empty(), "{name}");
     }
 }
 

@@ -12,9 +12,9 @@ use cineris_testkit::Hold;
 
 use crate::extensions_found::{
     about_probe, cache, definition, found_probe, make_link, open_answering, pin, projects,
-    searches, searches_times, state, trust, users, write_extension,
+    searches, searches_times, start, state, trust, users, write_extension,
 };
-use crate::{Front, World, says};
+use crate::{World, says};
 
 // ------------------------------------------------------------ a change
 
@@ -31,7 +31,7 @@ fn a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn() {
     let core = world.core();
     let made = cineris_ext::engine::runtimes_made();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         write_extension(&folder, "", "the second, and longer");
@@ -63,7 +63,7 @@ fn an_extension_approved_in_a_session_is_loaded_at_the_next_turn() {
     write_extension(&folder, "", "Gives its arguments back");
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
         pin(&world, &folder);
@@ -73,8 +73,9 @@ fn an_extension_approved_in_a_session_is_loaded_at_the_next_turn() {
     });
 }
 
-/// A change is seen wherever the configuration directory is given: with
-/// `~`, relative to the workspace, with `..`, and through a link.
+/// The user's folder is found, and a change in it seen, wherever the
+/// configuration directory is given: with `~`, relative to the workspace,
+/// with `..`, and through a link, which is followed.
 #[test]
 fn a_change_is_seen_however_the_configuration_directory_is_given() {
     let world = World::new("reload_forms", searches_times(8));
@@ -89,20 +90,22 @@ fn a_change_is_seen_however_the_configuration_directory_is_given() {
     if make_link(&real, &linked) {
         forms.push(linked);
     }
-    for (round, given) in forms.into_iter().enumerate() {
-        write_extension(&folder, "", &format!("round {round}"));
-        pin(&world, &folder);
-        cache(&world, &folder);
+    // Pinned and cached once: each round puts the folder back as it was.
+    write_extension(&folder, "", "as approved");
+    pin(&world, &folder);
+    cache(&world, &folder);
+    for given in forms {
+        write_extension(&folder, "", "as approved");
         let core = world.core_with(|options| {
             let mut dirs = world.dirs();
             dirs.config = Some(given.clone());
             options.dirs = Some(dirs);
         });
         world.run(async {
-            let front = Front::start(&world, &core).await;
+            let front = start(&world, &core).await;
             front.turn("look for the probe").await;
             assert!(found_probe(&front), "{given:?}: {:?}", front.results());
-            write_extension(&folder, "", &format!("round {round}, changed since"));
+            write_extension(&folder, "", "changed since it was approved");
             front.turn("look for the probe").await;
             assert!(!found_probe(&front), "{given:?}: {:?}", front.results());
             front.close().await;
@@ -170,7 +173,7 @@ fn with_no_extension_a_session_looks_once_a_folder_and_reads_nothing() {
     let made = cineris_ext::engine::runtimes_made();
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("go").await;
         front.close().await;
     });
@@ -181,7 +184,7 @@ fn with_no_extension_a_session_looks_once_a_folder_and_reads_nothing() {
     );
     world.project_config("");
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("go").await;
         front.close().await;
     });
@@ -214,7 +217,7 @@ fn with_an_extension_nothing_of_it_is_read_until_the_session_is_open() {
     let core = world.core();
     let reads = Hold::new(AN_EXTENSION_IS_READ);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         let mut waiting = std::pin::pin!(std::future::pending::<()>());
         reads.drive_until_reached(waiting.as_mut()).await;
         assert_eq!(reads.timed_out(), 0, "nothing waited for the read");

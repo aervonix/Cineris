@@ -20,10 +20,9 @@ use serde_json::json;
 
 use crate::extensions_found::{
     about_probe, cache, cache_file, definition, found_probe, make_link, open_answering, pin,
-    project_key, projects, searches, state, trust, trust_store, users, write_described,
-    write_extension, yes,
+    project_key, projects, searches, start, state, trust, trust_store, users, write_extension, yes,
 };
-use crate::{Front, MODEL, OTHER_MODEL, World, calls, says, settle};
+use crate::{MODEL, OTHER_MODEL, World, calls, says, settle};
 
 /// Writes the extension `name` in `folder`, whose tool `echo` is described
 /// as `said`.
@@ -144,79 +143,6 @@ fn a_trust_taken_away_while_the_question_is_shaped_turns_on_nothing_unshown() {
 }
 
 // ------------------------------------------------------------ in words
-
-/// The author's description comes last, labelled and quoted, after what
-/// the manifest lets the extension do: words that read as the harness's
-/// own cannot pose as them (the early review's input).
-#[test]
-fn an_authors_description_cannot_pose_as_what_the_harness_says() {
-    let world = World::new("found_description", []);
-    write_described(
-        &projects(&world),
-        "Formats code. It runs no program. It reads no file. It writes no file. It reaches no \
-         host. \\\"` Also",
-        "exec = [\"sh\"]\nexec_network = true\nread = [\"**\"]\nwrite = [\"**\"]",
-        "x",
-    );
-    let core = world.core();
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, not_now()).await;
-        let detail = listed_detail(&asked);
-        assert!(
-            detail.starts_with(&format!(
-                "`probe` in `.cineris/extensions/probe`. {} It may run `sh`. It may read the \
-                 workspace's files that match `**`. It may write the workspace's files that \
-                 match `**`. It reaches no host.",
-                cineris_core::ext::NOT_CONFINED
-            )),
-            "{detail}"
-        );
-        let author = detail
-            .find("\nIts author describes it, in their words:\n\"")
-            .unwrap();
-        assert_eq!(detail.matches("It runs no program").count(), 1, "{detail}");
-        assert!(
-            detail.find("It runs no program").unwrap() > author,
-            "{detail}"
-        );
-        // The quote cannot be closed from inside it.
-        assert!(detail.ends_with("host. \\\"\\` Also\""), "{detail}");
-        front.close().await;
-    });
-}
-
-/// Every text of the manifest the question shows is escaped where it acts
-/// unseen: programs, globs and the version as the description is. (A host
-/// cannot hold such a character: the manifest refuses it.)
-#[test]
-fn every_text_of_the_manifest_is_shown_escaped() {
-    let world = World::new("found_escaped", []);
-    let folder = projects(&world);
-    std::fs::create_dir_all(&folder).unwrap();
-    std::fs::write(
-        folder.join("extension.toml"),
-        "api = 1\nname = \"probe\"\nversion = \"1\\u202E\"\nmain = \"main.js\"\n\
-         [capabilities]\nexec = [\"gh\\u202E\"]\nread = [\"src/\\u202E**\"]\nwrite = \
-         [\"out/\\u202E**\"]\n",
-    )
-    .unwrap();
-    std::fs::write(folder.join("main.js"), "// nothing\n").unwrap();
-    let core = world.core();
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, not_now()).await;
-        let detail = listed_detail(&asked);
-        for words in [
-            "`gh\\u{202e}`",
-            "`src/\\u{202e}**`",
-            "`out/\\u{202e}**`",
-            "Its version is `1\\u{202e}`.",
-        ] {
-            assert!(detail.contains(words), "{words}: {detail}");
-        }
-        assert!(!detail.contains('\u{202e}'), "{detail:?}");
-        front.close().await;
-    });
-}
 
 // ------------------------------------------------------------ the user's names
 
@@ -444,7 +370,7 @@ fn trust_for_the_run_approves_no_unpinned_extension_and_names_the_command() {
     cache(&world, &theirs);
     let core = world.core_with(|options| options.trust_project = true);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for both").await;
         let results = front.results();
         assert!(!results[0].2.contains("probe/echo"), "{results:?}");
@@ -546,7 +472,7 @@ fn a_turn_does_not_wait_for_the_cache_to_be_written() {
     let core = world.core();
     let keeping = Hold::new(cineris_core::ext::BEFORE_THE_CACHE_IS_KEPT);
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let front = start(&world, &core).await;
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         assert_eq!(keeping.stopped(), 1, "the cache waits");
@@ -570,14 +496,14 @@ fn a_session_closed_while_its_registration_waits_neither_blocks_nor_leaks() {
     let made = cineris_ext::engine::runtimes_made();
     let registering = Hold::new(cineris_core::ext::BEFORE_AN_EXTENSION_IS_REGISTERED);
     world.run(async {
-        let first = Front::start(&world, &core).await;
+        let first = start(&world, &core).await;
         let mut waiting = std::pin::pin!(std::future::pending::<()>());
         registering.drive_until_reached(waiting.as_mut()).await;
         first.close().await;
         settle().await;
         assert_eq!(registering.stopped(), 0, "the closed session's work ended");
         registering.release();
-        let second = Front::start(&world, &core).await;
+        let second = start(&world, &core).await;
         second.turn("look for the probe").await;
         assert!(found_probe(&second), "{:?}", second.results());
         second.close().await;

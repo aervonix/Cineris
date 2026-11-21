@@ -160,7 +160,7 @@ find: if allowed.contains(&event) {
 replace: if allowed.contains(&event) || true {
 caught-by:
     cineris-ext::it engine::a_hook_on_an_event_the_manifest_does_not_list_refuses_the_extension
-    cineris-ext::it cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+    cineris-ext cache::on_disk::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
 
 [break] a-changed-folder-is-evaluated
 rule: A runtime is made only from a snapshot whose hash is the pinned one.
@@ -1556,7 +1556,7 @@ find: } else if hides_something(description) {
 replace: } else if hides_something(description) && description.is_empty() {
 caught-by:
     cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
-    cineris-ext::it cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cineris-ext cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] a-schema-may-hide-text
 rule: A tool's schema, registered or cached, holds no character that acts unseen, in its keys or its values.
@@ -1566,7 +1566,7 @@ find: check_schema_text(schema)
 replace: Ok(())
 caught-by:
     cineris-ext::it engine::text_a_script_registers_holds_nothing_that_acts_unseen
-    cineris-ext::it cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cineris-ext cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] a-glob-may-hold-a-backslash
 rule: A manifest's glob splits its folders by `/` alone: a backslash is refused on every system.
@@ -2701,7 +2701,7 @@ in: extension_in
 find: if manifest.name != text {
 replace: if manifest.name != text && false {
 caught-by:
-    discover::an_extension_whose_manifest_does_not_give_its_folders_name_is_left_out
+    discover::tests::an_extension_whose_manifest_does_not_give_its_folders_name_is_left_out
 
 [break] found-files-beside-the-folders-read
 rule: A file beside the extensions' folders in a root is passed over without a word: an extension is a folder.
@@ -2710,7 +2710,7 @@ in: list
 find: (kind.is_dir() || kind.is_symlink()) && name.as_encoded_bytes().first() != Some(&b'.')
 replace: name.as_encoded_bytes().first() != Some(&b'.')
 caught-by:
-    discover::extensions_are_the_folders_directly_under_each_root_by_name
+    discover::tests::extensions_are_the_folders_directly_under_each_root_by_name
 
 [break] found-hidden-folders-read
 rule: A folder whose name begins with `.` is never an extension's (no extension's name begins with one), and is passed over unread.
@@ -2719,7 +2719,7 @@ in: list
 find: && name.as_encoded_bytes().first() != Some(&b'.')
 replace: && true
 caught-by:
-    discover::extensions_are_the_folders_directly_under_each_root_by_name
+    discover::tests::extensions_are_the_folders_directly_under_each_root_by_name
 
 # ------------------------------------------------------------ a root that is not there
 
@@ -2730,7 +2730,7 @@ in: each_root
 find: if certainly_absent(root, below.as_deref(), &places.workspace) {
 replace: if false && certainly_absent(root, below.as_deref(), &places.workspace) {
 caught-by:
-    discover::a_root_that_is_not_there_gives_nothing_and_is_not_resolved
+    discover::tests::a_root_that_is_not_there_gives_nothing_and_is_not_resolved
 
 [break] found-absent-project-root-looked-at-once
 rule: A project's root is looked at one name at a time below the workspace: a `.cineris` with no `extensions` in it is ruled out with a second look, not resolved.
@@ -2739,7 +2739,7 @@ in: certainly_absent
 find: Ok(found) if found.is_dir() => {}
 replace: Ok(found) if found.is_dir() => return false,
 caught-by:
-    discover::a_root_that_is_not_there_gives_nothing_and_is_not_resolved
+    discover::tests::a_root_that_is_not_there_gives_nothing_and_is_not_resolved
 
 [break] found-look-follows-a-link
 rule: The look that rules a project's root out follows no link (on Windows a link to a share would send the account's credentials): a link sends the root to the resolver.
@@ -2748,7 +2748,7 @@ in: certainly_absent
 find: match fs::symlink_metadata(&at) {
 replace: match fs::metadata(&at) {
 caught-by:
-    discover::a_projects_root_that_leads_out_of_the_workspace_gives_nothing_and_says_why
+    discover::tests::a_projects_root_that_leads_out_of_the_workspace_gives_nothing_and_says_why
 
 # ------------------------------------------------------------ where a root leads
 
@@ -2759,8 +2759,8 @@ in: open_root
 find: if root.source == Source::Project && !location_within(&real, &places.workspace) {
 replace: if !location_within(&real, &places.workspace) {
 caught-by:
-    discover::extensions_are_the_folders_directly_under_each_root_by_name
-    discover::a_users_root_that_is_a_link_is_followed_wherever_it_leads
+    discover::tests::extensions_are_the_folders_directly_under_each_root_by_name
+    discover::tests::a_users_root_that_is_a_link_is_followed_wherever_it_leads
 
 [break] found-projects-root-out-of-the-workspace
 rule: A project's root that leads out of the workspace (a `.cineris/extensions` or a `.cineris` that is a link out of it, or a path with `..`) gives nothing, and says why.
@@ -2769,8 +2769,8 @@ in: open_root
 find: if root.source == Source::Project && !location_within(&real, &places.workspace) {
 replace: if root.source == Source::Project && false {
 caught-by:
-    discover::a_projects_root_that_leads_out_of_the_workspace_gives_nothing_and_says_why
-    discover::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
+    discover::tests::a_projects_root_that_leads_out_of_the_workspace_gives_nothing_and_says_why
+    discover::tests::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
 
 [break] found-folder-through-a-link
 rule: An extension's folder reached through a link is refused, as a link inside one is: the folder is read where it is.
@@ -2779,7 +2779,7 @@ in: extension_in
 find: if kind.is_symlink() {
 replace: if false {
 caught-by:
-    discover::an_extension_folder_reached_through_a_link_is_refused
+    discover::tests::an_extension_folder_reached_through_a_link_is_refused
 
 # ------------------------------------------------------------ paths written other ways
 
@@ -2790,7 +2790,7 @@ in: below_workspace
 find: if dir.components().next() == Some(Component::Normal(OsStr::new("~"))) {
 replace: if false {
 caught-by:
-    discover::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
+    discover::tests::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
 
 [break] found-dots-taken-as-nothing
 rule: A root with `..` is the resolver's to read (against the real folders): the look that rules a root out takes no `..`.
@@ -2799,7 +2799,7 @@ in: below_workspace
 find: Component::CurDir => {}
 replace: Component::CurDir | Component::ParentDir => {}
 caught-by:
-    discover::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
+    discover::tests::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
 
 [break] found-same-folder-twice
 rule: The same folder given as two roots, written two ways, is looked in once, as the first.
@@ -2808,7 +2808,7 @@ in: open_root
 find: .find(|(earlier, _)| same_location(earlier, &real))
 replace: .find(|(earlier, _)| same_location(earlier, &real) && false)
 caught-by:
-    discover::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
+    discover::tests::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensions
 
 [break] found-windows-real-location-resolved-as-written
 rule: A root under the workspace is resolved by its names below it, so that one given in the workspace's real location on Windows (`\\?\C:\…`), which the resolver does not take, is found.
@@ -2829,8 +2829,8 @@ in: settle_names
 find: (one.source, one.manifest.name
 replace: (Source::User, one.manifest.name
 caught-by:
-    discover::one_name_from_the_users_root_and_the_projects_is_two_extensions
-    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
+    discover::tests::one_name_from_the_users_root_and_the_projects_is_two_extensions
+    discover::tests::names_that_differ_only_in_case_in_one_source_are_all_refused
 
 [break] found-one-name-twice-in-one-source
 rule: Two roots of one source that each hold an extension of one name give it once, from the first root, and leave out the second with the first one's folder.
@@ -2839,7 +2839,7 @@ in: settle_names
 find: if position > 0 {
 replace: if position > 0 && false {
 caught-by:
-    discover::one_name_from_the_users_root_and_the_projects_is_two_extensions
+    discover::tests::one_name_from_the_users_root_and_the_projects_is_two_extensions
 
 [break] found-names-in-another-case-both-kept
 rule: Within one source, names that differ only in case (`Tracker` and `tracker`, in one root or two) are refused on every system, not only on Windows, where they are one name.
@@ -2848,7 +2848,7 @@ in: settle_names
 find: one.manifest.name.to_ascii_lowercase()
 replace: one.manifest.name.clone()
 caught-by:
-    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
+    discover::tests::names_that_differ_only_in_case_in_one_source_are_all_refused
 
 [break] found-names-in-another-case-first-kept
 rule: None of names that differ only in case is kept, each left out naming the others, so that nothing depends on which was listed first.
@@ -2857,7 +2857,7 @@ in: settle_names
 find: .all(|&member| found[member].manifest.name == first.manifest.name);
 replace: .all(|&member| found[member].manifest.name.eq_ignore_ascii_case(&first.manifest.name));
 caught-by:
-    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
+    discover::tests::names_that_differ_only_in_case_in_one_source_are_all_refused
 
 # ------------------------------------------------------------ caps and order
 
@@ -2868,7 +2868,7 @@ in: look_in
 find: if read == MAX_PER_ROOT {
 replace: if read == MAX_PER_ROOT + 1 {
 caught-by:
-    discover::past_64_folders_a_root_the_rest_are_left_out_and_counted
+    discover::tests::past_64_folders_a_root_the_rest_are_left_out_and_counted
 
 [break] found-not-by-name
 rule: A root's folders are read by name, so that the 64 read are the first by name and the order is fixed.
@@ -2877,8 +2877,8 @@ in: list
 find: names.sort_by(|one, other| one.0.cmp(&other.0));
 replace: names.sort_by(|one, other| other.0.cmp(&one.0));
 caught-by:
-    discover::extensions_are_the_folders_directly_under_each_root_by_name
-    discover::past_64_folders_a_root_the_rest_are_left_out_and_counted
+    discover::tests::extensions_are_the_folders_directly_under_each_root_by_name
+    discover::tests::past_64_folders_a_root_the_rest_are_left_out_and_counted
 
 [break] found-more-than-1024-entries
 rule: At most 1024 entries of a root are listed; past them the rest is not looked at, and that is said.
@@ -2887,7 +2887,7 @@ in: list
 find: if names.len() == MAX_ENTRIES {
 replace: if names.len() == MAX_ENTRIES + 1 {
 caught-by:
-    discover::a_root_of_more_than_1024_entries_is_looked_at_only_so_far
+    discover::tests::a_root_of_more_than_1024_entries_is_looked_at_only_so_far
 
 # ------------------------------------------------------------ what is shown
 
@@ -2898,7 +2898,7 @@ in: extension_in
 find: in_code(&name.to_string_lossy())
 replace: name.to_string_lossy()
 caught-by:
-    discover::every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape
+    discover::tests::every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape
 
 [break] found-manifest-refusal-shown-raw
 rule: A manifest's refusal, which quotes what the manifest says, is shown with every character that acts unseen written as an escape. Since the fresh review of step 28 the manifest's own refusals escape what they quote (`in_code`, and `manifest::reader_said` for what the TOML reader quotes; `pinned-reader-key-raw` breaks that guard), so discovery's escaping is a second guard, and its break alone survives.
@@ -2917,7 +2917,7 @@ file: crates/cineris-ext/src/cache.rs
 find: #[serde(deny_unknown_fields)] struct RawFile
 replace: struct RawFile
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-unknown-field-in-an-entry-read
 rule: The registration cache is read strictly: a field this build does not know, in an entry, sets the whole file aside.
@@ -2925,7 +2925,7 @@ file: crates/cineris-ext/src/cache.rs
 find: #[serde(deny_unknown_fields)] struct RawEntry
 replace: struct RawEntry
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-newer-version-read
 rule: A registration cache of another version than this build's (a newer one) is set aside, never read.
@@ -2934,7 +2934,7 @@ in: parse
 find: if raw.version != VERSION {
 replace: if raw.version < VERSION {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-version-said-after-its-fields
 rule: A file of another version is set aside for its version, not for a field that version adds.
@@ -2943,7 +2943,7 @@ in: parse
 find: && version != VERSION
 replace: && false
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-key-not-a-hash-read
 rule: Every key of the entries is a content hash, 64 lowercase hexadecimal digits: any other sets the whole file aside.
@@ -2951,7 +2951,7 @@ file: crates/cineris-ext/src/cache.rs
 find: while let Some(hash) = map.next_key::<ContentHash>()? {
 replace: while let Some(hash) = map.next_key::<String>()?.map(|text| ContentHash::from_hex(&text).unwrap_or(ContentHash::of(text.as_bytes()))) {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-key-twice-read
 rule: A key given twice, which no build writes, sets the whole file aside: the order must not decide which entry stands.
@@ -2959,7 +2959,7 @@ file: crates/cineris-ext/src/cache.rs
 find: if entries.insert(hash, entry).is_some() {
 replace: if entries.insert(hash, entry).is_some() && false {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-more-than-1024-entries-read
 rule: A file of more than 1024 entries is set aside.
@@ -2967,7 +2967,7 @@ file: crates/cineris-ext/src/cache.rs
 find: if entries.len() == MAX_ENTRIES {
 replace: if entries.len() == MAX_ENTRIES + 1 {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-past-the-caps-read
 rule: An entry a live runtime could not have registered (the registration's own checks, its name, its prompt over 4 KiB) sets the whole file aside: what a session reads is what a live runtime could have registered.
@@ -2976,7 +2976,7 @@ in: parse
 find: entry.check().map_err(|problem| {
 replace: Ok::<(), String>(()).map_err(|problem| {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-larger-than-16-mib-read
 rule: A file larger than 16 MiB is set aside unread, for its size.
@@ -2984,7 +2984,7 @@ file: crates/cineris-ext/src/cache.rs
 find: pub const MAX_BYTES: u64 = 16 * 1024 * 1024;
 replace: pub const MAX_BYTES: u64 = 64 * 1024 * 1024;
 caught-by:
-    cache::a_file_larger_than_16_mib_is_set_aside_unread
+    cache::on_disk::a_file_larger_than_16_mib_is_set_aside_unread
 
 [break] cache-not-understood-read-as-empty-in-silence
 rule: A file that is not understood whole is an empty cache and set aside with its reason, never taken as empty in silence.
@@ -2993,7 +2993,7 @@ in: RegistrationCache::load
 find: set_aside: Some(self.set_aside(&bad))
 replace: set_aside: None
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-set-aside-left-in-place
 rule: A file set aside is moved to `registered.json.set-aside`, while it is still the file that was read, so that the next write begins a new one.
@@ -3002,8 +3002,8 @@ in: RegistrationCache::set_aside
 find: At::Read(Some(read)) if FileIdentity::at(&self.file).ok() != Some(read) =>
 replace: At::Read(Some(read)) if FileIdentity::at(&self.file).ok() == Some(read) =>
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
-    cache::a_put_over_a_file_not_understood_sets_it_aside_and_begins_a_new_one
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_put_over_a_file_not_understood_sets_it_aside_and_begins_a_new_one
 
 [break] cache-missing-file-set-aside
 rule: A missing file is an empty cache, not one set aside, and reading it makes nothing.
@@ -3012,7 +3012,7 @@ in: RegistrationCache::read
 find: Err(OpenError::NotFound) =>
 replace: Err(OpenError::NotFound) if false =>
 caught-by:
-    cache::a_missing_file_is_an_empty_cache_and_reading_it_makes_nothing
+    cache::on_disk::a_missing_file_is_an_empty_cache_and_reading_it_makes_nothing
 
 # ------------------------------------------------------------ the cache, written
 
@@ -3023,7 +3023,7 @@ in: RegistrationCache::put
 find: let mut cache = self.read_for_change();
 replace: let mut cache = Cache::default();
 caught-by:
-    cache::a_put_keeps_the_other_entries_and_replaces_its_own
+    cache::on_disk::a_put_keeps_the_other_entries_and_replaces_its_own
 
 [break] cache-put-past-the-caps
 rule: A put of an entry past a registration's caps is refused and writes nothing: this build never writes a file it would set aside.
@@ -3032,7 +3032,7 @@ in: RegistrationCache::put
 find: entry.check().map_err(|problem| CacheError::Entry {
 replace: Ok::<(), String>(()).map_err(|problem| CacheError::Entry {
 caught-by:
-    cache::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
+    cache::on_disk::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
 
 [break] cache-write-past-1024-entries
 rule: A put that would make a file of more than 1024 entries is refused and writes nothing.
@@ -3041,7 +3041,7 @@ in: RegistrationCache::write
 find: if cache.len() > MAX_ENTRIES {
 replace: if false {
 caught-by:
-    cache::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
+    cache::on_disk::a_put_that_would_make_a_file_set_aside_is_refused_and_writes_nothing
 
 [break] cache-write-past-16-mib
 rule: A put that would make a file larger than the cap (16 MiB) is refused and writes nothing.
@@ -3059,7 +3059,7 @@ in: RegistrationCache::write
 find: owner_only: true
 replace: owner_only: false
 caught-by:
-    cache::every_write_is_owner_only_and_leaves_no_temporary_file
+    cache::on_disk::every_write_is_owner_only_and_leaves_no_temporary_file
 
 [break] cache-folder-made-for-anyone
 rule: The registration cache's folder, when it is missing, is made owner-only.
@@ -3068,7 +3068,7 @@ in: RegistrationCache::write
 find: private::create_dir_all(folder)
 replace: std::fs::create_dir_all(folder)
 caught-by:
-    cache::every_write_is_owner_only_and_leaves_no_temporary_file
+    cache::on_disk::every_write_is_owner_only_and_leaves_no_temporary_file
 
 [break] cache-written-through-a-link
 rule: The registration cache is never written through a link at its name, one made after the file was read included.
@@ -3077,7 +3077,7 @@ in: RegistrationCache::write
 find: follow_links: false
 replace: follow_links: true
 caught-by:
-    cache::a_link_made_just_before_the_write_is_never_written_through
+    cache::on_disk::a_link_made_just_before_the_write_is_never_written_through
 
 [break] cache-prune-keeps-everything
 rule: A prune takes out every entry whose hash no pin names.
@@ -3086,7 +3086,7 @@ in: RegistrationCache::prune
 find: cache.entries.retain(|hash, _| keep(hash));
 replace: cache.entries.retain(|hash, _| keep(hash) || true);
 caught-by:
-    cache::a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did
+    cache::on_disk::a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did
 
 [break] cache-prune-writes-when-nothing-changed
 rule: A prune that takes out nothing writes nothing.
@@ -3095,7 +3095,7 @@ in: RegistrationCache::prune
 find: if removed > 0 {
 replace: if removed > 0 || true {
 caught-by:
-    cache::a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did
+    cache::on_disk::a_prune_takes_out_the_hashes_no_pin_names_and_writes_only_when_it_did
 
 # ------------------------------------------------------------ an entry checked as a live registration is (the review of 2a-1, M6)
 
@@ -3106,7 +3106,7 @@ in: Registration::check
 find: tool.check()
 replace: Ok::<(), String>(())
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-commands-unchecked
 rule: Each command of a cached entry meets the checks a live registration meets (its name, description and arguments).
@@ -3115,7 +3115,7 @@ in: Registration::check
 find: command.check()
 replace: Ok::<(), String>(())
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-hooks-unchecked
 rule: Each hook of a cached entry meets the checks a live registration meets (its event, its filter and its time).
@@ -3124,7 +3124,7 @@ in: Registration::check
 find: hook.check()
 replace: Ok::<Event, String>(Event::ToolBefore)
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-a-tool-twice
 rule: No tool name is registered twice, live or cached.
@@ -3133,7 +3133,7 @@ in: Registration::check
 find: .any(|earlier| earlier.name == tool.name)
 replace: .any(|earlier| earlier.name == tool.name && false)
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-a-name-unchecked
 rule: A name of a tool, a command or an argument is 1 to 64 of ASCII letters, digits, `_`, `-` and `.`, live or cached.
@@ -3142,7 +3142,7 @@ in: check_name
 find: let fine = !name.is_empty()
 replace: let fine = true || !name.is_empty()
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-description-unbounded
 rule: A description, live or cached, is at most 2 KiB.
@@ -3151,7 +3151,7 @@ in: check_description
 find: if description.len() > MAX_DESCRIPTION {
 replace: if false {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-schema-unbounded
 rule: A tool's schema, live or cached, is an object of at most 16 KiB as JSON.
@@ -3160,7 +3160,7 @@ in: check_schema
 find: if !schema.is_object() || schema.to_string().len() > MAX_SCHEMA_BYTES {
 replace: if !schema.is_object() {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-arguments-unbounded
 rule: A command names at most 16 arguments, live or cached.
@@ -3169,7 +3169,7 @@ in: CommandDef::check
 find: if self.arguments.len() > MAX_ARGUMENTS {
 replace: if false {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-filter-unbounded
 rule: A hook's filter lists at most 64 tools, live or cached.
@@ -3178,7 +3178,7 @@ in: HookDef::check
 find: if self.tools.len() > MAX_HOOK_TOOLS {
 replace: if false {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-filter-entry-unchecked
 rule: An entry of a hook's filter is a tool's name or `source/*`, of at most 129 bytes, live or cached.
@@ -3187,7 +3187,7 @@ in: check_filter
 find: let fine = !entry.is_empty()
 replace: let fine = true || !entry.is_empty()
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-time-unbounded
 rule: A hook's time, live or cached, is from 1 ms to 10 minutes.
@@ -3196,7 +3196,7 @@ in: check_timeout
 find: if timeout_ms.is_some_and(|time| time == 0 || time > MAX_HOOK_TIME_MS) {
 replace: if timeout_ms.is_some_and(|time| time == 0) {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-name-not-an-extensions
 rule: A cached entry's own name is an extension's name.
@@ -3205,7 +3205,7 @@ in: Entry::check
 find: if !manifest::is_name(&self.name) {
 replace: if false {
 caught-by:
-    cache::a_file_not_understood_whole_is_set_aside_and_read_as_empty
+    cache::on_disk::a_file_not_understood_whole_is_set_aside_and_read_as_empty
 
 [break] cache-entry-fits-another-name
 rule: An entry fits only the extension of its name.
@@ -3214,7 +3214,7 @@ in: Entry::fits
 find: if self.name != manifest.name {
 replace: if false {
 caught-by:
-    cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+    cache::on_disk::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
 
 [break] cache-entry-fits-another-api
 rule: An entry fits only an extension of this build's `api`.
@@ -3223,7 +3223,7 @@ in: Entry::fits
 find: if self.api != manifest::API {
 replace: if false {
 caught-by:
-    cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+    cache::on_disk::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
 
 [break] cache-entry-fits-hooks-the-manifest-does-not-list
 rule: An entry fits only an extension whose manifest's `capabilities.hooks` lists every event its hooks are on: the cache, with no manifest, cannot ask it when it reads the file.
@@ -3232,7 +3232,7 @@ in: Entry::fits
 find: .check_hooks(&manifest.capabilities.hooks)?;
 replace: .check_hooks(&crate::event::Event::ALL)?;
 caught-by:
-    cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+    cache::on_disk::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
 
 [break] cache-entry-fits-another-prompt
 rule: An entry fits only the extension whose prompt file holds its prompt's text: section 7 is the approved text.
@@ -3241,7 +3241,7 @@ in: Entry::fits
 find: if self.prompt.as_deref() != prompt.as_deref() {
 replace: if false {
 caught-by:
-    cache::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
+    cache::on_disk::an_entry_fits_only_the_extension_whose_manifest_and_prompt_it_has
 
 # ------------------------------------------------------------ what stands at the file's name (the review of 2a-1, L9)
 
@@ -3252,7 +3252,7 @@ in: RegistrationCache::read
 find: at: At::NotAFile
 replace: at: At::InUse
 caught-by:
-    cache::a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed
+    cache::on_disk::a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed
 
 [break] cache-old-set-aside-not-replaced
 rule: What is set aside replaces what was set aside before, unless that is a folder: a folder at the name moves over a link set aside before.
@@ -3261,7 +3261,7 @@ in: RegistrationCache::move_aside
 find: std::fs::remove_file(aside)?;
 replace: let _ = aside;
 caught-by:
-    cache::a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed
+    cache::on_disk::a_link_or_a_folder_at_the_files_name_is_set_aside_and_never_followed
 
 [break] cache-written-meanwhile-moved-away
 rule: A cache another session writes between the look and the move aside is put back, not moved away with the file it replaced.
@@ -3270,7 +3270,7 @@ in: RegistrationCache::set_aside
 find: Ok(()) if FileIdentity::at(&aside).ok() == Some(read) =>
 replace: Ok(()) if FileIdentity::at(&aside).ok() == Some(read) || true =>
 caught-by:
-    cache::a_cache_written_while_one_is_set_aside_is_put_back
+    cache::on_disk::a_cache_written_while_one_is_set_aside_is_put_back
 
 # From mutations/step-28-pinned.breaks (part `pinned`).
 # Step 28, the extensions a session loads (`cineris-core`'s `ext::found`, and
@@ -3290,8 +3290,7 @@ find: .map(|config| in_users(inputs, config, &mut decided.watched))
 replace: .filter(|_| false).map(|config| in_users(inputs, config, &mut decided.watched))
 caught-by:
     extensions_found::a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started
-    extensions_found::the_users_folder_is_found_through_a_config_dir_given_with_a_tilde_relatively_or_with_dots
-    extensions_found::a_config_dir_that_is_a_link_is_followed
+    extensions_reload::a_change_is_seen_however_the_configuration_directory_is_given
 
 [break] pinned-untrusted-projects-folder-looked-in
 rule: A session looks in its project's folder of extensions only while the project is trusted: one that is not is not looked in at all.
@@ -3597,7 +3596,7 @@ find: words.push(format!(
 occurrence: 2
 replace: words.insert(0, format!(
 caught-by:
-    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+    ext::found::tests::an_authors_description_cannot_pose_as_what_the_harness_says
 
 [break] pinned-description-closes-its-quote
 rule: The author's description is quoted so that it cannot close its quotes: a `"`, a backtick and a `\` in it are written with a `\` before them.
@@ -3606,7 +3605,7 @@ in: quoted
 find: if matches!(character, '\\' | '"' | '`') {
 replace: if matches!(character, '\\') {
 caught-by:
-    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+    ext::found::tests::an_authors_description_cannot_pose_as_what_the_harness_says
     ext::found::tests::quoted_text_cannot_close_its_quotes
 
 [break] pinned-entries-not-escaped
@@ -3616,7 +3615,7 @@ in: in_words
 find: .map(|item| format!("`{}`", in_code(item)))
 replace: .map(|item| format!("`{}`", item))
 caught-by:
-    extensions_trust::every_text_of_the_manifest_is_shown_escaped
+    ext::found::tests::every_text_of_the_manifest_is_shown_escaped
 
 [break] pinned-version-not-escaped
 rule: The version the question shows is written with what acts unseen escaped.
@@ -3625,7 +3624,7 @@ in: in_words
 find: in_code(&manifest.version)
 replace: manifest.version.as_str()
 caught-by:
-    extensions_trust::every_text_of_the_manifest_is_shown_escaped
+    ext::found::tests::every_text_of_the_manifest_is_shown_escaped
 
 [break] pinned-manifest-takes-a-backtick
 rule: The manifest refuses a backtick in a program, a glob or the version, which would end the code an approval shows it as.
@@ -4009,7 +4008,7 @@ in: extension_in
 find: match fs::symlink_metadata(&folder) {
 replace: match fs::metadata(&folder) {
 caught-by:
-    discover::a_folder_swapped_for_a_link_while_it_is_read_is_left_out
+    discover::tests::a_folder_swapped_for_a_link_while_it_is_read_is_left_out
 
 [break] pinned-root-over-16-mib-read
 rule: At most 16 MiB are read from one root: past them the rest of its folders are left out, and counted.
@@ -4018,7 +4017,7 @@ in: look_in
 find: if bytes >= MAX_ROOT_BYTES {
 replace: if bytes >= MAX_ROOT_BYTES * 4 {
 caught-by:
-    discover::past_16_mib_a_root_the_rest_are_left_out_and_counted
+    discover::tests::past_16_mib_a_root_the_rest_are_left_out_and_counted
 
 [break] pinned-unopened-root-takes-no-name
 rule: A root that is there and could not be opened (a file, a link to nothing) was not listed whole, and takes every name: a trusted project's extension is not used in the place of one of the user's.
@@ -4069,7 +4068,7 @@ replace: } else if confined || !confined {
 caught-by:
     ext::found::tests::what_an_extension_may_do_is_said_as_its_programs_are_confined_or_not
     extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
-    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+    ext::found::tests::an_authors_description_cannot_pose_as_what_the_harness_says
 
 [break] pinned-confined-without-a-sandbox
 rule: An approval takes an extension's programs as confined only where the session's commands would be: the sandbox enforcing, and no write root holding the harness's files.
@@ -4079,7 +4078,7 @@ find: sandbox == SandboxState::Enforcing
 replace: sandbox == SandboxState::Enforcing || sandbox != SandboxState::Enforcing
 caught-by:
     extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
-    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+
 
 [break] pinned-any-host-said-as-a-star
 rule: `net = ["*"]` is said as what it is: any host on the internet, including addresses on the user's own network that have public addresses.
@@ -4242,7 +4241,7 @@ in: extension_in
 find: *bytes += read_bytes;
 replace: *bytes += read_bytes * u64::from(read.as_ref().is_ok_and(|snapshot| Manifest::of(snapshot).is_ok()));
 caught-by:
-    discover::past_16_mib_a_root_the_rest_are_left_out_unread_though_none_had_a_manifest
+    discover::tests::past_16_mib_a_root_the_rest_are_left_out_unread_though_none_had_a_manifest
 
 [break] pinned-unwatched-folder-read-on
 rule: A folder its caller would not watch is not read, and neither is the rest of its root.
@@ -4251,7 +4250,7 @@ in: look_in
 find: None => unwatched = 1
 replace: None => {}
 caught-by:
-    discover::a_folder_the_caller_would_not_watch_and_the_rest_of_its_root_are_left_out_unread
+    discover::tests::a_folder_the_caller_would_not_watch_and_the_rest_of_its_root_are_left_out_unread
 
 [break] pinned-unwatched-root-listed-whole
 rule: A root of which a folder was not watched counts as not listed whole, so that its names are taken.
@@ -4260,7 +4259,7 @@ in: look_in
 find: if !discovered.cut.contains(&root.source) {
 replace: if discovered.cut.contains(&root.source) {
 caught-by:
-    discover::a_folder_the_caller_would_not_watch_and_the_rest_of_its_root_are_left_out_unread
+    discover::tests::a_folder_the_caller_would_not_watch_and_the_rest_of_its_root_are_left_out_unread
 
 [break] pinned-places-unbounded
 rule: The places a root's extensions may stamp are bounded by count: a folder walked past the bound is reported, and nothing past it is stamped.
@@ -4288,7 +4287,7 @@ in: extension_in
 find: let shown = format!("{}/{}", opened.shown, in_code(&name.to_string_lossy()));
 replace: let shown = format!("{}/{}", opened.shown, visible(&name.to_string_lossy()));
 caught-by:
-    discover::every_name_a_refusal_shows_as_code_cannot_end_its_code
+    discover::tests::every_name_a_refusal_shows_as_code_cannot_end_its_code
 
 [break] pinned-folder-error-names-visible
 rule: A name inside an extension's folder that a refusal quotes (a link, here) is shown as code it cannot end.
@@ -4296,7 +4295,7 @@ file: crates/cineris-ext/src/folder.rs
 find: "`{}` is a link: an extension's folder holds only files and folders, so that nothing in it can lead out of it", in_code(.0)
 replace: "`{}` is a link: an extension's folder holds only files and folders, so that nothing in it can lead out of it", .0
 caught-by:
-    discover::every_name_a_refusal_shows_as_code_cannot_end_its_code
+    discover::tests::every_name_a_refusal_shows_as_code_cannot_end_its_code
 
 [break] pinned-reader-key-raw
 rule: A key the TOML reader quotes from a manifest, one it does not know, is shown as code it cannot end.
@@ -4305,7 +4304,7 @@ in: reader_said
 find: in_code(&rest[..at])
 replace: &rest[..at]
 caught-by:
-    discover::every_name_a_refusal_shows_as_code_cannot_end_its_code
+    discover::tests::every_name_a_refusal_shows_as_code_cannot_end_its_code
 
 [break] pinned-trust-command-without-a-launcher
 rule: `cineris permissions trust` judges whether an extension's programs are confined as a session does, with the launcher the sessions are given.

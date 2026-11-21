@@ -834,3 +834,7 @@ mod tests {
         assert_eq!(cache.load().cache.len(), 1);
     }
 }
+
+/// The cache's file read, written, set aside and pruned, on a real disk.
+#[cfg(test)]
+mod on_disk;

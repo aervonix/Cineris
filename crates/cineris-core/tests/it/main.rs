@@ -44,8 +44,6 @@ mod extensions_reload;
 #[cfg(feature = "scripts")]
 mod extensions_review;
 #[cfg(feature = "scripts")]
-mod perf_where_a_test_goes;
-#[cfg(feature = "scripts")]
 mod extensions_trust;
 mod gates;
 mod harness_git;
