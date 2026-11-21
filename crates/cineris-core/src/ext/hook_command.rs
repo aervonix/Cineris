@@ -211,7 +211,7 @@ impl HookCommands {
         Self { parts, content }
     }
 
-    /// Runs `hook` for `event`, in `cx`.
+    /// Runs `hook` for `event`, in the session and turn its context names.
     pub(crate) async fn run(
         &self,
         hook: &CommandHook,
