@@ -34,20 +34,56 @@
 //! - a directory on the way that is a link now, or is gone, refuses the
 //!   path, which is left as it is.
 //!
+//! **Nothing is lost.** Before a file is written over or removed, what it
+//! holds is kept, as it is then, in a folder of the session's own
+//! ([`Keeper`]), up to [`KEEP_BYTES`] a file, owner-only: what a confined
+//! start wrote, or what the user wrote there meanwhile, can be found again.
+//! A file that cannot be kept (too large, nowhere to keep it) is left as it
+//! is, and named to put back by hand (the full review of the third security
+//! fix). A path the look before never watched (one the configuration named
+//! during the command, or one a link leads to only now) is never touched.
+//!
 //! Each path is put back on its own, and a failure leaves that path alone.
 //! What is left the caller finds by looking again ([`super::Watch::put_back`]),
 //! and names as a path to put back by hand. Only Linux puts anything back:
 //! protected paths are looked at only where the sandbox enforces.
 
+use std::path::{Path, PathBuf};
+
 use super::{Changed, Snapshot};
 
+/// The most of one file the put-back keeps before it writes over or removes
+/// it.
+pub const KEEP_BYTES: u64 = 256 * 1024;
+
+/// Where the put-back keeps what it writes over or removes, and what it
+/// kept.
+#[derive(Debug, Default)]
+pub(super) struct Keeper {
+    /// The folder, the session's own; `None` keeps nothing, and then
+    /// nothing that would be lost is touched.
+    pub(super) dir: Option<PathBuf>,
+    /// Each path whose content was kept, and its copy.
+    pub(super) kept: Vec<(PathBuf, PathBuf)>,
+}
+
 /// Puts back each path of `changed` as `before` holds it, as far as it
-/// safely can. It blocks.
-pub(super) fn put_back(before: &Snapshot, changed: &[Changed]) {
+/// safely can, keeping in `keeper` what it writes over or removes. It
+/// blocks.
+pub(super) fn put_back(before: &Snapshot, changed: &[Changed], keeper: &mut Keeper) {
     #[cfg(target_os = "linux")]
-    linux::put_back(before, changed);
+    linux::put_back(before, changed, keeper);
     #[cfg(not(target_os = "linux"))]
-    let _ = (before, changed);
+    let _ = (before, changed, keeper);
+}
+
+/// The name a kept copy of `path` is given in its folder: its count, and
+/// the path's last name.
+fn copy_name(count: usize, path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map_or_else(|| "file".into(), |name| name.to_string_lossy());
+    format!("{count:03}-{name}")
 }
 
 #[cfg(target_os = "linux")]
@@ -61,10 +97,11 @@ mod linux {
     use std::ffi::CString;
     use std::io::{self, Write};
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
     use std::path::Path;
 
-    use super::super::{Changed, Entry, Kind, Snapshot};
+    use super::super::{Before, Changed, Entry, Kind, Snapshot};
+    use super::{KEEP_BYTES, Keeper, copy_name};
 
     /// What is at a name now, not following a link.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,8 +113,14 @@ mod linux {
         Other,
     }
 
-    pub(super) fn put_back(before: &Snapshot, changed: &[Changed]) {
-        let mut paths: Vec<&Path> = changed.iter().map(|one| one.path.as_path()).collect();
+    pub(super) fn put_back(before: &Snapshot, changed: &[Changed], keeper: &mut Keeper) {
+        // Only what the look before watched: a path it never looked at (one
+        // first watched after the command) has nothing to go back to.
+        let mut paths: Vec<&Path> = changed
+            .iter()
+            .filter(|one| one.before == Before::Absent || before.entries.contains_key(&one.path))
+            .map(|one| one.path.as_path())
+            .collect();
         // What is in the way goes first, deepest first, so that what is
         // under a path goes before the path; then what was there is made
         // again, shallowest first, so that a directory is there before
@@ -85,13 +128,22 @@ mod linux {
         // since a directory whose mode lacks the owner's write right would
         // refuse what goes in it.
         paths.sort_by_key(|path| Reverse(path.components().count()));
+        let mut refused: Vec<&Path> = Vec::new();
         for path in &paths {
-            let _ = clear(path, before.entries.get(*path));
+            if matches!(
+                clear(path, before.entries.get(*path), keeper),
+                Ok(Cleared::Refused)
+            ) {
+                refused.push(path);
+            }
         }
         paths.reverse();
         for path in &paths {
+            if refused.contains(path) {
+                continue;
+            }
             if let Some(old) = before.entries.get(*path) {
-                let _ = restore(path, old);
+                let _ = restore(path, old, keeper);
             }
         }
         paths.reverse();
@@ -120,12 +172,28 @@ mod linux {
     /// Removes what is at `path` now where it is in the way of what was
     /// there before: anything, where nothing was; something of another kind,
     /// where something was.
-    fn clear(path: &Path, old: Option<&Entry>) -> io::Result<()> {
+    /// What clearing a path came to.
+    #[derive(Debug, PartialEq, Eq)]
+    enum Cleared {
+        /// Cleared, or nothing in the way, or it failed for a reason that
+        /// does not stop the path being made again (its folder gone too).
+        Done,
+        /// What is there could not be kept: the path is not touched.
+        Refused,
+    }
+
+    fn clear(path: &Path, old: Option<&Entry>, keeper: &mut Keeper) -> io::Result<Cleared> {
         if !can_be_made_again(old) {
-            return Ok(());
+            return Ok(Cleared::Done);
         }
         let (dir, name) = parent_of(path)?;
         let now = kind_at(&dir, &name)?;
+        // A folder the start made, which it may have closed to its owner:
+        // opened to its owner, so that the next round can list it and put
+        // back what is in it (the full review of the third security fix).
+        if old.is_none() && now == Now::Directory {
+            let _ = chmod_at(&dir, &name, 0o700, Now::Directory);
+        }
         let in_the_way = match (old.map(|old| old.kind), now) {
             (_, Now::Missing)
             | (Some(Kind::Directory), Now::Directory)
@@ -138,13 +206,62 @@ mod linux {
             _ => true,
         };
         if in_the_way {
+            if now != Now::Directory && keep(keeper, &dir, &name, path).is_err() {
+                return Ok(Cleared::Refused);
+            }
             unlink_at(&dir, &name, now == Now::Directory)?;
         }
+        Ok(Cleared::Done)
+    }
+
+    /// Keeps what `name` in `dir` holds now, before it is written over or
+    /// removed: a file's content, up to [`KEEP_BYTES`], or where a link
+    /// leads. Nothing for a folder (removed only when empty) or a special
+    /// file (it holds nothing). An error where it cannot be kept: then the
+    /// path is not touched.
+    fn keep(keeper: &mut Keeper, dir: &OwnedFd, name: &CString, path: &Path) -> io::Result<()> {
+        if keeper.kept.iter().any(|(kept, _)| kept == path) {
+            return Ok(());
+        }
+        let content = match kind_at(dir, name)? {
+            Now::Missing | Now::Directory => return Ok(()),
+            Now::File => read_at(dir, name)?,
+            Now::Other => match link_at(dir, name) {
+                Ok(target) => target.into_os_string().into_vec(),
+                Err(_) => return Ok(()),
+            },
+        };
+        let into = keeper
+            .dir
+            .clone()
+            .ok_or_else(|| io::Error::other("nowhere to keep what is replaced"))?;
+        cineris_base::private::create_dir_all(&into)?;
+        let copy = into.join(copy_name(keeper.kept.len() + 1, path));
+        let mut file = cineris_base::private::create_new(&copy)?;
+        file.write_all(&content)?;
+        keeper.kept.push((path.to_owned(), copy));
         Ok(())
     }
 
+    /// The content of the regular file `name` in `dir`, opened with no link
+    /// followed and without waiting: an error past [`KEEP_BYTES`].
+    fn read_at(dir: &OwnedFd, name: &CString) -> io::Result<Vec<u8>> {
+        use std::io::Read;
+        let file = std::fs::File::from(open_at(dir, name, libc::O_RDONLY | libc::O_NONBLOCK, 0)?);
+        let metadata = file.metadata()?;
+        if !metadata.is_file() || metadata.len() > KEEP_BYTES {
+            return Err(io::Error::other("too large to keep, or not a file"));
+        }
+        let mut content = Vec::new();
+        file.take(KEEP_BYTES + 1).read_to_end(&mut content)?;
+        if content.len() as u64 > KEEP_BYTES {
+            return Err(io::Error::other("too large to keep"));
+        }
+        Ok(content)
+    }
+
     /// Makes `path` again as `old` was.
-    fn restore(path: &Path, old: &Entry) -> io::Result<()> {
+    fn restore(path: &Path, old: &Entry, keeper: &mut Keeper) -> io::Result<()> {
         let mode = old.stamp.mode & 0o7777;
         let (dir, name) = parent_of(path)?;
         cineris_base::hook::point(super::super::PUTTING_BACK);
@@ -163,7 +280,13 @@ mod linux {
                 (Some(target), Now::Missing) => symlink_at(&dir, &name, target),
                 _ => Ok(()),
             },
-            (Kind::File, Some(content)) => write_at(&dir, &name, content, mode),
+            (Kind::File, Some(content)) => {
+                // What is there now is kept first, or the path is left.
+                if kind_at(&dir, &name)? == Now::File {
+                    keep(keeper, &dir, &name, path)?;
+                }
+                write_at(&dir, &name, content, mode)
+            }
             // Its content was not kept: only its mode can be put back.
             (Kind::File, None) if kind_at(&dir, &name)? == Now::File => {
                 chmod_at(&dir, &name, mode, Now::File)
@@ -179,7 +302,14 @@ mod linux {
         if kind_at(&dir, &name)? != Now::Directory {
             return Ok(());
         }
-        chmod_at(&dir, &name, old.stamp.mode & 0o7777, Now::Directory)
+        // Never a mode its owner cannot list: a folder no look can list hides
+        // what is in it from every look after (the full review).
+        chmod_at(
+            &dir,
+            &name,
+            (old.stamp.mode & 0o7777) | 0o500,
+            Now::Directory,
+        )
     }
 
     /// The directory `path` is in, opened with no link followed anywhere on

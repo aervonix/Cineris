@@ -570,9 +570,10 @@ async fn look_after(
     let roots = roots.to_vec();
     let found = run_blocking(&free, move |_| {
         sandbox.follow_configured(&*git, &root);
+        let keep = sandbox.kept_in().map(std::path::Path::to_path_buf);
         sandbox
             .protected()
-            .map(|watch| protected_changes(&watch, &before, &roots))
+            .map(|watch| protected_changes(&watch, &before, &roots, keep.as_deref()))
     })
     .await
     .map_err(|error| HostError::Failed(format!("the protected paths were not looked at: {error}")))?
@@ -586,10 +587,9 @@ async fn look_after(
             let _ = run_blocking(&free, move |_| rounds.record_protected(&left)).await;
         }
     }
-    let (changed, complete) = (&found.changed, found.complete);
     let root = cx.paths.root().to_fs_path();
-    if let Some(note) = protected_note(changed, &found.left, &found.outside, complete, &root) {
-        if !changed.is_empty() || !found.outside.is_empty() || (complete.0 && !complete.1) {
+    if let Some(note) = protected_note(&found, &root) {
+        if found.stops_the_turn() {
             // The turn stops, and the script's call with it: a script that
             // caught a refusal would go on as if nothing had changed.
             host.parts.policy.stop_turn(cx.turn, note.clone());

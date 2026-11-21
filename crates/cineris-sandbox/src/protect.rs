@@ -92,6 +92,18 @@ pub struct Watch {
 pub struct Snapshot {
     entries: BTreeMap<PathBuf, Entry>,
     complete: bool,
+    /// The fixed list it was taken with: a path a later look adds to it was
+    /// never looked at by this one (the full review of the third security
+    /// fix).
+    fixed: Vec<PathBuf>,
+    /// When it began, by the system's clock, as a change time reads.
+    taken: (i64, i64),
+    /// The directories it found and could not list: what is in them was not
+    /// seen.
+    unlistable: Vec<PathBuf>,
+    /// Whether it stopped at its bound (its time, or the directories it may
+    /// list), and so looked at nothing after.
+    stopped: bool,
     /// The paths this look asked for by name, there or not.
     asked: BTreeSet<PathBuf>,
     /// The directories whose every entry this look went through.
@@ -116,6 +128,9 @@ struct Entry {
     /// same place is the same link, and one a command replaced can be made
     /// again (the early review of the third security fix).
     link: Option<PathBuf>,
+    /// Whether it was recorded because a protected link leads to it, not by
+    /// its own name: only a look that followed the same link watches it.
+    followed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +139,31 @@ enum Kind {
     Directory,
     Link,
     Other,
+}
+
+/// The content of the regular file at `path`, opened with no link followed
+/// and without waiting on a FIFO swapped in: `None` when it is not one now.
+fn read_regular(path: &Path) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let (mut file, _) = cineris_base::open_regular(path).ok()?;
+    let mut content = Vec::new();
+    file.read_to_end(&mut content).ok()?;
+    Some(content)
+}
+
+/// `path` with `.` and `..` taken by name.
+fn by_name(path: &Path) -> PathBuf {
+    let mut placed = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                placed.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => placed.push(other),
+        }
+    }
+    placed
 }
 
 /// What only the system sets: a program can put a file's modification
@@ -224,6 +264,14 @@ impl Watch {
     /// the limits give.
     #[must_use]
     pub fn take(&self) -> Snapshot {
+        let taken = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or((0, 0), |since| {
+                (
+                    i64::try_from(since.as_secs()).unwrap_or(i64::MAX),
+                    i64::from(since.subsec_nanos()),
+                )
+            });
         let mut look = Look {
             root: self.workspace.clone(),
             limits: self.limits,
@@ -231,9 +279,12 @@ impl Watch {
             listed: 0,
             kept: 0,
             complete: true,
+            stopped: false,
             entries: BTreeMap::new(),
             asked: BTreeSet::new(),
             through: BTreeSet::new(),
+            unlistable: Vec::new(),
+            following: false,
         };
         for path in &self.fixed {
             // A protected path reached through a link in the workspace is
@@ -249,6 +300,10 @@ impl Watch {
         Snapshot {
             entries: look.entries,
             complete: look.complete,
+            fixed: self.fixed.clone(),
+            taken,
+            unlistable: look.unlistable,
+            stopped: look.stopped,
             asked: look.asked,
             listed: look.through,
         }
@@ -267,7 +322,10 @@ impl Watch {
     /// again: for a change a confined start made, so that nothing it wrote
     /// in a protected path runs later outside the sandbox (the third
     /// security fix). Nothing is written through a link: how, and what
-    /// cannot be put back, is in [`restore`]'s documentation. A look again
+    /// cannot be put back, is in [`restore`]'s documentation. What a path
+    /// holds is kept in `keep` before it is written over or removed, and a
+    /// path that cannot be kept is not touched: with no `keep`, nothing that
+    /// would be lost is. A look again
     /// that shows a change the look before it could not (behind a directory
     /// a command made unreadable) has it put back too, in another round, at
     /// most three in all; only a path `may` allows is ever touched.
@@ -280,12 +338,17 @@ impl Watch {
         before: &Snapshot,
         changed: &[Changed],
         may: &dyn Fn(&Path) -> bool,
+        keep: Option<&Path>,
     ) -> PutBack {
+        let mut keeper = restore::Keeper {
+            dir: keep.map(Path::to_path_buf),
+            kept: Vec::new(),
+        };
         let mut seen: Vec<Changed> = changed.to_vec();
         let mut round: Vec<Changed> = changed.to_vec();
         let mut rounds = 0;
         loop {
-            restore::put_back(before, &round);
+            restore::put_back(before, &round, &mut keeper);
             rounds += 1;
             let (left, after) = self.changes_since(before);
             // A directory made again is a directory with its mode, as it
@@ -327,6 +390,7 @@ impl Watch {
                     changed: seen,
                     restored,
                     left,
+                    kept: keeper.kept,
                     after,
                 };
             }
@@ -348,6 +412,12 @@ pub const PUTTING_BACK: &str =
 /// have the mode set where the link leads.
 pub const PUTTING_BACK_A_MODE: &str = "protect: a path's mode is about to be put back";
 
+/// A point a test can stop at: a look found a protected regular file and
+/// has not read it yet. A FIFO swapped in now must not hold the look (and
+/// the session's confined starts behind it) for ever.
+pub const READING_A_PROTECTED_FILE: &str =
+    "protect: a protected file is found and its content not read yet";
+
 /// The most rounds of a put-back: each puts back what the look after the
 /// round before found, which a mode put back can show (a directory a
 /// command made unreadable hid what it planted in it).
@@ -365,6 +435,9 @@ pub struct PutBack {
     pub restored: Vec<PathBuf>,
     /// What still differs from the look before: to be put back by hand.
     pub left: Vec<Changed>,
+    /// What a path held when it was written over or removed, and where that
+    /// is kept: each changed path the put-back touched, before it did.
+    pub kept: Vec<(PathBuf, PathBuf)>,
     /// The look taken after putting back.
     pub after: Snapshot,
 }
@@ -374,6 +447,20 @@ impl Snapshot {
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.complete
+    }
+
+    /// Whether this look stopped at its bound (its time, or the directories
+    /// it may list): what lay beyond was not looked at.
+    #[must_use]
+    pub fn stopped_at_its_bound(&self) -> bool {
+        self.stopped
+    }
+
+    /// The directories this look found and could not list (a command took
+    /// their read right away): what is in them was not seen.
+    #[must_use]
+    pub fn unlistable(&self) -> &[PathBuf] {
+        &self.unlistable
     }
 
     /// How many entries it holds.
@@ -397,6 +484,9 @@ impl Snapshot {
         let mut changed = Vec::new();
         for (path, old) in &self.entries {
             match after.entries.get(path) {
+                // Where a link led before and leads no more: the link's own
+                // change is told, not this.
+                None if old.followed => {}
                 None if after.covers(path) => changed.push(Changed {
                     path: path.clone(),
                     change: Change::Deleted,
@@ -416,18 +506,61 @@ impl Snapshot {
                 }
             }
         }
-        for path in after.entries.keys() {
-            if !self.entries.contains_key(path) && self.covers(path) {
-                changed.push(Changed {
-                    path: path.clone(),
-                    change: Change::Created,
-                    before: Before::Absent,
-                    mode_changed: false,
-                });
+        // What the later look watches and this one did not (a path the
+        // configuration named during a command, a file a link leads to only
+        // now), or reached and this one did not (in a folder it could not
+        // list): this look never looked there, so what is there is not
+        // taken for made. Only what changed
+        // since this look began is named, as changed with what it was before
+        // unknown, never to be removed or written over: the put-back leaves
+        // it, and it is to be put back by hand (the full review of the third
+        // security fix: a hooks folder the repository keeps, named by `git
+        // config core.hooksPath`, was taken for made and deleted).
+        let newly: Vec<&PathBuf> = after
+            .fixed
+            .iter()
+            .filter(|path| !self.fixed.contains(path))
+            .collect();
+        for (path, entry) in &after.entries {
+            if self.entries.contains_key(path) {
+                continue;
             }
+            if entry.followed
+                || newly.iter().any(|root| path.starts_with(root))
+                || !self.covers(path)
+            {
+                if self.changed_since_taken(entry) {
+                    changed.push(Changed {
+                        path: path.clone(),
+                        change: Change::Modified,
+                        before: Before::Unknown,
+                        mode_changed: false,
+                    });
+                }
+                continue;
+            }
+            changed.push(Changed {
+                path: path.clone(),
+                change: Change::Created,
+                before: Before::Absent,
+                mode_changed: false,
+            });
         }
         changed.sort_by(|a, b| a.path.cmp(&b.path));
         changed
+    }
+
+    /// Whether `entry`'s change time is at or after this look began, less
+    /// a slack for the coarser clock the system stamps it by: what changed
+    /// since, while a command ran.
+    fn changed_since_taken(&self, entry: &Entry) -> bool {
+        const SLACK_NANOS: i64 = 20_000_000;
+        let (seconds, nanos) = self.taken;
+        let (changed_seconds, changed_nanos) = entry.stamp.changed;
+        let since = (i128::from(changed_seconds) - i128::from(seconds)) * 1_000_000_000
+            + i128::from(changed_nanos)
+            - i128::from(nanos);
+        since >= -i128::from(SLACK_NANOS)
     }
 
     /// Whether this look would have seen `path` had it been there, or seen
@@ -511,11 +644,20 @@ struct Look {
     listed: usize,
     kept: u64,
     complete: bool,
+    /// Whether the look stopped at its bound (its time, or the directories
+    /// it may list): from there on nothing more is looked at. A look that is
+    /// only incomplete (a folder it cannot list, a file too large to hash)
+    /// goes on with the rest.
+    stopped: bool,
     entries: BTreeMap<PathBuf, Entry>,
     /// The paths asked for by name, there or not.
     asked: BTreeSet<PathBuf>,
     /// The directories whose every entry was gone through.
     through: BTreeSet<PathBuf>,
+    /// The directories found and not listed.
+    unlistable: Vec<PathBuf>,
+    /// Whether what is recorded now is where a protected link leads.
+    following: bool,
 }
 
 /// The names a walk looks for in every directory, and what each holds that
@@ -533,8 +675,9 @@ impl Look {
     fn out_of_time(&mut self) -> bool {
         if self.started.elapsed() >= self.limits.time {
             self.complete = false;
+            self.stopped = true;
         }
-        !self.complete
+        self.stopped
     }
 
     /// Whether a directory between the workspace and `path` is a link.
@@ -591,10 +734,13 @@ impl Look {
             Kind::Other
         };
         let bytes = metadata.len();
+        if kind == Kind::File {
+            cineris_base::hook::point(READING_A_PROTECTED_FILE);
+        }
         let content = (kind == Kind::File
             && bytes <= self.limits.file_bytes
             && self.kept + bytes <= self.limits.total_bytes)
-            .then(|| fs::read(path).ok())
+            .then(|| read_regular(path))
             .flatten();
         if let Some(content) = &content {
             self.kept += u64::try_from(content.len()).unwrap_or(u64::MAX);
@@ -618,6 +764,10 @@ impl Look {
         let link = (kind == Kind::Link)
             .then(|| fs::read_link(path).ok())
             .flatten();
+        let target = link
+            .as_ref()
+            .and_then(|target| path.parent().map(|parent| by_name(&parent.join(target))))
+            .filter(|target| target.starts_with(&self.root) && target != path);
         self.entries.insert(
             path.to_owned(),
             Entry {
@@ -628,8 +778,25 @@ impl Look {
                 content,
                 hash,
                 link,
+                followed: self.following,
             },
         );
+        // A protected link that leads to a file inside the workspace (a
+        // hook linked to `tools/pre-commit`, a common set-up): what git runs
+        // is the file it leads to, so that is watched too, as itself, where
+        // no link on the way leads elsewhere (the full review of the third
+        // security fix). A file only: a link to a folder is reported as the
+        // link and not looked through, as a `.cargo` made a link is.
+        if let Some(target) = target
+            && !self.entries.contains_key(&target)
+            && !self.asked.contains(&target)
+            && !self.through_a_link(&target)
+            && fs::symlink_metadata(&target).is_ok_and(|metadata| metadata.is_file())
+        {
+            let was = std::mem::replace(&mut self.following, true);
+            self.record(&target);
+            self.following = was;
+        }
         Some(kind)
     }
 
@@ -643,6 +810,7 @@ impl Look {
     fn list(&mut self, directory: &Path) -> Option<Vec<(PathBuf, bool)>> {
         if self.listed >= self.limits.directories {
             self.complete = false;
+            self.stopped = true;
             return None;
         }
         self.listed += 1;
@@ -664,6 +832,9 @@ impl Look {
                 // (found by the early review of the third security fix).
                 if error.kind() != std::io::ErrorKind::NotFound {
                     self.complete = false;
+                    if !self.unlistable.iter().any(|known| known == directory) {
+                        self.unlistable.push(directory.to_owned());
+                    }
                 }
                 None
             }
@@ -852,7 +1023,10 @@ fn lexically_resolved(path: &Path) -> PathBuf {
 /// not held in memory. `None` when it cannot be read.
 fn hash_file(path: &Path) -> Option<cineris_base::ContentHash> {
     use std::io::Read;
-    let mut file = fs::File::open(path).ok()?;
+    // Opened with no link followed and without waiting, so that a file
+    // swapped for a FIFO between the look's two calls does not hold the
+    // look (and the session's confined starts behind it) for ever.
+    let (mut file, _) = cineris_base::open_regular(path).ok()?;
     let mut hasher = cineris_base::ContentHasher::new();
     let mut buffer = [0u8; 64 * 1024];
     loop {
@@ -885,6 +1059,8 @@ fn stamp(metadata: &fs::Metadata) -> Stamp {
 }
 
 mod restore;
+
+pub use restore::KEEP_BYTES;
 
 #[cfg(test)]
 mod tests;

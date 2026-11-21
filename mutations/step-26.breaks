@@ -195,8 +195,8 @@ caught-by:
 rule: A protected path that was not there before the command is reported as created.
 file: crates/cineris-sandbox/src/protect.rs
 in: Snapshot::compare
-find: if !self.entries.contains_key(path) && self.covers(path) {
-replace: if !self.entries.contains_key(path) && self.covers(path) && false {
+find: change: Change::Created, before: Before::Absent
+replace: change: Change::Modified, before: Before::Unknown
 caught-by:
     cineris-sandbox protect::tests::a_hook_written_a_config_changed_and_a_file_removed_are_found
 
@@ -274,8 +274,8 @@ expect: survives
 rule: When the look at protected paths stops at its bound, the result says so.
 file: crates/cineris-core/src/sandbox.rs
 in: protected_note
-find: } else if !complete_after {
-replace: } else if !complete_after && false {
+find: } else if stopped_after {
+replace: } else if stopped_after && false {
 caught-by:
     cineris-core::it sandbox::sys_past_its_bound_the_look_at_protected_paths_warns_and_does_not_stop
 
@@ -457,10 +457,10 @@ caught-by:
 
 [break] a-look-the-command-cut-short-goes-on
 rule: A command that makes the look after it stop at its bound, where the look before did not, stops the turn.
-file: crates/cineris-core/src/checkpoints.rs
-in: RecordingShell::run_by
-find: if !found.changed.is_empty() || !found.outside.is_empty() || (found.complete.0 && !found.complete.1) {
-replace: if !found.changed.is_empty() || !found.outside.is_empty() {
+file: crates/cineris-core/src/sandbox.rs
+in: Found::stops_the_turn
+find: || (self.stopped.1 && !self.stopped.0)
+replace: || false
 caught-by:
     cineris-core::it sandbox::sys_a_command_that_makes_the_look_stop_short_stops_the_turn
 
