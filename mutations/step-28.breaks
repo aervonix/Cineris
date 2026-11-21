@@ -4196,7 +4196,7 @@ in: look
 find: let confined = programs_confined(inner, &load, &place.root, place.state.as_ref());
 replace: let confined = programs_confined(inner, &trust.loaded, &place.root, place.state.as_ref());
 caught-by:
-    extensions_review::what_an_extensions_programs_can_do_is_said_of_the_load_a_yes_puts_in_force
+    extensions_review::the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force
 
 [break] pinned-confined-with-harness-files-writable
 rule: Where the sandbox enforces, an extension's programs are said to be confined only when no write root of the session holds the harness's own files.
@@ -4205,7 +4205,7 @@ in: programs_confined
 find: && !holds_harness_files(
 replace: || holds_harness_files(
 caught-by:
-    extensions_review::what_an_extensions_programs_can_do_is_said_of_the_load_a_yes_puts_in_force
+    extensions_review::the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force
 
 [break] ext-root-of-a-glob-ending-in-a-separator-is-the-workspace
 rule: A `write` glob that ends in a separator gives the launcher its folder whole, not the workspace: a bare name is told by the glob having no separator, not by the names left once empty ones are dropped.
@@ -4323,8 +4323,7 @@ in: harness_write_roots
 find: holds_harness_files(&sandbox_grant(inner, &with, root, &question), &with, state, launcher)
 replace: holds_harness_files(&sandbox_grant(inner, &with, root, &question), &with, state, launcher) && false
 caught-by:
-    extensions_review::the_trust_question_warns_of_a_write_root_that_would_turn_the_sandbox_off
-    extensions_review::the_trust_question_warns_of_a_profiles_write_root_that_would_turn_the_sandbox_off
+    extensions_review::the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force
 
 [break] pinned-file-over-its-cap-read
 rule: A file over its 1 MiB cap is refused by its length before it is read: nothing of it is read.
@@ -4370,7 +4369,7 @@ in: harness_write_warnings
 find: for name in &trusted.project_profiles {
 replace: for name in trusted.project_profiles.iter().take(0) {
 caught-by:
-    extensions_review::the_trust_question_warns_of_a_profiles_write_root_that_would_turn_the_sandbox_off
+    extensions_review::the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force
 
 # From mutations/step-28-pins.breaks (part `pins`).
 # Step 28, the user's own pins (`pins.toml`, `cineris-policy`'s
@@ -4728,7 +4727,7 @@ in: ExtState::project_get
 find: Ok(read_file(&path, &shown)?.remove(key))
 replace: Ok(read_file(&path, &shown)?.remove(key).filter(|_| false))
 caught-by:
-    cineris-core::it ext_state::a_project_value_is_seen_by_the_next_session_of_the_project
+    cineris-core::it ext_state::a_project_value_is_the_projects_alone_and_kept_owner_only
 
 [break] state-project-values-shared-by-every-project
 rule: A project's values are kept in that project's folder of the state directory: another project does not see them.
@@ -4737,7 +4736,7 @@ in: ProjectStore::new
 find: let dir = state.project_dir(project)?.join("extensions");
 replace: let dir = state.project_dir(project)?.parent()?.join("extensions");
 caught-by:
-    cineris-core::it ext_state::a_project_value_is_not_seen_by_another_project
+    cineris-core::it ext_state::a_project_value_is_the_projects_alone_and_kept_owner_only
 
 [break] state-project-file-of-another-version-read
 rule: A project's file is read strictly: one of another version, a newer one among them, is refused and never read as this build's.
@@ -4784,7 +4783,7 @@ in: ExtState::project_set
 find: owner_only: true
 replace: owner_only: false
 caught-by:
-    cineris-core::it ext_state::a_project_file_is_written_owner_only
+    cineris-core::it ext_state::a_project_value_is_the_projects_alone_and_kept_owner_only
 
 [break] state-project-file-changed-without-its-lock
 rule: A project's file is changed under its lock, from before the read until after the write: two sessions of the project changing it at once both keep their value.

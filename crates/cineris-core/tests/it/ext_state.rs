@@ -210,6 +210,10 @@ fn result_of(front: &Front, call: &str) -> cineris_protocol::ids::ItemId {
         .unwrap()
 }
 
+/// A session value is read back in the session, a set to null removes it,
+/// each change is a record of the extension's own key and a set that
+/// changes nothing writes nothing; and a rewind leaves the values as they
+/// are (one session, folded for Windows' tier 2).
 #[test]
 fn a_session_value_is_read_back_in_the_session_and_a_set_to_null_removes_it() {
     let world = World::new(
@@ -230,6 +234,12 @@ fn a_session_value_is_read_back_in_the_session_and_a_set_to_null_removes_it() {
                 ]),
             ),
             says("Done."),
+            ops("r1", json!([{"set": "r", "value": 1}])),
+            says("One."),
+            ops("r2", json!([{"set": "r", "value": 2}])),
+            says("Two."),
+            ops("r3", json!([{"get": "r"}])),
+            says("Read."),
         ],
     );
     let core = core_with(&world, &users(&world));
@@ -260,6 +270,30 @@ fn a_session_value_is_read_back_in_the_session_and_a_set_to_null_removes_it() {
         }
         assert_eq!(records[1]["data"]["state"]["value"], Value::Null);
         assert_eq!(records[2]["data"]["state"]["value"], 2);
+        // A record belongs to the session, not to a branch: a rewind leaves
+        // an extension's values as they are, as it leaves the lease.
+        turn(&front, "one").await;
+        let keep = front
+            .items()
+            .iter()
+            .rev()
+            .find_map(|item| match item {
+                Item::AssistantMessage(message) => Some(message.id.clone()),
+                _ => None,
+            })
+            .unwrap();
+        turn(&front, "two").await;
+        front
+            .op(Op::SessionRewind(SessionRewindParams {
+                session_id: front.session.clone(),
+                to: Some(keep),
+                before: None,
+                restore_files: false,
+                plan: None,
+            }))
+            .await
+            .unwrap();
+        assert_eq!(turn(&front, "read").await, ["got 2"]);
         front.close().await;
     });
 }
@@ -510,52 +544,18 @@ fn a_sessions_records_are_held_to_their_budget_at_its_edge_and_after_a_resume() 
     });
 }
 
-/// A record belongs to the session, not to a branch: a rewind leaves an
-/// extension's values as they are, as it leaves the lease.
+/// A project value is the project's: the next session of the project sees
+/// it, another project's session does not (and keeps its own, in a file of
+/// its own), and the session's values are another store. Its file is the
+/// user's alone, written whole: no other user can open it, and nothing
+/// half-written is left beside it. On Linux its mode is `0600` and its
+/// folder's `0700`; on Windows its access list allows the user alone and
+/// takes nothing from its folder, which a file written without being made
+/// owner-only would (`cineris_base::private::is_private` reads either).
+/// One world and one core, a session after another (folded for Windows'
+/// tier 2).
 #[test]
-fn a_rewind_leaves_the_session_values_as_they_are() {
-    let world = World::new(
-        "ext_state_rewind",
-        [
-            ops("c1", json!([{"set": "n", "value": 1}])),
-            says("One."),
-            ops("c2", json!([{"set": "n", "value": 2}])),
-            says("Two."),
-            ops("c3", json!([{"get": "n"}])),
-            says("Read."),
-        ],
-    );
-    let core = core_with(&world, &users(&world));
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        turn(&front, "one").await;
-        let keep = front
-            .items()
-            .iter()
-            .rev()
-            .find_map(|item| match item {
-                Item::AssistantMessage(message) => Some(message.id.clone()),
-                _ => None,
-            })
-            .unwrap();
-        turn(&front, "two").await;
-        front
-            .op(Op::SessionRewind(SessionRewindParams {
-                session_id: front.session.clone(),
-                to: Some(keep),
-                before: None,
-                restore_files: false,
-                plan: None,
-            }))
-            .await
-            .unwrap();
-        assert_eq!(turn(&front, "read").await, ["got 2"]);
-        front.close().await;
-    });
-}
-
-#[test]
-fn a_project_value_is_seen_by_the_next_session_of_the_project() {
+fn a_project_value_is_the_projects_alone_and_kept_owner_only() {
     let world = World::new(
         "ext_state_project",
         [
@@ -568,37 +568,6 @@ fn a_project_value_is_seen_by_the_next_session_of_the_project() {
                 ]),
             ),
             says("Kept."),
-            ops("c2", json!([{"get": "p", "scope": "project"}])),
-            says("Read."),
-        ],
-    );
-    let extension = users(&world);
-    let core = core_with(&world, &extension);
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        assert_eq!(
-            turn(&front, "keep").await,
-            ["kept", r#"got [1,"two"]"#, "got null"],
-            "the session's values are another store"
-        );
-        front.close().await;
-    });
-    assert_eq!(project_files(&world).len(), 1);
-    let core = core_with(&world, &extension);
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        assert_eq!(turn(&front, "read").await, [r#"got [1,"two"]"#]);
-        front.close().await;
-    });
-}
-
-#[test]
-fn a_project_value_is_not_seen_by_another_project() {
-    let world = World::new(
-        "ext_state_other_project",
-        [
-            ops("c1", json!([{"set": "p", "value": 1, "scope": "project"}])),
-            says("Kept."),
             ops(
                 "c2",
                 json!([
@@ -608,7 +577,7 @@ fn a_project_value_is_not_seen_by_another_project() {
             ),
             says("Elsewhere."),
             ops("c3", json!([{"get": "p", "scope": "project"}])),
-            says("Back."),
+            says("Read."),
         ],
     );
     let other = world.dir.join("work").join("other");
@@ -616,13 +585,42 @@ fn a_project_value_is_not_seen_by_another_project() {
     let core = core_with(&world, &users(&world));
     world.run(async {
         let front = Front::start(&world, &core).await;
-        assert_eq!(turn(&front, "keep").await, ["kept"]);
+        assert_eq!(
+            turn(&front, "keep").await,
+            ["kept", r#"got [1,"two"]"#, "got null"],
+            "the session's values are another store"
+        );
         front.close().await;
+    });
+    // Its file, the user's alone.
+    let file = project_files(&world).remove(0);
+    let folder = file.parent().unwrap().to_path_buf();
+    for path in [&file, &folder, &cineris_base::private::lock_path(&file)] {
+        assert!(
+            cineris_base::private::is_private(path).unwrap(),
+            "{} is open to other users",
+            path.display()
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&file), 0o600);
+        assert_eq!(mode(&folder), 0o700);
+    }
+    let mut beside: Vec<String> = std::fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    beside.sort();
+    assert_eq!(beside, ["user-probe.json", "user-probe.json.lock"]);
+    world.run(async {
         let elsewhere = start_in(&core, &other).await;
         assert_eq!(turn(&elsewhere, "elsewhere").await, ["got null", "kept"]);
         elsewhere.close().await;
         let back = Front::start(&world, &core).await;
-        assert_eq!(turn(&back, "back").await, ["got 1"]);
+        assert_eq!(turn(&back, "read").await, [r#"got [1,"two"]"#]);
         back.close().await;
     });
     // One file for each project.
@@ -865,49 +863,4 @@ fn a_project_file_this_build_did_not_write_is_refused_and_left_as_it_is() {
         }
         front.close().await;
     });
-}
-
-/// A project's file is the user's alone, written whole: no other user can
-/// open it, and nothing half-written is left beside it. On Linux its mode
-/// is `0600` and its folder's `0700`; on Windows its access list allows the
-/// user alone and takes nothing from its folder, which a file written
-/// without being made owner-only would (`cineris_base::private::is_private`
-/// reads either).
-#[test]
-fn a_project_file_is_written_owner_only() {
-    let world = World::new(
-        "ext_state_private",
-        [
-            ops("c1", json!([{"set": "p", "value": 1, "scope": "project"}])),
-            says("Kept."),
-        ],
-    );
-    let core = core_with(&world, &users(&world));
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        assert_eq!(turn(&front, "keep").await, ["kept"]);
-        front.close().await;
-    });
-    let file = project_files(&world).remove(0);
-    let folder = file.parent().unwrap();
-    for path in [&file, folder, &cineris_base::private::lock_path(&file)] {
-        assert!(
-            cineris_base::private::is_private(path).unwrap(),
-            "{} is open to other users",
-            path.display()
-        );
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&file), 0o600);
-        assert_eq!(mode(folder), 0o700);
-    }
-    let mut beside: Vec<String> = std::fs::read_dir(folder)
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    beside.sort();
-    assert_eq!(beside, ["user-probe.json", "user-probe.json.lock"]);
 }
