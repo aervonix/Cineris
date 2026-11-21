@@ -542,13 +542,12 @@ caught-by:
     cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
 
 [break] a-stopped-host-call-leaves-the-turn-going
-rule: A host call answered with a stop stops its turn: a call the model wrote after it is not run, and the turn ends denied without the model being asked again.
+rule: A host call answered with a stop stops its turn through the policy. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result (`stop-ends-turn/an-extensions-stopped-call-is-not-marked`), and an extension's tool runs alone, so nothing can start in that window.
 file: crates/cineris-core/src/ext/host.rs
 in: CallHost::decide
 find: self.parts.policy.stop_turn(self.cx.turn, reason.clone());
 replace: let _ = self.parts.policy.stopped_turn(self.cx.turn);
-caught-by:
-    cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
+expect: survives
 
 [break] a-run-that-completed-after-a-denial-exits-0
 rule: Under `--fail-on-denial`, a turn that completed after a call nobody could answer is reported denied, and the run exits 6.
@@ -788,13 +787,12 @@ caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
 
 [break] exec-protected-change-does-not-stop-the-turn
-rule: A protected path a program changed stops the turn: the model's next call does not run.
+rule: A protected path a program changed stops the turn through the policy. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result (`stop-ends-turn/an-extensions-stopped-call-is-not-marked`), and an extension's tool runs alone, so nothing can start in that window.
 file: crates/cineris-core/src/ext/exec.rs
 in: look_after
 find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Stopped(note));
 replace: return Err(HostError::Stopped(note));
-caught-by:
-    cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
+expect: survives
 
 [break] exec-protected-change-does-not-fail-the-call
 rule: A protected path a program changed ends its call, naming the change.
