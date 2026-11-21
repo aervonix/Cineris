@@ -699,9 +699,11 @@ fn the_users_and_the_projects_extension_of_one_name_never_see_each_others_values
     assert_eq!(names, ["project-probe.json", "user-probe.json"]);
 }
 
-/// 64 KiB of values an extension a scope, as the compact JSON of them all:
-/// at it they are kept, one byte past it a set is refused and nothing is
-/// written; and the two scopes are counted apart.
+/// A call sets at most a hundred values, each `session` one a line of the
+/// log, and the next call may set again; and 64 KiB of values an extension
+/// a scope, as the compact JSON of them all: at it they are kept, one byte
+/// past it a set is refused and nothing is written; and the two scopes are
+/// counted apart (one session, folded for Windows' tier 2).
 #[test]
 fn the_values_of_a_scope_are_kept_to_64_kib_exactly() {
     // `{"k":"…"}` is 8 bytes and the text.
@@ -719,6 +721,22 @@ fn the_values_of_a_scope_are_kept_to_64_kib_exactly() {
     let world = World::new(
         "ext_state_cap",
         [
+            // A call sets at most a hundred values: each `session` one is a
+            // line of the log. The next call may set again (and here takes
+            // the value away, so that the scope is empty for the cap).
+            calls(&[
+                (
+                    "h1",
+                    "tool_call",
+                    json!({"tool": "probe/state", "arguments": {"ops": [{"repeat": 101, "key": "n"}, {"get": "n"}]}}),
+                ),
+                (
+                    "h2",
+                    "tool_call",
+                    json!({"tool": "probe/state", "arguments": {"ops": [{"set": "n", "value": "again"}, {"set": "n"}]}}),
+                ),
+            ]),
+            says("Done."),
             ops("c1", at_the_edge("session")),
             says("The session's."),
             ops("c2", at_the_edge("project")),
@@ -728,7 +746,19 @@ fn the_values_of_a_scope_are_kept_to_64_kib_exactly() {
     let core = core_with(&world, &users(&world));
     world.run(async {
         let front = Front::start(&world, &core).await;
-        for (text, records_after) in [("the session's", 1), ("the project's", 1)] {
+        assert_eq!(turn(&front, "count").await, ["kept", "kept"]);
+        let first = front.results()[0].2.clone();
+        assert!(
+            first.contains("refused at 100: ") && first.contains("at most 100"),
+            "{first}"
+        );
+        assert!(first.contains("got 99"), "{first}");
+        let counted = records(&front, &world).len();
+        assert_eq!(counted, 102);
+        for (text, records_after) in [
+            ("the session's", counted + 1),
+            ("the project's", counted + 1),
+        ] {
             let outcomes = turn(&front, text).await;
             assert_eq!(outcomes[0], "kept", "{outcomes:?}");
             assert_eq!(outcomes[1], format!("length {edge}"));
@@ -755,43 +785,6 @@ fn the_values_of_a_scope_are_kept_to_64_kib_exactly() {
         "the file holds what was kept"
     );
     assert!(kept["values"].get("n").is_none());
-}
-
-/// A call sets at most a hundred values: each `session` one is a line of
-/// the log. The next call may set again.
-#[test]
-fn a_call_sets_at_most_a_hundred_values() {
-    let world = World::new(
-        "ext_state_count",
-        [
-            calls(&[
-                (
-                    "c1",
-                    "tool_call",
-                    json!({"tool": "probe/state", "arguments": {"ops": [{"repeat": 101, "key": "n"}, {"get": "n"}]}}),
-                ),
-                (
-                    "c2",
-                    "tool_call",
-                    json!({"tool": "probe/state", "arguments": {"ops": [{"set": "n", "value": "again"}]}}),
-                ),
-            ]),
-            says("Done."),
-        ],
-    );
-    let core = core_with(&world, &users(&world));
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        assert_eq!(turn(&front, "count").await, ["kept"]);
-        let first = front.results()[0].2.clone();
-        assert!(
-            first.contains("refused at 100: ") && first.contains("at most 100"),
-            "{first}"
-        );
-        assert!(first.contains("got 99"), "{first}");
-        assert_eq!(records(&front, &world).len(), 101);
-        front.close().await;
-    });
 }
 
 /// A project's file is read strictly: one this build did not write is

@@ -18,22 +18,26 @@ use crate::{World, says};
 
 // ------------------------------------------------------------ a change
 
-/// The user's extension changed during a session is withdrawn at the next
-/// turn's start: its tools are no longer offered, and the session is told
-/// why and what approves it.
+/// A change during a session is seen at the next turn's start, one
+/// session's turns (folded for Windows' tier 2): an extension approved in
+/// it (its pin written by another process, as `cineris ext add` writes it)
+/// is loaded, registered first since the cache misses it; changed then, it
+/// is withdrawn, its tools no longer offered, the session told why and what
+/// approves it, and the changed script never evaluated.
 #[test]
-fn a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn() {
-    let world = World::new("reload_changed", searches_times(2));
+fn an_extension_approved_and_changed_in_a_session_is_loaded_and_withdrawn_at_the_next_turns() {
+    let world = World::new("reload_approved_changed", searches_times(3));
     let folder = users(&world);
-    write_extension(&folder, "", "the first");
-    pin(&world, &folder);
-    cache(&world, &folder);
+    write_extension(&folder, "", "Gives its arguments back");
     let core = world.core();
-    let made = cineris_ext::engine::runtimes_made();
     world.run(async {
         let front = start(&world, &core).await;
         front.turn("look for the probe").await;
+        assert!(!found_probe(&front), "{:?}", front.results());
+        pin(&world, &folder);
+        front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
+        let made = cineris_ext::engine::runtimes_made();
         write_extension(&folder, "", "the second, and longer");
         front.turn("look for the probe").await;
         assert!(!found_probe(&front), "{:?}", front.results());
@@ -47,28 +51,8 @@ fn a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn() {
                 .any(|notice| notice.contains("has changed since you approved it")),
             "{told:?}"
         );
-        front.close().await;
-    });
-    // The changed script was never evaluated.
-    assert_eq!(cineris_ext::engine::runtimes_made(), made);
-}
-
-/// An extension approved during a session (its pin written by another
-/// process, as `cineris ext add` writes it) is loaded at the next turn's
-/// start, registered first since the cache misses it.
-#[test]
-fn an_extension_approved_in_a_session_is_loaded_at_the_next_turn() {
-    let world = World::new("reload_approved", searches_times(2));
-    let folder = users(&world);
-    write_extension(&folder, "", "Gives its arguments back");
-    let core = world.core();
-    world.run(async {
-        let front = start(&world, &core).await;
-        front.turn("look for the probe").await;
-        assert!(!found_probe(&front), "{:?}", front.results());
-        pin(&world, &folder);
-        front.turn("look for the probe").await;
-        assert!(found_probe(&front), "{:?}", front.results());
+        // The changed script was never evaluated.
+        assert_eq!(cineris_ext::engine::runtimes_made(), made);
         front.close().await;
     });
 }

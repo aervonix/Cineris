@@ -3880,8 +3880,7 @@ file: crates/cineris-core/src/core.rs
 find: live.extensions.recheck().await;
 replace: let _ = &live.extensions;
 caught-by:
-    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
-    extensions_reload::an_extension_approved_in_a_session_is_loaded_at_the_next_turn
+    extensions_reload::an_extension_approved_and_changed_in_a_session_is_loaded_and_withdrawn_at_the_next_turns
 
 [break] pinned-change-unseen
 rule: A place whose stamp differs from what it was is a change.
@@ -3890,7 +3889,7 @@ in: Watched::changed
 find: now != *stamp ||
 replace: false &&
 caught-by:
-    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
+    extensions_reload::an_extension_approved_and_changed_in_a_session_is_loaded_and_withdrawn_at_the_next_turns
     extensions_reload::a_change_is_seen_however_the_configuration_directory_is_given
     ext::watched::tests::a_change_is_seen_and_nothing_is_looked_at_through_a_link
 
@@ -3910,7 +3909,7 @@ in: Held::settle
 find: self.registry.remove_source(&gone.1);
 replace: let _ = &gone.1;
 caught-by:
-    extensions_reload::a_users_extension_changed_in_a_session_is_withdrawn_at_the_next_turn
+    extensions_reload::an_extension_approved_and_changed_in_a_session_is_loaded_and_withdrawn_at_the_next_turns
     extensions_reload::a_projects_folder_swapped_for_a_link_out_is_withdrawn
 
 [break] pinned-pins-unwatched
@@ -3920,7 +3919,7 @@ in: decide
 find: decided.watched.note(state.pins_file(), clock);
 replace: let _ = state.pins_file();
 caught-by:
-    extensions_reload::an_extension_approved_in_a_session_is_loaded_at_the_next_turn
+    extensions_reload::an_extension_approved_and_changed_in_a_session_is_loaded_and_withdrawn_at_the_next_turns
 
 [break] pinned-project-way-unwatched
 rule: The names on the way to the project's folder of extensions, as written, are stamped, each itself: a folder of extensions made in a session is looked in at the next turn.
@@ -4578,7 +4577,7 @@ find: const MAX_STATE_SET: u32 = 100;
 replace: const MAX_STATE_SET: u32 = 1000;
 packages: cineris-core
 caught-by:
-    cineris-core::it ext_state::a_call_sets_at_most_a_hundred_values
+    cineris-core::it ext_state::the_values_of_a_scope_are_kept_to_64_kib_exactly
 
 [break] state-sets-counted-across-calls
 rule: Each call of an extension has its own hundred sets.
@@ -4588,7 +4587,7 @@ find: self.stored = 0;
 replace: let _ = self.stored;
 packages: cineris-core
 caught-by:
-    cineris-core::it ext_state::a_call_sets_at_most_a_hundred_values
+    cineris-core::it ext_state::the_values_of_a_scope_are_kept_to_64_kib_exactly
 
 # ---------------------------------------------------------- whose values
 
