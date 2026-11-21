@@ -105,6 +105,8 @@ Configuration, extensions, themes and key bindings reload while the harness runs
 - at the start of every turn;
 - when the user runs `/reload`.
 
+At a turn's start, what the extensions were found in is looked at too, and only then (since step 28: [12-extensions.md](12-extensions.md), "Hot-reload").
+
 The check is a handful of `stat` calls, well under a millisecond. It compares each file's modification time and size with what they were when the file was loaded (and on Unix which file it is, so that a replaced file shows even when both are the same). A file that did not exist is watched too: creating it is a change. Two details keep it from missing a change:
 
 - **The stamp is taken before the file is read.** A change that lands while a file is being read and parsed is then seen by the next check.
@@ -120,7 +122,7 @@ The check is a handful of `stat` calls, well under a millisecond. It compares ea
 | Model, reasoning level, anything that shapes the system prompt or the declared tool list | At the session's next context epoch that builds the prompt again: a compaction, or the session opened again ([07-sessions-and-context.md](07-sessions-and-context.md)). A notice says what is pending. `/reload --now`, which would start a new epoch at once, is not built ([outstanding](../outstanding/reload-now-begins-an-epoch.md)). |
 | What a session is made with once, as it opens: its shell (`shell.*`), its sandbox's switch and protected paths (`sandbox.enabled`, `sandbox.protect`), the compatibility readers (`compat.*`), the map's wait and whether there is a map (`index.map_wait`, `index.map`) | In sessions opened from then on (`next session`, since step 24). A notice says so, and says with more weight when the change would tighten the sandbox, since the running session stays as it was. |
 | The data directory, the credential store | When the harness is next started. |
-| An extension's script or manifest | The extension is reloaded. If its hash no longer matches what was approved, it is disabled and the user is asked to review the change ([12-extensions.md](12-extensions.md)). |
+| An extension's script or manifest | At the next turn's start, every extension is found and judged again. One that no longer stands approved as it was loaded (its folder changed, its pin or its project's trust taken away) is withdrawn, its tools with it, and the session says so and how to approve it; one that now stands approved is loaded ([12-extensions.md](12-extensions.md), "Hot-reload"). |
 | An MCP server entry | That server is restarted. A changed command needs approval again. |
 | An invalid file | The old configuration stays in force and the error is shown. A reload never leaves the harness without a valid configuration. The one exception is lowering trust, below. |
 
@@ -291,7 +293,7 @@ The schema, in outline. The full list, generated from the declarations, is the [
 | `[keys]` | Key bindings ([09-tui.md](09-tui.md), "The editor as built"): a table for each context of the key map (`editor`, `menu`, `picker`, `toggle`, `search`, `focus`, `dialog`, `global`), from an action's name to the keys bound to it. | **Declared in step 23,** user-only. The interface checks the names and the keys, and says each entry it cannot use. |
 | `[terminal]` | Capability overrides, each defaulting to automatic detection. All terminal quirks live here. | **Declared in step 23:** `sync`, `keyboard`, `color` (`none`, `16`, `256`, `truecolor`), `hyperlinks` and `unicode`, each user-only and read at start. |
 | `[rpc]` | The RPC server's waits: `approval_timeout`, `stalled_client` (since step 27). The user's alone: read once, when `cineris serve` starts. | Declared. |
-| `[extensions.<name>]` | [12-extensions.md](12-extensions.md) | `enabled` alone, the user's (since step 28). |
+| `[extensions.<name>]` | [12-extensions.md](12-extensions.md) | `enabled` alone, the user's (since step 28): `false` keeps the user's own extension of that name, in `<config dir>/extensions/`, out of the sessions opened from then on, its pin kept. It does not turn off a project's extension, which is kept out by not approving it or not trusting the project. |
 | `[hooks.<name>]`, `[skills]` | [12-extensions.md](12-extensions.md) | Reserved. |
 | `[mcp.servers.<name>]`, `[mcp]` | [13-mcp.md](13-mcp.md) | Reserved. |
 
@@ -341,8 +343,10 @@ Separate from configuration, in the state directory (`$XDG_STATE_HOME/cineris`, 
 |---|---|
 | `trust.toml` | Trusted projects and the hashes of what was trusted. `cineris-policy`'s: one `[[project]]` table per project, read strictly, so that a file this build does not understand in full trusts nothing. |
 | `pins.toml` | The hashes of what the user approved of their own, their extensions first (since step 28). `cineris-policy`'s: one `[[pin]]` table for each kind and name, read strictly, so that a file this build does not understand in full pins nothing. A file of its own beside `trust.toml`, so that a build that reads only `trust.toml`'s version 2 is not made to refuse it ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md), "Project trust"). |
+| `extensions/registered.json` | What each approved extension registered (its tools, commands, hooks and prompt text), by the hash of its folder: the registration cache (since step 28). `cineris-ext`'s: read strictly, so that a file this build does not read in full is set aside (moved to `registered.json.set-aside`) and every approved extension registered again; written owner-only and atomically; pruned of the hashes no pin names, the user's and every trusted project's. A session reads it in place of starting the engine ([12-extensions.md](12-extensions.md), "Tier 4: script extensions"). |
 | `projects/<project key>/knowledge.toml` | What the harness has learned about a project ([14-adaptation.md](14-adaptation.md)). Since step 17, beside it: `knowledge.toml.good`, the last store read or written as valid, and `knowledge.toml.lock`. |
 | `projects/<project key>/index/` | The repository-map cache ([15-efficiency.md](15-efficiency.md)). |
+| `projects/<project key>/extensions/<source>-<name>.json` | An extension's `project` values (`cineris.state`, since step 28), `<source>` being `user` or `project`: `{"version": 1, "values": {…}}`, read strictly, written owner-only and atomically under `<file>.lock` beside it. The core's ([12-extensions.md](12-extensions.md), "Tier 4: script extensions"; [decision 0041](../decisions/0041-an-extension-s-state-is-kept-in-the-session-s-records-and-a-project-file-read-strictly-within-fixed-bounds.md)). |
 | `stats/` | Local statistics ([14-adaptation.md](14-adaptation.md)). |
 | `approvals/<project key>.toml` | "Always allow in this project" rules. `cineris-policy`'s: one `[[approval]]` table per rule, read strictly, and only ever an allow. |
 | `catalog-overlay.toml` | Results of `cineris models refresh`, in the catalog file's own form: a `version` and `[[model]]` tables. |
@@ -364,7 +368,7 @@ Each folder beside what the permission engine closes in it ([06-permissions-and-
 | The configuration directory: `config.toml` | `$XDG_CONFIG_HOME/cineris`, usually `~/.config/cineris` | `%APPDATA%\cineris`, the roaming folder | Reading and writing, the whole directory. |
 | The user's configuration file, when `CINERIS_CONFIG` names one elsewhere | Where it names | Where it names | Reading and writing, the file by name, and where it leads when it is a link (a dotfiles repository), here and in the configuration directory alike (since the review of the fixes to step 13a): it holds the level and the rules the next session starts with. A file it names inside the workspace (a team's configuration, committed) is closed there too, so a search over the workspace (`rg`, `grep -r`) is asked about at every level, as one over any tree with a closed file in it is. |
 | The stored keys: `credentials.toml`, its lock `credentials.toml.lock`, and a write's temporary file | In the configuration directory | In `%LOCALAPPDATA%\cineris\credentials`, a folder of their own in the data directory | Reading and writing, the folder whole (on Windows its own; on Linux the configuration directory). A write's temporary file (`.cineris-<hex>.tmp`), which a write that was killed leaves behind holding every key, is in the folder, and closed with it (since the review of the fixes to step 13a). |
-| The state directory: trust, the user's own pins (`pins.toml`), stored approvals, `shells.json`, logs | `$XDG_STATE_HOME/cineris`, usually `~/.local/state/cineris` | `%LOCALAPPDATA%\cineris\state`, inside the data directory | Reading and writing, the whole directory. |
+| The state directory: trust, the user's own pins (`pins.toml`), the registration cache, stored approvals, `shells.json`, logs | `$XDG_STATE_HOME/cineris`, usually `~/.local/state/cineris` | `%LOCALAPPDATA%\cineris\state`, inside the data directory | Reading and writing, the whole directory. |
 | The data directory: sessions | `$XDG_DATA_HOME/cineris`, usually `~/.local/share/cineris`, or `session.data_dir` | `%LOCALAPPDATA%\cineris`, or `session.data_dir` | Writing, the whole directory; and reading, the sessions of other projects. |
 | The managed file | `/etc/cineris/config.toml` | `%ProgramData%\cineris\config.toml` | Not closed: only an administrator writes it, and it holds an administrator's policy, not a key. |
 
