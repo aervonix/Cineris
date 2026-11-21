@@ -10,11 +10,17 @@
 //! `cineris_ext::host::serve`, then decided by the session's permission
 //! engine as a call of the extension's tool, and only then done.
 //!
+//! The extensions a session loads are found when it opens (`found`): the
+//! user's checked against their pins, a project's through its trust, what
+//! each approved one registered taken from the registration cache, and the
+//! session's first turn waiting for one the cache misses.
+//!
 //! The script engine is behind the `scripts` feature: without it, no
 //! extension's tool is registered.
 
 #[cfg(feature = "scripts")]
 mod exec;
+pub(crate) mod found;
 #[cfg(feature = "scripts")]
 mod host;
 #[cfg(feature = "scripts")]
@@ -27,6 +33,8 @@ use std::path::PathBuf;
 use cineris_base::ContentHash;
 use cineris_ext::manifest::Manifest;
 use cineris_ext::registration::Registration;
+
+pub use found::BEFORE_AN_EXTENSION_IS_REGISTERED;
 
 #[cfg(feature = "scripts")]
 pub(crate) use exec::{ExecParts, HarnessFiles};
