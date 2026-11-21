@@ -51,11 +51,16 @@ Commands:
   list         This project's trust, and the approvals stored for it
   revoke ID…   Remove stored approvals, by the ids that list shows
   trust        Trust this project, or approve the change of its rules;
-               its extensions too, if you say yes when asked, or, with no
-               terminal to ask at, with --with-extensions
+               it shows the project's extensions, if it has any, and asks
+               whether to approve them too
   untrust      Take this project's trust away
   forget       Forget this project's trust, or that you said never to
                trust it: the next session there asks again
+
+Options:
+  --with-extensions  With trust, where there is no terminal to ask at:
+                     approve the extensions it shows. At a terminal the
+                     question decides, and this flag is ignored
 
 Trusting a project lets its configuration choose a model, allow what its
 rules allow, and run what it defines. A change to its permission rules sets

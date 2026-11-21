@@ -8,6 +8,7 @@
 //! | `extensions/registered.json` | What each approved extension registered, by its hash: the registration cache (since step 28). | `cineris-ext` |
 //! | `projects/<project key>/knowledge.toml` | What the harness has learned about a project. | `cineris-knowledge` |
 //! | `projects/<project key>/index/` | The repository-map cache. | `cineris-index` |
+//! | `projects/<project key>/extensions/` | Each extension's `project` values of `cineris.state`, a file an extension, `<source>-<name>.json`, with its lock beside it (since step 28). | `cineris-core` |
 //! | `stats/` | Local statistics. | `cineris-stats` |
 //! | `approvals/<project key>.toml` | "Always allow in this project" rules. | `cineris-policy` |
 //! | `catalog-overlay.toml` | Results of `cineris models refresh`. | `cineris-llm` |
