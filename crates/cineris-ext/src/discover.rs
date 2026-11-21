@@ -149,10 +149,11 @@ pub const MAX_ENTRIES: usize = 1024;
 /// The bytes read from one root's extensions together past which none is
 /// read: once 16 MiB have been read, the rest of its folders are left out,
 /// counted (the full review of step 28: a root of 64 folders at their 4 MiB
-/// cap was 256 MiB to read on a session's way). Every folder read counts,
-/// one left out after its read too (the fresh review: 64 folders of 4 MiB
-/// with no manifest were all read). A user keeps a few extensions of a few
-/// KiB each.
+/// cap was 256 MiB to read on a session's way). Every byte read counts, of
+/// a folder left out after its read and of a file refused part way too
+/// (the fresh review: 64 folders of 4 MiB with no manifest were all read);
+/// a file over its cap is refused by its length, unread. A user keeps a few
+/// extensions of a few KiB each.
 pub const MAX_ROOT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The user's folder of extensions, in the configuration directory.
@@ -333,6 +334,42 @@ pub fn discover_seeing(
 pub fn names(roots: &[Root], paths: &PathResolver) -> Discovered {
     each_root(roots, paths, &mut |root, opened, discovered| {
         let _ = list(root, opened, discovered);
+    })
+}
+
+/// [`names`], giving `seen` each root and each extension's folder that
+/// [`discover`] would read, in its order and within its count, though none
+/// is read: a caller that bounds what it watches answers as it would to
+/// [`discover_seeing`], and a `false` leaves the root not listed whole
+/// ([`Discovered::cut`]) as it does there (the re-check of step 28's fresh
+/// review: the trust question took the user's names with no bound, and
+/// could list a project's extension the session then refused).
+///
+/// It blocks: call it on the blocking pool.
+pub fn names_seeing(
+    roots: &[Root],
+    paths: &PathResolver,
+    seen: &mut dyn FnMut(Seen<'_>) -> bool,
+) -> Discovered {
+    each_root(roots, paths, &mut |root, opened, discovered| {
+        let _ = seen(Seen::Root(root.source, &opened.real));
+        let Some(names) = list(root, opened, discovered) else {
+            return;
+        };
+        // As `look_in` takes them: every name counts toward the folders a
+        // root may have read, and a link or a name that is not Unicode is
+        // refused before its caller is told of it.
+        for (name, kind) in names.into_iter().take(MAX_PER_ROOT) {
+            if kind.is_symlink() || name.to_str().is_none() {
+                continue;
+            }
+            if !seen(Seen::Extension(root.source, &opened.real.join(&name))) {
+                if !discovered.cut.contains(&root.source) {
+                    discovered.cut.push(root.source);
+                }
+                return;
+            }
+        }
     })
 }
 

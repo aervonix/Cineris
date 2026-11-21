@@ -707,6 +707,11 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 // Its extensions are shown as the trust question shows
                 // them, and approved only on a yes at a terminal or, with
                 // none to ask at, by the flag (since step 28).
+                // What trusting it would turn the sandbox off with, said
+                // first, in the trust question's words.
+                for warning in core.project_sandbox_warnings(&project).map_err(fail)? {
+                    out!("{warning}\n");
+                }
                 let extensions = core.project_extensions(&project).map_err(fail)?;
                 let mut approved = Vec::new();
                 if !extensions.is_empty() {

@@ -386,6 +386,33 @@ impl Core {
         self.trust_project_with(project, &[])
     }
 
+    /// What trusting the project would turn the sandbox off with, in the
+    /// trust question's words: each write root of its own configuration
+    /// that holds the harness's files, where the sandbox would otherwise
+    /// enforce (`assemble::harness_write_warnings`).
+    ///
+    /// # Errors
+    ///
+    /// When the workspace cannot be resolved, or its configuration loaded.
+    pub fn project_sandbox_warnings(&self, project: &Project) -> Result<Vec<String>, OpError> {
+        let options = &self.inner.options;
+        let mut paths = PathOptions::new();
+        if let Some(home) = options.env.home().as_deref().and_then(resolve_dir) {
+            paths = paths.home(home);
+        }
+        let resolver = PathResolver::new(&project.root, paths)
+            .map_err(|failure| error(ErrorKind::Usage, "invalid_workspace", failure.to_string()))?;
+        let held = self.load(project, ConfigTrust::Untrusted)?;
+        let trusted = self.load_trusted(project)?;
+        Ok(crate::assemble::harness_write_warnings(
+            &self.inner,
+            &held,
+            &trusted,
+            resolver.root(),
+            self.state_dir().as_ref(),
+        ))
+    }
+
     /// The project's extensions that trusting it could approve: those not
     /// approved as they are now, each as the trust question lists it (one
     /// whose name a folder of the user's own extensions takes is not
