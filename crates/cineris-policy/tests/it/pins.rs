@@ -522,3 +522,56 @@ fn no_tool_can_read_or_write_the_users_pins() {
         Deny
     );
 }
+
+/// Makes `link` a link to the file `target`; `false`, said, where links
+/// cannot be made (a Windows account without the right), except on a CI
+/// runner, which must make one.
+fn file_link(target: &std::path::Path, link: &std::path::Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link);
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_file(target, link);
+    match made {
+        Ok(()) => true,
+        Err(error) if std::env::var_os("GITHUB_ACTIONS").is_none() => {
+            println!("skipped: cannot make a link here ({error})");
+            false
+        }
+        Err(error) => panic!("the CI runner cannot make a link: {error}"),
+    }
+}
+
+/// A link at the store's name is not followed, as the registration
+/// cache's and an extension's values' are not: what it names is not read
+/// as the user's pins, so nothing is taken as pinned and the error says
+/// why, and no change writes through it.
+#[test]
+fn a_link_at_the_stores_name_is_neither_read_nor_written_through() {
+    let scratch = cineris_testkit::scratch!("pins_link");
+    let hash = "1".repeat(64);
+    let named = format!(
+        "version = 1\n\n[[pin]]\nkind = \"extension\"\nname = \"tracker\"\nhash = \
+         \"{hash}\"\nat = \"2026-11-13T10:00:00Z\"\n"
+    );
+    let elsewhere = scratch.file("elsewhere/pins.toml", &named);
+    scratch.dir("state");
+    let store = store(&scratch);
+    if !file_link(&elsewhere, store.path()) {
+        return;
+    }
+    let error = store.pins().unwrap_err();
+    assert!(matches!(error, PinError::Read { .. }), "{error}");
+    let said = error.to_string();
+    assert!(said.contains("link"), "{said}");
+    assert!(said.contains("nothing is taken as pinned"), "{said}");
+    assert!(store.pin(&extension("notes", "v1")).is_err());
+    assert!(store.unpin(&EXTENSION, "tracker").is_err());
+    assert_eq!(std::fs::read_to_string(&elsewhere).unwrap(), named);
+    assert!(
+        std::fs::symlink_metadata(store.path())
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the link is left as it is"
+    );
+}
