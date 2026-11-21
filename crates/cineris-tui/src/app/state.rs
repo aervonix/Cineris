@@ -2110,11 +2110,23 @@ impl App {
     /// into the draft the edit set aside, which comes back when the edit
     /// ends, and that is said.
     fn give_back(&mut self, text: &str) {
-        if !text.is_empty() && self.input.give_back_to_draft(text) {
+        if self.put_back(text) == Back::Draft {
             self.say(
                 "The text is in the prompt you were writing, which comes back when the item edit \
                  ends.",
             );
+        }
+    }
+
+    /// Puts `text` back for the user as [`give_back`](Self::give_back)
+    /// does, saying nothing, and says where it went.
+    fn put_back(&mut self, text: &str) -> Back {
+        if text.is_empty() {
+            Back::Nowhere
+        } else if self.input.give_back_to_draft(text) {
+            Back::Draft
+        } else {
+            Back::Editor
         }
     }
 
@@ -2463,14 +2475,9 @@ impl App {
                     .iter()
                     .filter(|part| !matches!(part, Part::Text(_)))
                     .count();
-                // Into the draft, and an item being edited stays as it is.
-                let into = if text.is_empty() {
-                    Back::Nowhere
-                } else if self.input.give_back_to_draft(&text) {
-                    Back::Draft
-                } else {
-                    Back::Editor
-                };
+                // Into the draft, and an item being edited stays as it is:
+                // the notice says where it went.
+                let into = self.put_back(&text);
                 self.transcript
                     .push(Block::Notice(returned_text(returned, into, left_out)));
             }

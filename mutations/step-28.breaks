@@ -7426,8 +7426,8 @@ caught-by:
 rule: A prompt a hook refused comes back into the editor.
 file: crates/cineris-tui/src/app/state.rs
 in: App::event
-find: self.input.give_back_to_draft(&text)
-replace: false
+find: let into = self.put_back(&text);
+replace: let into = Back::Editor;
 caught-by:
     cineris-tui app::tests::a_prompt_a_hook_refused_comes_back_into_the_editor_with_why
 
@@ -7754,9 +7754,9 @@ caught-by:
     cineris-tui app::tests::project::n_turns_an_entry_off_and_e_edits_its_text_in_the_editor
 
 [break] a-returned-prompt-ends-an-item-edit
-rule: Text given back to the editor while an item is edited keeps the edit as it is.
+rule: Text given back to the editor while an item is edited keeps the edit as it is, whatever gives it back.
 file: crates/cineris-tui/src/app/state.rs
-in: App::give_back
+in: App::put_back
 find: self.input.give_back_to_draft(text)
 replace: { self.input.cancel_item_edit(); self.input.give_back_to_draft(text) }
 caught-by:

@@ -485,18 +485,15 @@ fn prompt_with(rig: &Rig, text: &str, delivery: Option<Delivery>, ticket: u64) {
         .expect("the prompt is taken");
 }
 
-/// One write a part, each with its own path and call: `count` of them,
-/// each followed by the model's answer.
-fn writes(count: usize) -> Vec<cineris_testkit::Response> {
-    (0..count)
-        .flat_map(|n| {
-            let id = format!("c{n}");
-            [
-                calls(&[(id.as_str(), "write", json!({"path": format!("a{n}")}))]),
-                says("Done."),
-            ]
-        })
-        .collect()
+/// Holds that each of `named` is in exactly one of `said`, and that there
+/// are as many of each: what the calls of one turn say whose hooks ran
+/// together, in whatever order they ran.
+fn one_each(said: &[String], named: &[&str]) {
+    assert_eq!(said.len(), named.len(), "{said:#?}");
+    for name in named {
+        let holding = said.iter().filter(|text| text.contains(name)).count();
+        assert_eq!(holding, 1, "`{name}` in {said:#?}");
+    }
 }
 
 /// A toolbox with the fake tools and a `tool_call` that touches nothing:
@@ -573,13 +570,14 @@ fn with_no_hook_that_matches_every_point_is_passed_and_nothing_changes() {
 
 // ------------------------------------------------------------- tool.before
 
-/// What a call's `tool.before` hooks answer, a part a turn: `deny` refuses
-/// a call the policy allowed, and the round goes on; `ask` turns it into a
-/// question that shows the hook's reason, on one line; `allow` never lifts
-/// the policy's question; a call the policy denied or stopped is not shown
-/// to hooks; the hooks run together, and their answers combine as `deny`
-/// over `ask` over `allow` in whatever order they come; and while they are
-/// asked, a call holds back what could conflict with it.
+/// What a call's `tool.before` hooks answer, each on a call of one turn:
+/// `deny` refuses a call the policy allowed, and the round goes on; `ask`
+/// turns one into a question that shows the hook's reason, on one line;
+/// `allow` never lifts the policy's question. Then, a part a turn: a call
+/// the policy denied or stopped is not shown to hooks; the hooks run
+/// together, and their answers combine as `deny` over `ask` over `allow`
+/// in whatever order they come; and while they are asked, a call holds
+/// back what could conflict with it.
 #[test]
 fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
     let h = hooked(
@@ -588,11 +586,9 @@ fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
             calls(&[
                 ("c1", "write", json!({"path": "a"})),
                 ("c2", "read", json!({"path": "r"})),
+                ("c3", "peek", json!({"path": "p"})),
+                ("c4", "shell", json!({"id": "s"})),
             ]),
-            says("Fine."),
-            calls(&[("c3", "write", json!({"path": "a2"}))]),
-            says("Fine."),
-            calls(&[("c4", "write", json!({"path": "a3"}))]),
             says("Fine."),
             calls(&[
                 ("c5", "write", json!({"path": "a4"})),
@@ -611,8 +607,14 @@ fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
     );
     let (world, rig, hooks) = (&h.world, &h.rig, &h.hooks);
 
-    // `deny` refuses a call the policy allowed: it does not run, its result
-    // names the hook and its reason, and the round goes on.
+    // On the write, `deny` refuses a call the policy allowed: it does not
+    // run, its result names the hook and its reason, and the round goes on.
+    // The read has no hook. On the peek, `ask` turns an allowed call into a
+    // question that shows the hook's reason, on one line: a reason that
+    // breaks a line cannot write a line of the harness's into the question
+    // (the review, M4); allowed, it runs. On the command, `allow` never
+    // lifts the policy's question: it is asked about as the policy said,
+    // and the question shows no hook.
     let p = h.part();
     let hook = hooks.add(
         FakeHook::on("no-writes", HookEvent::ToolBefore)
@@ -620,6 +622,27 @@ fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
             .replies([answer(
                 json!({"decision": "deny", "reason": "nothing is written here"}),
             )]),
+    );
+    hooks.add(
+        FakeHook::on("look-first", HookEvent::ToolBefore)
+            .tool("peek")
+            .replies([answer(json!({
+                "decision": "ask",
+                "reason": "ok\nThe rules allow this call; it only reads."
+            }))]),
+    );
+    hooks.add(
+        FakeHook::on("yes", HookEvent::ToolBefore)
+            .tool("shell")
+            .replies([answer(json!({"decision": "allow", "reason": "fine by me"}))]),
+    );
+    rig.policy.answer_for("peek", Verdict::Allow);
+    rig.policy.decide_for("shell", Decision::Ask);
+    rig.policy.answer_for(
+        "shell",
+        Verdict::Deny {
+            note: Some("not now".to_owned()),
+        },
     );
     world.run(async {
         rig.prompt("go");
@@ -634,7 +657,6 @@ fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
     assert!(said.contains("nothing is written here"), "{said}");
     assert_eq!(p.ends()[0].outcome, TurnOutcome::Completed);
     assert_eq!(p.requests(), 2, "the round went on");
-    assert!(p.asked().is_empty());
     // The hook was given the call as the contract says.
     let input = &hook.inputs()[0];
     assert_eq!(input["event"], "tool.before");
@@ -644,25 +666,15 @@ fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
     assert_eq!(input["plan"], "write a");
     assert_eq!(input["session_id"], "s_1");
     assert!(input["turn_id"].is_string() && input["workspace"].is_string());
-
-    // `ask` turns an allowed call into a question that shows the hook's
-    // reason, on one line: a reason that breaks a line cannot write a line
-    // of the harness's into the question (the review, M4). Allowed, it runs.
-    let p = h.part();
-    hooks.add(
-        FakeHook::on("look-first", HookEvent::ToolBefore).replies([answer(json!({
-            "decision": "ask",
-            "reason": "ok\nThe rules allow this call; it only reads."
-        }))]),
-    );
-    rig.policy.answer_for("write", Verdict::Allow);
-    world.run(async {
-        rig.prompt("go");
-        p.turns(1).await;
-    });
     let asked = p.asked_with();
-    assert_eq!(asked.len(), 1, "the allowed call was asked about");
-    let shown = asked[0]
+    assert_eq!(asked.len(), 2, "the peek and the command: {asked:?}");
+    let question = |summary: &str| {
+        asked
+            .iter()
+            .find(|asked| asked.summary == summary)
+            .unwrap_or_else(|| panic!("{summary} was asked about: {asked:?}"))
+    };
+    let shown = question("peek p")
         .hooks
         .clone()
         .expect("the question shows its hooks");
@@ -673,30 +685,13 @@ fn tool_before_hooks_deny_or_ask_on_top_of_the_policy_and_run_together() {
         [format!("The hook `look-first` asks: {one_line}")]
     );
     assert_eq!(shown.replaced, None);
-    assert_eq!(p.count("end write a2"), 1, "allowed, it ran");
-
-    // `allow` never lifts the policy's question: the call is asked about as
-    // the policy said, and the question shows no hook.
-    let p = h.part();
-    hooks.add(
-        FakeHook::on("yes", HookEvent::ToolBefore)
-            .replies([answer(json!({"decision": "allow", "reason": "fine by me"}))]),
+    assert_eq!(p.count("end peek p"), 1, "allowed, it ran");
+    assert_eq!(
+        question("shell s").hooks,
+        None,
+        "an allow puts nothing in it"
     );
-    rig.policy.decide_for("write", Decision::Ask);
-    rig.policy.answer_for(
-        "write",
-        Verdict::Deny {
-            note: Some("not now".to_owned()),
-        },
-    );
-    world.run(async {
-        rig.prompt("go");
-        p.turns(1).await;
-    });
-    let asked = p.asked_with();
-    assert_eq!(asked.len(), 1, "the policy's question was put");
-    assert_eq!(asked[0].hooks, None, "an allow puts nothing in it");
-    assert_eq!(p.count("start write a3"), 0);
+    assert_eq!(p.count("start shell s"), 0);
 
     // A call the policy denied or stopped is not shown to hooks.
     let p = h.part();
@@ -1017,9 +1012,10 @@ fn a_replacement_the_user_the_policy_or_the_core_refuses_does_not_run() {
     let h = hooked(
         "hook_replace_refused",
         [
-            calls(&[("c1", "write", json!({"path": "a"}))]),
-            says("Done."),
-            calls(&[("c2", "write", json!({"path": "a2"}))]),
+            calls(&[
+                ("c1", "write", json!({"path": "a"})),
+                ("c2", "write", json!({"path": "a2"})),
+            ]),
             says("Done."),
             calls(&[("c3", "write", json!({"path": "a3"}))]),
             calls(&[("c4", "write", json!({"path": "a4"}))]),
@@ -1032,63 +1028,80 @@ fn a_replacement_the_user_the_policy_or_the_core_refuses_does_not_run() {
     );
     let (world, rig, hooks) = (&h.world, &h.rig, &h.hooks);
 
-    // The user refuses it.
+    // Two writes, which the hook gives a replacement each, in whatever
+    // order it ran: the policy denies one, which stands and is not put to
+    // the user, nor checked; the user refuses the other.
     let p = h.part();
-    hooks.add(
-        FakeHook::on("elsewhere", HookEvent::ToolBefore)
-            .replies([answer(json!({"arguments": {"path": "b"}}))]),
-    );
+    hooks.add(FakeHook::on("elsewhere", HookEvent::ToolBefore).replies([
+        answer(json!({"arguments": {"path": "b"}})),
+        answer(json!({"arguments": {"path": "b2"}})),
+    ]));
     rig.policy.answer_for("write", Verdict::Deny { note: None });
+    rig.policy.decide_for(
+        "write b2",
+        Decision::Deny {
+            reason: Some("b2 is out of bounds".to_owned()),
+        },
+    );
     world.run(async {
         rig.prompt("go");
         p.turns(1).await;
     });
-    assert_eq!(p.count("start write b"), 0);
-    let result = &p.results()[0];
-    assert_eq!(result.outcome, ToolOutcome::Denied);
-    assert!(text(result).contains("The hook `elsewhere`"));
-    assert!(text(result).contains("The user did not allow this call."));
-
-    // The policy denies it, or stops the turn over it: it stands, and it is
-    // not put to the user.
-    for (stops, path) in [(false, "b2"), (true, "b3")] {
-        let p = h.part();
-        hooks.add(
-            FakeHook::on("elsewhere", HookEvent::ToolBefore)
-                .replies([answer(json!({"arguments": {"path": path}}))]),
-        );
-        let decision = if stops {
-            Decision::Stop {
-                reason: format!("{path} is out of bounds"),
-            }
+    assert_eq!(p.started("start write"), 0, "{:?}", p.lines());
+    assert_eq!(p.asked(), ["write b"], "the one the policy did not deny");
+    assert_eq!(p.checked(), ["write b"], "a refusal needs no check");
+    let results = p.results();
+    assert!(
+        results
+            .iter()
+            .all(|result| result.outcome == ToolOutcome::Denied),
+        "{results:?}"
+    );
+    let said: Vec<String> = results.iter().map(text).collect();
+    one_each(
+        &said,
+        &["The user did not allow this call.", "b2 is out of bounds"],
+    );
+    for said in &said {
+        if said.contains("b2 is out of bounds") {
+            assert!(
+                said.contains("`elsewhere` replaced its arguments"),
+                "{said}"
+            );
         } else {
-            Decision::Deny {
-                reason: Some(format!("{path} is out of bounds")),
-            }
-        };
-        rig.policy.decide_for(&format!("write {path}"), decision);
-        world.run(async {
-            rig.prompt("go");
-            p.turns(1).await;
-        });
-        assert!(p.asked().is_empty(), "stops: {stops}");
-        assert!(p.checked().is_empty(), "a refusal needs no check");
-        assert_eq!(p.started("start write"), 0);
-        let result = &p.results()[0];
-        assert_eq!(result.outcome, ToolOutcome::Denied);
-        assert!(
-            text(result).contains(&format!("{path} is out of bounds")),
-            "{}",
-            text(result)
-        );
-        let outcome = &p.ends()[0].outcome;
-        if stops {
-            assert_eq!(*outcome, TurnOutcome::Denied);
-        } else {
-            assert!(text(result).contains("`elsewhere` replaced its arguments"));
-            assert_eq!(*outcome, TurnOutcome::Completed);
+            assert!(said.contains("The hook `elsewhere`"), "{said}");
         }
     }
+    assert_eq!(p.ends()[0].outcome, TurnOutcome::Completed);
+
+    // The policy stops the turn over it: it stands, and is not put to the
+    // user.
+    let p = h.part();
+    hooks.add(
+        FakeHook::on("elsewhere", HookEvent::ToolBefore)
+            .replies([answer(json!({"arguments": {"path": "b3"}}))]),
+    );
+    rig.policy.decide_for(
+        "write b3",
+        Decision::Stop {
+            reason: "b3 is out of bounds".to_owned(),
+        },
+    );
+    world.run(async {
+        rig.prompt("go");
+        p.turns(1).await;
+    });
+    assert!(p.asked().is_empty());
+    assert!(p.checked().is_empty(), "a refusal needs no check");
+    assert_eq!(p.started("start write"), 0);
+    let result = &p.results()[0];
+    assert_eq!(result.outcome, ToolOutcome::Denied);
+    assert!(
+        text(result).contains("b3 is out of bounds"),
+        "{}",
+        text(result)
+    );
+    assert_eq!(p.ends()[0].outcome, TurnOutcome::Denied);
 
     // A replacement whose plan the core refuses (one that would write a
     // protected path) is refused before anyone is asked.
@@ -1139,121 +1152,125 @@ fn a_replacement_the_user_the_policy_or_the_core_refuses_does_not_run() {
 /// plans it; for `tool_call`, one that names another tool (one that keeps
 /// the tool it names is put to the user as any other); two hooks' that
 /// both replace the arguments, which then run with neither; and one larger
-/// than the cap, before it is put in a question or an item.
+/// than the cap, before it is put in a question or an item. The calls of a
+/// turn here are hooked together, so each is read in whatever order their
+/// hooks ran.
 #[test]
 fn a_replacement_of_the_wrong_shape_is_refused_before_anyone_is_asked() {
-    let tool_call = |id: &str| {
-        calls(&[(
-            id,
-            "tool_call",
-            json!({"tool": "tracker/find", "arguments": {}}),
-        )])
-    };
+    let find = || json!({"tool": "tracker/find", "arguments": {}});
     let h = hooked_with(
         "hook_replace_shape",
         [
-            calls(&[("c1", "write", json!({"path": "a"}))]),
+            calls(&[
+                ("c1", "write", json!({"path": "a"})),
+                ("c2", "write", json!({"path": "a2"})),
+            ]),
             says("Done."),
-            calls(&[("c2", "write", json!({"path": "a2"}))]),
+            calls(&[("c3", "tool_call", find()), ("c4", "tool_call", find())]),
             says("Done."),
-            tool_call("c3"),
-            says("Done."),
-            tool_call("c4"),
-            says("Done."),
-            calls(&[("c5", "write", json!({"path": "a5"}))]),
-            says("Done."),
-            calls(&[("c6", "write", json!({"path": "a6"}))]),
+            calls(&[
+                ("c5", "write", json!({"path": "a5"})),
+                ("c6", "plain", json!({"id": "q"})),
+            ]),
             says("Done."),
         ],
         |world, setup| setup.toolbox = Some(with_tool_call(world)),
     );
     let (world, rig, hooks) = (&h.world, &h.rig, &h.hooks);
 
-    for (replacement, says_why) in [
-        (json!("not an object"), "do not fit the tool's schema"),
-        (json!({"bad": true}), "ones its tool refuses"),
-    ] {
-        let p = h.part();
-        hooks.add(
-            FakeHook::on("odd", HookEvent::ToolBefore)
-                .replies([answer(json!({"arguments": replacement}))]),
-        );
-        world.run(async {
-            rig.prompt("go");
-            p.turns(1).await;
-        });
-        let result = &p.results()[0];
-        assert_eq!(result.outcome, ToolOutcome::Denied, "{replacement}");
-        assert!(text(result).contains(says_why), "{}", text(result));
-        assert!(p.asked().is_empty());
-        assert_eq!(p.decided().len(), 1, "not decided: {:?}", p.decided());
-    }
-
-    for (replacement, refused) in [
-        (json!({"tool": "tracker/delete", "arguments": {}}), true),
-        (
-            json!({"tool": "tracker/find", "arguments": {"q": "x"}}),
-            false,
-        ),
-    ] {
-        let p = h.part();
-        // A filter on the tool a `tool_call` names matches it.
-        let hook = hooks.add(
-            FakeHook::on("narrow", HookEvent::ToolBefore)
-                .tool("tracker/find")
-                .replies([answer(json!({"arguments": replacement}))]),
-        );
-        rig.policy.answer_all(Verdict::Allow);
-        world.run(async {
-            rig.prompt("go");
-            p.turns(1).await;
-        });
-        assert_eq!(hook.inputs().len(), 1);
-        let result = &p.results()[0];
-        if refused {
-            assert_eq!(result.outcome, ToolOutcome::Denied);
-            assert!(text(result).contains("call another tool (`tracker/delete`)"));
-            assert!(p.asked().is_empty());
-        } else {
-            assert_eq!(result.outcome, ToolOutcome::Success);
-            assert_eq!(p.asked().len(), 1);
-        }
-    }
-
-    // Two hooks that both replace the arguments.
+    // Not the tool's schema, and not what its tool plans.
     let p = h.part();
-    hooks.add(
-        FakeHook::on("to-b", HookEvent::ToolBefore)
-            .replies([answer(json!({"arguments": {"path": "b"}}))]),
-    );
-    hooks.add(
-        FakeHook::on("to-c", HookEvent::ToolBefore)
-            .replies([answer(json!({"arguments": {"path": "c"}}))]),
-    );
+    hooks.add(FakeHook::on("odd", HookEvent::ToolBefore).replies([
+        answer(json!({"arguments": "not an object"})),
+        answer(json!({"arguments": {"bad": true}})),
+    ]));
     world.run(async {
         rig.prompt("go");
         p.turns(1).await;
     });
-    assert_eq!(p.started("start write"), 0);
-    let result = &p.results()[0];
-    assert_eq!(result.outcome, ToolOutcome::Denied);
-    assert!(text(result).contains("`to-b` and `to-c` each replaced its arguments"));
+    let results = p.results();
+    assert!(
+        results
+            .iter()
+            .all(|result| result.outcome == ToolOutcome::Denied),
+        "{results:?}"
+    );
+    one_each(
+        &results.iter().map(text).collect::<Vec<_>>(),
+        &["do not fit the tool's schema", "ones its tool refuses"],
+    );
     assert!(p.asked().is_empty());
+    assert_eq!(p.decided().len(), 2, "not decided again: {:?}", p.decided());
 
-    // Larger than the cap.
+    // For `tool_call`, another tool, and the same one. A filter on the
+    // tool a `tool_call` names matches it.
     let p = h.part();
+    let hook = hooks.add(
+        FakeHook::on("narrow", HookEvent::ToolBefore)
+            .tool("tracker/find")
+            .replies([
+                answer(json!({"arguments": {"tool": "tracker/delete", "arguments": {}}})),
+                answer(json!({"arguments": {"tool": "tracker/find", "arguments": {"q": "x"}}})),
+            ]),
+    );
+    rig.policy.answer_all(Verdict::Allow);
+    world.run(async {
+        rig.prompt("go");
+        p.turns(1).await;
+    });
+    assert_eq!(hook.inputs().len(), 2);
+    let results = p.results();
+    let denied: Vec<String> = results
+        .iter()
+        .filter(|result| result.outcome == ToolOutcome::Denied)
+        .map(text)
+        .collect();
+    assert_eq!(denied.len(), 1, "{results:?}");
+    assert!(
+        denied[0].contains("call another tool (`tracker/delete`)"),
+        "{}",
+        denied[0]
+    );
+    let ran = results
+        .iter()
+        .filter(|result| result.outcome == ToolOutcome::Success)
+        .count();
+    assert_eq!(ran, 1, "the one that keeps its tool ran: {results:?}");
+    assert_eq!(p.asked().len(), 1, "and was put to the user");
+
+    // Two hooks that both replace a write's arguments, and a replacement
+    // larger than the cap.
+    let p = h.part();
+    for (name, path) in [("to-b", "b"), ("to-c", "c")] {
+        hooks.add(
+            FakeHook::on(name, HookEvent::ToolBefore)
+                .tool("write")
+                .replies([answer(json!({"arguments": {"path": path}}))]),
+        );
+    }
     hooks.add(
-        FakeHook::on("bloat", HookEvent::ToolBefore).replies([answer(json!({
-            "arguments": {"path": "b", "pad": "x".repeat(cineris_agent::hooks::ARGUMENTS_CAP)}
-        }))]),
+        FakeHook::on("bloat", HookEvent::ToolBefore)
+            .tool("plain")
+            .replies([answer(json!({
+                "arguments": {"id": "x".repeat(cineris_agent::hooks::ARGUMENTS_CAP)}
+            }))]),
     );
     world.run(async {
         rig.prompt("go");
         p.turns(1).await;
     });
-    let result = &p.results()[0];
-    assert_eq!(result.outcome, ToolOutcome::Denied);
-    assert!(text(result).contains("more than the"), "{}", text(result));
+    assert_eq!(p.started("start "), 0, "neither ran: {:?}", p.lines());
+    let of = |id: &str| {
+        p.results()
+            .into_iter()
+            .find(|result| result.call_id.as_str() == id)
+            .expect("its result")
+    };
+    let (write, plain) = (of("c5"), of("c6"));
+    assert_eq!(write.outcome, ToolOutcome::Denied);
+    assert!(text(&write).contains("`to-b` and `to-c` each replaced its arguments"));
+    assert_eq!(plain.outcome, ToolOutcome::Denied);
+    assert!(text(&plain).contains("more than the"), "{}", text(&plain));
     assert!(p.asked().is_empty());
 }
 
@@ -1263,7 +1280,8 @@ fn a_replacement_of_the_wrong_shape_is_refused_before_anyone_is_asked() {
 /// fails, when it answers outside its contract (a field the event does not
 /// take, a decision it does not know), and when it does not answer within
 /// its time, on the session's timer: 5 s by default, and 60 s at most
-/// whatever it names.
+/// whatever it names. The calls of a turn here are hooked together, so
+/// each is read in whatever order their hooks ran.
 #[test]
 fn a_tool_before_hook_that_fails_or_does_not_answer_in_its_time_refuses_the_call() {
     let broken = [
@@ -1276,47 +1294,89 @@ fn a_tool_before_hook_that_fails_or_does_not_answer_in_its_time_refuses_the_call
         (answer(json!({"decision": "allow", "later": 1})), "`later`"),
         (answer(json!(["deny"])), "not a JSON object"),
     ];
-    let stuck = [(None, 5), (Some(120), 60), (Some(2), 2)];
-    let h = hooked("hook_fails", writes(broken.len() + stuck.len()));
+    let each: Vec<(String, Json)> = (0..broken.len())
+        .map(|n| (format!("c{n}"), json!({"path": format!("a{n}")})))
+        .collect();
+    let writes: Vec<(&str, &str, Json)> = each
+        .iter()
+        .map(|(id, arguments)| (id.as_str(), "write", arguments.clone()))
+        .collect();
+    let h = hooked(
+        "hook_fails",
+        [
+            calls(&writes),
+            says("Done."),
+            calls(&[
+                ("c5", "write", json!({"path": "a5"})),
+                ("c6", "read", json!({"path": "r"})),
+                ("c7", "peek", json!({"path": "p"})),
+            ]),
+            says("Done."),
+        ],
+    );
     let (world, rig, hooks, timer) = (&h.world, &h.rig, &h.hooks, &h.timer);
-    let mut n = 0;
-    for (reply, named) in broken {
-        let p = h.part();
-        hooks.add(FakeHook::on("broken", HookEvent::ToolBefore).replies([reply]));
-        world.run(async {
-            rig.prompt("go");
-            p.turns(1).await;
-        });
-        assert_eq!(p.count(&format!("start write a{n}")), 0, "{named}");
-        let said = text(&p.results()[0]);
-        assert!(said.contains("the hook `broken` failed"), "{said}");
-        assert!(said.contains(named), "{said}");
-        n += 1;
-    }
-    for (named, waited) in stuck {
-        let p = h.part();
-        let mut hook = FakeHook::on("stuck", HookEvent::ToolBefore).replies([Reply::Never]);
+
+    // Five writes, and the hook fails or breaks its contract a different
+    // way on each.
+    let p = h.part();
+    let (replies, named): (Vec<Reply>, Vec<&str>) = broken.into_iter().unzip();
+    hooks.add(FakeHook::on("broken", HookEvent::ToolBefore).replies(replies));
+    world.run(async {
+        rig.prompt("go");
+        p.turns(1).await;
+    });
+    assert_eq!(p.started("start write"), 0, "{:?}", p.lines());
+    let said: Vec<String> = p.results().iter().map(text).collect();
+    assert!(
+        said.iter()
+            .all(|said| said.contains("the hook `broken` failed")),
+        "{said:#?}"
+    );
+    one_each(&said, &named);
+
+    // Three hooks that never answer, each on a call of its own: given 5 s
+    // by default, 60 s at most whatever one names, and 2 s as one names.
+    let p = h.part();
+    let stuck = [
+        ("write", None, 5),
+        ("read", Some(120), 60),
+        ("peek", Some(2), 2),
+    ];
+    for (tool, named, _) in stuck {
+        let mut hook = FakeHook::on(&format!("stuck-{tool}"), HookEvent::ToolBefore)
+            .tool(tool)
+            .replies([Reply::Never]);
         if let Some(named) = named {
             hook = hook.timeout(Duration::from_secs(named));
         }
-        let hook = hooks.add(hook);
-        let waited = Duration::from_secs(waited);
-        world.run(async {
-            rig.prompt("go");
-            hook.runs(1).await;
-            assert!(soon(|| !timer.running().is_empty()).await, "{named:?}");
-            assert_eq!(timer.running(), [waited], "{named:?}");
-            timer.advance(waited);
-            p.turns(1).await;
-        });
-        let said = text(&p.results()[0]);
+        hooks.add(hook);
+    }
+    world.run(async {
+        rig.prompt("go");
         assert!(
-            said.contains(&format!("did not answer within {} s", waited.as_secs())),
+            soon(|| timer.running().len() == 3).await,
+            "{:?}",
+            timer.running()
+        );
+        let mut running = timer.running();
+        running.sort();
+        assert_eq!(running, [2, 5, 60].map(Duration::from_secs));
+        timer.advance(Duration::from_secs(60));
+        p.turns(1).await;
+    });
+    for (tool, _, waited) in stuck {
+        let result = p
+            .results()
+            .into_iter()
+            .find(|result| result.tool == tool)
+            .expect("its result");
+        let said = text(&result);
+        assert!(
+            said.contains(&format!("did not answer within {waited} s")),
             "{said}"
         );
-        assert_eq!(p.count(&format!("start write a{n}")), 0);
-        n += 1;
     }
+    assert_eq!(p.started("start "), 0, "none ran: {:?}", p.lines());
 }
 
 /// An observer is never waited for and its answer is not read: the call
@@ -1341,9 +1401,12 @@ fn an_observer_is_never_waited_for_and_runs_a_few_at_a_time_until_its_session_cl
     let h = hooked(
         "hook_observer",
         [
-            reads(&["a", "b"]),
-            says("Done."),
-            reads(&["a2", "b2"]),
+            calls(&[
+                ("c-a", "read", json!({"path": "a"})),
+                ("c-b", "read", json!({"path": "b"})),
+                ("c-c", "peek", json!({"path": "c"})),
+                ("c-d", "peek", json!({"path": "d"})),
+            ]),
             says("Done."),
             reads(&["f0", "f1", "f2", "f3", "f4", "f5"]),
             says("Done."),
@@ -1354,43 +1417,52 @@ fn an_observer_is_never_waited_for_and_runs_a_few_at_a_time_until_its_session_cl
         ],
     );
     let (world, rig, hooks, timer) = (&h.world, &h.rig, &h.hooks, &h.timer);
-    for (named, given, paths) in [(None, 60, ["a", "b"]), (Some(3_600), 600, ["a2", "b2"])] {
-        let p = h.part();
-        // Two reads: nothing either does is a change, so neither is decided
-        // again, and the observer is run once for each. Whichever call
-        // comes to it first, the observer never answers it, and refuses the
-        // other.
-        let mut watching = FakeHook::on("watching", HookEvent::ToolBefore)
+
+    // Two observers, each on two calls that only read: nothing either does
+    // is a change, so neither is decided again, and each observer is run
+    // once for each. Whichever call comes to it first, an observer never
+    // answers it, and refuses the other. One is given 60 s, by default;
+    // the other names an hour, and is given 10 minutes.
+    let p = h.part();
+    let mut watching = Vec::new();
+    for (name, tool, named) in [
+        ("watching", "read", None),
+        ("glancing", "peek", Some(3_600)),
+    ] {
+        let mut hook = FakeHook::on(name, HookEvent::ToolBefore)
             .observing()
-            .tool("read")
+            .tool(tool)
             .replies([Reply::Never, answer(json!({"decision": "deny"}))]);
         if let Some(named) = named {
-            watching = watching.timeout(Duration::from_secs(named));
+            hook = hook.timeout(Duration::from_secs(named));
         }
-        let watching = hooks.add(watching);
-        let given = Duration::from_secs(given);
-        world.run(async {
-            rig.prompt("go");
-            // Neither read waits for it.
-            assert!(
-                soon(|| p.ended() == 1).await,
-                "the turn waited for an observer"
-            );
-            assert_eq!(timer.running(), [given], "the first still runs");
-            timer.advance(given);
-            crate::settle().await;
-        });
-        assert_eq!(watching.inputs().len(), 2);
-        for path in paths {
-            assert_eq!(
-                p.count(&format!("end read {path}")),
-                1,
-                "its deny was not read"
-            );
-        }
-        assert!(p.asked().is_empty());
-        assert!(timer.running().is_empty(), "stopped at its time");
+        watching.push(hooks.add(hook));
     }
+    world.run(async {
+        rig.prompt("go");
+        // No call waits for them.
+        assert!(
+            soon(|| p.ended() == 1).await,
+            "the turn waited for an observer"
+        );
+        let mut running = timer.running();
+        running.sort();
+        assert_eq!(
+            running,
+            [60, 600].map(Duration::from_secs),
+            "the first run of each still runs"
+        );
+        timer.advance(Duration::from_secs(600));
+        crate::settle().await;
+    });
+    for hook in &watching {
+        assert_eq!(hook.inputs().len(), 2, "{}", hook.name);
+    }
+    for line in ["end read a", "end read b", "end peek c", "end peek d"] {
+        assert_eq!(p.count(line), 1, "{line}: its deny was not read");
+    }
+    assert!(p.asked().is_empty());
+    assert!(timer.running().is_empty(), "stopped at its time");
 
     // A few at once: six reads, and the observer never answers.
     let p = h.part();
@@ -1966,7 +2038,9 @@ fn a_tool_after_hooks_note_ends_the_result_under_a_line_naming_it() {
 
 /// On `tool.after`, a hook that fails, does not answer in its time, or
 /// answers outside its contract (a decision, a reason) is shown to the
-/// user and adds nothing: the call keeps its own result.
+/// user and adds nothing: the call keeps its own result. Four reads, one
+/// way of failing each: their hooks run together, so each is read in
+/// whatever order they ran.
 #[test]
 fn a_tool_after_hook_that_fails_is_shown_and_adds_nothing() {
     let cases = [
@@ -1975,39 +2049,49 @@ fn a_tool_after_hook_that_fails_is_shown_and_adds_nothing() {
         (answer(json!({"reason": "x"})), "`reason`"),
         (Reply::Never, "did not answer within 5 s"),
     ];
-    let responses = (0..cases.len()).flat_map(|n| {
-        let id = format!("c{n}");
-        [
-            calls(&[(id.as_str(), "read", json!({"path": format!("a{n}")}))]),
-            says("Done."),
-        ]
-    });
-    let h = hooked("hook_after_fails", responses);
-    let (world, rig, hooks, timer) = (&h.world, &h.rig, &h.hooks, &h.timer);
-    for (n, (reply, named)) in cases.into_iter().enumerate() {
-        let p = h.part();
-        let stuck = matches!(reply, Reply::Never);
-        let hook = hooks.add(FakeHook::on("lint", HookEvent::ToolAfter).replies([reply]));
-        world.run(async {
-            rig.prompt("go");
-            if stuck {
-                hook.runs(1).await;
-                assert!(soon(|| timer.running() == [Duration::from_secs(5)]).await);
-                timer.advance(Duration::from_secs(5));
-            }
-            p.turns(1).await;
-        });
-        let result = &p.results()[0];
-        assert_eq!(result.outcome, ToolOutcome::Success, "{named}");
-        assert_eq!(text(result), format!("read a{n} ok"), "nothing was added");
-        let infos = p.infos();
-        assert_eq!(infos.len(), 1, "{infos:?}");
+    let each: Vec<(String, Json)> = (0..cases.len())
+        .map(|n| (format!("c{n}"), json!({"path": format!("a{n}")})))
+        .collect();
+    let reads: Vec<(&str, &str, Json)> = each
+        .iter()
+        .map(|(id, arguments)| (id.as_str(), "read", arguments.clone()))
+        .collect();
+    let Hooked {
+        world,
+        rig,
+        hooks,
+        timer,
+    } = hooked("hook_after_fails", [calls(&reads), says("Done.")]);
+    let (replies, named): (Vec<Reply>, Vec<&str>) = cases.into_iter().unzip();
+    let hook = hooks.add(FakeHook::on("lint", HookEvent::ToolAfter).replies(replies));
+    world.run(async {
+        rig.prompt("go");
+        hook.runs(named.len()).await;
         assert!(
-            infos[0].starts_with("The hook `lint` failed on `tool.after`"),
-            "{infos:?}"
+            soon(|| timer.running() == [Duration::from_secs(5)]).await,
+            "{:?}",
+            timer.running()
         );
-        assert!(infos[0].contains(named), "{infos:?}");
+        timer.advance(Duration::from_secs(5));
+        rig.events.turns(1).await;
+    });
+    for result in results(&rig) {
+        let path = result.call_id.as_str().replacen('c', "a", 1);
+        assert_eq!(result.outcome, ToolOutcome::Success, "{path}");
+        assert_eq!(
+            text(&result),
+            format!("read {path} ok"),
+            "nothing was added"
+        );
     }
+    let infos = infos(&rig);
+    assert!(
+        infos
+            .iter()
+            .all(|info| info.starts_with("The hook `lint` failed on `tool.after`")),
+        "{infos:#?}"
+    );
+    one_each(&infos, &named);
 }
 
 /// A `turn.end` hook's text is a notice for the next turn, given at its
