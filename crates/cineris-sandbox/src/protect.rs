@@ -202,6 +202,20 @@ impl Watch {
         self
     }
 
+    /// The same watch with `more` protected paths on its fixed list, each
+    /// with everything under it: what the repository's configuration names
+    /// for git to run from, such as the folder `core.hooksPath` names (the
+    /// third security fix). One already on the list is not added again.
+    #[must_use]
+    pub fn with_more(mut self, more: impl IntoIterator<Item = PathBuf>) -> Self {
+        for path in more {
+            if !self.fixed.contains(&path) {
+                self.fixed.push(path);
+            }
+        }
+        self
+    }
+
     /// Looks at every protected path now. It blocks, for at most the time
     /// the limits give.
     #[must_use]

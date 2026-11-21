@@ -561,17 +561,20 @@ fn sys_past_its_bound_the_look_at_protected_paths_warns_and_does_not_stop() {
     });
 }
 
+/// The workspace, and its temporary folder, cannot be left out of the
+/// grant: a workspace that holds the harness's own files (here the program
+/// started as the launcher) still turns the sandbox off for the session,
+/// and says why (step 26; what is still true since the third security fix,
+/// which leaves out a `sandbox.write` entry that does instead:
+/// [`a_write_entry_that_holds_the_harness_files_is_left_out_and_the_sandbox_stays_on`]).
 #[test]
 fn a_workspace_that_holds_the_harness_files_is_not_confined() {
     let world = World::new("own_files", []);
-    // A write root that holds the home directory holds the harness's
-    // configuration, state and data too.
-    world.user_config(&format!(
-        "[sandbox]\nwrite = [\"{}\"]\n",
-        world.home.display().to_string().replace('\\', "\\\\")
-    ));
+    let program = world.workspace.join("tools").join("cineris");
+    std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+    std::fs::write(&program, "the launcher").unwrap();
     let core = world.core_with(|options| {
-        options.launcher = Some(launcher());
+        options.launcher = Some((program.clone(), Vec::new()));
         options.sandbox = Some(Support::Landlock(8));
     });
     world.run(async {
@@ -983,22 +986,256 @@ fn sys_a_link_a_command_planted_is_put_back_and_nothing_is_written_through_it() 
     });
 }
 
+/// A `sandbox.write` entry as the configuration file writes it.
+fn write_entry(path: &std::path::Path) -> String {
+    path.display().to_string().replace('\\', "\\\\")
+}
+
+/// A `sandbox.write` entry that holds the harness's own files is left out
+/// of the grant, with a notice that names it, and the session keeps the
+/// sandbox enforcing (the third security fix; `outstanding`'s
+/// `a-projects-write-root-holding-the-harness-files-turns-the-sandbox-off`;
+/// decision 0042). Before it, each of these turned the sandbox off for the
+/// whole session (step 26's second review and its findings 9 and 1). One
+/// world and a core for each case, folded for Windows' tier 2:
+/// - the user's own entry `~`, which holds the configuration, state and
+///   data directories;
+/// - the user's own entry `~/.cargo`, with the launcher in `~/.cargo/bin`;
+/// - the user's own entry inside the configuration directory;
+/// - a trusted project's own entry `~/.cargo`, with the launcher there: the
+///   open item's case, where a project's file switched the sandbox off;
+/// - on Unix, a dotfiles folder that the user's configuration file is a
+///   link into.
 #[test]
-fn a_write_root_that_holds_the_launcher_is_not_confined() {
-    let world = World::new("launcher_writable", []);
-    let (program, _) = launcher();
-    let directory = program.parent().expect("the test binary is in a directory");
-    world.user_config(&format!(
-        "[sandbox]\nwrite = [\"{}\"]\n",
-        directory.display().to_string().replace('\\', "\\\\")
-    ));
+fn a_write_entry_that_holds_the_harness_files_is_left_out_and_the_sandbox_stays_on() {
+    #[derive(Clone, Copy)]
+    enum Case {
+        Home,
+        Launcher,
+        InsideConfig,
+        ProjectsLauncher,
+        LinkedConfig,
+    }
+    let cases: &[Case] = if cfg!(unix) {
+        &[
+            Case::Home,
+            Case::Launcher,
+            Case::InsideConfig,
+            Case::ProjectsLauncher,
+            Case::LinkedConfig,
+        ]
+    } else {
+        &[
+            Case::Home,
+            Case::Launcher,
+            Case::InsideConfig,
+            Case::ProjectsLauncher,
+        ]
+    };
+    for (index, case) in cases.iter().enumerate() {
+        let world = World::new(&format!("left_out_{index}"), []);
+        let program = world.home.join(".cargo").join("bin").join("cineris");
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, "the launcher").unwrap();
+        let (entry, shown) = match case {
+            Case::Home => ("~".to_owned(), "`~`".to_owned()),
+            Case::Launcher | Case::ProjectsLauncher => {
+                ("~/.cargo".to_owned(), "`~/.cargo`".to_owned())
+            }
+            Case::InsideConfig => {
+                let inside = world
+                    .dirs()
+                    .config
+                    .expect("a configuration directory")
+                    .join("inside");
+                std::fs::create_dir_all(&inside).unwrap();
+                (write_entry(&inside), "inside`".to_owned())
+            }
+            Case::LinkedConfig => {
+                let dotfiles = world.dir.join("dotfiles");
+                std::fs::create_dir_all(&dotfiles).unwrap();
+                (write_entry(&dotfiles), "dotfiles`".to_owned())
+            }
+        };
+        let sandbox = format!("[sandbox]\nwrite = [\"{entry}\"]\n");
+        if matches!(case, Case::ProjectsLauncher) {
+            world.project_config(&sandbox);
+        } else {
+            world.user_config(&sandbox);
+        }
+        #[cfg(unix)]
+        if matches!(case, Case::LinkedConfig) {
+            let named = world.dirs().user_config.expect("a configuration file");
+            let target = world.dir.join("dotfiles").join("config.toml");
+            std::fs::rename(&named, &target).unwrap();
+            std::os::unix::fs::symlink(&target, &named).unwrap();
+        }
+        let core = world.core_with(|options| {
+            options.launcher = Some((program.clone(), Vec::new()));
+            options.sandbox = Some(Support::Landlock(8));
+            options.trust_project = true;
+        });
+        world.run(async {
+            let front = Front::start_as(
+                &world,
+                &core,
+                cineris_core::ClientInfo::user(),
+                at(Level::Autonomous),
+            )
+            .await
+            .expect("the session starts at autonomous: the sandbox enforces");
+            assert_eq!(front.state.sandbox, SandboxStatus::Enforcing, "{entry}");
+            let notices = notices_until(&front, |notice| notice.contains("is left out")).await;
+            let said = notices
+                .iter()
+                .find(|notice| notice.contains("is left out"))
+                .unwrap();
+            assert!(
+                said.starts_with("`sandbox.write` names `")
+                    && said.contains(&shown)
+                    && said.contains("the sandbox stays on"),
+                "{entry}: {said}"
+            );
+            front.close().await;
+        });
+    }
+}
+
+/// Where the sandbox does not enforce (here a kernel without Landlock, as on
+/// Windows), nothing is confined for an entry to undo: nothing is left out,
+/// and nothing is said of it, as before the third security fix.
+#[test]
+fn where_the_sandbox_does_not_enforce_no_write_entry_is_left_out() {
+    let world = World::new("left_out_not_enforcing", []);
+    world.user_config("[sandbox]\nwrite = [\"~\"]\n");
     let core = world.core_with(|options| {
         options.launcher = Some(launcher());
-        options.sandbox = Some(Support::Landlock(8));
+        options.sandbox = Some(Support::NoLandlock);
     });
     world.run(async {
         let front = Front::start(&world, &core).await;
         assert_eq!(front.state.sandbox, SandboxStatus::Off);
+        let notices = notices_until(&front, |notice| notice.contains("Landlock")).await;
+        assert!(
+            !notices.iter().any(|notice| notice.contains("is left out")),
+            "{notices:?}"
+        );
+        front.close().await;
+    });
+}
+
+/// A reload that adds a `sandbox.write` entry holding the harness's own
+/// files leaves that entry out, says so, and applies the rest: the session
+/// keeps the sandbox enforcing (the third security fix; before it the
+/// reload was refused whole, `harness_files_writable`).
+#[test]
+fn a_reload_that_adds_a_write_entry_holding_the_harness_files_leaves_it_out() {
+    let world = World::new("left_out_reload", []);
+    let program = world.home.join(".cargo").join("bin").join("cineris");
+    std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+    std::fs::write(&program, "the launcher").unwrap();
+    let core = world.core_with(|options| {
+        options.launcher = Some((program.clone(), Vec::new()));
+        options.sandbox = Some(Support::Landlock(8));
+    });
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        world.user_config("[sandbox]\nwrite = [\"~/.cargo\", \"build\"]\n");
+        let reloaded = front
+            .op(Op::ConfigReload(
+                cineris_protocol::methods::ConfigReloadParams::default(),
+            ))
+            .await
+            .expect("the reload answers");
+        let OpResult::ConfigReload(reloaded) = reloaded else {
+            panic!("not the result of config/reload");
+        };
+        assert!(reloaded.errors.is_empty(), "{reloaded:?}");
+        assert!(
+            reloaded.applied.iter().any(|key| key == "sandbox.write"),
+            "{reloaded:?}"
+        );
+        let notices = notices_until(&front, |notice| notice.contains("is left out")).await;
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("`~/.cargo`") && notice.contains("is left out")),
+            "{notices:?}"
+        );
+        front.close().await;
+    });
+}
+
+/// The open item's case end to end, where the sandbox enforces: of two
+/// `sandbox.write` entries, the one inside the harness's configuration
+/// directory is left out and the other granted. A confined command writes
+/// in the second and is refused in the first, which a session that turned
+/// the sandbox off (before the third security fix) would have let it
+/// write.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_write_entry_left_out_grants_nothing_and_the_rest_is_granted() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("left_out_grant", []);
+    let inside = world
+        .dirs()
+        .config
+        .expect("a configuration directory")
+        .join("inside");
+    let extra = world.dir.join("extra");
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::create_dir_all(&extra).unwrap();
+    world.user_config(&format!(
+        "[sandbox]\nwrite = [\"{}\", \"{}\"]\n",
+        write_entry(&inside),
+        write_entry(&extra)
+    ));
+    // A script, so that the line names neither folder: the engine refuses a
+    // line that names the harness's own files before the sandbox is reached.
+    world.put(
+        "act.sh",
+        format!(
+            "echo g > '{}/g'\necho f > '{}/f'\n",
+            extra.display(),
+            inside.display()
+        ),
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh act.sh"}))]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        assert_eq!(front.state.sandbox, SandboxStatus::Enforcing);
+        front.turn_allowing("write both").await;
+        let results = front.results();
+        assert_eq!(
+            std::fs::read_to_string(extra.join("g")).ok().as_deref(),
+            Some("g\n"),
+            "the entry kept was not granted: {results:?}"
+        );
+        assert!(
+            !inside.join("f").exists(),
+            "a confined command wrote in an entry that holds the harness's files: {results:?}"
+        );
+        front.close().await;
     });
 }
 
@@ -1061,56 +1298,6 @@ fn while_commands_are_confined_a_later_call_waits_for_the_open_question() {
             }
         )
     );
-}
-
-#[test]
-fn a_write_root_inside_the_harness_files_is_not_confined() {
-    let world = World::new("inside_own_files", []);
-    let inside = world
-        .dirs()
-        .config
-        .expect("a configuration directory")
-        .join("inside");
-    std::fs::create_dir_all(&inside).unwrap();
-    world.user_config(&format!(
-        "[sandbox]\nwrite = [\"{}\"]\n",
-        inside.display().to_string().replace('\\', "\\\\")
-    ));
-    let core = world.core_with(|options| {
-        options.launcher = Some(launcher());
-        options.sandbox = Some(Support::Landlock(8));
-    });
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        assert_eq!(front.state.sandbox, SandboxStatus::Off);
-    });
-}
-
-/// The user's configuration file kept in a dotfiles directory, and linked
-/// from where the harness reads it: a write root that holds the directory
-/// could change the level and the rules the next session starts with.
-#[cfg(unix)]
-#[test]
-fn a_write_root_that_holds_the_user_configuration_a_link_leads_to_is_not_confined() {
-    let world = World::new("config_through_link", []);
-    let dotfiles = world.dir.join("dotfiles");
-    std::fs::create_dir_all(&dotfiles).unwrap();
-    world.user_config(&format!(
-        "[sandbox]\nwrite = [\"{}\"]\n",
-        dotfiles.display()
-    ));
-    let named = world.dirs().user_config.expect("a configuration file");
-    let target = dotfiles.join("config.toml");
-    std::fs::rename(&named, &target).unwrap();
-    std::os::unix::fs::symlink(&target, &named).unwrap();
-    let core = world.core_with(|options| {
-        options.launcher = Some(launcher());
-        options.sandbox = Some(Support::Landlock(8));
-    });
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        assert_eq!(front.state.sandbox, SandboxStatus::Off);
-    });
 }
 
 /// A protected path that changes between two confined commands — from a

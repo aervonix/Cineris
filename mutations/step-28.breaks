@@ -1730,7 +1730,7 @@ caught-by:
 [break] a-root-that-cannot-be-read-is-passed-over
 rule: A write root that cannot be read as an absolute path counts as holding the harness's files.
 file: crates/cineris-core/src/assemble.rs
-in: holds_harness_files
+in: HarnessFilesAt::held_by
 find: Err(_) => true
 replace: Err(_) => false
 caught-by:
@@ -4301,11 +4301,11 @@ caught-by:
     commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
 
 [break] pinned-sandbox-off-unwarned
-rule: The trust question warns, before the yes, of a write root of the project's own configuration that holds the harness's files, which trusting it would turn the sandbox off with.
+rule: The trust question warns, before the yes, of a write root of the project's own configuration that holds the harness's files, which trusting it leaves out of the grant (it turned the sandbox off before the third security fix).
 file: crates/cineris-core/src/assemble.rs
 in: harness_write_roots
-find: holds_harness_files(&sandbox_grant(inner, &with, root, &question), &with, state, launcher)
-replace: holds_harness_files(&sandbox_grant(inner, &with, root, &question), &with, state, launcher) && false
+find: .filter(|entry| !held.settings.sandbox.write.contains(entry))
+replace: .filter(|_| false)
 caught-by:
     extensions_review::the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force
 

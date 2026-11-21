@@ -638,7 +638,9 @@ fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
 /// - a project whose own `sandbox.write` names a folder that holds the
 ///   harness's files (`~/.cargo`, with the launcher in `~/.cargo/bin`),
 ///   which the question's own load holds back, is warned of before anything
-///   else, and its extension's programs are said not to be confined;
+///   else: the entry is left out and the sandbox stays on (since the third
+///   security fix; before it the project's sessions ran without it), so its
+///   extension's programs are said to be confined;
 /// - an ordinary write root, a folder in the workspace, gets no warning,
 ///   and the programs are said to be confined (the first core test to reach
 ///   that branch);
@@ -652,12 +654,13 @@ fn the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force() {
     std::fs::write(bin.join("cineris"), "the launcher").unwrap();
     write_extension(&projects(&world), "exec = [\"sh\"]", "x");
     let warned = "This project's configuration asks to write in `~/.cargo`, which holds \
-                  Cineris's own files. If you trust it, its sessions run without the sandbox.";
+                  Cineris's own files. That entry is left out, so commands do not write there, \
+                  and its sessions keep the sandbox on.";
     let in_dev = "This project's configuration asks, in its profile `dev`, to write in `~/.cargo`, \
-                  which holds Cineris's own files. If you trust it, its sessions with that profile \
-                  run without the sandbox.";
+                  which holds Cineris's own files. That entry is left out, so commands do not \
+                  write there, and its sessions with that profile keep the sandbox on.";
     for (config, said, confined) in [
-        ("[sandbox]\nwrite = [\"~/.cargo\"]\n", Some(warned), false),
+        ("[sandbox]\nwrite = [\"~/.cargo\"]\n", Some(warned), true),
         ("[sandbox]\nwrite = [\"build\"]\n", None, true),
         (
             "[profiles.dev.sandbox]\nwrite = [\"~/.cargo\"]\n",
@@ -677,7 +680,7 @@ fn the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force() {
             let resources = &asked[0].resources;
             let warnings: Vec<&TrustResource> = resources
                 .iter()
-                .filter(|resource| resource.detail.contains("without the sandbox"))
+                .filter(|resource| resource.detail.contains("keep the sandbox on"))
                 .collect();
             match said {
                 Some(said) => {

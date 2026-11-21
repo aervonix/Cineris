@@ -822,6 +822,9 @@ struct Prepared {
     key_variables: Option<Vec<String>>,
     repository: Option<bool>,
     epoch: Option<EpochPrepared>,
+    /// What the user is told of each `sandbox.write` entry the reload adds
+    /// that is left out of the grant.
+    left_out: Vec<String>,
 }
 
 /// What a reload builds before it applies anything.
@@ -868,7 +871,10 @@ async fn prepare(
     {
         let template = lock(&live.template).parts.clone();
         let session = live.handle.id().clone();
-        let state = lock(&live.config).state.clone();
+        let (state, in_force) = {
+            let config = lock(&live.config);
+            (config.state.clone(), config.in_force())
+        };
         let (held, loaded, sandbox) = (
             Arc::clone(inner),
             Arc::clone(mix),
@@ -882,7 +888,20 @@ async fn prepare(
                 trusted.rules,
                 trusted.repository,
                 &session,
+                state.as_ref(),
             );
+            // A `sandbox.write` entry that holds the harness's own files is
+            // left out of the grant, as at a session's start, and the rest
+            // applied (the third security fix; before it the reload was
+            // refused whole). Each one the reload adds is said once.
+            let workspace = &template.workspace;
+            let before = assemble::left_out_writes(&held, &in_force, workspace, state.as_ref());
+            let left_out: Vec<String> =
+                assemble::left_out_writes(&held, &loaded, workspace, state.as_ref())
+                    .into_iter()
+                    .filter(|entry| !before.contains(entry))
+                    .map(|entry| assemble::left_out_notice(&held, &entry, workspace))
+                    .collect();
             let mut policy = None;
             if parts.sandbox_policy != template.sandbox_policy && sandbox.enforces() {
                 if assemble::holds_harness_files(
@@ -900,12 +919,13 @@ async fn prepare(
                 }
                 policy = sandbox.policy_for(&parts.sandbox_policy);
             }
-            Ok((parts, policy))
+            Ok((parts, policy, left_out))
         })
         .await
         .map_err(|failure| failure.message)?;
         prepared.engine = Some(built.0);
         prepared.policy = built.1;
+        prepared.left_out = built.2;
     }
 
     let models_now = touches(now, &["retry", "model", "adapt"])
@@ -1051,6 +1071,9 @@ async fn put(core: &Core, live: &Arc<Live>, prepared: Prepared) -> Result<(), Op
     }
     if let Some(policy) = prepared.policy {
         live.sandbox.set_policy(policy);
+    }
+    for note in prepared.left_out {
+        live.hooks.tell(note);
     }
     if let Some(models) = prepared.models {
         for (role, model) in models.roles() {

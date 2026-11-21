@@ -190,9 +190,11 @@ pub enum NoSandbox {
     /// The kernel's Landlock is older than the sandbox needs: this version
     /// (`docs/decisions/0032-what-the-linux-sandbox-needs.md`).
     LandlockTooOld(u8),
-    /// A directory a command may write holds the harness's own
-    /// configuration, state or data, which the sandbox cannot keep a
-    /// command from changing.
+    /// The workspace, or its temporary folder, holds the harness's own
+    /// configuration, state or data, or its program, which the sandbox
+    /// cannot keep a command from changing. (A `sandbox.write` entry that
+    /// does is left out of the grant instead, since the third security
+    /// fix.)
     HarnessFilesWritable,
     /// The user turned the sandbox off (`sandbox.enabled = false`).
     TurnedOff,
@@ -223,14 +225,12 @@ impl NoSandbox {
                     ""
                 }
             ),
-            Self::HarnessFilesWritable => "The workspace, or a directory `sandbox.write` \
-                                           names, holds Cineris's own configuration, \
-                                           state or data, or its program, which the sandbox \
-                                           cannot keep a command from changing: a command \
-                                           could change what it is allowed. So a command that \
-                                           runs is not confined. Open the project's own \
-                                           directory instead, and keep the program out of \
-                                           `sandbox.write`."
+            Self::HarnessFilesWritable => "The workspace, or its temporary folder, holds \
+                                           Cineris's own configuration, state or data, or its \
+                                           program, which the sandbox cannot keep a command \
+                                           from changing: a command could change what it is \
+                                           allowed. So a command that runs is not confined. \
+                                           Open the project's own directory instead."
                 .to_owned(),
             Self::TurnedOff => "The sandbox is turned off in configuration (`sandbox.enabled = \
                                 false`), so a command that runs is not confined."

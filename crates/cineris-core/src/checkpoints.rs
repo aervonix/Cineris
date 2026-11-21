@@ -50,7 +50,7 @@ use cineris_tools::{
 };
 
 use crate::policy::EnginePolicy;
-use crate::sandbox::{SessionSandbox, protected_changes, protected_note};
+use crate::sandbox::{SessionGit, SessionSandbox, protected_changes, protected_note};
 
 /// The checkpoint of the tool round that is running, shared by the tools
 /// that fill it and the session store that writes it.
@@ -429,6 +429,9 @@ pub(crate) struct RecordingShell {
     /// The session's checkpoints. `None` for a session kept in memory.
     rounds: Option<Arc<Rounds>>,
     sandbox: Arc<SessionSandbox>,
+    /// The session's own git, which reads the folder the repository runs
+    /// its hooks from, to look at it with the protected paths.
+    git: Arc<SessionGit>,
     policy: Arc<EnginePolicy>,
     /// The project's knowledge, whose observer is told how each command
     /// ended. `None` for a session with no state directory.
@@ -439,7 +442,7 @@ impl RecordingShell {
     pub(crate) fn new(
         tool: ShellTool,
         rounds: Option<Arc<Rounds>>,
-        sandbox: Arc<SessionSandbox>,
+        (sandbox, git): (Arc<SessionSandbox>, Arc<SessionGit>),
         policy: Arc<EnginePolicy>,
         knowledge: Option<Arc<crate::knowledge::Knowledge>>,
     ) -> Self {
@@ -447,6 +450,7 @@ impl RecordingShell {
             tool,
             rounds,
             sandbox,
+            git,
             policy,
             knowledge,
         }
@@ -632,13 +636,25 @@ impl RecordingShell {
             let decided = self.sandbox.decide();
             let session_confines = decided.confines();
             let confined = session_confines && !unconfined;
-            let watch = self.sandbox.protected().filter(|_| confined).cloned();
-            let before = match &watch {
-                Some(watch) => {
-                    let watch = watch.clone();
-                    tokio::task::spawn_blocking(move || watch.take()).await.ok()
-                }
-                None => None,
+            // Looked at only where the command is confined, with the folder
+            // the repository's configuration names for its hooks read first.
+            let looks = confined && self.sandbox.protected().is_some();
+            let root = cx.paths.root().to_fs_path();
+            let before = if looks {
+                let (sandbox, git, root) = (
+                    Arc::clone(&self.sandbox),
+                    Arc::clone(&self.git),
+                    root.clone(),
+                );
+                tokio::task::spawn_blocking(move || {
+                    sandbox.follow_hooks(&*git, &root);
+                    sandbox.protected().map(|watch| watch.take())
+                })
+                .await
+                .ok()
+                .flatten()
+            } else {
+                None
             };
             // Before the command runs, the look before it is compared with
             // the look after the last confined command: a protected path
@@ -663,13 +679,22 @@ impl RecordingShell {
             // What the command changed among the protected paths is put
             // back at once, from the look before's own record: a confined
             // command never keeps a change there (the third security fix).
-            let found = match (watch, before) {
-                (Some(watch), Some(before)) => {
-                    tokio::task::spawn_blocking(move || protected_changes(&watch, &before))
-                        .await
-                        .ok()
+            // The folder for hooks is read again first: a command may have
+            // named another through a file the configuration includes.
+            let found = match before {
+                Some(before) => {
+                    let (sandbox, git) = (Arc::clone(&self.sandbox), Arc::clone(&self.git));
+                    tokio::task::spawn_blocking(move || {
+                        sandbox.follow_hooks(&*git, &root);
+                        sandbox
+                            .protected()
+                            .map(|watch| protected_changes(&watch, &before))
+                    })
+                    .await
+                    .ok()
+                    .flatten()
                 }
-                _ => None,
+                None => None,
             };
             // The look after this command is kept for the next command's
             // and the close's continuity check, and the harness-touched set

@@ -674,6 +674,82 @@ struct Repository {
     prefix: String,
 }
 
+/// The folder git runs the hooks of the repository the workspace `root` is
+/// in from, where the repository's configuration names one
+/// (`core.hooksPath`), as an absolute path: for the look at protected paths,
+/// which watches it as it watches `.git/hooks`, since a hook a confined
+/// command plants there runs at the next `git commit` outside the sandbox
+/// (the third security fix). `None` where the workspace is in no
+/// repository, nothing names a folder, or git gives no answer within `cap`.
+///
+/// Asked of the harness's own git, through `confinement`, which reads the
+/// configuration (its includes too) and runs no program it names: `git
+/// config` starts no filter and no monitor. The value the harness's own
+/// command line gives (`core.hooksPath` nowhere, in [`GIT_HARDENING`]) is
+/// the last, of the `command` scope, and is passed over: the folder is the
+/// one the repository's configuration, or the user's, names. A `~` is
+/// expanded by git (`--type=path`); a relative path is taken from the top of
+/// the working tree, where git runs a hook. It blocks.
+#[must_use]
+pub fn hooks_folder(confinement: &dyn Confinement, root: &Path, cap: Duration) -> Option<PathBuf> {
+    // A directory, or for a worktree a file, named `.git`: with none, no
+    // git is started.
+    let top = root
+        .ancestors()
+        .find(|directory| std::fs::symlink_metadata(directory.join(".git")).is_ok())?;
+    let child = cineris_base::git::start(
+        confinement,
+        root,
+        &[
+            "config",
+            "--type=path",
+            "--null",
+            "--show-scope",
+            "--get-all",
+            "core.hooksPath",
+        ],
+    )
+    .ok()?;
+    // Git exits with a failure where nothing names the key.
+    let answer = brief::answer(child, cap).ok()?;
+    hooks_folder_from(&answer, top)
+}
+
+/// The folder an answer of `git config --null --show-scope --get-all
+/// core.hooksPath` names, from the top of the working tree `top`: the last
+/// value of a scope other than `command`. Each value is its scope, a NUL,
+/// the value and a NUL.
+fn hooks_folder_from(answer: &[u8], top: &Path) -> Option<PathBuf> {
+    let fields: Vec<&[u8]> = answer.split(|byte| *byte == 0).collect();
+    let value = fields
+        .chunks(2)
+        .filter(|pair| pair.len() == 2 && pair[0] != b"command")
+        .map(|pair| pair[1])
+        .next_back()?;
+    let value = std::str::from_utf8(value).ok()?;
+    if value.is_empty() {
+        return None;
+    }
+    let named = Path::new(value);
+    let path = if named.is_absolute() {
+        named.to_path_buf()
+    } else {
+        top.join(named)
+    };
+    // `..` taken by name, so that the place judged is the place named.
+    let mut placed = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::ParentDir => {
+                placed.pop();
+            }
+            std::path::Component::CurDir => {}
+            other => placed.push(other),
+        }
+    }
+    Some(placed)
+}
+
 /// What `git status --porcelain=v2 --branch -z` said.
 #[derive(Debug, PartialEq, Eq)]
 struct Status {
@@ -808,6 +884,33 @@ mod tests {
         );
         // A path that is not Unicode.
         assert_eq!(parse_status(b"? caf\xe9.txt\0"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_hooks_folder_is_the_last_one_a_configuration_names() {
+        let top = Path::new("/work/repo");
+        // The harness's own `-c core.hooksPath=/dev/null` comes last, of the
+        // `command` scope, and is passed over.
+        assert_eq!(
+            hooks_folder_from(
+                b"global\0/home/me/hooks\0local\0scripts/hooks\0command\0/dev/null\0",
+                top
+            ),
+            Some(PathBuf::from("/work/repo/scripts/hooks"))
+        );
+        assert_eq!(
+            hooks_folder_from(b"local\0/abs/hooks\0command\0/dev/null\0", top),
+            Some(PathBuf::from("/abs/hooks"))
+        );
+        // `..` is taken by name.
+        assert_eq!(
+            hooks_folder_from(b"local\0./a/../.githooks\0", top),
+            Some(PathBuf::from("/work/repo/.githooks"))
+        );
+        // Only the harness's own: none.
+        assert_eq!(hooks_folder_from(b"command\0/dev/null\0", top), None);
+        assert_eq!(hooks_folder_from(b"", top), None);
     }
 
     #[test]

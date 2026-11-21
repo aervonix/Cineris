@@ -1431,12 +1431,18 @@ fn engine_parts(
         }
     }
 
+    // A `sandbox.write` entry that holds the harness's own files is left
+    // out of the grant, and the user is told which (the third security
+    // fix).
+    for entry in left_out_writes(inner, loaded, &root, state) {
+        notices.push(left_out_notice(inner, &entry, &root));
+    }
     Parts {
         lease_id,
         level: settings.permissions.mode.clone(),
         rules,
         approved,
-        sandbox_policy: sandbox_grant(inner, loaded, &root, session),
+        sandbox_policy: sandbox_grant(inner, loaded, &root, session, state),
         sandbox: inner.sandbox.state(settings.sandbox.enabled).0,
         models: Vec::new(),
         budget: budget(&settings.limits.session),
@@ -1470,6 +1476,76 @@ pub(crate) fn placed_entry(entry: &str, home: Option<&Path>, root: &AbsPath) -> 
     })
 }
 
+/// An entry of `sandbox.write` or `sandbox.protect` as the root the sandbox
+/// is given: where it really is ([`placed_entry`], then resolved), or as it
+/// is written when it cannot be placed, for the engine to refuse by name.
+fn placed_root(inner: &Inner, entry: &str, root: &AbsPath) -> String {
+    let home = inner.options.env.home();
+    placed_entry(entry, home.as_deref(), root)
+        .as_deref()
+        .and_then(resolve_dir)
+        .map_or_else(|| entry.to_owned(), |resolved| resolved.as_str().to_owned())
+}
+
+/// An entry of `sandbox.write` as the user is shown it: where it really is,
+/// under `~`, or as it is written when it cannot be placed.
+fn shown_entry(inner: &Inner, entry: &str, root: &AbsPath) -> String {
+    let home = inner.options.env.home();
+    placed_entry(entry, home.as_deref(), root)
+        .as_deref()
+        .and_then(resolve_dir)
+        .map_or_else(
+            || entry.to_owned(),
+            |placed| crate::ext::found::shown_path(&placed.to_fs_path(), home.as_deref()),
+        )
+}
+
+/// The entries of `sandbox.write` in `loaded` that are left out of the
+/// sandbox's grant: each that holds the harness's own files (its
+/// configuration, state or data directory, the user's configuration file,
+/// the program started as the launcher), or lies inside one, judged on its
+/// own as a session's start judges its roots ([`holds_harness_files`]). A
+/// confined command allowed to write there could change what it is
+/// allowed, or put a program that confines nothing where the next launcher
+/// is started from. Leaving the entry out keeps the rest of the grant, and
+/// the sandbox enforcing; before the third security fix such an entry
+/// turned the sandbox off for the whole session (decision 0042). A
+/// project's entry and the user's own are left out alike. Only where the
+/// sandbox would enforce: elsewhere nothing is confined, and the grant's
+/// roots bind nothing. Blocks.
+pub(crate) fn left_out_writes(
+    inner: &Inner,
+    loaded: &Loaded,
+    root: &AbsPath,
+    state: Option<&StateDir>,
+) -> Vec<String> {
+    let (sandbox, _) = inner.sandbox.state(loaded.settings.sandbox.enabled);
+    if sandbox != SandboxState::Enforcing {
+        return Vec::new();
+    }
+    let own = HarnessFilesAt::of(loaded, state, inner.sandbox.program());
+    loaded
+        .settings
+        .sandbox
+        .write
+        .iter()
+        .filter(|entry| own.held_by(&placed_root(inner, entry, root)))
+        .cloned()
+        .collect()
+}
+
+/// What the user is told of a `sandbox.write` entry that is left out
+/// ([`left_out_writes`]): the entry where it really is, under `~`.
+pub(crate) fn left_out_notice(inner: &Inner, entry: &str, root: &AbsPath) -> String {
+    format!(
+        "`sandbox.write` names `{}`, which holds Cineris's own files (its configuration, its \
+         state or data, or its program): a command allowed to write there could change what it \
+         is allowed. It is left out, so commands do not write there, and the sandbox stays on. \
+         To let commands write in a folder there, name one that holds none of them instead.",
+        cineris_base::in_code(&shown_entry(inner, entry, root))
+    )
+}
+
 /// What the session's sandbox grants, from `loaded`: the workspace, the
 /// session's temporary directory and `sandbox.write` to write, the
 /// protected paths, and `sandbox.network`.
@@ -1478,23 +1554,26 @@ pub(crate) fn sandbox_grant(
     loaded: &Loaded,
     root: &AbsPath,
     session: &SessionId,
+    state: Option<&StateDir>,
 ) -> cineris_protocol::lease::SandboxPolicy {
     let settings = &loaded.settings;
-    let home_dir = inner.options.env.home();
-    // A path the user wrote, as where it really is. One that cannot be
-    // placed is passed on as written, for the engine to refuse by name.
-    let place = |entry: &String| -> String {
-        placed_entry(entry, home_dir.as_deref(), root)
-            .as_deref()
-            .and_then(resolve_dir)
-            .map_or_else(|| entry.clone(), |resolved| resolved.as_str().to_owned())
-    };
+    let place = |entry: &String| -> String { placed_root(inner, entry, root) };
     let temporary = sandbox::temp_path(session);
     let mut writable: Vec<String> = resolve_dir(&temporary)
         .map(|path| path.as_str().to_owned())
         .into_iter()
         .collect();
-    writable.extend(settings.sandbox.write.iter().map(place));
+    // An entry that holds the harness's own files is left out, and the rest
+    // is granted (the third security fix).
+    let left_out = left_out_writes(inner, loaded, root, state);
+    writable.extend(
+        settings
+            .sandbox
+            .write
+            .iter()
+            .filter(|entry| !left_out.contains(entry))
+            .map(place),
+    );
     let protect: Vec<String> = settings.sandbox.protect.iter().map(place).collect();
     let mut policy = default_sandbox(root, &writable, &protect);
     policy.network = settings.sandbox.network;
@@ -1513,6 +1592,7 @@ pub(crate) fn reloaded_parts(
     trusted: bool,
     repository_trusted: bool,
     session: &SessionId,
+    state: Option<&StateDir>,
 ) -> Parts {
     let mut parts = template.clone();
     let mut rules = sourced_rules(loaded);
@@ -1526,7 +1606,7 @@ pub(crate) fn reloaded_parts(
     );
     parts.rules = rules;
     parts.level = loaded.settings.permissions.mode.clone();
-    parts.sandbox_policy = sandbox_grant(inner, loaded, &template.workspace, session);
+    parts.sandbox_policy = sandbox_grant(inner, loaded, &template.workspace, session, state);
     parts.budget = budget(&loaded.settings.limits.session);
     parts.trusted = trusted;
     parts.repository_trusted = repository_trusted;
@@ -1729,7 +1809,7 @@ pub(crate) fn programs_confined(
     let (sandbox, _) = inner.sandbox.state(loaded.settings.sandbox.enabled);
     sandbox == SandboxState::Enforcing
         && !holds_harness_files(
-            &sandbox_grant(inner, loaded, root, &SessionId::new("s_question")),
+            &sandbox_grant(inner, loaded, root, &SessionId::new("s_question"), state),
             loaded,
             state,
             inner.sandbox.program(),
@@ -1741,10 +1821,11 @@ pub(crate) fn programs_confined(
 pub(crate) type ProfileLoads<'a, E> = dyn Fn(&str) -> Result<(Loaded, Loaded), E> + 'a;
 
 /// What the trust question says of each write root a yes would add that
-/// holds the harness's own files, and so would turn the sandbox off for the
-/// project's sessions (the maintainers, after the fresh review of step 28;
-/// `outstanding/a-projects-write-root-holding-the-harness-files-turns-the-sandbox-off.md`):
-/// of the configuration as `loads` holds it, `(held, trusted)`, and of each
+/// holds the harness's own files, and so is left out of the project's
+/// sessions' grant while the sandbox stays on ([`left_out_writes`]; the
+/// maintainers, after the fresh review of step 28, when such a root turned
+/// the sandbox off; worded as it is since the third security fix): of the
+/// configuration as `loads` holds it, `(held, trusted)`, and of each
 /// profile the project defines, as `with_profile` loads it the same two
 /// ways, since a yes trusts every profile (the last look at the warning: a
 /// profile's root was not said). A profile's root the configuration as a
@@ -1767,7 +1848,8 @@ pub(crate) fn harness_write_warnings<E>(
         .map(|(_, shown)| {
             format!(
                 "This project's configuration asks to write in `{}`, which holds Cineris's own \
-                 files. If you trust it, its sessions run without the sandbox.",
+                 files. That entry is left out, so commands do not write there, and its sessions \
+                 keep the sandbox on.",
                 cineris_base::in_code(&shown)
             )
         })
@@ -1787,8 +1869,8 @@ pub(crate) fn harness_write_warnings<E>(
             }
             said.push(format!(
                 "This project's configuration asks, in its profile `{}`, to write in `{}`, which \
-                 holds Cineris's own files. If you trust it, its sessions with that profile run \
-                 without the sandbox.",
+                 holds Cineris's own files. That entry is left out, so commands do not write there, \
+                 and its sessions with that profile keep the sandbox on.",
                 cineris_base::in_code(name),
                 cineris_base::in_code(&shown)
             ));
@@ -1799,10 +1881,10 @@ pub(crate) fn harness_write_warnings<E>(
 
 /// Each write root a yes would add that holds the harness's own files, as
 /// it is written and as it is shown, under `~`: one the load `trusted`
-/// holds and the load `held`, the one in force without that yes, does not,
-/// judged as a session's start judges its roots ([`holds_harness_files`]).
-/// None where the sandbox would not enforce anyway: it is off, there is
-/// none, or what is in force already turns it off.
+/// leaves out ([`left_out_writes`]) and the load `held`, the one in force
+/// without that yes, does not name. None where the sandbox would not
+/// enforce anyway: it is off, there is none, or the workspace or its
+/// temporary folder, which cannot be left out, turns it off.
 fn harness_write_roots(
     inner: &Inner,
     held: &Loaded,
@@ -1811,44 +1893,22 @@ fn harness_write_roots(
     state: Option<&StateDir>,
 ) -> Vec<(String, String)> {
     let (sandbox, _) = inner.sandbox.state(trusted.settings.sandbox.enabled);
-    let question = SessionId::new("s_question");
-    let launcher = inner.sandbox.program();
     if sandbox != SandboxState::Enforcing
         || holds_harness_files(
-            &sandbox_grant(inner, held, root, &question),
+            &sandbox_grant(inner, held, root, &SessionId::new("s_question"), state),
             held,
             state,
-            launcher,
+            inner.sandbox.program(),
         )
     {
         return Vec::new();
     }
-    let home = inner.options.env.home();
-    trusted
-        .settings
-        .sandbox
-        .write
-        .iter()
+    left_out_writes(inner, trusted, root, state)
+        .into_iter()
         .filter(|entry| !held.settings.sandbox.write.contains(entry))
-        .filter(|entry| {
-            let mut with = held.clone();
-            with.settings.sandbox.write.push((*entry).clone());
-            holds_harness_files(
-                &sandbox_grant(inner, &with, root, &question),
-                &with,
-                state,
-                launcher,
-            )
-        })
         .map(|entry| {
-            let shown = placed_entry(entry, home.as_deref(), root)
-                .as_deref()
-                .and_then(resolve_dir)
-                .map_or_else(
-                    || entry.clone(),
-                    |placed| crate::ext::found::shown_path(&placed.to_fs_path(), home.as_deref()),
-                );
-            (entry.clone(), shown)
+            let shown = shown_entry(inner, &entry, root);
+            (entry, shown)
         })
         .collect()
 }
@@ -1869,47 +1929,69 @@ pub(crate) fn holds_harness_files(
     state: Option<&StateDir>,
     launcher: Option<&Path>,
 ) -> bool {
-    // Resolved paths against the lease's roots, which are resolved too, in
-    // one spelling; names compared as the system compares them, folding
-    // case on Windows, since a match here only takes the sandbox away.
-    let own: Vec<AbsPath> = [
-        loaded.dirs.config.clone(),
-        state.map(|state| state.root().to_path_buf()),
-        loaded.data_dir(),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(|dir| resolve_dir(&dir))
-    .collect();
-    // The launcher's program and the user's configuration file, each as
-    // it is named and as it really is: its directory resolved, and its own
-    // name.
-    let files: Vec<AbsPath> = launcher
+    let own = HarnessFilesAt::of(loaded, state, launcher);
+    policy.write.all || policy.write.roots.iter().any(|root| own.held_by(root))
+}
+
+/// Where the harness's own files are, to judge a write root against
+/// ([`holds_harness_files`], [`left_out_writes`]).
+struct HarnessFilesAt {
+    /// The configuration, state and data directories, resolved.
+    dirs: Vec<AbsPath>,
+    /// The launcher's program and the user's configuration file, each as
+    /// it is named and as it really is: its directory resolved, and its own
+    /// name.
+    files: Vec<AbsPath>,
+}
+
+impl HarnessFilesAt {
+    fn of(loaded: &Loaded, state: Option<&StateDir>, launcher: Option<&Path>) -> Self {
+        // Resolved paths against the lease's roots, which are resolved too,
+        // in one spelling; names compared as the system compares them,
+        // folding case on Windows, since a match here only takes a root
+        // away.
+        let dirs: Vec<AbsPath> = [
+            loaded.dirs.config.clone(),
+            state.map(|state| state.root().to_path_buf()),
+            loaded.data_dir(),
+        ]
         .into_iter()
-        .chain(loaded.dirs.user_config.as_deref())
-        .flat_map(|program| {
-            [
-                Some(program.to_path_buf()),
-                std::fs::canonicalize(program).ok(),
-            ]
-        })
         .flatten()
-        .filter_map(|program| {
-            let name = program.file_name()?.to_owned();
-            resolve_dir(program.parent()?)?.child(&name).ok()
-        })
+        .filter_map(|dir| resolve_dir(&dir))
         .collect();
-    policy.write.all
-        || policy.write.roots.iter().any(|root| {
-            match AbsPath::parse(root, cineris_base::PathStyle::NATIVE) {
-                Ok(root) => {
-                    own.iter()
-                        .any(|dir| dir.starts_with(&root) || root.starts_with(dir))
-                        || files.iter().any(|file| file.starts_with(&root))
-                }
-                Err(_) => true,
+        let files: Vec<AbsPath> = launcher
+            .into_iter()
+            .chain(loaded.dirs.user_config.as_deref())
+            .flat_map(|program| {
+                [
+                    Some(program.to_path_buf()),
+                    std::fs::canonicalize(program).ok(),
+                ]
+            })
+            .flatten()
+            .filter_map(|program| {
+                let name = program.file_name()?.to_owned();
+                resolve_dir(program.parent()?)?.child(&name).ok()
+            })
+            .collect();
+        Self { dirs, files }
+    }
+
+    /// Whether the write root `root` holds one of the harness's files, is
+    /// one of its directories, or lies inside one. A root that cannot be
+    /// read as an absolute path counts as holding them: what cannot be
+    /// judged is not granted.
+    fn held_by(&self, root: &str) -> bool {
+        match AbsPath::parse(root, cineris_base::PathStyle::NATIVE) {
+            Ok(root) => {
+                self.dirs
+                    .iter()
+                    .any(|dir| dir.starts_with(&root) || root.starts_with(dir))
+                    || self.files.iter().any(|file| file.starts_with(&root))
             }
-        })
+            Err(_) => true,
+        }
+    }
 }
 
 /// Starts an engine, with its failure as the error a front end is shown.
@@ -2660,7 +2742,9 @@ pub(crate) fn assemble(
     );
     // A write root that holds the harness's own files would let a confined
     // command change what it is allowed: the sandbox does not enforce there
-    // (found by the review of step 26).
+    // (found by the review of step 26). Since the third security fix only
+    // the workspace or its temporary folder can: a `sandbox.write` entry
+    // that does is left out of the grant ([`left_out_writes`]).
     let (mut sandbox_state, mut enforcing_with) =
         inner.sandbox.state(loaded.settings.sandbox.enabled);
     if sandbox_state == SandboxState::Enforcing
@@ -2963,7 +3047,7 @@ pub(crate) fn assemble(
         let recording = Arc::new(RecordingShell::new(
             tool,
             rounds.clone(),
-            Arc::clone(&sandbox),
+            (Arc::clone(&sandbox), Arc::clone(&session_git)),
             Arc::clone(&policy),
             knowledge.clone(),
         ));

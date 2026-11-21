@@ -161,3 +161,102 @@ in-string: (`sandbox: false`)
 replace: (it)
 caught-by:
     cineris-core::it sandbox::sys_a_protected_path_a_command_changes_is_put_back_and_stops_the_turn
+
+# ---------------------- item 2: a write entry holding the harness's files
+
+[break] nothing-left-out
+rule: A `sandbox.write` entry that holds the harness's own files is left out of the grant, so that the session keeps the sandbox enforcing.
+file: crates/cineris-core/src/assemble.rs
+in: sandbox_grant
+find: .filter(|entry| !left_out.contains(entry))
+replace: .filter(|_| true)
+caught-by:
+    cineris-core::it sandbox::a_write_entry_that_holds_the_harness_files_is_left_out_and_the_sandbox_stays_on
+    cineris-core::it sandbox::sys_a_write_entry_left_out_grants_nothing_and_the_rest_is_granted
+    cineris-core::it sandbox::a_reload_that_adds_a_write_entry_holding_the_harness_files_leaves_it_out
+
+[break] a-left-out-entry-not-told
+rule: The user is told, under `~`, of a `sandbox.write` entry that is left out.
+file: crates/cineris-core/src/assemble.rs
+in: engine_parts
+find: notices.push(left_out_notice(inner, &entry, &root));
+replace: let _ = &entry;
+caught-by:
+    cineris-core::it sandbox::a_write_entry_that_holds_the_harness_files_is_left_out_and_the_sandbox_stays_on
+
+[break] a-left-out-entry-not-told-at-a-reload
+rule: A reload that adds a `sandbox.write` entry which is left out says so.
+file: crates/cineris-core/src/reload.rs
+in: put
+find: live.hooks.tell(note);
+replace: let _ = note;
+caught-by:
+    cineris-core::it sandbox::a_reload_that_adds_a_write_entry_holding_the_harness_files_leaves_it_out
+
+[break] entries-left-out-where-nothing-is-confined
+rule: Where the sandbox does not enforce, no entry is left out and nothing is said: nothing is confined for an entry to undo (Windows is as before).
+file: crates/cineris-core/src/assemble.rs
+in: left_out_writes
+find: if sandbox != SandboxState::Enforcing { return Vec::new(); }
+replace:
+caught-by:
+    cineris-core::it sandbox::where_the_sandbox_does_not_enforce_no_write_entry_is_left_out
+
+[break] the-trust-question-says-the-sandbox-goes
+rule: The trust question says a project's entry that holds the harness's files is left out and its sessions keep the sandbox on.
+file: crates/cineris-core/src/assemble.rs
+in: harness_write_warnings
+in-string: keep the sandbox on
+replace: run without the sandbox
+occurrence: 1
+caught-by:
+    cineris-core::it extensions_review::the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force
+
+# ------------------------------------- the folder core.hooksPath names
+
+[break] hooks-folder-not-read-before-the-look
+rule: The folder the repository's configuration names for its hooks is read before a confined command's look before it, so that a hook already there that the command changes is found.
+file: crates/cineris-core/src/checkpoints.rs
+in: RecordingShell::run_by
+find: sandbox.follow_hooks(&*git, &root); sandbox.protected().map(|watch| watch.take())
+replace: sandbox.protected().map(|watch| watch.take())
+caught-by:
+    cineris-core::it harness_git::sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back
+
+[break] hooks-folder-not-read-again-after-the-command
+rule: The folder is read again before the look after a command, so that one the command named through a file the configuration includes is looked at too.
+file: crates/cineris-core/src/checkpoints.rs
+in: RecordingShell::run_by
+find: sandbox.follow_hooks(&*git, &root); sandbox.protected().map(|watch| protected_changes(&watch, &before))
+replace: sandbox.protected().map(|watch| protected_changes(&watch, &before))
+caught-by:
+    cineris-core::it harness_git::sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back
+
+[break] hooks-folder-the-harness-names-taken
+rule: The folder read is the one the repository's or the user's configuration names, not the harness's own `core.hooksPath` nowhere, given on its command line.
+file: crates/cineris-tools/src/shell/changes.rs
+in: hooks_folder_from
+find: .filter(|pair| pair.len() == 2 && pair[0] != b"command")
+replace: .filter(|pair| pair.len() == 2)
+packages: cineris-tools,cineris-core
+caught-by:
+    cineris-tools shell::changes::tests::the_hooks_folder_is_the_last_one_a_configuration_names
+    cineris-core::it harness_git::sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back
+
+[break] hooks-folder-not-watched
+rule: The folder read is watched with the protected paths, everything under it.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::protected
+find: .map(|watch| watch.clone().with_more(hooks))
+replace: .map(|watch| { let _ = hooks; watch.clone() })
+caught-by:
+    cineris-core::it harness_git::sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back
+
+[break] hooks-folder-not-read-around-a-program
+rule: The folder the repository's configuration names for its hooks is watched around an extension's program with a write root, as around a confined command.
+file: crates/cineris-core/src/ext/exec.rs
+in: look_after
+find: sandbox.follow_hooks(&*git, &root);
+replace: let _ = (&git, &root);
+caught-by:
+    cineris-core::it ext_exec::confined::sys_a_hook_a_program_plants_in_the_hooks_folder_is_put_back

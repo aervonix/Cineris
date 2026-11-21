@@ -52,6 +52,11 @@ use cineris_sandbox::protect::{Changed, Limits, Snapshot, Watch};
 use cineris_sandbox::support::{Assessment, Support, Unconfined};
 use cineris_tools::process::{Argument, CommandLine, Direct, Exit, Launch, LaunchCx, Launcher};
 
+/// How long the read of the folder git runs hooks from may take
+/// ([`SessionSandbox::follow_hooks`]): a configuration that includes a file
+/// that stalls a read (a FIFO) gives up there, and nothing more is watched.
+const HOOKS_CAP: std::time::Duration = std::time::Duration::from_millis(500);
+
 /// What the core knows of the sandbox, once for its life.
 #[derive(Debug, Clone)]
 pub(crate) struct CoreSandbox {
@@ -148,6 +153,11 @@ pub(crate) struct SessionSandbox {
     /// The protected paths, looked at before and after each confined
     /// command, when the sandbox enforces.
     watch: Option<Watch>,
+    /// The folders the repository's configuration has named for its hooks
+    /// (`core.hooksPath`) in this session, where they lie inside a write
+    /// root: watched with the protected paths, read again before and after
+    /// each confined start ([`Self::follow_hooks`]; the third security fix).
+    hooks: std::sync::RwLock<Vec<PathBuf>>,
     /// The look taken after the last confined command, kept so that the
     /// next confined command, and the session's close, can tell whether a
     /// protected path changed in between — by a process a command left
@@ -216,6 +226,7 @@ impl SessionSandbox {
             confine: AtomicBool::new(false),
             temp,
             watch,
+            hooks: std::sync::RwLock::new(Vec::new()),
             last_after: std::sync::Mutex::new(None),
         };
         sandbox.set_level(level);
@@ -259,7 +270,7 @@ impl SessionSandbox {
     /// the last confined command: for the session's close. Blocks. `None`
     /// when there is no earlier look, or nothing changed.
     pub(crate) fn continuity_at_close(&self) -> Option<Vec<Changed>> {
-        let watch = self.watch.as_ref()?;
+        let watch = self.protected()?;
         let now = watch.take();
         let changed = self.continuity(&now)?;
         (!changed.is_empty()).then_some(changed)
@@ -359,9 +370,59 @@ impl SessionSandbox {
     /// The protected paths, wherever the sandbox enforces, whatever the
     /// level: for a caller that decided its start is confined (a command
     /// [`decide`](Self::decide)d so, an extension's program its own launcher
-    /// confines at every level).
-    pub(crate) fn protected(&self) -> Option<&Watch> {
-        self.watch.as_ref()
+    /// confines at every level). With them, the folder the repository's
+    /// configuration names for its hooks, as [`Self::follow_hooks`] last
+    /// read it.
+    pub(crate) fn protected(&self) -> Option<Watch> {
+        let hooks = self
+            .hooks
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        self.watch
+            .as_ref()
+            .map(|watch| watch.clone().with_more(hooks))
+    }
+
+    /// Reads again which folder the repository the workspace `root` is in
+    /// runs its hooks from (`core.hooksPath`), with the session's own git
+    /// `git`, and keeps it to watch where it lies inside one of the
+    /// session's write roots: a hook a confined start plants there runs at
+    /// the next `git commit` outside the sandbox, though neither the folder
+    /// nor `.git/config` is on the protected list (step 28's review of
+    /// protected writes; the third security fix). Before each confined
+    /// start's look and again before the look after it, so that a folder a
+    /// start names through a file the configuration includes is watched by
+    /// the look after the same start. A folder once watched stays watched
+    /// for the session: a look that dropped one would take what is in it for
+    /// gone, and watching one more folder only narrows. Nothing where the
+    /// sandbox does not enforce, where nothing is looked at. It blocks: it
+    /// may start git.
+    pub(crate) fn follow_hooks(&self, git: &dyn Confinement, root: &Path) {
+        if self.watch.is_none() {
+            return;
+        }
+        let roots: Vec<PathBuf> = self
+            .launcher
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|launcher| launcher.policy().write.clone())
+            .unwrap_or_default();
+        let kept: Vec<PathBuf> = cineris_tools::shell::changes::hooks_folder(git, root, HOOKS_CAP)
+            .into_iter()
+            .filter(|folder| {
+                roots
+                    .iter()
+                    .any(|root| cineris_base::location_within(folder, root))
+            })
+            .collect();
+        let mut hooks = self.hooks.write().unwrap_or_else(PoisonError::into_inner);
+        for folder in kept {
+            if !hooks.contains(&folder) {
+                hooks.push(folder);
+            }
+        }
     }
 
     /// The launcher an extension's program is started through

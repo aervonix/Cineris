@@ -488,6 +488,95 @@ fn sys_a_git_that_fails_inside_the_sandbox_leaves_the_list_incomplete_and_says_w
     });
 }
 
+/// The folder the repository's configuration names for its hooks
+/// (`core.hooksPath`, here `scripts/hooks`) is looked at with the protected
+/// paths, and what a confined command changes there is put back: a hook it
+/// plants there, or one it changes, would run at the next `git commit`
+/// outside the sandbox, though neither the folder nor `.git/config` is on
+/// the protected list (step 28's review of protected writes; the third
+/// security fix). A folder the same command names through a file the
+/// configuration includes (`include.path`), which is not protected, is
+/// looked at by the look after it: the folder is read again first.
+#[test]
+fn sys_a_hook_a_confined_command_writes_in_the_hooks_folder_is_put_back() {
+    use std::os::unix::fs::PermissionsExt;
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("hooks_path_put_back", []);
+    repository(&world);
+    git(
+        &world.workspace,
+        &["config", "core.hooksPath", "scripts/hooks"],
+    );
+    let config = world.workspace.join(".git/config");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("[include]\n\tpath = ../shared.gitconfig\n");
+    std::fs::write(&config, text).unwrap();
+    world.put("shared.gitconfig", "");
+    world.put("scripts/hooks/pre-commit", "#!/bin/sh\necho ours\n");
+    let hook = world.workspace.join("scripts/hooks/pre-commit");
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A script, so that the line names nothing.
+    world.put(
+        "plant.sh",
+        "printf '#!/bin/sh\\nevil\\n' > scripts/hooks/pre-commit\n\
+         printf '#!/bin/sh\\nevil\\n' > scripts/hooks/pre-push\n\
+         chmod +x scripts/hooks/pre-push\n",
+    );
+    world.put(
+        "include.sh",
+        "printf '[core]\\n\\thooksPath = elsewhere\\n' > shared.gitconfig\n\
+         mkdir -p elsewhere\n\
+         printf '#!/bin/sh\\nevil\\n' > elsewhere/pre-commit\n",
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh plant.sh"}))]));
+    world.provider.push(says("Stopped."));
+    world.provider.push(calls(&[(
+        "c2",
+        "shell",
+        json!({"command": "sh include.sh"}),
+    )]));
+    world.provider.push(says("Stopped."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("plant").await;
+        let results = front.results();
+        assert!(
+            results[0]
+                .2
+                .contains("`scripts/hooks/pre-commit` (modified)")
+                && results[0].2.contains("`scripts/hooks/pre-push` (created)")
+                && results[0].2.contains("They were put back"),
+            "{results:?}"
+        );
+        assert_eq!(
+            world.read("scripts/hooks/pre-commit").as_deref(),
+            Some("#!/bin/sh\necho ours\n")
+        );
+        assert!(world.read("scripts/hooks/pre-push").is_none());
+        front.turn("include").await;
+        let results = front.results();
+        assert!(
+            results[1].2.contains("`elsewhere/pre-commit` (created)")
+                && results[1].2.contains("They were put back"),
+            "{results:?}"
+        );
+        assert!(world.read("elsewhere/pre-commit").is_none());
+        front.close().await;
+    });
+}
+
 /// A filter named by a bare name is never one in the workspace, even
 /// through an absolute directory of `PATH` (an activated `.venv/bin`):
 /// the harness's git, unasked, would run a file a command wrote. The same
