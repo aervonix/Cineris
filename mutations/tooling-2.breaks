@@ -175,8 +175,26 @@ caught-by:
 rule: Each job's tests make their scratch folders under a base of the job's own, never another job's.
 file: xtask/src/mutate/drive.rs
 in: tests_base
-find: parent.join(format!("job-{}", job + 1))
-replace: parent.join("job-1")
+find: let job_folder = format!("job-{}", job + 1);
+replace: let job_folder = "job-1".to_owned();
+caught-by:
+    mutate::drive::tests::no_two_jobs_give_their_tests_one_scratch_base
+
+[break] a-callers-folder-is-taken-for-the-jobs
+rule: Under the caller's CINERIS_TEST_TMPDIR, the jobs' folders are in a folder named for the command, never the caller's own.
+file: xtask/src/mutate/drive.rs
+in: tests_base
+find: let named = parent.join(command_folder(scratch));
+replace: let named = parent;
+caught-by:
+    mutate::drive::tests::no_two_jobs_give_their_tests_one_scratch_base
+
+[break] two-commands-share-one-scratch-folder
+rule: The command's folder is named for its copies, so two commands from two checkouts never share one.
+file: xtask/src/mutate/drive.rs
+in: command_folder
+find: hash.add(scratch.as_os_str().as_encoded_bytes());
+replace:
 caught-by:
     mutate::drive::tests::no_two_jobs_give_their_tests_one_scratch_base
 
@@ -184,19 +202,66 @@ caught-by:
 rule: Cargo is started with the job's own scratch base as its tests' CINERIS_TEST_TMPDIR.
 file: xtask/src/mutate/drive.rs
 in: CargoRunner::command
-find: .env(TESTS_BASE, &self.tests)
+find: .env(TESTS_BASE, &self.tests.dir)
 replace:
 caught-by:
     mutate::drive::tests::each_jobs_cargo_is_given_the_jobs_own_scratch_base_for_its_tests
 
-[break] tests-scratch-base-left-behind
-rule: A job's tests' scratch base is removed after each run of them, whatever the run came to.
+[break] a-folder-left-there-is-trusted
+rule: A job's tests' scratch base is emptied before each run: what a killed or kept run left there is not trusted.
 file: xtask/src/mutate/drive.rs
-in: in_tests_base
-find: let _ = crate::combine::remove_tree(base);
+in: TestsBase::make
+find: let note = crate::combine::remove_tree(&self.dir).err();
+replace: let note: Option<String> = None;
+caught-by:
+    mutate::drive::tests::the_tests_scratch_base_is_made_empty_before_a_run_and_removed_after_it
+
+[break] tests-scratch-base-left-behind
+rule: A job's tests' scratch base is removed after a run, with what a failed test left in it.
+file: xtask/src/mutate/drive.rs
+in: TestsBase::remove
+find: let failed = crate::combine::remove_tree(&self.dir).err();
+replace: let failed: Option<String> = None;
+caught-by:
+    mutate::drive::tests::the_tests_scratch_base_is_made_empty_before_a_run_and_removed_after_it
+    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_logs_what_it_could_not
+
+[break] a-failed-baseline-folder-is-removed
+rule: A run with nothing broken in which a test failed keeps its tests' scratch base for whoever looks.
+file: xtask/src/mutate/drive.rs
+in: keeps
+find: cases.iter().any(|case| case.failed)
+replace: cases.is_empty()
+caught-by:
+    mutate::drive::tests::only_a_failed_run_with_nothing_broken_keeps_its_tests_folders
+    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_logs_what_it_could_not
+
+[break] a-breaks-run-keeps-its-folder
+rule: A break's run, whose tests are meant to fail, never keeps its tests' scratch base.
+file: xtask/src/mutate/drive.rs
+in: keeps
+find: unbroken &&
+replace: unbroken ||
+caught-by:
+    mutate::drive::tests::only_a_failed_run_with_nothing_broken_keeps_its_tests_folders
+
+[break] a-kept-folder-is-not-said
+rule: The message of a run with nothing broken that failed says where its tests' scratch folders are kept.
+file: xtask/src/mutate/drive.rs
+in: drive_jobs
+find: baseline.kept = runner.kept();
 replace:
 caught-by:
-    mutate::drive::tests::the_tests_scratch_base_is_made_before_their_run_and_removed_after_whatever_it_came_to
+    mutate::drive::tests::a_run_with_nothing_broken_that_fails_says_where_its_tests_left_their_folders
+
+[break] a-folder-not-removed-is-not-logged
+rule: A scratch base that could not be emptied or removed is said in the job's log.
+file: xtask/src/mutate/drive.rs
+in: CargoRunner::after_run
+find: let _ = writeln!(log, "xtask mutate: {note}");
+replace: let _ = (&mut log, note);
+caught-by:
+    mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_logs_what_it_could_not
 
 [break] watch-limit-of-a-system-test
 rule: The watch gives a system test the 60 s nextest gives it.
