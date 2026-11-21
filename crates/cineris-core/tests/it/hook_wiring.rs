@@ -111,10 +111,13 @@ async fn run_beside<F: std::future::Future>(mut operation: std::pin::Pin<&mut F>
 /// The third, at `read-only`: a hook with `write = true` is given no write
 /// root, so its start does not take the baseline.
 ///
-/// The fourth closes while an observer of its `session.start` is still at
-/// work (held at the point after it takes the baseline): the close waits
-/// for it, as for every run of the session's hooks (the review of step
-/// 28's second pull request, M1 and M3).
+/// The fourth, opened after a reload that adds an observer of
+/// `session.start` with `write = true` (only there, so that no start of it
+/// in an earlier session takes the baseline the second session's two
+/// starts are counted at), closes while that observer is still at work,
+/// held at the point after it takes the baseline: the close waits for it,
+/// as for every run of the session's hooks (the review of step 28's second
+/// pull request, M1 and M3).
 ///
 /// And an observer of `session.start` that fails, never waited for, is
 /// logged.
@@ -147,7 +150,7 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
         ),
     )
     .unwrap();
-    let config = |gate: bool| {
+    let config = |gate: bool, scribe: bool| {
         let fails = this_binary("fail", &[]);
         format!(
             "{}{}",
@@ -160,12 +163,16 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
                 },
                 entry("ready", "session.start", &fails, ""),
                 entry("watch", "session.start", &fails, "observe = true"),
-                entry(
-                    "scribe",
-                    "session.start",
-                    &fails,
-                    "observe = true\nwrite = true"
-                ),
+                if scribe {
+                    entry(
+                        "scribe",
+                        "session.start",
+                        &fails,
+                        "observe = true\nwrite = true",
+                    )
+                } else {
+                    String::new()
+                },
                 entry(
                     "per-file",
                     "tool.before",
@@ -185,7 +192,7 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
             .concat()
         )
     };
-    world.user_config(&config(true));
+    world.user_config(&config(true, false));
     let core = world.core();
     let warnings = crate::extensions::Warnings::default();
     let logged = std::sync::Arc::clone(&warnings.0);
@@ -222,7 +229,7 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
             assert_eq!(*outcome, "denied", "{text}");
             assert!(text.contains("cannot run"), "{text}");
             // The entry is taken out, and the configuration read again.
-            world.user_config(&config(false));
+            world.user_config(&config(false, false));
             let OpResult::ConfigReload(reloaded) = front
                 .op(Op::ConfigReload(ConfigReloadParams::default()))
                 .await
@@ -364,6 +371,12 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
                 .await;
             assert!(matches!(ran, Ok(HookOutcome::Failed(_))), "{ran:?}");
             assert_eq!(writes.arrivals(), 0, "a write root at read-only");
+            // The observer the fourth session closes beside.
+            world.user_config(&config(false, true));
+            front
+                .op(Op::ConfigReload(ConfigReloadParams::default()))
+                .await
+                .unwrap();
             front.close().await;
             drop(writes);
 
