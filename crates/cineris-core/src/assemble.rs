@@ -2867,6 +2867,11 @@ pub(crate) fn assemble(
         }
         parts
     };
+    // Sections 6 and 7 of the system prompt: what the session's skills and
+    // extensions give it, settled by the same finding, which the first
+    // turn waits for, and answered from memory when the loop asks.
+    #[cfg(feature = "scripts")]
+    let prompt_parts = Arc::new(crate::ext::PromptParts::new(Arc::clone(&registry)));
     #[cfg(feature = "scripts")]
     let extensions = Some(crate::ext::found::Finding {
         resolver: Arc::clone(&resolver),
@@ -2894,6 +2899,12 @@ pub(crate) fn assemble(
             .collect(),
         registry: Arc::clone(&registry),
         parts: ext_parts,
+        // The user's three roots of skills always, and the project's three
+        // whether or not it is trusted: skills are text, as instruction
+        // files are. `compat.skills` off leaves out `.agents/` and
+        // `.claude/`.
+        skills: cineris_ext::skills::Root::standard(settings.compat.skills),
+        prompt: Arc::clone(&prompt_parts),
         cancel: options.cancel.child(),
     });
     // Without the script engine there is nothing to load.
@@ -3135,8 +3146,10 @@ pub(crate) fn assemble(
         profile: knowledge
             .as_ref()
             .map(|knowledge| Arc::clone(knowledge) as Arc<dyn cineris_agent::ProfileSource>),
-        // Sections 6 and 7 of the system prompt: none until the session's
-        // skills and extensions fill them.
+        #[cfg(feature = "scripts")]
+        extensions: Some(prompt_parts as Arc<dyn cineris_agent::ExtensionsSource>),
+        // Without the script engine nothing is found: no section.
+        #[cfg(not(feature = "scripts"))]
         extensions: None,
     };
     let verifier = Arc::new(crate::verify::CoreVerifier::new(crate::verify::Parts {

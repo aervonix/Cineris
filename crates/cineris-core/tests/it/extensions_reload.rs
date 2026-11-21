@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 
 use cineris_ext::discover::{A_NAME_IS_LOOKED_AT, A_ROOT_IS_RESOLVED, AN_EXTENSION_IS_READ};
+use cineris_ext::skills;
 use cineris_testkit::Hold;
 
 use crate::extensions_found::{
@@ -103,13 +104,18 @@ fn a_change_is_seen_however_the_configuration_directory_is_given() {
 /// and no runtime. The look is the trust question's at the project's (one
 /// name, as there is no `.cineris`), and the session's at the user's, once
 /// its loop runs; a `.cineris` with no `extensions` in it costs the
-/// question a second look.
+/// question a second look. With no skill, the same: the session's finding
+/// looks at the first name of each of the six roots of skills, and one
+/// more under a `.cineris` that is there, and resolves and reads nothing.
 #[test]
 fn with_no_extension_a_session_looks_once_a_folder_and_reads_nothing() {
     let world = World::new("startup_no_extension", [says("Done."), says("Done.")]);
     let looks = Hold::new(A_NAME_IS_LOOKED_AT).skipping(usize::MAX);
     let resolved = Hold::new(A_ROOT_IS_RESOLVED).skipping(usize::MAX);
     let reads = Hold::new(AN_EXTENSION_IS_READ).skipping(usize::MAX);
+    let skill_looks = Hold::new(skills::A_NAME_IS_LOOKED_AT).skipping(usize::MAX);
+    let skill_roots = Hold::new(skills::A_ROOT_IS_RESOLVED).skipping(usize::MAX);
+    let skill_reads = Hold::new(skills::A_SKILL_IS_READ).skipping(usize::MAX);
     let made = cineris_ext::engine::runtimes_made();
     let core = world.core();
     world.run(async {
@@ -122,6 +128,7 @@ fn with_no_extension_a_session_looks_once_a_folder_and_reads_nothing() {
         2,
         "the question's look, and the session's"
     );
+    assert_eq!(skill_looks.arrivals(), 6, "one look a root of skills");
     world.project_config("");
     world.run(async {
         let front = start(&world, &core).await;
@@ -135,6 +142,13 @@ fn with_no_extension_a_session_looks_once_a_folder_and_reads_nothing() {
     );
     assert_eq!(resolved.arrivals(), 0);
     assert_eq!(reads.arrivals(), 0);
+    assert_eq!(
+        skill_looks.arrivals(),
+        6 + 7,
+        "and `.cineris/skills` the second time"
+    );
+    assert_eq!(skill_roots.arrivals(), 0);
+    assert_eq!(skill_reads.arrivals(), 0);
     assert_eq!(cineris_ext::engine::runtimes_made(), made);
     let state = state(&world);
     assert!(!state.pins_file().exists());
@@ -144,11 +158,19 @@ fn with_no_extension_a_session_looks_once_a_folder_and_reads_nothing() {
 /// With an extension of the user's, nothing of it is read on the path that
 /// opens the session: the session opens while every read of an extension's
 /// folder is held, and the read comes after, from the session's own
-/// finding, which the first turn waits for.
+/// finding, which the first turn waits for. A skill's `SKILL.md` the same:
+/// read after the extensions, by the same finding.
 #[test]
 fn with_an_extension_nothing_of_it_is_read_until_the_session_is_open() {
     let mut world = World::new("startup_with_extension", searches());
     write_extension(&users(&world), "", "Gives its arguments back");
+    let skill = world.home.join(".claude/skills/review");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(
+        skill.join("SKILL.md"),
+        "---\nname: review\ndescription: Review a change.\n---\n",
+    )
+    .unwrap();
     pin(&world, &users(&world));
     cache(&world, &users(&world));
     // The core's blocking work on threads of their own: a read held on the
@@ -156,15 +178,20 @@ fn with_an_extension_nothing_of_it_is_read_until_the_session_is_open() {
     world._order = None;
     let core = world.core();
     let reads = Hold::new(AN_EXTENSION_IS_READ);
+    let skill_reads = Hold::new(skills::A_SKILL_IS_READ);
     world.run(async {
         let front = start(&world, &core).await;
         let mut waiting = std::pin::pin!(std::future::pending::<()>());
         reads.drive_until_reached(waiting.as_mut()).await;
         assert_eq!(reads.timed_out(), 0, "nothing waited for the read");
         reads.release();
+        skill_reads.drive_until_reached(waiting.as_mut()).await;
+        assert_eq!(skill_reads.timed_out(), 0, "nothing waited for the read");
+        skill_reads.release();
         front.turn("look for the probe").await;
         assert!(found_probe(&front), "{:?}", front.results());
         front.close().await;
     });
     assert_eq!(reads.arrivals(), 1);
+    assert_eq!(skill_reads.arrivals(), 1);
 }

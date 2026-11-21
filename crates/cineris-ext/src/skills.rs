@@ -56,6 +56,13 @@
 //! `.cineris/` over `.agents/` over `.claude/`; the other is left out with
 //! its reason. **The order is fixed:** by name, then by root.
 //!
+//! **A root that is not there costs a look at each name on the way to it,
+//! and is not resolved;** the home directory is resolved only when a
+//! user's root is shown. [`find_seeing`] names each place to the caller
+//! before it is looked at or read, where it really is and through no link
+//! the walk does not follow, so that a session can stamp what its skills
+//! were found in and see a change.
+//!
 //! Finding skills blocks: it reads folders and files. The caller runs
 //! [`find`] on the blocking pool.
 
@@ -70,11 +77,9 @@ use std::fs::FileType;
 use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
-use cineris_base::text::{ELLIPSIS, truncate_bytes};
-use cineris_base::visible::is_selector;
 use cineris_base::{
-    AbsPath, OpenError, PathError, PathResolver, ResolvedPath, acts_unseen, location_within,
-    open_regular, same_location, strip_location_prefix, visible,
+    AbsPath, OpenError, PathError, PathResolver, ResolvedPath, location_within, open_regular,
+    same_location, strip_location_prefix, visible,
 };
 
 /// The file that makes a folder a skill.
@@ -292,21 +297,57 @@ pub struct Found {
 /// It blocks: call it on the blocking pool.
 #[must_use]
 pub fn find(resolver: &PathResolver, roots: &[Root]) -> Found {
+    find_seeing(resolver, roots, &mut |_| {})
+}
+
+/// A point of [`find`]: a name on the way to a root, looked at itself to
+/// rule the root out (`cineris_base::hook`). A test counts what a session
+/// looks at with it.
+pub const A_NAME_IS_LOOKED_AT: &str = "skills: a name on the way to a root is looked at";
+
+/// A point of [`find`]: a root is resolved through the path resolver,
+/// since a look could not rule it out.
+pub const A_ROOT_IS_RESOLVED: &str = "skills: a root is resolved";
+
+/// A point of [`find`]: a `SKILL.md` is about to be read.
+pub const A_SKILL_IS_READ: &str = "skills: a SKILL.md is about to be read";
+
+/// [`find`], with each place given to `seen` **before** it is looked at or
+/// read, so that the caller can stamp it for a change (the core's
+/// hot-reload): each name on the way to a root as written, looked at
+/// itself; where each root really is, before it is listed; each entry of
+/// it that may be a skill's folder, itself, before it is looked into; where
+/// such a folder reached through a link really is; and each `SKILL.md`
+/// where it really is, before it is read. A place is never one reached
+/// through a link the walk does not follow. A root gives at most 3 names on
+/// the way, itself, and three places for each of its [`MAX_ENTRIES`]
+/// entries.
+///
+/// **A root that is not there costs a look at each name on the way to it,
+/// and is not resolved:** the names below the workspace, or below the home
+/// directory as it was given to the resolver, are looked at one at a time,
+/// each itself, and the first that is not there rules the root out. One
+/// that is a link, or anything but a folder, leaves it to the resolver,
+/// which follows a link and judges where it leads. The home directory is
+/// resolved only when a user's root is shown.
+pub fn find_seeing(resolver: &PathResolver, roots: &[Root], seen: &mut dyn FnMut(&Path)) -> Found {
     let places = Places {
         workspace: resolver.root().to_fs_path(),
-        home: resolver
-            .resolve("~")
-            .ok()
-            .filter(ResolvedPath::exists)
-            .map(|home| home.to_fs_path()),
+        home: std::cell::OnceCell::new(),
+        resolver,
     };
     let mut left_out = Vec::new();
     let mut candidates = Vec::new();
     let mut looked: Vec<(PathBuf, String)> = Vec::new();
     for (index, root) in roots.iter().enumerate() {
+        if certainly_absent(resolver, root, seen) {
+            continue;
+        }
+        cineris_base::hook::point(A_ROOT_IS_RESOLVED);
         let Some((real, shown)) = open_root(resolver, root, &places, &looked, &mut left_out) else {
             continue;
         };
+        seen(&real.to_fs_path());
         look_in(
             &Look {
                 resolver,
@@ -317,6 +358,7 @@ pub fn find(resolver: &PathResolver, roots: &[Root]) -> Found {
             },
             &mut candidates,
             &mut left_out,
+            seen,
         );
         looked.push((real.to_fs_path(), shown));
     }
@@ -355,14 +397,71 @@ pub fn find(resolver: &PathResolver, roots: &[Root]) -> Found {
     }
 }
 
-/// The places a path is shown relative to, as the file system's calls
-/// take them.
-struct Places {
-    workspace: PathBuf,
-    home: Option<PathBuf>,
+/// Whether a root is certainly not there, decided with a look at each name
+/// on the way to it, each looked at itself and given to `seen` first.
+/// `false` when it is there, or when the looks cannot tell (a link, a
+/// name that is not a folder, a `..`): the resolver decides then. A user's
+/// root with no home directory is not there.
+fn certainly_absent(resolver: &PathResolver, root: &Root, seen: &mut dyn FnMut(&Path)) -> bool {
+    let (mut at, rest) = if root.path == "~" || root.path.starts_with("~/") {
+        match resolver.home() {
+            Some(home) => (home.to_fs_path(), root.path.get(1..).unwrap_or_default()),
+            None => return true,
+        }
+    } else if Path::new(&root.path).is_absolute() {
+        let at = PathBuf::from(&root.path);
+        seen(&at);
+        cineris_base::hook::point(A_NAME_IS_LOOKED_AT);
+        return missing(std::fs::symlink_metadata(&at));
+    } else {
+        (resolver.root().to_fs_path(), root.path.as_str())
+    };
+    for name in rest.split('/') {
+        match name {
+            "" | "." => continue,
+            ".." => return false,
+            name => at.push(name),
+        }
+        seen(&at);
+        cineris_base::hook::point(A_NAME_IS_LOOKED_AT);
+        match std::fs::symlink_metadata(&at) {
+            // A folder, and no link: the next name is looked at in it.
+            Ok(found) if found.is_dir() => {}
+            found => return missing(found),
+        }
+    }
+    false
 }
 
-impl Places {
+/// Whether a look found nothing there.
+fn missing(found: std::io::Result<std::fs::Metadata>) -> bool {
+    matches!(found, Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// The places a path is shown relative to, as the file system's calls
+/// take them.
+struct Places<'a> {
+    workspace: PathBuf,
+    /// The home directory's real location, resolved the first time a
+    /// user's root is shown: `None` within when there is none.
+    home: std::cell::OnceCell<Option<PathBuf>>,
+    resolver: &'a PathResolver,
+}
+
+impl Places<'_> {
+    /// Where the home directory really is.
+    fn home(&self) -> Option<&Path> {
+        self.home
+            .get_or_init(|| {
+                self.resolver
+                    .resolve("~")
+                    .ok()
+                    .filter(ResolvedPath::exists)
+                    .map(|home| home.to_fs_path())
+            })
+            .as_deref()
+    }
+
     /// `path` as the model and the user are shown it: relative to the
     /// workspace for a project's, under `~` for the user's, escaped.
     fn show(&self, owner: Owner, path: &AbsPath) -> String {
@@ -376,7 +475,7 @@ impl Places {
                     rest
                 }
             }),
-            Owner::User => self.home.as_deref().and_then(below).map(|rest| {
+            Owner::User => self.home().and_then(below).map(|rest| {
                 if rest.is_empty() {
                     "~".to_owned()
                 } else {
@@ -493,7 +592,12 @@ fn path_reason(error: PathError) -> Reason {
 }
 
 /// Looks at each entry of one root, by name, up to [`MAX_ENTRIES`].
-fn look_in(look: &Look<'_>, candidates: &mut Vec<Candidate>, left_out: &mut Vec<LeftOut>) {
+fn look_in(
+    look: &Look<'_>,
+    candidates: &mut Vec<Candidate>,
+    left_out: &mut Vec<LeftOut>,
+    seen: &mut dyn FnMut(&Path),
+) {
     let entries = match std::fs::read_dir(look.real.to_fs_path()) {
         Ok(entries) => entries,
         Err(error) => {
@@ -532,7 +636,10 @@ fn look_in(look: &Look<'_>, candidates: &mut Vec<Candidate>, left_out: &mut Vec<
             continue;
         }
         let named = format!("{}/{}", look.shown, visible(&name.to_string_lossy()));
-        match skill_in(look, &name, &named) {
+        // The entry itself, before it is looked into: a `SKILL.md` made in
+        // it, or the folder swapped for a link, is a change.
+        seen(&look.real.to_fs_path().join(&name));
+        match skill_in(look, &name, &named, seen) {
             Ok(Some(skill)) => candidates.push(Candidate {
                 skill,
                 root: look.index,
@@ -546,7 +653,12 @@ fn look_in(look: &Look<'_>, candidates: &mut Vec<Candidate>, left_out: &mut Vec<
 /// The skill in the folder `name` of a root: `None` when the folder is not
 /// a skill's (no `SKILL.md`, or a link to a file), and what was left out
 /// and why when it is one that cannot be taken.
-fn skill_in(look: &Look<'_>, name: &OsStr, named: &str) -> Result<Option<Skill>, LeftOut> {
+fn skill_in(
+    look: &Look<'_>,
+    name: &OsStr,
+    named: &str,
+    seen: &mut dyn FnMut(&Path),
+) -> Result<Option<Skill>, LeftOut> {
     let left = |path: &str, reason: Reason| LeftOut {
         path: path.to_owned(),
         reason,
@@ -574,6 +686,9 @@ fn skill_in(look: &Look<'_>, name: &OsStr, named: &str) -> Result<Option<Skill>,
     if !inside {
         return Err(left(named, Reason::LinkOut));
     }
+    // Where a folder reached through a link really is: what is made in it
+    // is a change too.
+    seen(&folder.to_fs_path());
     match std::fs::metadata(folder.to_fs_path()) {
         Ok(metadata) if metadata.is_dir() => {}
         // A link to a file inside the root: not a skill's folder.
@@ -596,6 +711,8 @@ fn skill_in(look: &Look<'_>, name: &OsStr, named: &str) -> Result<Option<Skill>,
     if !location_within(&file.to_fs_path(), &root) {
         return Err(left(&file_shown, Reason::LinkOut));
     }
+    seen(&file.to_fs_path());
+    cineris_base::hook::point(A_SKILL_IS_READ);
     let text = match read_capped(&file.to_fs_path()) {
         Ok(Some(text)) => text,
         Ok(None) => return Ok(None),
@@ -644,50 +761,10 @@ fn read_capped(path: &Path) -> Result<Option<String>, Reason> {
     Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
-/// `text` as one line for the system prompt, at most `max_bytes` long.
-///
-/// - White space of every kind (a line break, a tab, U+2028) becomes one
-///   space, and a run of it one space; the ends are trimmed.
-/// - Every other character that acts unseen ([`acts_unseen`]) is taken
-///   out: the control characters, the format characters (`Cf`: the
-///   bidirectional controls U+202A to U+202E and U+2066 to U+2069, the
-///   zero-width characters, U+FEFF), and the characters that render as
-///   nothing. A variation selector stays only right after a character kept.
-/// - Text longer than `max_bytes` is cut between two grapheme clusters, so
-///   never inside a character, and ends with `…` within `max_bytes`.
-#[must_use]
-pub fn one_line(text: &str, max_bytes: usize) -> String {
-    let mut out = String::with_capacity(text.len().min(max_bytes.saturating_add(8)));
-    let mut space = false;
-    // Whether the last character kept may take a variation selector.
-    let mut base = false;
-    for character in text.chars() {
-        if character.is_whitespace() {
-            space = !out.is_empty();
-            base = false;
-        } else if is_selector(character) {
-            if base {
-                out.push(character);
-            }
-        } else if !acts_unseen(character) {
-            if space {
-                out.push(' ');
-                space = false;
-            }
-            out.push(character);
-            base = true;
-        }
-    }
-    if out.len() <= max_bytes {
-        return out;
-    }
-    let Some(room) = max_bytes.checked_sub(ELLIPSIS.len()) else {
-        return truncate_bytes(&out, max_bytes).to_owned();
-    };
-    let mut cut = truncate_bytes(&out, room).trim_end().to_owned();
-    cut.push_str(ELLIPSIS);
-    cut
-}
+/// `text` as one line for the system prompt, at most `max_bytes` long: the
+/// rule's one home is `cineris_base`, which the agent's index of tool
+/// sources is shown by too.
+pub use cineris_base::one_line;
 
 /// The front matter at the top of a Markdown file: a block between two
 /// `---` lines, the first line of the file, holding `key: value` lines.
@@ -1133,149 +1210,4 @@ pub fn render(found: &Found, cap: usize) -> Index {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn read(text: &str) -> FrontMatter {
-        FrontMatter::read(text).unwrap()
-    }
-
-    #[test]
-    fn plain_values_and_comments() {
-        let front = read(
-            "---\nname: pdf-tools # the folder's name\ndescription: Fill in forms\n  and merge \
-             them.\n\n  Also split.\nlicense: MIT\n---\n# Body\n",
-        );
-        assert_eq!(front.get("name"), Some("pdf-tools"));
-        assert_eq!(
-            front.get("description"),
-            Some("Fill in forms and merge them.\nAlso split.")
-        );
-        assert_eq!(front.get("license"), Some("MIT"));
-        assert_eq!(front.get("missing"), None);
-        // A `#` inside a word is not a comment.
-        assert_eq!(
-            read("---\nname: c#-tools\n---").get("name"),
-            Some("c#-tools")
-        );
-    }
-
-    #[test]
-    fn quoted_values_in_both_quotes_and_over_lines() {
-        let front = read(
-            "---\nname: \"pdf: tools\" # quoted\ndescription: 'It''s for\n  forms, \"all\" of \
-             them.'\n---\n",
-        );
-        assert_eq!(front.get("name"), Some("pdf: tools"));
-        assert_eq!(
-            front.get("description"),
-            Some("It's for forms, \"all\" of them.")
-        );
-        let escaped = read(
-            "---\nname: \"a\\tb\\u00e9\\x41\\\"\\\\\"\ndescription: \"one \\\n  two\n\n  \
-             three\"\n---",
-        );
-        assert_eq!(escaped.get("name"), Some("a\tbéA\"\\"));
-        assert_eq!(escaped.get("description"), Some("one two\nthree"));
-        // A quote never closed is taken as far as it goes.
-        assert_eq!(read("---\nname: \"open\n---").get("name"), Some("open"));
-    }
-
-    #[test]
-    fn blocks_keep_or_fold_their_lines() {
-        let front = read(
-            "---\nname: x\ndescription: >-\n  Folded\n  into one.\n\n  Then more.\nnotes: |\n  \
-             kept\n    indented\n  lines\n---",
-        );
-        assert_eq!(
-            front.get("description"),
-            Some("Folded into one.\nThen more.")
-        );
-        assert_eq!(front.get("notes"), Some("kept\n  indented\nlines"));
-        // An indentation indicator is taken.
-        assert_eq!(
-            read("---\nd: |2\n    deeper\n  less\n---").get("d"),
-            Some("  deeper\nless")
-        );
-        // A `>` that is not a block's header is plain text.
-        assert_eq!(read("---\nd: >x\n---").get("d"), Some(">x"));
-    }
-
-    #[test]
-    fn what_is_and_is_not_front_matter() {
-        for none in [
-            "",
-            "name: x\n",
-            "# Title\n---\nname: x\n---",
-            "---\nname: x\n",
-            " ---\nname: x\n---",
-        ] {
-            assert_eq!(FrontMatter::read(none), None, "{none:?}");
-        }
-        // A byte-order mark, `\r\n` and `...` as the close.
-        let front = read("\u{feff}---\r\nname: x\r\ndescription: y \r\n...\r\nbody");
-        assert_eq!(
-            (front.get("name"), front.get("description")),
-            (Some("x"), Some("y"))
-        );
-        // A key's first value stands; a nested map belongs to its key; a
-        // `key:value` with no space is no field; a quoted key is one.
-        let front = read(
-            "---\nname: first\nmetadata:\n  name: nested\nname: second\nurl:x\n\"description\" : \
-             d\n---",
-        );
-        assert_eq!(front.get("name"), Some("first"));
-        assert_eq!(front.get("url"), None);
-        assert_eq!(front.get("description"), Some("d"));
-        assert_eq!(
-            front.fields().map(|(key, _)| key).collect::<Vec<_>>(),
-            ["name", "metadata", "description"]
-        );
-    }
-
-    #[test]
-    fn one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge() {
-        assert_eq!(
-            one_line("  a\tb\r\n\u{2028}c\u{1b}[31m d  ", 100),
-            "a b c[31m d"
-        );
-        assert_eq!(
-            one_line("ad\u{202e}min\u{2066}\u{200d}\u{200b}\u{feff}\u{ad}x", 100),
-            "adminx"
-        );
-        // A variation selector after a character kept stays; alone, not.
-        assert_eq!(
-            one_line("\u{fe0f}\u{2764}\u{fe0f}", 100),
-            "\u{2764}\u{fe0f}"
-        );
-        // Cut between characters, never inside one, with the mark within
-        // the cap.
-        let cut = one_line(&"é".repeat(200), 300);
-        assert!(cut.len() <= 300 && cut.ends_with(ELLIPSIS), "{}", cut.len());
-        assert_eq!(cut.trim_end_matches(ELLIPSIS), "é".repeat(148));
-        assert_eq!(one_line("abcdef", 2), "ab");
-        assert_eq!(one_line("abc", 3), "abc");
-    }
-
-    #[test]
-    fn the_standard_roots_in_the_order_a_name_is_taken() {
-        let paths = |compat| {
-            Root::standard(compat)
-                .into_iter()
-                .map(|root| root.path)
-                .collect::<Vec<_>>()
-        };
-        assert_eq!(
-            paths(true),
-            [
-                ".cineris/skills",
-                ".agents/skills",
-                ".claude/skills",
-                "~/.cineris/skills",
-                "~/.agents/skills",
-                "~/.claude/skills"
-            ]
-        );
-        assert_eq!(paths(false), [".cineris/skills", "~/.cineris/skills"]);
-    }
-}
+mod tests;

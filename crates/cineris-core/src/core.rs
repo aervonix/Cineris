@@ -1691,6 +1691,11 @@ impl Core {
             Op::SessionCompact(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                // A compaction begins as a turn does, and may build the
+                // session's first prompt: it waits for the session's
+                // extensions and skills as a turn does, so that the prompt
+                // holds what they give it (step 28).
+                live.extensions.wait().await;
                 live.handle.compact(params.focus)?;
                 Ok(OpResult::SessionCompact(Empty {}))
             }

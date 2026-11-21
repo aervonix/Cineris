@@ -197,10 +197,24 @@ fn a_users_extension_left_out_keeps_its_name_from_a_projects() {
 /// Each extension's folder is read once on a session's way: the project's
 /// by the trust question, which the session takes on, and the user's by
 /// the session alone, the question only listing the user's folder for the
-/// names it takes (the early review: both were read whole twice).
+/// names it takes (the early review: both were read whole twice). Each
+/// skill's `SKILL.md` is read once too, the user's and the project's, by
+/// the session's finding alone.
 #[test]
 fn each_folder_is_read_once_when_a_session_opens() {
     let world = World::new("found_read_once", searches_both());
+    for root in [
+        world.home.join(".claude/skills/review"),
+        world.workspace.join(".cineris/skills/pdf"),
+    ] {
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("SKILL.md"),
+            "---\nname: a skill\ndescription: One.\n---\n",
+        )
+        .unwrap();
+    }
+    let skill_reads = counting(cineris_ext::skills::A_SKILL_IS_READ);
     write_extension(&users(&world), "", "one of mine");
     pin(&world, &users(&world));
     cache(&world, &users(&world));
@@ -220,6 +234,7 @@ fn each_folder_is_read_once_when_a_session_opens() {
         front.close().await;
     });
     assert_eq!(reads.arrivals(), 2, "one reading of each folder");
+    assert_eq!(skill_reads.arrivals(), 2, "one reading of each skill");
 }
 
 // ------------------------------------------------------------ never, not now

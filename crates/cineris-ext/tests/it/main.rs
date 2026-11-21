@@ -16,7 +16,6 @@ mod engine;
 mod folder;
 mod manifest;
 mod serve;
-mod skills;
 
 use std::collections::BTreeMap;
 use std::path::Path;

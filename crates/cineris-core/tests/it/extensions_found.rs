@@ -207,6 +207,33 @@ pub(crate) async fn open_doing(
     meanwhile: &dyn Fn(),
     answer: TrustResponse,
 ) -> (Front, Vec<TrustRequest>) {
+    open_kept_or_not(world, core, info, meanwhile, answer, true).await
+}
+
+/// [`start`], with the session kept in a log: one that can be read again
+/// (rewound), as a resume reads it.
+pub(crate) async fn start_kept(world: &World, core: &Core) -> Front {
+    open_kept_or_not(
+        world,
+        core,
+        ClientInfo::user(),
+        &|| {},
+        TrustResponse::default(),
+        false,
+    )
+    .await
+    .0
+}
+
+/// [`open_doing`], the session kept in memory only when `ephemeral`.
+async fn open_kept_or_not(
+    world: &World,
+    core: &Core,
+    info: ClientInfo,
+    meanwhile: &dyn Fn(),
+    answer: TrustResponse,
+    ephemeral: bool,
+) -> (Front, Vec<TrustRequest>) {
     let client = core.connect(info);
     let opening = core.handle(
         client.id,
@@ -216,9 +243,10 @@ pub(crate) async fn open_doing(
             settings: SessionSettings::default(),
             title: None,
             config: serde_json::Map::new(),
-            // Kept in memory only: what these tests check is not the log,
-            // and its writes are much of a session's cost on Windows.
-            ephemeral: true,
+            // Kept in memory only, unless a test reads the session again:
+            // what these tests check is not the log, and its writes are much
+            // of a session's cost on Windows.
+            ephemeral,
         }),
     );
     let mut asked = Vec::new();
