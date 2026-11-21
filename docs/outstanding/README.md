@@ -33,6 +33,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [stopping-at-a-task-lease-edge](stopping-at-a-task-lease-edge.md): At a task lease's edge the loop should stop and report, then fall back to the standing lease. Owner: step 37.
 - [the-maps-share-of-the-context-record](the-maps-share-of-the-context-record.md): The repository map is counted among the notices in the context record, so the profiler cannot say what it costs. Owner: step 44, or step 16.
 - [the-token-counting-endpoint-near-the-limit](the-token-counting-endpoint-near-the-limit.md): The provider's token-counting endpoint is never asked near the limit; needs a `Protocol` method and loop call. Owner: a later step that touches the budget, or step 33.
+- [whether-a-projects-text-for-the-model-waits-for-trust](whether-a-projects-text-for-the-model-waits-for-trust.md): Whether the text a repository gives the model, its instruction files and its skills together, should wait until the project is trusted, where today it reaches the model at once. Owner: the owner.
 
 ### cineris-base
 
