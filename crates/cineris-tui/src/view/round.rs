@@ -43,6 +43,10 @@ pub struct Call {
     pub took: Option<Duration>,
     /// What can be shown under it.
     pub detail: Detail,
+    /// The hook that put its arguments in place of the model's, when one
+    /// did and the call was put to the user with them (since step 28): the
+    /// target is then the hook's.
+    pub hook: Option<String>,
 }
 
 /// What a call acts on.
@@ -327,6 +331,14 @@ fn call_line(call: &Call, tick: usize, room: usize, look: &Look) -> Line {
         for span in measure.spans() {
             line.push(span.clone());
         }
+    }
+    // It ran with a hook's arguments, which the user allowed.
+    if let Some(hook) = &call.hook {
+        line.push(Span::plain("  "));
+        line.push(Span::new(
+            format!("arguments from the hook {}", one_line(hook)),
+            theme.style(Token::Warning),
+        ));
     }
     cut(&line, room, g.ellipsis)
 }

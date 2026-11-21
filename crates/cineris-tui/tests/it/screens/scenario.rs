@@ -224,6 +224,7 @@ fn call(
         measure,
         took: took.map(Duration::from_millis),
         detail,
+        hook: None,
     }
 }
 

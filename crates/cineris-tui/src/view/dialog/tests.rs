@@ -400,6 +400,105 @@ fn every_field_of_an_approval_escapes_what_acts_unseen() {
     );
 }
 
+/// A call whose arguments a hook replaced (step 28): the dialog says which
+/// hook changed it and why, in the warning colour, and its detail begins
+/// with both sets of arguments, the model's and the hook's, before what
+/// would run. The line `reasons` holds for a client that does not read
+/// `replaced` is not drawn twice, and nor is a hook's that asked.
+#[test]
+fn a_replacement_shows_the_hook_and_both_sets_of_arguments() {
+    use cineris_protocol::item::{HookReason, ReplacedArguments};
+    let mut asked = request(command("cargo test --offline", false), "Run cargo test --offline");
+    let replaced = ReplacedArguments {
+        hook: "offline".to_owned(),
+        arguments: serde_json::json!({"command": "cargo test --offline"}),
+        original: Some(serde_json::json!({"command": "cargo test"})),
+        reason: Some("Tests run offline here.".to_owned()),
+    };
+    let slow = HookReason {
+        hook: "slow".to_owned(),
+        reason: Some("the suite takes ten minutes".to_owned()),
+    };
+    // As the core gives it: a line for each, for older clients.
+    asked.reasons = vec![slow.asking_line(), replaced.reason_line()];
+    asked.hooks = vec![slow];
+    asked.replaced = Some(Box::new(replaced));
+    let drawn = approval(&asked, &view(20), 99, &look());
+    let rows = text(&drawn);
+    assert_eq!(rows[0], "? Run cargo test --offline?");
+    assert_eq!(
+        rows[1],
+        "  The hook `slow` asks: the suite takes ten minutes"
+    );
+    let said = rows[2..]
+        .iter()
+        .take_while(|row| !row.is_empty())
+        .map(|row| row.trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        said,
+        "The hook `offline` changed the arguments the model wrote: the call would run with the \
+         hook's. Its reason: Tests run offline here."
+    );
+    let from = rows
+        .iter()
+        .position(|row| row == "    The model wrote:")
+        .expect("the model's arguments");
+    assert_eq!(
+        rows[from..from + 5],
+        [
+            "    The model wrote:",
+            r#"      {"command":"cargo test"}"#,
+            "    The hook's, which would run:",
+            r#"      {"command":"cargo test --offline"}"#,
+            "",
+        ]
+        .map(str::to_owned),
+        "{rows:#?}"
+    );
+    assert_eq!(rows[from + 5], "    cargo test --offline", "then what would run");
+    let all = rows.join("\n");
+    assert_eq!(all.matches("The hook `slow`").count(), 1, "{all}");
+    assert_eq!(all.matches("The hook `offline`").count(), 1, "{all}");
+}
+
+/// A hook that asked is named from `hooks` when `reasons` does not say it.
+#[test]
+fn a_hook_that_asked_is_named_when_the_reasons_do_not_say_it() {
+    let mut asked = request(command("make", false), "Run make");
+    asked.hooks = vec![cineris_protocol::item::HookReason {
+        hook: "look".to_owned(),
+        reason: None,
+    }];
+    let rows = text(&approval(&asked, &view(10), 99, &look()));
+    assert_eq!(rows[2], "  The hook `look` asks about this call.", "{rows:#?}");
+}
+
+/// What a hook gave (its name, its reason, both sets of arguments) is
+/// drawn with what acts unseen escaped.
+#[test]
+fn what_a_hook_gave_is_drawn_escaped() {
+    let mut asked = request(command("make", false), "Run make");
+    asked.reasons.clear();
+    asked.hooks = vec![cineris_protocol::item::HookReason {
+        hook: format!("asker{UNSEEN}"),
+        reason: Some(format!("because{UNSEEN}")),
+    }];
+    asked.replaced = Some(Box::new(cineris_protocol::item::ReplacedArguments {
+        hook: format!("swap{UNSEEN}"),
+        arguments: serde_json::json!({ "path": format!("theirs{UNSEEN}") }),
+        original: Some(serde_json::json!({ "path": format!("mine{UNSEEN}") })),
+        reason: Some(format!("why{UNSEEN}")),
+    }));
+    let width = 140;
+    shows_escaped(
+        &approval(&asked, &view(10), width, &look()),
+        width,
+        &["asker", "because", "swap", "why", "theirs", "mine"],
+    );
+}
+
 /// The trust question's workspace, each resource's detail and a rule's
 /// profile are drawn with what acts unseen escaped.
 #[test]

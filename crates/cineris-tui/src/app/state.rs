@@ -2444,6 +2444,21 @@ impl App {
                 // takes it in.
                 self.restyle_if(&changed.applied);
             }
+            // A prompt a hook refused, or one the turn's interrupt kept
+            // from its hooks (step 28): said with the hooks' reasons, and
+            // put back in the editor.
+            Event::Notice(Notice::PromptReturned(returned)) => {
+                self.transcript.push(Block::Notice(returned_text(returned)));
+                let text: Vec<&str> = returned
+                    .parts
+                    .iter()
+                    .filter_map(|part| match part {
+                        Part::Text(text) => Some(text.text.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                self.give_back(&text.join("\n"));
+            }
             Event::Notice(notice) => {
                 if let Some(message) = notice_text(notice) {
                     self.transcript.push(Block::Notice(message));
@@ -2959,6 +2974,33 @@ fn new_session(
 
 /// A notice in words: the message, with a compaction's counts when it does
 /// not say them.
+/// What the transcript says of a prompt given back: each hook that refused
+/// it, with its reason, and that it is in the editor again. With no hook
+/// named (the turn was interrupted while they were asked), the server's
+/// own words.
+fn returned_text(returned: &cineris_protocol::event::PromptReturnedNotice) -> String {
+    if returned.hooks.is_empty() {
+        return format!("{} It is back in the editor.", returned.message);
+    }
+    let what = if returned.delivery == Some(ItemDelivery::Steer) {
+        "the steering message"
+    } else {
+        "the prompt"
+    };
+    let each: Vec<String> = returned
+        .hooks
+        .iter()
+        .map(|hook| match &hook.reason {
+            Some(reason) => format!("{}: {reason}", hook.hook),
+            None => hook.hook.clone(),
+        })
+        .collect();
+    format!(
+        "A hook refused {what}, which was not sent ({}). It is back in the editor.",
+        each.join("; ")
+    )
+}
+
 fn notice_text(notice: &Notice) -> Option<String> {
     let message = notice.message()?.to_owned();
     if let Notice::Compaction(compaction) = notice

@@ -29,6 +29,7 @@ pub(crate) fn started(tool: &str) -> Call {
         measure: Measure::None,
         took: None,
         detail: Detail::None,
+        hook: None,
     }
 }
 
@@ -85,6 +86,15 @@ pub(crate) fn target(tool: &str, arguments: &Value) -> Target {
 /// The call once its result has come: its state, measure, time and detail.
 /// `output` is what streamed while it ran.
 pub(crate) fn finish(call: &mut Call, result: &ToolResultItem, output: &str) {
+    // A hook's arguments, put to the user and allowed or not: the line
+    // names the hook, and acts on what the hook's arguments name.
+    if let Some(replaced) = &result.replaced {
+        call.hook = Some(replaced.hook.clone());
+        let target = target(&result.tool, &replaced.arguments);
+        if target != Target::None {
+            call.target = target;
+        }
+    }
     call.state = match result.outcome {
         ToolOutcome::Success => CallState::Succeeded,
         ToolOutcome::Denied => CallState::Denied,
@@ -421,6 +431,34 @@ mod tests {
             Target::Text("cargo test\n -p parser".to_owned())
         );
         assert_eq!(target("plan", &json!({"items": []})), Target::None);
+    }
+
+    /// A result that ran with a hook's arguments names the hook on its
+    /// line, and acts on what the hook's arguments name (step 28).
+    #[test]
+    fn a_result_a_hook_changed_names_the_hook_and_its_target() {
+        let mut call = started("shell");
+        call.target = target("shell", &json!({"command": "cargo test"}));
+        let mut ran = result("shell", ToolOutcome::Success, json!({"exit_code": 0}));
+        ran.replaced = Some(Box::new(cineris_protocol::item::ReplacedArguments {
+            hook: "offline".to_owned(),
+            arguments: json!({"command": "cargo test --offline"}),
+            original: None,
+            reason: None,
+        }));
+        finish(&mut call, &ran, "");
+        assert_eq!(call.hook.as_deref(), Some("offline"));
+        assert_eq!(
+            call.target,
+            Target::Text("cargo test --offline".to_owned())
+        );
+        let mut plain = started("shell");
+        finish(
+            &mut plain,
+            &result("shell", ToolOutcome::Success, json!({})),
+            "",
+        );
+        assert_eq!(plain.hook, None);
     }
 
     #[test]

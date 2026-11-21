@@ -27,6 +27,7 @@ fn running_call() -> Call {
         measure: Measure::None,
         took: None,
         detail: Detail::None,
+        hook: None,
     }
 }
 
