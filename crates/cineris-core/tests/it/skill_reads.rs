@@ -7,8 +7,10 @@
 //! and a user's whose folder is in the workspace or holds it, have none, so
 //! that the workspace's reads stay as they were, nor has a folder that is
 //! the home directory or holds it; the rules follow the skills found at each
-//! turn's start, and one the user revoked is not given again. End to end,
-//! through the core, on in-memory sessions.
+//! turn's start, and one the user revoked is not given again. All of it
+//! only while the user's own configuration turns `permissions.
+//! read_skill_folders` on: it is off by default, and a project's file may
+//! not set it. End to end, through the core, on in-memory sessions.
 
 use std::path::Path;
 
@@ -20,6 +22,9 @@ use serde_json::json;
 
 use crate::extensions_found::start;
 use crate::{Front, World, calls, says};
+
+/// The user's configuration that turns the skills' read rule on.
+const ON: &str = "[permissions]\nread_skill_folders = true\n\n";
 
 /// Writes the skill `name` in the folder of skills `root`.
 fn skill(root: &Path, name: &str) {
@@ -172,10 +177,10 @@ async fn revoke(front: &Front, id: cineris_protocol::ids::ApprovalId) {
 #[test]
 fn a_users_skill_folder_is_read_unasked_and_its_rule_follows_the_skills_found() {
     let world = World::new("skill_reads_story", []);
-    world.user_config(
-        "[[permissions.rules]]\neffect = \"read\"\nmatch = \"~/.claude/skills/review/private.md\"\n\
-         action = \"deny\"\n",
-    );
+    world.user_config(&format!(
+        "{ON}[[permissions.rules]]\neffect = \"read\"\nmatch = \"~/.claude/skills/review/private.md\"\n\
+         action = \"deny\"\n"
+    ));
     let root = world.home.join(".claude/skills");
     skill(&root, "review");
     let folder = root.join("review");
@@ -290,6 +295,48 @@ fn a_users_skill_folder_is_read_unasked_and_its_rule_follows_the_skills_found() 
     });
 }
 
+/// Off by default: a file of a user's own skill outside the workspace is
+/// asked about, as any file there is, and the session has no rule. A
+/// project's configuration may not turn it on: its `read_skill_folders =
+/// true` is ignored, the session is told so, and the read is still asked
+/// about.
+#[test]
+fn the_rule_is_off_by_default_and_a_project_may_not_turn_it_on() {
+    let world = World::new("skill_reads_off", []);
+    let root = world.home.join(".claude/skills");
+    skill(&root, "review");
+    for _ in 0..2 {
+        world
+            .provider
+            .push(reading(&[read("c1", &root.join("review/SKILL.md"))]));
+        world.provider.push(says("Asked."));
+    }
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        assert_eq!(front.turn_denying("read the skill").await, ["read"]);
+        let approvals = approvals(&front).await;
+        assert!(approvals.is_empty(), "{approvals:#?}");
+        front.close().await;
+    });
+    world.project_config("[permissions]\nread_skill_folders = true\n");
+    world.run(async {
+        let front = start(&world, &core).await;
+        assert_eq!(front.turn_denying("read the skill").await, ["read"]);
+        let approvals = approvals(&front).await;
+        assert!(approvals.is_empty(), "{approvals:#?}");
+        let notices = front.notices();
+        assert!(
+            notices
+                .iter()
+                .any(|notice| notice.contains("read_skill_folders")
+                    && notice.contains("may not set this")),
+            "{notices:#?}"
+        );
+        front.close().await;
+    });
+}
+
 /// Only the user's skills found have a rule: none for a skill's folder that
 /// is a link out of its root, read where it leads or through the link, nor
 /// for a skill in `.claude/skills/` while `compat.skills` is off. A folder
@@ -298,7 +345,7 @@ fn a_users_skill_folder_is_read_unasked_and_its_rule_follows_the_skills_found() 
 #[test]
 fn a_users_skill_that_is_not_found_has_no_rule() {
     let world = World::new("skill_reads_not_found", []);
-    world.user_config("[compat]\nskills = false\n");
+    world.user_config(&format!("{ON}[compat]\nskills = false\n"));
     let mine = world.home.join(".cineris/skills");
     skill(&mine, "kept");
     skill(&mine, "notes[1]");
@@ -353,6 +400,7 @@ fn a_users_skill_that_is_not_found_has_no_rule() {
 #[test]
 fn the_skills_in_the_workspace_have_no_rule() {
     let world = World::new("skill_reads_in_the_workspace", []);
+    world.user_config(ON);
     let theirs = world.workspace.join(".cineris/skills");
     skill(&theirs, "theirs");
     put(&theirs.join("theirs/.env"), "TOKEN=project\n");
@@ -410,6 +458,7 @@ fn the_skills_in_the_workspace_have_no_rule() {
 #[test]
 fn a_skill_folder_that_holds_the_workspace_has_no_rule() {
     let mut world = World::new("skill_reads_holding_the_workspace", []);
+    world.user_config(ON);
     let root = world.home.join(".claude/skills");
     skill(&root, "pdf");
     skill(&root, "review");
@@ -449,6 +498,7 @@ fn a_skill_folder_that_holds_the_workspace_has_no_rule() {
 #[test]
 fn a_skill_folder_that_is_the_home_directory_has_no_rule() {
     let world = World::new("skill_reads_the_home", []);
+    world.user_config(ON);
     put(
         &world.home.join("SKILL.md"),
         "---\nname: everything\ndescription: All of it.\n---\n",
@@ -483,6 +533,7 @@ fn a_skill_folder_that_is_the_home_directory_has_no_rule() {
 #[test]
 fn on_windows_a_home_written_otherwise_is_judged_by_place() {
     let mut world = World::new("skill_reads_windows_spelling", []);
+    world.user_config(ON);
     let written: std::path::PathBuf = world
         .home
         .to_str()

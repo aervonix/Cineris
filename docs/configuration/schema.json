@@ -701,6 +701,13 @@
           "x-cineris-effect": "at once",
           "x-cineris-trust": "by level: not above the mode in effect is a preference, up to `supervised` widens access, above it user only"
         },
+        "read_skill_folders": {
+          "default": false,
+          "description": "Let the model read the files in your own skill folders (in your home directory, outside the workspace) without asking. Secret-looking files there, such as a `.env` a skill's scripts use, are read too, and sent to the model's provider. Off: each such read is asked about. The user's alone: a project's file may not set it.",
+          "type": "boolean",
+          "x-cineris-effect": "next session",
+          "x-cineris-trust": "user only"
+        },
         "rules": {
           "default": [],
           "description": "Permission rules. Every layer adds to the list; `deny` beats `ask` beats `allow`, whatever the order.",

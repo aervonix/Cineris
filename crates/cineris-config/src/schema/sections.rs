@@ -378,6 +378,14 @@ settings! {
         /// `ask` beats `allow`, whatever the order.
         [ByRuleAction, Now, joined]
         pub rules: Vec<Rule>,
+        /// Let the model read the files in your own skill folders (in your
+        /// home directory, outside the workspace) without asking.
+        /// Secret-looking files there, such as a `.env` a skill's scripts
+        /// use, are read too, and sent to the model's provider. Off: each
+        /// such read is asked about. The user's alone: a project's file may
+        /// not set it.
+        [UserOnly, NextSession]
+        pub read_skill_folders: bool = false,
     }
 }
 

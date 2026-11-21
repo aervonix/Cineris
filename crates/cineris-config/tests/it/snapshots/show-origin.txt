@@ -30,6 +30,7 @@ model.speed_cooldown_min = "1m"             # default
 model.speed_fallback = true                 # default
 model.speed_wait = "5s"                     # command-line: -c model.speed_wait
 permissions.mode = "read-only"              # profile review (user: ~/cineris/config.toml:33)
+permissions.read_skill_folders = false      # default
 permissions.rules = [
     { action = "deny", effect = "write", match = "/etc/**" },  # managed: ~/managed/config.toml:9
     { action = "allow", effect = "exec", match = "cargo test *" },  # user: ~/cineris/config.toml:23

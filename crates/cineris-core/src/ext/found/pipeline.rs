@@ -18,7 +18,11 @@
 //! allow for reading the folder and everything below it
 //! ([`crate::policy::reading_below`]), added as "allow for this session"
 //! adds one, with the source `session`, at each finding of the skills
-//! ([`super::reads`] says which folders, and how the rules follow them).
+//! ([`super::reads`] says which folders, and how the rules follow them),
+//! **while `permissions.read_skill_folders` is on**, which only the user's
+//! own configuration may do and which is off by default (the owner's
+//! decision: a skill's folder may hold a `.env` its scripts use, and what
+//! is read is sent to the provider).
 //! The folder is where the skill really is, as `skills::find` judged it, so
 //! a skill whose folder is a link out of its root, which is not found, has
 //! none; a rule that holds reading back still wins, as it wins over any
@@ -88,6 +92,10 @@ pub(crate) struct Finding {
     /// The roots skills are looked for in (`skills::Root::standard`, as
     /// `compat.skills` says).
     pub(crate) skills: Vec<skills::Root>,
+    /// Whether the user's own skills' folders may be read unasked
+    /// (`permissions.read_skill_folders`, the user's alone, off by
+    /// default). Off, the skills give the session no rule.
+    pub(crate) read_skill_folders: bool,
     /// Where what the skills and the extensions give the system prompt is
     /// settled, for the loop to ask.
     pub(crate) prompt: Arc<PromptParts>,
@@ -160,6 +168,7 @@ struct Inputs {
     trust_project: bool,
     disabled: Vec<String>,
     skills: Vec<skills::Root>,
+    read_skill_folders: bool,
     clock: SharedClock,
 }
 
@@ -243,6 +252,7 @@ async fn first(extensions: &Extensions, finding: Finding) {
         registry,
         parts,
         skills,
+        read_skill_folders,
         prompt,
         cancel: _,
     } = finding;
@@ -256,6 +266,7 @@ async fn first(extensions: &Extensions, finding: Finding) {
         trust_project,
         disabled,
         skills,
+        read_skill_folders,
         clock: Arc::clone(&parts.clock),
     });
     let kept = {
@@ -508,6 +519,11 @@ impl Held {
         self.skills_watched = watched;
         self.prompt
             .set_skills(skills::render(&found, cineris_agent::SKILLS_CAP).text);
+        // Off (the default), the skills give no rule: each read of their
+        // files outside the workspace is asked about.
+        if !self.inputs.read_skill_folders {
+            return;
+        }
         let workspace = self.inputs.resolver.root().to_fs_path();
         let folders = super::reads::readable(&found.skills, &workspace, home.as_deref());
         let reads = Arc::clone(&self.reads);
