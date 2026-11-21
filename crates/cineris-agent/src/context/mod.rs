@@ -31,6 +31,7 @@
 
 mod budget;
 mod compact;
+mod extensions;
 mod history;
 mod instructions;
 mod map;
@@ -50,6 +51,10 @@ use serde_json::Value;
 
 pub use budget::{DEFAULT_RATIO, OUTPUT_RESERVE_CAP, limit_of};
 pub use compact::SUMMARY_INSTRUCTIONS;
+pub use extensions::{
+    EXTENSION_TEXT_CAP, EXTENSIONS_CAP, ExtensionPrompt, ExtensionSections, ExtensionsSource,
+    INDEX_CAP, SKILLS_CAP,
+};
 pub use history::{NOTICE_LEAD, append, project};
 pub use instructions::{
     DEFAULT_CAP, DEFAULT_NAMES, FileText, InstructionFiles, MemoryInstructionFiles,
@@ -180,6 +185,10 @@ pub struct ContextParts {
     /// Where the project profile, section 5 of the system prompt, comes
     /// from. `None` gives no section.
     pub profile: Option<Arc<dyn ProfileSource>>,
+    /// Where sections 6 and 7 of the system prompt come from: the index of
+    /// skills and tool sources, and the extensions' own text. `None` gives
+    /// neither.
+    pub extensions: Option<Arc<dyn ExtensionsSource>>,
 }
 
 impl ContextParts {
@@ -197,6 +206,7 @@ impl ContextParts {
             cache_key: None,
             map: None,
             profile: None,
+            extensions: None,
         }
     }
 }

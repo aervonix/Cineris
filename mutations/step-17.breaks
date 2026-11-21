@@ -310,8 +310,8 @@ caught-by:
 rule: Section 5 is outside the epoch's base hash: a profile that changed between processes does not make a resume a new epoch.
 file: crates/cineris-agent/src/context/prompt.rs
 in: build
-find: profile.is_some() && index == profile_at
-replace: false
+find: if let Some(text) = profile { outside.push(parts.len());
+replace: if let Some(text) = profile {
 caught-by:
     cineris-agent context::prompt::tests::the_base_hash_leaves_the_project_profile_out
 

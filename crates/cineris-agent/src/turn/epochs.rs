@@ -313,15 +313,29 @@ impl Session {
         let profile = Self::profile_now(self.context.parts.profile.clone())
             .await
             .unwrap_or_default();
+        let extensions = Self::extensions_now(self.context.parts.extensions.clone()).await;
         let parts = &self.context.parts;
         let built = build(&Sections {
             environment: Some(&parts.environment),
             instructions: &discovered.texts,
             profile: Some(&profile),
+            extensions: extensions.as_ref(),
             append: parts.append.as_deref(),
             guided: self.model.variants.prompt_style == "guided",
         });
         (built, discovered)
+    }
+
+    /// What sections 6 and 7 are to hold now, asked on the blocking pool.
+    /// `None` when the session has no extensions, or the answer did not
+    /// come.
+    async fn extensions_now(
+        source: Option<Arc<dyn crate::context::ExtensionsSource>>,
+    ) -> Option<crate::context::ExtensionSections> {
+        let source = source?;
+        run_blocking(&CancelToken::new(), move |_| source.sections())
+            .await
+            .ok()
     }
 
     /// Tells the user what the cap left out, or what could not be read.

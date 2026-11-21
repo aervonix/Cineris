@@ -3135,6 +3135,9 @@ pub(crate) fn assemble(
         profile: knowledge
             .as_ref()
             .map(|knowledge| Arc::clone(knowledge) as Arc<dyn cineris_agent::ProfileSource>),
+        // Sections 6 and 7 of the system prompt: none until the session's
+        // skills and extensions fill them.
+        extensions: None,
     };
     let verifier = Arc::new(crate::verify::CoreVerifier::new(crate::verify::Parts {
         settings: crate::verify::Settings::of(&settings.verify, shell_limits(settings).1),
