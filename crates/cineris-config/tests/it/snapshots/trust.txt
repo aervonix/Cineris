@@ -37,6 +37,7 @@ retry.idle_timeout                 tighten only: a lower limit is a preference, 
 retry.first_event_timeout          tighten only: a lower limit is a preference, a first limit where there was none waits for trust, a higher one is user only
 permissions.mode                   by level: not above the mode in effect is a preference, up to `supervised` widens access, above it user only  [enforced]
 permissions.rules                  by action: `deny` and `ask` are preferences, `allow` widens access  [enforced]
+permissions.read_skill_folders     user only  [enforced]
 sandbox.enabled                    user only  [enforced]
 sandbox.write                      widens access  [enforced]
 sandbox.protect                    preference  [enforced]

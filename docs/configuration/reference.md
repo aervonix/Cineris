@@ -73,6 +73,7 @@ Every key a Cineris configuration file may hold. The design is in [architecture/
 |---|---|---|---|---|---|
 | `permissions.mode` | `"read-only"`, `"supervised"`, `"guided"`, `"autonomous"`, `"unrestricted"` | `"supervised"` | by level: not above the mode in effect is a preference, up to `supervised` widens access, above it user only | at once | The session's level: how much runs without asking. Fails closed. |
 | `permissions.rules` | list of rule: `effect`, `match`, `action`, joined | `[]` | by action: `deny` and `ask` are preferences, `allow` widens access | at once | Permission rules. Every layer adds to the list; `deny` beats `ask` beats `allow`, whatever the order. Fails closed. |
+| `permissions.read_skill_folders` | `true` or `false` | `false` | user only | next session | Let the model read the files in your own skill folders (in your home directory, outside the workspace) without asking. Secret-looking files there, such as a `.env` a skill's scripts use, are read too, and sent to the model's provider. Off: each such read is asked about. The user's alone: a project's file may not set it. Fails closed. |
 
 ## `[sandbox]`
 

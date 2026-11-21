@@ -2904,6 +2904,9 @@ pub(crate) fn assemble(
         // files are. `compat.skills` off leaves out `.agents/` and
         // `.claude/`.
         skills: cineris_ext::skills::Root::standard(settings.compat.skills),
+        // The user's alone (a project's file may not set it), and off by
+        // default: read once, for the session.
+        read_skill_folders: settings.permissions.read_skill_folders,
         prompt: Arc::clone(&prompt_parts),
         cancel: options.cancel.child(),
     });

@@ -30,6 +30,7 @@ model.speed_cooldown_min = "1m"
 model.speed_fallback = true
 model.speed_wait = "5s"
 permissions.mode = "read-only"
+permissions.read_skill_folders = false
 permissions.rules = [
     { action = "deny", effect = "write", match = "/etc/**" },
     { action = "allow", effect = "exec", match = "cargo test *" },

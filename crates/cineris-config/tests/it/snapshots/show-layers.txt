@@ -24,6 +24,7 @@ model.speed_cooldown_min = "1m"
 model.speed_fallback = true
 model.speed_wait = "20s"
 permissions.mode = "supervised"
+permissions.read_skill_folders = false
 permissions.rules = []
 project.learn = true
 project.profile_tokens = 1500
