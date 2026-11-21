@@ -463,3 +463,72 @@ fn a_compaction_looks_again_before_it_builds_its_prompt() {
         systems[2]
     );
 }
+
+/// What a project's skills cost a session's turns, without trust: the
+/// session's open and first turn (the finding, which resolves and reads
+/// each `SKILL.md`), and the median of five later turns with nothing
+/// changed (each one's start stamps every place the skills were found in
+/// again). Four projects: none, a typical one (one root of 5 skills), and
+/// a crafted one of the project's three roots with 200 entries each, and
+/// with 1,000 each (`MAX_ENTRIES`), each entry a folder with a small
+/// `SKILL.md`. With 200 entries a root it is what a cap of 200 would leave
+/// a crafted repository (the re-check of step 28, L4). A measurement, run
+/// by `cargo xtask perf -p cineris-core`.
+#[test]
+#[ignore = "a measurement: `cargo xtask perf -p cineris-core`"]
+fn perf_what_a_projects_skills_cost_each_turns_start() {
+    let later = 5;
+    let craft = |world: &World, roots: &[&str], entries: usize| {
+        for (at, folder) in roots.iter().enumerate() {
+            let root = world.workspace.join(folder);
+            for entry in 0..entries {
+                let name = format!("r{at}-s{entry:04}");
+                std::fs::create_dir_all(root.join(&name)).unwrap();
+                std::fs::write(
+                    root.join(&name).join("SKILL.md"),
+                    format!("---\nname: {name}\ndescription: Does one thing.\n---\n"),
+                )
+                .unwrap();
+            }
+        }
+    };
+    let all = [".cineris/skills", ".agents/skills", ".claude/skills"];
+    for (case, roots, entries) in [
+        ("none", &all[..0], 0),
+        ("typical_5", &all[..1], 5),
+        ("crafted_3x200", &all[..], 200),
+        ("crafted_3x1000", &all[..], cineris_ext::skills::MAX_ENTRIES),
+    ] {
+        let world = World::new(
+            &format!("perf_skills_{case}"),
+            std::iter::repeat_with(|| says("Done.")).take(1 + later),
+        );
+        craft(&world, roots, entries);
+        let core = world.core();
+        let (first, mut turns) = world.run(async {
+            let began = std::time::Instant::now();
+            let front = start(&world, &core).await;
+            front.turn("go").await;
+            let first = began.elapsed();
+            let mut turns = Vec::new();
+            for _ in 0..later {
+                let began = std::time::Instant::now();
+                front.turn("go").await;
+                turns.push(began.elapsed());
+            }
+            front.close().await;
+            (first, turns)
+        });
+        // What is measured is what was found.
+        let system = &systems(&world)[0];
+        assert_eq!(system.contains("- r0-s0000:"), entries > 0, "{case}");
+        turns.sort();
+        for (what, took) in [("first_turn", first), ("later_turn", turns[later / 2])] {
+            cineris_testkit::numbers::report(
+                &format!("project_skills.{case}.{what}"),
+                took.as_secs_f64() * 1e3,
+                "ms",
+            );
+        }
+    }
+}
