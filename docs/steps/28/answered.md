@@ -18,7 +18,7 @@ Given through the maintainers, to the calls the build left for the owner.
 | **A hook of the user's own configuration** runs where the permission engine would ask (point 2) | Confirmed, as the design has it. | Point 2 below |
 | **The fetch client's TLS check** (the system's own roots through rustls, nothing fetched to check a certificate; the second pull request) and **the narrowed claim of what a fetch can reach** (the machine's own and its networks' public addresses) | Both confirmed. | [parts/pr1b-fetch.md](parts/pr1b-fetch.md); [a-fetch-reaches-the-machines-own-and-its-networks-public-addresses](../../outstanding/a-fetch-reaches-the-machines-own-and-its-networks-public-addresses.md) |
 | **A project's text for the model** (its instruction files and skills): should it wait for trust? | **Keep it as it is:** they need no trust, as the pages say. The open item asking it is settled and deleted. | [06-permissions-and-sandbox.md](../../architecture/06-permissions-and-sandbox.md), "Project trust" |
-| **A stopped host call that does not end its turn:** may the loop change so that a stop in a tool's result ends the round? | **Approved, as a small step of its own after step 28.** | [a-stopped-host-call-does-not-end-the-turn](../../outstanding/a-stopped-host-call-does-not-end-the-turn.md) |
+| **A stopped host call that does not end its turn:** may the loop change so that a stop in a tool's result ends the round? | **Approved, as a small step of its own after step 28.** | Built and closed by the stop-ends-turn step: [its record](../stop-ends-turn/answered.md) |
 
 ## The engine check
 
