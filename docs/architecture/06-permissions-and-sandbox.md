@@ -269,14 +269,14 @@ Some files in a workspace decide what runs later, outside the sandbox and withou
 | `supervised`, `guided`, `autonomous` | Asked about. `autonomous` lets a command run unasked and still asks about these. |
 | `unrestricted` | Left to the holder: the level asks nothing. A user's `deny` and `ask` rules still hold there, and so does the built-in protection of the harness's own files. |
 
-An extension's script's write of one (`cineris.fs.write`) is the exception: it is refused at every level, `unrestricted` included, before the engine is asked, since nothing looks at it afterwards as the look at the protected paths does after a command ([12-extensions.md](12-extensions.md), "Tier 4").
+An extension's script's write of one (`cineris.fs.write`) is the exception: it is refused at every level, `unrestricted` included, before the engine is asked, since nothing looks at it afterwards as the look at the protected paths does after a command ([12-extensions.md](12-extensions.md), "Tier 4"). No rule and no answer lifts that refusal.
 
 - **Every route asks.**
   - The `write` and `edit` tools.
   - A redirection: `echo x > .git/config`.
   - A command that names one: `cp evil .git/hooks/pre-commit`, `sed -i … .github/workflows/ci.yml`, `tee`, `rm`, `dd of=…`. This holds whatever allow rule or level lets the command itself run. The engine cannot know that a command only reads a file it names, unless the command is on the table of commands that only read.
   - `git config`, however it is written: it changes the configuration without naming the file.
-- **An allow rule that names the path lifts the question,** for that path and by every route: `allow write .github/workflows/**`. A project's own allow does so only after trust.
+- **An allow rule that names the path lifts the question,** for that path and by every route the engine decides: `allow write .github/workflows/**`. A project's own allow does so only after trust. It does not lift an extension's `cineris.fs.write` of one, which is refused before the engine is asked (above).
 - **Names are compared without regard to case on Windows,** like every rule that holds back.
 - **Reading one is not held back,** unless it also looks like a secret.
 - **What each of these makes git or cargo run,** and what the harness's own git and the sandbox do about each, is in [security.md](../security.md), section 11.
