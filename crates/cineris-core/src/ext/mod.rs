@@ -19,7 +19,7 @@
 //! A session's hook commands (`hooks`) are its configuration's: the
 //! user's own and a project's, kept apart, a project's waiting for trust
 //! and pinned as the trust question showed it. Each start (`hook_command`)
-//! goes through `cineris.exec`'s own path (`exec::run_as`), decided by the
+//! goes through `cineris.exec`'s own path (`exec::run`), decided by the
 //! permission engine without a question (`hook_command::hook_may_run`).
 //!
 //! The script engine is behind the `scripts` feature: without it, no

@@ -2,7 +2,7 @@
 //! the hook command's column, and point 6).
 //!
 //! A hook command is started as an extension's program is, through
-//! `super::exec::run_as`: the same program lookup (`PATH`'s absolute
+//! `super::exec::run`: the same program lookup (`PATH`'s absolute
 //! directories outside the workspace and the write roots; on Windows
 //! `.exe`, `.cmd`, `.bat` a directory at a time), the same Windows quoting
 //! and `cmd.exe` line for a script, the same environment (a shell
@@ -292,7 +292,7 @@ impl HookCommands {
         };
         let policy = Arc::clone(&self.parts.policy);
         let decide = |start: ToDecide<'_>| decide(&policy, hook, cx, start);
-        let ran = exec::run_as(&self.parts.exec, request, &host, &Decided::Unasked(&decide)).await;
+        let ran = exec::run(&self.parts.exec, request, &host, &Decided::Unasked(&decide)).await;
         match ran {
             Ok(output) => outcome(hook, &output).unwrap_or_else(failed),
             Err(HostError::Stopped(note)) => HookOutcome::Stopped(note),

@@ -1,0 +1,394 @@
+# Step 28, hook commands (the second pull request's part `hookcmd`): the
+# configuration's `[hooks.<name>]`, a hook command compiled and started, and
+# a project's hooks in the trust question, broken one rule at a time, with
+# the tests that must fail (docs/steps/28/answered.md, points 3 to 6).
+
+# ------------------------------------------------------- the configuration
+
+[break] the-hooks-section-is-not-enforced
+rule: `[hooks]` is enforced: a key this build does not know in a hook's entry refuses the file.
+file: crates/cineris-config/src/schema/sections.rs
+find: [enforced] pub hooks: BTreeMap<String, HookSettings>
+replace: [nested] pub hooks: BTreeMap<String, HookSettings>
+caught-by:
+    cineris-config::it hooks::an_unknown_key_in_a_hooks_entry_refuses_the_file
+    schema::json::tests::collections_rules_profiles_and_reserved_sections_have_their_shapes
+
+[break] a-projects-hooks-are-read-from-every-layer
+rule: A project's hooks are read from the project's own files alone, apart from the user's.
+file: crates/cineris-config/src/load.rs
+in: project_hooks
+find: layers.iter().filter(|layer| layer.kind.is_project())
+replace: layers.iter().filter(|layer| !layer.kind.is_project())
+caught-by:
+    cineris-config::it hooks::a_projects_hooks_are_kept_apart_from_the_users
+
+[break] the-merge-looks-at-a-projects-hook
+rule: The merge leaves a project's hook alone, locked or not: the lock is said once, where the project's hooks are read.
+file: crates/cineris-config/src/merge.rs
+in: Merger::set
+find: if trust == Trust::KeptApart && source.authority.is_project() {
+replace: if trust == Trust::KeptApart && source.authority.is_project() && false {
+caught-by:
+    cineris-config::it hooks::a_lock_keeps_a_projects_hook_of_its_name_out
+
+[break] the-merge-admits-a-projects-hook
+rule: A project's value kept apart is never merged. Survives: `Merger::set` returns before the trust rules for such a value, so this arm is a second guard.
+file: crates/cineris-config/src/merge.rs
+in: Merger::admit
+find: TrustClass::KeptApart => false
+replace: TrustClass::KeptApart => true
+expect: survives
+
+[break] a-lock-does-not-keep-a-projects-hook-out
+rule: A lock on a hook, or on a key of its entry, keeps a project's hook of that name out.
+file: crates/cineris-config/src/load.rs
+in: project_hooks
+find: if merger.is_locked(&key) {
+replace: if false {
+caught-by:
+    cineris-config::it hooks::a_lock_keeps_a_projects_hook_of_its_name_out
+    cineris-config::it layers::a_value_cannot_replace_a_table_that_holds_a_locked_key
+
+[break] the-shared-file-beats-the-local-one
+rule: A project's local file's key is over its shared file's for the same hook.
+file: crates/cineris-config/src/load.rs
+in: project_hooks
+find: merged.insert(field.clone(), value.clone());
+replace: merged.entry(field.clone()).or_insert_with(|| value.clone());
+caught-by:
+    cineris-config::it hooks::a_projects_hooks_are_kept_apart_from_the_users
+
+[break] a-profile-may-hold-a-hook
+rule: A hook belongs to the file that defines it: a profile may not hold one.
+file: crates/cineris-config/src/validate.rs
+in: NOT_IN_A_PROFILE
+in-string: hooks
+replace: hook
+caught-by:
+    cineris-config::it hooks::a_profile_may_not_hold_a_hook
+
+# ------------------------------------------------------------ the entry
+
+[break] a-placeholder-inside-an-argument-is-taken
+rule: A placeholder is a whole argument: `--file={path}` refuses the entry.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::compile
+find: .find(|placeholder| written.contains(*placeholder))
+replace: .find(|placeholder| written.contains(*placeholder) && false)
+caught-by:
+    hook::command::tests::a_placeholder_inside_an_argument_refuses_the_entry
+
+[break] the-program-may-be-a-placeholder
+rule: The first word of a hook's command is its program, never a placeholder.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::compile
+find: if PLACEHOLDERS.iter().any(|placeholder| program.contains(placeholder)) {
+replace: if false {
+caught-by:
+    hook::command::tests::a_placeholder_inside_an_argument_refuses_the_entry
+
+[break] a-tools-placeholder-fills-a-non-tool-event
+rule: `{path}` and `{tool}` are for tool events only.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::compile
+find: if matches!(arg, Arg::Path | Arg::Tool) && !tool_event {
+replace: if false {
+caught-by:
+    hook::command::tests::a_tools_placeholders_and_filter_are_for_tool_events_only
+
+[break] tools-on-a-non-tool-event
+rule: `tools` is for `tool.before` and `tool.after` only.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::compile
+find: if !tool_event && !entry.tools.is_empty() {
+replace: if false {
+caught-by:
+    hook::command::tests::a_tools_placeholders_and_filter_are_for_tool_events_only
+
+[break] more-than-256-arguments-as-written
+rule: A hook's command has at most 256 arguments as written.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::compile
+find: if rest.len() > EXEC_MAX_ARGS {
+replace: if rest.len() > EXEC_MAX_ARGS + 1 {
+caught-by:
+    hook::command::tests::the_arguments_are_capped_as_written_and_as_filled
+
+[break] more-than-256-arguments-as-filled
+rule: A hook's command has at most 256 arguments once its placeholders are filled.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::expand
+find: if args.len() > EXEC_MAX_ARGS {
+replace: if args.len() > EXEC_MAX_ARGS + 1 {
+caught-by:
+    hook::command::tests::the_arguments_are_capped_as_written_and_as_filled
+
+[break] path-fills-more-than-64-files
+rule: `{path}` is filled with at most 64 files; a call that names more fails the hook.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::expand
+find: if with.paths.len() > MAX_PATHS {
+replace: if with.paths.len() > MAX_PATHS + 1 {
+caught-by:
+    hook::command::tests::the_arguments_are_capped_as_written_and_as_filled
+
+[break] a-waited-hook-runs-for-ten-minutes
+rule: A hook that is waited for runs for at most a minute.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::compile
+find: (WAITED_DEFAULT, WAITED_MOST)
+replace: (WAITED_DEFAULT, OBSERVER_MOST)
+caught-by:
+    hook::command::tests::its_time_is_held_to_its_kinds_most
+
+[break] the-pin-leaves-out-write
+rule: A project's hook is pinned by everything it shows: `write` among it.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::definition
+find: "write", flag(self.write)
+replace: "write", flag(false)
+caught-by:
+    hook::command::tests::its_pin_changes_with_everything_it_shows_and_nothing_else
+
+[break] a-tool-call-is-not-matched-by-the-tool-it-names
+rule: A `tool_call` is matched by `tool_call` and by the `source/tool` it names.
+file: crates/cineris-ext/src/hook.rs
+in: Filter::matches
+find: let names = std::iter::once(tool).chain(named);
+replace: let names = std::iter::once(tool).chain(None::<&str>);
+caught-by:
+    hook::tests::a_tool_call_is_matched_by_tool_call_and_by_the_tool_it_names
+
+# ------------------------------------------------------------ the answer
+
+[break] an-answer-takes-a-field-its-event-does-not
+rule: An answer is read strictly: a field its event does not take is a failure.
+file: crates/cineris-ext/src/hook/answer.rs
+in: Answer::read
+find: .find(|(field, given)| *given && !takes(event, field))
+replace: .find(|(field, given)| *given && !takes(event, field) && false)
+caught-by:
+    hook::answer::tests::a_field_its_event_does_not_take_is_a_failure
+
+[break] an-answer-takes-a-field-twice
+rule: An answer is read strictly: a field given twice is a failure.
+file: crates/cineris-ext/src/hook/answer.rs
+find: if seen.contains(&key) {
+replace: if false {
+caught-by:
+    hook::answer::tests::an_unknown_field_or_decision_is_a_failure
+
+[break] a-prompts-hook-may-ask
+rule: `ask` is a decision of `tool.before` alone.
+file: crates/cineris-ext/src/hook/answer.rs
+in: Answer::read
+find: Some("ask") if event == Event::ToolBefore => Some(Decision::Ask)
+replace: Some("ask") => Some(Decision::Ask)
+caught-by:
+    hook::answer::tests::an_unknown_field_or_decision_is_a_failure
+
+[break] an-answer-past-64-kib-is-read
+rule: An answer is at most 64 KiB.
+file: crates/cineris-ext/src/hook/answer.rs
+in: Answer::read
+find: if output.len() > MAX_ANSWER {
+replace: if output.len() > MAX_ANSWER * 2 {
+caught-by:
+    hook::answer::tests::an_answer_is_bounded_and_its_context_is_cut
+
+# ------------------------------------------------- the core: the hooks
+
+[break] a-projects-hook-takes-a-users-name-in-another-case
+rule: A project's hook with the name of one of the user's, ASCII case aside, is refused.
+file: crates/cineris-core/src/ext/hooks.rs
+in: Configured::of
+find: .any(|mine| mine.eq_ignore_ascii_case(&hook.name))
+replace: .any(|mine| *mine == hook.name)
+caught-by:
+    ext::hooks::tests::a_projects_hook_never_takes_a_name_of_the_users
+
+[break] a-refused-hook-forgets-its-event
+rule: A refused entry keeps its event, so that a refused gate is known as one.
+file: crates/cineris-core/src/ext/hooks.rs
+in: compiled
+find: event: event_of(&entry)
+replace: event: None
+caught-by:
+    ext::hooks::tests::an_entry_that_does_not_compile_is_refused_with_its_event
+
+[break] a-projects-hook-runs-untrusted
+rule: A project's hook runs only while the project is trusted.
+file: crates/cineris-core/src/ext/hooks.rs
+in: in_session
+find: if trusted {
+replace: if true {
+caught-by:
+    ext::hooks::tests::a_projects_hook_runs_only_trusted_and_approved_as_it_is
+
+[break] a-changed-projects-hook-runs
+rule: A project's hook runs only as it was approved: a pin of another hash is a change.
+file: crates/cineris-core/src/ext/hooks.rs
+in: in_session
+find: Some(Standing::Approved) => Standing::Approved
+replace: Some(_) => Standing::Approved
+caught-by:
+    ext::hooks::tests::a_projects_hook_runs_only_trusted_and_approved_as_it_is
+
+[break] an-approved-projects-hook-is-asked-about-again
+rule: The trust question lists a project's hook only when it is not approved as it is now.
+file: crates/cineris-core/src/ext/hooks.rs
+in: asked
+find: Standing::Approved => continue
+replace: Standing::Approved => false
+caught-by:
+    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+
+[break] the-trust-question-leaves-the-hooks-out
+rule: The trust question lists a project's hooks.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: resources.extend(hooks.resources);
+replace:
+caught-by:
+    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+
+[break] a-yes-pins-no-hook
+rule: A yes to the trust question pins the hooks it listed, as they were shown.
+file: crates/cineris-core/src/assemble.rs
+in: kept_answer
+find: pin.extend(question.hooks.iter().cloned());
+replace:
+caught-by:
+    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+
+[break] a-session-runs-an-untrusted-projects-hooks
+rule: A session runs a project's hooks only while the project is trusted.
+file: crates/cineris-core/src/assemble.rs
+in: assemble
+find: let trusted = matches!(
+replace: let trusted = true || matches!(
+caught-by:
+    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+
+# ------------------------------------------------ the core: the start
+
+[break] a-managed-ask-lets-the-users-hook-run
+rule: No hook runs where a managed `ask` rule is among the reasons.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: hook_may_run
+find: if managed_ask {
+replace: if false {
+caught-by:
+    ext::hook_command::tests::a_hooks_start_follows_the_engine_and_a_project_never_passes_a_question
+
+[break] the-managed-ask-is-not-looked-for
+rule: Whether a managed `ask` rule is among the reasons is asked of the engine for each start.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: decide
+find: if question.managed
+replace: if question.managed && false
+caught-by:
+    cineris-core::it hook_commands::a_users_hook_is_held_back_by_a_deny_or_a_managed_ask
+
+[break] a-projects-hook-passes-a-question
+rule: A project's hook does not run where the engine would ask.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: hook_may_run
+find: Decision::Ask => true
+replace: Decision::Ask => false
+caught-by:
+    ext::hook_command::tests::a_hooks_start_follows_the_engine_and_a_project_never_passes_a_question
+    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+
+[break] a-read-only-line-that-may-be-another-program-passes
+rule: A line the engine reads as only reading, where that may not be the program that runs, counts as a question.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: hook_may_run
+find: Decision::AllowReadOnly => read_only_asks
+replace: Decision::AllowReadOnly => false
+caught-by:
+    ext::hook_command::tests::a_hooks_start_follows_the_engine_and_a_project_never_passes_a_question
+
+[break] the-engines-refusal-does-not-stop-the-start
+rule: Every start is decided by the engine, and a refusal starts nothing.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: decide(ToDecide { line: &line, cwd: &cwd, effects, read_only_asks })?;
+replace: let _ = decide(ToDecide { line: &line, cwd: &cwd, effects, read_only_asks });
+caught-by:
+    cineris-core::it hook_commands::a_users_hook_is_held_back_by_a_deny_or_a_managed_ask
+
+[break] a-hook-without-write-gets-the-workspace
+rule: A hook writes nothing where commands are confined unless its entry says `write = true`.
+os: linux
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: write_roots: if hook.write {
+replace: write_roots: if true {
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
+
+[break] a-path-is-given-twice
+rule: `{path}` names each file once, by place.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: && !keys.contains(&path.abs().key().to_owned())
+replace: && true
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] a-path-is-given-in-the-file-systems-form
+rule: `{path}` is the system's plain form of a path, never `\\?\`.
+os: windows
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: paths.push(path.abs().to_native_string());
+replace: paths.push(path.abs().to_fs_path().display().to_string());
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] an-event-past-its-cap-is-given
+rule: A hook is given an event of at most 1 MiB.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: Ok(input) if input.len() <= EXEC_MAX_STDIN => input
+replace: Ok(input) => input
+caught-by:
+    cineris-core::it hook_commands::an_event_past_its_cap_starts_nothing
+
+[break] a-failed-exit-is-read-as-an-answer
+rule: A hook that exits with anything but 0 has failed.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: outcome
+find: Some(0) => {}
+replace: Some(0 | 2) => {}
+caught-by:
+    ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
+
+[break] an-observers-answer-is-read
+rule: An observer's answer is not read.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: outcome
+find: if hook.observe {
+replace: if false {
+caught-by:
+    ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
+
+[break] output-past-its-cap-is-read
+rule: A hook that writes more than 1 MiB to its standard output has failed.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: outcome
+find: if output.stdout_cut || output.stdout.len() > MAX_OUTPUT {
+replace: if false {
+caught-by:
+    ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
+
+[break] a-hook-is-given-ten-times-its-time
+rule: A hook is stopped, its process tree with it, when its time is up on the session's clock.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: timeout: hook.timeout
+replace: timeout: hook.timeout * 10
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time

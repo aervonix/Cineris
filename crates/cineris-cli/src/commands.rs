@@ -765,7 +765,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                     }
                 }
                 let trusted = core
-                    .trust_project_approving(&project, &approved.0, &approved.1)
+                    .trust_project_with(&project, &approved.0, &approved.1)
                     .map_err(fail)?;
                 let mut out = format!(
                     "{} {}{}.\n",
