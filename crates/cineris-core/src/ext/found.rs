@@ -752,6 +752,8 @@ fn sentence(text: &str) -> String {
 
 #[cfg(feature = "scripts")]
 mod pipeline;
+#[cfg(feature = "scripts")]
+mod reads;
 
 #[cfg(test)]
 mod tests {
