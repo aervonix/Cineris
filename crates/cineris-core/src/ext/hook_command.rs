@@ -469,16 +469,33 @@ impl HookCommands {
         // `{path}`: each file the call reads or writes, once, by place, in
         // the system's plain form (never `\\?\C:\…`).
         let mut keys = Vec::new();
-        let mut paths = Vec::new();
+        let mut candidates = Vec::new();
         for effect in event.effects {
             if let Effect::Read(path) | Effect::Write(path) = effect
                 && path.is_inside_workspace()
                 && !keys.contains(&path.abs().key().to_owned())
             {
                 keys.push(path.abs().key().to_owned());
-                paths.push(path.abs().to_native_string());
+                candidates.push(path.clone());
             }
         }
+        // Files, not folders: a listing's read of a folder is no file.
+        let paths: Vec<String> = if candidates.is_empty() {
+            Vec::new()
+        } else {
+            let files = cineris_tools::run_blocking(&cx.cancel, move |_| {
+                candidates
+                    .into_iter()
+                    .filter(|path| !is_folder(&path.to_fs_path()))
+                    .map(|path| path.abs().to_native_string())
+                    .collect::<Vec<_>>()
+            })
+            .await;
+            match files {
+                Ok(files) => files,
+                Err(error) => return failed(error.to_string()),
+            }
+        };
         let workspace = cx.paths.root().to_native_string();
         let args = match hook.expand(&Expansion {
             tool: event.tool,
@@ -638,6 +655,16 @@ impl crate::Core {
         };
         Ok(hooks.commands.run(hook, &event, &cx).await)
     }
+}
+
+/// Whether `path` is a folder, looked at itself. Blocks: called on the
+/// blocking pool.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "looking at the file system blocks; it runs on the blocking pool"
+)]
+fn is_folder(path: &std::path::Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|found| found.is_dir())
 }
 
 /// The number of turn `turn` (`t_7` is 7): 0 when it has none.
