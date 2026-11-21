@@ -3024,6 +3024,11 @@ pub(crate) fn assemble(
             commands: Arc::new(crate::ext::HookCommands::new(
                 Arc::clone(&ext_parts),
                 Arc::clone(&content),
+                cancel.child(),
+                {
+                    let sink = Arc::clone(&sink);
+                    Arc::new(move || sink.running_turn())
+                },
             )),
             paths: Arc::clone(&resolver),
             starting: tokio::sync::Mutex::new(None),

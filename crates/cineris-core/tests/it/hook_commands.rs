@@ -11,13 +11,21 @@
 //! standard output, which no answer read strictly could carry. The tests
 //! that start one are named `sys_…`, and are few: one session runs every
 //! start shape in turn (one that gates, one that replaces the arguments,
-//! one that fails, one that runs past its time), so that the system tier
-//! pays for one session's start.
+//! one that fails, one that runs past its time, one whose turn is
+//! interrupted), so that the system tier pays for one session's start. The
+//! hooks that start nothing are tested in `hook_wiring`.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use cineris_core::ext::{HookOutcome, HookRun};
+use cineris_core::{ClientInfo, Outgoing};
+use cineris_protocol::event::TurnOutcome;
+use cineris_protocol::lease::{Budget, Effect, HardLimits, Lease, Level, NetworkAccess, PathSet};
+use cineris_protocol::lease::{Rule, RuleAction, SandboxPolicy};
+use cineris_protocol::methods::{
+    ApprovalChoice, ApprovalResponse, ClientRole, Op, OpResult, ServerResponse, SessionRef,
+};
 use serde_json::{Value, json};
 
 use crate::{Front, HOOK, World};
@@ -90,8 +98,143 @@ pub(crate) fn script(dir: &Path, name: &str, report: Option<&Path>, answer: &str
     }
 }
 
+/// A hook's program that runs on until it is stopped, and that a test can
+/// tell has started: on Linux a script that writes its process's id, waits
+/// on a pipe the test opens, and then becomes this binary's `hang`; on
+/// other systems this binary's `hang` itself.
+pub(crate) struct Lingering {
+    /// The entry's `command`.
+    pub(crate) command: Vec<String>,
+    #[cfg(target_os = "linux")]
+    pid: PathBuf,
+    #[cfg(target_os = "linux")]
+    ready: PathBuf,
+}
+
+impl Lingering {
+    /// One called `name`, its files in `dir`.
+    pub(crate) fn new(dir: &Path, name: &str) -> Self {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::create_dir_all(dir).unwrap();
+            let pid = dir.join(format!("{name}.pid"));
+            let ready = dir.join(format!("{name}.ready"));
+            let made = std::process::Command::new("mkfifo")
+                .arg(&ready)
+                .status()
+                .expect("mkfifo runs");
+            assert!(made.success());
+            let path = dir.join(name);
+            let exe = std::env::current_exe().expect("the test binary has a path");
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\necho $$ > '{}'\ncat '{}' > /dev/null\nexec '{}' --exact \
+                     launcher_entry --nocapture {HOOK} hang\n",
+                    pid.display(),
+                    ready.display(),
+                    exe.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            Self {
+                command: vec![path.display().to_string()],
+                pid,
+                ready,
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (dir, name);
+            Self {
+                command: this_binary("hang", &[]),
+            }
+        }
+    }
+
+    /// Once its start is known to be made (its time runs on the session's
+    /// clock): on Linux, waits until it has written its id, with no wait of
+    /// real time (opening the pipe to write blocks until the script opens
+    /// it to read), and gives it.
+    pub(crate) fn started(&self) -> Option<u32> {
+        #[cfg(target_os = "linux")]
+        {
+            drop(
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&self.ready)
+                    .expect("the pipe opens"),
+            );
+            let pid = std::fs::read_to_string(&self.pid).unwrap();
+            Some(pid.trim().parse().unwrap())
+        }
+        #[cfg(not(target_os = "linux"))]
+        None
+    }
+
+    /// Fails the test, with `what`, when the process `started` named is
+    /// still there.
+    pub(crate) fn assert_gone(pid: Option<u32>, what: &str) {
+        if let Some(pid) = pid {
+            assert!(
+                !Path::new(&format!("/proc/{pid}")).exists(),
+                "{what}: its process {pid} is still there"
+            );
+        }
+    }
+}
+
+/// Completes when `count` waits of `length` run on the world's timer: for
+/// a hook, the loop's wait for it and its run's own time, which starts once
+/// its program has.
+async fn waits_of(world: &World, length: Duration, count: usize) {
+    while world
+        .timer
+        .running()
+        .iter()
+        .filter(|wait| **wait == length)
+        .count()
+        < count
+    {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// A supervisor's grant `id` that allows reading everything, at
+/// `autonomous`.
+fn a_grant_to_read_everything(id: &str) -> Lease {
+    let everything = PathSet {
+        all: true,
+        roots: Vec::new(),
+    };
+    cineris_policy::standing_lease(
+        cineris_protocol::ids::LeaseId::new(id),
+        cineris_policy::StandingTerms {
+            level: Level::Autonomous,
+            rules: vec![Rule {
+                effect: Effect::Read,
+                pattern: "**".to_owned(),
+                action: RuleAction::Allow,
+            }],
+            sandbox: SandboxPolicy {
+                read: everything.clone(),
+                write: everything,
+                protect: PathSet::default(),
+                network: NetworkAccess::Off,
+            },
+            models: Vec::new(),
+            budget: Budget::default(),
+            limits: HardLimits::default(),
+        },
+        cineris_policy::SandboxState::Enforcing,
+    )
+    .expect("a lease")
+}
+
 /// A run of a tool event's hook for `edit`, naming `paths`.
-fn for_edit(paths: &[&str]) -> HookRun {
+pub(crate) fn for_edit(paths: &[&str]) -> HookRun {
     HookRun {
         input: json!({"event": "tool.before", "tool": "edit", "arguments": {"path": "src/a.rs"}}),
         tool: Some("edit".to_owned()),
@@ -107,13 +250,23 @@ fn for_edit(paths: &[&str]) -> HookRun {
 ///   (`{path}` once for each file by place, resolved and plain), the event
 ///   on its standard input and no provider's key, and its `deny` refuses the
 ///   call;
-/// - one that replaces the arguments has its replacement put to the user,
-///   allowed once, and run;
+/// - one that replaces the arguments, here with a read outside the
+///   workspace, which the engine asks about with rules it could keep, has
+///   its replacement put to the user offering "allow once" and "deny"
+///   alone; it is a person's to answer, so neither a supervisor that had
+///   the session open nor one that opens it while the question is open is
+///   put it, and neither's allow is taken (the review of step 28's second
+///   pull request, M6); answered "allow for the session", it runs once and
+///   keeps no rule;
 /// - one that exits with an error has failed, which refuses the call;
 /// - one that runs past its time on the session's clock is killed, and
 ///   refuses the call;
 /// - a replacement that would write a protected path (`.git/config`) is
-///   refused before anyone is asked (`check_replacement`).
+///   refused before anyone is asked (`check_replacement`);
+/// - one that asks about a call the rules allow has the question put all
+///   the same, saying which hook asked;
+/// - one whose turn is interrupted while it runs, its own time far off, is
+///   stopped, its process with it (M3).
 #[test]
 fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
     let world = World::new(
@@ -133,8 +286,13 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
             crate::says("Done."),
             crate::calls(&[("c5", "write", json!({"path": "notes.txt", "content": "x"}))]),
             crate::says("Done."),
+            crate::calls(&[("c6", "outline", json!({"path": "src/a.rs"}))]),
+            crate::says("Done."),
+            crate::calls(&[("c7", "shell", json!({"command": "echo never"}))]),
         ],
     );
+    // The stuck hook's time, which nothing reaches.
+    const STUCK: Duration = Duration::from_secs(50);
     let tools = world.dir.join("hooks");
     let report = world.dir.join("report.json");
     let gate = script(
@@ -143,7 +301,24 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
         Some(&report),
         r#"{"decision":"deny","reason":"generated"}"#,
     );
-    let swap = script(&tools, "swap", None, r#"{"arguments":{"path":"src/b.rs"}}"#);
+    let outside = world.dir.join("outside.txt");
+    std::fs::write(&outside, "the replacement's file\n").unwrap();
+    let swap = script(
+        &tools,
+        "swap",
+        None,
+        &format!(
+            r#"{{"arguments":{{"path":{}}}}}"#,
+            serde_json::to_string(&outside.display().to_string()).unwrap()
+        ),
+    );
+    let asks = script(
+        &tools,
+        "asks",
+        None,
+        r#"{"decision":"ask","reason":"look first"}"#,
+    );
+    let stuck = Lingering::new(&tools, "stuck");
     let to_config = script(
         &tools,
         "to-config",
@@ -181,11 +356,22 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
                 &[to_config.display().to_string()],
                 "tools = [\"write\"]",
             ),
+            entry(
+                "asks",
+                "tool.before",
+                &[asks.display().to_string()],
+                "tools = [\"outline\"]",
+            ),
+            entry(
+                "stuck",
+                "tool.before",
+                &stuck.command,
+                "tools = [\"shell\"]\ntimeout = \"50s\"",
+            ),
         ]
         .concat(),
     );
     world.put("src/a.rs", "fn main() {}\n");
-    world.put("src/b.rs", "the replacement's file\n");
     let env = world.shell_env(&[("ANTHROPIC_API_KEY", "sk-test-not-for-hooks")]);
     let core = world.core_with(|options| options.shell_env = Some(env));
     world.run(async {
@@ -235,34 +421,88 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
             "no provider's key reaches a hook"
         );
 
-        // One that replaces the arguments: put to the user, allowed once,
-        // and run with the hook's.
-        front.turn("read it").await;
-        let replaced: Vec<_> = front
-            .approvals()
-            .into_iter()
-            .filter(|asked| asked.replaced.is_some())
-            .collect();
-        let [asked] = replaced.as_slice() else {
-            panic!("one question of a replacement: {:?}", front.approvals());
+        // One that replaces the arguments: a person's to answer, offered
+        // once or never, and run with the hook's.
+        let supervisor = |grant: &str| {
+            core.connect_with_grant(
+                ClientInfo {
+                    role: ClientRole::Supervisor,
+                    ..ClientInfo::user()
+                },
+                Some(a_grant_to_read_everything(grant)),
+            )
         };
+        let opens = |client: &cineris_core::Client| {
+            core.handle(
+                client.id,
+                Op::SessionOpen(SessionRef {
+                    session_id: front.session.clone(),
+                }),
+            )
+        };
+        let early = supervisor("l_early");
+        let opened = opens(&early).await;
+        assert!(opened.is_ok(), "{opened:?}");
+        front.prompt("read it").await;
+        let (id, asked) = front.approval().await;
+        assert!(asked.replaced.is_some(), "{asked:?}");
         assert_eq!(
             asked.choices,
-            [
-                cineris_protocol::methods::ApprovalChoice::AllowOnce,
-                cineris_protocol::methods::ApprovalChoice::Deny
-            ]
+            [ApprovalChoice::AllowOnce, ApprovalChoice::Deny]
         );
         assert!(
             asked.reasons.iter().any(|line| line.contains("swap")),
             "{:?}",
             asked.reasons
         );
+        let not_put = |client: &cineris_core::Client, which: &str| {
+            let mut put = false;
+            while let Some(next) = client.queue.try_next() {
+                put |= matches!(next, Outgoing::Request { .. });
+            }
+            assert!(!put, "a replacement was put to a supervisor that {which}");
+            let taken = core.respond(
+                client.id,
+                &id,
+                ServerResponse::Approval(ApprovalResponse {
+                    choice: ApprovalChoice::AllowOnce,
+                    note: None,
+                }),
+            );
+            assert!(
+                taken.is_err(),
+                "the allow of a supervisor that {which} was taken"
+            );
+        };
+        not_put(&early, "had the session open");
+        // A session has one supervisor at a time: the next opens it while
+        // the question is open.
+        core.disconnect(early.id).await;
+        let late = supervisor("l_late");
+        let opened = opens(&late).await;
+        assert!(opened.is_ok(), "{opened:?}");
+        not_put(&late, "opened it late");
+        front.answer(&id, ApprovalChoice::AllowSession).unwrap();
+        front.turns(2).await;
         let results = front.results();
         let (tool, outcome, text) = &results[1];
         assert_eq!(tool, "read");
         assert_eq!(*outcome, "success", "{text}");
         assert!(text.contains("the replacement's file"), "{text}");
+        let OpResult::PermissionsList(listed) = front
+            .op(Op::PermissionsList(SessionRef {
+                session_id: front.session.clone(),
+            }))
+            .await
+            .unwrap()
+        else {
+            panic!("not the result of permissions/list");
+        };
+        assert!(
+            listed.approvals.is_empty(),
+            "a replacement's answer kept a rule: {:?}",
+            listed.approvals
+        );
 
         // One that fails: the call is refused, the failure named.
         front.turn("list it").await;
@@ -303,6 +543,43 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
         assert!(world.read(".git/config").is_none());
         assert!(world.read("notes.txt").is_none());
 
+        // One that asks about a call the rules allow: the question is put
+        // all the same, saying which hook asked.
+        front.turn("outline it").await;
+        let approvals = front.approvals();
+        let asked = approvals.last().expect("a question");
+        assert_eq!(asked.tool, "outline", "{approvals:?}");
+        assert!(
+            asked.reasons.iter().any(|line| line.contains("asks")),
+            "{:?}",
+            asked.reasons
+        );
+        let results = front.results();
+        let (tool, outcome, text) = &results[5];
+        assert_eq!(tool, "outline");
+        // Allowed, it ran: this session has no index to outline from.
+        assert_ne!(*outcome, "denied", "{text}");
+
+        // One whose turn is interrupted while it runs: stopped, though its
+        // time is far off.
+        let started = std::cell::Cell::new(None);
+        let mut turn = std::pin::pin!(front.turn("run it"));
+        let mut interrupt = std::pin::pin!(async {
+            // The loop's wait for it, and its run's own time.
+            waits_of(&world, STUCK, 2).await;
+            started.set(stuck.started());
+            front.interrupt(false).await;
+        });
+        let mut interrupted = false;
+        let ended = std::future::poll_fn(|context| {
+            if !interrupted {
+                interrupted = interrupt.as_mut().poll(context).is_ready();
+            }
+            turn.as_mut().poll(context)
+        })
+        .await;
+        assert_eq!(ended.outcome, TurnOutcome::Interrupted, "{ended:?}");
+
         // The same file named three ways, and on Windows in another case,
         // is one file to `{path}`, given once, by place.
         let mut named = vec!["src/a.rs", "./src/a.rs", "src/../src/a.rs"];
@@ -327,176 +604,7 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
             serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
         assert_eq!(given["args"].as_array().unwrap().len(), 4, "{given}");
         front.close().await;
-    });
-}
-
-/// A project's hook is listed by the trust question in words, and a yes
-/// pins it as it was shown, so that a session opened again is not asked
-/// about it; it is the session's, and its start is refused all the same,
-/// as the engine would ask about it at `supervised` and a project's hook
-/// never puts a question: nothing is started. A project's hook of a user's
-/// name is never one the session runs.
-#[test]
-fn a_projects_hook_is_listed_pinned_and_never_passes_a_question() {
-    use crate::extensions_found::{open_answering, yes};
-    use crate::extensions_trust::not_now;
-    use cineris_protocol::methods::TrustResourceKind;
-
-    let world = World::new("hook_project_trust", []);
-    world.user_config(&entry("mine", "turn.end", &this_binary("fail", &[]), ""));
-    world.project_config(
-        &[
-            entry(
-                "lint",
-                "tool.after",
-                &this_binary("report", &["{path}"]),
-                "tools = [\"edit\"]",
-            ),
-            entry("mine", "turn.end", &this_binary("hang", &[]), ""),
-        ]
-        .concat(),
-    );
-    let core = world.core();
-    // Not now: a project not trusted runs none of its hooks.
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, not_now()).await;
-        assert_eq!(asked.len(), 1, "{asked:?}");
-        let none = core
-            .run_hook_command(&front.session, "lint", for_edit(&["src/a.rs"]))
-            .await;
-        assert!(none.is_err(), "{none:?}");
-        front.close().await;
-    });
-    let core = world.core();
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, yes()).await;
-        let [question] = asked.as_slice() else {
-            panic!("one question: {asked:?}");
-        };
-        let hooks: Vec<_> = question
-            .resources
-            .iter()
-            .filter(|resource| resource.kind == TrustResourceKind::Hook)
-            .collect();
-        let [lint] = hooks.as_slice() else {
-            panic!("the project's own hook alone: {:?}", question.resources);
-        };
-        assert_eq!(lint.name, "lint");
-        assert!(lint.detail.contains("on `tool.after`"), "{}", lint.detail);
-        assert!(lint.detail.contains("for `edit`"), "{}", lint.detail);
-        let refused = core
-            .run_hook_command(&front.session, "lint", for_edit(&["src/a.rs"]))
-            .await
-            .unwrap();
-        let HookOutcome::Failed(why) = &refused else {
-            panic!("{refused:?}");
-        };
-        assert!(why.contains("a project's hook never asks"), "{why}");
-        front.drain();
-        assert!(
-            front
-                .notices()
-                .iter()
-                .any(|notice| notice.contains("This project's hook `mine` does not run")),
-            "{:?}",
-            front.notices()
-        );
-        front.close().await;
-    });
-    // A session opened again finds it approved as it is: not asked again.
-    let core = world.core();
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, yes()).await;
-        assert!(asked.is_empty(), "{asked:?}");
-        let ran = core
-            .run_hook_command(&front.session, "lint", for_edit(&["src/a.rs"]))
-            .await
-            .unwrap();
-        assert!(matches!(ran, HookOutcome::Failed(_)), "{ran:?}");
-        front.close().await;
-    });
-}
-
-/// The user's own hook runs where the engine would ask, but not where a
-/// rule denies its line, nor where a rule of the managed configuration
-/// asks about it: neither starts anything.
-#[test]
-fn a_users_hook_is_held_back_by_a_deny_or_a_managed_ask() {
-    let program = std::env::current_exe().expect("the test binary has a path");
-    for (name, managed, user) in [
-        (
-            "hook_user_denied",
-            String::new(),
-            format!(
-                "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"deny\"\n",
-                program.display()
-            ),
-        ),
-        (
-            "hook_user_managed_ask",
-            format!(
-                "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"ask\"\n",
-                program.display()
-            ),
-            String::new(),
-        ),
-    ] {
-        let world = World::new(name, []);
-        world.user_config(&format!(
-            "{user}{}",
-            entry("gate", "tool.before", &this_binary("fail", &[]), "")
-        ));
-        if !managed.is_empty() {
-            let file = world.dirs().managed_config.unwrap();
-            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-            std::fs::write(file, &managed).unwrap();
-        }
-        let core = world.core();
-        world.run(async {
-            let front = Front::start(&world, &core).await;
-            let held = core
-                .run_hook_command(&front.session, "gate", for_edit(&[]))
-                .await
-                .unwrap();
-            let HookOutcome::Failed(why) = &held else {
-                panic!("{name}: {held:?}");
-            };
-            let said = if managed.is_empty() {
-                "a permission rule refuses it"
-            } else {
-                "a rule of the managed configuration"
-            };
-            assert!(why.contains(said), "{name}: {why}");
-            front.close().await;
-        });
-    }
-}
-
-/// An event of more than 1 MiB is no hook's input: the hook has failed,
-/// and nothing is started.
-#[test]
-fn an_event_past_its_cap_starts_nothing() {
-    let world = World::new("hook_event_cap", []);
-    world.user_config(&entry("gate", "turn.end", &this_binary("fail", &[]), ""));
-    let core = world.core();
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        let ran = core
-            .run_hook_command(
-                &front.session,
-                "gate",
-                HookRun {
-                    input: json!({"text": "a".repeat(1024 * 1024)}),
-                    ..HookRun::default()
-                },
-            )
-            .await
-            .unwrap();
-        let HookOutcome::Failed(why) = &ran else {
-            panic!("{ran:?}");
-        };
-        assert!(why.contains("a hook is given at most 1 MiB"), "{why}");
-        front.close().await;
+        Lingering::assert_gone(started.get(), "the interrupted hook ran on");
     });
 }
 
@@ -511,13 +619,24 @@ mod confined {
     /// with it writes the workspace, and a protected path it changes is
     /// found by the look after it, which puts it back as it was and stops
     /// the turn (the look is `cineris.exec`'s, since the third security fix
-    /// one that puts back).
+    /// one that puts back). A hook of the stopped turn then starts nothing,
+    /// and is no stop of its own (the review of step 28's second pull
+    /// request, M2). A stop made by a hook of no turn (a `session.start`
+    /// one's) while a turn runs stops that turn too: the call whose
+    /// question was open does not run, whatever the answer.
     #[test]
     fn sys_a_hooks_writes_are_confined_and_looked_at() {
         if !enforcing_here() {
             return;
         }
-        let world = World::new("hook_confined", []);
+        let world = World::new(
+            "hook_confined",
+            [
+                crate::says("Hi."),
+                crate::calls(&[("c1", "shell", json!({"command": "touch made.txt"}))]),
+                crate::says("Done."),
+            ],
+        );
         world.put(".github/README", "ci\n");
         world.user_config(
             &[
@@ -566,12 +685,35 @@ mod confined {
                 world.read(".github/workflows/x.yml").is_none(),
                 "the hook's protected change is put back"
             );
-            // The turn is stopped: no more of its hooks starts.
+            // The turn is stopped: no more of its hooks starts, and one
+            // that does not is no stop of its own (the review of the second
+            // pull request, M2): it is not told as one, and holds back no
+            // second prompt.
             let again = core
                 .run_hook_command(&front.session, "reader", after())
                 .await
                 .unwrap();
-            assert!(matches!(again, HookOutcome::Stopped(_)), "{again:?}");
+            let HookOutcome::Failed(why) = &again else {
+                panic!("{again:?}");
+            };
+            assert!(why.contains("its turn was stopped"), "{why}");
+            assert!(
+                !front
+                    .notices()
+                    .iter()
+                    .any(|notice| notice.contains("The hook `reader` was stopped")),
+                "{:?}",
+                front.notices()
+            );
+            let held = front.turn("first").await;
+            assert_eq!(held.outcome, TurnOutcome::Denied);
+            front.drain();
+            let sent = front.turn("second").await;
+            assert_eq!(
+                sent.outcome,
+                TurnOutcome::Completed,
+                "one stop holds back one prompt"
+            );
             // In the next turn, a protected path changed by hand since the
             // last look refuses the next start that has a write root.
             world.put(".github/workflows/new.yml", "on: push\n");
@@ -580,7 +722,7 @@ mod confined {
                     &front.session,
                     "scribble",
                     HookRun {
-                        turn: Some("t_2".to_owned()),
+                        turn: Some("t_9".to_owned()),
                         ..after()
                     },
                 )
@@ -590,6 +732,30 @@ mod confined {
                 panic!("{next:?}");
             };
             assert!(note.contains("changed since the last command"), "{note}");
+            assert_eq!(front.turn("third").await.outcome, TurnOutcome::Denied);
+            front.drain();
+            // A stop of no turn's while a turn runs, its question open.
+            front.prompt("make it").await;
+            let (id, asked) = front.approval().await;
+            assert_eq!(asked.tool, "shell");
+            let outside = core
+                .run_hook_command(
+                    &front.session,
+                    "scribble",
+                    HookRun {
+                        turn: Some("t_0".to_owned()),
+                        ..after()
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(matches!(outside, HookOutcome::Stopped(_)), "{outside:?}");
+            front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+            front.turns(front.ends().len() + 1).await;
+            assert!(
+                world.read("made.txt").is_none(),
+                "the running turn's call ran after a hook's stop"
+            );
             front.close().await;
         });
     }

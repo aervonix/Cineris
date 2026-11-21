@@ -583,6 +583,8 @@ pub(crate) struct SessionSink {
     /// The turn that is running and the `seq` of the last event, for a
     /// reader that asks where the session is.
     last: Mutex<(u64, Option<TurnId>)>,
+    /// The turn that started and has not completed, if any.
+    running: Mutex<Option<TurnId>>,
     /// Who sent the prompts the loop may give back, the latest last: a
     /// prompt a hook refused (`prompt_returned`) is given back whole only
     /// to the client that sent it, since it may have been refused for
@@ -602,12 +604,19 @@ impl SessionSink {
             subscribers: Mutex::default(),
             progress: Mutex::default(),
             last: Mutex::default(),
+            running: Mutex::default(),
             senders: Mutex::default(),
         }
     }
 
+    /// The turn running now, if one is.
+    pub(crate) fn running_turn(&self) -> Option<TurnId> {
+        lock(&self.running).clone()
+    }
+
     /// Notes that `client` sent the prompt `parts`, for the loop's giving it
-    /// back, should a hook refuse it.
+    /// back, should a hook refuse it. Only when a `prompt.submit` hook is
+    /// there to refuse it, and let go as it is given back or recorded.
     pub(crate) fn sent_by(&self, client: u64, parts: &[Part]) {
         let mut senders = lock(&self.senders);
         if senders.len() == SENDERS_KEPT {
@@ -707,6 +716,17 @@ impl EventSink for SessionSink {
             let mut progress = lock(&self.progress);
             progress.observe(&event.event);
             *lock(&self.last) = (event.seq, event.turn_id.clone());
+            match &event.event {
+                Event::TurnStarted(_) => *lock(&self.running) = event.turn_id.clone(),
+                Event::TurnCompleted(_) => *lock(&self.running) = None,
+                _ => {}
+            }
+        }
+        // A prompt recorded is given back no more: who sent it is let go.
+        if let Event::ItemCompleted(completed) = &event.event
+            && let Item::UserMessage(message) = &completed.item
+        {
+            let _ = self.sender_of(&message.parts);
         }
         // A prompt given back reaches its sender whole, and every other
         // client without the prompt: its `seq` is every client's, so none
@@ -1258,6 +1278,43 @@ mod tests {
             queued.push(outgoing);
         }
         assert_eq!(queued.len(), 1, "merged: {queued:?}");
+    }
+
+    /// Who sent a prompt is kept only until the prompt is recorded or given
+    /// back (the review of step 28's second pull request, M5); and the turn
+    /// running is known from its start to its end.
+    #[test]
+    fn a_prompts_sender_is_let_go_as_it_is_recorded_and_the_running_turn_is_known() {
+        let sink = SessionSink::new(SessionId::new("s_1"));
+        let prompt = vec![Part::text("the code is 1234")];
+        sink.sent_by(7, &prompt);
+        assert_eq!(sink.running_turn(), None);
+        sink.emit(event(1, Event::TurnStarted(TurnStarted {})));
+        assert_eq!(sink.running_turn(), Some(TurnId::new("t_1")));
+        sink.emit(event(
+            2,
+            Event::ItemCompleted(ItemCompleted {
+                item: Item::UserMessage(cineris_protocol::item::UserMessageItem {
+                    id: ItemId::new("i_1"),
+                    parts: prompt.clone(),
+                    delivery: None,
+                    created_at: None,
+                }),
+            }),
+        ));
+        assert_eq!(sink.sender_of(&prompt), None, "kept after it was recorded");
+        sink.emit(event(
+            3,
+            Event::TurnCompleted(cineris_protocol::event::TurnCompleted {
+                outcome: cineris_protocol::event::TurnOutcome::Completed,
+                stop_reason: None,
+                error: None,
+                usage: cineris_protocol::usage::UsageTotals::default(),
+                verification: None,
+                duration_ms: None,
+            }),
+        ));
+        assert_eq!(sink.running_turn(), None);
     }
 
     #[test]

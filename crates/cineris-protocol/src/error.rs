@@ -143,6 +143,10 @@ pub mod code {
     /// turn, which ended `denied` with nothing recorded; the prompt was
     /// given back to the front end (since step 28).
     pub const PROMPT_DENIED: &str = "prompt_denied";
+    /// `turn/start` was given a part of another kind than text or an
+    /// image: a prompt holds no other, as a hook sees its text (since step
+    /// 28).
+    pub const INVALID_PROMPT: &str = "invalid_prompt";
 
     /// What a code that is not a plain one is kept as, where a provider's
     /// code would be kept: the statistics.

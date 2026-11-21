@@ -207,9 +207,7 @@ find:
             self.alive.store(false, Ordering::SeqCst);
         }
 replace:
-        if let After::TornDown = after {
             let _ = &self.alive;
-        }
 caught-by:
     cineris-ext::it engine::a_memory_bomb_is_stopped_by_the_memory_limit
 
@@ -223,8 +221,6 @@ find:
         }
 replace:
         if kind.is_symlink() && false {
-            return Err(FolderError::Link(relative));
-        }
 caught-by:
     cineris-ext::it folder::a_link_anywhere_in_the_folder_refuses_it
 
@@ -473,7 +469,6 @@ find:
                     self.remember_allowed(&call, asked);
                 }
 replace:
-                self.remember_allowed(&call, asked);
 caught-by:
     cineris-core::it extensions::allowing_a_host_write_once_allows_that_write_alone
 
@@ -1501,11 +1496,8 @@ find:
         }
         cineris_base::hook::point(super::AFTER_A_CALL_IS_CLAIMED);
         if outbox.send(FromThread::Started).is_err() {
-            return After::Goes;
-        }
 replace:
         claim.store(STARTED, Ordering::SeqCst);
-        cineris_base::hook::point(super::AFTER_A_CALL_IS_CLAIMED);
         let _ = outbox.send(FromThread::Started);
 caught-by:
     cineris-ext::it engine::a_call_cancelled_before_its_turn_is_withdrawn_and_never_runs
@@ -1871,8 +1863,6 @@ find:
             "its host has a character the fetch would read differently: write it plainly"
 replace:
     if false {
-        return Err(refused(
-            "its host has a character the fetch would read differently: write it plainly"
 caught-by:
     cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
 
@@ -2604,11 +2594,7 @@ find:
             .field("cut", &self.cut)
             .field("address", &self.address)
 replace:
-        .field("status", &self.status)
             .field("headers", &self.headers)
-            .field("body_bytes", &self.body.len())
-            .field("cut", &self.cut)
-            .field("address", &self.address)
 caught-by:
     cineris-llm fetch::tests::a_response_prints_without_its_header_values
 
@@ -2657,8 +2643,6 @@ find:
             .field("headers", &names)
             .field("body_bytes", &self.body.len())
 replace:
-        f.debug_struct("FetchOutput")
-            .field("status", &self.status)
             .field("headers", &self.headers)
             .field("body_bytes", &self.body)
 caught-by:
@@ -6300,8 +6284,8 @@ caught-by:
 rule: An answer's `reason` is cut to 8 KiB, as its `context` is.
 file: crates/cineris-ext/src/hook/answer.rs
 in: Answer::of
-find: let (reason, was_cut) = cut(text(given)?);
-replace: let (reason, was_cut) = (text(given)?, false);
+find: let (reason, was_cut) = cut(folded(&text(given)?));
+replace: let (reason, was_cut) = (folded(&text(given)?), false);
 caught-by:
     hook::answer::tests::an_answer_is_bounded_and_its_texts_are_cut
 
@@ -6359,7 +6343,7 @@ in: asked
 find: Standing::Approved => continue
 replace: Standing::Approved => false
 caught-by:
-    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] the-trust-question-leaves-the-hooks-out
 rule: The trust question lists a project's hooks.
@@ -6368,7 +6352,7 @@ in: look
 find: resources.extend(hooks.resources);
 replace:
 caught-by:
-    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] a-yes-pins-no-hook
 rule: A yes to the trust question pins the hooks it listed, as they were shown.
@@ -6377,15 +6361,44 @@ in: kept_answer
 find: pin.extend(question.hooks.iter().cloned());
 replace:
 caught-by:
-    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] a-session-runs-an-untrusted-projects-hooks
-rule: A session runs a project's hooks only while the project is trusted. Survives: a session of a project not trusted has the store's own reading of it, which gives each of its definitions the standing `Untrusted`, or, when the store could not be read, no reading at all (it is read again only under `--trust-project`), so `in_session` approves none of its hooks without this check either.
+rule: A session takes a project's hooks, and tells of its entries, only while the project is trusted.
 file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: let trusted = matches!(
 replace: let trusted = true || matches!(
-expect: survives
+caught-by:
+    cineris-core::it hook_wiring::an_untrusted_projects_refused_entries_change_nothing
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
+
+[break] an-untrusted-projects-refused-entry-gates-the-session
+rule: A project's entry that does not compile is on no event, trusted or not (the review of the second pull request, H1).
+file: crates/cineris-core/src/ext/hooks.rs
+in: in_session
+find: .partition(|refused| refused.source == Source::User)
+replace: .partition(|_| true)
+caught-by:
+    cineris-core::it hook_wiring::an_untrusted_projects_refused_entries_change_nothing
+
+[break] an-untrusted-projects-warning-is-told
+rule: The configuration's warning of a project's hook is told only while the project is trusted.
+file: crates/cineris-core/src/ext/hooks.rs
+in: in_session
+find: .filter(|(source, _)| *source == Source::User || trusted)
+replace: .filter(|_| true)
+caught-by:
+    cineris-core::it hook_wiring::an_untrusted_projects_refused_entries_change_nothing
+
+[break] a-projects-hook-turned-off-runs
+rule: A project's hook turned off (`enabled = false`) is neither asked about nor the session's.
+file: crates/cineris-core/src/ext/hooks.rs
+in: Configured::of
+find: if !hook.settings.enabled {
+replace: if false {
+caught-by:
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 # ------------------------------------------------ the core: the start
 
@@ -6405,7 +6418,7 @@ in: decide
 find: (Decision::Ask, question.managed)
 replace: (Decision::Ask, false)
 caught-by:
-    cineris-core::it hook_commands::a_users_hook_is_held_back_by_a_deny_or_a_managed_ask
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-projects-hook-passes-a-question
 rule: A project's hook does not run where the engine would ask.
@@ -6415,7 +6428,7 @@ find: Decision::Ask => true
 replace: Decision::Ask => false
 caught-by:
     ext::hook_command::tests::a_hooks_start_follows_the_engine_and_a_project_never_passes_a_question
-    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] a-read-only-line-that-may-be-another-program-passes
 rule: A line the engine reads as only reading, where that may not be the program that runs, counts as a question.
@@ -6433,7 +6446,7 @@ in: run
 find: decide(ToDecide { line: &line, cwd: &cwd, effects, read_only_asks })?;
 replace: let _ = decide(ToDecide { line: &line, cwd: &cwd, effects, read_only_asks });
 caught-by:
-    cineris-core::it hook_commands::a_users_hook_is_held_back_by_a_deny_or_a_managed_ask
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-hook-without-write-gets-the-workspace
 rule: A hook writes nothing where commands are confined unless its entry says `write = true`.
@@ -6471,7 +6484,7 @@ in: HookCommands::run
 find: Ok(input) if input.len() <= EXEC_MAX_STDIN => input
 replace: Ok(input) => input
 caught-by:
-    cineris-core::it hook_commands::an_event_past_its_cap_starts_nothing
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-failed-exit-is-read-as-an-answer
 rule: A hook that exits with anything but 0 has failed.
@@ -6559,7 +6572,7 @@ replace: if false {
 packages: cineris-ext,cineris-core
 caught-by:
     hook::command::tests::the_arguments_are_capped_as_written_and_as_filled
-    cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-gating-path-hook-for-every-tool-is-not-warned-of
 rule: A `tool.before` hook that is waited for, uses `{path}` and lists no `tools` is warned of once, as it is read.
@@ -6570,7 +6583,7 @@ replace: && self.filter.is_every() && false)
 packages: cineris-ext,cineris-core
 caught-by:
     hook::command::tests::a_gating_hook_that_relies_on_path_for_every_tool_is_warned_of
-    cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] the-words-leave-out-the-environment
 rule: A hook's words say, before the yes, that it runs with the user's environment, tokens included.
@@ -6581,7 +6594,7 @@ replace:
 packages: cineris-ext,cineris-core
 caught-by:
     hook::command::tests::its_words_show_every_text_as_code
-    cineris-core::it hook_wiring::permissions_trust_lists_and_pins_a_projects_hooks
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] the-words-say-a-hook-writes-nothing
 rule: A hook's words say that without `write` it writes the session's temporary folder alone, and reads what the session's commands may.
@@ -6601,7 +6614,7 @@ in: HookCommands::run
 find: && path.is_inside_workspace()
 replace: && true
 caught-by:
-    cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-folder-fills-path
 rule: `{path}` is filled with files, never a folder a listing reads.
@@ -6610,13 +6623,13 @@ in: HookCommands::run
 find: .filter(|path| !is_folder(&path.to_fs_path()))
 replace: .filter(|_| true)
 caught-by:
-    cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-hooks-stop-is-not-kept
 rule: A hook whose look stops a turn is told to the user, and the next prompt is refused with it, on any event.
 file: crates/cineris-core/src/ext/hook_command.rs
 in: HookCommands::run
-find: self.stopped(&hook.name, &note);
+find: self.stopped(&hook.name, &cx.turn, &note);
 replace:
 caught-by:
     cineris-core::it hook_wiring::confined::sys_a_hooks_stop_outside_a_turn_is_told_and_refuses_the_next_prompt
@@ -6646,7 +6659,7 @@ in: PointHooks::of
 find: for refused in &hooks.refused {
 replace: for refused in hooks.refused.iter().take(0) {
 caught-by:
-    cineris-core::it hook_wiring::a_refused_gate_holds_its_event_and_a_reload_leaves_it_in_force
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-changed-projects-hook-lapses
 rule: A project's hook approved once and changed since is on its event as a hook that fails.
@@ -6694,7 +6707,6 @@ find: Outcome::Allow { .. } if hooked.is_some() => Question {
 replace: Outcome::Allow { .. } if false && hooked.is_some() => Question {
 caught-by:
     cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
-    cineris-core::it hook_wiring::sys_a_replacement_is_answered_by_a_person_and_never_by_a_supervisors_grant
 
 [break] a-hooks-question-has-no-reasons-line
 rule: A hook's question says, in its reasons, which hook asked or replaced the arguments.
@@ -6705,6 +6717,41 @@ replace:
 caught-by:
     cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
 
+[break] a-replacement-is-put-to-whoever-opens-the-session
+rule: A replacement is a person's: put to the users alone, a supervisor that opens the session while it is open included (the review of the second pull request, M6).
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: let (id, mut answer) = if replaced {
+replace: let (id, mut answer) = if false {
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] a-late-supervisor-is-put-a-replacement
+rule: A request only a person answers is never put to a supervisor that opens the session while it is open.
+file: crates/cineris-core/src/clients.rs
+in: Clients::join
+find: if open.people_only && !person {
+replace: if false {
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] a-replacements-answer-keeps-a-rule
+rule: A replacement is offered "allow once" and "deny" alone, and whatever a person answers keeps no rule.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: let once_only = host.is_some() || replaced;
+replace: let once_only = host.is_some();
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] a-supervisors-allow-of-a-replacement-is-taken
+rule: A supervisor's allow of a replacement is not taken. Survives: a replacement is never put to a supervisor, at the question or when one opens the session later, and `Clients::answer` refuses an answer from a client a request was not put to; this is the last of those guards, kept for the rule's sake.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: if response.choice == ApprovalChoice::AllowOnce && !replaced {
+replace: if response.choice == ApprovalChoice::AllowOnce {
+expect: survives
+
 [break] a-supervisor-is-put-a-replacement
 rule: A replacement is put to the session's users alone, never to a supervisor.
 file: crates/cineris-core/src/policy.rs
@@ -6712,7 +6759,7 @@ in: EnginePolicy::ask_with
 find: if !replaced { return clients; }
 replace: if true { return clients; }
 caught-by:
-    cineris-core::it hook_wiring::sys_a_replacement_is_answered_by_a_person_and_never_by_a_supervisors_grant
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
 
 [break] a-prompt-given-back-reaches-every-client-whole
 rule: A prompt a hook refused is given back whole only to the client that sent it.
@@ -6721,7 +6768,7 @@ in: SessionSink::emit
 find: returned.parts = Vec::new();
 replace:
 caught-by:
-    cineris-core::it hook_wiring::a_prompt_given_back_reaches_only_its_sender_whole
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] a-prompt-holds-any-part
 rule: A prompt holds text and images only.
@@ -6729,7 +6776,7 @@ file: crates/cineris-core/src/core.rs
 find: !matches!(part, cineris_protocol::Part::Text(_) | cineris_protocol::Part::Image(_))
 replace: false
 caught-by:
-    cineris-core::it hook_wiring::a_prompt_holds_text_and_images_only
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 # ----------------------------------- round 2: what the review found untested
 
@@ -6767,7 +6814,7 @@ in: assemble
 find: None if options.trust_project && !configured.project.is_empty() => {
 replace: None if false && !configured.project.is_empty() => {
 caught-by:
-    cineris-core::it hook_wiring::trust_for_the_run_approves_no_hook_that_is_not_pinned
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] permissions-trust-pins-no-hook
 rule: `cineris permissions trust`, with the hooks approved, pins each as it was shown.
@@ -6776,7 +6823,7 @@ in: Core::trust_project_with
 find: pin.extend(hooks.iter().map(|hook| hook.definition.clone()));
 replace:
 caught-by:
-    cineris-core::it hook_wiring::permissions_trust_lists_and_pins_a_projects_hooks
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] an-unkept-yes-approves-no-hook
 rule: A yes the trust store cannot keep approves the hooks shown, by their hashes, for the session.
@@ -6786,7 +6833,7 @@ find: hooks: question.hooks.clone()
 occurrence: 1
 replace: hooks: Vec::new()
 caught-by:
-    cineris-core::it hook_wiring::a_yes_the_store_cannot_keep_approves_the_hooks_shown_for_the_session
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] a-trusted-project-is-not-asked-about-a-new-hook
 rule: A trusted project with nothing else new is asked about a hook in it that is new or changed.
@@ -6795,7 +6842,7 @@ in: look
 find: if quiet && extensions.pins.is_empty() && hooks.pins.is_empty() {
 replace: if quiet && extensions.pins.is_empty() {
 caught-by:
-    cineris-core::it hook_wiring::a_trusted_project_is_asked_about_a_new_hook_and_keep_leaves_it_off
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] keep-without-a-new-hook-asks-again-in-the-core
 rule: Keep trusting it, without a new hook, is kept by the core for its run: it asks no more until the next start.
@@ -6804,7 +6851,7 @@ in: kept_answer
 find: || !question.hooks.is_empty()
 replace:
 caught-by:
-    cineris-core::it hook_wiring::a_trusted_project_is_asked_about_a_new_hook_and_keep_leaves_it_off
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 
 [break] a-hook-without-network-reaches-the-network
 rule: A hook reaches the network where commands are confined only with `network = true`.
@@ -6822,10 +6869,10 @@ caught-by:
 rule: Hook starts with a write root run one at a time: they share one baseline of the look at the protected paths.
 file: crates/cineris-core/src/ext/hook_command.rs
 in: HookCommands::run
-find: Some(self.writing.lock().await)
-replace: None::<tokio::sync::MutexGuard<'_, ()>>
+find: Some(writing) => Some(writing),
+replace: Some(writing) => { drop(writing); None }
 caught-by:
-    cineris-core::it hook_wiring::hooks_with_a_write_root_run_one_at_a_time
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-write-hook-has-a-write-root-at-read-only
 rule: At `read-only` a hook with `write = true` is given no write root.
@@ -6834,7 +6881,7 @@ in: HookCommands::run
 find: && *self.parts.policy.engine().level() != cineris_protocol::lease::Level::ReadOnly
 replace: && true
 caught-by:
-    cineris-core::it hook_wiring::a_write_hook_has_no_write_root_at_read_only
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-failing-start-observer-is-not-logged
 rule: A failing observer of `session.start`, never waited for, is logged.
@@ -6843,7 +6890,128 @@ in: SessionHooks::start
 find: tracing::warn!(hook = %name, %why, "a `session.start` observer failed");
 replace: let _ = (&name, &why);
 caught-by:
-    cineris-core::it hook_wiring::a_failing_observer_of_session_start_is_logged
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+# ------------------------------- round 3: the review of the second pull request
+
+[break] a-session-start-hook-is-not-under-the-sessions-token
+rule: Every `session.start` run is under the session's token, which the close fires (M1). Its symptom is a close that waits for ever, caught when the test's time runs out.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: SessionHooks::runs_of
+find: self.commands.session.child()
+replace: CancelToken::new()
+caught-by:
+    cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
+
+[break] the-close-waits-for-no-hook
+rule: The close stops what of the session's hooks still runs, and waits for every run, before the `session.end` hooks and the close's look (M1).
+os: linux
+file: crates/cineris-core/src/core.rs
+in: Core::end
+find: live.command_hooks.close().await;
+replace:
+caught-by:
+    cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
+
+[break] a-hook-of-a-stopped-turn-is-a-stop-of-its-own
+rule: A hook not started because its turn is stopped has failed, and is no stop of its own: it is not told as one, and holds back no second prompt (M2).
+os: linux
+file: crates/cineris-core/src/ext/hook_command.rs
+in: decide
+find: NotRun::Stopped(_) => { HostError::Failed("it was not started: its turn was stopped".to_owned()) }
+replace: NotRun::Stopped(reason) => HostError::Stopped(reason),
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
+
+[break] a-hook-of-a-stopped-turn-starts
+rule: A hook of a turn that is stopped starts nothing.
+os: linux
+file: crates/cineris-core/src/ext/hook_command.rs
+in: decide
+find: match policy.stopped_turn(turn_number(&cx.turn)) {
+replace: match None::<String> {
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
+
+[break] a-stop-of-no-turns-leaves-the-running-turn
+rule: A stop made by a hook of no turn (a `session.start` one's) stops the turn running then, if one is.
+os: linux
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::stopped
+find: if turn_number(turn) == 0
+replace: if false
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
+
+[break] a-hook-let-go-runs-on
+rule: A hook run whose wait is let go (its turn interrupted) is stopped, its process tree with it, even before the wait is first polled (M3). Its symptom is a close that waits for ever, caught when the test's time runs out.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: CommandRun::run
+find: let stop = StopOnDrop(cancel.clone(), kill.clone());
+replace: let stop = (cancel.clone(), kill.clone());
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] a-reasons-line-breaks-are-kept
+rule: An answer's `reason` has its line breaks folded to spaces, on the core's own events too (M4).
+file: crates/cineris-ext/src/hook/answer.rs
+in: Answer::of
+find: let (reason, was_cut) = cut(folded(&text(given)?));
+replace: let (reason, was_cut) = cut(text(given)?);
+caught-by:
+    hook::answer::tests::a_reasons_line_breaks_are_folded_and_a_contexts_kept
+
+[break] a-prompts-sender-is-kept-after-it-is-recorded
+rule: Who sent a prompt is kept only until the prompt is recorded or given back (M5).
+file: crates/cineris-core/src/events.rs
+in: SessionSink::emit
+find: let _ = self.sender_of(&message.parts);
+replace:
+caught-by:
+    events::tests::a_prompts_sender_is_let_go_as_it_is_recorded_and_the_running_turn_is_known
+
+[break] a-prompts-sender-is-not-noted
+rule: Who sent a prompt is noted where a `prompt.submit` hook could refuse it, so that it is given back whole to its sender alone.
+file: crates/cineris-core/src/core.rs
+find: if live.command_hooks.wants_prompt() {
+replace: if false {
+caught-by:
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
+
+[break] a-refused-prompt-gate-keeps-no-sender
+rule: A refused entry on `prompt.submit` is a hook that may refuse a prompt: who sent one is noted for it.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: SessionHooks::wants_prompt
+find: .any(|refused| refused.event == Some(Event::PromptSubmit))
+replace: .any(|_| false)
+caught-by:
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
+
+[break] the-close-gives-session-end-hooks-no-bound
+rule: A session's `session.end` hooks are given up to five seconds on the session's clock as it closes (M8). Its symptom is a close that waits for ever, caught when the test's time runs out.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: SessionHooks::end
+find: let mut over = timer.sleep(SESSION_END_TIME);
+replace: let mut over: cineris_base::Sleep = Box::pin(std::future::pending());
+caught-by:
+    cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
+
+[break] the-first-turn-does-not-wait-for-session-start
+rule: The first turn waits for the `session.start` hooks that are waited for.
+file: crates/cineris-core/src/core.rs
+find: live.command_hooks.started().await;
+replace:
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+[break] a-hook-of-no-tools-is-on-no-call
+rule: A hook that lists no `tools` is on every call.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: on_target
+find: (None, Some(_)) => true,
+replace: (None, Some(_)) => false,
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 # From mutations/step-28-hookseam.breaks (part `hookseam`).
 # Step 28, the loop's hook seam: `cineris_agent::Hooks` at `prompt.submit`

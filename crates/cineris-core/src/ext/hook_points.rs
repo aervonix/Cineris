@@ -35,7 +35,9 @@ use cineris_ext::event::Event;
 use cineris_ext::hook::{CommandHook, Filter};
 use cineris_tools::{BoxFuture, Effect};
 
-use super::hook_command::{HookCommands, HookCx, HookEvent, HookOutcome, SessionHooks};
+use super::hook_command::{
+    HookCommands, HookCx, HookOutcome, Owned, SessionHooks, TURN_END_AT_ONCE,
+};
 use super::hooks::Refused;
 
 /// The event of the loop's that an event of a hook's configuration is:
@@ -89,6 +91,7 @@ impl PointHooks {
                         hook: hook.clone(),
                         commands: Arc::clone(&hooks.commands),
                         paths: Arc::clone(&hooks.paths),
+                        running: Arc::default(),
                     }),
                 });
             }
@@ -114,7 +117,10 @@ impl PointHooks {
 fn on_target(filter: Option<&Filter>, target: Option<ToolTarget<'_>>) -> bool {
     match (filter, target) {
         (Some(filter), Some(target)) => filter.matches(target.tool, target.names),
-        _ => true,
+        // A hook that lists no tools is on every call.
+        (None, Some(_)) => true,
+        // An event of no call (a prompt, a turn's end): every hook on it.
+        (_, None) => true,
     }
 }
 
@@ -171,6 +177,25 @@ struct CommandRun {
     hook: CommandHook,
     commands: Arc<HookCommands>,
     paths: Arc<cineris_base::PathResolver>,
+    /// How many runs of it are going on: a waited-for `turn.end` hook has
+    /// at most [`TURN_END_AT_ONCE`].
+    running: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+/// One run of a hook counted while its task lives.
+struct Counted(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Counted {
+    fn new(running: &Arc<std::sync::atomic::AtomicUsize>) -> Self {
+        running.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        Self(Arc::clone(running))
+    }
+}
+
+impl Drop for Counted {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 /// Stops a run when what waits for it lets it go: the program is stopped,
@@ -221,32 +246,49 @@ impl Hook for CommandRun {
             }
             _ => (None, Vec::new()),
         };
+        // A waited-for `turn.end` hook runs at most so many times at once,
+        // as an observer does: turns that end faster than it runs leave the
+        // rest unstarted.
+        if self.hook.event == Event::TurnEnd
+            && !self.hook.observe
+            && self.running.load(std::sync::atomic::Ordering::Acquire) >= TURN_END_AT_ONCE
+        {
+            return Box::pin(std::future::ready(Heard::Failed(format!(
+                "The hook `{}` was not started: {TURN_END_AT_ONCE} runs of it are going on",
+                in_code(&self.hook.name)
+            ))));
+        }
         let cancel = CancelToken::new();
         let kill = CancelToken::new();
+        // Made before the run is: a future let go before it is first
+        // polled stops the run too (the review of the second pull request,
+        // M3: the loop's observers can be let go so).
+        let stop = StopOnDrop(cancel.clone(), kill.clone());
         let cx = HookCx {
             session: input.session.clone(),
             turn: input.turn.clone(),
-            cancel: cancel.clone(),
-            kill: kill.clone(),
+            cancel,
+            kill,
             paths: Arc::clone(&self.paths),
         };
-        let commands = Arc::clone(&self.commands);
-        let hook = self.hook.clone();
         // A task of its own, on the runtime's thread and never the blocking
         // pool's (a program's death signal is tied to the thread that
-        // started it): what follows the program is done whatever becomes of
-        // the wait for it.
-        let task = tokio::spawn(async move {
-            let event = HookEvent {
-                input: &json,
-                tool: tool.as_deref(),
-                effects: &effects,
-            };
-            commands.run(&hook, &event, &cx).await
-        });
+        // started it), kept by the session until its close waits for it:
+        // what follows the program is done whatever becomes of the wait for
+        // it.
+        let outcome = self.commands.spawn_run(
+            self.hook.clone(),
+            Owned {
+                input: json,
+                tool,
+                effects,
+            },
+            cx,
+            Box::new(Counted::new(&self.running)),
+        );
         Box::pin(async move {
-            let _stop = StopOnDrop(cancel, kill);
-            match task.await {
+            let _stop = stop;
+            match outcome.await {
                 Ok(HookOutcome::Answered(answer)) => Heard::Answer(answer),
                 Ok(HookOutcome::Nothing | HookOutcome::Observed) => Heard::Nothing,
                 Ok(HookOutcome::Failed(why) | HookOutcome::Stopped(why)) => Heard::Failed(why),

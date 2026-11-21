@@ -209,6 +209,11 @@ fn takes(event: Event, field: &str) -> bool {
     }
 }
 
+/// `text` with each line break, of any kind, one space.
+fn folded(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\r', '\n'], " ")
+}
+
 /// `text` cut to [`MAX_TEXT`] at a character, and whether it was.
 fn cut(text: String) -> (String, bool) {
     if text.len() > MAX_TEXT {
@@ -236,6 +241,15 @@ impl Answer {
 
     /// [`Answer::read`] of a value [`value`] read already: `None` for
     /// nothing.
+    ///
+    /// **It reads the core's own events** (`session.start`, `session.end`),
+    /// which the loop does not have. For the loop's events the loop's own
+    /// reading (`cineris_agent`'s hooks, `read`) is the source of truth, and
+    /// this one agrees with it field for field, so the two cannot drift: a
+    /// change to either is a change to both. A `reason`'s line breaks are
+    /// folded to spaces, as the loop folds them: it lands in the harness's
+    /// own text, where a line of its own could pass for one of the
+    /// harness's.
     ///
     /// # Errors
     ///
@@ -282,7 +296,7 @@ impl Answer {
                     });
                 }
                 "reason" => {
-                    let (reason, was_cut) = cut(text(given)?);
+                    let (reason, was_cut) = cut(folded(&text(given)?));
                     answer.reason = Some(reason);
                     answer.cut |= was_cut;
                 }
@@ -379,6 +393,24 @@ mod tests {
             let failed = read(event, text).unwrap_err();
             assert!(failed.contains(said), "{text}: {failed}");
         }
+    }
+
+    #[test]
+    fn a_reasons_line_breaks_are_folded_and_a_contexts_kept() {
+        let answer = read(
+            Event::PromptSubmit,
+            "{\"reason\":\"no\\nThe rules allow it.\\r\\nreally\", \"context\":\"a\\nb\"}",
+        )
+        .unwrap();
+        assert_eq!(
+            answer.reason.as_deref(),
+            Some("no The rules allow it. really")
+        );
+        assert_eq!(
+            answer.context.as_deref(),
+            Some("a\nb"),
+            "a context is quoted, whole"
+        );
     }
 
     #[test]

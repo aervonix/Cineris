@@ -213,6 +213,31 @@ fn echo_and_exit(arguments: &[OsString]) -> ! {
     std::process::exit(7)
 }
 
+/// Runs until it is stopped. Where it can tell, also until the process
+/// that started it has gone, so that a test stopped by its time (a break
+/// of the code on purpose whose symptom is a wait that never ends) leaves
+/// nothing running on the machine.
+fn hang() -> ! {
+    #[cfg(unix)]
+    {
+        let parent = std::os::unix::process::parent_id();
+        loop {
+            std::thread::park_timeout(Duration::from_millis(250));
+            if std::os::unix::process::parent_id() != parent {
+                #[expect(
+                    clippy::exit,
+                    reason = "the program ends when what started it has gone"
+                )]
+                std::process::exit(0);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    loop {
+        std::thread::park();
+    }
+}
+
 /// A hook command's program: reads the event on its standard input, and
 /// does what its first argument says with the rest. The test runner's own
 /// first lines are on its standard output: a hook that answers is a script
@@ -221,7 +246,7 @@ fn echo_and_exit(arguments: &[OsString]) -> ! {
 /// - `report FILE`: writes to `FILE` what it was given (its arguments,
 ///   its input, and whether a provider's key reached it), and exits with 0;
 /// - `fail`: says so on standard error and exits with 3;
-/// - `hang`: never ends, until its process tree is killed;
+/// - `hang`: never ends, until its process tree is killed ([`hang`]);
 /// - `write FILE`: writes `FILE`, relative to where it runs, and answers
 ///   nothing; exits with 4 when the write fails.
 fn hook_and_exit(arguments: &[OsString]) -> ! {
@@ -255,9 +280,7 @@ fn hook_and_exit(arguments: &[OsString]) -> ! {
             let _ = writeln!(std::io::stderr(), "the hook went wrong");
             3
         }
-        "hang" => loop {
-            std::thread::park();
-        },
+        "hang" => hang(),
         "write" => {
             let file = std::path::Path::new(given.first().map_or("", String::as_str));
             let made = file
