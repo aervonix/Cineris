@@ -4320,11 +4320,12 @@ caught-by:
 [break] pinned-sandbox-off-unwarned
 rule: The trust question warns, before the yes, of a write root of the project's own configuration that holds the harness's files, which trusting it would turn the sandbox off with.
 file: crates/cineris-core/src/assemble.rs
-in: harness_write_warnings
+in: harness_write_roots
 find: holds_harness_files(&sandbox_grant(inner, &with, root, &question), &with, state, launcher)
 replace: holds_harness_files(&sandbox_grant(inner, &with, root, &question), &with, state, launcher) && false
 caught-by:
     extensions_review::the_trust_question_warns_of_a_write_root_that_would_turn_the_sandbox_off
+    extensions_review::the_trust_question_warns_of_a_profiles_write_root_that_would_turn_the_sandbox_off
 
 [break] pinned-file-over-its-cap-read
 rule: A file over its 1 MiB cap is refused by its length before it is read: nothing of it is read.
@@ -4362,6 +4363,15 @@ replace: if discovered.cut.contains(&root.source) {
 packages: cineris-core
 caught-by:
     ext::found::tests::the_users_names_are_taken_within_the_bound_on_places_the_session_watches
+
+[break] pinned-profiles-root-unwarned
+rule: The trust question warns of a write root that would turn the sandbox off in each profile the project defines, not only in the one selected: a yes trusts every profile.
+file: crates/cineris-core/src/assemble.rs
+in: harness_write_warnings
+find: for name in &trusted.project_profiles {
+replace: for name in trusted.project_profiles.iter().take(0) {
+caught-by:
+    extensions_review::the_trust_question_warns_of_a_profiles_write_root_that_would_turn_the_sandbox_off
 
 # From mutations/step-28-pins.breaks (part `pins`).
 # Step 28, the user's own pins (`pins.toml`, `cineris-policy`'s
