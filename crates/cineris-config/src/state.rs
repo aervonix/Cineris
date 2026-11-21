@@ -5,6 +5,7 @@
 //! |---|---|---|
 //! | `trust.toml` | Trusted projects and the hashes of what was trusted. | `cineris-policy` |
 //! | `pins.toml` | The hashes of the user's own extensions that the user approved (since step 28). | `cineris-policy` |
+//! | `extensions/registered.json` | What each approved extension registered, by its hash: the registration cache (since step 28). | `cineris-ext` |
 //! | `projects/<project key>/knowledge.toml` | What the harness has learned about a project. | `cineris-knowledge` |
 //! | `projects/<project key>/index/` | The repository-map cache. | `cineris-index` |
 //! | `stats/` | Local statistics. | `cineris-stats` |
@@ -86,6 +87,15 @@ impl StateDir {
     #[must_use]
     pub fn pins_file(&self) -> PathBuf {
         self.root.join("pins.toml")
+    }
+
+    /// `extensions/registered.json`: what each approved extension
+    /// registered, its tools, commands, hooks and prompt text, by the hash
+    /// of its folder (since step 28): the registration cache, which a
+    /// session reads in place of starting the engine.
+    #[must_use]
+    pub fn registration_cache_file(&self) -> PathBuf {
+        self.root.join("extensions").join("registered.json")
     }
 
     /// `projects/<key>/`: what is kept about one project. `None` when the
@@ -262,6 +272,10 @@ mod tests {
         assert_eq!(state.root(), Path::new("/state/cineris"));
         assert_eq!(state.trust_file(), at("/state/cineris/trust.toml"));
         assert_eq!(state.pins_file(), at("/state/cineris/pins.toml"));
+        assert_eq!(
+            state.registration_cache_file(),
+            at("/state/cineris/extensions/registered.json")
+        );
         assert_eq!(
             state.knowledge_file(&project),
             Some(at("/state/cineris/projects/9f2c4a1b7d3e/knowledge.toml"))
