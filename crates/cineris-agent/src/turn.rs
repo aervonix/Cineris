@@ -801,7 +801,10 @@ impl Session {
     async fn begin(&mut self, turn: &Turn, prompt: Prompt) -> Result<Begun, StoreError> {
         let mut context = Vec::new();
         if prompt.compact.is_none() && self.wants_prompts() {
-            match self.submit(turn, &prompt.input, prompt.delivery.clone()).await {
+            match self
+                .submit(turn, &prompt.input, prompt.delivery.clone())
+                .await
+            {
                 None => {
                     self.give_back(
                         turn,
@@ -935,8 +938,12 @@ impl Session {
         context: Vec<(String, String)>,
     ) -> Result<(), StoreError> {
         for (hook, text) in context {
-            self.record_notice(turn, NoticeSource::Hook, hooks::context_notice(&hook, &text))
-                .await?;
+            self.record_notice(
+                turn,
+                NoticeSource::Hook,
+                hooks::context_notice(&hook, &text),
+            )
+            .await?;
         }
         Ok(())
     }

@@ -142,7 +142,7 @@ export interface ApprovalRequest {
   hooks?: Array<HookReason>;
   /** Why the call needs an answer, a reason an entry: the rule that asks, the part of a command that is not on a safe list, a protected path. */
   reasons?: Array<string>;
-  /** The arguments a hook put in place of the model's (since step 28), with the model's own as `original`: the call would run with the hook's, and `summary` and `detail` describe it so. Such a question is always put, whatever the rules say, and offers only `allow_once` and `deny`. */
+  /** The arguments a hook put in place of the model's (since step 28), with the model's own as `original`: the call would run with the hook's, and `summary` and `detail` describe it so. Such a question is always put, whatever the rules say, and offers only `allow_once` and `deny`. (Boxed: it is rare, and every request would otherwise be its size.) */
   replaced?: ReplacedArguments | null;
   /** The session. */
   session_id: SessionId;

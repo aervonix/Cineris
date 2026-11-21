@@ -517,9 +517,11 @@ async fn together<T>(all: Vec<BoxFuture<'_, T>>) -> Vec<T> {
 /// The time the loop gives `hook`.
 fn time_of(hook: &dyn Hook) -> Duration {
     if hook.observes() {
-        hook.timeout().map_or(OBSERVE_DEFAULT, |time| time.min(OBSERVE_MAX))
+        hook.timeout()
+            .map_or(OBSERVE_DEFAULT, |time| time.min(OBSERVE_MAX))
     } else {
-        hook.timeout().map_or(WAIT_DEFAULT, |time| time.min(WAIT_MAX))
+        hook.timeout()
+            .map_or(WAIT_DEFAULT, |time| time.min(WAIT_MAX))
     }
 }
 

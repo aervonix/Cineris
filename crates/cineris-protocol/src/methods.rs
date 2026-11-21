@@ -1166,9 +1166,10 @@ pub struct ApprovalRequest {
     /// with the model's own as `original`: the call would run with the
     /// hook's, and `summary` and `detail` describe it so. Such a question
     /// is always put, whatever the rules say, and offers only `allow_once`
-    /// and `deny`.
+    /// and `deny`. (Boxed: it is rare, and every request would otherwise be
+    /// its size.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub replaced: Option<ReplacedArguments>,
+    pub replaced: Option<Box<ReplacedArguments>>,
 }
 
 /// A rule an answer to an approval request would add: always an `allow`.
