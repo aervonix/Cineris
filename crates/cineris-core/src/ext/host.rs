@@ -9,7 +9,9 @@
 //! its host calls too. The call is decided under the extension tool's
 //! name with the built-in tools' default: nothing else about the decision
 //! differs from a built-in tool's. A question it needs offers only "allow
-//! once" and "deny", and no answer to it keeps a rule.
+//! once" and "deny", and no answer to it keeps a rule. A write of a
+//! protected path is refused before the engine is asked, at every level
+//! (`super::protected`).
 
 use std::io::Read as _;
 use std::sync::Mutex;
@@ -218,6 +220,11 @@ impl Host for CallHost<'_> {
 
     fn write(&self, path: ResolvedPath, text: String) -> HostFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
+            // A protected path is refused at every level, `unrestricted`
+            // included, before the engine is asked or the tool planned:
+            // nothing looks at a host write afterwards, as the look at the
+            // protected paths does after a command.
+            self.refuse_protected(&path).await?;
             let arguments = json!({"path": path.data(), "content": text});
             let cx = self.extension_cx();
             let plan_cx = cx.plan_cx();
@@ -459,6 +466,32 @@ impl CallHost<'_> {
 }
 
 impl CallHost<'_> {
+    /// Refuses a write of `path` when it is a protected path or lies under
+    /// one (`super::protected`), at every level: the extension host's own
+    /// check, as the manifest's is, made before the engine is asked.
+    async fn refuse_protected(&self, path: &ResolvedPath) -> Result<(), HostError> {
+        let protect = self
+            .parts
+            .policy
+            .engine()
+            .lease()
+            .grant
+            .sandbox
+            .protect
+            .clone();
+        let paths = std::sync::Arc::clone(&self.cx.paths);
+        let target = path.clone();
+        let refused = run_blocking(&self.cx.cancel, move |_| {
+            super::protected::refusal(&paths, &target, &protect)
+        })
+        .await
+        .map_err(|error| HostError::Failed(error.to_string()))?;
+        match refused {
+            Some(why) => Err(HostError::Denied(why)),
+            None => Ok(()),
+        }
+    }
+
     /// Whether `path` leads, now, where it led when it was checked.
     async fn still_leads(&self, path: &ResolvedPath) -> Result<(), HostError> {
         let again = self.resolve(&path.abs().to_native_string()).await?;

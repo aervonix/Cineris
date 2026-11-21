@@ -269,7 +269,7 @@ in: EnginePolicy::ask_with
 find: question.lifts.clear();
 replace: question.lifts.truncate(usize::MAX);
 caught-by:
-    cineris-core::it extensions::a_host_write_of_a_protected_path_asks_once_only_and_keeps_no_rule
+    cineris-core::it extensions::a_host_writes_question_offers_allow_once_only_and_keeps_no_rule
 
 [break] a-host-read-is-not-shown-to-the-engine
 rule: A script's read is decided by the permission engine as a read of its path.
