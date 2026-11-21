@@ -26,7 +26,7 @@
     reason = "a look at each place found, on the blocking pool"
 )]
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use cineris_base::{SharedClock, UtcTime};
@@ -110,18 +110,79 @@ pub(crate) struct Watched {
     places: Vec<(PathBuf, Stamp, UtcTime)>,
 }
 
+/// The most places stamped within one extension's folder: its snapshot's
+/// own cap on entries, past which it is not read either.
+const MAX_IN_A_FOLDER: usize = 1024;
+
+/// The deepest a folder within an extension's is stamped, as its snapshot
+/// reads it.
+const MAX_DEPTH: usize = 16;
+
 impl Watched {
     /// Stamps `places`, in their order: each folder before what is in it.
+    #[cfg(test)]
     pub(crate) fn stamp(places: Vec<PathBuf>, clock: &SharedClock) -> Self {
-        let now = clock.now();
-        Self {
-            places: places
-                .into_iter()
-                .map(|place| {
-                    let stamp = Stamp::of(&place);
-                    (place, stamp, now)
-                })
-                .collect(),
+        let mut watched = Self::default();
+        for place in places {
+            watched.note(place, clock);
+        }
+        watched
+    }
+
+    /// Stamps `place` now, after what is stamped already; a place stamped
+    /// already keeps its first stamp.
+    pub(crate) fn note(&mut self, place: PathBuf, clock: &SharedClock) {
+        if self.places.iter().any(|(known, _, _)| *known == place) {
+            return;
+        }
+        let stamp = Stamp::of(&place);
+        self.places.push((place, stamp, clock.now()));
+    }
+
+    /// Stamps an extension's `folder` now, before it is read: the folder,
+    /// then each folder in it, an empty one included, before what is in
+    /// that, and each file, walked with no link followed, within the caps
+    /// its snapshot is read within. A link in it is stamped as a link and
+    /// not walked into.
+    pub(crate) fn note_tree(&mut self, folder: &Path, clock: &SharedClock) {
+        let mut count = 0;
+        self.walk(folder, 0, &mut count, clock);
+    }
+
+    fn walk(&mut self, folder: &Path, depth: usize, count: &mut usize, clock: &SharedClock) {
+        self.note(folder.to_path_buf(), clock);
+        if depth > MAX_DEPTH {
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(folder) else {
+            return;
+        };
+        let mut inside: Vec<(PathBuf, bool)> = Vec::new();
+        for entry in entries.flatten() {
+            if *count >= MAX_IN_A_FOLDER {
+                break;
+            }
+            *count += 1;
+            // The entry's own kind: a link is not followed to say it.
+            let folder = entry.file_type().is_ok_and(|kind| kind.is_dir());
+            inside.push((entry.path(), folder));
+        }
+        inside.sort();
+        for (path, is_folder) in inside {
+            if is_folder {
+                self.walk(&path, depth + 1, count, clock);
+            } else {
+                self.note(path, clock);
+            }
+        }
+    }
+
+    /// What is stamped in `other`, after what is stamped here.
+    pub(crate) fn extend(&mut self, other: Self) {
+        for (place, stamp, taken) in other.places {
+            if !self.places.iter().any(|(known, _, _)| *known == place) {
+                self.places.push((place, stamp, taken));
+            }
         }
     }
 
@@ -134,6 +195,27 @@ impl Watched {
             (now != *stamp || unsettled(stamp, *taken)).then(|| place.clone())
         })
     }
+}
+
+/// The first name on the way to `folder` (it included) that is not a
+/// folder of its own, looked at itself: a link, a file, or nothing there.
+/// `folder` is where an extension really is, every link on the way already
+/// followed when it was found, so a link on it now is one put there since.
+/// Blocks.
+pub(crate) fn linked_on_the_way(folder: &Path) -> Option<PathBuf> {
+    let mut at = PathBuf::new();
+    for component in folder.components() {
+        at.push(component);
+        // The root, or a Windows prefix, is not a name to look at.
+        if !matches!(component, std::path::Component::Normal(_)) {
+            continue;
+        }
+        match std::fs::symlink_metadata(&at) {
+            Ok(metadata) if metadata.is_dir() => {}
+            _ => return Some(at),
+        }
+    }
+    None
 }
 
 /// Whether a place was modified so shortly before (or, by a skewed clock,
@@ -200,6 +282,37 @@ mod tests {
         let now: SharedClock = Arc::new(cineris_base::SystemClock::new());
         let watched = Watched::stamp(vec![dir.join("gone")], &now);
         assert_eq!(watched.changed(), Some(dir.join("gone")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A file replaced by another of the same size and time is still a
+    /// change, by which file it is (Unix's inode and change time).
+    #[cfg(unix)]
+    #[test]
+    #[expect(
+        clippy::disallowed_types,
+        reason = "a file's modification time is set back by its handle"
+    )]
+    fn a_file_replaced_with_the_same_size_and_time_is_a_change() {
+        let dir =
+            std::env::temp_dir().join(format!("cineris-core-replaced-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("main.js");
+        std::fs::write(&file, "one").unwrap();
+        let time = std::fs::metadata(&file).unwrap().modified().unwrap();
+        let clock: SharedClock = Arc::new(FakeClock::starting_at("2001-01-01T00:00:00Z").unwrap());
+        let watched = Watched::stamp(vec![file.clone()], &clock);
+        let other = dir.join("other.js");
+        std::fs::write(&other, "two").unwrap();
+        std::fs::File::options()
+            .write(true)
+            .open(&other)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+        std::fs::rename(&other, &file).unwrap();
+        assert_eq!(watched.changed(), Some(file));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

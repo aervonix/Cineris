@@ -120,8 +120,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use cineris_base::{
-    AbsPath, PathError, PathResolver, location_within, same_location, strip_location_prefix,
-    visible,
+    AbsPath, PathError, PathResolver, in_code, location_within, same_location,
+    strip_location_prefix, visible,
 };
 
 use crate::folder::Snapshot;
@@ -145,6 +145,12 @@ pub const MAX_PER_ROOT: usize = 64;
 /// listing is bounded on its own: a folder of a great many files costs no
 /// more than this many entries.
 pub const MAX_ENTRIES: usize = 1024;
+
+/// The most bytes read from one root's extensions together: 16 MiB. Past
+/// it the rest of its folders are left out, counted (the full review of
+/// step 28: a root of 64 folders at their 4 MiB cap was 256 MiB to read on
+/// a session's way). A user keeps a few extensions of a few KiB each.
+pub const MAX_ROOT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The user's folder of extensions, in the configuration directory.
 pub const USER_FOLDER: &str = "extensions";
@@ -263,6 +269,24 @@ pub const A_ROOT_IS_RESOLVED: &str = "discover: a root is resolved";
 /// whole.
 pub const AN_EXTENSION_IS_READ: &str = "discover: an extension's folder is about to be read";
 
+/// A point of [`discover`]: an extension's folder has been read, and is
+/// about to be looked at again, to see that it is still a folder of its
+/// own.
+pub const AN_EXTENSION_WAS_READ: &str =
+    "discover: an extension's folder was read, and is not yet looked at again";
+
+/// A place [`discover_seeing`] is about to look in, given to its caller
+/// first, so that the caller can note what the place is like before it is
+/// read: a change made while it is read is then a change from what was
+/// noted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Seen<'a> {
+    /// A root, where it really is, about to be listed.
+    Root(Source, &'a Path),
+    /// An extension's folder, a folder of its own, about to be read whole.
+    Extension(Source, &'a Path),
+}
+
 /// Looks for extensions in `roots`, through `paths`, the session's
 /// resolver: its workspace is the project's, and its home directory is
 /// what `~` stands for (a resolver with none finds nothing in a root given
@@ -272,7 +296,20 @@ pub const AN_EXTENSION_IS_READ: &str = "discover: an extension's folder is about
 /// nothing else. It blocks: call it on the blocking pool.
 #[must_use]
 pub fn discover(roots: &[Root], paths: &PathResolver) -> Discovered {
-    let mut discovered = each_root(roots, paths, look_in);
+    discover_seeing(roots, paths, &mut |_| {})
+}
+
+/// [`discover`], giving `seen` each root, where it really is, before it is
+/// listed, and each extension's folder before it is read ([`Seen`]).
+pub fn discover_seeing(
+    roots: &[Root],
+    paths: &PathResolver,
+    seen: &mut dyn FnMut(Seen<'_>),
+) -> Discovered {
+    let mut discovered = each_root(roots, paths, &mut |root, opened, discovered| {
+        seen(Seen::Root(root.source, &opened.real));
+        look_in(root, opened, discovered, seen);
+    });
     settle_names(&mut discovered);
     discovered
 }
@@ -287,7 +324,7 @@ pub fn discover(roots: &[Root], paths: &PathResolver) -> Discovered {
 /// It blocks: call it on the blocking pool.
 #[must_use]
 pub fn names(roots: &[Root], paths: &PathResolver) -> Discovered {
-    each_root(roots, paths, |root, opened, discovered| {
+    each_root(roots, paths, &mut |root, opened, discovered| {
         let _ = list(root, opened, discovered);
     })
 }
@@ -296,7 +333,7 @@ pub fn names(roots: &[Root], paths: &PathResolver) -> Discovered {
 fn each_root(
     roots: &[Root],
     paths: &PathResolver,
-    mut look: impl FnMut(&Root, &Opened, &mut Discovered),
+    look: &mut dyn FnMut(&Root, &Opened, &mut Discovered),
 ) -> Discovered {
     let mut places = Places {
         workspace: paths.root().to_fs_path(),
@@ -311,6 +348,7 @@ fn each_root(
         }
         discovered.resolved += 1;
         cineris_base::hook::point(A_ROOT_IS_RESOLVED);
+        let refused = discovered.left_out.len();
         let Some(opened) = open_root(
             root,
             below.as_deref(),
@@ -319,6 +357,12 @@ fn each_root(
             &looked,
             &mut discovered.left_out,
         ) else {
+            // A root that is there and could not be opened was not listed
+            // whole: what it holds may take a name (the full review of step
+            // 28). One that is not there holds nothing.
+            if discovered.left_out.len() > refused {
+                discovered.cut.push(root.source);
+            }
             continue;
         };
         discovered.roots.push((root.source, opened.real.clone()));
@@ -355,7 +399,7 @@ fn settle_names(discovered: &mut Discovered) {
                 if position > 0 {
                     refused[member] = Some(format!(
                         "the {whose} extension `{}` was found first, in `{}`",
-                        visible(&this.manifest.name),
+                        in_code(&this.manifest.name),
                         first.shown
                     ));
                 }
@@ -378,7 +422,7 @@ fn settle_names(discovered: &mut Discovered) {
                 "its name `{}` differs only in case from {those} {}: names that differ only in \
                  case are one name on Windows, where they would share what an extension keeps \
                  under its name, so {none}",
-                visible(&this.manifest.name),
+                in_code(&this.manifest.name),
                 listed(&others)
             ));
         }
@@ -504,7 +548,45 @@ impl Places {
                 })
             }
         };
-        visible(&text.unwrap_or_else(|| real.as_str().to_owned())).into_owned()
+        in_code(&text.unwrap_or_else(|| real.as_str().to_owned())).into_owned()
+    }
+
+    /// A root as it was given, as the user is shown it: the project's
+    /// relative to the workspace, the user's under `~` when it is in the
+    /// home directory, escaped as code.
+    fn show_given(
+        &mut self,
+        root: &Root,
+        below: Option<&[OsString]>,
+        paths: &PathResolver,
+    ) -> String {
+        let text = match (root.source, below) {
+            (Source::Project, Some(names)) if !names.is_empty() => names
+                .iter()
+                .map(|name| name.to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/"),
+            (Source::Project, Some(_)) => ".".to_owned(),
+            (Source::User, _) if root.dir.is_absolute() => {
+                let home = self.home.get_or_insert_with(|| {
+                    paths
+                        .resolve("~")
+                        .ok()
+                        .filter(cineris_base::ResolvedPath::exists)
+                        .map(|home| home.to_fs_path())
+                });
+                match home
+                    .as_deref()
+                    .and_then(|home| strip_location_prefix(&root.dir, home))
+                {
+                    Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+                    Some(rest) => format!("~/{}", slashed(&rest)),
+                    None => root.dir.to_string_lossy().into_owned(),
+                }
+            }
+            _ => root.dir.to_string_lossy().into_owned(),
+        };
+        in_code(&text).into_owned()
     }
 }
 
@@ -547,7 +629,7 @@ fn open_root(
     looked: &[(PathBuf, String)],
     left_out: &mut Vec<LeftOut>,
 ) -> Option<Opened> {
-    let written = visible(&root.dir.to_string_lossy()).into_owned();
+    let written = places.show_given(root, below, paths);
     let refused = |shown: &str, folder: PathBuf, why: &str| LeftOut {
         source: root.source,
         folder,
@@ -637,8 +719,15 @@ fn open_root(
     Some(Opened { real, shown })
 }
 
-/// Reads each folder of one root, by name, within the caps.
-fn look_in(root: &Root, opened: &Opened, discovered: &mut Discovered) {
+/// Reads each folder of one root, by name, within the caps: at most
+/// [`MAX_PER_ROOT`] folders, and none once [`MAX_ROOT_BYTES`] have been read
+/// from the root.
+fn look_in(
+    root: &Root,
+    opened: &Opened,
+    discovered: &mut Discovered,
+    seen: &mut dyn FnMut(Seen<'_>),
+) {
     let Some(names) = list(root, opened, discovered) else {
         return;
     };
@@ -652,16 +741,36 @@ fn look_in(root: &Root, opened: &Opened, discovered: &mut Discovered) {
     let shown = &opened.shown;
     let mut read = 0;
     let mut past = 0;
+    let mut bytes: u64 = 0;
+    let mut over = 0;
     for (name, kind) in names {
         if read == MAX_PER_ROOT {
             past += 1;
             continue;
         }
+        if bytes >= MAX_ROOT_BYTES {
+            over += 1;
+            continue;
+        }
         read += 1;
-        match extension_in(root, opened, &name, kind) {
-            Ok(found) => discovered.found.push(found),
+        match extension_in(root, opened, &name, kind, seen) {
+            Ok(found) => {
+                bytes += found.snapshot.total_bytes();
+                discovered.found.push(found);
+            }
             Err(left) => discovered.left_out.push(left),
         }
+    }
+    if over > 0 {
+        let (count, were) = if over == 1 {
+            ("1 more folder".to_owned(), "it was")
+        } else {
+            (format!("{over} more folders"), "they were")
+        };
+        discovered.left_out.push(of_root(format!(
+            "the {whose} folder of extensions `{shown}` holds {count} past the 16 MiB read from \
+             it, the first by name: {were} left out"
+        )));
     }
     if past > 0 {
         let (count, were) = if past == 1 {
@@ -743,9 +852,10 @@ fn extension_in(
     opened: &Opened,
     name: &OsStr,
     kind: FileType,
+    seen: &mut dyn FnMut(Seen<'_>),
 ) -> Result<Found, LeftOut> {
     let folder = opened.real.join(name);
-    let shown = format!("{}/{}", opened.shown, visible(&name.to_string_lossy()));
+    let shown = format!("{}/{}", opened.shown, in_code(&name.to_string_lossy()));
     let refused = |why: &str| LeftOut {
         source: root.source,
         folder: folder.clone(),
@@ -760,9 +870,11 @@ fn extension_in(
             "it is a link, and an extension is read from a folder of its own in the folder of extensions, never through a link",
         ));
     }
+    seen(Seen::Extension(root.source, &folder));
     cineris_base::hook::point(AN_EXTENSION_IS_READ);
     let snapshot =
         Snapshot::read(&folder).map_err(|error| refused(&visible(&error.to_string())))?;
+    cineris_base::hook::point(AN_EXTENSION_WAS_READ);
     // `Snapshot::read` follows the folder itself: a folder swapped for a
     // link while it was read is refused as a link is.
     match fs::symlink_metadata(&folder) {
@@ -778,9 +890,9 @@ fn extension_in(
     if manifest.name != text {
         let why = format!(
             "its manifest gives the name `{}`, and an extension's manifest (`{}`) gives its folder's own name, `{}`",
-            visible(&manifest.name),
+            in_code(&manifest.name),
             manifest::FILE,
-            visible(text)
+            in_code(text)
         );
         return Err(refused(&why));
     }

@@ -27,7 +27,7 @@ use crate::{Front, MODEL, OTHER_MODEL, World, calls, says, settle};
 
 /// Writes the extension `name` in `folder`, whose tool `echo` is described
 /// as `said`.
-fn write_named(folder: &Path, name: &str, said: &str) {
+pub(crate) fn write_named(folder: &Path, name: &str, said: &str) {
     std::fs::create_dir_all(folder).unwrap();
     std::fs::write(
         folder.join("extension.toml"),
@@ -47,7 +47,7 @@ fn write_named(folder: &Path, name: &str, said: &str) {
 }
 
 /// The definition of the extension `name` in `folder`, as it is now.
-fn named_definition(folder: &Path, name: &str) -> Definition {
+pub(crate) fn named_definition(folder: &Path, name: &str) -> Definition {
     Definition {
         name: name.to_owned(),
         ..definition(folder)
@@ -55,15 +55,15 @@ fn named_definition(folder: &Path, name: &str) -> Definition {
 }
 
 /// A hold that stops nothing at `point` and counts who arrives there.
-fn counting(point: &str) -> Hold {
+pub(crate) fn counting(point: &str) -> Hold {
     Hold::new(point).skipping(usize::MAX)
 }
 
-fn not_now() -> TrustResponse {
+pub(crate) fn not_now() -> TrustResponse {
     TrustResponse::default()
 }
 
-fn keep() -> TrustResponse {
+pub(crate) fn keep() -> TrustResponse {
     TrustResponse {
         keep: true,
         ..TrustResponse::default()
@@ -71,7 +71,7 @@ fn keep() -> TrustResponse {
 }
 
 /// The detail of the one extension the one question listed.
-fn listed_detail(asked: &[TrustRequest]) -> String {
+pub(crate) fn listed_detail(asked: &[TrustRequest]) -> String {
     let [request] = asked else {
         panic!("one question: {asked:?}");
     };
@@ -87,7 +87,7 @@ fn listed_detail(asked: &[TrustRequest]) -> String {
 }
 
 /// A turn that looks for the tools of `probe` and of `tracker`.
-fn searches_both() -> [Response; 2] {
+pub(crate) fn searches_both() -> [Response; 2] {
     [
         calls(&[
             ("s1", "tool_search", json!({"query": "probe/"})),
@@ -163,15 +163,16 @@ fn an_authors_description_cannot_pose_as_what_the_harness_says() {
         let (front, asked) = open_answering(&world, &core, not_now()).await;
         let detail = listed_detail(&asked);
         assert!(
-            detail.starts_with(
-                "`probe` in `.cineris/extensions/probe`. It may run `sh`, which may reach the \
-                 network. It may read the workspace's files that match `**`. It may write the \
-                 workspace's files that match `**`. It reaches no host."
-            ),
+            detail.starts_with(&format!(
+                "`probe` in `.cineris/extensions/probe`. {} It may run `sh`. It may read the \
+                 workspace's files that match `**`. It may write the workspace's files that \
+                 match `**`. It reaches no host.",
+                cineris_core::ext::NOT_CONFINED
+            )),
             "{detail}"
         );
         let author = detail
-            .find("Its author describes it, in their words: \"")
+            .find("\nIts author describes it, in their words:\n\"")
             .unwrap();
         assert_eq!(detail.matches("It runs no program").count(), 1, "{detail}");
         assert!(
@@ -280,6 +281,7 @@ fn each_folder_is_read_once_when_a_session_opens() {
     let theirs = world.workspace.join(".cineris/extensions/tracker");
     write_named(&theirs, "tracker", "one of theirs");
     trust(&world, &[named_definition(&theirs, "tracker")]);
+    cache(&world, &theirs);
     let core = world.core();
     let reads = counting(AN_EXTENSION_IS_READ);
     world.run(async {

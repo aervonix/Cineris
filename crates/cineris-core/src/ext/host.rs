@@ -157,7 +157,11 @@ impl Host for CallHost<'_> {
     ) -> HostFuture<'_, Result<String, HostError>> {
         Box::pin(async move {
             self.decide(
-                format!("{}: read `{}`", self.full_name, path.shown()),
+                format!(
+                    "{}: read `{}`",
+                    self.full_name,
+                    cineris_base::in_code(&path.data())
+                ),
                 json!({"path": path.data()}),
                 vec![Effect::Read(path.clone())],
                 None,
@@ -231,7 +235,11 @@ impl Host for CallHost<'_> {
                 None => None,
             };
             self.decide(
-                format!("{}: write `{}`", self.full_name, path.shown()),
+                format!(
+                    "{}: write `{}`",
+                    self.full_name,
+                    cineris_base::in_code(&path.data())
+                ),
                 arguments,
                 plan.effects.clone(),
                 preview.as_ref(),
@@ -307,7 +315,12 @@ impl Host for CallHost<'_> {
             let shown = shown_url(&request.url);
             let sends = what_a_fetch_sends(&request);
             self.decide(
-                format!("{}: {} `{shown}`", self.full_name, method.as_str()),
+                format!(
+                    "{}: {} `{}`",
+                    self.full_name,
+                    method.as_str(),
+                    cineris_base::in_code(&shown)
+                ),
                 json!({"url": shown, "method": method.as_str()}),
                 vec![Effect::Network(NetworkTarget::Host(host))],
                 None,

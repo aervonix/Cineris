@@ -10,6 +10,7 @@
 
 use std::time::Duration;
 
+use cineris_base::in_code;
 use serde::Deserialize;
 
 use crate::event::Event;
@@ -262,11 +263,13 @@ impl Manifest {
         if snapshot.file(&manifest.main).is_none() {
             return Err(refused(format!(
                 "`main = \"{}\"` names a file the folder does not have",
-                manifest.main
+                in_code(&manifest.main)
             )));
         }
-        if let Some(prompt) = &manifest.prompt {
-            let content = snapshot.file(prompt).ok_or_else(|| {
+        if let Some(file) = &manifest.prompt {
+            // What the manifest holds is shown as code, escaped.
+            let prompt = in_code(file);
+            let content = snapshot.file(file).ok_or_else(|| {
                 refused(format!(
                     "`prompt = \"{prompt}\"` names a file the folder does not have"
                 ))
@@ -300,6 +303,7 @@ fn check_name(name: &str) -> Result<(), ManifestError> {
     if is_name(name) {
         Ok(())
     } else {
+        let name = in_code(name);
         Err(refused(format!(
             "`name = \"{name}\"`: a name is 1 to {MAX_NAME} of ASCII letters, digits, `_`, `-` and `.`, and does not start with `.`"
         )))
@@ -357,6 +361,7 @@ fn check_file(key: &str, path: &str, extensions: &[&str]) -> Result<(), Manifest
     if fine {
         Ok(())
     } else {
+        let path = in_code(path);
         Err(refused(format!(
             "`{key} = \"{path}\"`: a file in the extension's folder, written with `/`, with no `.` or `..`, ending in .{}",
             extensions.join(" or .")
@@ -398,8 +403,9 @@ fn declared(raw: RawCapabilities) -> Result<Declared, ManifestError> {
         .map(|pattern| host_pattern(pattern))
         .collect::<Result<Vec<_>, _>>()?;
     let mut hooks = Vec::new();
-    for name in &raw.hooks {
-        let event = Event::parse(name).ok_or_else(|| {
+    for named in &raw.hooks {
+        let name = in_code(named);
+        let event = Event::parse(named).ok_or_else(|| {
             refused(format!(
                 "`capabilities.hooks` names `{name}`, which is not an event: {}",
                 Event::ALL.map(Event::as_str).join(", ")
@@ -425,6 +431,7 @@ fn declared(raw: RawCapabilities) -> Result<Declared, ManifestError> {
 /// A program entry: a bare name, or an absolute path. A relative path is
 /// refused: it would name whichever file is there.
 fn program(entry: String) -> Result<Program, ManifestError> {
+    let shown = in_code(&entry).into_owned();
     let bad = entry.trim().is_empty()
         || entry != entry.trim()
         || entry.chars().any(char::is_control)
@@ -432,13 +439,13 @@ fn program(entry: String) -> Result<Program, ManifestError> {
         || entry == "..";
     if bad {
         return Err(refused(format!(
-            "`capabilities.exec` has `{entry}`, which is not a program's name"
+            "`capabilities.exec` has `{shown}`, which is not a program's name"
         )));
     }
     if !entry.contains('/') && !entry.contains('\\') {
         if entry.contains(':') {
             return Err(refused(format!(
-                "`capabilities.exec` has `{entry}`: a drive with no root is a relative path"
+                "`capabilities.exec` has `{shown}`: a drive with no root is a relative path"
             )));
         }
         return Ok(Program::Name(entry));
@@ -460,7 +467,7 @@ fn program(entry: String) -> Result<Program, ManifestError> {
         Ok(Program::Path(entry))
     } else {
         Err(refused(format!(
-            "`capabilities.exec` has `{entry}`: a program is a bare name or an absolute path, with no `.` or `..`"
+            "`capabilities.exec` has `{shown}`: a program is a bare name or an absolute path, with no `.` or `..`"
         )))
     }
 }
@@ -482,6 +489,7 @@ fn check_glob(key: &str, glob: &str) -> Result<(), ManifestError> {
         || names_dots
         || glob.chars().any(char::is_control);
     if bad {
+        let glob = in_code(glob);
         Err(refused(format!(
             "`capabilities.{key}` has `{glob}`: a glob of paths in the workspace, written relative to it with `/` between its folders, with no `.` or `..`"
         )))
@@ -529,6 +537,7 @@ fn host_pattern(pattern: &str) -> Result<HostPattern, ManifestError> {
         );
         Ok(HostPattern::Exact(host))
     } else {
+        let pattern = in_code(pattern);
         Err(refused(format!(
             "`capabilities.net` has `{pattern}`: a host is `*`, `*.example.com`, a host's name or an address, with no scheme, port or path"
         )))

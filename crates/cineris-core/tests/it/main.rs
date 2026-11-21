@@ -42,6 +42,8 @@ mod extensions_found;
 #[cfg(feature = "scripts")]
 mod extensions_reload;
 #[cfg(feature = "scripts")]
+mod extensions_review;
+#[cfg(feature = "scripts")]
 mod extensions_trust;
 mod gates;
 mod harness_git;

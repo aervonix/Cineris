@@ -105,8 +105,9 @@ fn start_below(root: &AbsPath, cwd: &Path) -> Result<Option<String>, Box<ErrorDa
             ErrorKind::Usage,
             "invalid_cwd",
             format!(
-                "`{}` is not inside the workspace `{root}`: a session's commands start inside it.",
-                cwd.display()
+                "`{}` is not inside the workspace `{}`: a session's commands start inside it.",
+                cineris_base::in_code(&cwd.display().to_string()),
+                cineris_base::in_code(root.as_str())
             ),
         )
     };
@@ -436,7 +437,7 @@ pub(crate) struct Trust {
     /// What the trust question found in the project's folder of
     /// extensions, when it looked: the session's finding takes it in place
     /// of reading the folder again.
-    found: Option<cineris_ext::discover::Discovered>,
+    found: Option<crate::ext::found::Looked>,
 }
 
 /// The project's rules as trust pins them (the owner's answer of
@@ -609,7 +610,7 @@ fn place(inner: &Inner, wanted: &Wanted) -> Result<Place, Box<ErrorData>> {
             "invalid_workspace",
             format!(
                 "`{}` cannot be a workspace: {failure}",
-                wanted.workspace.display()
+                cineris_base::in_code(&wanted.workspace.display().to_string())
             ),
         )
     })?;
@@ -679,7 +680,7 @@ pub(crate) fn look(
     // session, which does not read it again.
     let rules_new = !trust.rules && !trust.rules_declined;
     let quiet = trust.standing != TrustStanding::Untrusted && !rules_new && !trust.git_new;
-    let found = crate::ext::found::in_project(&place.resolver);
+    let (found, watched) = crate::ext::found::in_project(&place.resolver, &inner.options.clock);
     let extensions = if found.found.is_empty() {
         crate::ext::found::Asked::default()
     } else {
@@ -687,9 +688,12 @@ pub(crate) fn look(
             &place.resolver,
             place.load.dirs.config.as_deref(),
         );
-        crate::ext::found::asked(&found, &users, &stored)
+        let confined = programs_confined(inner, &trust.loaded, &place.root, place.state.as_ref());
+        crate::ext::found::asked(&found, &users, &stored, confined)
     };
-    trust.found = Some(found);
+    // Handed to the session without the extensions' bytes, its places
+    // stamped as they were before they were read.
+    trust.found = Some(crate::ext::found::looked(&found, watched));
     if quiet && extensions.pins.is_empty() {
         return Ok((trust, None));
     }
@@ -1674,6 +1678,27 @@ fn judge_pins(
     }
 }
 
+/// Whether the programs an extension of this session would run are
+/// confined: where the sandbox enforces, as the session's would (its
+/// launcher confines them at every level there), and not where a write root
+/// holds the harness's own files. What an approval says of them follows it
+/// (the full review of step 28). Blocks.
+pub(crate) fn programs_confined(
+    inner: &Inner,
+    loaded: &Loaded,
+    root: &AbsPath,
+    state: Option<&StateDir>,
+) -> bool {
+    let (sandbox, _) = inner.sandbox.state(loaded.settings.sandbox.enabled);
+    sandbox == SandboxState::Enforcing
+        && !holds_harness_files(
+            &sandbox_grant(inner, loaded, root, &SessionId::new("s_question")),
+            loaded,
+            state,
+            inner.sandbox.program(),
+        )
+}
+
 /// Whether a write root of `policy` holds the harness's configuration,
 /// state or data directory, or is one, or lies inside one; or holds the
 /// user's configuration file, as named or where a link leads (a dotfiles
@@ -1890,7 +1915,7 @@ fn find_shell(
         told.push(format!(
             "The shell `{}` was passed over: it is inside the workspace or a writable root, where \
              a command could have put it; the search went on.",
-            passed.display()
+            cineris_base::in_code(&passed.display().to_string())
         ));
     }
     let mut shell = shell;
@@ -2209,7 +2234,7 @@ pub(crate) fn assemble(
             loaded
                 .withheld
                 .iter()
-                .map(|withheld| format!("`{}`", withheld.key))
+                .map(|withheld| format!("`{}`", cineris_base::in_code(&withheld.key.to_string())))
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
