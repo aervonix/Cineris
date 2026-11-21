@@ -53,6 +53,49 @@ fn refused(reason: impl Into<String>) -> ManifestError {
     ManifestError(reason.into())
 }
 
+/// What the TOML reader said of a manifest, with what it quotes of the
+/// manifest shown so that it cannot end the code it is quoted as (the
+/// fresh review of step 28: an unknown key with a backtick in it closed
+/// the reader's own backticks). A key it names, unknown or given twice, is
+/// put through [`in_code`], the reader's words around it kept; a value it
+/// quotes between double quotes has its backticks escaped.
+fn reader_said(message: &str) -> String {
+    const UNKNOWN: &str = "unknown field `";
+    const EXPECTED: &str = "`, expected ";
+    const TWICE: &str = "duplicate key `";
+    // The key runs from the reader's first backtick to the last place its
+    // words go on from: what it expects are this build's own names.
+    if let Some(rest) = message.strip_prefix(UNKNOWN)
+        && let Some(at) = rest.rfind(EXPECTED)
+    {
+        return format!(
+            "{UNKNOWN}{}{EXPECTED}{}",
+            in_code(&rest[..at]),
+            &rest[at + EXPECTED.len()..]
+        );
+    }
+    if let Some(key) = message
+        .strip_prefix(TWICE)
+        .and_then(|rest| rest.strip_suffix('`'))
+    {
+        return format!("{TWICE}{}`", in_code(key));
+    }
+    let mut said = String::with_capacity(message.len());
+    let mut quoted = false;
+    let mut escaped = false;
+    for character in message.chars() {
+        if quoted && character == '`' && !escaped {
+            said.push('\\');
+        }
+        if character == '"' && !escaped {
+            quoted = !quoted;
+        }
+        escaped = character == '\\' && !escaped;
+        said.push(character);
+    }
+    said
+}
+
 /// A program the extension may ask the host to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Program {
@@ -218,7 +261,8 @@ impl Manifest {
                 "`api = {api}` is not one this build of Cineris knows (it knows {API}): it needs another version of Cineris"
             )));
         }
-        let raw: Raw = toml::from_str(text).map_err(|error| refused(error.message().to_owned()))?;
+        let raw: Raw =
+            toml::from_str(text).map_err(|error| refused(reader_said(error.message())))?;
         if raw.api != API {
             return Err(refused(format!(
                 "`api = {}` is not one this build of Cineris knows (it knows {API})",

@@ -352,6 +352,7 @@ pub(crate) fn in_project(resolver: &PathResolver, clock: &SharedClock) -> (Disco
             _ => break,
         }
     }
+    let mut left = super::watched::MAX_PLACES_PER_ROOT;
     let discovered = discover::discover_seeing(
         &[Root::project(&workspace)],
         resolver,
@@ -368,8 +369,9 @@ pub(crate) fn in_project(resolver: &PathResolver, clock: &SharedClock) -> (Disco
                     }
                 }
                 watched.note(real.to_path_buf(), clock);
+                true
             }
-            Seen::Extension(_, folder) => watched.note_tree(folder, clock),
+            Seen::Extension(_, folder) => watched.note_tree(folder, clock, &mut left),
         },
     );
     for left in &discovered.left_out {
@@ -514,21 +516,25 @@ pub const NOT_CONFINED: &str = "Programs this extension runs are not confined on
 pub const ANY_HOST: &str =
     "any host on the internet, including addresses on your own network that have public addresses";
 
-/// The folder a `write` glob gives its programs where they are confined:
-/// the glob's folders before its first wildcard (`out/**` gives `out`;
-/// `**/*.rs` the workspace), as the launcher's write roots are made.
-fn write_folder(glob: &str) -> Option<String> {
-    let folders: Vec<&str> = glob
-        .split('/')
-        .take_while(|name| !name.contains(['*', '?', '[', '{']))
-        .collect();
-    // A glob with no wildcard names one file: its folder.
-    let folders = if folders.len() == glob.split('/').count() {
-        &folders[..folders.len().saturating_sub(1)]
-    } else {
-        &folders[..]
+/// The folders the `write` globs give the extension's programs where they
+/// are confined, each relative to the workspace (`None` for the workspace
+/// itself): made by the launcher's own code
+/// (`cineris_ext::capability::write_roots`), so that what an approval says
+/// is what the launcher grants (the fresh review of step 28 found the
+/// words naming `out` where the launcher granted the workspace).
+pub(crate) fn write_folders(globs: &[String]) -> Vec<Option<String>> {
+    let Ok(workspace) = cineris_base::AbsPath::parse("/workspace", cineris_base::PathStyle::Posix)
+    else {
+        return vec![None];
     };
-    (!folders.is_empty()).then(|| folders.join("/"))
+    cineris_ext::capability::write_roots(&workspace, globs)
+        .iter()
+        .map(|root| {
+            root.strip_prefix(&workspace)
+                .map(|relative| relative.as_str().to_owned())
+                .filter(|relative| !relative.is_empty())
+        })
+        .collect()
 }
 
 /// What an extension's manifest lets it do, in words for the person asked.
@@ -578,11 +584,10 @@ pub(crate) fn in_words(manifest: &Manifest, confined: bool) -> String {
                 "which may not reach the network"
             }
         ));
-        let folders: Vec<String> = declared
-            .write
-            .iter()
-            .map(|glob| {
-                write_folder(glob).map_or_else(
+        let folders: Vec<String> = write_folders(&declared.write)
+            .into_iter()
+            .map(|folder| {
+                folder.map_or_else(
                     || "the workspace".to_owned(),
                     |folder| format!("`{}`", in_code(&folder)),
                 )
@@ -741,7 +746,7 @@ mod tests {
     fn what_an_extension_may_do_is_said_as_its_programs_are_confined_or_not() {
         let manifest = Manifest::parse(
             "api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n[capabilities]\n\
-             exec = [\"gh\"]\nwrite = [\"out/**\", \"**/*.rs\", \"docs/index.md\"]\nnet = \
+             exec = [\"gh\"]\nwrite = [\"out/\", \"a/b/\", \"x//y/**\", \"site/index.md\"]\nnet = \
              [\"*\", \"*.example.org\"]\n",
         )
         .unwrap();
@@ -756,8 +761,8 @@ mod tests {
         assert!(
             confined.starts_with(
                 "It may run `gh`, which may not reach the network. Its programs are confined: \
-                 they read what the session's commands may read, and write only in `out`, the \
-                 workspace, `docs` and the session's own temporary folder."
+                 they read what the session's commands may read, and write only in `out`, \
+                 `a/b`, `x/y`, `site` and the session's own temporary folder."
             ),
             "{confined}"
         );
@@ -769,11 +774,76 @@ mod tests {
                 "{said}"
             );
         }
+        // A folder that holds the others is all the words name.
+        let wide = Manifest::parse(
+            "api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n[capabilities]\n\
+             exec = [\"gh\"]\nwrite = [\"out/**\", \"**/*.rs\"]\n",
+        )
+        .unwrap();
+        assert!(
+            in_words(&wide, true).contains("write only in the workspace and the session's own"),
+            "{}",
+            in_words(&wide, true)
+        );
         // An extension that runs no program says nothing of confinement.
         let none =
             Manifest::parse("api = 1\nname = \"probe\"\nversion = \"1\"\nmain = \"main.js\"\n")
                 .unwrap();
         assert!(in_words(&none, false).starts_with("It runs no program."));
+    }
+
+    /// The folders an approval names are the ones the launcher grants: made
+    /// by its own code, each shown relative to the workspace (the fresh
+    /// review of step 28: `out/` was said as `out` and granted the whole
+    /// workspace; `a/b/` as `a/b` and granted `a`; `x//y/**` as `x//y`).
+    #[test]
+    fn the_folders_an_approval_names_are_the_launchers_write_roots() {
+        let globs: Vec<String> = [
+            "out/",
+            "a/b/",
+            "x//y/**",
+            "src/gen/*.rs",
+            "notes/today.md",
+            "*.lock",
+        ]
+        .iter()
+        .map(|glob| (*glob).to_owned())
+        .collect();
+        let workspace =
+            cineris_base::AbsPath::parse("/work/app", cineris_base::PathStyle::Posix).unwrap();
+        let declared = cineris_ext::manifest::Declared {
+            write: globs.clone(),
+            ..cineris_ext::manifest::Declared::default()
+        };
+        let granted: Vec<Option<String>> =
+            cineris_ext::capability::Capabilities::compile(&declared, &workspace)
+                .unwrap()
+                .write_roots()
+                .iter()
+                .map(|root| {
+                    root.strip_prefix(&workspace)
+                        .map(|relative| relative.as_str().to_owned())
+                        .filter(|relative| !relative.is_empty())
+                })
+                .collect();
+        assert_eq!(write_folders(&globs), granted);
+        assert_eq!(
+            granted,
+            [None],
+            "`*.lock` matches at any depth: the workspace"
+        );
+        let narrow: Vec<String> = ["out/", "a/b/", "x//y/**"]
+            .iter()
+            .map(|glob| (*glob).to_owned())
+            .collect();
+        assert_eq!(
+            write_folders(&narrow),
+            [
+                Some("out".to_owned()),
+                Some("a/b".to_owned()),
+                Some("x/y".to_owned())
+            ]
+        );
     }
 
     #[cfg(feature = "scripts")]

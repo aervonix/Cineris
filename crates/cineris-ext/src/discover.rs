@@ -146,10 +146,13 @@ pub const MAX_PER_ROOT: usize = 64;
 /// more than this many entries.
 pub const MAX_ENTRIES: usize = 1024;
 
-/// The most bytes read from one root's extensions together: 16 MiB. Past
-/// it the rest of its folders are left out, counted (the full review of
-/// step 28: a root of 64 folders at their 4 MiB cap was 256 MiB to read on
-/// a session's way). A user keeps a few extensions of a few KiB each.
+/// The bytes read from one root's extensions together past which none is
+/// read: once 16 MiB have been read, the rest of its folders are left out,
+/// counted (the full review of step 28: a root of 64 folders at their 4 MiB
+/// cap was 256 MiB to read on a session's way). Every folder read counts,
+/// one left out after its read too (the fresh review: 64 folders of 4 MiB
+/// with no manifest were all read). A user keeps a few extensions of a few
+/// KiB each.
 pub const MAX_ROOT_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The user's folder of extensions, in the configuration directory.
@@ -278,7 +281,11 @@ pub const AN_EXTENSION_WAS_READ: &str =
 /// A place [`discover_seeing`] is about to look in, given to its caller
 /// first, so that the caller can note what the place is like before it is
 /// read: a change made while it is read is then a change from what was
-/// noted.
+/// noted. The caller answers whether to read it: `false` for an
+/// extension's folder leaves it and the rest of its root out, unread, and
+/// the root is then not listed whole ([`Discovered::cut`]): a caller that
+/// cannot note more of a root (the core watches a bounded number of places
+/// in each) fails closed. The answer for a root is not read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Seen<'a> {
     /// A root, where it really is, about to be listed.
@@ -296,7 +303,7 @@ pub enum Seen<'a> {
 /// nothing else. It blocks: call it on the blocking pool.
 #[must_use]
 pub fn discover(roots: &[Root], paths: &PathResolver) -> Discovered {
-    discover_seeing(roots, paths, &mut |_| {})
+    discover_seeing(roots, paths, &mut |_| true)
 }
 
 /// [`discover`], giving `seen` each root, where it really is, before it is
@@ -304,10 +311,10 @@ pub fn discover(roots: &[Root], paths: &PathResolver) -> Discovered {
 pub fn discover_seeing(
     roots: &[Root],
     paths: &PathResolver,
-    seen: &mut dyn FnMut(Seen<'_>),
+    seen: &mut dyn FnMut(Seen<'_>) -> bool,
 ) -> Discovered {
     let mut discovered = each_root(roots, paths, &mut |root, opened, discovered| {
-        seen(Seen::Root(root.source, &opened.real));
+        let _ = seen(Seen::Root(root.source, &opened.real));
         look_in(root, opened, discovered, seen);
     });
     settle_names(&mut discovered);
@@ -720,13 +727,13 @@ fn open_root(
 }
 
 /// Reads each folder of one root, by name, within the caps: at most
-/// [`MAX_PER_ROOT`] folders, and none once [`MAX_ROOT_BYTES`] have been read
-/// from the root.
+/// [`MAX_PER_ROOT`] folders, none once [`MAX_ROOT_BYTES`] have been read
+/// from the root, and none after one the caller would not watch.
 fn look_in(
     root: &Root,
     opened: &Opened,
     discovered: &mut Discovered,
-    seen: &mut dyn FnMut(Seen<'_>),
+    seen: &mut dyn FnMut(Seen<'_>) -> bool,
 ) {
     let Some(names) = list(root, opened, discovered) else {
         return;
@@ -743,7 +750,12 @@ fn look_in(
     let mut past = 0;
     let mut bytes: u64 = 0;
     let mut over = 0;
+    let mut unwatched = 0;
     for (name, kind) in names {
+        if unwatched > 0 {
+            unwatched += 1;
+            continue;
+        }
         if read == MAX_PER_ROOT {
             past += 1;
             continue;
@@ -753,13 +765,26 @@ fn look_in(
             continue;
         }
         read += 1;
-        match extension_in(root, opened, &name, kind, seen) {
-            Ok(found) => {
-                bytes += found.snapshot.total_bytes();
-                discovered.found.push(found);
-            }
-            Err(left) => discovered.left_out.push(left),
+        match extension_in(root, opened, &name, kind, seen, &mut bytes) {
+            Some(Ok(found)) => discovered.found.push(found),
+            Some(Err(left)) => discovered.left_out.push(left),
+            None => unwatched = 1,
         }
+    }
+    if unwatched > 0 {
+        let (count, were) = if unwatched == 1 {
+            ("folder".to_owned(), "was")
+        } else {
+            (format!("{unwatched} folders"), "were")
+        };
+        // Not listed whole: what was left out may take a name.
+        if !discovered.cut.contains(&root.source) {
+            discovered.cut.push(root.source);
+        }
+        discovered.left_out.push(of_root(format!(
+            "the {whose} folder of extensions `{shown}` holds more folders and files than a \
+             session watches for a change: the last {count} by name {were} left out unread"
+        )));
     }
     if over > 0 {
         let (count, were) = if over == 1 {
@@ -847,13 +872,18 @@ fn list(
 
 /// The extension in the folder `name` of a root, or what was left out and
 /// why.
+///
+/// Every byte of its files read is added to `bytes`, a read that fails
+/// part way, or a folder left out after its read, included. `None` when
+/// the caller would not watch it ([`Seen`]): it is not read.
 fn extension_in(
     root: &Root,
     opened: &Opened,
     name: &OsStr,
     kind: FileType,
-    seen: &mut dyn FnMut(Seen<'_>),
-) -> Result<Found, LeftOut> {
+    seen: &mut dyn FnMut(Seen<'_>) -> bool,
+    bytes: &mut u64,
+) -> Option<Result<Found, LeftOut>> {
     let folder = opened.real.join(name);
     let shown = format!("{}/{}", opened.shown, in_code(&name.to_string_lossy()));
     let refused = |why: &str| LeftOut {
@@ -863,30 +893,38 @@ fn extension_in(
         reason: format!("the extension folder `{shown}` was left out: {why}"),
     };
     let Some(text) = name.to_str() else {
-        return Err(refused("its name is not valid Unicode"));
+        return Some(Err(refused("its name is not valid Unicode")));
     };
     if kind.is_symlink() {
-        return Err(refused(
+        return Some(Err(refused(
             "it is a link, and an extension is read from a folder of its own in the folder of extensions, never through a link",
-        ));
+        )));
     }
-    seen(Seen::Extension(root.source, &folder));
+    if !seen(Seen::Extension(root.source, &folder)) {
+        return None;
+    }
     cineris_base::hook::point(AN_EXTENSION_IS_READ);
-    let snapshot =
-        Snapshot::read(&folder).map_err(|error| refused(&visible(&error.to_string())))?;
+    let (read, read_bytes) = Snapshot::read_counted(&folder);
+    *bytes += read_bytes;
+    let snapshot = match read {
+        Ok(snapshot) => snapshot,
+        Err(error) => return Some(Err(refused(&visible(&error.to_string())))),
+    };
     cineris_base::hook::point(AN_EXTENSION_WAS_READ);
     // `Snapshot::read` follows the folder itself: a folder swapped for a
     // link while it was read is refused as a link is.
     match fs::symlink_metadata(&folder) {
         Ok(found) if found.is_dir() => {}
         _ => {
-            return Err(refused(
+            return Some(Err(refused(
                 "it changed while it was read, and is no longer a folder of its own",
-            ));
+            )));
         }
     }
-    let manifest =
-        Manifest::of(&snapshot).map_err(|error| refused(&visible(&error.to_string())))?;
+    let manifest = match Manifest::of(&snapshot) {
+        Ok(manifest) => manifest,
+        Err(error) => return Some(Err(refused(&visible(&error.to_string())))),
+    };
     if manifest.name != text {
         let why = format!(
             "its manifest gives the name `{}`, and an extension's manifest (`{}`) gives its folder's own name, `{}`",
@@ -894,13 +932,13 @@ fn extension_in(
             manifest::FILE,
             in_code(text)
         );
-        return Err(refused(&why));
+        return Some(Err(refused(&why)));
     }
-    Ok(Found {
+    Some(Ok(Found {
         source: root.source,
         folder,
         shown,
         snapshot: Arc::new(snapshot),
         manifest,
-    })
+    }))
 }

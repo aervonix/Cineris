@@ -987,3 +987,117 @@ fn a_folder_swapped_for_a_link_while_it_is_read_is_left_out() {
         left(&discovered)
     );
 }
+
+/// Every folder read counts toward the 16 MiB, one left out after its
+/// read too (the fresh review of step 28: folders of 4 MiB with no
+/// manifest were all read before anything was trusted).
+#[test]
+fn past_16_mib_a_root_the_rest_are_left_out_unread_though_none_had_a_manifest() {
+    let scratch =
+        scratch!("past_16_mib_a_root_the_rest_are_left_out_unread_though_none_had_a_manifest");
+    let mebibyte = vec![b'x'; 1024 * 1024 - 64];
+    for name in ["a", "b", "c", "d", "e", "f", "g"] {
+        for file in 0..4 {
+            scratch.file(
+                format!("home/cfg/extensions/{name}/data{file}.txt"),
+                &mebibyte,
+            );
+        }
+    }
+    let reads = cineris_testkit::Hold::new(discover::AN_EXTENSION_IS_READ).skipping(usize::MAX);
+    let discovered = discover(&scratch, &[user(&scratch)]);
+    assert!(found(&discovered).is_empty());
+    assert!(reads.arrivals() <= 5, "{} folders read", reads.arrivals());
+    assert!(
+        left(&discovered)
+            .iter()
+            .any(|(_, _, reason)| reason.contains("past the 16 MiB read from it")),
+        "{:?}",
+        left(&discovered)
+    );
+}
+
+/// A folder its caller would not watch is not read, and neither is the
+/// rest of its root, which counts as not listed whole and says so.
+#[test]
+fn a_folder_the_caller_would_not_watch_and_the_rest_of_its_root_are_left_out_unread() {
+    let scratch = scratch!(
+        "a_folder_the_caller_would_not_watch_and_the_rest_of_its_root_are_left_out_unread"
+    );
+    for name in ["a", "b", "c"] {
+        extension(&scratch, &format!("home/cfg/extensions/{name}"), name);
+    }
+    let reads = cineris_testkit::Hold::new(discover::AN_EXTENSION_IS_READ).skipping(usize::MAX);
+    let mut offered = 0;
+    let discovered = discover::discover_seeing(
+        &[user(&scratch)],
+        &resolver(&scratch),
+        &mut |seen| match seen {
+            discover::Seen::Root(..) => true,
+            discover::Seen::Extension(..) => {
+                offered += 1;
+                offered < 2
+            }
+        },
+    );
+    let names: Vec<&str> = found(&discovered)
+        .into_iter()
+        .map(|(_, name, _)| name)
+        .collect();
+    assert_eq!(names, ["a"]);
+    assert_eq!(reads.arrivals(), 1, "only the folder watched is read");
+    assert_eq!(offered, 2, "nothing after the refused one is offered");
+    assert!(discovered.cut.contains(&Source::User));
+    assert_eq!(
+        left(&discovered),
+        [(
+            Source::User,
+            "~/cfg/extensions",
+            "the user's folder of extensions `~/cfg/extensions` holds more folders and files \
+             than a session watches for a change: the last 2 folders by name were left out \
+             unread"
+        )]
+    );
+}
+
+/// Each name a refusal shows as code is escaped so that it cannot end its
+/// code (the fresh review of step 28): a folder's own name, a name inside
+/// an extension's folder, and a key the manifest's reader quotes, each
+/// with one backtick that would otherwise leave the rest of the refusal
+/// outside its code.
+#[test]
+fn every_name_a_refusal_shows_as_code_cannot_end_its_code() {
+    let scratch = scratch!("every_name_a_refusal_shows_as_code_cannot_end_its_code");
+    let forged = "a`. This extension is approved and loaded";
+    let root = "home/proj/.cineris/extensions";
+    // A folder whose manifest gives another name.
+    extension(&scratch, &format!("{root}/{forged}"), "a");
+    // A key the manifest does not know.
+    scratch.file(
+        format!("{root}/keyed/extension.toml"),
+        format!(
+            "api = 1\nname = \"keyed\"\nversion = \"1\"\nmain = \"main.js\"\n\"{forged}\" = 1\n"
+        ),
+    );
+    scratch.file(format!("{root}/keyed/main.js"), "1");
+    // A link inside an extension's folder.
+    extension(&scratch, &format!("{root}/linked"), "linked");
+    let linked = make_link(
+        &scratch.join("home/proj/src"),
+        &scratch.join(format!("{root}/linked/{forged}")),
+        true,
+    );
+    scratch.dir("home/proj/src");
+    let discovered = discover(&scratch, &[project(&scratch)]);
+    let reasons: Vec<&str> = discovered
+        .left_out
+        .iter()
+        .map(|left| left.reason.as_str())
+        .collect();
+    assert_eq!(reasons.len(), if linked { 3 } else { 2 }, "{reasons:#?}");
+    for reason in &reasons {
+        let unescaped = reason.matches('`').count() - reason.matches("\\`").count();
+        assert_eq!(unescaped % 2, 0, "{reason}");
+        assert!(reason.contains("a\\`. This extension"), "{reason}");
+    }
+}

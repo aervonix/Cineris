@@ -406,12 +406,16 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
 /// is read. Blocks.
 fn in_users(inputs: &Inputs, config: &std::path::Path, watched: &mut Watched) -> Discovered {
     let clock = &inputs.clock;
+    let mut left = crate::ext::watched::MAX_PLACES_PER_ROOT;
     let discovered = discover::discover_seeing(
         &[Root::user(config)],
         &inputs.resolver,
         &mut |seen| match seen {
-            Seen::Root(_, real) => watched.note(real.to_path_buf(), clock),
-            Seen::Extension(_, folder) => watched.note_tree(folder, clock),
+            Seen::Root(_, real) => {
+                watched.note(real.to_path_buf(), clock);
+                true
+            }
+            Seen::Extension(_, folder) => watched.note_tree(folder, clock, &mut left),
         },
     );
     if !discovered
