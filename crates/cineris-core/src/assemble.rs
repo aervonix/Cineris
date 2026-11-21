@@ -2994,9 +2994,12 @@ pub(crate) fn assemble(
             TrustStanding::ForTheRun | TrustStanding::Trusted | TrustStanding::RulesChanged
         );
         let configured = crate::ext::hooks::Configured::of(&loaded);
+        // Read again only under `--trust-project`, which reads it not at
+        // all: a store that could not be read when the trust was worked
+        // out approves nothing of the project's here either.
         let stored = match stored {
             Some(stored) => Some(stored),
-            None if trusted && !configured.project.is_empty() => {
+            None if options.trust_project && !configured.project.is_empty() => {
                 state_dir.as_ref().and_then(|state| {
                     TrustStore::new(state.trust_file(), Arc::clone(&clock))
                         .project(&project)
@@ -3018,7 +3021,10 @@ pub(crate) fn assemble(
         Arc::new(crate::ext::SessionHooks {
             hooks: in_session.hooks,
             refused: in_session.refused,
-            commands: crate::ext::HookCommands::new(Arc::clone(&ext_parts), Arc::clone(&content)),
+            commands: Arc::new(crate::ext::HookCommands::new(
+                Arc::clone(&ext_parts),
+                Arc::clone(&content),
+            )),
             paths: Arc::clone(&resolver),
         })
     };
@@ -3371,8 +3377,13 @@ pub(crate) fn assemble(
         },
         cancel,
         observer: None,
-        // The core's implementation of the seam comes with its own part of
-        // step 28.
+        // The session's hooks, as the loop's points reach them (step 28).
+        #[cfg(feature = "scripts")]
+        hooks: Some(cineris_agent::LoopHooks::new(
+            Arc::new(crate::ext::PointHooks::of(&command_hooks)),
+            Arc::clone(&options.timer),
+        )),
+        #[cfg(not(feature = "scripts"))]
         hooks: None,
     };
 

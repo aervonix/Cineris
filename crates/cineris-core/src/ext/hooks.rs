@@ -19,8 +19,8 @@ use cineris_base::{in_code, visible};
 use cineris_config::Loaded;
 use cineris_config::schema::HookSettings;
 use cineris_ext::event::Event;
-use cineris_ext::hook::CommandHook;
 use cineris_ext::hook::command::{Entry, event_of};
+use cineris_ext::hook::{CommandHook, Filter};
 use cineris_ext::source::Source;
 use cineris_policy::{Definition, ProjectTrust, Standing};
 use cineris_protocol::methods::{TrustResource, TrustResourceKind};
@@ -38,6 +38,9 @@ pub(crate) struct Refused {
     pub(crate) event: Option<Event>,
     /// Whether it only observes.
     pub(crate) observe: bool,
+    /// The tools it is on, for a tool event: `None` when its `tools` could
+    /// not be read, so that it is on every tool (failing closed).
+    pub(crate) filter: Option<Filter>,
     /// Why, in a sentence that follows its name.
     pub(crate) reason: String,
 }
@@ -84,6 +87,10 @@ pub(crate) struct Configured {
     /// The entries that do not compile, or a project's that takes a name of
     /// the user's.
     pub(crate) refused: Vec<Refused>,
+    /// What the configuration's check says once of an entry that compiles:
+    /// a gating hook that relies on `{path}` for every tool
+    /// (`CommandHook::warning`).
+    pub(crate) warnings: Vec<String>,
 }
 
 /// A hook's entry as `cineris-ext` compiles it.
@@ -108,6 +115,7 @@ fn compiled(name: &str, source: Source, settings: &HookSettings) -> Result<Comma
         source,
         event: event_of(&entry),
         observe: entry.observe,
+        filter: Filter::new(entry.tools.clone()).ok(),
         reason,
     })
 }
@@ -122,7 +130,10 @@ impl Configured {
                 continue;
             }
             match compiled(name, Source::User, settings) {
-                Ok(hook) => configured.user.push(hook),
+                Ok(hook) => {
+                    configured.warnings.extend(hook.warning());
+                    configured.user.push(hook);
+                }
                 Err(refused) => configured.refused.push(refused),
             }
         }
@@ -145,6 +156,7 @@ impl Configured {
                         .event
                         .and_then(|event| Event::parse(event.as_str())),
                     observe: hook.settings.observe,
+                    filter: Filter::new(hook.settings.tools.clone()).ok(),
                     reason: "one of your own hooks has its name, and the name is yours: no \
                              project's file can name, change or turn off a hook of yours"
                         .to_owned(),
@@ -152,7 +164,10 @@ impl Configured {
                 continue;
             }
             match compiled(&hook.name, Source::Project, &hook.settings) {
-                Ok(compiled) => configured.project.push(compiled),
+                Ok(compiled) => {
+                    configured.warnings.extend(compiled.warning());
+                    configured.project.push(compiled);
+                }
                 Err(refused) => configured.refused.push(refused),
             }
         }
@@ -215,7 +230,10 @@ pub(crate) fn detail(hook: &CommandHook, changed: bool, confined: bool) -> Strin
 pub(crate) struct InSession {
     /// The user's own, then the project's approved ones.
     pub(crate) hooks: Vec<CommandHook>,
-    /// Every entry that does not run because it was refused.
+    /// Every entry that does not run because it was refused, and every
+    /// project's hook approved before that has changed since: each is on
+    /// its event as a hook that fails, so that a gate it held does not
+    /// lapse.
     pub(crate) refused: Vec<Refused>,
     /// What the session is told: each refused entry, and each project's
     /// hook of a trusted project that is not approved as it is now.
@@ -234,6 +252,8 @@ pub(crate) fn in_session(
     for_the_run: &[Definition],
 ) -> InSession {
     let mut told: Vec<String> = configured.refused.iter().map(Refused::told).collect();
+    told.extend(configured.warnings);
+    let mut refused = configured.refused;
     let mut hooks = configured.user;
     if trusted {
         for hook in configured.project {
@@ -253,10 +273,24 @@ pub(crate) fn in_session(
             let name = in_code(&hook.name);
             match standing {
                 Standing::Approved => hooks.push(hook),
-                Standing::Changed => told.push(format!(
-                    "This project's hook `{name}` has changed since you approved it, so it does \
-                     not run. `cineris permissions trust` shows it, to approve it."
-                )),
+                Standing::Changed => {
+                    told.push(format!(
+                        "This project's hook `{name}` has changed since you approved it, so it \
+                         does not run. `cineris permissions trust` shows it, to approve it."
+                    ));
+                    // Approved once, it held its event: it fails there now,
+                    // as a changed extension's gating hook does.
+                    refused.push(Refused {
+                        name: hook.name.clone(),
+                        source: Source::Project,
+                        event: Some(hook.event),
+                        observe: hook.observe,
+                        filter: Some(hook.filter.clone()),
+                        reason: "it has changed since you approved it: `cineris permissions \
+                                 trust` shows it, to approve it"
+                            .to_owned(),
+                    });
+                }
                 _ => told.push(format!(
                     "This project's hook `{name}` does not run: you have not approved it. \
                      `cineris permissions trust` shows it, to approve it."
@@ -266,7 +300,7 @@ pub(crate) fn in_session(
     }
     InSession {
         hooks,
-        refused: configured.refused,
+        refused,
         told,
     }
 }
@@ -522,5 +556,11 @@ mod tests {
         let changed = in_session(configured, true, Some(&elsewhere), &[]);
         assert!(changed.hooks.is_empty());
         assert!(changed.told[0].contains("has changed since you approved it"));
+        // Approved once, it is on its event still, as a hook that fails.
+        let [held] = changed.refused.as_slice() else {
+            panic!("{:?}", changed.refused);
+        };
+        assert_eq!(held.name, "lint");
+        assert!(held.reason.contains("changed since you approved it"));
     }
 }

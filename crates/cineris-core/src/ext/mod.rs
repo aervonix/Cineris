@@ -31,6 +31,8 @@ mod exec;
 pub(crate) mod found;
 #[cfg(feature = "scripts")]
 mod hook_command;
+#[cfg(feature = "scripts")]
+mod hook_points;
 pub(crate) mod hooks;
 #[cfg(feature = "scripts")]
 mod host;
@@ -68,6 +70,8 @@ pub(crate) use exec::{ExecParts, HarnessFiles};
 pub(crate) use hook_command::{HookCommands, SessionHooks};
 #[cfg(feature = "scripts")]
 pub use hook_command::{HookOutcome, HookRun};
+#[cfg(feature = "scripts")]
+pub(crate) use hook_points::PointHooks;
 #[cfg(feature = "scripts")]
 pub(crate) use prompt::PromptParts;
 #[cfg(feature = "scripts")]
