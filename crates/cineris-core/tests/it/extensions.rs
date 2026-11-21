@@ -199,6 +199,7 @@ fn approve(folder: &Path, capabilities: &str, script: &str) -> ApprovedExtension
     let (manifest, registration) =
         block_on(cineris_ext::engine::register(Arc::clone(&snapshot), &timer)).unwrap();
     ApprovedExtension {
+        source: cineris_ext::source::Source::User,
         folder: folder.to_path_buf(),
         hash: snapshot.hash(),
         manifest,
