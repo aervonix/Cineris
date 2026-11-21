@@ -117,7 +117,8 @@ impl PointHooks {
 fn on_target(filter: Option<&Filter>, target: Option<ToolTarget<'_>>) -> bool {
     match (filter, target) {
         (Some(filter), Some(target)) => filter.matches(target.tool, target.names),
-        // A hook that lists no tools is on every call.
+        // A refused entry whose `tools` could not be read: on every call,
+        // failing closed.
         (None, Some(_)) => true,
         // An event of no call (a prompt, a turn's end): every hook on it.
         (_, None) => true,
