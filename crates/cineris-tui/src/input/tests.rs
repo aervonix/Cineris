@@ -57,6 +57,27 @@ fn an_item_edit_saves_with_enter_and_brings_the_draft_back_whole() {
     assert_eq!(text(&input), "a draft");
 }
 
+/// A prompt given back while an item is being edited (step 28's review)
+/// goes into the draft the edit set aside, and the edit goes on as it was;
+/// with no edit under way it goes into the editor, after what is there.
+#[test]
+fn a_prompt_given_back_during_an_item_edit_waits_in_the_draft() {
+    let mut input = input();
+    type_text(&mut input, "a draft");
+    input.begin_item_edit("the item", "saves the item");
+    type_text(&mut input, " reworded");
+    assert!(input.give_back_to_draft("the refused prompt"));
+    assert_eq!(text(&input), "the item reworded", "the edit is kept");
+    assert!(input.item_edit().is_some());
+    assert_eq!(
+        press(&mut input, "enter"),
+        Outcome::ItemEdited("the item reworded".to_owned())
+    );
+    assert_eq!(text(&input), "a draft\nthe refused prompt");
+    assert!(!input.give_back_to_draft("another"));
+    assert_eq!(text(&input), "a draft\nthe refused prompt\nanother");
+}
+
 #[test]
 fn an_item_edit_cancels_with_esc_and_is_never_a_prompt() {
     let mut input = input();

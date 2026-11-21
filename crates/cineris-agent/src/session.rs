@@ -109,6 +109,9 @@ pub(crate) struct Prompt {
     /// A turn that only runs the project's checks: `verify/run` on an idle
     /// session.
     pub(crate) verify: bool,
+    /// The server's ticket for the prompt
+    /// ([`SessionHandle::prompt_with`]), carried untouched.
+    pub(crate) ticket: Option<u64>,
 }
 
 /// A prompt waiting to become a turn, with the id that turn will have.
@@ -121,8 +124,11 @@ pub(crate) struct Queued {
 /// Something to deliver at the next safe boundary of the running turn.
 #[derive(Debug, Clone)]
 pub(crate) enum Pending {
-    /// A steering message from the user.
-    Steer(Vec<Part>),
+    /// A steering message from the user, with the server's ticket for it.
+    Steer {
+        input: Vec<Part>,
+        ticket: Option<u64>,
+    },
     /// A notice for the model: an edit to the plan, changed instructions.
     Notice { source: NoticeSource, text: String },
     /// A compaction the user asked for, with what the summary should keep
@@ -301,6 +307,30 @@ impl SessionHandle {
         input: Vec<Part>,
         delivery: Option<Delivery>,
     ) -> Result<TurnStartResult, Box<ErrorData>> {
+        self.prompt_with(input, delivery, None)
+    }
+
+    /// [`prompt`](Self::prompt), with the server's `ticket` for the prompt:
+    /// an opaque number the loop carries with it, untouched, wherever it
+    /// goes (a steering message, a queued or held prompt, a turn of its
+    /// own), and gives back with it. A prompt given back to the front end
+    /// (`prompt_returned`) carries its ticket
+    /// ([`PromptReturnedNotice::ticket`](cineris_protocol::event::PromptReturnedNotice::ticket));
+    /// one recorded in the conversation, or handed back undelivered by an
+    /// interrupt, is told by [`EventSink::prompt_settled`](crate::EventSink::prompt_settled).
+    /// So a server knows who sent a prompt by its ticket, and lets the
+    /// sender go when the prompt is settled.
+    ///
+    /// # Errors
+    ///
+    /// As [`prompt`](Self::prompt). A prompt refused here was never taken:
+    /// its ticket is not told of.
+    pub fn prompt_with(
+        &self,
+        input: Vec<Part>,
+        delivery: Option<Delivery>,
+        ticket: Option<u64>,
+    ) -> Result<TurnStartResult, Box<ErrorData>> {
         let shared = &self.shared;
         let mut inbox = shared.lock();
         if inbox.closed {
@@ -328,6 +358,7 @@ impl SessionHandle {
                 delivery: None,
                 compact: None,
                 verify: false,
+                ticket,
             });
             // What was held follows this prompt, ahead of anything queued
             // from here on.
@@ -343,7 +374,7 @@ impl SessionHandle {
         };
         match delivery {
             Some(Delivery::Steer) => {
-                inbox.pending.push_back(Pending::Steer(input));
+                inbox.pending.push_back(Pending::Steer { input, ticket });
                 Ok(TurnStartResult {
                     turn_id: running.id,
                     disposition: Disposition::Steering,
@@ -358,6 +389,7 @@ impl SessionHandle {
                         delivery: Some(Delivery::Queue),
                         compact: None,
                         verify: false,
+                        ticket,
                     },
                 });
                 shared.emit_updated(&inbox);
@@ -396,9 +428,11 @@ impl SessionHandle {
             return TurnInterruptResult::default();
         };
         let mut undelivered = Vec::new();
+        let mut settled = Vec::new();
         inbox.pending.retain(|pending| match pending {
-            Pending::Steer(input) => {
+            Pending::Steer { input, ticket } => {
                 undelivered.push(input.clone());
+                settled.push(*ticket);
                 false
             }
             // An interrupt means stop: a compaction that was asked for
@@ -407,6 +441,10 @@ impl SessionHandle {
             Pending::Notice { .. } => true,
         });
         drop(inbox);
+        // Handed back to whoever interrupted: the loop has them no more.
+        for ticket in settled {
+            self.shared.emitter.settled(ticket);
+        }
         running.cancel.cancel();
         TurnInterruptResult {
             interrupted: true,
@@ -495,6 +533,7 @@ impl SessionHandle {
             delivery: None,
             compact: Some(focus),
             verify: false,
+            ticket: None,
         });
         drop(inbox);
         shared.wake.notify_one();
@@ -547,6 +586,7 @@ impl SessionHandle {
             delivery: None,
             compact: None,
             verify: true,
+            ticket: None,
         });
         drop(inbox);
         shared.wake.notify_one();

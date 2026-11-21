@@ -298,6 +298,12 @@ pub struct PromptReturnedNotice {
     /// The hooks that refused it, each with its reason or its failure.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HookReason>,
+    /// The ticket the server gave the prompt when it handed it to the
+    /// session's loop, carried back untouched: what the server knows the
+    /// prompt's sender by. **Never on the wire:** it is not written, and a
+    /// value read is always `None`.
+    #[serde(skip)]
+    pub ticket: Option<u64>,
 }
 
 open_union! {

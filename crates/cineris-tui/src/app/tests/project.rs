@@ -416,6 +416,21 @@ fn n_turns_an_entry_off_and_e_edits_its_text_in_the_editor() {
     let _ = live_text(&mut app, at);
     press(&mut app, "e", at);
     type_text(&mut app, ", all of them", at);
+    // A prompt given back while the item is edited waits in the draft the
+    // edit set aside, and the edit goes on as it was (the review of step
+    // 28's hooks).
+    link.give(event(Event::Notice(
+        cineris_protocol::event::Notice::PromptReturned(
+            cineris_protocol::event::PromptReturnedNotice {
+                message: "A hook refused the prompt.".to_owned(),
+                parts: vec![Part::text("the refused prompt")],
+                delivery: None,
+                hooks: Vec::new(),
+                ticket: None,
+            },
+        ),
+    )));
+    drain(&mut app, at);
     press(&mut app, "enter", at);
     assert_eq!(
         answered(&mut app, &link, &[], at),
@@ -429,6 +444,7 @@ fn n_turns_an_entry_off_and_e_edits_its_text_in_the_editor() {
         app.input().focus().focused(),
         Target::Panel(project_id(&app))
     );
+    assert_eq!(app.input().editor().expanded(), "the refused prompt");
 }
 
 #[test]

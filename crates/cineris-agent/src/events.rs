@@ -24,6 +24,19 @@ use cineris_protocol::{SessionId, TurnId};
 pub trait EventSink: Send + Sync {
     /// The next event of the session. Its `seq` is one more than the last.
     fn emit(&self, event: SessionEvent);
+
+    /// The prompt the server gave `ticket`
+    /// ([`SessionHandle::prompt_with`](crate::SessionHandle::prompt_with))
+    /// is the loop's no more: it was recorded in the conversation, or an
+    /// interrupt handed it back undelivered. A prompt the loop gives back
+    /// is told by its `prompt_returned` notice instead, which carries the
+    /// ticket. Told once a ticket at most: a prompt the loop lets go of
+    /// otherwise (a log that failed before it was recorded, a session
+    /// closed with it waiting) is never told of, so a server keeps a bound
+    /// of its own as well. A sink that gives no tickets need not write it.
+    fn prompt_settled(&self, ticket: u64) {
+        let _ = ticket;
+    }
 }
 
 /// Numbers a session's events and hands them to its sink.
@@ -57,6 +70,14 @@ impl Emitter {
             turn_id: turn.cloned(),
             event,
         });
+    }
+
+    /// Tells the sink a prompt's ticket is settled
+    /// ([`EventSink::prompt_settled`]).
+    pub(crate) fn settled(&self, ticket: Option<u64>) {
+        if let Some(ticket) = ticket {
+            self.sink.prompt_settled(ticket);
+        }
     }
 
     /// The `seq` of the last event sent.

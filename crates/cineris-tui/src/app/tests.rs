@@ -713,19 +713,43 @@ fn a_prompt_a_hook_refused_comes_back_into_the_editor_with_why() {
     let now = Instant::now();
     let (mut app, link) = app(now);
     opened(&mut app, &link, now);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
     link.give(event(Event::Notice(
         cineris_protocol::event::Notice::PromptReturned(
             cineris_protocol::event::PromptReturnedNotice {
                 message: "A hook refused the prompt.".to_owned(),
-                parts: vec![Part::text("use the key sk-123")],
+                parts: vec![
+                    Part::text("use the key sk-123"),
+                    Part::Image(cineris_protocol::message::ImagePart {
+                        media_type: "image/png".to_owned(),
+                        data: Some("iVBORw0KGgo=".to_owned()),
+                        artifact: None,
+                    }),
+                ],
                 delivery: None,
                 hooks: vec![cineris_protocol::item::HookReason {
                     hook: "no-keys".to_owned(),
                     reason: Some("it names a key".to_owned()),
                 }],
+                ticket: None,
             },
         ),
     )));
+    // The turn the prompt would have started ends `denied`, with the same
+    // refusal as its error: said once, by the notice.
+    link.give(event(Event::TurnCompleted(TurnCompleted {
+        outcome: TurnOutcome::Denied,
+        stop_reason: None,
+        error: Some(ErrorData::new(
+            ErrorKind::Permission,
+            cineris_protocol::error::code::PROMPT_DENIED,
+            "A hook refused the prompt, which was not sent to the model (`no-keys`: it names a \
+             key).",
+        )),
+        usage: Default::default(),
+        verification: None,
+        duration_ms: None,
+    })));
     drain(&mut app, now);
     assert_eq!(app.input().editor().expanded(), "use the key sk-123");
     let mut scrollback = Vec::new();
@@ -736,9 +760,33 @@ fn a_prompt_a_hook_refused_comes_back_into_the_editor_with_why() {
     assert!(
         words.contains(
             "A hook refused the prompt, which was not sent (no-keys: it names a key). It is back \
-             in the editor."
+             in the editor. 1 of its parts that are not text (an image) could not be put back."
         ),
         "{all}"
+    );
+    assert_eq!(
+        words.matches("refused the prompt").count(),
+        1,
+        "said once: {all}"
+    );
+    // With an item being edited, the text waits in the draft the edit set
+    // aside (`Input::give_back_to_draft`), and the notice says so; a notice
+    // with no text (another client's prompt) says nothing of the editor.
+    let returned = cineris_protocol::event::PromptReturnedNotice {
+        message: "A hook refused the prompt.".to_owned(),
+        parts: Vec::new(),
+        delivery: None,
+        hooks: Vec::new(),
+        ticket: None,
+    };
+    assert!(
+        state::returned_text(&returned, state::Back::Draft, 0).ends_with(
+            "It is back in the prompt you were writing, which comes back when the item edit ends."
+        )
+    );
+    assert_eq!(
+        state::returned_text(&returned, state::Back::Nowhere, 0),
+        "A hook refused the prompt."
     );
 }
 

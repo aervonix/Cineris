@@ -98,12 +98,26 @@ pub fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[derive(Default)]
 pub struct Events {
     list: Mutex<Vec<SessionEvent>>,
+    /// The prompts' tickets the loop said were settled, in order.
+    settled: Mutex<Vec<u64>>,
     wake: Notify,
     /// Set by the one test that makes the loop panic on purpose.
     pub loop_panic_expected: std::sync::atomic::AtomicBool,
 }
 
+impl Events {
+    /// The prompts' tickets the loop said were settled, in order.
+    pub fn settled(&self) -> Vec<u64> {
+        lock(&self.settled).clone()
+    }
+}
+
 impl EventSink for Events {
+    fn prompt_settled(&self, ticket: u64) {
+        lock(&self.settled).push(ticket);
+        self.wake.notify_one();
+    }
+
     fn emit(&self, event: SessionEvent) {
         // The loop contains its own panics and ends the turn. In a test
         // that is a bug showing itself (a failed assertion in the loop),
@@ -745,6 +759,18 @@ impl ScriptedPolicy {
     /// Answers every question that has no answer of its own with `verdict`.
     pub fn answer_all(&self, verdict: Verdict) {
         *lock(&self.unscripted) = Some(verdict);
+    }
+
+    /// Forgets what the test scripted (the decisions, the answers, the
+    /// gate its questions wait at), for the next part of a test that runs
+    /// its parts as turns of one session. What it was shown and asked is
+    /// kept.
+    pub fn forget(&self) {
+        lock(&self.decisions).clear();
+        *lock(&self.decide_by) = None;
+        lock(&self.answers).clear();
+        *lock(&self.unscripted) = None;
+        *lock(&self.wait) = None;
     }
 
     /// Makes every question wait at the gate `ask <tool>`.

@@ -733,7 +733,7 @@ caught-by:
 [break] turn-starts-under-a-rewind
 rule: No turn starts while a rewind is under way. (Since the fixes to the review, the check is in the session's handle, under its lock.)
 file: crates/cineris-agent/src/session.rs
-in: SessionHandle::prompt
+in: SessionHandle::prompt_with
 find:
     if inbox.changing {
         return Err(history_changing());

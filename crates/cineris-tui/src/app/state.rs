@@ -69,7 +69,6 @@ use super::link::{Inbound, Link, Ticket};
 use super::panels::{ItemEditFor, Panels, Seen};
 use super::{Exit, Open, Settings, Start};
 use crate::complete::Command;
-use crate::editor::Fragment;
 use crate::focus::Target;
 use crate::input::{Delivery, Input, Outcome, SendMode};
 use crate::transcript::kept::Kept;
@@ -2106,21 +2105,17 @@ impl App {
     }
 
     /// A prompt that was not delivered goes back into the editor, after
-    /// whatever is there.
+    /// whatever is there, which keeps its chips. An item being edited is
+    /// kept as it is (since the review of step 28's hooks): the text goes
+    /// into the draft the edit set aside, which comes back when the edit
+    /// ends, and that is said.
     fn give_back(&mut self, text: &str) {
-        if text.is_empty() {
-            return;
+        if !text.is_empty() && self.input.give_back_to_draft(text) {
+            self.say(
+                "The text is in the prompt you were writing, which comes back when the item edit \
+                 ends.",
+            );
         }
-        // Into the draft, not into an item being edited.
-        self.input.cancel_item_edit();
-        self.item_edit = None;
-        // What is there keeps its chips.
-        let mut now = self.input.editor().fragment();
-        if !now.is_empty() {
-            now.push(Fragment::text("\n"));
-        }
-        now.push(Fragment::text(text));
-        self.input.external_result(Some(now));
     }
 
     /// A session is open; `stored` when it was opened from the store (a
@@ -2389,7 +2384,13 @@ impl App {
             Event::TurnCompleted(completed) => {
                 self.turn_runs = false;
                 self.mapper.turn_done(&mut self.transcript, now);
-                if let Some(error) = &completed.error {
+                // A prompt a hook refused was said by its `prompt_returned`
+                // notice, with the hooks and their reasons: it is said once.
+                let said_by_its_notice = completed
+                    .error
+                    .as_ref()
+                    .is_some_and(|error| error.code == code::PROMPT_DENIED);
+                if let Some(error) = completed.error.as_ref().filter(|_| !said_by_its_notice) {
                     self.error(error);
                 } else if completed.outcome == TurnOutcome::Interrupted {
                     self.say("Interrupted.");
@@ -2448,7 +2449,6 @@ impl App {
             // from its hooks (step 28): said with the hooks' reasons, and
             // put back in the editor.
             Event::Notice(Notice::PromptReturned(returned)) => {
-                self.transcript.push(Block::Notice(returned_text(returned)));
                 let text: Vec<&str> = returned
                     .parts
                     .iter()
@@ -2457,7 +2457,22 @@ impl App {
                         _ => None,
                     })
                     .collect();
-                self.give_back(&text.join("\n"));
+                let text = text.join("\n");
+                let left_out = returned
+                    .parts
+                    .iter()
+                    .filter(|part| !matches!(part, Part::Text(_)))
+                    .count();
+                // Into the draft, and an item being edited stays as it is.
+                let into = if text.is_empty() {
+                    Back::Nowhere
+                } else if self.input.give_back_to_draft(&text) {
+                    Back::Draft
+                } else {
+                    Back::Editor
+                };
+                self.transcript
+                    .push(Block::Notice(returned_text(returned, into, left_out)));
             }
             Event::Notice(notice) => {
                 if let Some(message) = notice_text(notice) {
@@ -2972,35 +2987,67 @@ fn new_session(
     })
 }
 
-/// A notice in words: the message, with a compaction's counts when it does
-/// not say them.
-/// What the transcript says of a prompt given back: each hook that refused
-/// it, with its reason, and that it is in the editor again. With no hook
-/// named (the turn was interrupted while they were asked), the server's
-/// own words.
-fn returned_text(returned: &cineris_protocol::event::PromptReturnedNotice) -> String {
-    if returned.hooks.is_empty() {
-        return format!("{} It is back in the editor.", returned.message);
-    }
-    let what = if returned.delivery == Some(ItemDelivery::Steer) {
-        "the steering message"
-    } else {
-        "the prompt"
-    };
-    let each: Vec<String> = returned
-        .hooks
-        .iter()
-        .map(|hook| match &hook.reason {
-            Some(reason) => format!("{}: {reason}", hook.hook),
-            None => hook.hook.clone(),
-        })
-        .collect();
-    format!(
-        "A hook refused {what}, which was not sent ({}). It is back in the editor.",
-        each.join("; ")
-    )
+/// Where the text of a prompt given back went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Back {
+    /// Into the editor.
+    Editor,
+    /// Into the draft an item edit set aside, which comes back when the
+    /// edit ends.
+    Draft,
+    /// Nowhere: the notice holds no text (another client sent it, and only
+    /// its sender is given it).
+    Nowhere,
 }
 
+/// What the transcript says of a prompt given back: each hook that refused
+/// it, with its reason, and where its text went, and how many of its
+/// parts (images) could not be put back. With no hook named (the turn was
+/// interrupted while they were asked), the server's own words. It is said
+/// once: the turn it would have started says nothing more of it.
+pub(super) fn returned_text(
+    returned: &cineris_protocol::event::PromptReturnedNotice,
+    into: Back,
+    left_out: usize,
+) -> String {
+    let mut said = if returned.hooks.is_empty() {
+        returned.message.clone()
+    } else {
+        let what = if returned.delivery == Some(ItemDelivery::Steer) {
+            "the steering message"
+        } else {
+            "the prompt"
+        };
+        let each: Vec<String> = returned
+            .hooks
+            .iter()
+            .map(|hook| match &hook.reason {
+                Some(reason) => format!("{}: {reason}", hook.hook),
+                None => hook.hook.clone(),
+            })
+            .collect();
+        format!(
+            "A hook refused {what}, which was not sent ({}).",
+            each.join("; ")
+        )
+    };
+    match into {
+        Back::Editor => said.push_str(" It is back in the editor."),
+        Back::Draft => said.push_str(
+            " It is back in the prompt you were writing, which comes back when the item edit ends.",
+        ),
+        Back::Nowhere => {}
+    }
+    if left_out > 0 {
+        said.push_str(&format!(
+            " {left_out} of its parts that are not text (an image) could not be put back."
+        ));
+    }
+    said
+}
+
+/// A notice in words: the message, with a compaction's counts when it does
+/// not say them.
 fn notice_text(notice: &Notice) -> Option<String> {
     let message = notice.message()?.to_owned();
     if let Notice::Compaction(compaction) = notice
