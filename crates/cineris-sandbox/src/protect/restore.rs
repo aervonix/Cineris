@@ -110,12 +110,16 @@ const NAME_BYTES: usize = 200;
 
 /// Gives the folder at `path` its owner's right to list it back, through a
 /// descriptor that needs no read right, where a command took it away: the
-/// look that follows sees what is in it. It blocks.
-pub(super) fn reopen(path: &Path) {
+/// look that follows sees what is in it. Whether its mode was changed: a
+/// folder its owner can list already is left as it is. It blocks.
+pub(super) fn reopen(path: &Path) -> bool {
     #[cfg(target_os = "linux")]
-    let _ = linux::reopen(path);
+    return linux::reopen(path).unwrap_or(false);
     #[cfg(not(target_os = "linux"))]
-    let _ = path;
+    {
+        let _ = path;
+        false
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -295,13 +299,16 @@ mod linux {
 
     /// Gives the folder `path` its owner's right to list it, through an
     /// `O_PATH` descriptor, keeping the rest of its mode.
-    pub(super) fn reopen(path: &Path) -> io::Result<()> {
+    pub(super) fn reopen(path: &Path) -> io::Result<bool> {
         let (dir, name) = parent_of(path)?;
         let (now, mode) = mode_at(&dir, &name)?;
-        if now != Now::Directory {
-            return Ok(());
+        // Only where its owner lacks the right to read or search it: a mode
+        // set again, even the same, would move the folder's change time.
+        if now != Now::Directory || mode & 0o500 == 0o500 {
+            return Ok(false);
         }
-        chmod_at(&dir, &name, (mode & 0o7777) | 0o500, Now::Directory)
+        chmod_at(&dir, &name, (mode & 0o7777) | 0o500, Now::Directory)?;
+        Ok(true)
     }
 
     /// What `name` in `dir` is, with its mode, with no link followed.

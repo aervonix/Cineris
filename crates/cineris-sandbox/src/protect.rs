@@ -359,9 +359,15 @@ impl Watch {
         let mut round: Vec<Changed> = changed.to_vec();
         let mut rounds = 0;
         let mut reopened: Vec<PathBuf> = Vec::new();
+        // The folders gone through for opening, each once.
+        let mut opened: Vec<PathBuf> = Vec::new();
         loop {
-            restore::put_back(before, &round, &mut keeper);
-            rounds += 1;
+            // A pass that only opened folders puts nothing back, and is no
+            // round: the rounds bound the put-back's own.
+            if !round.is_empty() || rounds == 0 {
+                restore::put_back(before, &round, &mut keeper);
+                rounds += 1;
+            }
             let (left, after) = self.changes_since(before);
             // A folder the look before listed and this one cannot (a
             // command took its read right away, though it is no protected
@@ -372,7 +378,7 @@ impl Watch {
                 .unlistable()
                 .iter()
                 .filter(|folder| {
-                    before.was_listed(folder) && may(folder) && !reopened.contains(folder)
+                    before.was_listed(folder) && may(folder) && !opened.contains(folder)
                 })
                 .cloned()
                 .collect();
@@ -400,9 +406,10 @@ impl Watch {
                 .cloned()
                 .collect();
             // Another round only where this one showed what the last did not
-            // (a mode put back on a directory that hid what is in it), or a
-            // folder was opened again, and within the bound.
-            if (new.is_empty() && closed.is_empty()) || rounds >= ROUNDS {
+            // (a mode put back on a directory that hid what is in it), within
+            // the bound; or a folder is to be opened again.
+            let more = !new.is_empty() && rounds < ROUNDS;
+            if !more && closed.is_empty() {
                 // Put back only where the last look reached: a path it did
                 // not reach is not known to be as it was.
                 let restored = seen
@@ -426,12 +433,33 @@ impl Watch {
                     after,
                 };
             }
-            for folder in closed {
-                restore::reopen(&folder);
-                reopened.push(folder);
+            // Each closed folder is opened, and every folder under it that
+            // the look before listed too, all the way down, before the next
+            // look: a command may close folders deeper than the rounds go
+            // (the last review of the third security fix: five, deepest
+            // first, hid a hook). Bounded by what the look before listed,
+            // each once.
+            let mut opening = closed;
+            while let Some(folder) = opening.pop() {
+                if opened.contains(&folder) {
+                    continue;
+                }
+                if restore::reopen(&folder) {
+                    reopened.push(folder.clone());
+                }
+                for under in before.listed_in(&folder) {
+                    if may(&under) && !opened.contains(&under) {
+                        opening.push(under);
+                    }
+                }
+                opened.push(folder);
             }
-            seen.extend(new);
-            round = left.into_iter().filter(|one| may(&one.path)).collect();
+            if more {
+                seen.extend(new);
+                round = left.into_iter().filter(|one| may(&one.path)).collect();
+            } else {
+                round = Vec::new();
+            }
         }
     }
 }
@@ -495,6 +523,15 @@ impl Snapshot {
     #[must_use]
     pub fn was_listed(&self, folder: &Path) -> bool {
         self.listed.contains(folder)
+    }
+
+    /// The folders right inside `folder` that this look went through.
+    fn listed_in(&self, folder: &Path) -> Vec<PathBuf> {
+        self.listed
+            .iter()
+            .filter(|listed| listed.parent() == Some(folder))
+            .cloned()
+            .collect()
     }
 
     /// Whether this look stopped at its bound (its time, or the directories

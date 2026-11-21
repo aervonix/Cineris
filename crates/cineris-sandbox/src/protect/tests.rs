@@ -1532,4 +1532,46 @@ mod putting_back {
             "#!/bin/sh\nevil\n"
         );
     }
+
+    /// A hook behind more closed folders than the put-back's rounds: a
+    /// command plants a hook in a repository five folders down, then closes
+    /// each folder to every look, deepest first (`chmod 311`: searchable, so
+    /// git still finds the hook). Every folder under one opened again that
+    /// the look before listed is opened too, all the way down, before the
+    /// next look, so the hook is found and taken away (found by the last
+    /// review of the third security fix, where three were opened and the
+    /// hook never named).
+    #[test]
+    fn a_hook_behind_five_closed_folders_is_found_and_taken_away() {
+        let scratch = workspace("five_closed");
+        let ws = scratch.join("ws");
+        let chain = ["a", "a/b", "a/b/c", "a/b/c/d", "a/b/c/d/e"];
+        scratch.file("ws/a/b/c/d/e/sub/.git/config", "[core]\n");
+        scratch.dir("ws/a/b/c/d/e/sub/.git/hooks");
+        let watch = unhurried_watch(&ws);
+        let before = watch.take();
+        assert!(before.is_complete());
+        let hook = ws.join("a/b/c/d/e/sub/.git/hooks/pre-commit");
+        fs::write(&hook, "#!/bin/sh\nevil\n").unwrap();
+        set_mode(&hook, 0o755);
+        for folder in chain.iter().rev() {
+            set_mode(&ws.join(folder), 0o311);
+        }
+        let (changed, _) = watch.changes_since(&before);
+        let kept = scratch.join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
+        let modes: Vec<u32> = chain.iter().map(|folder| mode(&ws.join(folder))).collect();
+        for folder in chain {
+            set_mode(&ws.join(folder), 0o755);
+        }
+        assert!(
+            !hook.exists(),
+            "reopened {:?}, left {:?}",
+            put.reopened,
+            put.left
+        );
+        assert_eq!(put.reopened.len(), chain.len(), "{:?}", put.reopened);
+        assert_eq!(modes, [0o711; 5]);
+        assert!(put.after.unlistable().is_empty());
+    }
 }
