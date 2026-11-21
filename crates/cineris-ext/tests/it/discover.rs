@@ -497,6 +497,173 @@ fn one_name_from_the_users_root_and_the_projects_is_two_extensions() {
     );
 }
 
+/// Why an extension whose name differs only in case from `others`' is
+/// left out.
+fn differs_in_case(shown: &str, name: &str, others: &str, more_than_one: bool) -> String {
+    let (those, none) = if more_than_one {
+        ("those of the user's extensions", "none of them is used")
+    } else {
+        ("that of the user's extension", "neither is used")
+    };
+    format!(
+        "the extension folder `{shown}` was left out: its name `{name}` differs only in case from \
+         {those} {others}: names that differ only in case are one name on Windows, where they \
+         would share what an extension keeps under its name, so {none}"
+    )
+}
+
+/// Only a system that tells the two names apart in an ordinary folder can
+/// hold both in one: on Windows the second would be written into the
+/// first. Windows has the test below, in a folder made case-sensitive.
+#[cfg(unix)]
+#[test]
+fn names_that_differ_only_in_case_in_one_source_are_all_refused() {
+    let scratch = scratch!("names_that_differ_only_in_case_in_one_source_are_all_refused");
+    for (folder, name) in [
+        ("home/cfg/extensions/Lint", "Lint"),
+        ("home/cfg/extensions/lint", "lint"),
+        ("home/cfg/extensions/Tracker", "Tracker"),
+        ("home/cfg/extensions/tracker", "tracker"),
+        ("home/cfg/extensions/other", "other"),
+        // Another root of the same source.
+        ("home/more/extensions/TRACKER", "TRACKER"),
+        // The project's is another source, and stands.
+        ("home/proj/.cineris/extensions/tracker", "tracker"),
+    ] {
+        extension(&scratch, folder, name);
+    }
+    let discovered = discover(
+        &scratch,
+        &[
+            user(&scratch),
+            Root::user(&scratch.join("home/more")),
+            project(&scratch),
+        ],
+    );
+    assert_eq!(
+        found(&discovered),
+        [
+            (Source::User, "other", "~/cfg/extensions/other"),
+            (Source::Project, "tracker", ".cineris/extensions/tracker"),
+        ]
+    );
+    // Every one of them refused, naming the others: none depends on which
+    // was listed first.
+    let reasons: Vec<&str> = discovered
+        .left_out
+        .iter()
+        .map(|left| left.reason.as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            differs_in_case(
+                "~/cfg/extensions/Lint",
+                "Lint",
+                "`~/cfg/extensions/lint`",
+                false
+            ),
+            differs_in_case(
+                "~/cfg/extensions/Tracker",
+                "Tracker",
+                "`~/cfg/extensions/tracker` and `~/more/extensions/TRACKER`",
+                true
+            ),
+            differs_in_case(
+                "~/cfg/extensions/lint",
+                "lint",
+                "`~/cfg/extensions/Lint`",
+                false
+            ),
+            differs_in_case(
+                "~/cfg/extensions/tracker",
+                "tracker",
+                "`~/cfg/extensions/Tracker` and `~/more/extensions/TRACKER`",
+                true
+            ),
+            differs_in_case(
+                "~/more/extensions/TRACKER",
+                "TRACKER",
+                "`~/cfg/extensions/Tracker` and `~/cfg/extensions/tracker`",
+                true
+            ),
+        ]
+    );
+    assert!(
+        discovered
+            .left_out
+            .iter()
+            .all(|left| left.source == Source::User)
+    );
+}
+
+/// A folder made case-sensitive (`fsutil file setCaseSensitiveInfo`) is the
+/// one place Windows holds two names that differ only in case: both are
+/// refused there, as everywhere. `fsutil` is a process: hence the `sys_`
+/// name.
+#[cfg(windows)]
+#[test]
+fn sys_on_windows_names_that_differ_only_in_case_in_a_case_sensitive_folder_are_refused() {
+    let scratch = scratch!(
+        "sys_on_windows_names_that_differ_only_in_case_in_a_case_sensitive_folder_are_refused"
+    );
+    let root = scratch.dir("home/cfg/extensions");
+    let made = std::process::Command::new("fsutil.exe")
+        .args(["file", "setCaseSensitiveInfo"])
+        .arg(&root)
+        .arg("enable")
+        .output()
+        .expect("run fsutil");
+    if !made.status.success() {
+        let why = format!(
+            "{}{}",
+            String::from_utf8_lossy(&made.stdout),
+            String::from_utf8_lossy(&made.stderr)
+        );
+        assert!(
+            std::env::var_os("GITHUB_ACTIONS").is_none(),
+            "the CI runner cannot make a folder case-sensitive: {why}"
+        );
+        println!("skipped: cannot make a folder case-sensitive here ({why})");
+        return;
+    }
+    extension(&scratch, "home/cfg/extensions/Tracker", "Tracker");
+    extension(&scratch, "home/cfg/extensions/tracker", "tracker");
+    extension(&scratch, "home/cfg/extensions/other", "other");
+    assert_eq!(
+        scratch.listing("home/cfg/extensions"),
+        ["Tracker", "other", "tracker"],
+        "the folder holds both names"
+    );
+    let discovered = discover(&scratch, &[user(&scratch)]);
+    assert_eq!(
+        found(&discovered),
+        [(Source::User, "other", "~/cfg/extensions/other")]
+    );
+    let reasons: Vec<&str> = discovered
+        .left_out
+        .iter()
+        .map(|left| left.reason.as_str())
+        .collect();
+    assert_eq!(
+        reasons,
+        [
+            differs_in_case(
+                "~/cfg/extensions/Tracker",
+                "Tracker",
+                "`~/cfg/extensions/tracker`",
+                false
+            ),
+            differs_in_case(
+                "~/cfg/extensions/tracker",
+                "tracker",
+                "`~/cfg/extensions/Tracker`",
+                false
+            ),
+        ]
+    );
+}
+
 #[test]
 fn past_64_folders_a_root_the_rest_are_left_out_and_counted() {
     let scratch = scratch!("past_64_folders_a_root_the_rest_are_left_out_and_counted");

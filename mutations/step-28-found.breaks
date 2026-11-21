@@ -135,20 +135,39 @@ caught-by:
 [break] found-one-name-across-sources
 rule: The user's and the project's extension of one name are both found: they are different extensions, keyed by source.
 file: crates/cineris-ext/src/discover.rs
-in: look_in
-find: earlier.source == found.source && earlier.manifest.name == found.manifest.name
-replace: earlier.manifest.name == found.manifest.name
+in: settle_names
+find: (one.source, one.manifest.name
+replace: (Source::User, one.manifest.name
 caught-by:
     discover::one_name_from_the_users_root_and_the_projects_is_two_extensions
+    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
 
 [break] found-one-name-twice-in-one-source
 rule: Two roots of one source that each hold an extension of one name give it once, from the first root, and leave out the second with the first one's folder.
 file: crates/cineris-ext/src/discover.rs
-in: look_in
-find: earlier.source == found.source && earlier.manifest.name == found.manifest.name
-replace: earlier.source == found.source && earlier.manifest.name == found.manifest.name && false
+in: settle_names
+find: if position > 0 {
+replace: if position > 0 && false {
 caught-by:
     discover::one_name_from_the_users_root_and_the_projects_is_two_extensions
+
+[break] found-names-in-another-case-both-kept
+rule: Within one source, names that differ only in case (`Tracker` and `tracker`, in one root or two) are refused on every system, not only on Windows, where they are one name.
+file: crates/cineris-ext/src/discover.rs
+in: settle_names
+find: one.manifest.name.to_ascii_lowercase()
+replace: one.manifest.name.clone()
+caught-by:
+    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
+
+[break] found-names-in-another-case-first-kept
+rule: None of names that differ only in case is kept, each left out naming the others, so that nothing depends on which was listed first.
+file: crates/cineris-ext/src/discover.rs
+in: settle_names
+find: .all(|&member| found[member].manifest.name == first.manifest.name);
+replace: .all(|&member| found[member].manifest.name.eq_ignore_ascii_case(&first.manifest.name));
+caught-by:
+    discover::names_that_differ_only_in_case_in_one_source_are_all_refused
 
 # ------------------------------------------------------------ caps and order
 
