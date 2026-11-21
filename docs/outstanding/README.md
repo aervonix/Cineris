@@ -144,6 +144,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-term
 
+- [a-terminals-reply-typed-into-the-input-box-on-a-busy-windows-machine](a-terminals-reply-typed-into-the-input-box-on-a-busy-windows-machine.md): On a busy Windows machine a reply from the terminal can come slower than the 500 ms the decoder waits for it, and then `[?0u` is typed into the input box as if the user had typed it; one CI flake, and a product bug. Owner: step 32.
 - [function-keys-through-conpty](function-keys-through-conpty.md): A function key sent to the application through the test kit's pseudo-console on a hosted Windows runner never reached it as that key; whether a real Windows Terminal is affected is not known. Owner: step 25.
 - [input-decoder-corners](input-decoder-corners.md): `sys::unix::wait` and `sys::windows::wait` restart their timeout after an interrupted call, stale wake or key release. Owner: step 32.
 - [mouse-reports-in-flight-when-the-mouse-goes-off](mouse-reports-in-flight-when-the-mouse-goes-off.md): A mouse report the terminal sent just before the mouse was turned off can arrive afterwards and be read as text. Owner: step 33.
