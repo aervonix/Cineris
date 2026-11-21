@@ -235,6 +235,14 @@ impl PathResolver {
         &self.root
     }
 
+    /// The directory a leading `~` stands for, as it was given, not
+    /// resolved: for a look at a name below it that follows no link the
+    /// resolver would follow. `None` when there is none.
+    #[must_use]
+    pub fn home(&self) -> Option<&AbsPath> {
+        self.options.home.as_ref()
+    }
+
     /// Resolves a path as a tool received it: relative to the workspace
     /// root, absolute, or starting with `~` for the home directory (`~` or
     /// `~/notes`; `~name` and `./~` are ordinary names).

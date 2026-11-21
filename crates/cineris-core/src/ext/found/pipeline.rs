@@ -2,6 +2,16 @@
 //! judges and registers them when the session opens, and the look at a
 //! turn's start that does it again when what they were found in changed
 //! (the [parent module](super) says what each rule is).
+//!
+//! **The session's skills are found on the same task,** after its
+//! extensions and before the first turn may start, and found again when
+//! what they were found in changed: the user's three roots always, and the
+//! project's three whether or not it is trusted (skills are text, as
+//! instruction files are). Each place is stamped before it is looked at or
+//! read, as an extension's are, following no link (`skills::find_seeing`).
+//! What the skills and the loaded extensions give the system prompt is
+//! settled into the session's [`PromptParts`] before the work is settled,
+//! so that a turn that waits for it is built with them.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -14,6 +24,7 @@ use cineris_config::StateDir;
 use cineris_ext::cache::{Entry, RegistrationCache};
 use cineris_ext::discover::{self, Discovered, LeftOut, Root, Seen};
 use cineris_ext::folder::Snapshot;
+use cineris_ext::skills;
 use cineris_ext::source::Source;
 use cineris_policy::{Definition, PinStore, ProjectTrust, Standing, TrustStore, UserPins};
 use cineris_protocol::ProjectKey;
@@ -24,7 +35,8 @@ use super::{
     BEFORE_AN_EXTENSION_IS_REGISTERED, BEFORE_THE_CACHE_IS_KEPT, Extensions, Listed, Looked,
     Pending, UserNames, in_project, sentence, with_paths_shown,
 };
-use crate::ext::watched::Watched;
+use crate::ext::prompt::PromptParts;
+use crate::ext::watched::{MAX_PLACES_PER_ROOT, Watched};
 use crate::ext::{ApprovedExtension, HostParts};
 
 /// How the session is told something.
@@ -62,6 +74,12 @@ pub(crate) struct Finding {
     pub(crate) registry: Arc<ToolRegistry>,
     /// What their calls are served with, and how the session is told.
     pub(crate) parts: Arc<HostParts>,
+    /// The roots skills are looked for in (`skills::Root::standard`, as
+    /// `compat.skills` says).
+    pub(crate) skills: Vec<skills::Root>,
+    /// Where what the skills and the extensions give the system prompt is
+    /// settled, for the loop to ask.
+    pub(crate) prompt: Arc<PromptParts>,
     /// Ends the work when the session or the core ends.
     pub(crate) cancel: CancelToken,
 }
@@ -108,6 +126,13 @@ struct Held {
     told: HashSet<String>,
     /// What it was found in, stamped.
     watched: Watched,
+    /// What the skills were found in, stamped: looked at apart, so that a
+    /// change to a skill does not have every extension read again.
+    skills_watched: Watched,
+    /// The prompt text of each extension loaded, by what it was loaded as.
+    texts: Vec<(Key, String)>,
+    /// Where sections 6 and 7 are settled.
+    prompt: Arc<PromptParts>,
 }
 
 /// What the blocking look is given.
@@ -120,6 +145,7 @@ struct Inputs {
     for_the_run: Vec<Definition>,
     trust_project: bool,
     disabled: Vec<String>,
+    skills: Vec<skills::Root>,
     clock: SharedClock,
 }
 
@@ -128,8 +154,9 @@ struct Inputs {
 struct Decided {
     /// What to tell the session.
     told: Vec<String>,
-    /// Approved, with what they registered from the cache.
-    approved: Vec<ApprovedExtension>,
+    /// Approved, with what they registered from the cache, and the text of
+    /// the prompt file the cache holds.
+    approved: Vec<(ApprovedExtension, Option<String>)>,
     /// Approved, and missing from the cache: registered now, from the
     /// snapshot whose hash is the approved one.
     missing: Vec<(Listed, Arc<Snapshot>)>,
@@ -201,6 +228,8 @@ async fn first(extensions: &Extensions, finding: Finding) {
         disabled,
         registry,
         parts,
+        skills,
+        prompt,
         cancel: _,
     } = finding;
     let inputs = Arc::new(Inputs {
@@ -212,6 +241,7 @@ async fn first(extensions: &Extensions, finding: Finding) {
         for_the_run,
         trust_project,
         disabled,
+        skills,
         clock: Arc::clone(&parts.clock),
     });
     let kept = {
@@ -224,8 +254,12 @@ async fn first(extensions: &Extensions, finding: Finding) {
             failed: Vec::new(),
             told: HashSet::new(),
             watched: Watched::default(),
+            skills_watched: Watched::default(),
+            texts: Vec::new(),
+            prompt,
         };
         let kept = held.settle(project_found).await;
+        held.find_skills().await;
         *slot = Some(held);
         kept
     };
@@ -247,11 +281,24 @@ impl Shared {
                 return;
             };
             let watched = std::mem::take(&mut held.watched);
-            let Some((changed, watched)) = blocking(move || (watched.changed(), watched)).await
+            let skills = std::mem::take(&mut held.skills_watched);
+            let Some((changed, watched, skills_changed, skills)) = blocking(move || {
+                (
+                    watched.changed(),
+                    watched,
+                    skills.changed().is_some(),
+                    skills,
+                )
+            })
+            .await
             else {
                 return;
             };
             held.watched = watched;
+            held.skills_watched = skills;
+            if skills_changed {
+                held.find_skills().await;
+            }
             if changed.is_none() {
                 return;
             }
@@ -301,13 +348,23 @@ impl Held {
         }
         let wanted: Vec<Key> = approved
             .iter()
-            .map(|one| (one.source, one.manifest.name.clone(), one.hash))
+            .map(|(one, _)| (one.source, one.manifest.name.clone(), one.hash))
             .chain(
                 missing
                     .iter()
                     .map(|(one, _)| (one.source, one.manifest.name.clone(), one.hash)),
             )
             .collect();
+        // What is withdrawn leaves the prompt's snapshot first, its text and
+        // its source together, then the registry: a text no later than its
+        // tools.
+        let gone: Vec<String> = self
+            .loaded
+            .iter()
+            .filter(|key| !wanted.contains(key))
+            .map(|key| key.1.clone())
+            .collect();
+        self.prompt.withdraw(&gone);
         for gone in self.loaded.iter().filter(|key| !wanted.contains(key)) {
             self.registry.remove_source(&gone.1);
             (self.parts.tell)(format!(
@@ -317,14 +374,18 @@ impl Held {
             ));
         }
         self.loaded.retain(|key| wanted.contains(key));
-        let mut new: Vec<ApprovedExtension> = approved
-            .into_iter()
-            .filter(|one| {
-                !self
-                    .loaded
-                    .contains(&(one.source, one.manifest.name.clone(), one.hash))
-            })
-            .collect();
+        self.texts.retain(|(key, _)| wanted.contains(key));
+        let mut new: Vec<ApprovedExtension> = Vec::new();
+        for (one, text) in approved {
+            let key = (one.source, one.manifest.name.clone(), one.hash);
+            if self.loaded.contains(&key) {
+                continue;
+            }
+            if let Some(text) = text {
+                self.texts.push((key, text));
+            }
+            new.push(one);
+        }
         let mut written: Vec<(ContentHash, Entry)> = Vec::new();
         for (listed, snapshot) in missing {
             let hash = listed.hash;
@@ -356,6 +417,10 @@ impl Held {
                         .as_deref()
                         .and_then(|file| snapshot.file(file))
                         .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
+                    if let Some(text) = &prompt {
+                        self.texts
+                            .push(((listed.source, manifest.name.clone(), hash), text.clone()));
+                    }
                     written.push((hash, Entry::new(&manifest, registration.clone(), prompt)));
                     new.push(ApprovedExtension {
                         source: listed.source,
@@ -385,6 +450,26 @@ impl Held {
             (self.parts.tell)(message);
         }
         self.loaded.extend(keys);
+        // Section 7: the text of each extension loaded, as the cache holds
+        // it, and only of one the registry took, as the turn will find it:
+        // one whose capabilities did not compile is not loaded.
+        let sources: HashSet<String> = self
+            .registry
+            .sources()
+            .into_iter()
+            .map(|source| source.name)
+            .collect();
+        self.texts
+            .retain(|(key, _)| self.loaded.contains(key) && sources.contains(&key.1));
+        self.prompt.settle(
+            self.texts
+                .iter()
+                .map(|((_, name, _), text)| cineris_agent::ExtensionPrompt {
+                    name: name.clone(),
+                    text: text.clone(),
+                })
+                .collect(),
+        );
         let state = self.inputs.state.clone()?;
         cache.map(|cache| Kept {
             cache,
@@ -393,6 +478,36 @@ impl Held {
             clock: Arc::clone(&self.inputs.clock),
         })
     }
+}
+
+impl Held {
+    /// Finds the session's skills, each place stamped before it is read,
+    /// and settles section 6's part of them. On the blocking pool.
+    async fn find_skills(&mut self) {
+        let inputs = Arc::clone(&self.inputs);
+        let Some((found, watched)) = blocking(move || skills_found(&inputs)).await else {
+            return;
+        };
+        self.skills_watched = watched;
+        self.prompt
+            .set_skills(skills::render(&found, cineris_agent::SKILLS_CAP).text);
+    }
+}
+
+/// A root gives at most the names on the way to it, itself, and three
+/// places an entry it looks at (`skills::find_seeing`): within what a root
+/// may stamp.
+const _: () = assert!(4 + 3 * skills::MAX_ENTRIES <= MAX_PLACES_PER_ROOT);
+
+/// The session's skills, found in their roots, and what they were found in,
+/// each place stamped before it was looked at or read. Blocks.
+fn skills_found(inputs: &Inputs) -> (skills::Found, Watched) {
+    let clock = &inputs.clock;
+    let mut watched = Watched::default();
+    let found = skills::find_seeing(&inputs.resolver, &inputs.skills, &mut |place| {
+        watched.note(place.to_path_buf(), clock);
+    });
+    (found, watched)
 }
 
 /// Runs `work` on the blocking pool. `None` when it could not finish.
@@ -597,13 +712,16 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
         let against = snapshot.as_deref().unwrap_or(&listed.prompt);
         match entry {
             Some(entry) if entry.fits(&listed.manifest, against).is_ok() => {
-                decided.approved.push(ApprovedExtension {
-                    source: listed.source,
-                    folder: listed.folder,
-                    hash: listed.hash,
-                    manifest: listed.manifest,
-                    registration: entry.registration.clone(),
-                });
+                decided.approved.push((
+                    ApprovedExtension {
+                        source: listed.source,
+                        folder: listed.folder,
+                        hash: listed.hash,
+                        manifest: listed.manifest,
+                        registration: entry.registration.clone(),
+                    },
+                    entry.prompt.clone(),
+                ));
             }
             _ => {
                 // To register it its bytes are needed: what the question

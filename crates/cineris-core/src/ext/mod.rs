@@ -25,6 +25,8 @@ pub(crate) mod found;
 #[cfg(feature = "scripts")]
 mod host;
 #[cfg(feature = "scripts")]
+mod prompt;
+#[cfg(feature = "scripts")]
 mod state;
 #[cfg(feature = "scripts")]
 mod tools;
@@ -50,6 +52,8 @@ pub use found::{
 
 #[cfg(feature = "scripts")]
 pub(crate) use exec::{ExecParts, HarnessFiles};
+#[cfg(feature = "scripts")]
+pub(crate) use prompt::PromptParts;
 #[cfg(feature = "scripts")]
 pub(crate) use state::{ExtState, ProjectStore};
 #[cfg(feature = "scripts")]

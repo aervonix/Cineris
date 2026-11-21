@@ -486,13 +486,117 @@ replace: None
 caught-by:
     cineris-agent::it extensions::a_summary_is_asked_to_leave_out_a_withdrawn_text
 
-[break] one-line-keeps-what-acts-unseen
-rule: `one_line`, the one home of the rule a skill's name and description and a source's description are shown by, takes out every character that acts unseen (call 7).
-file: crates/cineris-base/src/visible.rs
-in: one_line
-find: !acts_unseen(character)
-replace: true
-packages: cineris-base,cineris-agent
+# The core fills them: skills found with the extensions, the sections from
+# what the session's finding settled, a change at the next turn's start.
+
+[break] compat-off-still-reads-other-tools-skills
+rule: With `compat.skills` off, a session looks for skills only in the two `.cineris/skills/`.
+file: crates/cineris-core/src/assemble.rs
+find: cineris_ext::skills::Root::standard(settings.compat.skills)
+replace: cineris_ext::skills::Root::standard(true)
 caught-by:
-    cineris-base visible::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
-    cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
+    cineris-core::it extensions_prompt::with_compat_skills_off_only_the_cineris_folders_of_skills_are_read
+
+[break] a-projects-skills-wait-for-its-trust
+rule: A project's skills are found whether or not it is trusted: they are text, as instruction files are.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: skills_found
+find: &inputs.skills, &mut |place|
+replace: &inputs.skills.iter().filter(|root| inputs.project.is_some() || root.owner == skills::Owner::User).cloned().collect::<Vec<_>>(), &mut |place|
+caught-by:
+    cineris-core::it extensions_prompt::the_first_turns_prompt_holds_the_skills_and_the_extensions_text
+
+[break] the-first-finding-finds-no-skills
+rule: The skills are found on the session's finding before it settles, so that the first turn's prompt, built after it, holds them.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: first
+find: held.find_skills().await;
+replace:
+caught-by:
+    cineris-core::it extensions_prompt::the_first_turns_prompt_holds_the_skills_and_the_extensions_text
+    cineris-core::it extensions_reload::with_no_extension_a_session_looks_once_a_folder_and_reads_nothing
+
+[break] a-skill-changed-is-not-found-again
+rule: What the skills were found in is looked at again at each turn's start, and a change has them found again.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Shared::recheck
+find: if skills_changed { held.find_skills().await; }
+replace:
+caught-by:
+    cineris-core::it extensions_prompt::a_skill_added_changed_and_removed_is_told_and_a_session_read_again_goes_on
+
+[break] the-skills-places-are-not-stamped
+rule: Each place the skills are found through is stamped before it is looked at or read, so that a change is seen.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: skills_found
+find: watched.note(place.to_path_buf(), clock);
+replace: let _ = place;
+caught-by:
+    cineris-core::it extensions_prompt::a_skill_added_changed_and_removed_is_told_and_a_session_read_again_goes_on
+
+[break] a-skill-file-is-not-named-before-it-is-read
+rule: Each `SKILL.md` is named to the caller before it is read, where it really is: an edit in place is a change.
+file: crates/cineris-ext/src/skills.rs
+in: skill_in
+find: seen(&file.to_fs_path());
+replace:
+packages: cineris-ext,cineris-core
+caught-by:
+    cineris-ext skills::tests::each_place_is_named_before_it_is_looked_at_or_read
+    cineris-core::it extensions_prompt::a_skill_added_changed_and_removed_is_told_and_a_session_read_again_goes_on
+
+[break] a-root-of-skills-that-is-not-there-is-resolved
+rule: A root of skills that is not there costs a look at each name on the way to it, and is not resolved.
+file: crates/cineris-ext/src/skills.rs
+in: find_seeing
+find: if certainly_absent(resolver, root, seen) { continue; }
+replace:
+packages: cineris-ext,cineris-core
+caught-by:
+    cineris-ext skills::tests::a_root_that_is_not_there_costs_a_look_a_name_and_no_resolve
+    cineris-core::it extensions_reload::with_no_extension_a_session_looks_once_a_folder_and_reads_nothing
+
+[break] section-seven-is-not-the-cached-text
+rule: Section 7 is each loaded extension's prompt text as the registration cache holds it: the approved text.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: entry.prompt.clone()
+replace: None
+caught-by:
+    cineris-core::it extensions_prompt::the_first_turns_prompt_holds_the_skills_and_the_extensions_text
+    cineris-core::it extensions_prompt::an_extension_withdrawn_in_an_epoch_has_its_text_withdrawn_and_a_new_epoch_without_it
+
+[break] a-compaction-does-not-wait-for-the-extensions
+rule: A compaction may build a session's first prompt, and waits for the session's extensions as a turn does.
+file: crates/cineris-core/src/core.rs
+find: live.extensions.wait().await; live.handle.compact(params.focus)?;
+replace: live.handle.compact(params.focus)?;
+caught-by:
+    cineris-core::it extensions_prompt::a_compaction_before_the_first_turn_waits_for_the_extensions
+
+[break] two-texts-of-one-name
+rule: The extensions' source holds one text a name.
+file: crates/cineris-core/src/ext/prompt.rs
+in: PromptParts::settle
+find: if !kept.iter().any(|one| one.name == prompt.name) {
+replace: if true {
+caught-by:
+    cineris-core ext::prompt::tests::a_text_and_its_source_leave_together_and_a_name_has_one_text
+
+[break] a-withdrawn-text-stays-in-the-snapshot
+rule: An extension withdrawn leaves the source's snapshot, its text with its source of tools.
+file: crates/cineris-core/src/ext/prompt.rs
+in: PromptParts::withdraw
+find: .retain(|prompt| !names.contains(&prompt.name))
+replace: .retain(|_| true)
+caught-by:
+    cineris-core ext::prompt::tests::a_text_and_its_source_leave_together_and_a_name_has_one_text
+
+[break] the-snapshot-is-told-after-the-registry
+rule: A withdrawn extension leaves the source's snapshot before its tools leave the registry, so that a text leaves no later than its tools. Survives: the session's finding settles the snapshot again before the lock that withdraws is let go, and no test asks the source in between; the order is held by the code and the unit test of `withdraw`.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+find: self.prompt.withdraw(&gone);
+replace:
+expect: survives
+

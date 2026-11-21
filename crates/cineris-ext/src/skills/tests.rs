@@ -4,16 +4,24 @@
 //!
 //! Each test's scratch folder holds `home/`, the home directory `~` stands
 //! for, `home/proj/`, the workspace, and `outside/`, which is neither.
+//!
+//! The front matter's reader, `one_line` and the standard roots are tested
+//! here too, as they were in the module.
 
-use cineris_base::{AbsPath, PathOptions, PathResolver, PathStyle};
-use cineris_ext::skills::{
-    self, Found, HEADING, INDEX_CAP, Layout, LeftOut, MAX_DESCRIPTION_BYTES, MAX_SKILLS, Owner,
-    Reason, Root, Skill,
-};
-use cineris_testkit::scratch;
+#![allow(
+    clippy::disallowed_methods,
+    clippy::disallowed_types,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "a test prepares real files, fails by panicking, and says when it skips"
+)]
+
+use cineris_base::{PathOptions, PathStyle};
 use cineris_testkit::scratch::Scratch;
 
-use crate::make_link;
+use super::*;
+use crate::skills;
 
 /// The session's resolver: the workspace `home/proj`, and `~` for `home`.
 fn resolver(scratch: &Scratch) -> PathResolver {
@@ -52,9 +60,158 @@ fn find(scratch: &Scratch, roots: &[Root]) -> Found {
     skills::find(&resolver(scratch), roots)
 }
 
+/// Makes a symbolic link to a file or, with `directory`, to a folder. On
+/// Windows that needs a privilege an ordinary account lacks unless
+/// Developer Mode is on; the CI runner has it, and there the link must be
+/// made. Elsewhere `false` when it could not be, and the test says so and
+/// stops.
+fn make_link(target: &Path, link: &Path, directory: bool) -> bool {
+    #[cfg(unix)]
+    let made = {
+        let _ = directory;
+        std::os::unix::fs::symlink(target, link)
+    };
+    #[cfg(windows)]
+    let made = if directory {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    };
+    match made {
+        Ok(()) => true,
+        Err(error) if std::env::var_os("GITHUB_ACTIONS").is_none() => {
+            println!("skipped: cannot make a link here ({error})");
+            false
+        }
+        Err(error) => panic!("the CI runner cannot make a link: {error}"),
+    }
+}
+
+fn read(text: &str) -> FrontMatter {
+    FrontMatter::read(text).unwrap()
+}
+
+#[test]
+fn plain_values_and_comments() {
+    let front = read(
+        "---\nname: pdf-tools # the folder's name\ndescription: Fill in forms\n  and merge \
+         them.\n\n  Also split.\nlicense: MIT\n---\n# Body\n",
+    );
+    assert_eq!(front.get("name"), Some("pdf-tools"));
+    assert_eq!(
+        front.get("description"),
+        Some("Fill in forms and merge them.\nAlso split.")
+    );
+    assert_eq!(front.get("license"), Some("MIT"));
+    assert_eq!(front.get("missing"), None);
+    // A `#` inside a word is not a comment.
+    assert_eq!(
+        read("---\nname: c#-tools\n---").get("name"),
+        Some("c#-tools")
+    );
+}
+
+#[test]
+fn quoted_values_in_both_quotes_and_over_lines() {
+    let front = read(
+        "---\nname: \"pdf: tools\" # quoted\ndescription: 'It''s for\n  forms, \"all\" of \
+         them.'\n---\n",
+    );
+    assert_eq!(front.get("name"), Some("pdf: tools"));
+    assert_eq!(
+        front.get("description"),
+        Some("It's for forms, \"all\" of them.")
+    );
+    let escaped = read(
+        "---\nname: \"a\\tb\\u00e9\\x41\\\"\\\\\"\ndescription: \"one \\\n  two\n\n  \
+         three\"\n---",
+    );
+    assert_eq!(escaped.get("name"), Some("a\tbéA\"\\"));
+    assert_eq!(escaped.get("description"), Some("one two\nthree"));
+    // A quote never closed is taken as far as it goes.
+    assert_eq!(read("---\nname: \"open\n---").get("name"), Some("open"));
+}
+
+#[test]
+fn blocks_keep_or_fold_their_lines() {
+    let front = read(
+        "---\nname: x\ndescription: >-\n  Folded\n  into one.\n\n  Then more.\nnotes: |\n  \
+         kept\n    indented\n  lines\n---",
+    );
+    assert_eq!(
+        front.get("description"),
+        Some("Folded into one.\nThen more.")
+    );
+    assert_eq!(front.get("notes"), Some("kept\n  indented\nlines"));
+    // An indentation indicator is taken.
+    assert_eq!(
+        read("---\nd: |2\n    deeper\n  less\n---").get("d"),
+        Some("  deeper\nless")
+    );
+    // A `>` that is not a block's header is plain text.
+    assert_eq!(read("---\nd: >x\n---").get("d"), Some(">x"));
+}
+
+#[test]
+fn what_is_and_is_not_front_matter() {
+    for none in [
+        "",
+        "name: x\n",
+        "# Title\n---\nname: x\n---",
+        "---\nname: x\n",
+        " ---\nname: x\n---",
+    ] {
+        assert_eq!(FrontMatter::read(none), None, "{none:?}");
+    }
+    // A byte-order mark, `\r\n` and `...` as the close.
+    let front = read("\u{feff}---\r\nname: x\r\ndescription: y \r\n...\r\nbody");
+    assert_eq!(
+        (front.get("name"), front.get("description")),
+        (Some("x"), Some("y"))
+    );
+    // A key's first value stands; a nested map belongs to its key; a
+    // `key:value` with no space is no field; a quoted key is one.
+    let front = read(
+        "---\nname: first\nmetadata:\n  name: nested\nname: second\nurl:x\n\"description\" : \
+         d\n---",
+    );
+    assert_eq!(front.get("name"), Some("first"));
+    assert_eq!(front.get("url"), None);
+    assert_eq!(front.get("description"), Some("d"));
+    assert_eq!(
+        front.fields().map(|(key, _)| key).collect::<Vec<_>>(),
+        ["name", "metadata", "description"]
+    );
+}
+
+#[test]
+fn the_standard_roots_in_the_order_a_name_is_taken() {
+    let paths = |compat| {
+        Root::standard(compat)
+            .into_iter()
+            .map(|root| root.path)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        paths(true),
+        [
+            ".cineris/skills",
+            ".agents/skills",
+            ".claude/skills",
+            "~/.cineris/skills",
+            "~/.agents/skills",
+            "~/.claude/skills"
+        ]
+    );
+    assert_eq!(paths(false), [".cineris/skills", "~/.cineris/skills"]);
+}
+
 #[test]
 fn skills_are_found_one_level_down_in_every_root_and_listed_by_name() {
-    let scratch = scratch!("skills_are_found_one_level_down_in_every_root_and_listed_by_name");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "skills_are_found_one_level_down_in_every_root_and_listed_by_name",
+    );
     skill(
         &scratch,
         "home/proj/.cineris/skills/zeta",
@@ -132,8 +289,10 @@ fn skills_are_found_one_level_down_in_every_root_and_listed_by_name() {
 
 #[test]
 fn roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_skills() {
-    let scratch =
-        scratch!("roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_skills");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_skills",
+    );
     skill(&scratch, "home/proj/.cineris/skills/one", "one", "1");
     skill(&scratch, "home/proj/.agents/skills/two", "two", "2");
     skill(&scratch, "home/proj/.claude/skills/three", "three", "3");
@@ -181,7 +340,10 @@ fn roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_skills()
 
 #[test]
 fn a_link_in_a_root_that_leads_out_of_it_is_left_out() {
-    let scratch = scratch!("a_link_in_a_root_that_leads_out_of_it_is_left_out");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_link_in_a_root_that_leads_out_of_it_is_left_out",
+    );
     skill(&scratch, "outside/stolen", "stolen", "SECRET-OUTSIDE");
     skill(&scratch, "home/proj/.cineris/skills/fine", "fine", "Inside");
     skill(
@@ -244,8 +406,10 @@ fn a_link_in_a_root_that_leads_out_of_it_is_left_out() {
 
 #[test]
 fn a_root_that_is_a_link_is_followed_and_a_projects_only_inside_the_workspace() {
-    let scratch =
-        scratch!("a_root_that_is_a_link_is_followed_and_a_projects_only_inside_the_workspace");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_root_that_is_a_link_is_followed_and_a_projects_only_inside_the_workspace",
+    );
     skill(
         &scratch,
         "home/dotfiles/skills/mine",
@@ -313,7 +477,10 @@ fn a_root_that_is_a_link_is_followed_and_a_projects_only_inside_the_workspace() 
 
 #[test]
 fn a_link_outside_that_leads_into_a_root_is_followed() {
-    let scratch = scratch!("a_link_outside_that_leads_into_a_root_is_followed");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_link_outside_that_leads_into_a_root_is_followed",
+    );
     skill(
         &scratch,
         "home/proj/.cineris/skills/direct",
@@ -377,7 +544,10 @@ fn a_link_outside_that_leads_into_a_root_is_followed() {
 
 #[test]
 fn a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out() {
-    let scratch = scratch!("a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out",
+    );
     scratch.dir("home/proj/.cineris/skills/folder-file/SKILL.md");
     scratch.dir("home/proj/.cineris/skills/file-gone");
     skill(&scratch, "home/proj/.cineris/skills/kept", "kept", "Fine");
@@ -405,7 +575,10 @@ fn a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out() {
 
 #[test]
 fn a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read() {
-    let scratch = scratch!("a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read",
+    );
     let at = |folder: &str, text: &str| {
         scratch.file(format!("home/proj/.cineris/skills/{folder}/SKILL.md"), text);
     };
@@ -452,8 +625,10 @@ fn a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read() {
 
 #[test]
 fn names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge() {
-    let scratch =
-        scratch!("names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge",
+    );
     // A bidirectional override and a zero-width joiner in the name; a line
     // break, an isolate, a byte-order mark and an escape in the
     // description.
@@ -512,7 +687,10 @@ fn names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge() 
 
 #[test]
 fn one_name_is_one_skill_the_projects_first_then_cineris_agents_claude() {
-    let scratch = scratch!("one_name_is_one_skill_the_projects_first_then_cineris_agents_claude");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "one_name_is_one_skill_the_projects_first_then_cineris_agents_claude",
+    );
     skill(
         &scratch,
         "home/proj/.claude/skills/a",
@@ -586,7 +764,10 @@ fn one_name_is_one_skill_the_projects_first_then_cineris_agents_claude() {
 
 #[test]
 fn past_a_hundred_skills_the_rest_are_counted_and_not_listed() {
-    let scratch = scratch!("past_a_hundred_skills_the_rest_are_counted_and_not_listed");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "past_a_hundred_skills_the_rest_are_counted_and_not_listed",
+    );
     for index in 0..103 {
         skill(
             &scratch,
@@ -612,7 +793,10 @@ fn past_a_hundred_skills_the_rest_are_counted_and_not_listed() {
 
 #[test]
 fn a_skill_file_larger_than_64_kib_is_left_out() {
-    let scratch = scratch!("a_skill_file_larger_than_64_kib_is_left_out");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_skill_file_larger_than_64_kib_is_left_out",
+    );
     let at_most = |extra: usize| {
         let head = "---\nname: big\n---\n";
         let cap = 64 * 1024;
@@ -633,7 +817,10 @@ fn a_skill_file_larger_than_64_kib_is_left_out() {
 
 #[test]
 fn a_root_with_more_than_a_thousand_entries_is_looked_at_only_so_far() {
-    let scratch = scratch!("a_root_with_more_than_a_thousand_entries_is_looked_at_only_so_far");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_root_with_more_than_a_thousand_entries_is_looked_at_only_so_far",
+    );
     let root = scratch.dir("home/proj/.cineris/skills");
     for index in 0..1_000 {
         std::fs::write(root.join(format!("f{index:04}.md")), "").unwrap();
@@ -732,8 +919,10 @@ fn the_index_keeps_within_its_cap_and_counts_what_it_leaves_out() {
 #[cfg(windows)]
 #[test]
 fn on_windows_a_root_in_another_case_and_with_backslashes_is_the_same_folder() {
-    let scratch =
-        scratch!("on_windows_a_root_in_another_case_and_with_backslashes_is_the_same_folder");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "on_windows_a_root_in_another_case_and_with_backslashes_is_the_same_folder",
+    );
     skill(&scratch, "home/proj/.cineris/skills/fine", "fine", "Found");
     skill(&scratch, "home/.claude/skills/mine", "mine", "Found too");
     let roots = [
@@ -767,8 +956,10 @@ fn on_windows_a_root_in_another_case_and_with_backslashes_is_the_same_folder() {
 #[cfg(windows)]
 #[test]
 fn sys_on_windows_a_junction_out_of_a_root_is_left_out_and_one_inside_followed() {
-    let scratch =
-        scratch!("sys_on_windows_a_junction_out_of_a_root_is_left_out_and_one_inside_followed");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "sys_on_windows_a_junction_out_of_a_root_is_left_out_and_one_inside_followed",
+    );
     skill(&scratch, "outside/stolen", "stolen", "SECRET-OUTSIDE");
     skill(
         &scratch,
@@ -804,4 +995,97 @@ fn sys_on_windows_a_junction_out_of_a_root_is_left_out_and_one_inside_followed()
     );
     assert_eq!(left(&found), [(".cineris/skills/escape", &Reason::LinkOut)]);
     assert!(!format!("{found:?}").contains("SECRET-OUTSIDE"));
+}
+
+/// A root that is not there costs a look at each name on the way to it,
+/// each named to the caller first, and nothing is resolved: six roots of
+/// which none is there are six looks, and a seventh where the user has a
+/// `.claude` with no `skills` in it.
+#[test]
+fn a_root_that_is_not_there_costs_a_look_a_name_and_no_resolve() {
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_root_that_is_not_there_costs_a_look_a_name_and_no_resolve",
+    );
+    scratch.dir("home/.claude/projects");
+    let resolver = resolver(&scratch);
+    let looks = cineris_testkit::Hold::new(A_NAME_IS_LOOKED_AT).skipping(usize::MAX);
+    let resolved = cineris_testkit::Hold::new(A_ROOT_IS_RESOLVED).skipping(usize::MAX);
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let found = find_seeing(&resolver, &Root::standard(true), &mut |place| {
+        seen.push(place.to_path_buf());
+    });
+    assert_eq!(found, Found::default());
+    let workspace = resolver.root().to_fs_path();
+    let home = scratch.join("home");
+    assert_eq!(
+        seen,
+        [
+            workspace.join(".cineris"),
+            workspace.join(".agents"),
+            workspace.join(".claude"),
+            home.join(".cineris"),
+            home.join(".agents"),
+            home.join(".claude"),
+            home.join(".claude").join("skills"),
+        ]
+    );
+    assert_eq!(looks.arrivals(), 7);
+    assert_eq!(resolved.arrivals(), 0);
+}
+
+/// Every place a root's skills are found through is named to the caller
+/// before it is looked at or read, where it really is: the names on the
+/// way, the root, each entry, the folder a link in it leads to, and each
+/// `SKILL.md`; and nothing beyond a link that leads out of the root.
+#[test]
+fn each_place_is_named_before_it_is_looked_at_or_read() {
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "each_place_is_named_before_it_is_looked_at_or_read",
+    );
+    skill(&scratch, "home/proj/.cineris/skills/pdf", "pdf", "Forms.");
+    skill(&scratch, "outside/stolen", "stolen", "Not ours.");
+    scratch.dir("home/proj/.cineris/skills/empty");
+    let root = scratch.join("home/proj/.cineris/skills");
+    let linked = make_link(&root.join("pdf"), &root.join("alias"), true)
+        && make_link(&scratch.join("outside/stolen"), &root.join("escape"), true);
+    let resolver = resolver(&scratch);
+    let workspace = resolver.root().to_fs_path();
+    let real = workspace.join(".cineris").join("skills");
+    let reads = cineris_testkit::Hold::new(A_SKILL_IS_READ).skipping(usize::MAX);
+    let mut seen: Vec<PathBuf> = Vec::new();
+    // How many `SKILL.md` files had been read as each was named.
+    let mut read_then: Vec<usize> = Vec::new();
+    let found = find_seeing(&resolver, &Root::standard(false), &mut |place| {
+        seen.push(place.to_path_buf());
+        if place.ends_with(FILE_NAME) {
+            read_then.push(reads.arrivals());
+        }
+    });
+    assert!(!found.skills.is_empty(), "{found:?}");
+    assert!(!read_then.is_empty());
+    for (named, read) in read_then.iter().enumerate() {
+        assert_eq!(*read, named, "a SKILL.md is named before it is read");
+    }
+    let at = |place: &Path| {
+        seen.iter()
+            .position(|named| named == place)
+            .unwrap_or_else(|| panic!("{} was not named: {seen:#?}", place.display()))
+    };
+    assert!(at(&workspace.join(".cineris")) < at(&real));
+    assert!(at(&real) < at(&real.join("pdf")));
+    assert!(at(&real.join("pdf")) < at(&real.join("pdf").join(FILE_NAME)));
+    let _ = at(&real.join("empty"));
+    if linked {
+        // The link itself, and where it leads, which is inside the root.
+        let _ = at(&real.join("alias"));
+        let _ = at(&real.join("escape"));
+        assert!(
+            !seen
+                .iter()
+                .any(|place| place.starts_with(scratch.join("outside"))),
+            "{seen:#?}"
+        );
+    }
 }

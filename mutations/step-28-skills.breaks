@@ -12,7 +12,7 @@ find: layout.is_compat() && !compat
 replace: false
 caught-by:
     cineris-ext skills::tests::the_standard_roots_in_the_order_a_name_is_taken
-    cineris-ext::it skills::skills_are_found_one_level_down_in_every_root_and_listed_by_name
+    cineris-ext skills::tests::skills_are_found_one_level_down_in_every_root_and_listed_by_name
 
 [break] a-projects-root-may-lead-out-of-the-workspace
 rule: A project's root is looked in only where it leads to a place inside the workspace: what a repository's link reaches is not the repository's.
@@ -21,8 +21,8 @@ in: open_root
 find: root.owner == Owner::Project && !location_within(&real, &places.workspace)
 replace: false
 caught-by:
-    cineris-ext::it skills::a_root_that_is_a_link_is_followed_and_a_projects_only_inside_the_workspace
-    cineris-ext::it skills::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_skills
+    cineris-ext skills::tests::a_root_that_is_a_link_is_followed_and_a_projects_only_inside_the_workspace
+    cineris-ext skills::tests::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_skills
 
 [break] a-users-root-is-held-to-the-workspace
 rule: The user's root is followed wherever it leads: the user named it.
@@ -31,8 +31,8 @@ in: open_root
 find: root.owner == Owner::Project && !location_within(&real, &places.workspace)
 replace: !location_within(&real, &places.workspace)
 caught-by:
-    cineris-ext::it skills::skills_are_found_one_level_down_in_every_root_and_listed_by_name
-    cineris-ext::it skills::a_root_that_is_a_link_is_followed_and_a_projects_only_inside_the_workspace
+    cineris-ext skills::tests::skills_are_found_one_level_down_in_every_root_and_listed_by_name
+    cineris-ext skills::tests::a_root_that_is_a_link_is_followed_and_a_projects_only_inside_the_workspace
 
 [break] one-folder-is-looked-at-twice
 rule: A root that is the same folder as one looked at before it, however it is written, is not looked at again.
@@ -41,7 +41,7 @@ in: open_root
 find: same_location(earlier, &real)
 replace: same_location(earlier, &real) && false
 caught-by:
-    cineris-ext::it skills::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_skills
+    cineris-ext skills::tests::roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_skills
 
 [break] a-link-to-nothing-is-not-said
 rule: A link to nothing is left out, and said to be one.
@@ -50,7 +50,7 @@ in: path_reason
 find: PathError::DanglingLink { .. } => Reason::Dangling
 replace: PathError::DanglingLink { .. } => Reason::Unreadable(String::new())
 caught-by:
-    cineris-ext::it skills::a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out
+    cineris-ext skills::tests::a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out
 
 [break] a-root-is-read-past-its-entry-cap
 rule: At most 1,000 entries are looked at in a root, and the rest are said not to have been.
@@ -59,7 +59,7 @@ in: look_in
 find: names.len() == MAX_ENTRIES
 replace: false
 caught-by:
-    cineris-ext::it skills::a_root_with_more_than_a_thousand_entries_is_looked_at_only_so_far
+    cineris-ext skills::tests::a_root_with_more_than_a_thousand_entries_is_looked_at_only_so_far
 
 [break] a-folder-linked-out-of-its-root-is-followed
 rule: A skill's folder reached through a link is followed only where it stays below its root: not out of it, and not to the root itself.
@@ -68,7 +68,7 @@ in: skill_in
 find: if !inside
 replace: if false
 caught-by:
-    cineris-ext::it skills::a_link_in_a_root_that_leads_out_of_it_is_left_out
+    cineris-ext skills::tests::a_link_in_a_root_that_leads_out_of_it_is_left_out
 
 [break] a-skill-file-linked-out-of-its-root-is-read
 rule: A `SKILL.md` reached through a link is read only where it stays inside its root.
@@ -77,7 +77,7 @@ in: skill_in
 find: !location_within(&file.to_fs_path(), &root)
 replace: false
 caught-by:
-    cineris-ext::it skills::a_link_in_a_root_that_leads_out_of_it_is_left_out
+    cineris-ext skills::tests::a_link_in_a_root_that_leads_out_of_it_is_left_out
 
 [break] a-skill-file-that-is-no-file-is-passed-over
 rule: A `SKILL.md` that is a folder, a FIFO or a device is left out with its reason.
@@ -86,7 +86,7 @@ in: read_capped
 find: Err(OpenError::Directory | OpenError::NotAFile) => return Err(Reason::NotAFile)
 replace: Err(OpenError::Directory | OpenError::NotAFile) => return Ok(None)
 caught-by:
-    cineris-ext::it skills::a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out
+    cineris-ext skills::tests::a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out
 
 [break] a-skill-file-past-its-cap-is-read
 rule: A `SKILL.md` larger than 64 KiB is left out.
@@ -95,7 +95,7 @@ in: read_capped
 find: bytes.len() as u64 > MAX_SKILL_BYTES
 replace: false
 caught-by:
-    cineris-ext::it skills::a_skill_file_larger_than_64_kib_is_left_out
+    cineris-ext skills::tests::a_skill_file_larger_than_64_kib_is_left_out
 
 [break] the-skill-files-cap-is-not-64-kib
 rule: The cap on a `SKILL.md` is 64 KiB.
@@ -103,7 +103,7 @@ file: crates/cineris-ext/src/skills.rs
 find: pub const MAX_SKILL_BYTES: u64 = 64 * 1024;
 replace: pub const MAX_SKILL_BYTES: u64 = 65 * 1024;
 caught-by:
-    cineris-ext::it skills::a_skill_file_larger_than_64_kib_is_left_out
+    cineris-ext skills::tests::a_skill_file_larger_than_64_kib_is_left_out
 
 [break] a-nameless-skill-is-listed
 rule: A `SKILL.md` whose front matter gives no name, or one that is empty once it is one line, is left out.
@@ -112,43 +112,43 @@ in: skill_in
 find: skill_name.is_empty()
 replace: false
 caught-by:
-    cineris-ext::it skills::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
+    cineris-ext skills::tests::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
 
 [break] one-name-is-listed-twice
 rule: One name is one skill: of two skills with one name, one is taken and the other left out with its reason.
 file: crates/cineris-ext/src/skills.rs
-in: find
+in: find_seeing
 find: kept.name == skill.name
 replace: false
 caught-by:
-    cineris-ext::it skills::one_name_is_one_skill_the_projects_first_then_cineris_agents_claude
+    cineris-ext skills::tests::one_name_is_one_skill_the_projects_first_then_cineris_agents_claude
 
 [break] the-users-skill-is-taken-over-the-projects
 rule: Of two skills with one name, the project's is taken over the user's.
 file: crates/cineris-ext/src/skills.rs
-in: find
+in: find_seeing
 find: .then_with(|| one.skill.owner.cmp(&other.skill.owner))
 replace:
 caught-by:
-    cineris-ext::it skills::one_name_is_one_skill_the_projects_first_then_cineris_agents_claude
+    cineris-ext skills::tests::one_name_is_one_skill_the_projects_first_then_cineris_agents_claude
 
 [break] the-layouts-order-is-the-lists
 rule: Of two skills with one name and one owner, `.cineris/` is taken over `.agents/` over `.claude/`, whatever order the roots are given in.
 file: crates/cineris-ext/src/skills.rs
-in: find
+in: find_seeing
 find: .then_with(|| one.skill.layout.cmp(&other.skill.layout))
 replace:
 caught-by:
-    cineris-ext::it skills::one_name_is_one_skill_the_projects_first_then_cineris_agents_claude
+    cineris-ext skills::tests::one_name_is_one_skill_the_projects_first_then_cineris_agents_claude
 
 [break] skills-past-the-cap-are-listed
 rule: At most 100 skills are listed; the rest are counted.
 file: crates/cineris-ext/src/skills.rs
-in: find
+in: find_seeing
 find: skills.truncate(MAX_SKILLS);
 replace:
 caught-by:
-    cineris-ext::it skills::past_a_hundred_skills_the_rest_are_counted_and_not_listed
+    cineris-ext skills::tests::past_a_hundred_skills_the_rest_are_counted_and_not_listed
 
 [break] the-cap-on-skills-is-not-a-hundred
 rule: The cap on the skills listed is 100.
@@ -156,46 +156,50 @@ file: crates/cineris-ext/src/skills.rs
 find: pub const MAX_SKILLS: usize = 100;
 replace: pub const MAX_SKILLS: usize = 101;
 caught-by:
-    cineris-ext::it skills::past_a_hundred_skills_the_rest_are_counted_and_not_listed
+    cineris-ext skills::tests::past_a_hundred_skills_the_rest_are_counted_and_not_listed
 
 [break] a-users-skill-is-shown-with-its-home-written-out
 rule: A user's skill is shown under `~`, never with the home directory written out.
 file: crates/cineris-ext/src/skills.rs
 in: Places::show
-find: self.home.as_deref().and_then(below)
+find: self.home().and_then(below)
 replace: None::<&Path>.and_then(below)
 caught-by:
-    cineris-ext::it skills::skills_are_found_one_level_down_in_every_root_and_listed_by_name
+    cineris-ext skills::tests::skills_are_found_one_level_down_in_every_root_and_listed_by_name
 
 [break] white-space-is-not-made-one-space
 rule: A line break, a tab or any other white space in a name or a description becomes one space.
-file: crates/cineris-ext/src/skills.rs
+file: crates/cineris-base/src/visible.rs
 in: one_line
 find: character.is_whitespace()
 replace: character == ' '
+packages: cineris-base,cineris-ext
 caught-by:
-    cineris-ext skills::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
-    cineris-ext::it skills::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
+    cineris-base visible::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
+    cineris-ext skills::tests::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
 
 [break] what-acts-unseen-stays-in
 rule: Control characters and format characters (the bidirectional controls, the zero-width characters, U+FEFF) are taken out of a name and a description.
-file: crates/cineris-ext/src/skills.rs
+file: crates/cineris-base/src/visible.rs
 in: one_line
 find: } else if !acts_unseen(character) {
 replace: } else {
+packages: cineris-base,cineris-ext,cineris-agent
 caught-by:
-    cineris-ext skills::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
-    cineris-ext::it skills::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
+    cineris-base visible::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
+    cineris-ext skills::tests::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
+    cineris-agent context::prompt::tests::what_acts_unseen_is_taken_out_of_a_description_and_a_text
 
 [break] a-long-text-is-not-cut
 rule: A name is cut to 64 bytes and a description to 300.
-file: crates/cineris-ext/src/skills.rs
+file: crates/cineris-base/src/visible.rs
 in: one_line
 find: out.len() <= max_bytes
 replace: true
+packages: cineris-base,cineris-ext
 caught-by:
-    cineris-ext skills::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
-    cineris-ext::it skills::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
+    cineris-base visible::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
+    cineris-ext skills::tests::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
 
 [break] the-description-cap-is-not-300
 rule: A description is cut to 300 bytes.
@@ -203,17 +207,18 @@ file: crates/cineris-ext/src/skills.rs
 find: pub const MAX_DESCRIPTION_BYTES: usize = 300;
 replace: pub const MAX_DESCRIPTION_BYTES: usize = 301;
 caught-by:
-    cineris-ext::it skills::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
+    cineris-ext skills::tests::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
 
 [break] a-cut-falls-inside-a-character
 rule: A cut falls between two characters, never inside one.
-file: crates/cineris-ext/src/skills.rs
+file: crates/cineris-base/src/visible.rs
 in: one_line
-find: truncate_bytes(&out, room)
+find: crate::text::truncate_bytes(&out, room)
 replace: (&*String::from_utf8_lossy(&out.as_bytes()[..room]))
+packages: cineris-base,cineris-ext
 caught-by:
-    cineris-ext skills::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
-    cineris-ext::it skills::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
+    cineris-base visible::tests::one_line_takes_out_what_acts_unseen_and_cuts_at_an_edge
+    cineris-ext skills::tests::names_and_descriptions_are_one_line_with_nothing_unseen_and_cut_at_an_edge
 
 [break] an-unclosed-block-is-front-matter
 rule: Front matter is closed by a `---` or `...` line; a block never closed is none, and its file is left out.
@@ -224,7 +229,7 @@ occurrence: 2
 replace: Some(Self { fields: fields_of(&body) })
 caught-by:
     cineris-ext skills::tests::what_is_and_is_not_front_matter
-    cineris-ext::it skills::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
+    cineris-ext skills::tests::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
 
 [break] a-later-key-is-kept-too
 rule: A key given twice keeps its first value, once.
@@ -243,7 +248,7 @@ find: Some('|' | '>') if block_header(first) => block(first, more)
 replace: Some('|' | '>') if false => block(first, more)
 caught-by:
     cineris-ext skills::tests::blocks_keep_or_fold_their_lines
-    cineris-ext::it skills::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
+    cineris-ext skills::tests::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
 
 [break] quotes-are-kept
 rule: A value in quotes is read without them.
@@ -253,7 +258,7 @@ find: Some(quote @ ('"' | '\'')) => quoted(&first[1..], more, quote)
 replace: Some('"' | '\'') => plain(first, more)
 caught-by:
     cineris-ext skills::tests::quoted_values_in_both_quotes_and_over_lines
-    cineris-ext::it skills::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
+    cineris-ext skills::tests::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
 
 [break] escapes-are-not-read
 rule: In a `"` string, the escapes are read.
@@ -263,7 +268,7 @@ find: '\\' if quote == '"' => escape(&mut chars, &mut out)
 replace: '\\' if false => escape(&mut chars, &mut out)
 caught-by:
     cineris-ext skills::tests::quoted_values_in_both_quotes_and_over_lines
-    cineris-ext::it skills::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
+    cineris-ext skills::tests::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
 
 [break] a-comment-stays-in-a-plain-value
 rule: A comment (` #` and what follows) is not part of a plain value.
@@ -281,7 +286,7 @@ in: render
 find: text.len() + 1 + line.len() > room
 replace: false
 caught-by:
-    cineris-ext::it skills::the_index_keeps_within_its_cap_and_counts_what_it_leaves_out
+    cineris-ext skills::tests::the_index_keeps_within_its_cap_and_counts_what_it_leaves_out
 
 [break] the-index-does-not-count-what-it-leaves-out
 rule: Section 6's list says how many skills it does not list.
@@ -290,5 +295,5 @@ in: render
 find: index.not_listed > 0
 replace: false
 caught-by:
-    cineris-ext::it skills::the_index_keeps_within_its_cap_and_counts_what_it_leaves_out
-    cineris-ext::it skills::past_a_hundred_skills_the_rest_are_counted_and_not_listed
+    cineris-ext skills::tests::the_index_keeps_within_its_cap_and_counts_what_it_leaves_out
+    cineris-ext skills::tests::past_a_hundred_skills_the_rest_are_counted_and_not_listed
