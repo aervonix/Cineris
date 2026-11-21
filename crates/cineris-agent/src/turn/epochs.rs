@@ -205,6 +205,42 @@ async fn summarize(
     }
 }
 
+/// A summary's `compaction.before` hooks, matched and given their input,
+/// ready to be asked.
+struct CompactionAsk {
+    set: crate::hooks::LoopHooks,
+    matched: Vec<Arc<dyn crate::hooks::Hook>>,
+    input: crate::hooks::HookInput,
+}
+
+impl CompactionAsk {
+    /// Asks them: what they add to the summary's instructions, and which
+    /// failed.
+    async fn run(self) -> crate::hooks::Added {
+        let heard = crate::hooks::ask_all(&self.set, self.matched, self.input).await;
+        crate::hooks::added(crate::hooks::HookEvent::CompactionBefore, heard)
+    }
+}
+
+/// Adds what `compaction.before` hooks gave to a summary request's
+/// instructions, its last message, each under a line that names its hook.
+fn add_instructions(request: &mut ModelRequest, added: &[(String, String)]) {
+    if added.is_empty() {
+        return;
+    }
+    let text = crate::hooks::summary_instructions(added);
+    if let Some(message) = request.messages.last_mut() {
+        let last_text = message.parts.iter_mut().rev().find_map(|part| match part {
+            Part::Text(part) => Some(part),
+            _ => None,
+        });
+        match last_text {
+            Some(part) => part.text.push_str(&text),
+            None => message.parts.push(Part::text(text.trim_start())),
+        }
+    }
+}
+
 /// The stop reason a summary's outcome stands for, for its record.
 fn stop_of(outcome: &Result<Written, ErrorData>) -> StopReason {
     match outcome {
@@ -1299,6 +1335,59 @@ impl Session {
         out
     }
 
+    /// The summary's `compaction.before` hooks, if any hook is on the
+    /// event: asked before the summary is requested. `None` passes the
+    /// point at once.
+    fn compaction_ask(
+        &self,
+        turn: &Turn,
+        trigger: crate::hooks::CompactionTrigger,
+        focus: Option<&str>,
+    ) -> Option<CompactionAsk> {
+        let event = crate::hooks::HookEvent::CompactionBefore;
+        let set = self
+            .env
+            .hooks
+            .as_ref()
+            .filter(|set| set.hooks.wants(event, None))?
+            .clone();
+        let matched = set.hooks.matching(event, None);
+        let input = crate::hooks::HookInput::new(
+            event,
+            self.shared.info.id.clone(),
+            turn.id.clone(),
+            self.env.workspace.paths.root().clone(),
+            crate::hooks::HookSubject::Compaction {
+                trigger,
+                focus: focus.map(str::to_owned),
+            },
+        );
+        Some(CompactionAsk {
+            set,
+            matched,
+            input,
+        })
+    }
+
+    /// Asks a compaction's `compaction.before` hooks, waited for: what they
+    /// add to the summary's instructions. A hook that fails is shown to the
+    /// user and adds nothing. `None` when the turn was interrupted meanwhile.
+    async fn compaction_hooks(
+        &mut self,
+        turn: &Turn,
+        trigger: crate::hooks::CompactionTrigger,
+        focus: Option<&str>,
+    ) -> Option<Vec<(String, String)>> {
+        let Some(ask) = self.compaction_ask(turn, trigger, focus) else {
+            return Some(Vec::new());
+        };
+        let added = turn.cancel.race(ask.run()).await?;
+        for failed in added.failed {
+            self.notify(turn, Notice::Info(InfoNotice { message: failed }));
+        }
+        Some(added.texts)
+    }
+
     /// Starts a summary in the background, when the settings allow one and
     /// none is under way or ready.
     pub(super) fn start_background(&mut self, turn: &Turn) {
@@ -1318,13 +1407,17 @@ impl Session {
         }
         let covered = self.context.history.len();
         let (role, model) = self.summary_model();
-        let request = self.summary_request(&model, &role, covered, None);
-        let bytes = request_bytes(&request);
+        let mut request = self.summary_request(&model, &role, covered, None);
+        let mut bytes = request_bytes(&request);
         let (window, _, _) = self.summary_limit(&model);
         let cancel = self.shared.cancel.child();
         let token = cancel.clone();
         let client = Arc::clone(&model.client);
         let started_in = turn.id.clone();
+        // Its `compaction.before` hooks are asked on its own task, before
+        // it is requested: the turn goes on meanwhile.
+        let asked = self.compaction_ask(turn, crate::hooks::CompactionTrigger::Background, None);
+        let emitter = Arc::clone(&self.env.emitter);
         let span = tracing::info_span!(
             "request",
             role = %role,
@@ -1334,6 +1427,21 @@ impl Session {
         );
         let handle = tokio::spawn(tracing::Instrument::instrument(
             async move {
+                // Stopped meanwhile, the summary below is stopped too.
+                if let Some(asked) = asked
+                    && let Some(added) = token.race(asked.run()).await
+                {
+                    for failed in added.failed {
+                        emitter.emit(
+                            Some(&started_in),
+                            Event::Notice(Notice::Info(InfoNotice { message: failed })),
+                        );
+                    }
+                    if !added.texts.is_empty() {
+                        add_instructions(&mut request, &added.texts);
+                        bytes = request_bytes(&request);
+                    }
+                }
                 let (outcome, usage, attempts) = summarize(client, request, token).await;
                 tracing::Span::current().record("attempts", attempts);
                 Summarized {
@@ -1634,11 +1742,22 @@ impl Session {
     )]
     pub(super) async fn compacting(&mut self, turn: &mut Turn, prep: Prep) -> Phase {
         self.enter(TurnState::Compacting);
+        let trigger = if prep.overflowed {
+            crate::hooks::CompactionTrigger::Overflow
+        } else if self.manual || prep.only {
+            crate::hooks::CompactionTrigger::Manual
+        } else {
+            crate::hooks::CompactionTrigger::Threshold
+        };
         self.manual = false;
         let focus = self
             .manual_focus
             .take()
             .filter(|focus| !focus.trim().is_empty());
+        // What the `compaction.before` hooks add to the summary's
+        // instructions: asked once, before the first summary this compaction
+        // requests, and kept for any it requests again.
+        let mut instructions: Option<Vec<(String, String)>> = None;
         let notice = |state, message: String, before: Option<u64>, after: Option<u64>| {
             Notice::Compaction(CompactionNotice {
                 message,
@@ -1725,6 +1844,15 @@ impl Session {
             let (covered, outcome, from_background) = match attempt.take() {
                 Some(taken) => taken,
                 None => {
+                    if instructions.is_none() {
+                        match self
+                            .compaction_hooks(turn, trigger, focus.as_deref())
+                            .await
+                        {
+                            Some(added) => instructions = Some(added),
+                            None => return Phase::Interrupted(None),
+                        }
+                    }
                     let messages = self.covered_now();
                     let cover = Cover {
                         messages,
@@ -1748,7 +1876,9 @@ impl Session {
                         );
                         return self.limit_reached(turn, &reached).await;
                     }
-                    let request = self.summary_request(&model, &role, messages, focus.as_deref());
+                    let mut request =
+                        self.summary_request(&model, &role, messages, focus.as_deref());
+                    add_instructions(&mut request, instructions.as_deref().unwrap_or_default());
                     let bytes = request_bytes(&request);
                     let (window, _, _) = self.summary_limit(&model);
                     let client = Arc::clone(&model.client);

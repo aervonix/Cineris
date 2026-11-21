@@ -1160,6 +1160,9 @@ pub struct ApprovalRequest {
     /// The `tool.before` hooks that put the question (since step 28): each
     /// that answered `ask`, with its reason. A hook only narrows, so it may
     /// put a question about a call the rules alone would have allowed.
+    /// `reasons` holds a line for each as well
+    /// ([`HookReason::asking_line`]), and one for `replaced`
+    /// ([`ReplacedArguments::reason_line`]), for a client that reads neither.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hooks: Vec<HookReason>,
     /// The arguments a hook put in place of the model's (since step 28),

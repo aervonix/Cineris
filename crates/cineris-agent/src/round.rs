@@ -104,7 +104,8 @@ use std::time::Duration;
 
 use cineris_base::{AbsPath, CancelToken, IdCounter, SharedClock};
 use cineris_protocol::event::{
-    Delta, Event, ItemCompleted, ItemDelta, ItemKind, ItemRef, ItemStarted, TextDelta,
+    Delta, Event, InfoNotice, ItemCompleted, ItemDelta, ItemKind, ItemRef, ItemStarted, Notice,
+    TextDelta,
 };
 use cineris_protocol::item::{HookReason, ReplacedArguments, ToolOutcome, ToolResultItem};
 use cineris_protocol::{CallId, Item, ItemId, Part, SessionId, TurnId};
@@ -165,6 +166,9 @@ pub(crate) enum Report {
         result: ToolResult,
         duration: Duration,
         stat: ToolStatOutcome,
+        /// What its `tool.after` hooks add to its result, after the output
+        /// policy: each note under a line that names its hook.
+        notes: Vec<Part>,
     },
 }
 
@@ -597,6 +601,7 @@ impl Round {
                     .await,
                     duration: Duration::ZERO,
                     stat: ToolStatOutcome::Failed,
+                    notes: Vec::new(),
                 },
             };
             // The round is gone only when the session is: nobody is left
@@ -617,6 +622,7 @@ impl Round {
                 result: bound(result, &tool, &cx).await,
                 duration: Duration::ZERO,
                 stat,
+                notes: Vec::new(),
             }
         });
     }
@@ -855,7 +861,8 @@ impl Round {
                 result,
                 duration,
                 stat,
-            } => self.finished(token, result, duration, stat),
+                notes,
+            } => self.finished(token, result, duration, stat, notes),
         }
     }
 
@@ -1098,6 +1105,7 @@ impl Round {
         result: ToolResult,
         duration: Duration,
         stat: ToolStatOutcome,
+        notes: Vec<Part>,
     ) {
         debug_assert!(result.is_bounded(), "every result passes the output policy");
         let turn_stop = result.turn_stop().map(str::to_owned);
@@ -1126,7 +1134,7 @@ impl Round {
             {
                 self.changes += 1;
             }
-            let item = self.item(
+            let mut item = self.item(
                 &call.item_id,
                 &call.call_id,
                 &call.name,
@@ -1134,6 +1142,8 @@ impl Round {
                 duration,
                 call.replaced(),
             );
+            // What its `tool.after` hooks added, after the tool's own.
+            item.content.extend(notes);
             if !call.shown {
                 self.emit_started(call);
             }
@@ -1166,7 +1176,7 @@ impl Round {
             // response asks for the same call, whose id then replaces the
             // empty one here.
             let cached = &self.cache[position];
-            let item = self.item(
+            let mut item = self.item(
                 &cached.item_id,
                 &CallId::new(""),
                 &cached.name,
@@ -1174,6 +1184,7 @@ impl Round {
                 duration,
                 cached.replaced.as_ref(),
             );
+            item.content.extend(notes);
             self.cache[position].outcome = Some(Outcome {
                 item,
                 stat,
@@ -1483,6 +1494,36 @@ impl Round {
             turn: self.turn.clone(),
             item_id: call.item_id.clone(),
         };
+        // Its `tool.after` hooks, when any is on it: asked once it has run,
+        // before its result is recorded. With none, nothing is kept for
+        // them.
+        let after = self
+            .env
+            .hooks
+            .as_ref()
+            .filter(|set| {
+                set.hooks.wants(
+                    HookEvent::ToolAfter,
+                    Some(ToolTarget::of(&call.name, &call.arguments)),
+                )
+            })
+            .map(|set| After {
+                set: set.clone(),
+                emitter: Arc::clone(&self.env.emitter),
+                session: self.env.session.clone(),
+                turn: self.turn.clone(),
+                root: self.env.workspace.paths.root().clone(),
+                tool: call.name.clone(),
+                call_id: call.call_id.clone(),
+                // What it runs with: a hook's arguments, if they were
+                // allowed.
+                arguments: call
+                    .replaced()
+                    .map_or_else(|| call.arguments.clone(), |replaced| replaced.arguments.clone()),
+                model_arguments: call.arguments.clone(),
+                summary: plan.summary.clone(),
+                effects: plan.effects.clone(),
+            });
         // One call's run: its parent is the span the loop is in, the
         // turn's or the request's (`docs/architecture/02-runtime.md`,
         // "Spans").
@@ -1495,17 +1536,23 @@ impl Round {
                     cineris_base::hook::await_point!(BEFORE_A_CALL_RUNS);
                     let started = clock.monotonic();
                     let result = execute(tool.as_ref(), plan, &cx, &mut out).await;
+                    let duration = clock.monotonic().saturating_sub(started);
                     let stat = match result.outcome() {
                         ToolOutcome::Success => ToolStatOutcome::Ok,
                         ToolOutcome::Denied => ToolStatOutcome::Denied,
                         ToolOutcome::Interrupted => ToolStatOutcome::Interrupted,
                         _ => ToolStatOutcome::Failed,
                     };
+                    let notes = match after {
+                        Some(after) => after.notes(&result, &cx.cancel).await,
+                        None => Vec::new(),
+                    };
                     Report::Finished {
                         token,
                         result,
-                        duration: clock.monotonic().saturating_sub(started),
+                        duration,
                         stat,
+                        notes,
                     }
                 },
                 span,
@@ -1746,6 +1793,64 @@ struct Planning {
     cx: RunCx,
 }
 
+/// A call's `tool.after` hooks, as the task that ran it asks them.
+struct After {
+    set: LoopHooks,
+    emitter: Arc<Emitter>,
+    session: SessionId,
+    turn: TurnId,
+    root: AbsPath,
+    tool: String,
+    call_id: CallId,
+    /// What it ran with.
+    arguments: Json,
+    /// What the model wrote: what the hooks' filters were matched by.
+    model_arguments: Json,
+    summary: String,
+    effects: Vec<Effect>,
+}
+
+impl After {
+    /// Shows the call's result to its hooks, and returns the notes they add
+    /// to it, each under a line that names the hook. A hook that fails is
+    /// shown to the user and adds nothing; an interrupt meanwhile leaves the
+    /// result as it is.
+    async fn notes(self, result: &ToolResult, cancel: &CancelToken) -> Vec<Part> {
+        let target = ToolTarget::of(&self.tool, &self.model_arguments);
+        let matched = self.set.hooks.matching(HookEvent::ToolAfter, Some(target));
+        let input = HookInput {
+            event: HookEvent::ToolAfter,
+            session: self.session.clone(),
+            turn: self.turn.clone(),
+            workspace: self.root.clone(),
+            subject: HookSubject::Ran {
+                tool: self.tool.clone(),
+                call_id: self.call_id.clone(),
+                arguments: self.arguments.clone(),
+                summary: self.summary.clone(),
+                effects: self.effects.clone(),
+                outcome: result.outcome().clone(),
+                result: result.text(),
+            },
+        };
+        let Some(heard) = cancel.race(hooks::ask_all(&self.set, matched, input)).await else {
+            return Vec::new();
+        };
+        let added = hooks::added(HookEvent::ToolAfter, heard);
+        for failed in added.failed {
+            self.emitter.emit(
+                Some(&self.turn),
+                Event::Notice(Notice::Info(InfoNotice { message: failed })),
+            );
+        }
+        added
+            .texts
+            .iter()
+            .map(|(hook, text)| Part::text(hooks::result_note(hook, text)))
+            .collect()
+    }
+}
+
 /// What became of a replacement of a call's arguments on the blocking pool:
 /// the replacement and its plan, the policy's decision of it, and whether
 /// it may be put to the user.
@@ -1804,6 +1909,7 @@ impl Planning {
             result: bound(result, &self.name, &self.cx).await,
             duration: Duration::ZERO,
             stat,
+            notes: Vec::new(),
         }
     }
 

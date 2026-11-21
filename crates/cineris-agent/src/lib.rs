@@ -82,8 +82,8 @@ pub use context::{
 pub use events::EventSink;
 pub use guard::RepetitionLimits;
 pub use hooks::{
-    Hook, HookEvent, HookInput, HookOutcome, HookQuestion, HookSubject, Hooks, LoopHooks,
-    ToolTarget,
+    CompactionTrigger, Hook, HookEvent, HookInput, HookOutcome, HookQuestion, HookSubject, Hooks,
+    LoopHooks, ToolTarget,
 };
 pub use ledger::{Account, CatchUp, Ledger, LimitReached, Spent};
 pub use policy::{AllowAll, Decision, PlannedCall, Policy, Verdict};
