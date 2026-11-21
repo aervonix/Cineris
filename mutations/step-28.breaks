@@ -6960,20 +6960,47 @@ replace: let (reason, was_cut) = cut(text(given)?);
 caught-by:
     hook::answer::tests::a_reasons_line_breaks_are_folded_and_a_contexts_kept
 
-[break] a-prompts-sender-is-kept-after-it-is-recorded
-rule: Who sent a prompt is kept only until the prompt is recorded or given back (M5).
+[break] a-prompts-sender-is-kept-after-it-is-settled
+rule: Who sent a prompt is kept by its ticket only until the loop says the prompt is settled: recorded, or handed back undelivered (M5).
 file: crates/cineris-core/src/events.rs
-in: SessionSink::emit
-find: let _ = self.sender_of(&message.parts);
-replace:
+in: SessionSink::prompt_settled
+find: let _ = self.forget(ticket);
+replace: let _ = ticket;
 caught-by:
-    events::tests::a_prompts_sender_is_let_go_as_it_is_recorded_and_the_running_turn_is_known
+    events::tests::a_prompts_sender_is_let_go_as_it_is_settled_and_the_running_turn_is_known
+
+[break] a-prompt-given-backs-sender-is-kept
+rule: Who sent a prompt given back is let go as it is given back.
+file: crates/cineris-core/src/events.rs
+in: SessionSink::forget
+find: senders.remove(at).map(|(_, client)| client)
+replace: senders.get(at).map(|(_, client)| *client)
+caught-by:
+    events::tests::a_prompts_sender_is_let_go_as_it_is_settled_and_the_running_turn_is_known
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
+
+[break] senders-are-kept-without-bound
+rule: A session keeps the senders of a few prompts at most: a prompt the loop lets go of untold is not kept for ever.
+file: crates/cineris-core/src/events.rs
+in: SessionSink::sent_by
+find: if senders.len() == SENDERS_KEPT {
+replace: if false {
+caught-by:
+    events::tests::a_prompts_sender_is_let_go_as_it_is_settled_and_the_running_turn_is_known
+
+[break] a-session-with-no-prompt-hook-keeps-senders
+rule: Who sent a prompt is noted only where a `prompt.submit` hook could refuse it: a session with none hands the loop no ticket (M5).
+file: crates/cineris-core/src/core.rs
+find: .wants_prompt().then(|| live.sink.sent_by(client.0))
+replace: .wants_prompt().then_some(()).or(Some(())).map(|()| live.sink.sent_by(client.0))
+caught-by:
+    cineris-core::it hook_wiring::an_untrusted_projects_refused_entries_change_nothing
 
 [break] a-prompts-sender-is-not-noted
 rule: Who sent a prompt is noted where a `prompt.submit` hook could refuse it, so that it is given back whole to its sender alone.
 file: crates/cineris-core/src/core.rs
-find: if live.command_hooks.wants_prompt() {
-replace: if false {
+find: .wants_prompt().then(|| live.sink.sent_by(client.0))
+replace: .wants_prompt().then(|| live.sink.sent_by(client.0)).filter(|_| false)
 caught-by:
     cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
 

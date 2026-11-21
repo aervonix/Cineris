@@ -588,13 +588,20 @@ pub(crate) struct SessionSink {
     /// Who sent the prompts the loop may give back, the latest last: a
     /// prompt a hook refused (`prompt_returned`) is given back whole only
     /// to the client that sent it, since it may have been refused for
-    /// holding a secret (the early review of the hook seam, L4).
-    senders: Mutex<VecDeque<(u64, Vec<Part>)>>,
+    /// holding a secret (the early review of the hook seam, L4). Each is
+    /// kept by the ticket its prompt was handed to the loop with
+    /// (`SessionHandle::prompt_with`), as `(ticket, client)`.
+    senders: Mutex<VecDeque<(u64, u64)>>,
+    /// The tickets handed out so far.
+    tickets: std::sync::atomic::AtomicU64,
 }
 
-/// The most prompts whose senders a session keeps: each is let go when
-/// its prompt is given back, and the oldest when there are more.
-const SENDERS_KEPT: usize = 32;
+/// The most prompts whose senders a session keeps. Each is let go when its
+/// prompt is recorded or given back, when the loop refuses it, or when the
+/// session closes; the oldest when there are more, since a prompt the loop
+/// lets go of otherwise is never told of (the review of step 28's second
+/// pull request, M5).
+const SENDERS_KEPT: usize = 8;
 
 impl SessionSink {
     /// The sink of `session`, with nobody subscribed.
@@ -606,6 +613,7 @@ impl SessionSink {
             last: Mutex::default(),
             running: Mutex::default(),
             senders: Mutex::default(),
+            tickets: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -614,23 +622,41 @@ impl SessionSink {
         lock(&self.running).clone()
     }
 
-    /// Notes that `client` sent the prompt `parts`, for the loop's giving it
-    /// back, should a hook refuse it. Only when a `prompt.submit` hook is
-    /// there to refuse it, and let go as it is given back or recorded.
-    pub(crate) fn sent_by(&self, client: u64, parts: &[Part]) {
+    /// Notes that `client` sent a prompt, for the loop's giving it back,
+    /// should a hook refuse it: the ticket to hand the loop with it. Only
+    /// where a `prompt.submit` hook could refuse it.
+    pub(crate) fn sent_by(&self, client: u64) -> u64 {
+        let ticket = self
+            .tickets
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         let mut senders = lock(&self.senders);
         if senders.len() == SENDERS_KEPT {
             senders.pop_front();
         }
-        senders.push_back((client, parts.to_vec()));
+        senders.push_back((ticket, client));
+        ticket
     }
 
-    /// Who sent the prompt `parts`, let go as it is told: the earliest
-    /// still kept. `None` when it is not known.
-    fn sender_of(&self, parts: &[Part]) -> Option<u64> {
+    /// Lets the sender of the prompt of `ticket` go: who it was, if it was
+    /// still kept.
+    pub(crate) fn forget(&self, ticket: u64) -> Option<u64> {
         let mut senders = lock(&self.senders);
-        let at = senders.iter().position(|(_, sent)| sent == parts)?;
-        senders.remove(at).map(|(client, _)| client)
+        let at = senders.iter().position(|(kept, _)| *kept == ticket)?;
+        senders.remove(at).map(|(_, client)| client)
+    }
+
+    /// Lets every sender go: what the session's close does.
+    pub(crate) fn forget_all(&self) {
+        lock(&self.senders).clear();
+    }
+
+    /// The tickets handed out so far, and the senders kept now.
+    pub(crate) fn tickets(&self) -> (u64, usize) {
+        (
+            self.tickets.load(std::sync::atomic::Ordering::Relaxed),
+            lock(&self.senders).len(),
+        )
     }
 
     /// Adds a client's queue, under the client's number. A client is added
@@ -722,19 +748,13 @@ impl EventSink for SessionSink {
                 _ => {}
             }
         }
-        // A prompt recorded is given back no more: who sent it is let go.
-        if let Event::ItemCompleted(completed) = &event.event
-            && let Item::UserMessage(message) = &completed.item
-        {
-            let _ = self.sender_of(&message.parts);
-        }
         // A prompt given back reaches its sender whole, and every other
         // client without the prompt: its `seq` is every client's, so none
         // sees a gap. One whose sender is not known reaches nobody whole.
         if let Event::Notice(cineris_protocol::event::Notice::PromptReturned(returned)) =
             &event.event
         {
-            let sender = self.sender_of(&returned.parts);
+            let sender = returned.ticket.and_then(|ticket| self.forget(ticket));
             let mut without = event.clone();
             if let Event::Notice(cineris_protocol::event::Notice::PromptReturned(returned)) =
                 &mut without.event
@@ -757,6 +777,12 @@ impl EventSink for SessionSink {
             }
             last.push(event);
         }
+    }
+
+    /// The prompt of `ticket` was recorded, or handed back undelivered:
+    /// who sent it is let go.
+    fn prompt_settled(&self, ticket: u64) {
+        let _ = self.forget(ticket);
     }
 }
 
@@ -1280,29 +1306,25 @@ mod tests {
         assert_eq!(queued.len(), 1, "merged: {queued:?}");
     }
 
-    /// Who sent a prompt is kept only until the prompt is recorded or given
-    /// back (the review of step 28's second pull request, M5); and the turn
-    /// running is known from its start to its end.
+    /// Who sent a prompt is kept by its ticket only until the prompt is
+    /// settled, and a few at most (the review of step 28's second pull
+    /// request, M5); and the turn running is known from its start to its
+    /// end.
     #[test]
-    fn a_prompts_sender_is_let_go_as_it_is_recorded_and_the_running_turn_is_known() {
+    fn a_prompts_sender_is_let_go_as_it_is_settled_and_the_running_turn_is_known() {
         let sink = SessionSink::new(SessionId::new("s_1"));
-        let prompt = vec![Part::text("the code is 1234")];
-        sink.sent_by(7, &prompt);
+        let ticket = sink.sent_by(7);
+        sink.prompt_settled(ticket);
+        assert_eq!(sink.forget(ticket), None, "kept after it was settled");
+        for client in 0..20 {
+            sink.sent_by(client);
+        }
+        assert_eq!(sink.tickets(), (21, SENDERS_KEPT));
+        sink.forget_all();
+        assert_eq!(sink.tickets().1, 0);
         assert_eq!(sink.running_turn(), None);
         sink.emit(event(1, Event::TurnStarted(TurnStarted {})));
         assert_eq!(sink.running_turn(), Some(TurnId::new("t_1")));
-        sink.emit(event(
-            2,
-            Event::ItemCompleted(ItemCompleted {
-                item: Item::UserMessage(cineris_protocol::item::UserMessageItem {
-                    id: ItemId::new("i_1"),
-                    parts: prompt.clone(),
-                    delivery: None,
-                    created_at: None,
-                }),
-            }),
-        ));
-        assert_eq!(sink.sender_of(&prompt), None, "kept after it was recorded");
         sink.emit(event(
             3,
             Event::TurnCompleted(cineris_protocol::event::TurnCompleted {

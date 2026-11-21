@@ -1149,6 +1149,9 @@ impl Core {
         if let Some(task) = task {
             let _ = task.await;
         }
+        // Who sent its prompts is let go: a prompt waiting as it closes is
+        // never told of.
+        live.sink.forget_all();
         // What of its hooks still runs is stopped and waited for, then its
         // `session.end` hooks are given up to five seconds, before the
         // close's look at the protected paths (step 28).
@@ -1754,13 +1757,26 @@ impl Core {
                 }
                 // Refused with `history_changing` while a rewind is under
                 // way, under the session's own lock. Who sent it is noted
-                // first: a hook may refuse it and give it back.
+                // first, by a ticket the loop carries with the prompt, where
+                // a `prompt.submit` hook may refuse it and give it back; let
+                // go when the loop refuses it (the review of step 28's second
+                // pull request, M5).
                 #[cfg(feature = "scripts")]
-                if live.command_hooks.wants_prompt() {
-                    live.sink.sent_by(client.0, &params.input);
+                let ticket = live
+                    .command_hooks
+                    .wants_prompt()
+                    .then(|| live.sink.sent_by(client.0));
+                #[cfg(not(feature = "scripts"))]
+                let ticket = None;
+                let result = live
+                    .handle
+                    .prompt_with(params.input, params.delivery, ticket);
+                if result.is_err()
+                    && let Some(ticket) = ticket
+                {
+                    let _ = live.sink.forget(ticket);
                 }
-                let result = live.handle.prompt(params.input, params.delivery)?;
-                Ok(OpResult::TurnStart(result))
+                Ok(OpResult::TurnStart(result?))
             }
             Op::TurnInterrupt(params) => {
                 let live = self.open_for(client, &params.session_id)?;
