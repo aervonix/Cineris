@@ -23,7 +23,7 @@ use serde_json::{Value, json};
 use crate::{Front, HOOK, World};
 
 /// This test binary as a hook's program in `mode`, then `args`.
-fn this_binary(mode: &str, args: &[&str]) -> Vec<String> {
+pub(crate) fn this_binary(mode: &str, args: &[&str]) -> Vec<String> {
     let program = std::env::current_exe().expect("the test binary has a path");
     std::iter::once(program.display().to_string())
         .chain(
@@ -37,7 +37,7 @@ fn this_binary(mode: &str, args: &[&str]) -> Vec<String> {
 
 /// The `[hooks.<name>]` entry of a hook on `event` that runs `command`,
 /// with `extra` keys.
-fn entry(name: &str, event: &str, command: &[String], extra: &str) -> String {
+pub(crate) fn entry(name: &str, event: &str, command: &[String], extra: &str) -> String {
     let words: Vec<String> = command.iter().map(|word| format!("'{word}'")).collect();
     format!(
         "[hooks.{name}]\nevent = \"{event}\"\ncommand = [{}]\n{extra}\n",
@@ -50,7 +50,7 @@ fn entry(name: &str, event: &str, command: &[String], extra: &str) -> String {
 /// nothing of the binary's on the script's standard output; and then
 /// answers `answer`. A `.cmd` on Windows, a shell script elsewhere. Its
 /// path.
-fn script(dir: &Path, name: &str, report: Option<&Path>, answer: &str) -> PathBuf {
+pub(crate) fn script(dir: &Path, name: &str, report: Option<&Path>, answer: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let exe = std::env::current_exe().expect("the test binary has a path");
     #[cfg(windows)]
@@ -100,24 +100,41 @@ fn for_edit(paths: &[&str]) -> HookRun {
     }
 }
 
-/// The answer of a hook that answered.
-fn answered(outcome: &HookOutcome) -> &Value {
-    let HookOutcome::Answered(answer) = outcome else {
-        panic!("the hook did not answer: {outcome:?}");
-    };
-    answer
-}
-
-/// Every start shape in one session: a hook that gates is given its
-/// placeholders as whole arguments (`{path}` once for each file by place,
-/// resolved and plain), the event on its standard input and no provider's
-/// key, and its `deny` is read; one that replaces the arguments has them
-/// read; one that exits with an error has failed, saying what it wrote to
-/// standard error; and one that runs past its time on the session's clock
-/// is killed, and has failed.
+/// Every start shape, as turns of one session, the loop running each hook
+/// at its `tool.before` point:
+///
+/// - a hook that gates is given its placeholders as whole arguments
+///   (`{path}` once for each file by place, resolved and plain), the event
+///   on its standard input and no provider's key, and its `deny` refuses the
+///   call;
+/// - one that replaces the arguments has its replacement put to the user,
+///   allowed once, and run;
+/// - one that exits with an error has failed, which refuses the call;
+/// - one that runs past its time on the session's clock is killed, and
+///   refuses the call;
+/// - a replacement that would write a protected path (`.git/config`) is
+///   refused before anyone is asked (`check_replacement`).
 #[test]
 fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
-    let world = World::new("hook_shapes", []);
+    let world = World::new(
+        "hook_shapes",
+        [
+            crate::calls(&[(
+                "c1",
+                "edit",
+                json!({"path": "src/a.rs", "edits": [{"old": "fn", "new": "pub fn"}]}),
+            )]),
+            crate::says("Done."),
+            crate::calls(&[("c2", "read", json!({"path": "src/a.rs"}))]),
+            crate::says("Done."),
+            crate::calls(&[("c3", "list", json!({"path": "."}))]),
+            crate::says("Done."),
+            crate::calls(&[("c4", "search", json!({"pattern": "main"}))]),
+            crate::says("Done."),
+            crate::calls(&[("c5", "write", json!({"path": "notes.txt", "content": "x"}))]),
+            crate::says("Done."),
+        ],
+    );
     let tools = world.dir.join("hooks");
     let report = world.dir.join("report.json");
     let gate = script(
@@ -126,11 +143,12 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
         Some(&report),
         r#"{"decision":"deny","reason":"generated"}"#,
     );
-    let swap = script(
+    let swap = script(&tools, "swap", None, r#"{"arguments":{"path":"src/b.rs"}}"#);
+    let to_config = script(
         &tools,
-        "swap",
+        "to-config",
         None,
-        r#"{"arguments":{"command":"echo replaced"}}"#,
+        r#"{"arguments":{"path":".git/config","content":"[core]"}}"#,
     );
     let gate_command: Vec<String> = [gate.display().to_string()]
         .into_iter()
@@ -138,38 +156,50 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
         .collect();
     world.user_config(
         &[
-            entry("gate", "tool.before", &gate_command, ""),
-            entry("swap", "tool.before", &[swap.display().to_string()], ""),
-            entry("broken", "turn.end", &this_binary("fail", &[]), ""),
+            entry("gate", "tool.before", &gate_command, "tools = [\"edit\"]"),
+            entry(
+                "swap",
+                "tool.before",
+                &[swap.display().to_string()],
+                "tools = [\"read\"]",
+            ),
+            entry(
+                "broken",
+                "tool.before",
+                &this_binary("fail", &[]),
+                "tools = [\"list\"]",
+            ),
             entry(
                 "slow",
                 "tool.before",
                 &this_binary("hang", &[]),
-                "timeout = \"2s\"",
+                "tools = [\"search\"]\ntimeout = \"2s\"",
+            ),
+            entry(
+                "to-config",
+                "tool.before",
+                &[to_config.display().to_string()],
+                "tools = [\"write\"]",
             ),
         ]
         .concat(),
     );
     world.put("src/a.rs", "fn main() {}\n");
+    world.put("src/b.rs", "the replacement's file\n");
     let env = world.shell_env(&[("ANTHROPIC_API_KEY", "sk-test-not-for-hooks")]);
     let core = world.core_with(|options| options.shell_env = Some(env));
     world.run(async {
         let front = Front::start(&world, &core).await;
-        let session = front.session.clone();
+        front.answering(crate::Answering::allow_all());
 
-        // One that gates. The same file named three ways, and on Windows
-        // in another case, is one file, given once.
-        let mut named = vec!["src/a.rs", "./src/a.rs", "src/../src/a.rs"];
-        if cfg!(windows) {
-            named.push("SRC/A.RS");
-        }
-        let ran = core
-            .run_hook_command(&session, "gate", for_edit(&named))
-            .await
-            .unwrap();
-        let answer = answered(&ran);
-        assert_eq!(answer["decision"], "deny");
-        assert_eq!(answer["reason"], "generated");
+        // One that gates. The edit names one file, given once, by place.
+        front.turn("edit it").await;
+        let results = front.results();
+        let (tool, outcome, text) = &results[0];
+        assert_eq!(tool, "edit");
+        assert_eq!(*outcome, "denied", "{text}");
+        assert!(text.contains("generated"), "{text}");
+        assert_eq!(world.read("src/a.rs").as_deref(), Some("fn main() {}\n"));
         let given: Value =
             serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
         let args: Vec<&str> = given["args"]
@@ -196,62 +226,82 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
         ));
         assert_eq!(args[3], "tool.before");
         let stdin: Value = serde_json::from_str(given["stdin"].as_str().unwrap()).unwrap();
-        assert_eq!(stdin, for_edit(&[]).input, "the event on standard input");
+        assert_eq!(stdin["event"], "tool.before");
+        assert_eq!(stdin["tool"], "edit");
+        assert_eq!(stdin["arguments"]["path"], "src/a.rs");
         assert_eq!(
             given["key"],
             Value::Null,
             "no provider's key reaches a hook"
         );
 
-        // One that replaces the arguments.
-        let ran = core
-            .run_hook_command(&session, "swap", for_edit(&[]))
-            .await
-            .unwrap();
-        let answer = answered(&ran);
-        assert_eq!(answer["arguments"], json!({"command": "echo replaced"}));
-        assert_eq!(answer.get("decision"), None);
-
-        // One that fails.
-        let broken = core
-            .run_hook_command(
-                &session,
-                "broken",
-                HookRun {
-                    input: json!({"event": "turn.end"}),
-                    ..HookRun::default()
-                },
-            )
-            .await
-            .unwrap();
+        // One that replaces the arguments: put to the user, allowed once,
+        // and run with the hook's.
+        front.turn("read it").await;
+        let replaced: Vec<_> = front
+            .approvals()
+            .into_iter()
+            .filter(|asked| asked.replaced.is_some())
+            .collect();
+        let [asked] = replaced.as_slice() else {
+            panic!("one question of a replacement: {:?}", front.approvals());
+        };
         assert_eq!(
-            broken,
-            HookOutcome::Failed(
-                "The hook `broken` failed: it exited with 3, saying: the hook went wrong."
-                    .to_owned()
-            )
+            asked.choices,
+            [
+                cineris_protocol::methods::ApprovalChoice::AllowOnce,
+                cineris_protocol::methods::ApprovalChoice::Deny
+            ]
         );
+        assert!(
+            asked.reasons.iter().any(|line| line.contains("swap")),
+            "{:?}",
+            asked.reasons
+        );
+        let results = front.results();
+        let (tool, outcome, text) = &results[1];
+        assert_eq!(tool, "read");
+        assert_eq!(*outcome, "success", "{text}");
+        assert!(text.contains("the replacement's file"), "{text}");
+
+        // One that fails: the call is refused, the failure named.
+        front.turn("list it").await;
+        let results = front.results();
+        let (_, outcome, text) = &results[2];
+        assert_eq!(*outcome, "denied", "{text}");
+        assert!(text.contains("the hook went wrong"), "{text}");
 
         // One that runs past its time: killed when the session's clock
-        // reaches it.
-        let mut slow = std::pin::pin!(core.run_hook_command(&session, "slow", for_edit(&[])));
+        // reaches it, and the call refused.
+        let mut turn = std::pin::pin!(front.turn("search it"));
         let mut its_time = std::pin::pin!(async {
             world.timer.sleeping_for(Duration::from_secs(2)).await;
             world.timer.advance(Duration::from_secs(2));
         });
         let mut advanced = false;
-        let slow = std::future::poll_fn(|context| {
+        std::future::poll_fn(|context| {
             if !advanced {
                 advanced = its_time.as_mut().poll(context).is_ready();
             }
-            slow.as_mut().poll(context)
+            turn.as_mut().poll(context).map(|_| ())
         })
-        .await
-        .unwrap();
-        let HookOutcome::Failed(why) = &slow else {
-            panic!("{slow:?}");
-        };
-        assert!(why.contains("ran past its 2000 ms"), "{why}");
+        .await;
+        let results = front.results();
+        let (_, outcome, text) = &results[3];
+        assert_eq!(*outcome, "denied", "{text}");
+        assert!(text.contains("slow"), "{text}");
+
+        // A replacement that would write `.git/config`: refused, unasked.
+        let asked_before = front.approvals().len();
+        front.turn("write it").await;
+        let results = front.results();
+        let (tool, outcome, text) = &results[4];
+        assert_eq!(tool, "write");
+        assert_eq!(*outcome, "denied", "{text}");
+        assert!(text.contains("protected path"), "{text}");
+        assert_eq!(front.approvals().len(), asked_before, "nobody was asked");
+        assert!(world.read(".git/config").is_none());
+        assert!(world.read("notes.txt").is_none());
         front.close().await;
     });
 }

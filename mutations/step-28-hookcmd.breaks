@@ -163,39 +163,49 @@ caught-by:
 # ------------------------------------------------------------ the answer
 
 [break] an-answer-takes-a-field-its-event-does-not
-rule: An answer is read strictly: a field its event does not take is a failure.
+rule: An answer is read strictly: a field its event does not take is a failure, present as `null` too.
 file: crates/cineris-ext/src/hook/answer.rs
-in: Answer::read
-find: .find(|(field, given)| *given && !takes(event, field))
-replace: .find(|(field, given)| *given && !takes(event, field) && false)
-caught-by:
-    hook::answer::tests::a_field_its_event_does_not_take_is_a_failure
-
-[break] an-answer-takes-a-field-twice
-rule: An answer is read strictly: a field given twice is a failure.
-file: crates/cineris-ext/src/hook/answer.rs
-find: if seen.contains(&key) {
+in: Answer::of
+find: if !takes(event, &field) {
 replace: if false {
 caught-by:
-    hook::answer::tests::an_unknown_field_or_decision_is_a_failure
+    hook::answer::tests::a_field_its_event_does_not_take_is_a_failure_null_or_not
 
 [break] a-prompts-hook-may-ask
 rule: `ask` is a decision of `tool.before` alone.
 file: crates/cineris-ext/src/hook/answer.rs
-in: Answer::read
-find: Some("ask") if event == Event::ToolBefore => Some(Decision::Ask)
-replace: Some("ask") => Some(Decision::Ask)
+in: Answer::of
+find: "ask" if event == Event::ToolBefore => Decision::Ask
+replace: "ask" => Decision::Ask
 caught-by:
     hook::answer::tests::an_unknown_field_or_decision_is_a_failure
 
 [break] an-answer-past-64-kib-is-read
 rule: An answer is at most 64 KiB.
 file: crates/cineris-ext/src/hook/answer.rs
-in: Answer::read
+in: value
 find: if output.len() > MAX_ANSWER {
 replace: if output.len() > MAX_ANSWER * 2 {
 caught-by:
-    hook::answer::tests::an_answer_is_bounded_and_its_context_is_cut
+    hook::answer::tests::an_answer_is_bounded_and_its_texts_are_cut
+
+[break] a-reason-is-kept-whole
+rule: An answer's `reason` is cut to 8 KiB, as its `context` is.
+file: crates/cineris-ext/src/hook/answer.rs
+in: Answer::of
+find: let (reason, was_cut) = cut(text(given)?);
+replace: let (reason, was_cut) = (text(given)?, false);
+caught-by:
+    hook::answer::tests::an_answer_is_bounded_and_its_texts_are_cut
+
+[break] a-key-the-hook-wrote-is-quoted-raw
+rule: A failure quotes a key the hook wrote only as code, cut.
+file: crates/cineris-ext/src/hook/answer.rs
+in: StrictValue::visit_map
+find: shown(&key)
+replace: key
+caught-by:
+    hook::answer::tests::a_key_the_hook_wrote_is_quoted_as_code_and_cut
 
 # ------------------------------------------------- the core: the hooks
 
@@ -282,11 +292,11 @@ caught-by:
     ext::hook_command::tests::a_hooks_start_follows_the_engine_and_a_project_never_passes_a_question
 
 [break] the-managed-ask-is-not-looked-for
-rule: Whether a managed `ask` rule is among the reasons is asked of the engine for each start.
+rule: Whether a managed `ask` rule is among the reasons is read from the one answer of the engine each start has.
 file: crates/cineris-core/src/ext/hook_command.rs
 in: decide
-find: if question.managed
-replace: if question.managed && false
+find: (Decision::Ask, question.managed)
+replace: (Decision::Ask, false)
 caught-by:
     cineris-core::it hook_commands::a_users_hook_is_held_back_by_a_deny_or_a_managed_ask
 
@@ -323,8 +333,8 @@ rule: A hook writes nothing where commands are confined unless its entry says `w
 os: linux
 file: crates/cineris-core/src/ext/hook_command.rs
 in: HookCommands::run
-find: write_roots: if hook.write {
-replace: write_roots: if true {
+find: write_roots: if hook.write &&
+replace: write_roots: if true &&
 caught-by:
     cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
 
@@ -342,8 +352,8 @@ rule: `{path}` is the system's plain form of a path, never `\\?\`.
 os: windows
 file: crates/cineris-core/src/ext/hook_command.rs
 in: HookCommands::run
-find: paths.push(path.abs().to_native_string());
-replace: paths.push(path.abs().to_fs_path().display().to_string());
+find: .map(|path| path.abs().to_native_string())
+replace: .map(|path| path.abs().to_fs_path().display().to_string())
 caught-by:
     cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
 
@@ -394,13 +404,14 @@ caught-by:
     cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
 
 [break] a-replacement-holds-a-key-twice
-rule: An answer is read strictly: an object anywhere in its `arguments` that holds a key twice is a failure.
+rule: A hook's answer is one JSON value with no object in it, at any depth, holding a key twice: `{"decision":"deny","decision":"allow"}` is a failure, not an allow.
 file: crates/cineris-ext/src/hook/answer.rs
 in: StrictValue::visit_map
 find: if object.contains_key(&key) {
 replace: if false {
 caught-by:
     hook::answer::tests::an_unknown_field_or_decision_is_a_failure
+    ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
 
 # ------------------------------------- a protected path changed again
 
@@ -420,3 +431,192 @@ find: .is_none_or(|path| !touched.contains(path.key()))
 replace: .is_none_or(|_| false)
 caught-by:
     cineris-core::it hook_commands::confined::sys_a_protected_path_changed_again_after_a_hook_is_found_by_the_next_start_and_the_close
+
+# ---------------------------------------------- round 2: the entry and words
+
+[break] a-tool-name-that-is-an-option-fills-tool
+rule: `{tool}` is filled only with a tool's name: one that begins with `-`, or is not of a name's shape, fails the hook.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::expand
+find: if tool.starts_with('-') || Filter::new(vec![tool.to_owned()]).is_err() {
+replace: if false {
+caught-by:
+    hook::command::tests::the_placeholders_are_filled_from_the_event
+
+[break] a-path-hook-runs-for-a-call-with-no-file
+rule: An entry that uses `{path}` does not run for a call that names no file.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::expand
+find: if self.uses_path() && with.paths.is_empty() {
+replace: if false {
+caught-by:
+    hook::command::tests::the_arguments_are_capped_as_written_and_as_filled
+    cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
+
+[break] a-gating-path-hook-for-every-tool-is-not-warned-of
+rule: A `tool.before` hook that is waited for, uses `{path}` and lists no `tools` is warned of once, as it is read.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::warning
+find: && self.filter.is_every())
+replace: && self.filter.is_every() && false)
+caught-by:
+    hook::command::tests::a_gating_hook_that_relies_on_path_for_every_tool_is_warned_of
+    cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
+
+[break] the-words-leave-out-the-environment
+rule: A hook's words say, before the yes, that it runs with the user's environment, tokens included.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::in_words
+find: words.push(ITS_ENVIRONMENT.to_owned());
+replace:
+caught-by:
+    hook::command::tests::its_words_show_every_text_as_code
+    cineris-core::it hook_wiring::permissions_trust_lists_and_pins_a_projects_hooks
+
+[break] the-words-say-a-hook-writes-nothing
+rule: A hook's words say that without `write` it writes the session's temporary folder alone, and reads what the session's commands may.
+file: crates/cineris-ext/src/hook/command.rs
+in: CommandHook::in_words
+in-string: only the session's temporary folder
+replace: nothing
+caught-by:
+    hook::command::tests::its_words_show_every_text_as_code
+
+# --------------------------------------------- round 2: the core's start
+
+[break] a-file-outside-the-workspace-fills-path
+rule: `{path}` is filled only with files within the workspace, judged by place; the hook is told of none of the others.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: && path.is_inside_workspace()
+replace: && true
+caught-by:
+    cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
+
+[break] a-folder-fills-path
+rule: `{path}` is filled with files, never a folder a listing reads.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: .filter(|path| !is_folder(&path.to_fs_path()))
+replace: .filter(|_| true)
+caught-by:
+    cineris-core::it hook_wiring::a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace
+
+[break] a-hooks-stop-is-not-kept
+rule: A hook whose look stops a turn is told to the user, and the next prompt is refused with it, on any event.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: self.stopped(&hook.name, &note);
+replace:
+caught-by:
+    cineris-core::it hook_wiring::confined::sys_a_hooks_stop_outside_a_turn_is_told_and_refuses_the_next_prompt
+
+[break] a-hooks-stop-is-not-told
+rule: A hook whose look stops a turn is told to the user at once.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::stopped
+find: (self.parts.tell)(format!(
+replace: drop(format!(
+caught-by:
+    cineris-core::it hook_wiring::confined::sys_a_hooks_stop_outside_a_turn_is_told_and_refuses_the_next_prompt
+
+[break] the-next-prompt-is-not-refused-after-a-hooks-stop
+rule: The next prompt after a hook's stop is refused with it, by the harness's own `prompt.submit` hook.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: PointHooks::wants
+find: (event == LoopEvent::PromptSubmit && self.commands.stop_pending())
+replace: (false && self.commands.stop_pending())
+caught-by:
+    cineris-core::it hook_wiring::confined::sys_a_hooks_stop_outside_a_turn_is_told_and_refuses_the_next_prompt
+
+[break] a-refused-entry-lapses
+rule: A hook entry that cannot run is on its event all the same, as a hook that fails: the gate it held does not lapse.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: PointHooks::of
+find: for refused in &hooks.refused {
+replace: for refused in hooks.refused.iter().take(0) {
+caught-by:
+    cineris-core::it hook_wiring::a_refused_gate_holds_its_event_and_a_reload_leaves_it_in_force
+
+[break] a-changed-projects-hook-lapses
+rule: A project's hook approved once and changed since is on its event as a hook that fails.
+file: crates/cineris-core/src/ext/hooks.rs
+in: in_session
+find: refused.push(Refused {
+replace: let _ = (Refused {
+caught-by:
+    ext::hooks::tests::a_projects_hook_runs_only_trusted_and_approved_as_it_is
+
+[break] a-replacement-may-write-a-protected-path
+rule: A replacement whose plan would write a protected path is refused before anyone is asked.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: PointHooks::check_replacement
+find: && let Some(why) = super::protected::refusal(&self.paths, path, &protect)
+replace: && let Some(why) = None::<String>.filter(|_| protect.all && path.data().is_empty())
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] session-start-context-is-not-told
+rule: A `session.start` hook's `context` reaches the model before the first prompt, labelled as the hook's.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: SessionHooks::start
+find: notice(session_notice(&name, &context));
+replace: drop(session_notice(&name, &context));
+caught-by:
+    cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
+
+[break] session-end-hooks-do-not-run
+rule: A session's `session.end` hooks run as it closes.
+file: crates/cineris-core/src/core.rs
+in: Core::end
+find: live.command_hooks.end(live.handle.id(), &self.inner.options.timer).await;
+replace: let _ = &live.command_hooks;
+caught-by:
+    cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
+
+# --------------------------------------- round 2: the question and prompts
+
+[break] a-hooks-question-is-not-put-where-the-rules-allow
+rule: A call a hook asked about, or whose arguments it replaced, is put to the user even where the rules allow it.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: Outcome::Allow { .. } if hooked.is_some() => Question {
+replace: Outcome::Allow { .. } if false && hooked.is_some() => Question {
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+    cineris-core::it hook_wiring::sys_a_replacement_is_answered_by_a_person_and_never_by_a_supervisors_grant
+
+[break] a-hooks-question-has-no-reasons-line
+rule: A hook's question says, in its reasons, which hook asked or replaced the arguments.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: .chain(hooked.map(cineris_agent::HookQuestion::reasons).unwrap_or_default())
+replace:
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] a-supervisor-is-put-a-replacement
+rule: A replacement is put to the session's users alone, never to a supervisor.
+file: crates/cineris-core/src/policy.rs
+in: EnginePolicy::ask_with
+find: if !replaced { return clients; }
+replace: if true { return clients; }
+caught-by:
+    cineris-core::it hook_wiring::sys_a_replacement_is_answered_by_a_person_and_never_by_a_supervisors_grant
+
+[break] a-prompt-given-back-reaches-every-client-whole
+rule: A prompt a hook refused is given back whole only to the client that sent it.
+file: crates/cineris-core/src/events.rs
+in: SessionSink::emit
+find: returned.parts = Vec::new();
+replace:
+caught-by:
+    cineris-core::it hook_wiring::a_prompt_given_back_reaches_only_its_sender_whole
+
+[break] a-prompt-holds-any-part
+rule: A prompt holds text and images only.
+file: crates/cineris-core/src/core.rs
+find: !matches!(part, cineris_protocol::Part::Text(_) | cineris_protocol::Part::Image(_))
+replace: false
+caught-by:
+    cineris-core::it hook_wiring::a_prompt_holds_text_and_images_only

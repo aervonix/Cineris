@@ -50,6 +50,7 @@ mod extensions_trust;
 mod gates;
 mod harness_git;
 mod hook_commands;
+mod hook_wiring;
 mod index;
 mod knowledge;
 mod lifecycle;
