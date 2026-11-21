@@ -645,7 +645,12 @@ fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
 ///   and the programs are said to be confined (the first core test to reach
 ///   that branch);
 /// - such a root in a profile the project defines is warned of too, naming
-///   the profile, in a session opened with none: a yes trusts every profile.
+///   the profile, in a session opened with none: a yes trusts every profile;
+/// - a workspace that holds the harness's own files (here the launcher),
+///   which no entry left out can take away, gets no warning, and the
+///   programs are said not to be confined, as its sessions' commands are
+///   not (since the third security fix only the workspace or the session's
+///   temporary folder can hold them).
 #[test]
 fn the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force() {
     let world = World::new("review_sandbox_by_the_trusted_load", []);
@@ -659,19 +664,29 @@ fn the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force() {
     let in_dev = "This project's configuration asks, in its profile `dev`, to write in `~/.cargo`, \
                   which holds Cineris's own files. That entry is left out, so commands do not \
                   write there, and its sessions with that profile keep the sandbox on.";
-    for (config, said, confined) in [
-        ("[sandbox]\nwrite = [\"~/.cargo\"]\n", Some(warned), true),
-        ("[sandbox]\nwrite = [\"build\"]\n", None, true),
+    let inside = world.workspace.join("tools");
+    std::fs::create_dir_all(&inside).unwrap();
+    std::fs::write(inside.join("cineris"), "the launcher").unwrap();
+    for (config, said, confined, launcher) in [
+        (
+            "[sandbox]\nwrite = [\"~/.cargo\"]\n",
+            Some(warned),
+            true,
+            &bin,
+        ),
+        ("[sandbox]\nwrite = [\"build\"]\n", None, true, &bin),
         (
             "[profiles.dev.sandbox]\nwrite = [\"~/.cargo\"]\n",
             Some(in_dev),
             true,
+            &bin,
         ),
+        ("", None, false, &inside),
     ] {
         world.project_config(config);
         // A core of its own: a not now is the core's for its life.
         let core = world.core_with(|options| {
-            options.launcher = Some((bin.join("cineris"), Vec::new()));
+            options.launcher = Some((launcher.join("cineris"), Vec::new()));
             options.sandbox = Some(cineris_sandbox::support::Support::Landlock(8));
         });
         world.run(async {

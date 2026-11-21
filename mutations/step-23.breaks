@@ -705,7 +705,7 @@ rule: A compaction asked for during a turn's last request runs in a turn of its 
 file: crates/cineris-agent/src/turn.rs
 in: Session::compact_turn
 find: .position(|pending| matches!(pending, Pending::Compact(_)))?;
-replace: .position(|pending| matches!(pending, Pending::Steer(_)))?;
+replace: .position(|pending| matches!(pending, Pending::Steer { .. }))?;
 packages: cineris-agent
 caught-by:
     context::a_compaction_asked_for_during_the_last_request_runs_when_the_turn_ends

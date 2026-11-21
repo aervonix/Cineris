@@ -207,7 +207,9 @@ find:
             self.alive.store(false, Ordering::SeqCst);
         }
 replace:
+        if let After::TornDown = after {
             let _ = &self.alive;
+        }
 caught-by:
     cineris-ext::it engine::a_memory_bomb_is_stopped_by_the_memory_limit
 
@@ -221,6 +223,8 @@ find:
         }
 replace:
         if kind.is_symlink() && false {
+            return Err(FolderError::Link(relative));
+        }
 caught-by:
     cineris-ext::it folder::a_link_anywhere_in_the_folder_refuses_it
 
@@ -469,6 +473,7 @@ find:
                     self.remember_allowed(&call, asked);
                 }
 replace:
+                self.remember_allowed(&call, asked);
 caught-by:
     cineris-core::it extensions::allowing_a_host_write_once_allows_that_write_alone
 
@@ -537,7 +542,7 @@ caught-by:
     cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
 
 [break] a-stopped-host-call-leaves-the-turn-going
-rule: A host call answered with a stop stops its turn through the policy. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result (`stop-ends-turn/an-extensions-stopped-call-is-not-marked`). Nothing else is decided in that turn after the stop today: the engine serves a script's host calls one at a time and ends the call, and its runtime, at the first stop, so the script makes no host call after it (`a-script-goes-on-in-a-stopped-turn`); an extension's tool runs alone; and the round refuses its later calls itself. A hook's host call later in the turn (step 28's hooks) would be refused only by this stop: a test of that names this break again (`docs/outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md`).
+rule: A host call answered with a stop stops its turn through the policy. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result (`stop-ends-turn/an-extensions-stopped-call-is-not-marked`). Nothing else is decided in that turn after the stop today: the engine serves a script's host calls one at a time and ends the call, and its runtime, at the first stop, so the script makes no host call after it (`a-script-goes-on-in-a-stopped-turn`); an extension's tool runs alone; and the round refuses its later calls itself. A hook command makes no host call: its start is decided apart (`Decided::Unasked`), and a stopped turn's hook fails at that decision, so step 28's hooks do not reach this stop either; the pair of it in `look_after` is caught since they run (`exec-protected-change-does-not-stop-the-turn`). What is left is a script's host call after a stop (`docs/outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md`).
 file: crates/cineris-core/src/ext/host.rs
 in: CallHost::decide
 find: self.parts.policy.stop_turn(self.cx.turn, reason.clone());
@@ -782,12 +787,14 @@ caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
 
 [break] exec-protected-change-does-not-stop-the-turn
-rule: A protected path a program changed stops the turn through the policy. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result (`stop-ends-turn/an-extensions-stopped-call-is-not-marked`). Nothing else is decided in that turn after the stop today: the engine serves a script's host calls one at a time and ends the call, and its runtime, at the first stop, so the script makes no host call after it (`a-script-goes-on-in-a-stopped-turn`); an extension's tool runs alone; and the round refuses its later calls itself. A hook's host call later in the turn (step 28's hooks) would be refused only by this stop: a test of that names this break again (`docs/outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md`).
+rule: A protected path a program changed stops the turn through the policy, so that nothing more of the turn starts. The call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own; what only this stop refuses is a start later in the same turn that no round decides: a hook command after a hook's stop (step 28's hooks), which is refused as "its turn was stopped" only because the look's stop reached the policy.
+os: linux
 file: crates/cineris-core/src/ext/exec.rs
 in: look_after
 find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Stopped(note));
 replace: return Err(HostError::Stopped(note));
-expect: survives
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
 
 [break] exec-protected-change-does-not-fail-the-call
 rule: A protected path a program changed ends its call, naming the change.
@@ -1496,8 +1503,11 @@ find:
         }
         cineris_base::hook::point(super::AFTER_A_CALL_IS_CLAIMED);
         if outbox.send(FromThread::Started).is_err() {
+            return After::Goes;
+        }
 replace:
         claim.store(STARTED, Ordering::SeqCst);
+        cineris_base::hook::point(super::AFTER_A_CALL_IS_CLAIMED);
         let _ = outbox.send(FromThread::Started);
 caught-by:
     cineris-ext::it engine::a_call_cancelled_before_its_turn_is_withdrawn_and_never_runs
@@ -1654,7 +1664,7 @@ rule: What a program did is looked at whatever ended its run: its own time, the 
 file: crates/cineris-core/src/ext/exec.rs
 in: run
 find: Some(before) => look_after(parts, host, before, &roots, escaped).await,
-replace: Some(before) if ran.as_ref().is_ok_and(|finished| finished.ending == Ending::Exited) => look_after(parts, host, before, &roots, escaped).await,
+replace: Some(before) if ran.as_ref().is_ok_and(|finished| finished.ending == Ending::Exited) => look_after(parts, host, before, &roots, escaped).await, Some(_) => Ok(()),
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_stopped_at_its_time_is_still_looked_at
 
@@ -1863,6 +1873,8 @@ find:
             "its host has a character the fetch would read differently: write it plainly"
 replace:
     if false {
+        return Err(refused(
+            "its host has a character the fetch would read differently: write it plainly"
 caught-by:
     cineris-ext::it serve::a_url_the_client_would_read_as_another_host_never_reaches_the_host
 
@@ -2594,7 +2606,11 @@ find:
             .field("cut", &self.cut)
             .field("address", &self.address)
 replace:
+        .field("status", &self.status)
             .field("headers", &self.headers)
+            .field("body_bytes", &self.body.len())
+            .field("cut", &self.cut)
+            .field("address", &self.address)
 caught-by:
     cineris-llm fetch::tests::a_response_prints_without_its_header_values
 
@@ -2643,6 +2659,8 @@ find:
             .field("headers", &names)
             .field("body_bytes", &self.body.len())
 replace:
+        f.debug_struct("FetchOutput")
+            .field("status", &self.status)
             .field("headers", &self.headers)
             .field("body_bytes", &self.body)
 caught-by:
@@ -4157,17 +4175,8 @@ caught-by:
 
 # ------------------------------------------------------------ the fresh review
 
-[break] pinned-confined-said-of-the-question-load
-rule: What an extension's programs can do is said of the load a yes puts in force, not of the trust question's own load, which may hold back a `sandbox.write` that turns the sandbox off.
-file: crates/cineris-core/src/assemble.rs
-in: look
-find: let confined = programs_confined(inner, &load, &place.root, place.state.as_ref());
-replace: let confined = programs_confined(inner, &trust.loaded, &place.root, place.state.as_ref());
-caught-by:
-    extensions_review::the_trust_question_judges_the_sandbox_by_the_load_a_yes_puts_in_force
-
 [break] pinned-confined-with-harness-files-writable
-rule: Where the sandbox enforces, an extension's programs are said to be confined only when no write root of the session holds the harness's own files.
+rule: Where the sandbox enforces, an extension's programs are said to be confined only when no write root of the session holds the harness's own files: since the third security fix a `sandbox.write` entry that holds them is left out, so only the workspace or the session's temporary folder can (here the workspace holds the launcher).
 file: crates/cineris-core/src/assemble.rs
 in: programs_confined
 find: && !holds_harness_files(
