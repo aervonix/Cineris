@@ -35,6 +35,8 @@ pub(crate) use tools::{HostParts, register};
 /// the hash it was approved at, and what it registered then.
 #[derive(Debug, Clone)]
 pub struct ApprovedExtension {
+    /// Where it was found: the user's own, or the project's.
+    pub source: cineris_ext::source::Source,
     /// Its folder.
     pub folder: PathBuf,
     /// The hash of its folder when it was approved: a runtime is made only
