@@ -772,10 +772,16 @@ fn past_a_hundred_skills_the_rest_are_counted_and_not_listed() {
         "cineris-ext-unit",
         "past_a_hundred_skills_the_rest_are_counted_and_not_listed",
     );
+    // In two roots, since a root is looked at to 100 entries.
     for index in 0..103 {
+        let root = if index < 52 {
+            "home/proj/.cineris/skills"
+        } else {
+            "home/.cineris/skills"
+        };
         skill(
             &scratch,
-            &format!("home/proj/.cineris/skills/s{index:03}"),
+            &format!("{root}/s{index:03}"),
             &format!("s{index:03}"),
             "A skill",
         );
@@ -789,7 +795,7 @@ fn past_a_hundred_skills_the_rest_are_counted_and_not_listed() {
     assert!(
         index
             .text
-            .ends_with("\n- s099: A skill (.cineris/skills/s099/SKILL.md)\n(3 more skills are not listed, to keep this within its size.)"),
+            .ends_with("\n- s099: A skill (~/.cineris/skills/s099/SKILL.md)\n(3 more skills are not listed, to keep this within its size.)"),
         "{}",
         index.text
     );
@@ -820,17 +826,18 @@ fn a_skill_file_larger_than_64_kib_is_left_out() {
 }
 
 #[test]
-fn a_root_with_more_than_a_thousand_entries_is_looked_at_only_so_far() {
+fn a_root_with_more_than_a_hundred_entries_is_looked_at_only_so_far() {
     let scratch = Scratch::outside(
         "cineris-ext-unit",
-        "a_root_with_more_than_a_thousand_entries_is_looked_at_only_so_far",
+        "a_root_with_more_than_a_hundred_entries_is_looked_at_only_so_far",
     );
+    assert_eq!(MAX_ENTRIES, 100);
     let root = scratch.dir("home/proj/.cineris/skills");
-    for index in 0..1_000 {
+    for index in 0..MAX_ENTRIES {
         std::fs::write(root.join(format!("f{index:04}.md")), "").unwrap();
     }
     let found = find(&scratch, &Root::standard(false));
-    assert_eq!(left(&found), [], "a thousand entries are all looked at");
+    assert_eq!(left(&found), [], "a hundred entries are all looked at");
     scratch.file("home/proj/.cineris/skills/one-more.md", "");
     let found = find(&scratch, &Root::standard(false));
     assert_eq!(left(&found), [(".cineris/skills", &Reason::TooManyEntries)]);

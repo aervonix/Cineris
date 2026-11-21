@@ -468,12 +468,11 @@ fn a_compaction_looks_again_before_it_builds_its_prompt() {
 /// session's open and first turn (the finding, which resolves and reads
 /// each `SKILL.md`), and the median of five later turns with nothing
 /// changed (each one's start stamps every place the skills were found in
-/// again). Four projects: none, a typical one (one root of 5 skills), and
-/// a crafted one of the project's three roots with 200 entries each, and
-/// with 1,000 each (`MAX_ENTRIES`), each entry a folder with a small
-/// `SKILL.md`. With 200 entries a root it is what a cap of 200 would leave
-/// a crafted repository (the re-check of step 28, L4). A measurement, run
-/// by `cargo xtask perf -p cineris-core`.
+/// again). Three projects: none, a typical one (one root of 5 skills), and
+/// a crafted one of the project's three roots at their cap of entries each
+/// (`MAX_ENTRIES`), each entry a folder with a small `SKILL.md` (the
+/// re-check of step 28, L4). A measurement, run by `cargo xtask perf -p
+/// cineris-core`.
 #[test]
 #[ignore = "a measurement: `cargo xtask perf -p cineris-core`"]
 fn perf_what_a_projects_skills_cost_each_turns_start() {
@@ -493,11 +492,12 @@ fn perf_what_a_projects_skills_cost_each_turns_start() {
         }
     };
     let all = [".cineris/skills", ".agents/skills", ".claude/skills"];
+    let cap = cineris_ext::skills::MAX_ENTRIES;
+    let crafted = format!("crafted_3x{cap}");
     for (case, roots, entries) in [
         ("none", &all[..0], 0),
         ("typical_5", &all[..1], 5),
-        ("crafted_3x200", &all[..], 200),
-        ("crafted_3x1000", &all[..], cineris_ext::skills::MAX_ENTRIES),
+        (crafted.as_str(), &all[..], cap),
     ] {
         let world = World::new(
             &format!("perf_skills_{case}"),
