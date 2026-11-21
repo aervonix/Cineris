@@ -210,7 +210,7 @@ caught-by:
 [break] a-folder-left-there-is-trusted
 rule: A job's tests' scratch base is emptied before each run: what a killed run left there is not trusted.
 file: xtask/src/mutate/drive.rs
-in: TestsBase::make_with
+in: TestsBase::make
 find: let note = crate::combine::remove_tree(&self.dir).err();
 replace: let note: Option<String> = None;
 caught-by:
@@ -220,8 +220,8 @@ caught-by:
 rule: A job's tests' scratch base is removed after a run, with what a failed test left in it.
 file: xtask/src/mutate/drive.rs
 in: TestsBase::remove
-find: let failed = crate::combine::remove_tree(&self.dir).err();
-replace: let failed: Option<String> = None;
+find: crate::combine::remove_tree(&self.dir)
+replace: Ok::<(), String>(())
 caught-by:
     mutate::drive::tests::the_tests_scratch_base_is_made_empty_before_a_run_and_removed_after_it
     mutate::drive::tests::a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_notes_what_it_could_not
@@ -309,14 +309,34 @@ replace: error
 caught-by:
     mutate::drive::tests::a_run_with_nothing_broken_that_cannot_be_run_says_where_its_folder_is_kept
 
-[break] a-base-whose-parent-went-is-not-made-again
-rule: A scratch base whose command folder another job removed meanwhile is made again once.
+[break] the-command-folder-goes-while-jobs-run
+rule: The command's folder is never removed while a job runs: on Windows a job then could not make its own folder in it.
 file: xtask/src/mutate/drive.rs
-in: TestsBase::make_with
-find: error.kind() == std::io::ErrorKind::NotFound
-replace: false
+in: TestsBase::remove
+find: crate::combine::remove_tree(&self.dir)
+replace: crate::combine::remove_tree(&self.dir).map(|()| { if let Some(named) = &self.named { let _ = fs::remove_dir(named); } })
 caught-by:
-    mutate::drive::tests::a_scratch_base_whose_parent_went_meanwhile_is_made_again_once
+    mutate::drive::tests::the_tests_scratch_base_is_made_empty_before_a_run_and_removed_after_it
+
+[break] the-command-folder-is-left
+rule: The command's folder is removed once its jobs are done, when nothing is left in it.
+file: xtask/src/mutate/drive.rs
+in: RemovedWhenDone::drop
+find: let _ = fs::remove_dir(folder);
+replace: let _ = folder;
+caught-by:
+    mutate::drive::tests::the_tests_scratch_base_is_made_empty_before_a_run_and_removed_after_it
+    mutate::drive::tests::with_two_jobs_a_failed_baselines_folder_is_still_there_when_the_run_stops
+
+[break] the-jobs-shared-folder-is-not-known
+rule: The command removes the folder its jobs' bases share, which each job's runner names.
+file: xtask/src/mutate/drive.rs
+in: CargoRunner::shared_folder
+find: self.tests.named.clone()
+replace: None
+caught-by:
+    mutate::drive::tests::a_kept_folder_outlasts_the_jobs_next_runs_and_goes_with_the_next_command
+    mutate::drive::tests::with_two_jobs_a_failed_baselines_folder_is_still_there_when_the_run_stops
 
 [break] watch-limit-of-a-system-test
 rule: The watch gives a system test the 60 s nextest gives it.
