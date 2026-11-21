@@ -112,6 +112,10 @@ struct Entry {
     /// times the system sets, which a file system may not move finely
     /// enough.
     hash: Option<cineris_base::ContentHash>,
+    /// Where a link leads, as it is written: so that a link put back to the
+    /// same place is the same link, and one a command replaced can be made
+    /// again (the early review of the third security fix).
+    link: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -263,39 +267,71 @@ impl Watch {
     /// again: for a change a confined start made, so that nothing it wrote
     /// in a protected path runs later outside the sandbox (the third
     /// security fix). Nothing is written through a link: how, and what
-    /// cannot be put back, is in [`restore`]'s documentation. What still
-    /// differs from `before` after it (what could not be put back, or what
-    /// something else changed meanwhile) is [`PutBack::left`]. It blocks.
+    /// cannot be put back, is in [`restore`]'s documentation. A look again
+    /// that shows a change the look before it could not (behind a directory
+    /// a command made unreadable) has it put back too, in another round, at
+    /// most three in all; only a path `may` allows is ever touched.
+    /// What still differs from `before` after it (what could not be put
+    /// back, or what something else changed meanwhile) is
+    /// [`PutBack::left`]. It blocks.
     #[must_use]
-    pub fn put_back(&self, before: &Snapshot, changed: &[Changed]) -> PutBack {
-        restore::put_back(before, changed);
-        let (left, after) = self.changes_since(before);
-        // A directory made again is a directory with its mode, as it was,
-        // under another inode: what lies in it is compared on its own.
-        let left: Vec<Changed> = left
-            .into_iter()
-            .filter(|one| {
-                let made_again = one.change == Change::Modified
-                    && one.before == Before::Directory
-                    && before
-                        .entries
-                        .get(&one.path)
-                        .zip(after.entries.get(&one.path))
-                        .is_some_and(|(old, new)| {
-                            new.kind == Kind::Directory && new.stamp.mode == old.stamp.mode
-                        });
-                !made_again
-            })
-            .collect();
-        let restored = changed
-            .iter()
-            .filter(|one| !left.iter().any(|still| still.path == one.path))
-            .map(|one| one.path.clone())
-            .collect();
-        PutBack {
-            restored,
-            left,
-            after,
+    pub fn put_back(
+        &self,
+        before: &Snapshot,
+        changed: &[Changed],
+        may: &dyn Fn(&Path) -> bool,
+    ) -> PutBack {
+        let mut seen: Vec<Changed> = changed.to_vec();
+        let mut round: Vec<Changed> = changed.to_vec();
+        let mut rounds = 0;
+        loop {
+            restore::put_back(before, &round);
+            rounds += 1;
+            let (left, after) = self.changes_since(before);
+            // A directory made again is a directory with its mode, as it
+            // was, under another inode: what lies in it is compared on its
+            // own.
+            let left: Vec<Changed> = left
+                .into_iter()
+                .filter(|one| {
+                    let made_again = one.change == Change::Modified
+                        && one.before == Before::Directory
+                        && before
+                            .entries
+                            .get(&one.path)
+                            .zip(after.entries.get(&one.path))
+                            .is_some_and(|(old, new)| {
+                                new.kind == Kind::Directory && new.stamp.mode == old.stamp.mode
+                            });
+                    !made_again
+                })
+                .collect();
+            let new: Vec<Changed> = left
+                .iter()
+                .filter(|one| may(&one.path) && !seen.iter().any(|known| known.path == one.path))
+                .cloned()
+                .collect();
+            // Another round only where this one showed what the last did not
+            // (a mode put back on a directory that hid what is in it), and
+            // within the bound.
+            if new.is_empty() || rounds >= ROUNDS {
+                // Put back only where the last look reached: a path it did
+                // not reach is not known to be as it was.
+                let restored = seen
+                    .iter()
+                    .filter(|one| !left.iter().any(|still| still.path == one.path))
+                    .filter(|one| after.covers(&one.path))
+                    .map(|one| one.path.clone())
+                    .collect();
+                return PutBack {
+                    changed: seen,
+                    restored,
+                    left,
+                    after,
+                };
+            }
+            seen.extend(new);
+            round = left.into_iter().filter(|one| may(&one.path)).collect();
         }
     }
 }
@@ -307,10 +343,25 @@ impl Watch {
 pub const PUTTING_BACK: &str =
     "protect: a path's directory is open and the path is not put back yet";
 
+/// A point a test can stop at: a path's directory is open, and its mode is
+/// about to be set. A directory or a file swapped for a link now must not
+/// have the mode set where the link leads.
+pub const PUTTING_BACK_A_MODE: &str = "protect: a path's mode is about to be put back";
+
+/// The most rounds of a put-back: each puts back what the look after the
+/// round before found, which a mode put back can show (a directory a
+/// command made unreadable hid what it planted in it).
+const ROUNDS: usize = 3;
+
 /// What [`Watch::put_back`] did.
 #[derive(Debug, Clone)]
 pub struct PutBack {
-    /// The paths that are as they were before, again.
+    /// Every change it met: those it was given, and those a round showed
+    /// that the look before it could not (behind a directory a command made
+    /// unreadable).
+    pub changed: Vec<Changed>,
+    /// The paths that are as they were before, again, where the last look
+    /// reached.
     pub restored: Vec<PathBuf>,
     /// What still differs from the look before: to be put back by hand.
     pub left: Vec<Changed>,
@@ -404,6 +455,10 @@ impl Entry {
             (Kind::Directory, Kind::Directory) => (self.stamp.inode != old.stamp.inode
                 || self.stamp.mode != old.stamp.mode)
                 .then_some(Before::Directory),
+            // Two links are the same where they lead to the same place.
+            (Kind::Link, Kind::Link) if self.link.is_some() && old.link.is_some() => {
+                (self.link != old.link).then(|| old.before())
+            }
             (old_kind, new_kind) if old_kind != new_kind => Some(old.before()),
             // A change of mode alone (a hook made executable) is not put
             // back by writing the content again: it is put back by hand.
@@ -560,6 +615,9 @@ impl Look {
         } else {
             None
         };
+        let link = (kind == Kind::Link)
+            .then(|| fs::read_link(path).ok())
+            .flatten();
         self.entries.insert(
             path.to_owned(),
             Entry {
@@ -569,6 +627,7 @@ impl Look {
                 stamp: stamp(&metadata),
                 content,
                 hash,
+                link,
             },
         );
         Some(kind)
@@ -587,15 +646,28 @@ impl Look {
             return None;
         }
         self.listed += 1;
-        fs::read_dir(directory).ok().map(|entries| {
-            entries
-                .flatten()
-                .map(|entry| {
-                    let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
-                    (entry.path(), is_dir)
-                })
-                .collect()
-        })
+        match fs::read_dir(directory) {
+            Ok(entries) => Some(
+                entries
+                    .flatten()
+                    .map(|entry| {
+                        let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+                        (entry.path(), is_dir)
+                    })
+                    .collect(),
+            ),
+            Err(error) => {
+                // A directory that is there and cannot be listed (a command
+                // took its read right away, and git still finds a hook in it
+                // by its name) hides what is in it: the look did not see
+                // it, and says so, rather than take what is in it for gone
+                // (found by the early review of the third security fix).
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    self.complete = false;
+                }
+                None
+            }
+        }
     }
 
     /// Walks the workspace for protected names at any depth.

@@ -636,10 +636,49 @@ impl RecordingShell {
             let decided = self.sandbox.decide();
             let session_confines = decided.confines();
             let confined = session_confines && !unconfined;
+            let roots = decided.write_roots();
             // Looked at only where the command is confined, with the folder
             // the repository's configuration names for its hooks read first.
             let looks = confined && self.sandbox.protected().is_some();
             let root = cx.paths.root().to_fs_path();
+            // One confined start of the session at a time, from its look
+            // before to its look after: two that overlapped would each take
+            // the other's change for its own (the early review of the third
+            // security fix).
+            let one_at_a_time = if looks {
+                Some(self.sandbox.one_start_at_a_time().await)
+            } else {
+                None
+            };
+            // A command that is not confined, after a confined start whose
+            // look after is kept (an extension's program, which its launcher
+            // confines at every level, before a command at `unrestricted`):
+            // what changed since that look is found before the command runs,
+            // as before a confined one, since a process the start left
+            // running may have written a protected path after it (the early
+            // review of the third security fix). The look is then forgotten
+            // when the command has run.
+            if !looks && self.sandbox.enforces() && self.sandbox.has_last_after() {
+                let (sandbox, git, root) = (
+                    Arc::clone(&self.sandbox),
+                    Arc::clone(&self.git),
+                    root.clone(),
+                );
+                let guard = self.sandbox.one_start_at_a_time().await;
+                let now = tokio::task::spawn_blocking(move || {
+                    sandbox.follow_configured(&*git, &root);
+                    sandbox.protected().map(|watch| watch.take())
+                })
+                .await
+                .ok()
+                .flatten();
+                drop(guard);
+                if let Some(now) = &now
+                    && let Some(stop) = self.continuity(now, cx).await
+                {
+                    return stop;
+                }
+            }
             let before = if looks {
                 let (sandbox, git, root) = (
                     Arc::clone(&self.sandbox),
@@ -647,7 +686,7 @@ impl RecordingShell {
                     root.clone(),
                 );
                 tokio::task::spawn_blocking(move || {
-                    sandbox.follow_hooks(&*git, &root);
+                    sandbox.follow_configured(&*git, &root);
                     sandbox.protected().map(|watch| watch.take())
                 })
                 .await
@@ -685,10 +724,10 @@ impl RecordingShell {
                 Some(before) => {
                     let (sandbox, git) = (Arc::clone(&self.sandbox), Arc::clone(&self.git));
                     tokio::task::spawn_blocking(move || {
-                        sandbox.follow_hooks(&*git, &root);
+                        sandbox.follow_configured(&*git, &root);
                         sandbox
                             .protected()
-                            .map(|watch| protected_changes(&watch, &before))
+                            .map(|watch| protected_changes(&watch, &before, &roots))
                     })
                     .await
                     .ok()
@@ -696,6 +735,7 @@ impl RecordingShell {
                 }
                 None => None,
             };
+            drop(one_at_a_time);
             // The look after this command is kept for the next command's
             // and the close's continuity check, and the harness-touched set
             // is forgotten: the after-look already holds their new state.
@@ -704,13 +744,15 @@ impl RecordingShell {
                 if let Some(rounds) = &self.rounds {
                     rounds.clear_touched();
                 }
-            } else if unconfined && session_confines {
-                // A command the user let leave the sandbox is not looked at,
-                // so its own approved changes to a protected path are not
-                // recorded. The next confined command's continuity check must
-                // not compare across it and report those as a change from
-                // outside, so the baseline is dropped and the next command
-                // starts fresh (found by the independent review of the fixes).
+            } else if !looks && self.sandbox.enforces() {
+                // A command that ran as it is (one the user let leave the
+                // sandbox, or any at `unrestricted`) is not looked at, so its
+                // own changes to a protected path are not recorded. The next
+                // confined start's continuity check must not compare across
+                // it and report those as a change from outside, so the
+                // baseline is dropped and the next start begins fresh (found
+                // by the independent review of the fixes of step 26; at
+                // `unrestricted` too since the third security fix).
                 self.sandbox.forget_after();
                 if let Some(rounds) = &self.rounds {
                     rounds.clear_touched();
@@ -763,16 +805,23 @@ impl RecordingShell {
             let mut stopped = false;
             if let Some(found) = found {
                 let root = cx.paths.root().to_fs_path();
-                if let Some(note) =
-                    protected_note(&found.changed, &found.left, found.complete, &root)
-                {
+                if let Some(note) = protected_note(
+                    &found.changed,
+                    &found.left,
+                    &found.outside,
+                    found.complete,
+                    &root,
+                ) {
                     result = result.with_part(Part::text(note.clone()));
                     // A change, or a look the command itself made stop
                     // short, stops the turn; a workspace already past the
                     // bound only warns. The result is marked as the stop,
                     // so that the round ends at this call, even when it
                     // was the last of its response.
-                    if !found.changed.is_empty() || (found.complete.0 && !found.complete.1) {
+                    if !found.changed.is_empty()
+                        || !found.outside.is_empty()
+                        || (found.complete.0 && !found.complete.1)
+                    {
                         self.policy.stop_turn(cx.turn, note.clone());
                         result = result.stopping_turn(note);
                         stopped = true;

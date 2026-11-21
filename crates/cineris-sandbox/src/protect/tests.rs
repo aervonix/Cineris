@@ -668,7 +668,7 @@ mod putting_back {
         change(ws);
         let (changed, _) = watch.changes_since(&before);
         assert!(!changed.is_empty(), "the change was not found");
-        let put = watch.put_back(&before, &changed);
+        let put = watch.put_back(&before, &changed, &|_| true);
         (changed, put)
     }
 
@@ -832,7 +832,7 @@ mod putting_back {
         let hold = cineris_testkit::Hold::new(PUTTING_BACK);
         let putting = std::thread::spawn({
             let watch = watch.clone();
-            move || watch.put_back(&before, &changed)
+            move || watch.put_back(&before, &changed, &|_| true)
         });
         hold.reach();
         fs::rename(ws.join(".git/hooks"), ws.join(".git/hooks-moved")).unwrap();
@@ -848,7 +848,146 @@ mod putting_back {
             fs::read_to_string(ws.join(".git/hooks-moved/pre-commit.sample")).unwrap(),
             "#!/bin/sh\n"
         );
-        assert!(!put.left.is_empty(), "{:?}", put.restored);
+        // A later round removes the link itself and makes the folder again,
+        // with what was in it.
+        assert!(
+            put.left.is_empty()
+                == fs::symlink_metadata(ws.join(".git/hooks"))
+                    .unwrap()
+                    .is_dir(),
+            "{:?}",
+            put.left
+        );
+    }
+
+    /// A hook planted in `.git/hooks`, its folder then made searchable and
+    /// not readable (git still finds a hook by its name): the look after
+    /// cannot list the folder and says it is incomplete rather than take
+    /// what is in it for gone; the put-back gives the folder its mode back
+    /// without needing to read it, looks again, and in a second round puts
+    /// back the hook it can see now (found by the early review of the third
+    /// security fix).
+    #[test]
+    fn a_hook_hidden_in_a_folder_made_unreadable_is_found_and_put_back() {
+        let scratch = workspace("put_back_unreadable");
+        let ws = scratch.join("ws");
+        let hooks = ws.join(".git/hooks");
+        let was = mode(&hooks);
+        let watch = unhurried_watch(&ws);
+        let before = watch.take();
+        assert!(before.is_complete());
+        fs::write(hooks.join("pre-commit"), "#!/bin/sh\nevil\n").unwrap();
+        set_mode(&hooks.join("pre-commit"), 0o755);
+        set_mode(&hooks, 0o333);
+        if fs::read_dir(&hooks).is_ok() {
+            // A user that reads past modes (root): nothing is hidden.
+            set_mode(&hooks, 0o755);
+            return;
+        }
+        let (changed, after) = watch.changes_since(&before);
+        assert!(
+            !after.is_complete(),
+            "an unreadable folder was taken as looked at"
+        );
+        assert!(
+            !changed
+                .iter()
+                .any(|one| one.path.ends_with("pre-commit.sample")),
+            "what is in an unreadable folder was taken for gone: {changed:?}"
+        );
+        let put = watch.put_back(&before, &changed, &|_| true);
+        let mode_now = mode(&hooks);
+        set_mode(&hooks, 0o755);
+        assert_eq!(mode_now, was, "{mode_now:o}");
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        assert!(
+            put.changed
+                .iter()
+                .any(|one| one.path == hooks.join("pre-commit")),
+            "the hook it hid is not named: {:?}",
+            put.changed
+        );
+        assert!(!hooks.join("pre-commit").exists());
+        assert!(put.after.is_complete());
+    }
+
+    /// A directory whose mode lacks its owner's write right gets back what
+    /// was in it: it is made again open to its owner, its children are put
+    /// back, and its own mode is given last.
+    #[test]
+    fn a_directory_without_its_owners_write_right_gets_its_children_back() {
+        let scratch = workspace("put_back_read_only_dir");
+        let ws = scratch.join("ws");
+        let hooks = ws.join(".git/hooks");
+        set_mode(&hooks, 0o555);
+        let (_, put) = put_back_after(&ws, |_| {
+            set_mode(&hooks, 0o755);
+            fs::remove_dir_all(&hooks).unwrap();
+        });
+        let mode_now = mode(&hooks);
+        set_mode(&hooks, 0o755);
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        assert_eq!(mode_now, 0o555);
+        assert_eq!(
+            fs::read_to_string(hooks.join("pre-commit.sample")).unwrap(),
+            "#!/bin/sh\n"
+        );
+    }
+
+    /// A protected path that was a link (a `.cargo/config.toml` kept in a
+    /// shared folder) and that a command replaced with a file of its own is
+    /// made again as the link, to where it led; what it leads to is not
+    /// written.
+    #[test]
+    fn a_link_a_command_replaced_is_made_again() {
+        let scratch = workspace("put_back_link_again");
+        let ws = scratch.join("ws");
+        let shared = scratch.file("shared/config.toml", "[build]\njobs = 4\n");
+        fs::create_dir_all(ws.join(".cargo")).unwrap();
+        symlink(&shared, ws.join(".cargo/config.toml")).unwrap();
+        let (_, put) = put_back_after(&ws, |ws| {
+            fs::remove_file(ws.join(".cargo/config.toml")).unwrap();
+            fs::write(
+                ws.join(".cargo/config.toml"),
+                "[build]\nrustc-wrapper = \"/tmp/evil\"\n",
+            )
+            .unwrap();
+        });
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        assert_eq!(
+            fs::read_link(ws.join(".cargo/config.toml")).unwrap(),
+            shared
+        );
+        assert_eq!(fs::read_to_string(&shared).unwrap(), "[build]\njobs = 4\n");
+    }
+
+    /// A directory swapped for a link to a folder outside just before its
+    /// mode is put back: the mode is not set where the link leads.
+    #[test]
+    fn a_directory_swapped_for_a_link_while_its_mode_is_put_back_sets_nothing_where_it_leads() {
+        let scratch = workspace("put_back_race_mode");
+        let ws = scratch.join("ws");
+        let outside = scratch.dir("outside");
+        set_mode(&outside, 0o751);
+        let watch = unhurried_watch(&ws);
+        let before = watch.take();
+        set_mode(&ws.join(".git/hooks"), 0o700);
+        let (changed, _) = watch.changes_since(&before);
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        let hold = cineris_testkit::Hold::new(PUTTING_BACK_A_MODE);
+        let putting = std::thread::spawn({
+            let watch = watch.clone();
+            move || watch.put_back(&before, &changed, &|_| true)
+        });
+        hold.reach();
+        fs::rename(ws.join(".git/hooks"), ws.join(".git/hooks-moved")).unwrap();
+        symlink(&outside, ws.join(".git/hooks")).unwrap();
+        hold.release();
+        let put = putting.join().unwrap();
+        assert_eq!(mode(&outside), 0o751, "a mode was set where the link leads");
+        // A later round removes the link itself and makes the folder again.
+        let hooks = fs::symlink_metadata(ws.join(".git/hooks")).unwrap();
+        assert!(hooks.is_dir() || !put.left.is_empty(), "{hooks:?}");
     }
 
     /// The file itself is swapped for a link to a file outside after its
@@ -867,7 +1006,7 @@ mod putting_back {
         let hold = cineris_testkit::Hold::new(PUTTING_BACK);
         let putting = std::thread::spawn({
             let watch = watch.clone();
-            move || watch.put_back(&before, &changed)
+            move || watch.put_back(&before, &changed, &|_| true)
         });
         hold.reach();
         fs::remove_file(ws.join(".git/config")).unwrap();

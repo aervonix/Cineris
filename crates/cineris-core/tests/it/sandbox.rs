@@ -723,6 +723,117 @@ fn sys_after_a_put_back_the_next_command_runs() {
     });
 }
 
+/// A confined command plants a hook and makes `.git/hooks` searchable and
+/// not readable, which git still finds the hook in by its name: the hook is
+/// found, named, and put back, and the folder gets its mode back (found by
+/// the early review of the third security fix).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_hook_a_command_hides_in_a_folder_it_made_unreadable_is_put_back() {
+    use std::os::unix::fs::PermissionsExt;
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("unreadable_hooks", []);
+    world.put(".git/config", "[core]\n");
+    world.put(".git/hooks/pre-commit.sample", "#!/bin/sh\n");
+    let hooks = world.workspace.join(".git/hooks");
+    let was = std::fs::metadata(&hooks).unwrap().permissions().mode() & 0o7777;
+    world.put(
+        "fix.sh",
+        "printf '#!/bin/sh\\necho ran > ran.txt\\n' > .git/hooks/pre-commit\n\
+         chmod 755 .git/hooks/pre-commit\n\
+         chmod 333 .git/hooks\n",
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh fix.sh"}))]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("fix it").await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    let mode = std::fs::metadata(&hooks).unwrap().permissions().mode() & 0o7777;
+    let _ = std::fs::set_permissions(&hooks, std::fs::Permissions::from_mode(0o755));
+    assert!(
+        shown.contains("`.git/hooks/pre-commit` (created)") && shown.contains("They were put back"),
+        "{shown}"
+    );
+    assert!(!hooks.join("pre-commit").exists(), "{shown}");
+    assert_eq!(mode, was, "{shown}");
+}
+
+/// While a confined command runs, a protected path outside every root it
+/// may write changes (the user's own `sandbox.protect` folder, by the
+/// user's hand or a program of theirs): it is not the command's, so it is
+/// not put back, and it is told as a change the command could not have made
+/// (found by the early review of the third security fix).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_change_outside_the_commands_reach_is_not_put_back() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("outside_reach", []);
+    world.put(".git/config", "[core]\n");
+    let dotfiles = world.dir.join("dotfiles");
+    std::fs::create_dir_all(&dotfiles).unwrap();
+    std::fs::write(dotfiles.join("config"), "mine, as it was\n").unwrap();
+    world.user_config(&format!(
+        "[sandbox]\nprotect = [\"{}\"]\n",
+        write_entry(&dotfiles)
+    ));
+    world.provider.push(calls(&[(
+        "c1",
+        "shell",
+        json!({"command": "echo hi > hi.txt"}),
+    )]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let looks = cineris_testkit::Hold::new(cineris_core::BEFORE_THE_LOOK_AFTER);
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        let mut turn = std::pin::pin!(front.turn("go"));
+        looks.drive_until_reached(turn.as_mut()).await;
+        std::fs::write(dotfiles.join("config"), "mine, edited meanwhile\n").unwrap();
+        std::fs::write(dotfiles.join("installed"), "a program of the user's\n").unwrap();
+        looks.release();
+        turn.await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    assert_eq!(
+        std::fs::read_to_string(dotfiles.join("config")).unwrap(),
+        "mine, edited meanwhile\n",
+        "{shown}"
+    );
+    assert!(dotfiles.join("installed").exists(), "{shown}");
+    assert!(
+        shown.contains("protected paths it could not write changed")
+            && !shown.contains("They were put back"),
+        "{shown}"
+    );
+}
+
 /// Sets the session's level, as a front end does.
 #[cfg(target_os = "linux")]
 async fn set_level(front: &Front, level: Level) {

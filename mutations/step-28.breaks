@@ -781,8 +781,8 @@ caught-by:
 rule: A program with a write root has the protected paths looked at after it, and a change it made stops the call.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: look_after(parts, host, watch, before, escaped).await
-replace: { let _ = (watch, before, escaped); Ok::<(), HostError>(()) }
+find: look_after(parts, host, before, &roots, escaped).await
+replace: { let _ = (before, &roots, escaped); Ok::<(), HostError>(()) }
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
 
@@ -807,8 +807,8 @@ caught-by:
 rule: Before a confined start with a write root, a protected path changed since the last look, by nothing of the harness's, refuses the start and stops the turn.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: && parts.sandbox.confines()
-replace: && !parts.sandbox.confines()
+find: if let Some(before) = &before && let Some(note) = changed_since_last_look(
+replace: if let Some(before) = &before && false && let Some(note) = changed_since_last_look(
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_protected_path_changed_since_the_last_program_refuses_the_next
 
@@ -1661,8 +1661,8 @@ caught-by:
 rule: What a program did is looked at whatever ended its run: its own time, the call's cancellation, or a start that failed once the process was made.
 file: crates/cineris-core/src/ext/exec.rs
 in: run
-find: (Some(watch), Some(before)) => look_after(parts, host, watch, before, escaped).await,
-replace: (Some(watch), Some(before)) if ran.as_ref().is_ok_and(|finished| finished.ending == Ending::Exited) => look_after(parts, host, watch, before, escaped).await,
+find: Some(before) => look_after(parts, host, before, &roots, escaped).await,
+replace: Some(before) if ran.as_ref().is_ok_and(|finished| finished.ending == Ending::Exited) => look_after(parts, host, before, &roots, escaped).await,
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_stopped_at_its_time_is_still_looked_at
 
