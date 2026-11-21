@@ -78,14 +78,28 @@ pub(crate) trait Runner: Send {
     /// Runs the packages' tests in `tree`.
     fn test(&mut self, tree: &Path, packages: &[String]) -> Result<Tested>;
 
+    /// Runs the packages' tests in `tree` with nothing broken: as
+    /// [`Runner::test`], except that a run that fails keeps what its tests
+    /// left, for whoever looks ([`Runner::kept`]).
+    fn test_unbroken(&mut self, tree: &Path, packages: &[String]) -> Result<Tested> {
+        self.test(tree, packages)
+    }
+
     /// Runs the tests of the packages that the filterset `filter` chooses,
-    /// in `tree`: a known flake, run again. A runner that cannot leaves
-    /// the flake failed.
+    /// in `tree`: a known flake, run again with nothing broken. A runner
+    /// that cannot leaves the flake failed.
     fn test_only(&mut self, tree: &Path, packages: &[String], filter: &str) -> Result<Tested> {
         let _ = (tree, packages, filter);
         Ok(Tested::Broken(
             "this runner cannot run some tests alone".to_owned(),
         ))
+    }
+
+    /// Where the last run with nothing broken left its tests' scratch
+    /// folders, when it failed and they were kept. A runner that keeps
+    /// nothing says nothing.
+    fn kept(&self) -> Option<PathBuf> {
+        None
     }
 }
 
@@ -97,6 +111,8 @@ pub(crate) struct Baseline {
     notes: Vec<String>,
     /// How many known flakes passed on their second run.
     again: usize,
+    /// Where the tests' scratch folders were kept, when the run failed.
+    kept: Option<PathBuf>,
 }
 
 /// After the tests of `packages` ran with nothing broken: when every test
@@ -114,6 +130,7 @@ fn known_flakes_again(
         tested,
         notes: Vec::new(),
         again: 0,
+        kept: None,
     };
     let Tested::Ran(cases) = &tested else {
         return Ok(unchanged(tested));
@@ -136,6 +153,7 @@ fn known_flakes_again(
             tested,
             notes,
             again: 0,
+            kept: None,
         });
     }
     let tests: Vec<Test> = flakes.iter().map(|flake| flake.test.clone()).collect();
@@ -155,6 +173,7 @@ fn known_flakes_again(
                 tested,
                 notes,
                 again: 0,
+                kept: None,
             });
         }
     };
@@ -189,6 +208,7 @@ fn known_flakes_again(
         tested: Tested::Ran(merged),
         notes,
         again: again_passed,
+        kept: None,
     })
 }
 
@@ -200,7 +220,9 @@ fn known_flakes_again(
 pub(crate) struct CargoRunner {
     target: PathBuf,
     /// The tests' `CINERIS_TEST_TMPDIR` ([`tests_base`]).
-    tests: PathBuf,
+    tests: TestsBase,
+    /// The tests' scratch base, when the last run kept it ([`keeps`]).
+    kept_base: Option<PathBuf>,
     /// What cargo last printed. Every call writes it anew.
     log: PathBuf,
     /// Where the output of a call that failed is kept, one file a failure.
@@ -229,11 +251,24 @@ const TESTS_BASE: &str = "CINERIS_TEST_TMPDIR";
 const NEXTEST_TESTS_FAILED: i32 = 100;
 const NEXTEST_BUILD_FAILED: i32 = 101;
 
-/// The folder job `job` (counted from 0) gives its tests as their
-/// `CINERIS_TEST_TMPDIR`, the parent of their scratch folders: `job-<n>`,
-/// counted from 1, under the caller's `CINERIS_TEST_TMPDIR` when it is set,
-/// and otherwise under `<target>/tmp`, the job's build directory's
-/// `CARGO_TARGET_TMPDIR`, where the tests would have made them.
+/// Where job `job`'s tests make their scratch folders, and which folder is
+/// this command's own to remove.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TestsBase {
+    /// The tests' `CINERIS_TEST_TMPDIR`.
+    dir: PathBuf,
+    /// The folder named for the command that holds `dir`, under the
+    /// caller's `CINERIS_TEST_TMPDIR`: removed once no job's folder is in
+    /// it. None under the job's build directory, whose `tmp` is Cargo's.
+    named: Option<PathBuf>,
+}
+
+/// The tests' scratch base of job `job` (counted from 0) of the command
+/// whose copies are in `scratch`, with its build directory at `target`:
+/// `job-<n>`, counted from 1, under `cineris-mutate-<hash>`
+/// ([`command_folder`]) in the caller's `CINERIS_TEST_TMPDIR` when it is
+/// set, and otherwise under `<target>/tmp`, the job's build directory's
+/// `CARGO_TARGET_TMPDIR`, where the tests would have made their folders.
 ///
 /// Never another job's. A test's scratch folder is
 /// `<base>/<crate>-it/<test>`, so with one base for the whole command two
@@ -243,33 +278,90 @@ const NEXTEST_BUILD_FAILED: i32 = 101;
 /// not see. Without the caller's variable the bases were apart already (a
 /// build directory is a job's own); the folder is the job's own there too,
 /// made and removed in the same way, so that this does not rest on it.
-fn tests_base(callers: Option<&std::ffi::OsStr>, target: &Path, job: usize) -> PathBuf {
-    let parent = match callers.filter(|value| !value.is_empty()) {
-        // The tests run in their crates' folders, and this is made and
-        // removed from where `xtask` runs: a relative path would be two
-        // places.
-        Some(value) => std::path::absolute(value).unwrap_or_else(|_| PathBuf::from(value)),
-        None => target.join("tmp"),
-    };
-    parent.join(format!("job-{}", job + 1))
+///
+/// An empty variable counts as unset, as the test kit reads it. A relative
+/// one is made absolute from where this command runs, since the tests run
+/// in their crates' folders and would read it from there; one that cannot
+/// be (the command's directory is gone) is not used.
+fn tests_base(
+    callers: Option<&std::ffi::OsStr>,
+    scratch: &Path,
+    target: &Path,
+    job: usize,
+) -> TestsBase {
+    let job_folder = format!("job-{}", job + 1);
+    let callers = callers
+        .filter(|value| !value.is_empty())
+        .and_then(|value| std::path::absolute(value).ok());
+    match callers {
+        Some(parent) => {
+            let named = parent.join(command_folder(scratch));
+            TestsBase {
+                dir: named.join(&job_folder),
+                named: Some(named),
+            }
+        }
+        None => TestsBase {
+            dir: target.join("tmp").join(&job_folder),
+            named: None,
+        },
+    }
 }
 
-/// Runs `run`, a run of a job's tests, with their scratch base `base` made
-/// before it and removed after, whatever it came to: what a test that
-/// failed left in it goes with it, and what a run that was killed left goes
-/// at the end of the next. A base that cannot be removed (a file a process
-/// still holds on Windows) is left for the next run to remove; one that
-/// cannot be made is an error.
-fn in_tests_base<T>(base: &Path, run: impl FnOnce() -> Result<T>) -> Result<T> {
-    fs::create_dir_all(base).map_err(|error| {
-        format!(
-            "could not make the tests' scratch folder {}: {error}",
-            base.display()
-        )
-    })?;
-    let outcome = run();
-    let _ = crate::combine::remove_tree(base);
-    outcome
+/// The folder that holds a command's jobs' folders in the caller's
+/// `CINERIS_TEST_TMPDIR`: `cineris-mutate-<hash>`, by the folder of the
+/// copies, which one command at a time holds (the run's lock). So two
+/// commands from two checkouts given one value never meet, nothing of the
+/// caller's is ever taken for a job's folder, and a command finds what an
+/// earlier one of its own left there.
+fn command_folder(scratch: &Path) -> String {
+    let mut hash = Fnv::new();
+    hash.add(scratch.as_os_str().as_encoded_bytes());
+    format!("cineris-mutate-{:08x}", hash.0 >> 32)
+}
+
+impl TestsBase {
+    /// Makes the folder for a run of the tests, empty: what is in it is
+    /// this command's, by its name, left by a run that was killed or kept
+    /// for a run with nothing broken that failed. Returns what could not be
+    /// cleared, to be said; a folder that cannot be made is an error.
+    fn make(&self) -> Result<Option<String>> {
+        let note = crate::combine::remove_tree(&self.dir).err();
+        fs::create_dir_all(&self.dir).map_err(|error| {
+            format!(
+                "could not make the tests' scratch folder {}: {error}",
+                self.dir.display()
+            )
+        })?;
+        Ok(note.map(|error| format!("The tests' scratch folder was not emptied first: {error}")))
+    }
+
+    /// Removes the folder, with whatever a test that failed left in it, and
+    /// the command's folder around it once no job's is left there. Returns
+    /// what could not be removed (a file a process still holds on Windows),
+    /// to be said: the next run of the job removes it.
+    fn remove(&self) -> Option<String> {
+        let failed = crate::combine::remove_tree(&self.dir).err();
+        if let Some(named) = &self.named {
+            // Fails while another job's folder is in it, and is left.
+            let _ = fs::remove_dir(named);
+        }
+        failed.map(|error| format!("The tests' scratch folder was left: {error}"))
+    }
+}
+
+/// Whether a run's tests' scratch folders are kept for whoever looks: when
+/// the run was one with nothing broken (`unbroken`) and a test failed, or
+/// the run failed some other way. A break's run is not: its tests are meant
+/// to fail. A stall is run again, and a tree that does not build ran
+/// nothing.
+fn keeps(unbroken: bool, tested: &Result<Tested>) -> bool {
+    unbroken
+        && match tested {
+            Ok(Tested::Ran(cases)) => cases.iter().any(|case| case.failed),
+            Ok(Tested::Broken(_)) | Err(_) => true,
+            Ok(Tested::Stalled(_) | Tested::DoesNotCompile(_)) => false,
+        }
 }
 
 impl CargoRunner {
@@ -279,7 +371,13 @@ impl CargoRunner {
     pub(crate) fn new(scratch: &Path, job: usize) -> Self {
         let target = scratch.join(jobs::numbered("target", job));
         Self {
-            tests: tests_base(std::env::var_os(TESTS_BASE).as_deref(), &target, job),
+            tests: tests_base(
+                std::env::var_os(TESTS_BASE).as_deref(),
+                scratch,
+                &target,
+                job,
+            ),
+            kept_base: None,
             target,
             log: scratch.join(format!("{}.log", jobs::numbered("last", job))),
             logs: scratch.join("logs"),
@@ -322,7 +420,7 @@ impl CargoRunner {
             .env("CARGO_TARGET_DIR", &self.target)
             .env_remove("CARGO_BUILD_TARGET_DIR")
             // Nor a parent of its tests' scratch folders with another job.
-            .env(TESTS_BASE, &self.tests)
+            .env(TESTS_BASE, &self.tests.dir)
             // The log is read for the compiler's errors and by a person, not
             // shown on a terminal. CI sets `CARGO_TERM_COLOR=always`, which
             // cargo, rustc and nextest honour even into a file, and an
@@ -459,20 +557,74 @@ impl Runner for CargoRunner {
     }
 
     fn test(&mut self, tree: &Path, packages: &[String]) -> Result<Tested> {
-        self.run_tests(tree, packages, &[])
+        self.run_tests(tree, packages, &[], false)
+    }
+
+    fn test_unbroken(&mut self, tree: &Path, packages: &[String]) -> Result<Tested> {
+        self.run_tests(tree, packages, &[], true)
     }
 
     fn test_only(&mut self, tree: &Path, packages: &[String], filter: &str) -> Result<Tested> {
-        // Once: no retry, whatever the profile gives the test.
+        // Once: no retry, whatever the profile gives the test. It is only
+        // ever a known flake's second run, with nothing broken.
         let extra = ["-E", filter, "--retries", "0"].map(str::to_owned);
-        self.run_tests(tree, packages, &extra)
+        self.run_tests(tree, packages, &extra, true)
+    }
+
+    fn kept(&self) -> Option<PathBuf> {
+        self.kept_base.clone()
     }
 }
 
 impl CargoRunner {
     /// Runs the packages' tests in `tree`, with `extra` arguments for
-    /// nextest.
-    fn run_tests(&mut self, tree: &Path, packages: &[String], extra: &[String]) -> Result<Tested> {
+    /// nextest, in their scratch base: made empty before the run, and
+    /// removed after it unless it is kept ([`keeps`]; `unbroken` is a run
+    /// with nothing broken).
+    fn run_tests(
+        &mut self,
+        tree: &Path,
+        packages: &[String],
+        extra: &[String],
+        unbroken: bool,
+    ) -> Result<Tested> {
+        // What an earlier run kept is emptied now.
+        self.kept_base = None;
+        let cleared = self.tests.make()?;
+        let tested = self.run_tests_in_base(tree, packages, extra);
+        self.after_run(unbroken, &tested, cleared);
+        tested
+    }
+
+    /// What follows a run of the tests: their scratch base kept or removed,
+    /// and what could not be cleared before it or removed after it written
+    /// at the end of the job's log, after what cargo printed.
+    fn after_run(&mut self, unbroken: bool, tested: &Result<Tested>, cleared: Option<String>) {
+        let mut notes: Vec<String> = cleared.into_iter().collect();
+        let keep = keeps(unbroken, tested);
+        self.kept_base = keep.then(|| self.tests.dir.clone());
+        if !keep {
+            notes.extend(self.tests.remove());
+        }
+        if notes.is_empty() {
+            return;
+        }
+        // The log is for a person; a note that cannot be written there
+        // changes nothing of the run.
+        if let Ok(mut log) = OpenOptions::new().create(true).append(true).open(&self.log) {
+            for note in &notes {
+                let _ = writeln!(log, "xtask mutate: {note}");
+            }
+        }
+    }
+
+    /// The run itself, in the scratch base made for it.
+    fn run_tests_in_base(
+        &mut self,
+        tree: &Path,
+        packages: &[String],
+        extra: &[String],
+    ) -> Result<Tested> {
         let report = workspace::nextest_report(tree, "mutate");
         // A report left by the run before must not be read as this run's.
         workspace::forget_report(&report)?;
@@ -482,7 +634,7 @@ impl CargoRunner {
             .to_vec();
         arguments.extend(Self::package_arguments(packages));
         arguments.extend(extra.iter().cloned());
-        let (status, output) = in_tests_base(&self.tests, || self.cargo(tree, &arguments))?;
+        let (status, output) = self.cargo(tree, &arguments)?;
         let read = (status == Some(0) || status == Some(NEXTEST_TESTS_FAILED))
             .then(|| junit::read(&report));
         let agree =
@@ -1167,8 +1319,10 @@ pub(crate) fn drive_jobs(
     // A set whose run stalled is run again with one job, once the others
     // are done: a stall is a machine with more on it than it can take.
     let test_set = |runner: &mut dyn Runner, copy: &Path, set: &(&[String], &str)| {
-        let tested = runner.test(copy, set.0)?;
-        known_flakes_again(runner, copy, set.0, tested, &options.flaky)
+        let tested = runner.test_unbroken(copy, set.0)?;
+        let mut baseline = known_flakes_again(runner, copy, set.0, tested, &options.flaky)?;
+        baseline.kept = runner.kept();
+        Ok::<_, String>(baseline)
     };
     let mut stalled = Vec::new();
     let finished = jobs::for_each(
@@ -1340,6 +1494,13 @@ fn take_baseline(
         say(note);
     }
     let again = baseline.again;
+    // Where the tests' scratch folders are, for a run that failed.
+    let kept = baseline.kept.map_or_else(String::new, |kept| {
+        format!(
+            "\nWhat its tests left is kept in {}; the next run removes it.",
+            kept.display()
+        )
+    });
     let cases = match baseline.tested {
         Tested::Ran(cases) => cases,
         Tested::Stalled(note) => {
@@ -1353,7 +1514,7 @@ fn take_baseline(
         }
         Tested::Broken(detail) => {
             return Err(format!(
-                "the tests of {package} could not be run with nothing broken: {detail}"
+                "the tests of {package} could not be run with nothing broken: {detail}{kept}"
             ));
         }
     };
@@ -1366,7 +1527,7 @@ fn take_baseline(
         return Err(format!(
             "{} test(s) fail with nothing broken: {}.\nA test that fails by itself is no \
              evidence about a break. Fix it first; if it fails only sometimes, find it with \
-             `cargo xtask stress`.",
+             `cargo xtask stress`.{kept}",
             failing.len(),
             some_of(&failing)
         ));
@@ -1526,7 +1687,8 @@ pub(crate) mod tests {
     use super::super::list::{self, Break};
     use super::super::tests::breaks;
     use super::{
-        CargoRunner, Finished, Options, Outcome, Runner, Tested, Verdict, drive, report_only,
+        CargoRunner, Finished, Options, Outcome, Runner, Tested, TestsBase, Verdict, drive,
+        report_only,
     };
     use crate::Result;
     use crate::junit::TestCase;
@@ -1614,6 +1776,9 @@ replace: \"inside\"
         baselines_to_stall: Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>,
         /// How many runs with nothing broken this runner made.
         baselines: usize,
+        /// Where it says it kept the folders of a run with nothing broken
+        /// that failed.
+        keeps: Option<PathBuf>,
     }
 
     impl Pretend {
@@ -1692,6 +1857,10 @@ replace: \"inside\"
                 case("tests::far_over_is_over", !library.contains("1.5 * budget")),
                 case("tests::unrelated", false),
             ]))
+        }
+
+        fn kept(&self) -> Option<PathBuf> {
+            self.keeps.clone()
         }
 
         fn test_only(&mut self, _tree: &Path, packages: &[String], filter: &str) -> Result<Tested> {
@@ -1984,28 +2153,49 @@ replace: \"inside\"
     fn no_two_jobs_give_their_tests_one_scratch_base() {
         // The variable is the test kit's.
         assert_eq!(super::TESTS_BASE, cineris_testkit::scratch::BASE);
-        let target = |job| Path::new("scratch").join(super::jobs::numbered("target", job));
-        let bases = |callers: Option<&str>| -> Vec<PathBuf> {
+        let scratch = Path::new("checkout/target/mutate");
+        let target = |job| scratch.join(super::jobs::numbered("target", job));
+        let bases = |callers: Option<&str>| -> Vec<TestsBase> {
             (0..3)
-                .map(|job| super::tests_base(callers.map(OsStr::new), &target(job), job))
+                .map(|job| super::tests_base(callers.map(OsStr::new), scratch, &target(job), job))
                 .collect()
         };
         let job = |parent: &Path, n: usize| parent.join(format!("job-{n}"));
 
         // Under the caller's, set once for the whole command to put the
-        // tests on another disk: a folder for each job.
+        // tests on another disk: a folder for each job, in a folder named
+        // for the command, so that nothing of the caller's is taken for one.
         let callers = if cfg!(windows) { r"D:\fast" } else { "/fast" };
-        let fast = Path::new(callers);
-        assert_eq!(
-            bases(Some(callers)),
-            [job(fast, 1), job(fast, 2), job(fast, 3)]
+        let name = super::command_folder(scratch);
+        let named = Path::new(callers).join(&name);
+        let expected: Vec<TestsBase> = (1..=3)
+            .map(|n| TestsBase {
+                dir: job(&named, n),
+                named: Some(named.clone()),
+            })
+            .collect();
+        assert_eq!(bases(Some(callers)), expected);
+
+        // The command's folder is the same for every run of one command's
+        // copies, and another for another checkout's.
+        assert!(
+            name.strip_prefix("cineris-mutate-").is_some_and(
+                |hash| hash.len() == 8 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())
+            ),
+            "{name}"
         );
+        assert_eq!(super::command_folder(scratch), name);
+        assert_ne!(
+            super::command_folder(Path::new("another/target/mutate")),
+            name
+        );
+
         // A relative one is made absolute, so that the folder the tests are
         // given is the one made and removed.
-        let relative = &bases(Some("relative"))[1];
+        let relative = &bases(Some("relative"))[1].dir;
         assert!(relative.is_absolute(), "{}", relative.display());
         assert!(
-            relative.ends_with(Path::new("relative").join("job-2")),
+            relative.ends_with(Path::new("relative").join(&name).join("job-2")),
             "{}",
             relative.display()
         );
@@ -2013,15 +2203,13 @@ replace: \"inside\"
         // Without it, or with it empty (the test kit's reading), under each
         // job's own build directory, where the tests would have put them.
         for unset in [None, Some("")] {
-            assert_eq!(
-                bases(unset),
-                [
-                    job(&target(0).join("tmp"), 1),
-                    job(&target(1).join("tmp"), 2),
-                    job(&target(2).join("tmp"), 3),
-                ],
-                "{unset:?}"
-            );
+            let expected: Vec<TestsBase> = (0..3)
+                .map(|n| TestsBase {
+                    dir: job(&target(n).join("tmp"), n + 1),
+                    named: None,
+                })
+                .collect();
+            assert_eq!(bases(unset), expected, "{unset:?}");
         }
     }
 
@@ -2037,53 +2225,152 @@ replace: \"inside\"
                 .get_envs()
                 .find(|(key, _)| *key == super::TESTS_BASE)
                 .and_then(|(_, value)| value.map(Path::new));
-            assert_eq!(variable, Some(runner.tests.as_path()), "job {job}");
+            assert_eq!(variable, Some(runner.tests.dir.as_path()), "job {job}");
             assert_eq!(
                 runner.tests,
-                super::tests_base(callers.as_deref(), &runner.target, job)
+                super::tests_base(callers.as_deref(), scratch, &runner.target, job)
             );
-            given.push(runner.tests);
+            given.push(runner.tests.dir);
         }
         assert_ne!(given[0], given[1]);
     }
 
+    /// A job's base in a folder named for the command, beside a `job-1` of
+    /// the caller's own.
+    fn named_base(test: &str) -> (PathBuf, TestsBase) {
+        let root = tree(test, &[("job-1/the-callers.txt", "not a job's")]);
+        let named = root.join("cineris-mutate-0123abcd");
+        let base = TestsBase {
+            dir: named.join("job-1"),
+            named: Some(named),
+        };
+        (root, base)
+    }
+
     #[test]
-    fn the_tests_scratch_base_is_made_before_their_run_and_removed_after_whatever_it_came_to() {
-        let root = tree("tests-base", &[]);
-        let base = root.join("tests").join("job-2");
+    fn the_tests_scratch_base_is_made_empty_before_a_run_and_removed_after_it() {
+        let (root, base) = named_base("tests-base");
+        let named = base.named.clone().unwrap();
 
-        let ran = super::in_tests_base(&base, || {
-            assert!(base.is_dir(), "the base is made before the run");
-            // What a test that failed leaves, read-only as some tests'
-            // files are.
-            let left = base.join("cineris-demo-it/a_test/left.txt");
-            fs::create_dir_all(left.parent().unwrap()).unwrap();
-            fs::write(&left, "left").unwrap();
-            let mut permissions = fs::metadata(&left).unwrap().permissions();
-            permissions.set_readonly(true);
-            fs::set_permissions(&left, permissions).unwrap();
-            Ok(7)
-        });
-        assert_eq!(ran, Ok(7));
-        assert!(!base.exists(), "the base is removed after the run");
+        assert_eq!(base.make(), Ok(None));
+        assert!(base.dir.is_dir(), "the base is made before the run");
+        // What a test that failed leaves, read-only as some tests' files
+        // are.
+        let left = base.dir.join("cineris-demo-it/a_test/left.txt");
+        fs::create_dir_all(left.parent().unwrap()).unwrap();
+        fs::write(&left, "left").unwrap();
+        let mut permissions = fs::metadata(&left).unwrap().permissions();
+        permissions.set_readonly(true);
+        fs::set_permissions(&left, permissions).unwrap();
+        assert_eq!(base.remove(), None);
+        assert!(!base.dir.exists(), "the base is removed after the run");
+        assert!(!named.exists(), "and the command's folder with the last");
 
-        let failed: Result<()> = super::in_tests_base(&base, || {
-            assert!(base.is_dir());
-            Err("nextest could not be started".to_owned())
-        });
-        assert_eq!(failed, Err("nextest could not be started".to_owned()));
-        assert!(
-            !base.exists(),
-            "the base is removed after a run that failed"
-        );
-
-        // What a run that was killed left goes at the end of the next.
-        let killed = base.join("cineris-demo-it/killed/left.txt");
+        // What a run that was killed left, or a run that was kept, is the
+        // command's by its name, and is emptied before the next run.
+        let killed = base.dir.join("cineris-demo-it/killed/left.txt");
         fs::create_dir_all(killed.parent().unwrap()).unwrap();
         fs::write(&killed, "left").unwrap();
-        super::in_tests_base(&base, || Ok(())).unwrap();
-        assert!(!base.exists(), "what a killed run left is removed");
+        assert_eq!(base.make(), Ok(None));
+        assert_eq!(
+            fs::read_dir(&base.dir).unwrap().count(),
+            0,
+            "what was left is gone before the run"
+        );
 
+        // Another job's folder keeps the command's folder.
+        let other = named.join("job-2");
+        fs::create_dir_all(&other).unwrap();
+        assert_eq!(base.remove(), None);
+        assert!(!base.dir.exists());
+        assert!(other.is_dir(), "another job's folder is left");
+
+        // The caller's own `job-1` was never touched.
+        assert_eq!(
+            fs::read_to_string(root.join("job-1/the-callers.txt")).unwrap(),
+            "not a job's"
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    fn one_case(failed: bool) -> TestCase {
+        TestCase {
+            binary: "demo".to_owned(),
+            name: "tests::t".to_owned(),
+            seconds: 0.01,
+            failed,
+            retried: false,
+            repeat: None,
+        }
+    }
+
+    #[test]
+    fn only_a_failed_run_with_nothing_broken_keeps_its_tests_folders() {
+        let passed = Ok(Tested::Ran(vec![one_case(false)]));
+        let failed = Ok(Tested::Ran(vec![one_case(false), one_case(true)]));
+        let broken = Ok(Tested::Broken("no report".to_owned()));
+        let stalled = Ok(Tested::Stalled("STALL".to_owned()));
+        let not_built = Ok(Tested::DoesNotCompile("error[E0425]".to_owned()));
+        let error: Result<Tested> = Err("could not run cargo".to_owned());
+
+        // With nothing broken, what failed is for whoever looks.
+        assert!(super::keeps(true, &failed));
+        assert!(super::keeps(true, &broken));
+        assert!(super::keeps(true, &error));
+        assert!(!super::keeps(true, &passed));
+        // A stall is run again, and a tree that does not build ran nothing.
+        assert!(!super::keeps(true, &stalled));
+        assert!(!super::keeps(true, &not_built));
+        // A break's tests are meant to fail.
+        for tested in [&passed, &failed, &broken, &error] {
+            assert!(!super::keeps(false, tested), "{tested:?}");
+        }
+    }
+
+    #[test]
+    fn a_runner_keeps_a_failed_baselines_folders_removes_a_breaks_and_logs_what_it_could_not() {
+        let (root, base) = named_base("after-run");
+        let scratch = root.join("scratch");
+        fs::create_dir_all(&scratch).unwrap();
+        let mut runner = CargoRunner::new(&scratch, 0);
+        runner.tests = base.clone();
+        let failed = Ok(Tested::Ran(vec![one_case(true)]));
+
+        // With nothing broken, a failure's folders stay, and the runner
+        // says where.
+        base.make().unwrap();
+        runner.after_run(true, &failed, None);
+        assert!(base.dir.is_dir(), "kept");
+        assert_eq!(runner.kept(), Some(base.dir.clone()));
+
+        // A break's run that failed: removed, and nothing is kept.
+        runner.after_run(false, &failed, None);
+        assert!(!base.dir.exists(), "removed");
+        assert_eq!(runner.kept(), None);
+
+        // What could not be emptied or removed goes at the end of the job's
+        // log. A file where the folder is cannot be removed as one.
+        fs::write(&runner.log, "what cargo printed\n").unwrap();
+        fs::create_dir_all(base.named.as_ref().unwrap()).unwrap();
+        fs::write(&base.dir, "not a folder").unwrap();
+        runner.after_run(
+            false,
+            &failed,
+            Some("The tests' scratch folder was not emptied first: why".to_owned()),
+        );
+        let log = fs::read_to_string(&runner.log).unwrap();
+        assert!(log.starts_with("what cargo printed\n"), "{log}");
+        assert!(
+            log.contains("xtask mutate: The tests' scratch folder was not emptied first: why\n"),
+            "{log}"
+        );
+        assert!(
+            log.contains(&format!(
+                "xtask mutate: The tests' scratch folder was left: could not remove {}: ",
+                base.dir.display()
+            )),
+            "{log}"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -2923,7 +3210,30 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             "{error}"
         );
         assert!(error.contains("cargo xtask stress"), "{error}");
+        assert!(!error.contains("is kept in"), "{error}");
         assert_eq!(run.runner.asked, ["test demo"]);
+    }
+
+    #[test]
+    fn a_run_with_nothing_broken_that_fails_says_where_its_tests_left_their_folders() {
+        let mut run = Run::new("baseline-kept");
+        run.runner.always_failing = Some("tests::unrelated");
+        let kept = Path::new("kept").join("job-1");
+        run.runner.keeps = Some(kept.clone());
+
+        let error = run.go(&breaks("demo", LIST)).unwrap_err();
+
+        assert!(
+            error.contains("1 test(s) fail with nothing broken: demo tests::unrelated"),
+            "{error}"
+        );
+        assert!(
+            error.contains(&format!(
+                "What its tests left is kept in {}; the next run removes it.",
+                kept.display()
+            )),
+            "{error}"
+        );
     }
 
     #[test]
@@ -3364,7 +3674,7 @@ error: could not compile `demo` (lib test) due to 2 previous errors
 
         assert_eq!(finished, Finished::Complete { flagged: 2 }, "{said}");
         for expected in [
-            "  5 tests pass.",
+            "  6 tests pass.",
             "  does not compile: demo/not-rust: crates/demo/src/lib.rs:16:20: error: expected one of",
             "[1/5] demo/over-is-strict  caught by 1 test(s): demo \
              tests::at_the_budget_is_not_over  (",
@@ -3473,5 +3783,13 @@ error: could not compile `demo` (lib test) due to 2 previous errors
             );
         }
         assert!(scratch.join("target-2").is_dir(), "the second job's build");
+        // The fixture's own test found its job's base made; after the runs
+        // neither is left, nor the command's folder around them.
+        for job in [&first, &second] {
+            assert!(!job.tests.dir.exists(), "{}", job.tests.dir.display());
+            if let Some(named) = &job.tests.named {
+                assert!(!named.exists(), "{}", named.display());
+            }
+        }
     }
 }

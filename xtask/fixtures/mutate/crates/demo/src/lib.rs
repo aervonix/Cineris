@@ -52,4 +52,15 @@ mod tests {
     fn the_total_is_the_sum() {
         assert_eq!(total(&[1, 2, 3]), 6);
     }
+
+    /// `cargo xtask mutate` gives every run of the tests a scratch base of
+    /// the job's own, made before they run.
+    #[test]
+    fn the_jobs_scratch_base_is_there() {
+        let base = std::env::var_os("CINERIS_TEST_TMPDIR").expect("mutate gives the tests a base");
+        let base = std::path::Path::new(&base);
+        assert!(base.is_dir(), "{}", base.display());
+        let name = base.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("job-"), "{}", base.display());
+    }
 }
