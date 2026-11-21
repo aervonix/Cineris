@@ -675,9 +675,10 @@ pub(crate) fn look(
     // extension not approved as it is now (step 28). The project's folder
     // of extensions is looked in only now, below the never and the not
     // now: a look when it has none, two when it has a `.cineris`. The
-    // user's folder is only listed, for the names it takes, and only when
-    // the project has an extension. What was read is handed to the
-    // session, which does not read it again.
+    // user's folder is listed for the names it takes, and the places in
+    // its extensions looked at within the session's bound, none of their
+    // files read, only when the project has an extension. What was read
+    // is handed to the session, which does not read it again.
     let rules_new = !trust.rules && !trust.rules_declined;
     let quiet = trust.standing != TrustStanding::Untrusted && !rules_new && !trust.git_new;
     let (found, watched) = crate::ext::found::in_project(&place.resolver, &inner.options.clock);
@@ -800,13 +801,13 @@ pub(crate) fn look(
     // anything else it lists (the maintainers, after the fresh review of
     // step 28): what trust turns on there is the sandbox off.
     if rules_shown {
-        let warnings: Vec<TrustResource> = harness_write_warnings(
+        let warnings: Vec<TrustResource> = harness_write_warnings::<Box<ErrorData>>(
             inner,
-            &trust.loaded,
-            &peek,
             &place.root,
             place.state.as_ref(),
-        )
+            (&trust.loaded, &peek),
+            &|profile| Ok((untrusted_load(profile)?, trusted_load(Some(profile))?)),
+        )?
         .into_iter()
         .map(|detail| TrustResource {
             kind: TrustResourceKind::Settings,
@@ -1735,22 +1736,80 @@ pub(crate) fn programs_confined(
         )
 }
 
+/// A profile's configuration loaded with no trust and with trust, for
+/// [`harness_write_warnings`].
+pub(crate) type ProfileLoads<'a, E> = dyn Fn(&str) -> Result<(Loaded, Loaded), E> + 'a;
+
 /// What the trust question says of each write root a yes would add that
 /// holds the harness's own files, and so would turn the sandbox off for the
 /// project's sessions (the maintainers, after the fresh review of step 28;
-/// `outstanding/a-projects-write-root-holding-the-harness-files-turns-the-sandbox-off.md`).
-/// A root counts as a yes would add it when the load `trusted` holds it and
-/// the load `held`, the one in force without that yes, does not; it is
+/// `outstanding/a-projects-write-root-holding-the-harness-files-turns-the-sandbox-off.md`):
+/// of the configuration as `loads` holds it, `(held, trusted)`, and of each
+/// profile the project defines, as `with_profile` loads it the same two
+/// ways, since a yes trusts every profile (the last look at the warning: a
+/// profile's root was not said). A profile's root the configuration as a
+/// whole holds is said once, of the whole. A profile that cannot be
+/// selected (the managed file's lock) never applies.
+///
+/// # Errors
+///
+/// What loading a profile gives.
+pub(crate) fn harness_write_warnings<E>(
+    inner: &Inner,
+    root: &AbsPath,
+    state: Option<&StateDir>,
+    loads: (&Loaded, &Loaded),
+    with_profile: &ProfileLoads<'_, E>,
+) -> Result<Vec<String>, E> {
+    let (held, trusted) = loads;
+    let mut said: Vec<String> = harness_write_roots(inner, held, trusted, root, state)
+        .into_iter()
+        .map(|(_, shown)| {
+            format!(
+                "This project's configuration asks to write in `{}`, which holds Cineris's own \
+                 files. If you trust it, its sessions run without the sandbox.",
+                cineris_base::in_code(&shown)
+            )
+        })
+        .collect();
+    for name in &trusted.project_profiles {
+        // The profile selected is the configuration as a whole, said above.
+        if trusted.profile.as_deref() == Some(name.as_str()) {
+            continue;
+        }
+        let (held, of) = with_profile(name)?;
+        if of.profile.as_deref() != Some(name.as_str()) {
+            continue;
+        }
+        for (entry, shown) in harness_write_roots(inner, &held, &of, root, state) {
+            if trusted.settings.sandbox.write.contains(&entry) {
+                continue;
+            }
+            said.push(format!(
+                "This project's configuration asks, in its profile `{}`, to write in `{}`, which \
+                 holds Cineris's own files. If you trust it, its sessions with that profile run \
+                 without the sandbox.",
+                cineris_base::in_code(name),
+                cineris_base::in_code(&shown)
+            ));
+        }
+    }
+    Ok(said)
+}
+
+/// Each write root a yes would add that holds the harness's own files, as
+/// it is written and as it is shown, under `~`: one the load `trusted`
+/// holds and the load `held`, the one in force without that yes, does not,
 /// judged as a session's start judges its roots ([`holds_harness_files`]).
-/// Nothing is said where the sandbox would not enforce anyway: it is off,
-/// there is none, or what is in force already turns it off.
-pub(crate) fn harness_write_warnings(
+/// None where the sandbox would not enforce anyway: it is off, there is
+/// none, or what is in force already turns it off.
+fn harness_write_roots(
     inner: &Inner,
     held: &Loaded,
     trusted: &Loaded,
     root: &AbsPath,
     state: Option<&StateDir>,
-) -> Vec<String> {
+) -> Vec<(String, String)> {
     let (sandbox, _) = inner.sandbox.state(trusted.settings.sandbox.enabled);
     let question = SessionId::new("s_question");
     let launcher = inner.sandbox.program();
@@ -1789,11 +1848,7 @@ pub(crate) fn harness_write_warnings(
                     || entry.clone(),
                     |placed| crate::ext::found::shown_path(&placed.to_fs_path(), home.as_deref()),
                 );
-            format!(
-                "This project's configuration asks to write in `{}`, which holds Cineris's own \
-                 files. If you trust it, its sessions run without the sandbox.",
-                cineris_base::in_code(&shown)
-            )
+            (entry.clone(), shown)
         })
         .collect()
 }
