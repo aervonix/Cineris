@@ -16,12 +16,22 @@
 //! session's first turn waiting for one the cache misses; and found again
 //! at a turn's start when what they were found in changed (`watched`).
 //!
+//! A session's hook commands (`hooks`) are its configuration's: the
+//! user's own and a project's, kept apart, a project's waiting for trust
+//! and pinned as the trust question showed it. Each start (`hook_command`)
+//! goes through `cineris.exec`'s own path (`exec::run_as`), decided by the
+//! permission engine without a question (`hook_command::hook_may_run`).
+//!
 //! The script engine is behind the `scripts` feature: without it, no
-//! extension's tool is registered.
+//! extension's tool is registered, and no hook command is started yet: its
+//! start is `cineris.exec`'s, which the feature builds.
 
 #[cfg(feature = "scripts")]
 mod exec;
 pub(crate) mod found;
+#[cfg(feature = "scripts")]
+mod hook_command;
+pub(crate) mod hooks;
 #[cfg(feature = "scripts")]
 mod host;
 #[cfg(feature = "scripts")]
@@ -54,6 +64,10 @@ pub use found::{
 
 #[cfg(feature = "scripts")]
 pub(crate) use exec::{ExecParts, HarnessFiles};
+#[cfg(feature = "scripts")]
+pub(crate) use hook_command::{HookCommands, SessionHooks};
+#[cfg(feature = "scripts")]
+pub use hook_command::{HookOutcome, HookRun};
 #[cfg(feature = "scripts")]
 pub(crate) use prompt::PromptParts;
 #[cfg(feature = "scripts")]

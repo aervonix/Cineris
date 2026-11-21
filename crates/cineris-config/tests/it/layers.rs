@@ -549,18 +549,18 @@ fn a_value_cannot_replace_a_table_that_holds_a_locked_key() {
         "[managed]\nlocked = [\"mcp.servers.corp\", \"hooks.audit.command\", \
          \"providers.corp.headers.X-Audit\"]\n\
          [mcp.servers.corp]\ncommand = \"corp-proxy\"\n\
-         [hooks.audit]\ncommand = \"audit-log\"\n\
+         [hooks.audit]\nevent = \"turn.end\"\ncommand = [\"audit-log\"]\n\
          [providers.corp]\nheaders = { X-Audit = \"on\" }\n",
     );
     for (layer, text) in [
         (
             LayerKind::User,
-            "[mcp]\nservers = \"none\"\n[hooks]\naudit = false\n\
+            "[mcp]\nservers = \"none\"\n[hooks.audit]\ncommand = [\"mine\"]\n\
              [providers.corp]\nheaders = { X-Other = \"1\" }\n",
         ),
         (
             LayerKind::Project,
-            "[mcp]\nservers = []\n[hooks]\naudit = 0\n",
+            "[mcp]\nservers = []\n[hooks.audit]\ncommand = [\"theirs\"]\n",
         ),
     ] {
         machine
@@ -577,9 +577,11 @@ fn a_value_cannot_replace_a_table_that_holds_a_locked_key() {
         );
         assert_eq!(
             value(&loaded, "hooks.audit.command"),
-            "\"audit-log\"",
+            "[\"audit-log\"]",
             "{layer}"
         );
+        // A project's hook of a locked name is not read either (step 28).
+        assert!(loaded.project_hooks.is_empty(), "{layer}");
         assert_eq!(
             loaded.settings.providers["corp"]
                 .headers
@@ -606,12 +608,12 @@ fn a_value_cannot_replace_a_table_that_holds_a_locked_key() {
     machine.layer(LayerKind::Project, "");
     machine.layer(
         LayerKind::User,
-        "[mcp.servers.mine]\ncommand = \"mine\"\n[hooks.audit]\nwhen = \"start\"\n",
+        "[mcp.servers.mine]\ncommand = \"mine\"\n[hooks.audit]\nobserve = true\n",
     );
     let loaded = machine.load();
     assert_eq!(value(&loaded, "mcp.servers.mine.command"), "\"mine\"");
     assert_eq!(value(&loaded, "mcp.servers.corp.command"), "\"corp-proxy\"");
-    assert_eq!(value(&loaded, "hooks.audit.when"), "\"start\"");
+    assert_eq!(value(&loaded, "hooks.audit.observe"), "true");
     assert!(loaded.diagnostics.is_empty(), "{:?}", machine.said(&loaded));
 }
 

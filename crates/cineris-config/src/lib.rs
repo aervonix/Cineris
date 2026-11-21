@@ -60,7 +60,7 @@ pub use env::{Env, Platform};
 pub use key::KeyPath;
 pub use layer::{Diagnostic, LayerKind, Origin, Severity, Withheld};
 pub use load::{
-    Change, LoadFailure, LoadOptions, Loaded, Override, PlacedRule, ProjectTrust, load,
+    Change, LoadFailure, LoadOptions, Loaded, Override, PlacedRule, ProjectHook, ProjectTrust, load,
 };
 pub use reload::{LiveConfig, Reload};
 pub use schema::{Effect, Settings, Trust, TrustClass};
