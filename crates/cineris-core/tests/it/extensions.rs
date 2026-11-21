@@ -350,17 +350,54 @@ fn a_host_writes_question_offers_allow_once_only_and_keeps_no_rule() {
     assert_eq!(world.read(".env").as_deref(), Some("TOKEN=1\n"));
 }
 
+/// The harness's log at `warn` and above, each event as its fields' text,
+/// for a test on the thread that set it.
+#[derive(Clone, Default)]
+struct Warnings(Arc<std::sync::Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for Warnings {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        *metadata.level() <= tracing::Level::WARN
+    }
+
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Fields(Vec<String>);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0.push(format!("{}={value:?}", field.name()));
+            }
+        }
+        let mut fields = Fields(Vec::new());
+        event.record(&mut fields);
+        self.0.lock().unwrap().push(fields.0.join(" "));
+    }
+
+    fn enter(&self, _: &tracing::span::Id) {}
+
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
 /// A script's write of a protected path is refused at every level,
 /// `unrestricted` included, before the engine is asked, naming the path
 /// (the fix of the protected writes): a file (`.git/config`), a file below
 /// a protected folder (`.git/hooks/pre-commit`), a protected folder itself
 /// (`.husky`), `.cargo/config.toml` and a CI workflow; through `..` and
-/// through a link; at any depth; and on Windows in another case and with
-/// `\`. At `supervised`, where the engine would ask about each, nothing is
-/// asked (the front fails the test on a question it did not expect) and no
-/// denial is recorded; at `unrestricted`, where the engine would allow
-/// each, none is written. An ordinary write is made at both, as before. One
-/// world, a session at each level (folded for Windows' tier 2).
+/// through a link; at any depth; in another case with nothing there to
+/// spell it (`.Husky`); and on Windows in another case and with `\`. At
+/// `supervised`, where the engine would ask about each, nothing is asked
+/// (the front fails the test on a question it did not expect), no denial is
+/// recorded, and the log says each refusal; at `unrestricted`, where the
+/// engine would allow each, none is written. An ordinary write is made at
+/// both, as before. One world, a session at each level (folded for
+/// Windows' tier 2).
 #[test]
 fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked() {
     let world = World::new(
@@ -377,6 +414,9 @@ fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_
         ".git/config",
         ".git/hooks/pre-commit",
         ".husky",
+        // Another case, where nothing is there to give the spelling on
+        // disk: refused on a mount that ignores case, and on Windows.
+        ".Husky",
         ".cargo/config.toml",
         ".github/workflows/ci.yml",
         "src/../.git/config",
@@ -390,7 +430,11 @@ fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_
         protected.push("hooks-link/pre-commit");
     }
     if cfg!(windows) {
-        protected.extend([r".GIT\CONFIG", r".git/Hooks\post-checkout"]);
+        protected.extend([
+            r".GIT\CONFIG",
+            r".git/Hooks\post-checkout",
+            r".GITHUB\Workflows\ci.yml",
+        ]);
     }
     let extension = approve(
         &world.dir.join("ext"),
@@ -448,6 +492,9 @@ fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_
             "{tried:?}"
         );
     };
+    // Each refusal is in the harness's log, since nobody is asked.
+    let warned = Warnings::default();
+    let _logging = tracing::subscriber::set_default(warned.clone());
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.prompt("plant something").await;
@@ -457,6 +504,15 @@ fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_
         front.turns(1).await;
         check(&tried(&front), "src/first.txt");
         assert!(core.permission_denials(&front.session).is_empty());
+        let logged = warned.0.lock().unwrap().clone();
+        assert!(
+            logged.iter().any(|line| {
+                line.contains("message=refused an extension's write of a protected path")
+                    && line.contains("extension=\"probe\"")
+                    && line.contains("path=.git/hooks/pre-commit")
+            }),
+            "{logged:?}"
+        );
         front.close().await;
 
         let front = Front::start_as(
@@ -478,6 +534,7 @@ fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_
         ".git/config",
         ".git/hooks/pre-commit",
         ".husky",
+        ".Husky",
         ".cargo/config.toml",
         ".github/workflows/ci.yml",
         "vendor/lib/.git/config",
