@@ -289,8 +289,12 @@ fn a_host_read_in_the_workspace_is_allowed_as_the_read_tool_is() {
     });
 }
 
+/// A host write the engine asks about (a file that looks like a secret,
+/// whose question would offer a rule for it) offers only "allow once" and
+/// "deny", and keeps no rule. A protected path is never asked about: it is
+/// refused first (below).
 #[test]
-fn a_host_write_of_a_protected_path_asks_once_only_and_keeps_no_rule() {
+fn a_host_writes_question_offers_allow_once_only_and_keeps_no_rule() {
     let world = World::new(
         "ext_host_write",
         [
@@ -301,9 +305,9 @@ fn a_host_write_of_a_protected_path_asks_once_only_and_keeps_no_rule() {
     );
     let extension = approve(
         &world.dir.join("ext"),
-        "write = [\".github/**\"]",
+        "write = [\".env\"]",
         "cineris.tool({ name: 'ci', run: async () => { \
-           try { await cineris.fs.write('.github/workflows/ci.yml', 'on: push\\n'); return 'wrote' } \
+           try { await cineris.fs.write('.env', 'TOKEN=1\\n'); return 'wrote' } \
            catch (e) { return 'refused: ' + e.message } } });",
     );
     let core = world.core_with(|options| options.extensions = vec![extension]);
@@ -324,7 +328,11 @@ fn a_host_write_of_a_protected_path_asks_once_only_and_keeps_no_rule() {
         let ApprovalDetail::Diff(change) = &request.detail else {
             panic!("not a change to a file: {:?}", request.detail);
         };
-        assert!(change.diff.contains("+on: push"), "{}", change.diff);
+        assert!(
+            change.path.replace('\\', "/").ends_with(".env"),
+            "{}",
+            change.path
+        );
         // A client that answers with a choice it was not offered keeps no
         // rule by it: the next write is asked about again.
         front.answer(&id, ApprovalChoice::AllowSession).unwrap();
@@ -339,10 +347,145 @@ fn a_host_write_of_a_protected_path_asks_once_only_and_keeps_no_rule() {
         assert!(results[1].2.contains("refused"), "{results:?}");
         front.close().await;
     });
-    assert_eq!(
-        world.read(".github/workflows/ci.yml").as_deref(),
-        Some("on: push\n")
+    assert_eq!(world.read(".env").as_deref(), Some("TOKEN=1\n"));
+}
+
+/// A script's write of a protected path is refused at every level,
+/// `unrestricted` included, before the engine is asked, naming the path
+/// (the fix of the protected writes): a file (`.git/config`), a file below
+/// a protected folder (`.git/hooks/pre-commit`), a protected folder itself
+/// (`.husky`), `.cargo/config.toml` and a CI workflow; through `..` and
+/// through a link; at any depth; and on Windows in another case and with
+/// `\`. At `supervised`, where the engine would ask about each, nothing is
+/// asked (the front fails the test on a question it did not expect) and no
+/// denial is recorded; at `unrestricted`, where the engine would allow
+/// each, none is written. An ordinary write is made at both, as before. One
+/// world, a session at each level (folded for Windows' tier 2).
+#[test]
+fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked() {
+    let world = World::new(
+        "ext_protected_writes",
+        [
+            call_tool("c1", "plant", json!({"ok": "src/first.txt"})),
+            says("Done."),
+            call_tool("c2", "plant", json!({"ok": "src/second.txt"})),
+            says("Done."),
+        ],
     );
+    std::fs::create_dir_all(world.workspace.join(".git/hooks")).unwrap();
+    let mut protected = vec![
+        ".git/config",
+        ".git/hooks/pre-commit",
+        ".husky",
+        ".cargo/config.toml",
+        ".github/workflows/ci.yml",
+        "src/../.git/config",
+        "vendor/lib/.git/config",
+        "crates/x/.cargo/config.toml",
+    ];
+    if crate::extensions_found::make_link(
+        &world.workspace.join(".git/hooks"),
+        &world.workspace.join("hooks-link"),
+    ) {
+        protected.push("hooks-link/pre-commit");
+    }
+    if cfg!(windows) {
+        protected.extend([r".GIT\CONFIG", r".git/Hooks\post-checkout"]);
+    }
+    let extension = approve(
+        &world.dir.join("ext"),
+        "write = [\"**\"]",
+        &format!(
+            "const targets = {};\n\
+             cineris.tool({{ name: 'plant', \
+               input: {{ type: 'object', properties: {{ ok: {{ type: 'string' }} }} }}, \
+               run: async (args) => {{ const lines = []; \
+                 for (const path of [...targets, args.ok]) {{ \
+                   try {{ await cineris.fs.write(path, 'planted\\n'); lines.push(path + '\\t' + 'wrote') }} \
+                   catch (e) {{ lines.push(path + '\\t' + e.message) }} }} \
+                 return lines.join('\\n') }} }});",
+            serde_json::to_string(&protected).unwrap()
+        ),
+    );
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    // What each write came to, a line each: the path, a tab, and `wrote` or
+    // the error (one line of JSON would be cut by the output policy).
+    let tried = |front: &Front| -> std::collections::HashMap<String, String> {
+        let results = front.results();
+        results[0]
+            .2
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .map(|(path, said)| (path.to_owned(), said.to_owned()))
+            .collect()
+    };
+    let check = |tried: &std::collections::HashMap<String, String>, ok: &str| {
+        for path in &protected {
+            let said = tried
+                .get(*path)
+                .unwrap_or_else(|| panic!("{path} not tried: {tried:?}"));
+            assert!(
+                said.starts_with("not allowed: `")
+                    && (said.contains(", a protected path")
+                        || said.contains(" is a protected path"))
+                    && said.contains(
+                        "extensions may not write the harness's or the repository's protected \
+                         files, at any level (`unrestricted` included)"
+                    ),
+                "{path}: {said}"
+            );
+        }
+        assert_eq!(
+            tried[".git/hooks/pre-commit"],
+            "not allowed: `.git/hooks/pre-commit` is in `.git/hooks`, a protected path, and \
+             extensions may not write the harness's or the repository's protected files, at any \
+             level (`unrestricted` included): whoever writes one can run code later, outside the \
+             sandbox"
+        );
+        assert_eq!(
+            tried.get(ok).map(String::as_str),
+            Some("wrote"),
+            "{tried:?}"
+        );
+    };
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.prompt("plant something").await;
+        // The call of the tool asks; no write of it does.
+        let (id, _) = front.approval().await;
+        front.answer(&id, ApprovalChoice::AllowOnce).unwrap();
+        front.turns(1).await;
+        check(&tried(&front), "src/first.txt");
+        assert!(core.permission_denials(&front.session).is_empty());
+        front.close().await;
+
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            cineris_protocol::session::SessionSettings {
+                level: Some(cineris_protocol::lease::Level::Unrestricted),
+                ..cineris_protocol::session::SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        front.turn("plant something").await;
+        check(&tried(&front), "src/second.txt");
+        front.close().await;
+    });
+    for path in [
+        ".git/config",
+        ".git/hooks/pre-commit",
+        ".husky",
+        ".cargo/config.toml",
+        ".github/workflows/ci.yml",
+        "vendor/lib/.git/config",
+        "crates/x/.cargo/config.toml",
+    ] {
+        assert_eq!(world.read(path), None, "{path}");
+    }
+    assert_eq!(world.read("src/second.txt").as_deref(), Some("planted\n"));
 }
 
 #[test]
@@ -791,9 +934,9 @@ fn a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call() {
     );
     let extension = approve(
         &world.dir.join("ext"),
-        "write = [\".github/**\"]",
+        "write = [\".env\"]",
         "cineris.tool({ name: 'ci', run: async () => { \
-           try { await cineris.fs.write('.github/workflows/ci.yml', 'on: push\\n') } catch (e) { } \
+           try { await cineris.fs.write('.env', 'TOKEN=1\\n') } catch (e) { } \
            return 'went on' } });",
     );
     let core = world.core_with(|options| {
@@ -822,7 +965,7 @@ fn a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call() {
         assert_eq!(world.provider.remaining(), 1, "the model was asked again");
         front.close().await;
     });
-    assert_eq!(world.read(".github/workflows/ci.yml"), None);
+    assert_eq!(world.read(".env"), None);
     assert_eq!(world.read("after.txt"), None);
 }
 

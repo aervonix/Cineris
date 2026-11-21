@@ -1,0 +1,141 @@
+# The fix of the protected writes (step 28): an extension's script may not
+# write a protected path at any level, `unrestricted` included, and the
+# refusal is made before the permission engine is asked
+# (docs/steps/28/parts/protected-writes.md). `cineris.fs.write` is the one
+# host call that writes a file, so each break below leaves out one part of
+# its check, or of what the check finds protected.
+
+[break] a-host-write-of-a-protected-path-is-not-refused
+rule: A script's write of a protected path is refused before the engine is asked, at every level.
+file: crates/cineris-core/src/ext/host.rs
+find: self.refuse_protected(&path).await?;
+replace: let _ = &path;
+caught-by:
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked
+
+[break] a-host-write-of-a-protected-path-is-let-through-at-unrestricted
+rule: The refusal holds at `unrestricted`, where the engine would allow the write unasked.
+file: crates/cineris-core/src/ext/host.rs
+find: self.refuse_protected(&path).await?;
+replace: if *self.parts.policy.engine().level() != cineris_protocol::lease::Level::Unrestricted { self.refuse_protected(&path).await?; }
+caught-by:
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked
+
+[break] a-host-write-of-a-protected-path-is-asked-about-short-of-unrestricted
+rule: The refusal holds short of `unrestricted` too, where the engine would ask: nobody is asked.
+file: crates/cineris-core/src/ext/host.rs
+find: self.refuse_protected(&path).await?;
+replace: if *self.parts.policy.engine().level() == cineris_protocol::lease::Level::Unrestricted { self.refuse_protected(&path).await?; }
+caught-by:
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked
+
+[break] a-protected-path-is-judged-by-its-text
+rule: A target is compared with each protected path by place, so the extended-length form, either separator and another case on Windows are one place.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: .find(|place| style.location_within(target, &place.at))
+replace: .find(|place| target.starts_with(&place.at))
+caught-by:
+    ext::protected::tests::on_windows_a_protected_path_is_found_whatever_its_form_and_case
+
+[break] the-leases-protected-paths-are-not-looked-at
+rule: Each of the lease's protected paths, and what is below it, is refused: a CI workflow, `.husky`, a shell's start-up file.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: .find(|place| style.location_within(target, &place.at))
+replace: .find(|place| place.at.as_os_str().is_empty())
+caught-by:
+    ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked
+
+[break] a-protected-name-is-compared-in-its-case
+rule: A name protected at any depth is compared without regard to case, on Linux too: protecting too much is the safe side.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: name.eq_ignore_ascii_case(protected) || style.same_name(name, protected)
+replace: style.same_name(name, protected)
+caught-by:
+    ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
+
+[break] a-git-folder-below-the-root-is-not-protected
+rule: Everything in a folder named `.git` is refused at any depth: a nested repository's configuration and hooks too.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: let protected = same(name, ".git")
+replace: let protected = false
+caught-by:
+    ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked
+
+[break] a-file-named-head-is-not-protected
+rule: A file named `HEAD` is refused anywhere: with two folders beside it, git takes its folder for a repository.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: same(name, "HEAD")
+replace: false
+caught-by:
+    ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
+
+[break] a-build-file-below-the-root-is-not-protected
+rule: `.npmrc`, `.yarnrc`, `.yarnrc.yml` and `.envrc` are refused at any depth.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: BUILD_FILES.iter().any(|file| same(name, file))
+replace: false
+caught-by:
+    ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
+
+[break] a-cargo-configuration-below-the-root-is-not-protected
+rule: `.cargo/config.toml` and `.cargo/config` are refused at any depth.
+file: crates/cineris-core/src/ext/protected.rs
+in: entry_of
+find: same(&names[at - 1], ".cargo")
+replace: false
+caught-by:
+    ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked
+
+[break] a-folder-git-takes-for-a-repository-is-not-looked-for
+rule: Everything in a folder that holds `HEAD`, `objects` and `refs` is refused, whatever its name.
+file: crates/cineris-core/src/ext/protected.rs
+in: refusal
+find: .or_else(|| repository_on_the_way(&at, &workspace, style))
+replace: .or_else(|| repository_on_the_way(&at, &workspace, style).filter(|_| false))
+caught-by:
+    ext::protected::tests::everything_in_a_folder_git_takes_for_a_repository_is_refused
+
+[break] a-folder-with-part-of-a-repository-is-taken-for-one
+rule: A folder is a repository only when it holds all of `HEAD`, `objects` and `refs`.
+file: crates/cineris-core/src/ext/protected.rs
+in: repository_on_the_way
+find: .all(|part| std::fs::symlink_metadata(folder.join(part)).is_ok())
+replace: .any(|part| std::fs::symlink_metadata(folder.join(part)).is_ok())
+caught-by:
+    ext::protected::tests::everything_in_a_folder_git_takes_for_a_repository_is_refused
+
+[break] a-protected-path-that-is-a-link-is-judged-only-where-it-is-written
+rule: A protected path that leads elsewhere through a link protects where it leads: a `.git/hooks` that is a link to `hooks` protects `hooks`.
+file: crates/cineris-core/src/ext/protected.rs
+in: refusal
+find: leading(paths, &workspace, &mut places, style);
+replace: leading(paths, &workspace, &mut Vec::new(), style);
+caught-by:
+    ext::protected::tests::a_protected_path_that_is_a_link_protects_where_it_leads
+
+[break] a-lease-that-protects-everything-lets-a-write-through
+rule: Where the lease protects every path, every write is refused.
+file: crates/cineris-core/src/ext/protected.rs
+in: refusal
+find: let entry = if protect.all {
+replace: let entry = if false && protect.all {
+caught-by:
+    ext::protected::tests::everything_in_a_folder_git_takes_for_a_repository_is_refused
+
+[break] the-refusal-shows-the-path-as-text-a-name-can-end
+rule: The refusal shows the path as code that a name holding a backtick cannot end.
+file: crates/cineris-core/src/ext/protected.rs
+in: words
+find: cineris_base::in_code(&target.data()).into_owned()
+replace: target.data()
+caught-by:
+    ext::protected::tests::everything_in_a_folder_git_takes_for_a_repository_is_refused

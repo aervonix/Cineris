@@ -27,6 +27,8 @@ mod host;
 #[cfg(feature = "scripts")]
 mod prompt;
 #[cfg(feature = "scripts")]
+mod protected;
+#[cfg(feature = "scripts")]
 mod state;
 #[cfg(feature = "scripts")]
 mod tools;
