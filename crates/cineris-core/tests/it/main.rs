@@ -35,6 +35,8 @@ mod events;
 #[cfg(feature = "scripts")]
 mod ext_exec;
 mod extensions;
+#[cfg(feature = "scripts")]
+mod extensions_found;
 mod gates;
 mod harness_git;
 mod index;

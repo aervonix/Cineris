@@ -287,9 +287,11 @@ pub struct CoreOptions {
     /// there is refused `unrestricted_not_allowed`.
     pub allow_unrestricted: bool,
     /// Extensions the caller has already had approved, whose tools every
-    /// session registers (`crate::ext`). Empty by default: the harness's
-    /// own finding of extensions, with their pins, is step 28's second
-    /// pull request; until then only a test hands any in.
+    /// session registers as it is put together (`crate::ext`), beside those
+    /// the session finds itself in the user's folder of extensions and a
+    /// trusted project's, each checked against its pin. Empty by default:
+    /// a test's seam, which hands an extension in with no pin and no
+    /// registration cache.
     pub extensions: Vec<crate::ext::ApprovedExtension>,
     /// What an extension's `cineris.http.fetch` makes its requests with:
     /// a test's, whose names resolve as it says. `None`: the system's
@@ -402,6 +404,9 @@ pub(crate) struct Live {
     lease_count: AtomicU64,
     /// The project's knowledge as this session has it.
     pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
+    /// Whether the session's extensions are found and registered: a turn
+    /// waits for it before it starts (step 28).
+    pub(crate) extensions: Arc<crate::ext::found::Ready>,
 }
 
 impl Inner {
@@ -864,6 +869,7 @@ impl Core {
             accounts,
             shell_live,
             repository,
+            extensions,
         } = assembled;
         // The client is listening before the session can say anything.
         sink.subscribe(client.0, queue);
@@ -880,6 +886,9 @@ impl Core {
         if let Some(probe) = &self.inner.options.session_running {
             probe();
         }
+        // The session's extensions, found now that the loop runs, off the
+        // path that opens it: the first turn waits for them (step 28).
+        let extensions = crate::ext::found::start(extensions);
         // The repository index's first pass, now that the loop runs: never
         // on the path that puts the session together. With no map there is
         // nothing to make ahead: the `outline` tool reads what it needs.
@@ -909,6 +918,7 @@ impl Core {
             content,
             lease_count: AtomicU64::new(lease_count),
             knowledge,
+            extensions,
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The client may have left, or a shutdown begun, while the session
@@ -1625,6 +1635,11 @@ impl Core {
             Op::TurnStart(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                // No turn starts before the session's extensions are found
+                // and registered, an approved one the registration cache
+                // misses included: a gate one of them holds is never
+                // skipped (step 28). At once once they are.
+                live.extensions.wait().await;
                 // The start of a turn is one of the moments the files are
                 // looked at (08-configuration, "How changes are noticed"):
                 // a prompt that steers a running turn starts none.
