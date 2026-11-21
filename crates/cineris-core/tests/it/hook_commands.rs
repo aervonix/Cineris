@@ -614,6 +614,10 @@ mod confined {
 
     use super::*;
     use crate::sandbox::{enforcing_here, launcher};
+    use cineris_protocol::Part;
+    use cineris_protocol::event::{Event, Notice};
+    use cineris_protocol::item::Delivery;
+    use cineris_protocol::methods::TurnStartParams;
 
     /// A hook without `write` writes nothing, and fails when it tries; one
     /// with it writes the workspace, and a protected path it changes is
@@ -623,7 +627,9 @@ mod confined {
     /// and is no stop of its own (the review of step 28's second pull
     /// request, M2). A stop made by a hook of no turn (a `session.start`
     /// one's) while a turn runs stops that turn too: the call whose
-    /// question was open does not run, whatever the answer.
+    /// question was open does not run, whatever the answer. One made late
+    /// by a hook of an earlier turn leaves the running turn going, and
+    /// refuses the prompt queued behind it, which goes back to its sender.
     #[test]
     fn sys_a_hooks_writes_are_confined_and_looked_at() {
         if !enforcing_here() {
@@ -634,6 +640,7 @@ mod confined {
             [
                 crate::says("Hi."),
                 crate::calls(&[("c1", "shell", json!({"command": "touch made.txt"}))]),
+                crate::calls(&[("c2", "shell", json!({"command": "touch late.txt"}))]),
                 crate::says("Done."),
             ],
         );
@@ -685,10 +692,14 @@ mod confined {
                 world.read(".github/workflows/x.yml").is_none(),
                 "the hook's protected change is put back"
             );
+            // The stop holds back one prompt.
+            let held = front.turn("first").await;
+            assert_eq!(held.outcome, TurnOutcome::Denied);
+            front.drain();
             // The turn is stopped: no more of its hooks starts, and one
             // that does not is no stop of its own (the review of the second
-            // pull request, M2): it is not told as one, and holds back no
-            // second prompt.
+            // pull request, M2, and its re-check): it is not told as one,
+            // and holds back no prompt, now that the first stop is used.
             let again = core
                 .run_hook_command(&front.session, "reader", after())
                 .await
@@ -697,6 +708,7 @@ mod confined {
                 panic!("{again:?}");
             };
             assert!(why.contains("its turn was stopped"), "{why}");
+            front.drain();
             assert!(
                 !front
                     .notices()
@@ -705,14 +717,11 @@ mod confined {
                 "{:?}",
                 front.notices()
             );
-            let held = front.turn("first").await;
-            assert_eq!(held.outcome, TurnOutcome::Denied);
-            front.drain();
             let sent = front.turn("second").await;
             assert_eq!(
                 sent.outcome,
                 TurnOutcome::Completed,
-                "one stop holds back one prompt"
+                "a hook not started for a stopped turn held back a prompt"
             );
             // In the next turn, a protected path changed by hand since the
             // last look refuses the next start that has a write root.
@@ -755,6 +764,55 @@ mod confined {
             assert!(
                 world.read("made.txt").is_none(),
                 "the running turn's call ran after a hook's stop"
+            );
+            // The stop holds back the next prompt.
+            assert_eq!(front.turn("late").await.outcome, TurnOutcome::Denied);
+            // A stop made late, by a hook of an earlier turn, while a turn
+            // runs: that turn goes on, and the prompt queued behind it, sent
+            // before the stop, is refused by it, and goes back whole to its
+            // sender, as every prompt has its ticket (the re-check of step
+            // 28's second pull request).
+            front.prompt("go").await;
+            let (id, _) = front.approval().await;
+            front
+                .op(Op::TurnStart(TurnStartParams {
+                    session_id: front.session.clone(),
+                    input: vec![Part::text("next")],
+                    delivery: Some(Delivery::Queue),
+                }))
+                .await
+                .unwrap();
+            let late = core
+                .run_hook_command(
+                    &front.session,
+                    "scribble",
+                    HookRun {
+                        turn: Some("t_7".to_owned()),
+                        ..after()
+                    },
+                )
+                .await
+                .unwrap();
+            assert!(matches!(late, HookOutcome::Stopped(_)), "{late:?}");
+            front.answer(&id, ApprovalChoice::Deny).unwrap();
+            let ended = front.ends().len();
+            front.turns(ended + 2).await;
+            let ends = front.ends();
+            assert_eq!(ends[ended].outcome, TurnOutcome::Completed, "{ends:?}");
+            assert_eq!(ends[ended + 1].outcome, TurnOutcome::Denied, "{ends:?}");
+            let returned = front
+                .events()
+                .into_iter()
+                .rev()
+                .find_map(|event| match event.event {
+                    Event::Notice(Notice::PromptReturned(returned)) => Some(returned),
+                    _ => None,
+                })
+                .expect("the queued prompt given back");
+            assert_eq!(
+                returned.parts,
+                [Part::text("next")],
+                "a prompt refused by a later stop did not come back to its sender"
             );
             front.close().await;
         });

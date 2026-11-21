@@ -203,6 +203,12 @@ impl Drop for Counted {
 /// its process tree with it, and the run's task goes on to its look.
 struct StopOnDrop(CancelToken, CancelToken);
 
+impl From<(CancelToken, CancelToken)> for StopOnDrop {
+    fn from((cancel, kill): (CancelToken, CancelToken)) -> Self {
+        Self(cancel, kill)
+    }
+}
+
 impl Drop for StopOnDrop {
     fn drop(&mut self) {
         self.0.cancel();
@@ -288,7 +294,12 @@ impl Hook for CommandRun {
             Box::new(Counted::new(&self.running)),
         );
         Box::pin(async move {
-            let _stop = stop;
+            #[allow(
+                clippy::useless_conversion,
+                reason = "the stop is made before the run, and taken here as it is; a stop made \
+                          only here, at the first poll, is the break this line lets be written"
+            )]
+            let _stop = StopOnDrop::from(stop);
             match outcome.await {
                 Ok(HookOutcome::Answered(answer)) => Heard::Answer(answer),
                 Ok(HookOutcome::Nothing | HookOutcome::Observed) => Heard::Nothing,
@@ -373,5 +384,103 @@ impl Hook for Stopped {
             // Taken by another prompt in the meantime: this one goes on.
             None => Heard::Nothing,
         }))
+    }
+}
+
+impl crate::Core {
+    /// The session's hook `name` of a `turn.end` or `compaction.before`
+    /// point as the loop's point has it, and an event of that point for it.
+    fn hook_at_its_point(
+        &self,
+        session: &cineris_protocol::SessionId,
+        name: &str,
+    ) -> Result<(Arc<dyn Hook>, HookInput), crate::OpError> {
+        let live = self.live(session)?;
+        let points = PointHooks::of(&live.command_hooks);
+        let found = [LoopEvent::TurnEnd, LoopEvent::CompactionBefore]
+            .into_iter()
+            .find_map(|event| {
+                points
+                    .matching(event, None)
+                    .into_iter()
+                    .find(|hook| hook.name() == name)
+                    .map(|hook| (event, hook))
+            });
+        let Some((event, hook)) = found else {
+            return Err(Box::new(cineris_protocol::error::ErrorData::new(
+                cineris_protocol::error::ErrorKind::Usage,
+                "no_such_hook",
+                format!(
+                    "The session runs no `turn.end` or `compaction.before` hook `{}`.",
+                    in_code(name)
+                ),
+            )));
+        };
+        let subject = if event == LoopEvent::TurnEnd {
+            HookSubject::TurnEnded {
+                outcome: cineris_protocol::event::TurnOutcome::Completed,
+                error: None,
+            }
+        } else {
+            HookSubject::Compaction {
+                trigger: cineris_agent::CompactionTrigger::Manual,
+                focus: None,
+            }
+        };
+        let input = HookInput::new(
+            event,
+            session.clone(),
+            cineris_protocol::TurnId::new("t_1"),
+            live.command_hooks.paths.root().clone(),
+            subject,
+        );
+        Ok((hook, input))
+    }
+
+    /// Starts `count` runs of the session's hook `name` at once, as its
+    /// point (`turn.end` or `compaction.before`) starts them, and says how
+    /// each ended: `None` for an answer or nothing, its failure otherwise.
+    /// For the tests of a waited `turn.end` hook's cap (four runs at
+    /// once).
+    ///
+    /// # Errors
+    ///
+    /// When the session is not open, or runs no such hook.
+    #[doc(hidden)]
+    pub async fn hook_runs_at_its_point(
+        &self,
+        session: &cineris_protocol::SessionId,
+        name: &str,
+        count: usize,
+    ) -> Result<Vec<Option<String>>, crate::OpError> {
+        let (hook, input) = self.hook_at_its_point(session, name)?;
+        let runs: Vec<_> = (0..count).map(|_| hook.run(&input)).collect();
+        let mut said = Vec::with_capacity(count);
+        for run in runs {
+            said.push(match run.await {
+                Heard::Failed(why) => Some(why),
+                _ => None,
+            });
+        }
+        Ok(said)
+    }
+
+    /// Starts a run of the session's hook `name` as its point (`turn.end`
+    /// or `compaction.before`) does, and lets it go before it is first
+    /// polled, as the loop may: for the test that such a run is stopped
+    /// all the same (the review of step 28's second pull request, M3).
+    ///
+    /// # Errors
+    ///
+    /// When the session is not open, or runs no such hook.
+    #[doc(hidden)]
+    pub fn let_go_of_a_hook_run(
+        &self,
+        session: &cineris_protocol::SessionId,
+        name: &str,
+    ) -> Result<(), crate::OpError> {
+        let (hook, input) = self.hook_at_its_point(session, name)?;
+        drop(hook.run(&input));
+        Ok(())
     }
 }

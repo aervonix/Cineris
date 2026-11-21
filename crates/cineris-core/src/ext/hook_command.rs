@@ -49,17 +49,23 @@
 //!
 //! **No run outlives its session.** Every run is a task the session keeps,
 //! and the close waits for each before the `session.end` hooks and the
-//! close's look at the protected paths. At most [`RUNS_AT_ONCE`] run at
-//! once; the rest wait, within their own time.
+//! close's look at the protected paths. At most [`RUNS_AT_ONCE`] hooks that
+//! are waited for run at once, and as many observers, in pools apart, so
+//! that observers never keep a gate from starting; the rest wait, within
+//! their own time, and a run let go while it waits (its turn interrupted,
+//! its session closed) starts nothing.
 //!
 //! **A stop.** A start whose own look at the protected paths stops a turn
 //! (a change found before it, or one it made, or a process of it the kill
-//! could not clear) is told to the user at once; the turn running then, if
-//! one is, is stopped; and the next prompt is refused with it
-//! ([`HookCommands::stopped`]). **A hook of a turn that is stopped
-//! already does not start,** and is no stop of its own: it has failed, its
-//! turn stopped. So the `turn.end` hooks of a stopped turn do not start: a
-//! stopped turn runs nothing more.
+//! could not clear) is told to the user at once, and the next prompt is
+//! refused with it ([`HookCommands::stopped`]). A hook of no turn
+//! (`session.start`'s, run as turn `t_0`) also stops the turn running then,
+//! if one is. A loop's hook stops its own turn; one that ends after its
+//! turn did (a turn `N`'s `turn.end` hook) leaves the turn after it
+//! running, and holds back the prompt after that. **A hook of a turn that
+//! is stopped already does not start,** and is no stop of its own: it has
+//! failed, its turn stopped. So the `turn.end` hooks of a stopped turn do
+//! not start: a stopped turn runs nothing more.
 //!
 //! A hook that is refused, would be asked about (and never is), does not
 //! start, runs past its time, exits with anything but 0, writes more than
@@ -285,11 +291,7 @@ impl SessionHooks {
                 // A `session.start` run is under the session's token, which
                 // the close fires; a `session.end` one, run after it, has
                 // one of its own, fired when its time at the close is up.
-                let cancel = if event == Event::SessionStart {
-                    self.commands.session.child()
-                } else {
-                    CancelToken::new()
-                };
+                let cancel = run_token(event, &self.commands.session);
                 let cx = HookCx {
                     session: session.clone(),
                     // No turn of its own: a stop its look makes reaches the
@@ -312,21 +314,6 @@ impl SessionHooks {
                 (hook.name.clone(), !hook.observe, cancel, outcome)
             })
             .collect()
-    }
-
-    /// Whether anything is on `prompt.submit`: a hook, a refused one held
-    /// on its event, or a stop for the next prompt. Cheap: what the prompt's
-    /// way asks before it keeps who sent it.
-    pub(crate) fn wants_prompt(&self) -> bool {
-        self.commands.stop_pending()
-            || self
-                .hooks
-                .iter()
-                .any(|hook| hook.event == Event::PromptSubmit)
-            || self
-                .refused
-                .iter()
-                .any(|refused| refused.event == Some(Event::PromptSubmit))
     }
 
     /// The close: stops what of the session's hooks still runs under its
@@ -406,6 +393,7 @@ impl SessionHooks {
     pub(crate) async fn started(&self) {
         let waiting = self.starting.lock().await.take();
         if let Some(waiting) = waiting {
+            cineris_base::hook::await_point!(A_FIRST_TURN_WAITS);
             let _ = waiting.await;
         }
     }
@@ -418,6 +406,7 @@ impl SessionHooks {
         if runs.is_empty() {
             return;
         }
+        cineris_base::hook::await_point!(A_SESSION_ENDS);
         let mut over = timer.sleep(SESSION_END_TIME);
         for (name, _, cancel, mut task) in runs {
             let ended = std::future::poll_fn(|context| {
@@ -459,10 +448,47 @@ pub const A_SESSION_START_HOOK_IS_HEARD: &str =
 /// The most a session's `session.end` hooks are given while it closes.
 pub(crate) const SESSION_END_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// The most hook runs a session has at once: the rest wait, within their
-/// own time (the review of step 28's second pull request: a response of
-/// many calls each with its hooks started them all together).
+/// The first prompt is waiting for the `session.start` hooks that are
+/// waited for (a point a test can stop at: [`cineris_base::hook`]).
+pub const A_FIRST_TURN_WAITS: &str = "core: the first turn waits for the session.start hooks";
+
+/// The close waits for a run of the session's hooks (a point a test can
+/// stop at: [`cineris_base::hook`]).
+pub const A_CLOSE_WAITS_FOR_A_RUN: &str = "core: the close waits for a run of the session's hooks";
+
+/// A session's `session.end` hooks are started as it closes (a point a test
+/// can stop at: [`cineris_base::hook`]).
+pub const A_SESSION_ENDS: &str = "core: a session's session.end hooks are started";
+
+/// The most runs at once of a session's hooks that are waited for, and as
+/// many of its observers, in pools apart: the rest wait, within their own
+/// time (the review of step 28's second pull request: a response of many
+/// calls each with its hooks started them all together). Observers never
+/// keep a gate from starting (its re-check: with one pool, eight observers
+/// running made a gate fail closed).
 pub(crate) const RUNS_AT_ONCE: usize = 8;
+
+/// The token of a run of the session's own `event`: a `session.start` run
+/// is under the session's (`session`), which the close fires; a
+/// `session.end` one, run after it, has one of its own, fired when its
+/// time at the close is up.
+fn run_token(event: Event, session: &CancelToken) -> CancelToken {
+    if event == Event::SessionStart {
+        session.child()
+    } else {
+        CancelToken::new()
+    }
+}
+
+/// What came of a wait within a run's time.
+enum Waited<T> {
+    /// It ended in time.
+    Done(T),
+    /// The run's time was up first.
+    Over,
+    /// The run was let go first.
+    LetGo,
+}
 
 /// The most runs of one waited-for `turn.end` hook at once, as for an
 /// observer: turns that end faster than it runs leave the rest unstarted.
@@ -494,8 +520,10 @@ pub(crate) struct HookCommands {
     /// Every run's task, kept so that the close waits for each: none
     /// outlives its session. Those that ended are let go as more come.
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
-    /// At most [`RUNS_AT_ONCE`] runs at once.
-    at_once: Arc<tokio::sync::Semaphore>,
+    /// At most [`RUNS_AT_ONCE`] runs of hooks that are waited for at once.
+    waited_at_once: Arc<tokio::sync::Semaphore>,
+    /// And as many of observers, apart.
+    observing_at_once: Arc<tokio::sync::Semaphore>,
     /// The turn running now, if any: a hook's stop stops it as well.
     running: Arc<dyn Fn() -> Option<TurnId> + Send + Sync>,
 }
@@ -522,7 +550,8 @@ impl HookCommands {
             stop: Mutex::new(None),
             session,
             tasks: Mutex::new(Vec::new()),
-            at_once: Arc::new(tokio::sync::Semaphore::new(RUNS_AT_ONCE)),
+            waited_at_once: Arc::new(tokio::sync::Semaphore::new(RUNS_AT_ONCE)),
+            observing_at_once: Arc::new(tokio::sync::Semaphore::new(RUNS_AT_ONCE)),
             running,
         }
     }
@@ -571,29 +600,36 @@ impl HookCommands {
             if tasks.is_empty() {
                 return;
             }
+            cineris_base::hook::await_point!(A_CLOSE_WAITS_FOR_A_RUN);
             for task in tasks {
                 let _ = task.await;
             }
         }
     }
 
-    /// `wait` within what is left of `time` since `asked`: `None` when it is
-    /// up first.
+    /// `wait` within what is left of `time` since `asked`, unless the run
+    /// is let go first (`cancel`): a run that nothing waits for any more
+    /// waits for nothing (the re-check of step 28's second pull request).
     async fn within<T>(
         &self,
         asked: Duration,
         time: Duration,
+        cancel: &CancelToken,
         wait: impl std::future::Future<Output = T>,
-    ) -> Option<T> {
+    ) -> Waited<T> {
         let left = time.saturating_sub(self.parts.clock.monotonic().saturating_sub(asked));
         let mut over = self.parts.timer.sleep(left);
+        let mut let_go = std::pin::pin!(cancel.cancelled());
         let mut wait = std::pin::pin!(wait);
         std::future::poll_fn(|context| {
+            if let_go.as_mut().poll(context).is_ready() {
+                return std::task::Poll::Ready(Waited::LetGo);
+            }
             if let std::task::Poll::Ready(done) = wait.as_mut().poll(context) {
-                return std::task::Poll::Ready(Some(done));
+                return std::task::Poll::Ready(Waited::Done(done));
             }
             if over.as_mut().poll(context).is_ready() {
-                return std::task::Poll::Ready(None);
+                return std::task::Poll::Ready(Waited::Over);
             }
             std::task::Poll::Pending
         })
@@ -670,21 +706,32 @@ impl HookCommands {
         // turn among the runs at once and the baseline of the look, is
         // within it.
         let asked = self.parts.clock.monotonic();
-        let not_in_time = || {
+        let not_in_time = |behind: &str| {
             failed(format!(
-                "it did not start within its {} ms: other hooks were running",
+                "it did not start within its {} ms: {behind}",
                 hook.timeout.as_millis()
             ))
         };
-        let Some(Ok(_permit)) = self
+        let let_go = || failed("it was let go before it started".to_owned());
+        let pool = if hook.observe {
+            &self.observing_at_once
+        } else {
+            &self.waited_at_once
+        };
+        let _permit = match self
             .within(
                 asked,
                 hook.timeout,
-                Arc::clone(&self.at_once).acquire_owned(),
+                &cx.cancel,
+                Arc::clone(pool).acquire_owned(),
             )
             .await
-        else {
-            return not_in_time();
+        {
+            Waited::Done(Ok(permit)) => permit,
+            Waited::Done(Err(_)) | Waited::Over => {
+                return not_in_time("other hooks were running");
+            }
+            Waited::LetGo => return let_go(),
         };
         // `{path}`: each file the call reads or writes, once, by place, in
         // the system's plain form (never `\\?\C:\…`).
@@ -761,9 +808,13 @@ impl HookCommands {
         let _writing = if request.write_roots.is_empty() {
             None
         } else {
-            match self.within(asked, hook.timeout, self.writing.lock()).await {
-                Some(writing) => Some(writing),
-                None => return not_in_time(),
+            match self
+                .within(asked, hook.timeout, &cx.cancel, self.writing.lock())
+                .await
+            {
+                Waited::Done(writing) => Some(writing),
+                Waited::Over => return not_in_time("another hook with a write root was running"),
+                Waited::LetGo => return let_go(),
             }
         };
         // What is left of its time, for its decision, its looks and its run.
@@ -1058,6 +1109,19 @@ fn said(stderr: &[u8], cut: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// A `session.start` run is under the session's token, which the close
+    /// fires; a `session.end` run, made after it, is not (the review of
+    /// step 28's second pull request, M1: one outlived its session).
+    #[test]
+    fn a_session_start_run_is_under_the_sessions_token_and_a_session_end_one_is_not() {
+        let session = CancelToken::new();
+        let start = super::run_token(Event::SessionStart, &session);
+        let end = super::run_token(Event::SessionEnd, &session);
+        session.cancel();
+        assert!(start.is_cancelled());
+        assert!(!end.is_cancelled());
+    }
+
     use std::time::Duration;
 
     use cineris_ext::hook::command::Entry;

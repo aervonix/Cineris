@@ -67,7 +67,10 @@ pub use found::{
 #[cfg(feature = "scripts")]
 pub(crate) use exec::{ExecParts, HarnessFiles};
 #[cfg(feature = "scripts")]
-pub use hook_command::{A_HOOK_WRITES, A_SESSION_START_HOOK_IS_HEARD, HookOutcome, HookRun};
+pub use hook_command::{
+    A_CLOSE_WAITS_FOR_A_RUN, A_FIRST_TURN_WAITS, A_HOOK_WRITES, A_SESSION_ENDS,
+    A_SESSION_START_HOOK_IS_HEARD, HookOutcome, HookRun,
+};
 #[cfg(feature = "scripts")]
 pub(crate) use hook_command::{HookCommands, SessionHooks};
 #[cfg(feature = "scripts")]

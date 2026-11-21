@@ -1313,6 +1313,12 @@ mod tests {
     #[test]
     fn a_prompts_sender_is_let_go_as_it_is_settled_and_the_running_turn_is_known() {
         let sink = SessionSink::new(SessionId::new("s_1"));
+        // What is kept of a prompt is its ticket and the client it came
+        // from: two numbers, never its parts.
+        {
+            let kept: &VecDeque<(u64, u64)> = &lock(&sink.senders);
+            assert!(kept.is_empty());
+        }
         let ticket = sink.sent_by(7);
         sink.prompt_settled(ticket);
         assert_eq!(sink.forget(ticket), None, "kept after it was settled");
