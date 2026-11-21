@@ -764,3 +764,40 @@ fn the_trust_question_warns_of_a_write_root_that_would_turn_the_sandbox_off() {
         });
     }
 }
+
+/// A write root that would turn the sandbox off in one of the project's
+/// profiles is warned of too, naming the profile, in a session opened with
+/// no profile: a yes trusts every profile (the last look at the warning).
+#[test]
+fn the_trust_question_warns_of_a_profiles_write_root_that_would_turn_the_sandbox_off() {
+    let world = World::new("review_warns_of_a_profiles_root", []);
+    let bin = world.home.join(".cargo/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("cineris"), "the launcher").unwrap();
+    world.project_config("[profiles.dev.sandbox]\nwrite = [\"~/.cargo\"]\n");
+    let core = world.core_with(|options| {
+        options.launcher = Some((bin.join("cineris"), Vec::new()));
+        options.sandbox = Some(cineris_sandbox::support::Support::Landlock(8));
+    });
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, not_now()).await;
+        assert_eq!(asked.len(), 1);
+        let said: Vec<&str> = asked[0]
+            .resources
+            .iter()
+            .filter(|resource| resource.detail.contains("without the sandbox"))
+            .map(|resource| resource.detail.as_str())
+            .collect();
+        assert_eq!(
+            said,
+            [
+                "This project's configuration asks, in its profile `dev`, to write in `~/.cargo`, \
+              which holds Cineris's own files. If you trust it, its sessions with that profile \
+              run without the sandbox."
+            ],
+            "{:#?}",
+            asked[0].resources
+        );
+        front.close().await;
+    });
+}

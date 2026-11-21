@@ -387,9 +387,11 @@ impl Core {
     }
 
     /// What trusting the project would turn the sandbox off with, in the
-    /// trust question's words: each write root of its own configuration
-    /// that holds the harness's files, where the sandbox would otherwise
-    /// enforce (`assemble::harness_write_warnings`).
+    /// trust question's words: each write root of its own configuration, in
+    /// each of its profiles too, that holds the harness's files, where the
+    /// sandbox would otherwise enforce (`assemble::harness_write_warnings`).
+    /// Said of a project already trusted too: what it held back is judged
+    /// against the configuration with no trust.
     ///
     /// # Errors
     ///
@@ -404,13 +406,18 @@ impl Core {
             .map_err(|failure| error(ErrorKind::Usage, "invalid_workspace", failure.to_string()))?;
         let held = self.load(project, ConfigTrust::Untrusted)?;
         let trusted = self.load_trusted(project)?;
-        Ok(crate::assemble::harness_write_warnings(
+        crate::assemble::harness_write_warnings(
             &self.inner,
-            &held,
-            &trusted,
             resolver.root(),
             self.state_dir().as_ref(),
-        ))
+            (&held, &trusted),
+            &|profile| {
+                Ok((
+                    self.load_profile(project, profile, ConfigTrust::Untrusted)?,
+                    self.load_profile(project, profile, ConfigTrust::Trusted)?,
+                ))
+            },
+        )
     }
 
     /// The project's extensions that trusting it could approve: those not
