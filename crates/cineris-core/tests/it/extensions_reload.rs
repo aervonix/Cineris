@@ -10,8 +10,8 @@ use cineris_ext::discover::{A_NAME_IS_LOOKED_AT, A_ROOT_IS_RESOLVED, AN_EXTENSIO
 use cineris_testkit::Hold;
 
 use crate::extensions_found::{
-    about_probe, cache, found_probe, make_link, pin, searches, searches_times, start, state,
-    users, write_extension,
+    about_probe, cache, found_probe, make_link, pin, searches, searches_times, start, state, users,
+    write_extension,
 };
 use crate::{World, says};
 
