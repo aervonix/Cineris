@@ -3026,6 +3026,7 @@ pub(crate) fn assemble(
                 Arc::clone(&content),
             )),
             paths: Arc::clone(&resolver),
+            starting: tokio::sync::Mutex::new(None),
         })
     };
     #[cfg(not(feature = "scripts"))]

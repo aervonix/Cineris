@@ -45,6 +45,7 @@ use std::sync::{Arc, Mutex};
 
 use cineris_agent::{Decision, PlannedCall};
 use cineris_base::{CancelToken, PathResolver, in_code, visible};
+use cineris_ext::event::Event;
 use cineris_ext::hook::answer::MAX_OUTPUT;
 use cineris_ext::hook::{CommandHook, Expansion};
 use cineris_ext::host::{EXEC_MAX_STDIN, ExecOutput, ExecRequest, HostError};
@@ -199,7 +200,187 @@ pub(crate) struct SessionHooks {
     pub(crate) commands: Arc<HookCommands>,
     /// The session's path resolver.
     pub(crate) paths: Arc<PathResolver>,
+    /// The `session.start` hooks' run, which the first turn waits for.
+    pub(crate) starting: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
+
+/// The JSON a hook of the session's own events is given: the event, the
+/// session and the workspace.
+fn session_input(event: Event, session: &SessionId, paths: &PathResolver) -> Json {
+    json!({
+        "event": event.as_str(),
+        "session_id": session.as_str(),
+        "workspace": paths.root().to_native_string(),
+    })
+}
+
+/// What the model is told of a `session.start` hook's `context`: under a
+/// line that names the hook, every line quoted, what acts unseen escaped.
+fn session_notice(hook: &str, context: &str) -> String {
+    let shown = cineris_base::visible_keeping(context, &['\n']);
+    let quoted: Vec<String> = shown
+        .split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                ">".to_owned()
+            } else {
+                format!("> {line}")
+            }
+        })
+        .collect();
+    format!(
+        "The hook `{}` adds this as the session opens. It is the hook's text, not the \
+         user's:\n\n{}",
+        in_code(hook),
+        quoted.join("\n")
+    )
+}
+
+impl SessionHooks {
+    /// The hooks on `event` of the session's own (`session.start`,
+    /// `session.end`), each run on a task of its own, together, with its
+    /// cancellation: the runs, and whether each is waited for.
+    fn runs_of(
+        &self,
+        event: Event,
+        session: &SessionId,
+    ) -> Vec<(
+        String,
+        bool,
+        CancelToken,
+        tokio::task::JoinHandle<HookOutcome>,
+    )> {
+        let input = session_input(event, session, &self.paths);
+        self.hooks
+            .iter()
+            .filter(|hook| hook.event == event)
+            .map(|hook| {
+                let cancel = CancelToken::new();
+                let cx = HookCx {
+                    session: session.clone(),
+                    // No turn of its own: a stop its look makes reaches the
+                    // next prompt (`HookCommands::stopped`).
+                    turn: TurnId::new("t_0"),
+                    cancel: cancel.clone(),
+                    kill: cancel.clone(),
+                    paths: Arc::clone(&self.paths),
+                };
+                let commands = Arc::clone(&self.commands);
+                let (hook, input) = (hook.clone(), input.clone());
+                let name = hook.name.clone();
+                let observe = hook.observe;
+                let task = tokio::spawn(async move {
+                    let event = HookEvent {
+                        input: &input,
+                        tool: None,
+                        effects: &[],
+                    };
+                    commands.run(&hook, &event, &cx).await
+                });
+                (name, !observe, cancel, task)
+            })
+            .collect()
+    }
+
+    /// Starts the session's `session.start` hooks (`docs/steps/28/answered.md`,
+    /// point 6): each one's `context` becomes a notice before the first
+    /// prompt, with `notice`; a failure is told to the user and adds
+    /// nothing. The first turn waits for those that are waited for, up to
+    /// their time ([`Self::started`]); an observer runs to its own.
+    pub(crate) async fn start(
+        &self,
+        session: &SessionId,
+        notice: Arc<dyn Fn(String) + Send + Sync>,
+    ) {
+        let runs = self.runs_of(Event::SessionStart, session);
+        if runs.is_empty() {
+            return;
+        }
+        let tell = Arc::clone(&self.commands.parts.tell);
+        let waiting = tokio::spawn(async move {
+            for (name, waited, _cancel, task) in runs {
+                if !waited {
+                    // Never waited for, its answer not read: a failure is
+                    // logged.
+                    drop(task);
+                    continue;
+                }
+                let said = match task.await {
+                    Ok(HookOutcome::Answered(answer)) => {
+                        cineris_ext::hook::Answer::of(Event::SessionStart, Some(answer)).map_err(
+                            |why| {
+                                format!("The hook `{}` failed: its answer {why}.", in_code(&name))
+                            },
+                        )
+                    }
+                    Ok(HookOutcome::Nothing | HookOutcome::Observed) => {
+                        Ok(cineris_ext::hook::Answer::default())
+                    }
+                    Ok(HookOutcome::Failed(why) | HookOutcome::Stopped(why)) => Err(why),
+                    Err(_) => Err(format!(
+                        "The hook `{}` failed: its run ended before it could say how.",
+                        in_code(&name)
+                    )),
+                };
+                match said {
+                    Ok(answer) => {
+                        if let Some(context) = answer.context.filter(|text| !text.is_empty()) {
+                            notice(session_notice(&name, &context));
+                        }
+                    }
+                    Err(why) => tell(visible(&why).into_owned()),
+                }
+            }
+        });
+        *self.starting.lock().await = Some(waiting);
+    }
+
+    /// Waits for the `session.start` hooks that are waited for: what the
+    /// first turn does before it starts. At once after that.
+    pub(crate) async fn started(&self) {
+        let waiting = self.starting.lock().await.take();
+        if let Some(waiting) = waiting {
+            let _ = waiting.await;
+        }
+    }
+
+    /// Runs the session's `session.end` hooks as it closes: observed, their
+    /// answers not read, given up to [`SESSION_END_TIME`] on `timer`, after
+    /// which each is stopped, its process tree with it, and its look made.
+    pub(crate) async fn end(&self, session: &SessionId, timer: &cineris_base::SharedTimer) {
+        let runs = self.runs_of(Event::SessionEnd, session);
+        if runs.is_empty() {
+            return;
+        }
+        let mut over = timer.sleep(SESSION_END_TIME);
+        for (name, _, cancel, mut task) in runs {
+            let ended = std::future::poll_fn(|context| {
+                if let std::task::Poll::Ready(ended) = std::pin::Pin::new(&mut task).poll(context) {
+                    return std::task::Poll::Ready(Some(ended));
+                }
+                if over.as_mut().poll(context).is_ready() {
+                    return std::task::Poll::Ready(None);
+                }
+                std::task::Poll::Pending
+            })
+            .await;
+            let ended = match ended {
+                Some(ended) => ended,
+                None => {
+                    // Its time is up: stopped, and its look made.
+                    cancel.cancel();
+                    task.await
+                }
+            };
+            if let Ok(HookOutcome::Failed(why) | HookOutcome::Stopped(why)) = ended {
+                tracing::warn!(hook = %name, %why, "a `session.end` hook failed");
+            }
+        }
+    }
+}
+
+/// The most a session's `session.end` hooks are given while it closes.
+pub(crate) const SESSION_END_TIME: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What a session runs its hook commands with: its extensions' host parts,
 /// whose `exec` is the shell's runner, sandbox and environment.

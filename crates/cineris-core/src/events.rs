@@ -583,7 +583,16 @@ pub(crate) struct SessionSink {
     /// The turn that is running and the `seq` of the last event, for a
     /// reader that asks where the session is.
     last: Mutex<(u64, Option<TurnId>)>,
+    /// Who sent the prompts the loop may give back, the latest last: a
+    /// prompt a hook refused (`prompt_returned`) is given back whole only
+    /// to the client that sent it, since it may have been refused for
+    /// holding a secret (the early review of the hook seam, L4).
+    senders: Mutex<VecDeque<(u64, Vec<Part>)>>,
 }
+
+/// The most prompts whose senders a session keeps: each is let go when
+/// its prompt is given back, and the oldest when there are more.
+const SENDERS_KEPT: usize = 32;
 
 impl SessionSink {
     /// The sink of `session`, with nobody subscribed.
@@ -593,7 +602,26 @@ impl SessionSink {
             subscribers: Mutex::default(),
             progress: Mutex::default(),
             last: Mutex::default(),
+            senders: Mutex::default(),
         }
+    }
+
+    /// Notes that `client` sent the prompt `parts`, for the loop's giving it
+    /// back, should a hook refuse it.
+    pub(crate) fn sent_by(&self, client: u64, parts: &[Part]) {
+        let mut senders = lock(&self.senders);
+        if senders.len() == SENDERS_KEPT {
+            senders.pop_front();
+        }
+        senders.push_back((client, parts.to_vec()));
+    }
+
+    /// Who sent the prompt `parts`, let go as it is told: the earliest
+    /// still kept. `None` when it is not known.
+    fn sender_of(&self, parts: &[Part]) -> Option<u64> {
+        let mut senders = lock(&self.senders);
+        let at = senders.iter().position(|(_, sent)| sent == parts)?;
+        senders.remove(at).map(|(client, _)| client)
     }
 
     /// Adds a client's queue, under the client's number. A client is added
@@ -679,6 +707,28 @@ impl EventSink for SessionSink {
             let mut progress = lock(&self.progress);
             progress.observe(&event.event);
             *lock(&self.last) = (event.seq, event.turn_id.clone());
+        }
+        // A prompt given back reaches its sender whole, and every other
+        // client without the prompt: its `seq` is every client's, so none
+        // sees a gap. One whose sender is not known reaches nobody whole.
+        if let Event::Notice(cineris_protocol::event::Notice::PromptReturned(returned)) =
+            &event.event
+        {
+            let sender = self.sender_of(&returned.parts);
+            let mut without = event.clone();
+            if let Event::Notice(cineris_protocol::event::Notice::PromptReturned(returned)) =
+                &mut without.event
+            {
+                returned.parts = Vec::new();
+            }
+            for (client, queue) in lock(&self.subscribers).iter() {
+                if Some(*client) == sender {
+                    queue.push(event.clone());
+                } else {
+                    queue.push(without.clone());
+                }
+            }
+            return;
         }
         let subscribers = lock(&self.subscribers);
         if let Some(((_, last), rest)) = subscribers.split_last() {

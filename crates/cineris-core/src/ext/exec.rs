@@ -181,6 +181,9 @@ pub(crate) async fn run(
     // A turn that a confined command stopped starts nothing more: the
     // decision below refuses every call of it (`EnginePolicy::decide`).
     let named = request.program.as_str().to_owned();
+    // The program as a message shows it, between backticks: a hook's is
+    // its configuration's, and a script's its manifest's.
+    let shown = cineris_base::in_code(&named).into_owned();
     let inherited = parts
         .inherited
         .clone()
@@ -216,9 +219,14 @@ pub(crate) async fn run(
         .collect();
     if (parts.harness_files.0)(&plain_roots) {
         return Err(HostError::Failed(
-            "the extension's write roots hold the harness's own files (its configuration, its \
-             state or its launcher): no program of it is run"
-                .to_owned(),
+            if matches!(how, Decided::Host) {
+                "the extension's write roots hold the harness's own files (its configuration, its \
+                 state or its launcher): no program of it is run"
+            } else {
+                "its write root, the workspace, holds the harness's own files (its configuration, \
+                 its state or its launcher), so it is not run with `write = true`"
+            }
+            .to_owned(),
         ));
     }
 
@@ -326,7 +334,7 @@ pub(crate) async fn run(
         cfg!(windows) || !matches!(shell.kind(), ShellKind::Bash | ShellKind::Posix);
     let not_started = || {
         HostError::Failed(format!(
-            "`{named}` was not started: the call ended while it was being decided"
+            "`{shown}` was not started: the call ended while it was being decided"
         ))
     };
     if let Decided::Unasked(decide) = how {
@@ -474,7 +482,7 @@ pub(crate) async fn run(
         // The turn is stopped: the script's call ends here, whatever it
         // would do with a refusal.
         return Err(HostError::Stopped(format!(
-            "`{named}` was not started. {note}"
+            "`{shown}` was not started. {note}"
         )));
     }
 
@@ -558,10 +566,10 @@ pub(crate) async fn run(
     }
     looked?;
     let finished =
-        ran.map_err(|error| HostError::Failed(format!("`{named}` could not be started: {error}")))?;
+        ran.map_err(|error| HostError::Failed(format!("`{shown}` could not be started: {error}")))?;
     if finished.ending == Ending::Interrupted {
         return Err(HostError::Failed(format!(
-            "`{named}` was stopped: the call was interrupted"
+            "`{shown}` was stopped: the call was interrupted"
         )));
     }
     Ok(ExecOutput {
@@ -656,11 +664,18 @@ async fn look_after(
         (host.parts.tell)(note);
     }
     if escaped {
-        let note = "[A process the extension's program started kept forking and could not all \
+        let note = if host.extension.is_empty() {
+            "[A process the hook's program started kept forking and could not all be killed. It \
+             may still be running inside the sandbox and may change a protected path after this \
+             check. The turn stops here, and the protected paths are looked at again before the \
+             next command and at the session's close.]"
+        } else {
+            "[A process the extension's program started kept forking and could not all \
                     be killed. It may still be running inside the sandbox and may change a \
                     protected path after this check. The turn stops here, and the protected \
                     paths are looked at again before the next command and at the session's \
-                    close.]";
+                    close.]"
+        };
         host.parts.policy.stop_turn(cx.turn, note.to_owned());
         return Err(HostError::Stopped(note.to_owned()));
     }
