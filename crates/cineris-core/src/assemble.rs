@@ -2538,6 +2538,10 @@ pub(crate) fn assemble(
     let mut restored_plan: Option<Plan> = None;
     let mut base_capture = false;
 
+    // Where the put-back keeps what it writes over or removes: the
+    // session's own directory, with its other state (the third security
+    // fix). None for a session kept in memory.
+    let mut put_back_into: Option<PathBuf> = None;
     let (kept, content, rounds): (Kept, Arc<dyn ContentStore>, Option<Arc<Rounds>>) = if ephemeral {
         (Kept::memory(), Arc::new(MemoryStore::new()), None)
     } else {
@@ -2660,6 +2664,7 @@ pub(crate) fn assemble(
                     .join(", ")
             ));
         }
+        put_back_into = Some(session.log().dir().path().join("put-back"));
         let store = session.store();
         let rounds = Arc::new(Rounds::new(
             Arc::clone(&store),
@@ -2797,6 +2802,9 @@ pub(crate) fn assemble(
         options.protect_limits.unwrap_or_default(),
     ));
     session_git.set(Arc::clone(&sandbox));
+    if let Some(dir) = put_back_into {
+        sandbox.keep_copies_in(dir);
+    }
     let policy = Arc::new(EnginePolicy::new(PolicyParts {
         engine,
         clients: Arc::clone(&inner.clients),

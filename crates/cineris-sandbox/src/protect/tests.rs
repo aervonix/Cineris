@@ -263,9 +263,14 @@ fn a_look_that_stops_at_its_bound_reports_nothing_beyond_it() {
         directories: 10,
         ..unhurried()
     });
-    let whole = full.take();
-    let part = capped.take();
+    let mut whole = full.take();
+    let mut part = capped.take();
     assert!(whole.is_complete() && !part.is_complete());
+    // Taken as if the files were written long before (a test cannot age a
+    // file's change time): what changed since a look began, in a place it
+    // did not reach, is named by that time, and nothing here did.
+    whole.taken.0 += 3600;
+    part.taken.0 += 3600;
     // Nothing changed: a later look that reached less sees nothing gone,
     // and one that reached more sees nothing new.
     assert_eq!(whole.compare(&part), Vec::new());
@@ -668,7 +673,8 @@ mod putting_back {
         change(ws);
         let (changed, _) = watch.changes_since(&before);
         assert!(!changed.is_empty(), "the change was not found");
-        let put = watch.put_back(&before, &changed, &|_| true);
+        let kept = ws.parent().unwrap().join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
         (changed, put)
     }
 
@@ -859,9 +865,10 @@ mod putting_back {
         let (changed, _) = watch.changes_since(&before);
         assert_eq!(changed.len(), 1, "{changed:?}");
         let hold = cineris_testkit::Hold::new(PUTTING_BACK);
+        let kept = ws.parent().unwrap().join("kept");
         let putting = std::thread::spawn({
             let watch = watch.clone();
-            move || watch.put_back(&before, &changed, &|_| true)
+            move || watch.put_back(&before, &changed, &|_| true, Some(&kept))
         });
         hold.reach();
         fs::rename(ws.join(".git/hooks"), ws.join(".git/hooks-moved")).unwrap();
@@ -924,7 +931,8 @@ mod putting_back {
                 .any(|one| one.path.ends_with("pre-commit.sample")),
             "what is in an unreadable folder was taken for gone: {changed:?}"
         );
-        let put = watch.put_back(&before, &changed, &|_| true);
+        let kept = ws.parent().unwrap().join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
         let mode_now = mode(&hooks);
         set_mode(&hooks, 0o755);
         assert_eq!(mode_now, was, "{mode_now:o}");
@@ -1004,9 +1012,10 @@ mod putting_back {
         let (changed, _) = watch.changes_since(&before);
         assert_eq!(changed.len(), 1, "{changed:?}");
         let hold = cineris_testkit::Hold::new(PUTTING_BACK_A_MODE);
+        let kept = ws.parent().unwrap().join("kept");
         let putting = std::thread::spawn({
             let watch = watch.clone();
-            move || watch.put_back(&before, &changed, &|_| true)
+            move || watch.put_back(&before, &changed, &|_| true, Some(&kept))
         });
         hold.reach();
         fs::rename(ws.join(".git/hooks"), ws.join(".git/hooks-moved")).unwrap();
@@ -1033,9 +1042,10 @@ mod putting_back {
         let (changed, _) = watch.changes_since(&before);
         assert_eq!(changed.len(), 1, "{changed:?}");
         let hold = cineris_testkit::Hold::new(PUTTING_BACK);
+        let kept = ws.parent().unwrap().join("kept");
         let putting = std::thread::spawn({
             let watch = watch.clone();
-            move || watch.put_back(&before, &changed, &|_| true)
+            move || watch.put_back(&before, &changed, &|_| true, Some(&kept))
         });
         hold.reach();
         fs::remove_file(ws.join(".git/config")).unwrap();
@@ -1053,5 +1063,315 @@ mod putting_back {
             "[core]\n"
         );
         assert_eq!(fs::read_to_string(&target).unwrap(), "outside\n");
+    }
+
+    // ------------------------------------- the full review of the fix
+
+    /// A workspace for the full review's cases: the folder `core.hooksPath`
+    /// names (`scripts/hooks`), a submodule's configuration, and the
+    /// watch of the session, the hook names of that folder among it.
+    fn reviewed(test: &str) -> (Scratch, PathBuf, Watch) {
+        let scratch = workspace(test);
+        let ws = scratch.join("ws");
+        scratch.file("ws/scripts/hooks/README", "hooks\n");
+        scratch.file("ws/.git/modules/sub/config", "[core]\n");
+        scratch.file("ws/.git/modules/sub/HEAD", "ref: refs/heads/main\n");
+        scratch.file("ws/sub/.git", "gitdir: ../.git/modules/sub\n");
+        let watch = unhurried_watch(&ws).with_more([ws.join("scripts/hooks/pre-commit")]);
+        (scratch, ws, watch)
+    }
+
+    /// A folder of the command's own that no look can list (`chmod 000`)
+    /// hides nothing else: the look is incomplete for that folder alone,
+    /// and goes on, so a hook planted in the hooks folder and a filter in a
+    /// submodule's configuration are found and put back; the folder, the
+    /// command's, is opened and taken away with what is in it.
+    #[test]
+    fn a_folder_no_look_can_list_hides_nothing_else() {
+        let (_scratch, ws, watch) = reviewed("hidden_after");
+        let before = watch.take();
+        assert!(before.is_complete());
+        fs::create_dir(ws.join(".git/hooks/zz")).unwrap();
+        fs::write(ws.join(".git/hooks/zz/x"), "x").unwrap();
+        set_mode(&ws.join(".git/hooks/zz"), 0o000);
+        fs::write(ws.join("scripts/hooks/pre-commit"), "#!/bin/sh\nevil\n").unwrap();
+        fs::write(
+            ws.join(".git/modules/sub/config"),
+            "[core]\n\tfsmonitor = /tmp/evil\n",
+        )
+        .unwrap();
+        let (changed, after) = watch.changes_since(&before);
+        let unlistable = after.unlistable().to_vec();
+        let kept = ws.parent().unwrap().join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
+        let _ = fs::set_permissions(ws.join(".git/hooks/zz"), fs::Permissions::from_mode(0o755));
+        assert_eq!(unlistable, [ws.join(".git/hooks/zz")]);
+        assert!(
+            !ws.join("scripts/hooks/pre-commit").exists(),
+            "{:?}",
+            put.left
+        );
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/modules/sub/config")).unwrap(),
+            "[core]\n"
+        );
+        assert!(!ws.join(".git/hooks/zz").exists(), "{:?}", put.left);
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        assert!(put.after.is_complete());
+    }
+
+    /// An empty folder no look can list, there before the command, does
+    /// not blind the look: a workflow changed and one added are found.
+    #[test]
+    fn a_folder_no_look_can_list_does_not_blind_the_rest() {
+        let (_scratch, ws, watch) = reviewed("hidden_blind");
+        fs::create_dir_all(ws.join(".github/workflows")).unwrap();
+        fs::write(ws.join(".github/workflows/ci.yml"), "on: push\n").unwrap();
+        fs::create_dir(ws.join(".git/hooks/zz")).unwrap();
+        set_mode(&ws.join(".git/hooks/zz"), 0o000);
+        let before = watch.take();
+        fs::write(ws.join(".github/workflows/ci.yml"), "on: push\njobs: {}\n").unwrap();
+        fs::write(ws.join(".github/workflows/new.yml"), "on: push\n").unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        set_mode(&ws.join(".git/hooks/zz"), 0o755);
+        let paths: Vec<&PathBuf> = changed.iter().map(|one| &one.path).collect();
+        assert!(
+            paths.contains(&&ws.join(".github/workflows/ci.yml"))
+                && paths.contains(&&ws.join(".github/workflows/new.yml")),
+            "{paths:?}"
+        );
+    }
+
+    /// A protected link that leads to a script in the workspace (a hook
+    /// linked to `tools/pre-commit`): a change to the script, which is what
+    /// git runs, is found and put back.
+    #[test]
+    fn a_hook_linked_to_a_workspace_script_is_watched_through_its_link() {
+        let (scratch, ws, watch) = reviewed("linked_hook");
+        scratch.file("ws/tools/pre-commit", "#!/bin/sh\ncargo fmt --check\n");
+        symlink("../../tools/pre-commit", ws.join(".git/hooks/pre-commit")).unwrap();
+        let before = watch.take();
+        fs::write(ws.join("tools/pre-commit"), "#!/bin/sh\nevil\n").unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        assert!(
+            changed
+                .iter()
+                .any(|one| one.path == ws.join("tools/pre-commit")),
+            "{changed:?}"
+        );
+        let kept = ws.parent().unwrap().join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
+        assert!(put.left.is_empty(), "left: {:?}", put.left);
+        assert_eq!(
+            fs::read_to_string(ws.join("tools/pre-commit")).unwrap(),
+            "#!/bin/sh\ncargo fmt --check\n"
+        );
+        // The link taken away is the link's change: the file it led to,
+        // which is there still, is not named gone.
+        let before = watch.take();
+        fs::remove_file(ws.join(".git/hooks/pre-commit")).unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        let paths: Vec<&PathBuf> = changed.iter().map(|one| &one.path).collect();
+        assert_eq!(paths, [&ws.join(".git/hooks/pre-commit")]);
+    }
+
+    /// A link a command makes at a protected path, to a file the workspace
+    /// keeps, has the link taken away and never the file: a place only a
+    /// later look follows a link to is not taken for made.
+    #[test]
+    fn a_link_a_command_makes_to_a_kept_file_takes_nothing_of_it() {
+        let (scratch, ws, watch) = reviewed("link_made");
+        scratch.file("ws/tools/build.sh", "#!/bin/sh\nmake\n");
+        let before = watch.take();
+        symlink("../../tools/build.sh", ws.join(".git/hooks/pre-push")).unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        let kept = ws.parent().unwrap().join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
+        assert!(fs::symlink_metadata(ws.join(".git/hooks/pre-push")).is_err());
+        assert_eq!(
+            fs::read_to_string(ws.join("tools/build.sh")).unwrap(),
+            "#!/bin/sh\nmake\n",
+            "{:?}",
+            put.changed
+        );
+    }
+
+    /// A path a later look first watches (one the configuration named
+    /// during a command) is not taken for made: what was there before the
+    /// command is not named, and what changed since the look before began
+    /// is named, with what it was unknown, and never touched.
+    #[test]
+    fn a_path_first_watched_after_the_command_is_never_taken_for_made() {
+        let scratch = workspace("first_watched");
+        let ws = scratch.join("ws");
+        scratch.file("ws/.githooks/pre-commit", "#!/bin/sh\ncargo fmt --check\n");
+        let before_watch = unhurried_watch(&ws);
+        let mut before = before_watch.take();
+        scratch.file("ws/.githooks/pre-push", "#!/bin/sh\nevil\n");
+        let after_watch = unhurried_watch(&ws).with_more([
+            ws.join(".githooks/pre-commit"),
+            ws.join(".githooks/pre-push"),
+        ]);
+        let newly = |changed: &[Changed]| -> Vec<PathBuf> {
+            changed
+                .iter()
+                .filter(|one| one.path.starts_with(ws.join(".githooks")))
+                .map(|one| one.path.clone())
+                .collect()
+        };
+        // A look before taken after both were written (its start set an
+        // hour on, since a test cannot age a file's change time): neither is
+        // named, as a file there before the command is not.
+        before.taken.0 += 3600;
+        let (changed, _) = after_watch.changes_since(&before);
+        assert!(newly(&changed).is_empty(), "{changed:?}");
+        // One taken before both: both are named, with what they were
+        // unknown, and the put-back touches neither.
+        before.taken = (0, 0);
+        let (changed, _) = after_watch.changes_since(&before);
+        assert_eq!(newly(&changed).len(), 2, "{changed:?}");
+        assert!(
+            changed
+                .iter()
+                .filter(|one| one.path.starts_with(ws.join(".githooks")))
+                .all(|one| one.before == Before::Unknown)
+        );
+        let kept = ws.parent().unwrap().join("kept");
+        let put = after_watch.put_back(&before, &changed, &|_| true, Some(&kept));
+        assert!(ws.join(".githooks/pre-commit").exists());
+        assert!(
+            ws.join(".githooks/pre-push").exists(),
+            "a file first watched was touched"
+        );
+        assert!(
+            put.left
+                .iter()
+                .any(|one| one.path == ws.join(".githooks/pre-push"))
+        );
+    }
+
+    /// What a file held when the put-back writes over it is kept, as it
+    /// was then, in the folder it is given; a file too large to keep is
+    /// not written over, and is left to put back by hand.
+    #[test]
+    fn what_a_file_held_is_kept_and_one_too_large_is_left() {
+        let scratch = workspace("kept_copies");
+        let ws = scratch.join("ws");
+        let watch = unhurried_watch(&ws);
+        let before = watch.take();
+        fs::write(ws.join(".git/config"), "[core]\n\tthe user's = edit\n").unwrap();
+        fs::write(ws.join(".git/hooks/pre-push"), "#!/bin/sh\nmade\n").unwrap();
+        let large = vec![b'x'; usize::try_from(KEEP_BYTES).unwrap() + 1];
+        fs::write(ws.join(".git/hooks/pre-commit.sample"), &large).unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        let kept = scratch.join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/config")).unwrap(),
+            "[core]\n"
+        );
+        let (path, copy) = put
+            .kept
+            .iter()
+            .find(|(path, _)| *path == ws.join(".git/config"))
+            .expect("a kept copy of the configuration");
+        assert_eq!(path, &ws.join(".git/config"));
+        assert_eq!(
+            fs::read_to_string(copy).unwrap(),
+            "[core]\n\tthe user's = edit\n"
+        );
+        assert_eq!(mode(copy), 0o600);
+        // A file made is kept before it is removed.
+        assert!(!ws.join(".git/hooks/pre-push").exists());
+        let (_, copy) = put
+            .kept
+            .iter()
+            .find(|(path, _)| *path == ws.join(".git/hooks/pre-push"))
+            .expect("a kept copy of the hook made");
+        assert_eq!(fs::read_to_string(copy).unwrap(), "#!/bin/sh\nmade\n");
+        // Too large to keep: left as it is, and named.
+        assert_eq!(
+            fs::read(ws.join(".git/hooks/pre-commit.sample"))
+                .unwrap()
+                .len(),
+            large.len()
+        );
+        assert!(
+            put.left
+                .iter()
+                .any(|one| one.path == ws.join(".git/hooks/pre-commit.sample")),
+            "{:?}",
+            put.left
+        );
+        // With nowhere to keep it, nothing that would be lost is touched.
+        let before = watch.take();
+        fs::write(ws.join(".git/config"), "[core]\n\tagain = 1\n").unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        let put = watch.put_back(&before, &changed, &|_| true, None);
+        assert_eq!(
+            fs::read_to_string(ws.join(".git/config")).unwrap(),
+            "[core]\n\tagain = 1\n"
+        );
+        assert!(!put.left.is_empty());
+    }
+
+    /// A folder that could not be listed before the command, which the
+    /// command opened and planted in, is put back with a mode its owner can
+    /// list: never one that hides from every later look what is in it.
+    #[test]
+    fn a_folder_is_never_given_back_a_mode_no_look_can_list() {
+        let scratch = workspace("never_unlistable");
+        let ws = scratch.join("ws");
+        let zz = ws.join(".git/hooks/zz");
+        fs::create_dir(&zz).unwrap();
+        set_mode(&zz, 0o000);
+        let watch = unhurried_watch(&ws);
+        let before = watch.take();
+        set_mode(&zz, 0o755);
+        fs::write(zz.join("pre-commit"), "#!/bin/sh\nevil\n").unwrap();
+        let (changed, _) = watch.changes_since(&before);
+        let kept = scratch.join("kept");
+        let put = watch.put_back(&before, &changed, &|_| true, Some(&kept));
+        let now = mode(&zz);
+        set_mode(&zz, 0o755);
+        assert_eq!(now, 0o500, "{:?}", put.left);
+        assert!(put.after.unlistable().is_empty());
+        // What the look before could not see is not taken for made: what
+        // changed since it began is named, to put back by hand.
+        assert!(
+            put.left.iter().any(|one| one.path == zz.join("pre-commit")),
+            "{:?}",
+            put.left
+        );
+    }
+
+    /// A protected file swapped for a FIFO between the look's finding it
+    /// and its reading it does not hold the look: it is opened with no link
+    /// followed and without waiting. `mkfifo` is a process: hence the
+    /// `sys_` name.
+    #[test]
+    fn sys_a_file_swapped_for_a_fifo_while_it_is_read_does_not_hold_the_look() {
+        let scratch = workspace("fifo_swap");
+        let ws = scratch.join("ws");
+        let watch = unhurried_watch(&ws);
+        let hold = cineris_testkit::Hold::new(READING_A_PROTECTED_FILE);
+        let looking = std::thread::spawn({
+            let watch = watch.clone();
+            move || watch.take()
+        });
+        hold.reach();
+        // Whichever file the look is at, each is a FIFO now.
+        for name in [".git/config", ".git/hooks/pre-commit.sample"] {
+            let path = ws.join(name);
+            fs::remove_file(&path).unwrap();
+            let made = std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .expect("run mkfifo");
+            assert!(made.success(), "mkfifo failed");
+        }
+        hold.release();
+        let snapshot = looking.join().unwrap();
+        assert!(!snapshot.is_empty());
     }
 }

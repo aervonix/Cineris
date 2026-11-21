@@ -834,6 +834,85 @@ fn sys_a_change_outside_the_commands_reach_is_not_put_back() {
     );
 }
 
+/// The user saves an edit to a protected file inside the workspace (a CI
+/// workflow, in their editor) while a confined command runs. The put-back
+/// cannot tell it from the command's and puts the file back, but keeps what
+/// the file held in the session's folder, owner-only, and the note says
+/// where (the maintainers' settlement after the full review of the third
+/// security fix: the put-back never destroys what it replaces).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_what_the_put_back_writes_over_is_kept_in_the_sessions_folder() {
+    use std::os::unix::fs::PermissionsExt;
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("kept_copy", []);
+    world.put(".git/config", "[core]\n");
+    world.put(".github/workflows/ci.yml", "on: push\n");
+    world.provider.push(calls(&[(
+        "c1",
+        "shell",
+        json!({"command": "echo hi > hi.txt"}),
+    )]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let looks = cineris_testkit::Hold::new(cineris_core::BEFORE_THE_LOOK_AFTER);
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        let mut turn = std::pin::pin!(front.turn("go"));
+        looks.drive_until_reached(turn.as_mut()).await;
+        std::fs::write(
+            world.workspace.join(".github/workflows/ci.yml"),
+            "on: [push, pull_request]\n",
+        )
+        .unwrap();
+        looks.release();
+        turn.await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    assert_eq!(
+        world.read(".github/workflows/ci.yml").as_deref(),
+        Some("on: push\n")
+    );
+    assert!(
+        shown.contains("kept in the session's folder")
+            && shown.contains("`.github/workflows/ci.yml` as `put-back/001-ci.yml`"),
+        "{shown}"
+    );
+    fn find(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path, name) {
+                    return Some(found);
+                }
+            } else if path.ends_with(name) {
+                return Some(path);
+            }
+        }
+        None
+    }
+    let copy = find(&world.sessions_dir(), "put-back/001-ci.yml").expect("the kept copy");
+    assert_eq!(
+        std::fs::read_to_string(&copy).unwrap(),
+        "on: [push, pull_request]\n"
+    );
+    assert_eq!(
+        std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
+
 /// Sets the session's level, as a front end does.
 #[cfg(target_os = "linux")]
 async fn set_level(front: &Front, level: Level) {

@@ -52,6 +52,32 @@ use cineris_sandbox::protect::{Changed, Limits, Snapshot, Watch};
 use cineris_sandbox::support::{Assessment, Support, Unconfined};
 use cineris_tools::process::{Argument, CommandLine, Direct, Exit, Launch, LaunchCx, Launcher};
 
+/// Whether a path the configuration names is watched: a file, or a name not
+/// there yet; never a folder, which would watch whatever is in it, nor the
+/// workspace or a folder above it (the full review of the third security
+/// fix).
+#[allow(
+    clippy::disallowed_methods,
+    reason = "part of a look at the protected paths, on the blocking pool"
+)]
+fn watched_by_name(path: &Path, workspace: &Path) -> bool {
+    !std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
+        && !cineris_base::location_within(workspace, path)
+}
+
+/// `path` where it really is: its folder with every link on the way
+/// resolved, and its own name; as it is where its folder is not there.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "part of a look at the protected paths, on the blocking pool"
+)]
+fn where_it_is(path: &Path) -> PathBuf {
+    match (path.parent().map(std::fs::canonicalize), path.file_name()) {
+        (Some(Ok(folder)), Some(name)) => folder.join(name),
+        _ => path.to_path_buf(),
+    }
+}
+
 /// How long the read of what the repository's configuration names may take
 /// ([`SessionSandbox::follow_configured`]): a configuration that includes a
 /// file that stalls a read (a FIFO) gives up there, and nothing more is
@@ -160,6 +186,10 @@ pub(crate) struct SessionSandbox {
     /// with the protected paths, read again before and after each confined
     /// start ([`Self::follow_configured`]; the third security fix).
     configured: std::sync::RwLock<Vec<PathBuf>>,
+    /// The session's own folder where the put-back keeps what it writes
+    /// over or removes (in its session directory, with its other state):
+    /// `None` for a session kept in memory, which then writes over nothing.
+    keep: OnceLock<PathBuf>,
     /// Held from the look before a confined start to the look after it, by
     /// every confined start of the session: two that overlap would each take
     /// the other's change for its own, and one could put back what the
@@ -234,6 +264,7 @@ impl SessionSandbox {
             temp,
             watch,
             configured: std::sync::RwLock::new(Vec::new()),
+            keep: OnceLock::new(),
             starts: tokio::sync::Mutex::new(()),
             last_after: std::sync::Mutex::new(None),
         };
@@ -248,6 +279,17 @@ impl SessionSandbox {
             .last_after
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(after);
+    }
+
+    /// Keeps what the put-back writes over or removes in `dir`, the
+    /// session's own: set once, when the session's directory is known.
+    pub(crate) fn keep_copies_in(&self, dir: PathBuf) {
+        let _ = self.keep.set(dir);
+    }
+
+    /// Where the put-back keeps what it writes over or removes.
+    pub(crate) fn kept_in(&self) -> Option<&Path> {
+        self.keep.get().map(PathBuf::as_path)
     }
 
     /// Waits until no other confined start of the session is between its
@@ -436,6 +478,8 @@ impl SessionSandbox {
         let kept: Vec<PathBuf> =
             cineris_tools::shell::changes::configured_paths(git, root, CONFIGURED_CAP)
                 .into_iter()
+                .map(|path| where_it_is(&path))
+                .filter(|path| watched_by_name(path, root))
                 .filter(|path| {
                     roots
                         .iter()
@@ -735,6 +779,16 @@ pub(crate) struct Found {
     /// not the start's, so not put back (the user's own hand, or a program
     /// of the user's), and told as a change from outside.
     pub(crate) outside: Vec<Changed>,
+    /// What is as it was before, again, where the last look reached.
+    pub(crate) restored: Vec<PathBuf>,
+    /// What a path held when the put-back wrote over or removed it, and
+    /// where that is kept.
+    pub(crate) kept: Vec<(PathBuf, PathBuf)>,
+    /// The folders the last look found and could not list, and whether the
+    /// look before could list each.
+    pub(crate) unlistable: Vec<(PathBuf, bool)>,
+    /// Whether the look before and the last look stopped at their bound.
+    pub(crate) stopped: (bool, bool),
     /// Whether the look before and the look after were complete.
     pub(crate) complete: (bool, bool),
     /// The last look taken: after the put-back, where there was one. The
@@ -753,7 +807,18 @@ pub(crate) struct Found {
 /// security fix: a protected path of the user's own outside the workspace
 /// was put back). Whether the looks were complete is told of the last look
 /// taken, after the put-back. It blocks.
-pub(crate) fn protected_changes(watch: &Watch, before: &Snapshot, roots: &[PathBuf]) -> Found {
+pub(crate) fn protected_changes(
+    watch: &Watch,
+    before: &Snapshot,
+    roots: &[PathBuf],
+    keep: Option<&Path>,
+) -> Found {
+    let unlistable = |last: &Snapshot| -> Vec<(PathBuf, bool)> {
+        last.unlistable()
+            .iter()
+            .map(|folder| (folder.clone(), !before.unlistable().contains(folder)))
+            .collect()
+    };
     let within = |path: &Path| {
         roots
             .iter()
@@ -767,11 +832,15 @@ pub(crate) fn protected_changes(watch: &Watch, before: &Snapshot, roots: &[PathB
             changed,
             left: Vec::new(),
             outside,
+            restored: Vec::new(),
+            kept: Vec::new(),
+            unlistable: unlistable(&after),
+            stopped: (before.stopped_at_its_bound(), after.stopped_at_its_bound()),
             complete: (before.is_complete(), after.is_complete()),
             after,
         };
     }
-    let put = watch.put_back(before, &changed, &within);
+    let put = watch.put_back(before, &changed, &within, keep);
     // What the last look still finds outside the start's roots is told as
     // a change from outside: the put-back did not touch it.
     for one in &put.left {
@@ -788,80 +857,148 @@ pub(crate) fn protected_changes(watch: &Watch, before: &Snapshot, roots: &[PathB
         changed: put.changed,
         left,
         outside,
+        restored: put.restored,
+        kept: put.kept,
+        unlistable: unlistable(&put.after),
+        stopped: (
+            before.stopped_at_its_bound(),
+            put.after.stopped_at_its_bound(),
+        ),
         complete: (before.is_complete(), put.after.is_complete()),
         after: put.after,
     }
 }
 
+impl Found {
+    /// Whether what was found stops the turn: a change the start made, a
+    /// change from outside while it ran, a look the start made stop at its
+    /// bound where the one before did not, or a folder it made unlistable.
+    pub(crate) fn stops_the_turn(&self) -> bool {
+        !self.changed.is_empty()
+            || !self.outside.is_empty()
+            || (self.stopped.1 && !self.stopped.0)
+            || self.unlistable.iter().any(|(_, new)| *new)
+    }
+}
+
 /// What the model and the user are told after a confined start changed
-/// protected paths, which were put back (`left`: what could not be), after
-/// one changed outside the start's reach while it ran (`outside`), or when
-/// the look at them stopped at its bound. `None` when there is nothing to
-/// say.
-pub(crate) fn protected_note(
-    changed: &[Changed],
-    left: &[Changed],
-    outside: &[Changed],
-    (complete_before, complete_after): (bool, bool),
-    root: &Path,
-) -> Option<String> {
+/// protected paths: what was put back, what is left to put back by hand,
+/// what was not seen again, and where what was written over is kept; after
+/// a change outside the start's reach while it ran; of a folder no look can
+/// list; and when the look stopped at its bound. `None` when there is
+/// nothing to say.
+pub(crate) fn protected_note(found: &Found, root: &Path) -> Option<String> {
+    // A name from the workspace, which the model reads: every character
+    // that would act unseen is an escape.
+    let name = |path: &Path| -> String {
+        let path = path.strip_prefix(root).unwrap_or(path);
+        format!("`{}`", cineris_base::visible(&path.to_string_lossy()))
+    };
     let shown = |paths: &mut dyn Iterator<Item = &Changed>| -> Vec<String> {
         paths
-            .map(|changed| {
-                let path = changed.path.strip_prefix(root).unwrap_or(&changed.path);
-                // A name from the workspace, which the model reads: every
-                // character that would act unseen is an escape.
-                format!(
-                    "`{}` ({})",
-                    cineris_base::visible(&path.to_string_lossy()),
-                    changed.change.as_str()
-                )
-            })
+            .map(|changed| format!("{} ({})", name(&changed.path), changed.change.as_str()))
             .collect()
     };
     let mut lines = Vec::new();
-    if !changed.is_empty() {
-        let all = shown(&mut changed.iter());
-        let not_back = shown(&mut left.iter());
-        let none_back = changed
-            .iter()
-            .all(|one| left.iter().any(|still| still.path == one.path));
-        let back = if not_back.is_empty() {
-            "They were put back as they were before it.".to_owned()
-        } else if none_back {
-            format!(
-                "They could not be put back (a link on the way, what they held not kept, or a \
-                 directory that is not empty), and must be put back by hand: {}.",
-                not_back.join(", ")
-            )
+    if !found.changed.is_empty() {
+        let all = shown(&mut found.changed.iter());
+        let back = shown(
+            &mut found
+                .changed
+                .iter()
+                .filter(|one| found.restored.contains(&one.path)),
+        );
+        let left = shown(&mut found.left.iter());
+        let unseen = shown(&mut found.changed.iter().filter(|one| {
+            !found.restored.contains(&one.path)
+                && !found.left.iter().any(|still| still.path == one.path)
+        }));
+        let mut said = Vec::new();
+        if back.len() == all.len() {
+            said.push("They were put back as they were before it.".to_owned());
         } else {
-            format!(
-                "The others were put back as they were before it; these could not be, and must \
-                 be put back by hand: {}.",
-                not_back.join(", ")
-            )
-        };
+            if !back.is_empty() {
+                said.push(format!(
+                    "These were put back as they were before it: {}.",
+                    back.join(", ")
+                ));
+            }
+            if !left.is_empty() {
+                said.push(format!(
+                    "These could not be put back (a link on the way, what they held not kept, a \
+                     directory that is not empty, or a place first watched during the command), \
+                     and must be put back by hand: {}.",
+                    left.join(", ")
+                ));
+            }
+            if !unseen.is_empty() {
+                said.push(format!(
+                    "These were not seen again after the put-back (the look did not reach them), \
+                     and must be looked at by hand: {}.",
+                    unseen.join(", ")
+                ));
+            }
+        }
+        if !found.kept.is_empty() {
+            let kept: Vec<String> = found
+                .kept
+                .iter()
+                .map(|(path, copy)| {
+                    let copy = copy
+                        .file_name()
+                        .map_or_else(String::new, |copy| copy.to_string_lossy().into_owned());
+                    format!(
+                        "{} as `put-back/{}`",
+                        name(path),
+                        cineris_base::visible(&copy)
+                    )
+                })
+                .collect();
+            said.push(format!(
+                "What they held when the command ended is kept in the session's folder: {}.",
+                kept.join(", ")
+            ));
+        }
         // The owner's decision of 2026-11-21: a change a confined start
         // makes there is never kept, an approved one included.
         lines.push(format!(
             "[The command changed protected paths, which decide what runs later outside the \
-             sandbox: {}. {back} Nothing run inside the sandbox keeps a change to a protected \
+             sandbox: {}. {} Nothing run inside the sandbox keeps a change to a protected \
              path. If the user wants this change, make it with a command outside the sandbox \
              (`sandbox: false`), which the user is asked to allow once, or leave it to the \
              user. The turn stops here, so that the user can look.]",
             all.join(", "),
+            said.join(" "),
         ));
     }
-    if !outside.is_empty() {
+    if !found.outside.is_empty() {
         lines.push(format!(
             "[While the command ran, protected paths it could not write changed: {}. Something \
              other than the command changed them (the user's own hand, or a program of the \
              user's), so they are left as they are. The turn stops here, so that the user can \
              look.]",
-            shown(&mut outside.iter()).join(", ")
+            shown(&mut found.outside.iter()).join(", ")
         ));
     }
-    if complete_before && !complete_after {
+    if !found.unlistable.is_empty() {
+        let folders: Vec<String> = found
+            .unlistable
+            .iter()
+            .map(|(folder, _)| name(folder))
+            .collect();
+        let made = found.unlistable.iter().any(|(_, new)| *new);
+        lines.push(format!(
+            "[These folders cannot be listed, so what is in them was not looked at: {}.{}]",
+            folders.join(", "),
+            if made {
+                " The command made them so. The turn stops here, so that the user can look."
+            } else {
+                ""
+            }
+        ));
+    }
+    let (stopped_before, stopped_after) = found.stopped;
+    if stopped_after && !stopped_before {
         lines.push(
             "[The look at protected paths after the command stopped at its bound, where the \
              look before it did not: the command made the workspace too large to look at \
@@ -869,10 +1006,16 @@ pub(crate) fn protected_note(
              here, so that the user can look.]"
                 .to_owned(),
         );
-    } else if !complete_after {
+    } else if stopped_after {
         lines.push(
             "[Protected paths were looked at only in part: the look stopped at its bound. A \
              change to one further down the workspace would not have been seen.]"
+                .to_owned(),
+        );
+    } else if !found.complete.1 && found.unlistable.is_empty() {
+        lines.push(
+            "[Protected paths were looked at only in part: a file was too large to compare. A \
+             change to it may not have been seen.]"
                 .to_owned(),
         );
     }
@@ -1017,7 +1160,18 @@ mod tests {
             before: cineris_sandbox::protect::Before::Absent,
             mode_changed: false,
         }];
-        let note = protected_note(&changed, &[], &[], (true, true), &root).expect("a note");
+        let found = Found {
+            restored: changed.iter().map(|one| one.path.clone()).collect(),
+            changed: changed.to_vec(),
+            left: Vec::new(),
+            outside: Vec::new(),
+            kept: Vec::new(),
+            unlistable: Vec::new(),
+            stopped: (false, false),
+            complete: (true, true),
+            after: Snapshot::default(),
+        };
+        let note = protected_note(&found, &root).expect("a note");
         assert!(
             !note
                 .lines()
@@ -1281,5 +1435,47 @@ mod tests {
         // The close re-check finds it too.
         assert!(sandbox.continuity_at_close().is_some());
         let _ = std::fs::remove_dir_all(&workspace);
+    }
+
+    /// What the configuration names is watched only by name: a folder (a
+    /// hooks folder named whole, `./tools` in a program's line), the
+    /// workspace and a folder above it are not, a file and a name not there
+    /// yet are.
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "the test makes its files")]
+    fn a_folder_or_the_workspace_named_is_not_watched() {
+        let dir = std::env::temp_dir().join(format!(
+            "cineris-core-watched-by-name-{:016x}",
+            cineris_base::rng::SystemRng::new().next_u64()
+        ));
+        let ws = dir.join("ws");
+        std::fs::create_dir_all(ws.join("tools")).unwrap();
+        std::fs::write(ws.join("tools/strip.sh"), "").unwrap();
+        assert!(watched_by_name(&ws.join("tools/strip.sh"), &ws));
+        assert!(watched_by_name(&ws.join("tools/not-yet.sh"), &ws));
+        assert!(!watched_by_name(&ws.join("tools"), &ws));
+        assert!(!watched_by_name(&ws, &ws));
+        assert!(!watched_by_name(&dir, &ws));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What the configuration names is taken where it really is: a folder
+    /// on its way that is a link is resolved, so that it is held to the
+    /// write roots by place, not by its text.
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::disallowed_methods, reason = "the test makes its files")]
+    fn a_named_path_is_taken_where_it_really_is() {
+        let dir = std::env::temp_dir().join(format!(
+            "cineris-core-where-it-is-{:016x}",
+            cineris_base::rng::SystemRng::new().next_u64()
+        ));
+        std::fs::create_dir_all(dir.join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.join("real"), dir.join("via")).unwrap();
+        let real = std::fs::canonicalize(dir.join("real")).unwrap();
+        assert_eq!(where_it_is(&dir.join("via/hook")), real.join("hook"));
+        // A folder not there: the path as it is.
+        assert_eq!(where_it_is(&dir.join("gone/hook")), dir.join("gone/hook"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

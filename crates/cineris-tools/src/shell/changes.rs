@@ -775,8 +775,17 @@ fn configured_from(answer: &[u8], top: &Path, home: Option<&Path>) -> Vec<PathBu
             key.rsplit('.').next().unwrap_or_default(),
         );
         if key == "core.hookspath" {
+            // The hooks git runs from the folder, by their names: never the
+            // folder whole, which may be the working tree's top (the full
+            // review of the third security fix).
             if let Some(folder) = place(value, top) {
-                add(folder);
+                for hook in GIT_HOOKS {
+                    add(folder.join(hook));
+                }
+            }
+        } else if key == "core.attributesfile" {
+            if let Some(file) = place(value, top) {
+                add(file);
             }
         } else if (section == "include" || section == "includeif") && last == "path" {
             let from = file.parent().unwrap_or(top);
@@ -800,6 +809,39 @@ fn configured_from(answer: &[u8], top: &Path, home: Option<&Path>) -> Vec<PathBu
     found
 }
 
+/// The names of the hooks git runs from a repository's hooks folder
+/// (githooks(5)).
+const GIT_HOOKS: [&str; 28] = [
+    "applypatch-msg",
+    "pre-applypatch",
+    "post-applypatch",
+    "pre-commit",
+    "pre-merge-commit",
+    "prepare-commit-msg",
+    "commit-msg",
+    "post-commit",
+    "pre-rebase",
+    "post-checkout",
+    "post-merge",
+    "pre-push",
+    "pre-receive",
+    "update",
+    "proc-receive",
+    "post-receive",
+    "post-update",
+    "reference-transaction",
+    "push-to-checkout",
+    "pre-auto-gc",
+    "post-rewrite",
+    "sendemail-validate",
+    "fsmonitor-watchman",
+    "p4-changelist",
+    "p4-prepare-changelist",
+    "p4-post-changelist",
+    "p4-pre-submit",
+    "post-index-change",
+];
+
 /// Whether a setting's value is a command line git runs, by its key
 /// (lowercased), its section and its last part.
 fn names_a_program(key: &str, section: &str, last: &str) -> bool {
@@ -816,6 +858,8 @@ fn names_a_program(key: &str, section: &str, last: &str) -> bool {
             | "diff.external"
             | "uploadpack.packobjectshook"
             | "gpg.program"
+            | "gpg.ssh.defaultkeycommand"
+            | "interactive.difffilter"
     ) || matches!(
         (section, last),
         ("filter", "clean" | "smudge" | "process")
@@ -825,6 +869,7 @@ fn names_a_program(key: &str, section: &str, last: &str) -> bool {
             | ("gpg", "program")
             | ("remote", "receivepack" | "uploadpack" | "vcs")
             | ("submodule", "update")
+            | ("difftool" | "mergetool", "cmd" | "path")
             | ("pager" | "alias", _)
     )
 }
@@ -995,23 +1040,32 @@ mod tests {
             "file:.git/config\0remote.origin.url\nhttps://example.invalid/r\0",
             "file:.git/../shared.gitconfig\0diff.y.textconv\nsh \"scripts/conv.sh\"\0",
             "file:.git/../shared.gitconfig\0alias.x\n!../outside.sh\0",
+            "file:.git/config\0difftool.x.cmd\n./tools/difft.sh \"$LOCAL\"\0",
+            "file:.git/config\0core.attributesfile\nteam.attributes\0",
             "file:.git/config\0core.bool\0",
             "command line:\0core.hookspath\n/dev/null\0",
         );
         let found = configured_from(answer.as_bytes(), top, Some(Path::new("/srv/me")));
-        assert_eq!(
-            found,
+        let hooks: Vec<PathBuf> = GIT_HOOKS
+            .iter()
+            .map(|hook| PathBuf::from("/work/repo/scripts/hooks").join(hook))
+            .collect();
+        let mut wanted: Vec<PathBuf> = ["/srv/me/.gitconfig", "/work/repo/.git/config"]
+            .map(PathBuf::from)
+            .to_vec();
+        wanted.extend(hooks);
+        wanted.extend(
             [
-                "/srv/me/.gitconfig",
-                "/work/repo/.git/config",
-                "/work/repo/scripts/hooks",
                 "/work/repo/shared.gitconfig",
                 "/work/repo/tools/strip.sh",
                 "/work/repo/scripts/conv.sh",
                 "/work/outside.sh",
+                "/work/repo/tools/difft.sh",
+                "/work/repo/team.attributes",
             ]
-            .map(PathBuf::from)
+            .map(PathBuf::from),
         );
+        assert_eq!(found, wanted);
         // The harness's own command line names nothing.
         assert!(
             configured_from(b"command line:\0core.hookspath\n/dev/null\0", top, None).is_empty()

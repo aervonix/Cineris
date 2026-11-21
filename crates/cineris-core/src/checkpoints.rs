@@ -725,9 +725,10 @@ impl RecordingShell {
                     let (sandbox, git) = (Arc::clone(&self.sandbox), Arc::clone(&self.git));
                     tokio::task::spawn_blocking(move || {
                         sandbox.follow_configured(&*git, &root);
-                        sandbox
-                            .protected()
-                            .map(|watch| protected_changes(&watch, &before, &roots))
+                        let keep = sandbox.kept_in().map(std::path::Path::to_path_buf);
+                        sandbox.protected().map(|watch| {
+                            protected_changes(&watch, &before, &roots, keep.as_deref())
+                        })
                     })
                     .await
                     .ok()
@@ -805,23 +806,15 @@ impl RecordingShell {
             let mut stopped = false;
             if let Some(found) = found {
                 let root = cx.paths.root().to_fs_path();
-                if let Some(note) = protected_note(
-                    &found.changed,
-                    &found.left,
-                    &found.outside,
-                    found.complete,
-                    &root,
-                ) {
+                if let Some(note) = protected_note(&found, &root) {
                     result = result.with_part(Part::text(note.clone()));
-                    // A change, or a look the command itself made stop
-                    // short, stops the turn; a workspace already past the
-                    // bound only warns. The result is marked as the stop,
-                    // so that the round ends at this call, even when it
-                    // was the last of its response.
-                    if !found.changed.is_empty()
-                        || !found.outside.is_empty()
-                        || (found.complete.0 && !found.complete.1)
-                    {
+                    // A change, a look the command itself made stop short,
+                    // or a folder it made unlistable stops the turn; a
+                    // workspace already past the bound only warns. The
+                    // result is marked as the stop, so that the round ends
+                    // at this call, even when it was the last of its
+                    // response.
+                    if found.stops_the_turn() {
                         self.policy.stop_turn(cx.turn, note.clone());
                         result = result.stopping_turn(note);
                         stopped = true;

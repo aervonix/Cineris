@@ -1615,11 +1615,13 @@ mod confined {
     /// hooks (`core.hooksPath`) in a file the configuration includes, and
     /// plants a hook there, in the same run: neither is on the protected
     /// list. What the configuration names is read again before the look
-    /// after the program, so the hook is found and put back, the included
-    /// file with it, and the call stopped, as around a confined command (the
-    /// third security fix).
+    /// after the program, so the hook is found: the included file is put
+    /// back, so nothing names the folder any more, the hook, in a place the
+    /// look before never watched, is named to put back by hand, and the call
+    /// is stopped, as around a confined command (the third security fix and
+    /// its full review).
     #[test]
-    fn sys_a_hook_a_program_plants_in_the_hooks_folder_is_put_back() {
+    fn sys_a_hook_a_program_plants_in_a_folder_it_names_is_told_and_the_naming_put_back() {
         use cineris_testkit::scratch::git;
 
         if !enforcing_here() {
@@ -1656,12 +1658,12 @@ mod confined {
             front.turn("run it").await;
             let answer = stopped(&front, 0);
             assert!(
-                answer.contains("`.githooks/pre-push` (created)")
-                    && answer.contains("They were put back"),
+                answer.contains("put back as they were before it: `shared.gitconfig`")
+                    && answer.contains("must be put back by hand: `.githooks/pre-push` (modified)"),
                 "{answer}"
             );
-            assert!(world.read(".githooks/pre-push").is_none());
             assert_eq!(world.read("shared.gitconfig").as_deref(), Some(""));
+            assert!(world.read(".githooks/pre-push").is_some());
             front.close().await;
         });
     }

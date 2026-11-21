@@ -475,7 +475,11 @@ fn sys_a_git_that_fails_inside_the_sandbox_leaves_the_list_incomplete_and_says_w
 /// (`./tools/strip.sh`), which the model's own `git status` would run; and
 /// a file the configuration includes (`include.path`). A folder the same
 /// command names through the included file is looked at by the look after
-/// it: what the configuration names is read again first.
+/// it, what the configuration names being read again first: the included
+/// file is put back, so nothing names the folder any more, and the hook
+/// planted there, in a place the look before never watched, is named to
+/// put back by hand and never removed (the full review of the third
+/// security fix).
 #[test]
 fn sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back() {
     use std::os::unix::fs::PermissionsExt;
@@ -558,15 +562,185 @@ fn sys_what_the_configuration_names_that_a_confined_command_changes_is_put_back(
         front.turn("include").await;
         let results = front.results();
         assert!(
-            results[1].2.contains("`elsewhere/pre-commit` (created)")
-                && results[1].2.contains("`shared.gitconfig` (modified)")
-                && results[1].2.contains("They were put back"),
+            results[1].2.contains("`shared.gitconfig` (modified)")
+                && results[1]
+                    .2
+                    .contains("These were put back as they were before it: `shared.gitconfig`")
+                && results[1]
+                    .2
+                    .contains("must be put back by hand: `elsewhere/pre-commit` (modified)"),
             "{results:?}"
         );
-        assert!(world.read("elsewhere/pre-commit").is_none());
         assert_eq!(world.read("shared.gitconfig").as_deref(), Some(""));
+        assert!(world.read("elsewhere/pre-commit").is_some());
         front.close().await;
     });
+}
+
+/// A confined command names, in the repository's configuration, a folder
+/// for hooks and a file to include that the repository already keeps (`git
+/// config core.hooksPath .githooks`, `git config include.path
+/// ../team.gitconfig`). The look before never looked at them: what is there
+/// is not taken for made, and nothing of it is deleted (found by the full
+/// review of the third security fix, where both were deleted and said to be
+/// put back). The configuration itself, which the command changed, is put
+/// back.
+#[test]
+fn sys_what_a_command_names_that_was_already_there_is_not_deleted() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("named_already_there", []);
+    world.put("tracked.txt", "one\n");
+    world.put(".githooks/pre-commit", "#!/bin/sh\ncargo fmt --check\n");
+    world.put("team.gitconfig", "[core]\n\tautocrlf = false\n");
+    git(
+        &world.workspace,
+        &["init", "--quiet", "--initial-branch=main"],
+    );
+    git(&world.workspace, &["add", "--all"]);
+    git(
+        &world.workspace,
+        &["commit", "--quiet", "--message", "first"],
+    );
+    world.put(
+        "setup.sh",
+        "git config core.hooksPath .githooks\ngit config include.path ../team.gitconfig\n",
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh setup.sh"}))]));
+    world.provider.push(says("Stopped."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("set up the hooks").await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    assert_eq!(
+        world.read(".githooks/pre-commit").as_deref(),
+        Some("#!/bin/sh\ncargo fmt --check\n"),
+        "{shown}"
+    );
+    assert_eq!(
+        world.read("team.gitconfig").as_deref(),
+        Some("[core]\n\tautocrlf = false\n"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("`.git/config` (modified)") && !shown.contains("`team.gitconfig` (created)"),
+        "{shown}"
+    );
+}
+
+/// The same with the top of the working tree named as the folder for
+/// hooks: only git's hook names in it are watched, so nothing of the
+/// workspace is taken for made, and nothing is deleted.
+#[test]
+fn sys_naming_the_working_tree_for_hooks_deletes_nothing() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("named_top", []);
+    world.put("tracked.txt", "one\n");
+    world.put("src/main.rs", "fn main() {}\n");
+    git(
+        &world.workspace,
+        &["init", "--quiet", "--initial-branch=main"],
+    );
+    git(&world.workspace, &["add", "--all"]);
+    git(
+        &world.workspace,
+        &["commit", "--quiet", "--message", "first"],
+    );
+    world.put("setup.sh", "git config core.hooksPath .\n");
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh setup.sh"}))]));
+    world.provider.push(says("Stopped."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("set up the hooks").await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    let gone: Vec<&str> = ["tracked.txt", "src/main.rs", ".git/HEAD", "setup.sh"]
+        .into_iter()
+        .filter(|path| world.read(path).is_none())
+        .collect();
+    assert!(gone.is_empty(), "the put-back deleted {gone:?}\n{shown}");
+}
+
+/// A confined command makes a folder of its own under `.git/hooks` that no
+/// look can list, and plants a hook in the folder `core.hooksPath` names:
+/// the look goes on past the folder, so the hook is found and put back,
+/// and the folder, the command's, is opened and taken away with what is in
+/// it (found by the full review of the third security fix, where the folder
+/// ended the look and the hook was never named).
+#[test]
+fn sys_a_hook_planted_beside_a_folder_no_look_can_list_is_put_back() {
+    use std::os::unix::fs::PermissionsExt;
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("hidden_beside", []);
+    repository(&world);
+    git(
+        &world.workspace,
+        &["config", "core.hooksPath", "scripts/hooks"],
+    );
+    world.put("scripts/hooks/README", "hooks\n");
+    world.put(
+        "plant.sh",
+        "mkdir -p .git/hooks/zz && echo x > .git/hooks/zz/x && chmod 000 .git/hooks/zz\n\
+         printf '#!/bin/sh\\nevil\\n' > scripts/hooks/pre-commit\n\
+         chmod +x scripts/hooks/pre-commit\n",
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh plant.sh"}))]));
+    world.provider.push(says("Stopped."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("plant").await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    let zz = world.workspace.join(".git/hooks/zz");
+    let _ = std::fs::set_permissions(&zz, std::fs::Permissions::from_mode(0o755));
+    assert!(world.read("scripts/hooks/pre-commit").is_none(), "{shown}");
+    assert!(
+        shown.contains("`scripts/hooks/pre-commit` (created)"),
+        "{shown}"
+    );
+    assert!(!zz.exists(), "{shown}");
 }
 
 /// A filter named by a bare name is never one in the workspace, even
