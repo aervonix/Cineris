@@ -315,7 +315,9 @@ impl CommandHook {
             && self.filter.is_every())
         .then(|| {
             format!(
-                "The hook `{}` uses `{PATH}` and lists no `tools`: it does not run for a call                  that names no file, such as a shell command, so it gates none of those. For it                  to gate every call, list the tools in `tools` and do not rely on `{PATH}`.",
+                "The hook `{}` uses `{PATH}` and lists no `tools`: it does not run for a call \
+                 that names no file, such as a shell command, so it gates none of those. For it \
+                 to gate every call, list the tools in `tools` and do not rely on `{PATH}`.",
                 in_code(&self.name)
             )
         })

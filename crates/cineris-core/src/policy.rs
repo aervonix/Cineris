@@ -1409,15 +1409,22 @@ impl EnginePolicy {
                     .and_then(|hooks| hooks.replaced.clone())
                     .map(Box::new),
             };
-            // No grant answers a replacement: a supervisor's allow of it is
-            // not taken, and the request stays open for the users.
-            let judge = if replaced { None } else { self.judge(&call) };
-            let (id, mut answer) = self.clients.ask(
-                call.session,
-                &asked,
-                |_| ServerRequest::Approval(request.clone()),
-                judge,
-            );
+            // A replacement is a person's to answer: put to the users
+            // alone, a user that opens the session while it is open
+            // included and a supervisor that does never, and no grant
+            // answers it.
+            let (id, mut answer) = if replaced {
+                self.clients.ask_people(call.session, &asked, |_| {
+                    ServerRequest::Approval(request.clone())
+                })
+            } else {
+                self.clients.ask(
+                    call.session,
+                    &asked,
+                    |_| ServerRequest::Approval(request.clone()),
+                    self.judge(&call),
+                )
+            };
             // A client that opened the session from another thread between
             // the look at who may answer and the request being open found
             // nothing to be put (`Clients::join`), and is put it now; one

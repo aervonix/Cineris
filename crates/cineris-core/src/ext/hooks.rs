@@ -59,20 +59,6 @@ impl Refused {
             }
         }
     }
-
-    /// Whether it would have gated its event: a hook that is waited for on
-    /// `prompt.submit` or `tool.before`.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "the loop's points count a refused gate as a failed hook, in the step's \
-                      next part"
-        )
-    )]
-    pub(crate) fn gates(&self) -> bool {
-        !self.observe && self.event.is_some_and(Event::gates)
-    }
 }
 
 /// The hook commands a configuration holds, compiled: the user's own and a
@@ -87,10 +73,10 @@ pub(crate) struct Configured {
     /// The entries that do not compile, or a project's that takes a name of
     /// the user's.
     pub(crate) refused: Vec<Refused>,
-    /// What the configuration's check says once of an entry that compiles:
-    /// a gating hook that relies on `{path}` for every tool
-    /// (`CommandHook::warning`).
-    pub(crate) warnings: Vec<String>,
+    /// What the configuration's check says once of an entry that compiles,
+    /// with whose it is: a gating hook that relies on `{path}` for every
+    /// tool (`CommandHook::warning`).
+    pub(crate) warnings: Vec<(Source, String)>,
 }
 
 /// A hook's entry as `cineris-ext` compiles it.
@@ -131,7 +117,9 @@ impl Configured {
             }
             match compiled(name, Source::User, settings) {
                 Ok(hook) => {
-                    configured.warnings.extend(hook.warning());
+                    configured
+                        .warnings
+                        .extend(hook.warning().map(|said| (Source::User, said)));
                     configured.user.push(hook);
                 }
                 Err(refused) => configured.refused.push(refused),
@@ -165,7 +153,9 @@ impl Configured {
             }
             match compiled(&hook.name, Source::Project, &hook.settings) {
                 Ok(compiled) => {
-                    configured.warnings.extend(compiled.warning());
+                    configured
+                        .warnings
+                        .extend(compiled.warning().map(|said| (Source::Project, said)));
                     configured.project.push(compiled);
                 }
                 Err(refused) => configured.refused.push(refused),
@@ -230,13 +220,17 @@ pub(crate) fn detail(hook: &CommandHook, changed: bool, confined: bool) -> Strin
 pub(crate) struct InSession {
     /// The user's own, then the project's approved ones.
     pub(crate) hooks: Vec<CommandHook>,
-    /// Every entry that does not run because it was refused, and every
-    /// project's hook approved before that has changed since: each is on
-    /// its event as a hook that fails, so that a gate it held does not
-    /// lapse.
+    /// Each of the user's entries that does not run because it was
+    /// refused, and each hook of a trusted project approved before that
+    /// has changed since: each is on its event as a hook that fails, so
+    /// that a gate it held does not lapse. A project's entry that nobody
+    /// approved holds no gate, trusted or not (the review of step 28's
+    /// second pull request, H1: an untrusted repository's refused entry
+    /// gated every call).
     pub(crate) refused: Vec<Refused>,
-    /// What the session is told: each refused entry, and each project's
-    /// hook of a trusted project that is not approved as it is now.
+    /// What the session is told, once: each of the user's refused entries
+    /// and warnings; and, of a trusted project alone, each refused entry,
+    /// warning, and hook that is not approved as it is now.
     pub(crate) told: Vec<String>,
 }
 
@@ -251,11 +245,27 @@ pub(crate) fn in_session(
     stored: Option<&ProjectTrust>,
     for_the_run: &[Definition],
 ) -> InSession {
-    let mut told: Vec<String> = configured.refused.iter().map(Refused::told).collect();
-    told.extend(configured.warnings);
-    let mut refused = configured.refused;
+    // A project's entries are nothing to a session of a project not
+    // trusted: none of them is on its event, and none is told (the review
+    // of the second pull request, H1: an untrusted repository's refused
+    // entry gated every call). The user's refused entries hold their events.
+    let (mut refused, projects): (Vec<Refused>, Vec<Refused>) = configured
+        .refused
+        .into_iter()
+        .partition(|refused| refused.source == Source::User);
+    let mut told: Vec<String> = refused.iter().map(Refused::told).collect();
+    told.extend(
+        configured
+            .warnings
+            .iter()
+            .filter(|(source, _)| *source == Source::User || trusted)
+            .map(|(_, said)| said.clone()),
+    );
     let mut hooks = configured.user;
     if trusted {
+        // Told once, and on no event: an entry nobody approved holds no
+        // gate. Only one approved as it was and changed since does (below).
+        told.extend(projects.iter().map(Refused::told));
         for hook in configured.project {
             let definition = hook.definition();
             let standing = if for_the_run.contains(&definition) {
@@ -384,7 +394,13 @@ mod tests {
         let refused: Vec<(&str, Source, bool)> = configured
             .refused
             .iter()
-            .map(|refused| (refused.name.as_str(), refused.source, refused.gates()))
+            .map(|refused| {
+                (
+                    refused.name.as_str(),
+                    refused.source,
+                    !refused.observe && refused.event.is_some_and(Event::gates),
+                )
+            })
             .collect();
         assert_eq!(
             refused,
@@ -416,7 +432,7 @@ mod tests {
             .iter()
             .find(|refused| refused.name == "gate")
             .unwrap();
-        assert!(gate.gates());
+        assert_eq!(gate.event, Some(Event::ToolBefore));
         assert!(gate.reason.contains("as part of it"), "{}", gate.reason);
         assert!(gate.told().starts_with("Your hook `gate` does not run"));
         let bare = configured

@@ -1149,12 +1149,16 @@ impl Core {
         if let Some(task) = task {
             let _ = task.await;
         }
-        // Its `session.end` hooks, given up to five seconds, before the
+        // What of its hooks still runs is stopped and waited for, then its
+        // `session.end` hooks are given up to five seconds, before the
         // close's look at the protected paths (step 28).
         #[cfg(feature = "scripts")]
-        live.command_hooks
-            .end(live.handle.id(), &self.inner.options.timer)
-            .await;
+        {
+            live.command_hooks.close().await;
+            live.command_hooks
+                .end(live.handle.id(), &self.inner.options.timer)
+                .await;
+        }
         let log = Arc::clone(&live.log);
         let sandbox = Arc::clone(&live.sandbox);
         let closed = Self::blocking(move || {
@@ -1256,9 +1260,30 @@ impl Core {
         // trust"; the review of step 23).
         self.inner.clients.withdraw(None);
         let sessions: Vec<SessionId> = lock(&self.inner.sessions).keys().cloned().collect();
-        for session in sessions {
-            self.end(&session).await;
-        }
+        // Together, so that the sessions' `session.end` hooks, given up to
+        // five seconds each, are not given them one session after another.
+        let mut ends: Vec<_> = sessions
+            .iter()
+            .map(|session| Some(Box::pin(self.end(session))))
+            .collect();
+        std::future::poll_fn(|context| {
+            let mut pending = false;
+            for end in &mut ends {
+                if let Some(running) = end {
+                    if running.as_mut().poll(context).is_ready() {
+                        *end = None;
+                    } else {
+                        pending = true;
+                    }
+                }
+            }
+            if pending {
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(())
+            }
+        })
+        .await;
         // A shell still being asked its version is waited for, so that the
         // answer is kept: each ask is bounded by its own time limit.
         let probes = std::mem::take(&mut *lock(&self.inner.probes));
@@ -1688,7 +1713,7 @@ impl Core {
                 }) {
                     return Err(error(
                         ErrorKind::Usage,
-                        "invalid_prompt",
+                        code::INVALID_PROMPT,
                         format!(
                             "A prompt holds text and images only, and this one holds a `{}` part.",
                             cineris_base::visible(other.tag())
@@ -1730,7 +1755,10 @@ impl Core {
                 // Refused with `history_changing` while a rewind is under
                 // way, under the session's own lock. Who sent it is noted
                 // first: a hook may refuse it and give it back.
-                live.sink.sent_by(client.0, &params.input);
+                #[cfg(feature = "scripts")]
+                if live.command_hooks.wants_prompt() {
+                    live.sink.sent_by(client.0, &params.input);
+                }
                 let result = live.handle.prompt(params.input, params.delivery)?;
                 Ok(OpResult::TurnStart(result))
             }

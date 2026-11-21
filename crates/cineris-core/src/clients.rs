@@ -157,6 +157,10 @@ struct Open {
     /// session is put together) or work that holds the session (a rewind's
     /// question). Its answer's receiver is then told there is none.
     ends_with_askers: bool,
+    /// The request is a person's to answer: it is put to `user` clients
+    /// alone, a client that opens the session later included, and no
+    /// grant answers it (a call whose arguments a hook replaced, step 28).
+    people_only: bool,
 }
 
 /// The kinds of request, by the capability a client declares to be put
@@ -383,7 +387,20 @@ impl Clients {
         request: impl Fn(&RequestId) -> ServerRequest,
         judge: Option<Judge>,
     ) -> (RequestId, oneshot::Receiver<Answer>) {
-        self.put(session, asked, request, false, judge)
+        self.put(session, asked, request, false, judge, false)
+    }
+
+    /// Puts a request that only a person answers to `asked`, who are
+    /// `user` clients: a client that opens the session while it is open is
+    /// put it only when it is one too, and no supervisor's grant answers
+    /// it.
+    pub(crate) fn ask_people(
+        &self,
+        session: &SessionId,
+        asked: &[u64],
+        request: impl Fn(&RequestId) -> ServerRequest,
+    ) -> (RequestId, oneshot::Receiver<Answer>) {
+        self.put(session, asked, request, false, None, true)
     }
 
     /// Puts a request to `asked` that ends when they have all gone (see
@@ -395,7 +412,7 @@ impl Clients {
         asked: &[u64],
         request: impl Fn(&RequestId) -> ServerRequest,
     ) -> (RequestId, oneshot::Receiver<Answer>) {
-        self.put(session, asked, request, true, None)
+        self.put(session, asked, request, true, None, false)
     }
 
     fn put(
@@ -405,6 +422,7 @@ impl Clients {
         request: impl Fn(&RequestId) -> ServerRequest,
         ends_with_askers: bool,
         judge: Option<Judge>,
+        people_only: bool,
     ) -> (RequestId, oneshot::Receiver<Answer>) {
         let number = self.next_request.fetch_add(1, Ordering::Relaxed) + 1;
         let id = RequestId::Number(i64::try_from(number).unwrap_or(i64::MAX));
@@ -421,6 +439,7 @@ impl Clients {
                 answer,
                 judge,
                 ends_with_askers,
+                people_only,
             },
         );
         let clients = lock(&self.clients);
@@ -460,9 +479,18 @@ impl Clients {
             (Kind::Question, may(Kind::Question)),
             (Kind::Trust, may(Kind::Trust)),
         ];
+        let person = self
+            .info(client)
+            .is_some_and(|info| info.role == ClientRole::User);
         for (id, open) in lock(&self.open).iter_mut() {
             let kind = Kind::of(&open.request);
             if !answers.iter().any(|(each, may)| *each == kind && *may) {
+                continue;
+            }
+            // A person's to answer: never put to a supervisor that opens
+            // the session while it is open (the review of step 28's second
+            // pull request, M6).
+            if open.people_only && !person {
                 continue;
             }
             if open.session == *session && !open.asked.contains(&client.0) {

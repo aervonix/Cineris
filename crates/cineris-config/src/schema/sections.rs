@@ -283,11 +283,13 @@ settings! {
         /// The program and its arguments, each one argument: the first a
         /// bare name, found in `PATH`'s absolute directories outside the
         /// workspace, or an absolute path. An argument that is a whole
-        /// placeholder is filled: `{path}` with each file the call reads
-        /// or writes, one argument each (and none for a call that names no
-        /// file), `{tool}`, `{workspace}`, `{event}`. A placeholder is never
-        /// part of an argument: `--file={path}` refuses the entry. At most
-        /// 256 arguments.
+        /// placeholder is filled: `{path}` with each file within the
+        /// workspace that the call reads or writes, one argument each (a
+        /// folder never fills it), `{tool}`, `{workspace}`, `{event}`. An
+        /// entry that uses `{path}` does not run for a call that names no
+        /// file within the workspace. A placeholder is never part of an
+        /// argument: `--file={path}` refuses the entry. At most 256
+        /// arguments.
         [KeptApart, NextSession]
         pub command: Vec<String>,
         /// Whether it only observes: never waited for, its answer not read,
@@ -302,7 +304,8 @@ settings! {
         pub timeout: Option<Duration>,
         /// Whether it may write the workspace where commands are confined.
         /// Without it, it reads what the session's commands may read and
-        /// writes nothing. What it writes is not recorded in the round's
+        /// writes only the session's temporary folder; with it, never at
+        /// `read-only`. What it writes is not recorded in the round's
         /// checkpoint, so undo does not put it back.
         [KeptApart, NextSession]
         pub write: bool = false,

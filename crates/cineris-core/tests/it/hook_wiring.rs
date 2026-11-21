@@ -1,23 +1,29 @@
 //! The core's hooks at the loop's points and at the session's own
 //! (`docs/steps/28/answered.md`, point 6), and a project's hooks through
-//! trust: the tests that start no hook's process, and the few that start
-//! one (`sys_…`), each as turns of one session.
+//! trust.
+//!
+//! The tests that start no hook's process are few and long: each is one
+//! world whose sessions go through one story, so that the integration tier
+//! pays for few worlds (the A/B of step 28's second pull request found a
+//! world and a session for each rule). The few that start one (`sys_…`)
+//! are each turns of one session.
+
+use std::time::Duration;
 
 use cineris_core::ext::{HookOutcome, HookRun};
 use cineris_core::{ClientInfo, Outgoing};
-use cineris_protocol::event::{Event, Notice};
-use cineris_protocol::lease::{Budget, Effect, HardLimits, Lease, Level, NetworkAccess, PathSet};
-use cineris_protocol::lease::{Rule, RuleAction, SandboxPolicy};
+use cineris_protocol::event::{Event, Notice, TurnOutcome};
+use cineris_protocol::lease::Level;
 use cineris_protocol::methods::{
-    ApprovalChoice, ClientRole, ConfigReloadParams, Op, OpResult, SessionRef, TrustResourceKind,
-    TurnStartParams,
+    ConfigReloadParams, Op, OpResult, SessionRef, TrustResourceKind, TurnStartParams,
 };
+use cineris_protocol::session::SessionSettings;
 use cineris_protocol::{Item, Part};
 use serde_json::json;
 
-use crate::extensions_found::{open_answering, project_key, trust, trust_store, yes};
+use crate::extensions_found::{open_answering, project_key, start, trust_store, yes};
 use crate::extensions_trust::{keep, not_now};
-use crate::hook_commands::{entry, script, this_binary};
+use crate::hook_commands::{Lingering, entry, for_edit, script, this_binary};
 use crate::{Front, World, calls, says};
 
 /// An entry that does not compile, on `event`, for `tools`: it is on its
@@ -28,85 +34,511 @@ fn refused_entry(name: &str, event: &str, tools: &str) -> String {
     )
 }
 
-/// A refused gate holds its event: the call it is on is refused, with why;
-/// and a reload that takes the entry out leaves the session as it opened,
-/// the hooks' configuration taking effect in the next session, so that no
-/// gate lapses and none is given that the session was not opened with.
+/// A rule that refuses every start of this test binary: a hook that would
+/// start it fails, with why, and starts nothing.
+fn no_start_of_this_binary() -> String {
+    let program = std::env::current_exe().expect("the test binary has a path");
+    format!(
+        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"deny\"\n",
+        program.display()
+    )
+}
+
+/// An event of the session's turn's end, for `Core::run_hook_command`.
+fn turn_end() -> HookRun {
+    HookRun {
+        input: json!({"event": "turn.end"}),
+        ..HookRun::default()
+    }
+}
+
+/// Whether one of `front`'s notices says `words`.
+fn told(front: &Front, words: &str) -> bool {
+    front.drain();
+    front.notices().iter().any(|notice| notice.contains(words))
+}
+
+/// Polls `operation` while the runtime runs every other task as far as it
+/// can: what a test does to show that something does not happen.
+async fn run_beside<F: std::future::Future>(mut operation: std::pin::Pin<&mut F>) {
+    for _ in 0..64 {
+        let mut once = std::pin::pin!(tokio::task::yield_now());
+        std::future::poll_fn(|context| {
+            let _ = operation.as_mut().poll(context);
+            once.as_mut().poll(context)
+        })
+        .await;
+    }
+}
+
+/// A user's hooks that start nothing, in one world: a rule refuses every
+/// start of this binary, so that each hook is told apart by why it failed.
+///
+/// The first session, at `supervised`:
+/// - its first turn waits for its `session.start` hook that is waited for
+///   (one the rule refuses, which the user is told of) before the model is
+///   asked;
+/// - a refused entry that lists no `tools` holds `tool.before` for every
+///   call, with why; and a reload that takes it out leaves it in force,
+///   the hooks' configuration taking effect in the next session, so that
+///   no gate lapses and none is given that the session was not opened
+///   with;
+/// - a hook a rule denies, or a rule of the managed configuration asks
+///   about, starts nothing, and says which;
+/// - an event of more than 1 MiB is no hook's input;
+/// - two starts with a write root never run at once: they share one
+///   baseline of the look at the protected paths, so the first holds it at
+///   the point after it is taken, and the second does not reach that point
+///   until the first is let go;
+/// - a prompt is text and images: a part of another kind is refused before
+///   the loop has it.
+///
+/// The second, opened after the reload: the refused entry is gone, so the
+/// calls run; and an entry that uses `{path}` does not run for a call that
+/// names no file within the workspace (a listing, which names a folder; a
+/// read outside it, whose file it is never handed: settled by the
+/// maintainers), while a gating one that lists no `tools` is warned of once
+/// as the session opens.
+///
+/// The third, at `read-only`: a hook with `write = true` is given no write
+/// root, so its start does not take the baseline.
+///
+/// And an observer of `session.start` that fails, never waited for, is
+/// logged.
 #[test]
-fn a_refused_gate_holds_its_event_and_a_reload_leaves_it_in_force() {
+fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
+    let world = World::new("hook_users", []);
+    let outside = world.dir.join("outside.txt");
+    std::fs::write(&outside, "outside\n").unwrap();
+    for id in ["c1", "c2"] {
+        world
+            .provider
+            .push(calls(&[(id, "list", json!({"path": "."}))]));
+        world.provider.push(says("Done."));
+    }
+    world.provider.push(calls(&[
+        ("c3", "list", json!({"path": "."})),
+        ("c4", "read", json!({"path": outside.display().to_string()})),
+    ]));
+    world.provider.push(says("Done."));
+    // A script the managed configuration asks about, which the user's rule
+    // does not name: it is never started.
+    let held = script(&world.dir.join("hooks"), "held", None, "{}");
+    let file = world.dirs().managed_config.unwrap();
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        file,
+        format!(
+            "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"ask\"\n",
+            held.display()
+        ),
+    )
+    .unwrap();
+    let config = |gate: bool| {
+        let fails = this_binary("fail", &[]);
+        format!(
+            "{}{}",
+            no_start_of_this_binary(),
+            [
+                if gate {
+                    refused_entry("gate", "tool.before", "")
+                } else {
+                    String::new()
+                },
+                entry("ready", "session.start", &fails, ""),
+                entry("watch", "session.start", &fails, "observe = true"),
+                entry(
+                    "per-file",
+                    "tool.before",
+                    &this_binary("fail", &["{path}"]),
+                    ""
+                ),
+                entry("cap", "turn.end", &fails, ""),
+                entry("first", "turn.end", &fails, "write = true"),
+                entry("second", "turn.end", &fails, "write = true"),
+                entry(
+                    "held",
+                    "turn.end",
+                    &[held.display().to_string(), "x".to_owned()],
+                    ""
+                ),
+            ]
+            .concat()
+        )
+    };
+    world.user_config(&config(true));
+    let core = world.core();
+    let warnings = crate::extensions::Warnings::default();
+    let logged = std::sync::Arc::clone(&warnings.0);
+    tracing::subscriber::with_default(warnings, || {
+        world.run(async {
+            let hears =
+                cineris_testkit::Hold::new(cineris_core::ext::A_SESSION_START_HOOK_IS_HEARD);
+            let front = start(&world, &core).await;
+            // The first turn waits for the `session.start` hook.
+            let mut first = std::pin::pin!(front.turn("look"));
+            hears.drive_until_reached(first.as_mut()).await;
+            run_beside(first.as_mut()).await;
+            assert!(
+                world.provider.requests().is_empty(),
+                "the first turn did not wait for the `session.start` hook"
+            );
+            hears.release();
+            drop(hears);
+            first.await;
+            assert!(
+                told(&front, "The hook `ready` failed"),
+                "{:?}",
+                front.notices()
+            );
+            assert!(
+                told(&front, "Your hook `gate` does not run"),
+                "{:?}",
+                front.notices()
+            );
+            // The refused gate on every call.
+            let results = front.results();
+            let (_, outcome, text) = &results[0];
+            assert_eq!(*outcome, "denied", "{text}");
+            assert!(text.contains("cannot run"), "{text}");
+            // The entry is taken out, and the configuration read again.
+            world.user_config(&config(false));
+            let OpResult::ConfigReload(reloaded) = front
+                .op(Op::ConfigReload(ConfigReloadParams::default()))
+                .await
+                .unwrap()
+            else {
+                panic!("not the result of config/reload");
+            };
+            let said = format!("{reloaded:?}");
+            assert!(said.contains("sessions opened from now on"), "{said}");
+            front.turn("look again").await;
+            let results = front.results();
+            let (_, outcome, text) = &results[1];
+            assert_eq!(*outcome, "denied", "the gate holds for the session: {text}");
+
+            // A rule's deny, a managed `ask`: nothing is started.
+            for (hook, said) in [
+                ("cap", "a permission rule refuses it"),
+                ("held", "a rule of the managed configuration"),
+            ] {
+                let ran = core
+                    .run_hook_command(&front.session, hook, turn_end())
+                    .await
+                    .unwrap();
+                let HookOutcome::Failed(why) = &ran else {
+                    panic!("{hook}: {ran:?}");
+                };
+                assert!(why.contains(said), "{hook}: {why}");
+            }
+            // An event past its cap.
+            let ran = core
+                .run_hook_command(
+                    &front.session,
+                    "cap",
+                    HookRun {
+                        input: json!({"text": "a".repeat(1024 * 1024)}),
+                        ..HookRun::default()
+                    },
+                )
+                .await
+                .unwrap();
+            let HookOutcome::Failed(why) = &ran else {
+                panic!("{ran:?}");
+            };
+            assert!(why.contains("a hook is given at most 1 MiB"), "{why}");
+
+            // Two starts with a write root, one at a time.
+            let writes = cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES);
+            let mut one =
+                std::pin::pin!(core.run_hook_command(&front.session, "first", turn_end()));
+            let mut two =
+                std::pin::pin!(core.run_hook_command(&front.session, "second", turn_end()));
+            let mut both = std::pin::pin!(async {
+                let mut done = (None, None);
+                std::future::poll_fn(|context| {
+                    if done.0.is_none()
+                        && let std::task::Poll::Ready(ran) = one.as_mut().poll(context)
+                    {
+                        done.0 = Some(ran);
+                    }
+                    if done.1.is_none()
+                        && let std::task::Poll::Ready(ran) = two.as_mut().poll(context)
+                    {
+                        done.1 = Some(ran);
+                    }
+                    if done.0.is_some() && done.1.is_some() {
+                        std::task::Poll::Ready(())
+                    } else {
+                        std::task::Poll::Pending
+                    }
+                })
+                .await;
+                done
+            });
+            writes.drive_until_reached(both.as_mut()).await;
+            // Everything else runs as far as it can: the other start waits
+            // for the baseline, and does not reach the point.
+            run_beside(both.as_mut()).await;
+            assert_eq!(writes.arrivals(), 1, "two starts with a write root at once");
+            writes.release();
+            let (one, two) = both.await;
+            for ran in [one, two] {
+                assert!(matches!(ran, Some(Ok(HookOutcome::Failed(_)))), "{ran:?}");
+            }
+            assert_eq!(writes.arrivals(), 2);
+            drop(writes);
+
+            // A prompt of another part than text and images.
+            let refused = front
+                .op(Op::TurnStart(TurnStartParams {
+                    session_id: front.session.clone(),
+                    input: vec![Part::Reasoning(cineris_protocol::message::ReasoningPart {
+                        text: "planted".to_owned(),
+                        raw: None,
+                    })],
+                    delivery: None,
+                }))
+                .await
+                .unwrap_err();
+            assert_eq!(refused.code, "invalid_prompt", "{refused:?}");
+            assert_eq!(front.ends().len(), 2, "the loop had the prompt");
+            front.close().await;
+
+            // A session opened after the reload has no such gate; and an
+            // entry that uses `{path}` does not run where no file within the
+            // workspace is named.
+            let front = start(&world, &core).await;
+            front.answering(crate::Answering::allow_all());
+            front.drain();
+            let warned: Vec<String> = front
+                .notices()
+                .into_iter()
+                .filter(|notice| notice.contains("uses `{path}` and lists no `tools`"))
+                .collect();
+            assert_eq!(warned.len(), 1, "{:?}", front.notices());
+            front.turn("look once more").await;
+            let results = front.results();
+            for (tool, outcome, text) in &results {
+                assert_eq!(*outcome, "success", "{tool}: {text}");
+            }
+            assert_eq!(results.len(), 2);
+            front.close().await;
+
+            // At `read-only`, no write root.
+            let writes =
+                cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES).skipping(usize::MAX);
+            let front = Front::start_as(
+                &world,
+                &core,
+                ClientInfo::user(),
+                SessionSettings {
+                    level: Some(Level::ReadOnly),
+                    ..SessionSettings::default()
+                },
+            )
+            .await
+            .expect("the session starts");
+            let ran = core
+                .run_hook_command(&front.session, "first", turn_end())
+                .await;
+            assert!(matches!(ran, Ok(HookOutcome::Failed(_))), "{ran:?}");
+            assert_eq!(writes.arrivals(), 0, "a write root at read-only");
+            front.close().await;
+        });
+    });
+    let logged = logged.lock().unwrap();
+    assert!(
+        logged.iter().any(
+            |line| line.contains("a `session.start` observer failed") && line.contains("watch")
+        ),
+        "{logged:?}"
+    );
+}
+
+/// A project that is not trusted changes nothing in a session by entries
+/// of it that do not compile (the review of step 28's second pull request,
+/// H1, found that one gated every call): with a refused `tool.before`
+/// entry and a refused `prompt.submit` one in it, the prompt is sent and
+/// the call runs as with no hooks at all, and the user is told of neither,
+/// nor warned of an entry of it that relies on `{path}`.
+#[test]
+fn an_untrusted_projects_refused_entries_change_nothing() {
     let world = World::new(
-        "hook_refused_gate",
+        "hook_untrusted_refused",
         [
             calls(&[("c1", "read", json!({"path": "a.txt"}))]),
-            says("Done."),
-            calls(&[("c2", "read", json!({"path": "a.txt"}))]),
-            says("Done."),
-            calls(&[("c3", "read", json!({"path": "a.txt"}))]),
             says("Done."),
         ],
     );
     world.put("a.txt", "the file\n");
-    world.user_config(&refused_entry(
-        "gate",
-        "tool.before",
-        "tools = [\"read\"]\n",
-    ));
+    world.project_config(
+        &[
+            refused_entry("gate", "tool.before", ""),
+            refused_entry("check", "prompt.submit", ""),
+            entry(
+                "per-file",
+                "tool.before",
+                &this_binary("fail", &["{path}"]),
+                "",
+            ),
+        ]
+        .concat(),
+    );
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
-        front.drain();
+        let front = start(&world, &core).await;
+        let ended = front.turn("read it").await;
+        assert_eq!(ended.outcome, TurnOutcome::Completed, "{ended:?}");
+        let results = front.results();
+        let [(tool, outcome, text)] = results.as_slice() else {
+            panic!("{results:?}");
+        };
+        assert_eq!(tool, "read");
+        assert_eq!(*outcome, "success", "{text}");
         assert!(
-            front
-                .notices()
-                .iter()
-                .any(|notice| notice.contains("Your hook `gate` does not run")),
+            !told(&front, "`gate`") && !told(&front, "`check`") && !told(&front, "`per-file`"),
             "{:?}",
             front.notices()
         );
-        front.turn("read it").await;
-        let results = front.results();
-        let (_, outcome, text) = &results[0];
-        assert_eq!(*outcome, "denied", "{text}");
-        assert!(text.contains("cannot run"), "{text}");
-        // The entry is taken out, and the configuration read again.
-        world.user_config("");
-        let OpResult::ConfigReload(reloaded) = front
-            .op(Op::ConfigReload(ConfigReloadParams::default()))
-            .await
-            .unwrap()
-        else {
-            panic!("not the result of config/reload");
-        };
-        let said = format!("{reloaded:?}");
-        assert!(said.contains("sessions opened from now on"), "{said}");
-        front.turn("read it again").await;
-        let results = front.results();
-        let (_, outcome, text) = &results[1];
-        assert_eq!(*outcome, "denied", "the gate holds for the session: {text}");
-        front.close().await;
-    });
-    // A session opened after it has no such hook.
-    let core = world.core();
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        front.turn("read it once more").await;
-        let results = front.results();
-        let (_, outcome, text) = &results[0];
-        assert_eq!(*outcome, "success", "{text}");
         front.close().await;
     });
 }
 
-/// A prompt a hook refuses is given back whole only to the client that
-/// sent it: another client of the session is told of it without the
-/// prompt, under the same `seq`.
+/// A project's hooks reach a session only through trust, in one world, a
+/// core for each run of the harness the story needs (a core keeps a "not
+/// now" or a "keep" for its run).
+///
+/// 1. A yes the trust store cannot keep: the question lists the project's
+///    own hook in words, and neither one of a user's name nor one turned
+///    off (`enabled = false`); the yes approves the hooks shown, by their
+///    hashes, for that session alone, and says so; the hook is the
+///    session's, and its start is refused all the same, as the engine
+///    would ask about it at `supervised` and a project's hook never puts a
+///    question; an entry of the project's that does not compile is told
+///    once, the project trusted; one turned off is not the session's.
+/// 2. Not now: a project not trusted runs none of its hooks, and tells of
+///    none of its entries. Beside it, a prompt the user's refused
+///    `prompt.submit` entry refuses is given back whole only to the client
+///    that sent it: another client of the session is told of it without
+///    the prompt, under the same `seq`.
+/// 3. `--trust-project` approves no hook that is not pinned.
+/// 4. `cineris permissions trust`'s part of the core lists the project's
+///    hooks as the question does, its environment said, and pins those it
+///    is given, so that a session is not asked about them again.
+/// 5. `--trust-project` runs a hook pinned as it is.
+/// 6. A trusted project with a hook that is new is asked about it, and
+///    nothing else; keep trusting it without the hook leaves the hook off,
+///    and the core asks no more in its run.
+/// 7. A yes pins the hook as it was shown: a session opened again is not
+///    asked about it.
 #[test]
-fn a_prompt_given_back_reaches_only_its_sender_whole() {
-    let world = World::new("hook_prompt_returned", []);
-    world.user_config(&refused_entry("check", "prompt.submit", ""));
+fn a_projects_hooks_reach_a_session_only_through_trust() {
+    let world = World::new("hook_project", []);
+    world.user_config(
+        &[
+            refused_entry("mine", "turn.end", ""),
+            refused_entry("check", "prompt.submit", ""),
+        ]
+        .concat(),
+    );
+    let project = |more: &str| {
+        [
+            entry(
+                "lint",
+                "tool.after",
+                &this_binary("report", &["{path}"]),
+                "tools = [\"edit\"]",
+            ),
+            entry("mine", "turn.end", &this_binary("hang", &[]), ""),
+            entry(
+                "off",
+                "turn.end",
+                &this_binary("fail", &[]),
+                "enabled = false",
+            ),
+            refused_entry("odd", "tool.after", ""),
+            more.to_owned(),
+        ]
+        .concat()
+    };
+    world.project_config(&project(""));
+    let lint = || for_edit(&["src/a.rs"]);
+    let never_asks = |ran: Result<HookOutcome, cineris_core::OpError>| {
+        let Ok(HookOutcome::Failed(why)) = &ran else {
+            panic!("{ran:?}");
+        };
+        assert!(why.contains("a project's hook never asks"), "{why}");
+    };
+
+    // 1. A yes the store cannot keep.
+    let state = crate::extensions_found::state(&world);
+    let lock = state.root().join("trust.toml.lock");
+    std::fs::create_dir_all(&lock).unwrap();
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
+        let (front, asked) = open_answering(&world, &core, yes()).await;
+        let [question] = asked.as_slice() else {
+            panic!("one question: {asked:?}");
+        };
+        let hooks: Vec<_> = question
+            .resources
+            .iter()
+            .filter(|resource| resource.kind == TrustResourceKind::Hook)
+            .collect();
+        let [listed] = hooks.as_slice() else {
+            panic!("the project's own hook alone: {:?}", question.resources);
+        };
+        assert_eq!(listed.name, "lint");
+        assert!(
+            listed.detail.contains("on `tool.after`"),
+            "{}",
+            listed.detail
+        );
+        assert!(listed.detail.contains("for `edit`"), "{}", listed.detail);
+        assert!(
+            told(&front, "its rules and the hooks you were shown"),
+            "{:?}",
+            front.notices()
+        );
+        assert!(
+            told(&front, "This project's hook `mine` does not run"),
+            "{:?}",
+            front.notices()
+        );
+        assert!(
+            told(&front, "This project's hook `odd` does not run"),
+            "{:?}",
+            front.notices()
+        );
+        never_asks(core.run_hook_command(&front.session, "lint", lint()).await);
+        assert!(
+            core.run_hook_command(&front.session, "off", turn_end())
+                .await
+                .is_err(),
+            "a hook turned off is the session's"
+        );
+        front.close().await;
+    });
+    std::fs::remove_dir_all(&lock).unwrap();
+    assert!(
+        !trust_store(&world)
+            .project(&project_key(&world))
+            .unwrap()
+            .is_trusted()
+    );
+
+    // 2. Not now; and a prompt given back.
+    let core = world.core();
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, not_now()).await;
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        assert!(
+            core.run_hook_command(&front.session, "lint", lint())
+                .await
+                .is_err()
+        );
+        assert!(!told(&front, "`odd`"), "{:?}", front.notices());
         let other = core.connect(ClientInfo::user());
         let opened = core
             .handle(
@@ -141,36 +573,115 @@ fn a_prompt_given_back_reaches_only_its_sender_whole() {
         assert!(!format!("{theirs:?}").contains("1234"));
         front.close().await;
     });
-}
 
-/// A prompt is text and images: a part of any other kind is refused before
-/// anything is given to the loop.
-#[test]
-fn a_prompt_holds_text_and_images_only() {
-    let world = World::new("hook_prompt_parts", []);
+    // 3. `--trust-project`, nothing pinned.
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let (front, _) = open_answering(&world, &core, not_now()).await;
+        assert!(
+            core.run_hook_command(&front.session, "lint", lint())
+                .await
+                .is_err()
+        );
+        front.close().await;
+    });
+
+    // 4. `cineris permissions trust`.
+    let core = world.core();
+    let key = core.project(&world.workspace).unwrap();
+    let hooks = core.project_hook_commands(&key).unwrap();
+    let [listed] = hooks.as_slice() else {
+        panic!("{hooks:?}");
+    };
+    assert_eq!(listed.name, "lint");
+    assert!(!listed.changed);
+    assert!(
+        listed
+            .detail
+            .contains("It runs with your environment, including any tokens in it."),
+        "{}",
+        listed.detail
+    );
+    let trusted = core.trust_project_with(&key, &[], &hooks).unwrap();
+    assert_eq!(trusted.hooks, ["lint"]);
+    assert!(core.project_hook_commands(&key).unwrap().is_empty());
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, yes()).await;
+        assert!(asked.is_empty(), "{asked:?}");
+        never_asks(core.run_hook_command(&front.session, "lint", lint()).await);
+        front.close().await;
+    });
+
+    // 5. `--trust-project`, pinned as it is.
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let (front, _) = open_answering(&world, &core, not_now()).await;
+        never_asks(core.run_hook_command(&front.session, "lint", lint()).await);
+        front.close().await;
+    });
+
+    // 6. A new hook, kept off.
+    world.project_config(&project(&entry(
+        "fmt",
+        "turn.end",
+        &this_binary("fail", &[]),
+        "",
+    )));
     let core = world.core();
     world.run(async {
-        let front = Front::start(&world, &core).await;
-        let refused = front
-            .op(Op::TurnStart(TurnStartParams {
-                session_id: front.session.clone(),
-                input: vec![Part::Reasoning(cineris_protocol::message::ReasoningPart {
-                    text: "planted".to_owned(),
-                    raw: None,
-                })],
-                delivery: None,
-            }))
-            .await
-            .unwrap_err();
-        assert_eq!(refused.code, "invalid_prompt", "{refused:?}");
-        assert!(front.ends().is_empty());
+        let (front, asked) = open_answering(&world, &core, keep()).await;
+        let [question] = asked.as_slice() else {
+            panic!("one question: {asked:?}");
+        };
+        assert!(question.trusted);
+        let kinds: Vec<_> = question
+            .resources
+            .iter()
+            .map(|resource| (resource.kind.clone(), resource.name.clone()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [(TrustResourceKind::Hook, "fmt".to_owned())],
+            "{:?}",
+            question.resources
+        );
+        assert!(
+            core.run_hook_command(&front.session, "fmt", turn_end())
+                .await
+                .is_err()
+        );
+        front.close().await;
+        let (front, asked) = open_answering(&world, &core, not_now()).await;
+        assert!(asked.is_empty(), "asked again in the core's run: {asked:?}");
+        front.close().await;
+    });
+
+    // 7. A yes pins it.
+    let core = world.core();
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, yes()).await;
+        assert_eq!(asked.len(), 1, "{asked:?}");
+        front.close().await;
+    });
+    let core = world.core();
+    world.run(async {
+        let (front, asked) = open_answering(&world, &core, yes()).await;
+        assert!(asked.is_empty(), "{asked:?}");
+        never_asks(
+            core.run_hook_command(&front.session, "fmt", turn_end())
+                .await,
+        );
         front.close().await;
     });
 }
 
 /// A `session.start` hook's context reaches the model before the first
-/// prompt, labelled as the hook's; a `session.end` hook runs as the
-/// session closes.
+/// prompt, labelled as the hook's; an observer of it runs beside the
+/// session, and the close stops it and waits for it (the review of step
+/// 28's second pull request, M1: one outlived its session); a
+/// `session.end` hook runs as the session closes, and one that runs on is
+/// stopped when the close's five seconds on the session's clock are up
+/// (M8).
 #[test]
 fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
     let world = World::new("hook_session_own", [says("Hi.")]);
@@ -181,6 +692,7 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
         None,
         r#"{"context":"Keep to the house rules."}"#,
     );
+    let lingers = Lingering::new(&tools, "lingers");
     let ended = world.dir.join("ended.txt");
     world.user_config(
         &[
@@ -191,10 +703,22 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
                 "",
             ),
             entry(
+                "lingers",
+                "session.start",
+                &lingers.command,
+                "observe = true\ntimeout = \"10m\"",
+            ),
+            entry(
                 "ends",
                 "session.end",
                 &this_binary("write", &[&ended.display().to_string()]),
                 "observe = true",
+            ),
+            entry(
+                "late",
+                "session.end",
+                &this_binary("hang", &[]),
+                "observe = true\ntimeout = \"7s\"",
             ),
         ]
         .concat(),
@@ -202,6 +726,9 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
     let core = world.core();
     world.run(async {
         let front = Front::start(&world, &core).await;
+        // The observer is running.
+        world.timer.sleeping_for(Duration::from_secs(600)).await;
+        let lingering = lingers.started();
         front.turn("hello").await;
         let notice = front
             .items()
@@ -217,485 +744,29 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
             "{notice}"
         );
         assert!(!ended.exists(), "not before the close");
-        front.close().await;
+        // The close: the `late` hook runs on until the close's five seconds
+        // are up, moved once `ends` has written its file and `late` runs.
+        let mut close = std::pin::pin!(front.close());
+        let mut up = std::pin::pin!(async {
+            while !(ended.exists() && world.timer.running().contains(&Duration::from_secs(7))) {
+                tokio::task::yield_now().await;
+            }
+            world.timer.advance(Duration::from_secs(5));
+        });
+        let mut advanced = false;
+        std::future::poll_fn(|context| {
+            if !advanced {
+                advanced = up.as_mut().poll(context).is_ready();
+            }
+            close.as_mut().poll(context)
+        })
+        .await;
+        Lingering::assert_gone(
+            lingering,
+            "the `session.start` observer outlived its session",
+        );
     });
     assert!(ended.exists(), "the `session.end` hook ran at the close");
-}
-
-/// `--trust-project` approves no project's hook that is not pinned: the
-/// session does not run it; pinned as it is, it does.
-#[test]
-fn trust_for_the_run_approves_no_hook_that_is_not_pinned() {
-    let world = World::new("hook_trust_project", []);
-    world.project_config(&entry("lint", "turn.end", &this_binary("fail", &[]), ""));
-    let run = || HookRun {
-        input: json!({"event": "turn.end"}),
-        ..HookRun::default()
-    };
-    let core = world.core_with(|options| options.trust_project = true);
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        assert!(
-            core.run_hook_command(&front.session, "lint", run())
-                .await
-                .is_err()
-        );
-        front.close().await;
-    });
-    let lint = cineris_ext::hook::CommandHook::compile(
-        "lint",
-        cineris_ext::source::Source::Project,
-        &cineris_ext::hook::Entry {
-            event: Some("turn.end".to_owned()),
-            command: this_binary("fail", &[]),
-            ..cineris_ext::hook::Entry::default()
-        },
-    )
-    .unwrap();
-    trust(&world, &[lint.definition()]);
-    let core = world.core_with(|options| options.trust_project = true);
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        // Found, and refused at its start: the engine would ask, and a
-        // project's hook never does.
-        let ran = core.run_hook_command(&front.session, "lint", run()).await;
-        let Ok(HookOutcome::Failed(why)) = &ran else {
-            panic!("{ran:?}");
-        };
-        assert!(why.contains("a project's hook never asks"), "{why}");
-        front.close().await;
-    });
-}
-
-/// `cineris permissions trust`'s part of the core lists a project's hooks
-/// as the trust question does, its environment said, and pins those it is
-/// given, so that a session is not asked about them again.
-#[test]
-fn permissions_trust_lists_and_pins_a_projects_hooks() {
-    let world = World::new("hook_permissions_trust", []);
-    world.project_config(&entry("lint", "turn.end", &this_binary("fail", &[]), ""));
-    let core = world.core();
-    let project = core.project(&world.workspace).unwrap();
-    let hooks = core.project_hook_commands(&project).unwrap();
-    let [lint] = hooks.as_slice() else {
-        panic!("{hooks:?}");
-    };
-    assert_eq!(lint.name, "lint");
-    assert!(!lint.changed);
-    assert!(
-        lint.detail
-            .contains("It runs with your environment, including any tokens in it."),
-        "{}",
-        lint.detail
-    );
-    let trusted = core.trust_project_with(&project, &[], &hooks).unwrap();
-    assert_eq!(trusted.hooks, ["lint"]);
-    assert!(core.project_hook_commands(&project).unwrap().is_empty());
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, yes()).await;
-        assert!(asked.is_empty(), "{asked:?}");
-        let ran = core
-            .run_hook_command(
-                &front.session,
-                "lint",
-                HookRun {
-                    input: json!({"event": "turn.end"}),
-                    ..HookRun::default()
-                },
-            )
-            .await;
-        assert!(matches!(ran, Ok(HookOutcome::Failed(_))), "{ran:?}");
-        front.close().await;
-    });
-}
-
-/// A yes the trust store cannot keep approves the hooks shown, by their
-/// hashes, for that session alone, and says so.
-#[test]
-fn a_yes_the_store_cannot_keep_approves_the_hooks_shown_for_the_session() {
-    let world = World::new("hook_yes_unkept", []);
-    world.project_config(&entry("lint", "turn.end", &this_binary("fail", &[]), ""));
-    let state = crate::extensions_found::state(&world);
-    std::fs::create_dir_all(state.root().join("trust.toml.lock")).unwrap();
-    let core = world.core();
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, yes()).await;
-        assert_eq!(asked.len(), 1);
-        front.drain();
-        assert!(
-            front
-                .notices()
-                .iter()
-                .any(|notice| notice.contains("its rules and the hooks you were shown")),
-            "{:?}",
-            front.notices()
-        );
-        let ran = core
-            .run_hook_command(
-                &front.session,
-                "lint",
-                HookRun {
-                    input: json!({"event": "turn.end"}),
-                    ..HookRun::default()
-                },
-            )
-            .await;
-        assert!(matches!(ran, Ok(HookOutcome::Failed(_))), "{ran:?}");
-        front.close().await;
-    });
-    assert!(
-        !trust_store(&world)
-            .project(&project_key(&world))
-            .unwrap()
-            .is_trusted()
-    );
-}
-
-/// A trusted project with a hook that is new is asked about it, and
-/// nothing else; keep trusting it without the hook leaves the hook off,
-/// and the core asks no more in its run.
-#[test]
-fn a_trusted_project_is_asked_about_a_new_hook_and_keep_leaves_it_off() {
-    let world = World::new("hook_keep_new", []);
-    trust(&world, &[]);
-    world.project_config(&entry("lint", "turn.end", &this_binary("fail", &[]), ""));
-    let run = || HookRun {
-        input: json!({"event": "turn.end"}),
-        ..HookRun::default()
-    };
-    let core = world.core();
-    world.run(async {
-        let (front, asked) = open_answering(&world, &core, keep()).await;
-        let [question] = asked.as_slice() else {
-            panic!("one question: {asked:?}");
-        };
-        assert!(question.trusted);
-        let kinds: Vec<_> = question
-            .resources
-            .iter()
-            .map(|resource| resource.kind.clone())
-            .collect();
-        assert_eq!(kinds, [TrustResourceKind::Hook], "{:?}", question.resources);
-        assert!(
-            core.run_hook_command(&front.session, "lint", run())
-                .await
-                .is_err()
-        );
-        front.close().await;
-        let (front, asked) = open_answering(&world, &core, not_now()).await;
-        assert!(asked.is_empty(), "asked again in the core's run: {asked:?}");
-        front.close().await;
-    });
-}
-
-/// A replacement is a person's to allow: a supervisor whose grant's rules
-/// cover the replaced call is not put it, its allow of it is not taken, and
-/// the call does not run on its word. The user's denial settles it.
-#[test]
-fn sys_a_replacement_is_answered_by_a_person_and_never_by_a_supervisors_grant() {
-    let world = World::new(
-        "hook_replacement_supervisor",
-        [
-            calls(&[("c1", "read", json!({"path": "a.txt"}))]),
-            says("Done."),
-        ],
-    );
-    world.put("a.txt", "the model's\n");
-    world.put("b.txt", "the hook's\n");
-    let swap = script(
-        &world.dir.join("hooks"),
-        "swap",
-        None,
-        r#"{"arguments":{"path":"b.txt"}}"#,
-    );
-    world.user_config(&entry(
-        "swap",
-        "tool.before",
-        &[swap.display().to_string()],
-        "tools = [\"read\"]",
-    ));
-    let everything = PathSet {
-        all: true,
-        roots: Vec::new(),
-    };
-    let grant: Lease = cineris_policy::standing_lease(
-        cineris_protocol::ids::LeaseId::new("l_grant"),
-        cineris_policy::StandingTerms {
-            level: Level::Autonomous,
-            rules: vec![Rule {
-                effect: Effect::Read,
-                pattern: "**".to_owned(),
-                action: RuleAction::Allow,
-            }],
-            sandbox: SandboxPolicy {
-                read: everything.clone(),
-                write: everything,
-                protect: PathSet::default(),
-                network: NetworkAccess::Off,
-            },
-            models: Vec::new(),
-            budget: Budget::default(),
-            limits: HardLimits::default(),
-        },
-        cineris_policy::SandboxState::Enforcing,
-    )
-    .expect("a lease");
-    let core = world.core();
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        let supervisor = core.connect_with_grant(
-            ClientInfo {
-                role: ClientRole::Supervisor,
-                ..ClientInfo::user()
-            },
-            Some(grant),
-        );
-        let opened = core
-            .handle(
-                supervisor.id,
-                Op::SessionOpen(SessionRef {
-                    session_id: front.session.clone(),
-                }),
-            )
-            .await;
-        assert!(opened.is_ok(), "{opened:?}");
-        front.prompt("read it").await;
-        let (id, request) = front.approval().await;
-        assert!(request.replaced.is_some(), "{request:?}");
-        // The supervisor was not put it.
-        let mut put = false;
-        while let Some(next) = supervisor.queue.try_next() {
-            put |= matches!(next, Outgoing::Request { .. });
-        }
-        assert!(!put, "a replacement was put to the supervisor");
-        // Its allow is not taken.
-        let taken = core.respond(
-            supervisor.id,
-            &id,
-            cineris_protocol::methods::ServerResponse::Approval(
-                cineris_protocol::methods::ApprovalResponse {
-                    choice: ApprovalChoice::AllowOnce,
-                    note: None,
-                },
-            ),
-        );
-        assert!(taken.is_err(), "the supervisor's allow was taken");
-        front.answer(&id, ApprovalChoice::Deny).unwrap();
-        front.turns(1).await;
-        let results = front.results();
-        let (_, outcome, text) = &results[0];
-        assert_eq!(*outcome, "denied", "{text}");
-        assert!(!text.contains("the hook's"), "{text}");
-        front.close().await;
-    });
-}
-
-/// An entry that uses `{path}` does not run for a call that names no file
-/// within the workspace (settled by the maintainers: it says nothing
-/// there): not for a listing, which names a folder, nor for a read of a
-/// file outside the workspace, which it is never handed. A gating one that
-/// lists no `tools` is warned of once, as the session opens.
-#[test]
-fn a_hook_that_uses_path_does_not_run_for_a_call_that_names_no_file_within_the_workspace() {
-    let world = World::new("hook_path_none", []);
-    let outside = world.dir.join("outside.txt");
-    std::fs::write(&outside, "outside\n").unwrap();
-    world.provider.push(calls(&[
-        ("c1", "list", json!({"path": "."})),
-        ("c2", "read", json!({"path": outside.display().to_string()})),
-    ]));
-    world.provider.push(says("Done."));
-    // It would refuse every call it ran for, as it fails.
-    world.user_config(&entry(
-        "per-file",
-        "tool.before",
-        &this_binary("fail", &["{path}"]),
-        "",
-    ));
-    let core = world.core();
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        front.answering(crate::Answering::allow_all());
-        front.drain();
-        let warned: Vec<String> = front
-            .notices()
-            .into_iter()
-            .filter(|notice| notice.contains("uses `{path}` and lists no `tools`"))
-            .collect();
-        assert_eq!(warned.len(), 1, "{:?}", front.notices());
-        front.turn("look").await;
-        let results = front.results();
-        for (tool, outcome, text) in &results {
-            assert_eq!(*outcome, "success", "{tool}: {text}");
-        }
-        assert_eq!(results.len(), 2);
-        front.close().await;
-    });
-}
-
-/// Two hooks with a write root never run at once: they share one baseline
-/// of the look at the protected paths. The first holds it at the point
-/// after it is taken, and the second does not reach it until the first is
-/// let go. Their starts are then refused by a rule, so nothing is started.
-#[test]
-fn hooks_with_a_write_root_run_one_at_a_time() {
-    let world = World::new("hook_writes_one_at_a_time", []);
-    let program = std::env::current_exe().expect("the test binary has a path");
-    world.user_config(&format!(
-        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"deny\"\n{}",
-        program.display(),
-        [
-            entry(
-                "first",
-                "turn.end",
-                &this_binary("fail", &[]),
-                "write = true"
-            ),
-            entry(
-                "second",
-                "turn.end",
-                &this_binary("fail", &[]),
-                "write = true"
-            ),
-        ]
-        .concat()
-    ));
-    let core = world.core();
-    let writes = cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES);
-    world.run(async {
-        let front = Front::start(&world, &core).await;
-        let run = || HookRun {
-            input: json!({"event": "turn.end"}),
-            ..HookRun::default()
-        };
-        let mut first = std::pin::pin!(core.run_hook_command(&front.session, "first", run()));
-        let mut second = std::pin::pin!(core.run_hook_command(&front.session, "second", run()));
-        let mut both = std::pin::pin!(async {
-            let mut done = (None, None);
-            std::future::poll_fn(|context| {
-                if done.0.is_none()
-                    && let std::task::Poll::Ready(ran) = first.as_mut().poll(context)
-                {
-                    done.0 = Some(ran);
-                }
-                if done.1.is_none()
-                    && let std::task::Poll::Ready(ran) = second.as_mut().poll(context)
-                {
-                    done.1 = Some(ran);
-                }
-                if done.0.is_some() && done.1.is_some() {
-                    std::task::Poll::Ready(())
-                } else {
-                    std::task::Poll::Pending
-                }
-            })
-            .await;
-            done
-        });
-        writes.drive_until_reached(both.as_mut()).await;
-        // Everything else runs as far as it can: the other start waits for
-        // the baseline, and does not reach the point.
-        for _ in 0..64 {
-            let mut once = std::pin::pin!(async {
-                tokio::task::yield_now().await;
-            });
-            let _ = std::future::poll_fn(|context| {
-                let _ = both.as_mut().poll(context);
-                once.as_mut().poll(context)
-            })
-            .await;
-        }
-        assert_eq!(writes.arrivals(), 1, "two starts with a write root at once");
-        writes.release();
-        let (first, second) = both.await;
-        for ran in [first, second] {
-            assert!(matches!(ran, Some(Ok(HookOutcome::Failed(_)))), "{ran:?}");
-        }
-        assert_eq!(writes.arrivals(), 2);
-        front.close().await;
-    });
-}
-
-/// At `read-only` a hook with `write = true` is given no write root: its
-/// start does not take the baseline that a start with one holds.
-#[test]
-fn a_write_hook_has_no_write_root_at_read_only() {
-    let world = World::new("hook_write_read_only", []);
-    let program = std::env::current_exe().expect("the test binary has a path");
-    // Refused by a rule, so that nothing is started at all.
-    world.user_config(&format!(
-        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"deny\"\n{}",
-        program.display(),
-        entry(
-            "scribble",
-            "turn.end",
-            &this_binary("fail", &[]),
-            "write = true",
-        )
-    ));
-    let core = world.core();
-    let writes = cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES).skipping(usize::MAX);
-    world.run(async {
-        let front = Front::start_as(
-            &world,
-            &core,
-            ClientInfo::user(),
-            cineris_protocol::session::SessionSettings {
-                level: Some(Level::ReadOnly),
-                ..cineris_protocol::session::SessionSettings::default()
-            },
-        )
-        .await
-        .expect("the session starts");
-        let ran = core
-            .run_hook_command(
-                &front.session,
-                "scribble",
-                HookRun {
-                    input: json!({"event": "turn.end"}),
-                    ..HookRun::default()
-                },
-            )
-            .await;
-        assert!(matches!(ran, Ok(HookOutcome::Failed(_))), "{ran:?}");
-        assert_eq!(writes.arrivals(), 0, "a write root at read-only");
-        front.close().await;
-    });
-}
-
-/// An observer of `session.start` is not waited for, and a failure of it
-/// is logged.
-#[test]
-fn a_failing_observer_of_session_start_is_logged() {
-    let world = World::new("hook_start_observer", [says("Hi.")]);
-    let program = std::env::current_exe().expect("the test binary has a path");
-    world.user_config(&format!(
-        "[[permissions.rules]]\neffect = \"exec\"\nmatch = '{} *'\naction = \"deny\"\n{}",
-        program.display(),
-        entry(
-            "watch",
-            "session.start",
-            &this_binary("fail", &[]),
-            "observe = true",
-        )
-    ));
-    let core = world.core();
-    let warnings = crate::extensions::Warnings::default();
-    let logged = std::sync::Arc::clone(&warnings.0);
-    tracing::subscriber::with_default(warnings, || {
-        world.run(async {
-            let front = Front::start(&world, &core).await;
-            front.turn("hello").await;
-            front.close().await;
-        });
-    });
-    let logged = logged.lock().unwrap();
-    assert!(
-        logged.iter().any(
-            |line| line.contains("a `session.start` observer failed") && line.contains("watch")
-        ),
-        "{logged:?}"
-    );
 }
 
 #[cfg(target_os = "linux")]
@@ -725,11 +796,7 @@ mod confined {
         world.run(async {
             let front = Front::start(&world, &core).await;
             let ended = front.turn("hello").await;
-            assert_eq!(
-                ended.outcome,
-                cineris_protocol::event::TurnOutcome::Denied,
-                "{ended:?}"
-            );
+            assert_eq!(ended.outcome, TurnOutcome::Denied, "{ended:?}");
             let notices = front.notices();
             assert!(
                 notices
@@ -788,18 +855,18 @@ mod confined {
             .concat(),
         );
         let core = world.core_with(|options| options.launcher = Some(launcher()));
-        let run = || HookRun {
-            input: json!({"event": "turn.end"}),
-            ..HookRun::default()
-        };
         world.run(async {
             let front = Front::start(&world, &core).await;
-            let closed = core.run_hook_command(&front.session, "closed", run()).await;
+            let closed = core
+                .run_hook_command(&front.session, "closed", turn_end())
+                .await;
             let Ok(HookOutcome::Failed(why)) = &closed else {
                 panic!("{closed:?}");
             };
             assert!(why.contains("exited with 6"), "{why}");
-            let open = core.run_hook_command(&front.session, "open", run()).await;
+            let open = core
+                .run_hook_command(&front.session, "open", turn_end())
+                .await;
             assert!(matches!(open, Ok(HookOutcome::Observed)), "{open:?}");
             front.close().await;
         });

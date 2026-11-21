@@ -42,14 +42,32 @@
 //! its `context` as a notice before the first prompt, and the first turn
 //! waits for it, up to its time; **an observer of `session.start` is not
 //! waited for, by design** (as an observer is nowhere): it runs to its own
-//! time beside the session, and its failure is logged. A `session.end`
-//! hook is observed, given up to [`SESSION_END_TIME`].
+//! time beside the session, and its failure is logged. Every
+//! `session.start` run is under the session's token: the close stops each
+//! still running, its process tree with it, and waits for it. A
+//! `session.end` hook is observed, given up to [`SESSION_END_TIME`].
 //!
-//! A hook that is refused, would need a question, does not start, runs
-//! past its time, exits with anything but 0, writes more than 1 MiB, or
-//! answers outside the contract has failed ([`HookOutcome::Failed`]).
+//! **No run outlives its session.** Every run is a task the session keeps,
+//! and the close waits for each before the `session.end` hooks and the
+//! close's look at the protected paths. At most [`RUNS_AT_ONCE`] run at
+//! once; the rest wait, within their own time.
+//!
+//! **A stop.** A start whose own look at the protected paths stops a turn
+//! (a change found before it, or one it made, or a process of it the kill
+//! could not clear) is told to the user at once; the turn running then, if
+//! one is, is stopped; and the next prompt is refused with it
+//! ([`HookCommands::stopped`]). **A hook of a turn that is stopped
+//! already does not start,** and is no stop of its own: it has failed, its
+//! turn stopped. So the `turn.end` hooks of a stopped turn do not start: a
+//! stopped turn runs nothing more.
+//!
+//! A hook that is refused, would be asked about (and never is), does not
+//! start, runs past its time, exits with anything but 0, writes more than
+//! 1 MiB, or answers outside the contract has failed
+//! ([`HookOutcome::Failed`]).
 
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use cineris_agent::{Decision, PlannedCall};
 use cineris_base::{CancelToken, PathResolver, in_code, visible};
@@ -200,9 +218,10 @@ pub enum HookOutcome {
 pub(crate) struct SessionHooks {
     /// The user's own, then the project's approved ones.
     pub(crate) hooks: Vec<CommandHook>,
-    /// The entries that do not run because they were refused, or changed
-    /// since they were approved: each is on its event all the same, as a
-    /// hook that fails ([`super::hooks::Refused`]).
+    /// The user's entries that do not run because they were refused, and
+    /// a trusted project's hooks changed since they were approved: each is
+    /// on its event all the same, as a hook that fails
+    /// ([`super::hooks::InSession::refused`]).
     pub(crate) refused: Vec<super::hooks::Refused>,
     /// What runs them.
     pub(crate) commands: Arc<HookCommands>,
@@ -256,14 +275,21 @@ impl SessionHooks {
         String,
         bool,
         CancelToken,
-        tokio::task::JoinHandle<HookOutcome>,
+        tokio::sync::oneshot::Receiver<HookOutcome>,
     )> {
         let input = session_input(event, session, &self.paths);
         self.hooks
             .iter()
             .filter(|hook| hook.event == event)
             .map(|hook| {
-                let cancel = CancelToken::new();
+                // A `session.start` run is under the session's token, which
+                // the close fires; a `session.end` one, run after it, has
+                // one of its own, fired when its time at the close is up.
+                let cancel = if event == Event::SessionStart {
+                    self.commands.session.child()
+                } else {
+                    CancelToken::new()
+                };
                 let cx = HookCx {
                     session: session.clone(),
                     // No turn of its own: a stop its look makes reaches the
@@ -273,21 +299,47 @@ impl SessionHooks {
                     kill: cancel.clone(),
                     paths: Arc::clone(&self.paths),
                 };
-                let commands = Arc::clone(&self.commands);
-                let (hook, input) = (hook.clone(), input.clone());
-                let name = hook.name.clone();
-                let observe = hook.observe;
-                let task = tokio::spawn(async move {
-                    let event = HookEvent {
-                        input: &input,
+                let outcome = self.commands.spawn_run(
+                    hook.clone(),
+                    Owned {
+                        input: input.clone(),
                         tool: None,
-                        effects: &[],
-                    };
-                    commands.run(&hook, &event, &cx).await
-                });
-                (name, !observe, cancel, task)
+                        effects: Vec::new(),
+                    },
+                    cx,
+                    Box::new(()),
+                );
+                (hook.name.clone(), !hook.observe, cancel, outcome)
             })
             .collect()
+    }
+
+    /// Whether anything is on `prompt.submit`: a hook, a refused one held
+    /// on its event, or a stop for the next prompt. Cheap: what the prompt's
+    /// way asks before it keeps who sent it.
+    pub(crate) fn wants_prompt(&self) -> bool {
+        self.commands.stop_pending()
+            || self
+                .hooks
+                .iter()
+                .any(|hook| hook.event == Event::PromptSubmit)
+            || self
+                .refused
+                .iter()
+                .any(|refused| refused.event == Some(Event::PromptSubmit))
+    }
+
+    /// The close: stops what of the session's hooks still runs under its
+    /// token (`session.start`'s, its observers among them), and waits for
+    /// every run of the session, the loop's that the loop let go included,
+    /// before the `session.end` hooks and the close's look.
+    pub(crate) async fn close(&self) {
+        self.commands.session.cancel();
+        let waiting = self.starting.lock().await.take();
+        if let Some(waiting) = waiting {
+            let _ = waiting.await;
+        }
+        self.commands.settle().await;
     }
 
     /// Starts the session's `session.start` hooks (`docs/steps/28/answered.md`,
@@ -318,6 +370,7 @@ impl SessionHooks {
                     });
                     continue;
                 }
+                cineris_base::hook::await_point!(A_SESSION_START_HOOK_IS_HEARD);
                 let said = match task.await {
                     Ok(HookOutcome::Answered(answer)) => {
                         cineris_ext::hook::Answer::of(Event::SessionStart, Some(answer)).map_err(
@@ -397,8 +450,30 @@ impl SessionHooks {
 /// (a point a test can stop at: [`cineris_base::hook`]).
 pub const A_HOOK_WRITES: &str = "core: a hook's start with a write root holds the look's baseline";
 
+/// The `session.start` hooks that are waited for are heard one by one, at
+/// this point before each is read: the first turn has not started (a point
+/// a test can stop at: [`cineris_base::hook`]).
+pub const A_SESSION_START_HOOK_IS_HEARD: &str =
+    "core: a session.start hook is heard, the first turn not started";
+
 /// The most a session's `session.end` hooks are given while it closes.
 pub(crate) const SESSION_END_TIME: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// The most hook runs a session has at once: the rest wait, within their
+/// own time (the review of step 28's second pull request: a response of
+/// many calls each with its hooks started them all together).
+pub(crate) const RUNS_AT_ONCE: usize = 8;
+
+/// The most runs of one waited-for `turn.end` hook at once, as for an
+/// observer: turns that end faster than it runs leave the rest unstarted.
+pub(crate) const TURN_END_AT_ONCE: usize = 4;
+
+/// An event as a run's task owns it.
+pub(crate) struct Owned {
+    pub(crate) input: Json,
+    pub(crate) tool: Option<String>,
+    pub(crate) effects: Vec<Effect>,
+}
 
 /// What a session runs its hook commands with: its extensions' host parts,
 /// whose `exec` is the shell's runner, sandbox and environment.
@@ -413,6 +488,16 @@ pub(crate) struct HookCommands {
     /// once, and the next prompt is refused with it, whether or not a turn
     /// was running when it was made (the early review's M2).
     stop: Mutex<Option<String>>,
+    /// A child of the session's token: every `session.start` run is under
+    /// it, and the close fires it.
+    session: CancelToken,
+    /// Every run's task, kept so that the close waits for each: none
+    /// outlives its session. Those that ended are let go as more come.
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// At most [`RUNS_AT_ONCE`] runs at once.
+    at_once: Arc<tokio::sync::Semaphore>,
+    /// The turn running now, if any: a hook's stop stops it as well.
+    running: Arc<dyn Fn() -> Option<TurnId> + Send + Sync>,
 }
 
 impl std::fmt::Debug for HookCommands {
@@ -424,13 +509,95 @@ impl std::fmt::Debug for HookCommands {
 impl HookCommands {
     /// The hook commands of a session with `parts` and the store of
     /// versions and artifacts `content`.
-    pub(crate) fn new(parts: Arc<HostParts>, content: Arc<dyn ContentStore>) -> Self {
+    pub(crate) fn new(
+        parts: Arc<HostParts>,
+        content: Arc<dyn ContentStore>,
+        session: CancelToken,
+        running: Arc<dyn Fn() -> Option<TurnId> + Send + Sync>,
+    ) -> Self {
         Self {
             parts,
             content,
             writing: tokio::sync::Mutex::new(()),
             stop: Mutex::new(None),
+            session,
+            tasks: Mutex::new(Vec::new()),
+            at_once: Arc::new(tokio::sync::Semaphore::new(RUNS_AT_ONCE)),
+            running,
         }
+    }
+
+    /// Runs `hook` for `event` on a task of its own, which the session
+    /// keeps until the close waits for it; `keep` lives as long as the
+    /// task. Its outcome comes back on the receiver; the run goes on to its
+    /// end (its look made) whether or not anybody waits for that.
+    pub(crate) fn spawn_run(
+        self: &Arc<Self>,
+        hook: CommandHook,
+        event: Owned,
+        cx: HookCx,
+        keep: Box<dyn Send>,
+    ) -> tokio::sync::oneshot::Receiver<HookOutcome> {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        let commands = Arc::clone(self);
+        let task = tokio::spawn(async move {
+            let _keep = keep;
+            let event_of = HookEvent {
+                input: &event.input,
+                tool: event.tool.as_deref(),
+                effects: &event.effects,
+            };
+            let outcome = commands.run(&hook, &event_of, &cx).await;
+            let _ = sender.send(outcome);
+        });
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
+        receiver
+    }
+
+    /// Waits for every run the session has: what the close does.
+    pub(crate) async fn settle(&self) {
+        loop {
+            let tasks = std::mem::take(
+                &mut *self
+                    .tasks
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            if tasks.is_empty() {
+                return;
+            }
+            for task in tasks {
+                let _ = task.await;
+            }
+        }
+    }
+
+    /// `wait` within what is left of `time` since `asked`: `None` when it is
+    /// up first.
+    async fn within<T>(
+        &self,
+        asked: Duration,
+        time: Duration,
+        wait: impl std::future::Future<Output = T>,
+    ) -> Option<T> {
+        let left = time.saturating_sub(self.parts.clock.monotonic().saturating_sub(asked));
+        let mut over = self.parts.timer.sleep(left);
+        let mut wait = std::pin::pin!(wait);
+        std::future::poll_fn(|context| {
+            if let std::task::Poll::Ready(done) = wait.as_mut().poll(context) {
+                return std::task::Poll::Ready(Some(done));
+            }
+            if over.as_mut().poll(context).is_ready() {
+                return std::task::Poll::Ready(None);
+            }
+            std::task::Poll::Pending
+        })
+        .await
     }
 
     /// The session's policy, whose lease names the protected paths.
@@ -459,12 +626,27 @@ impl HookCommands {
     /// told at once, and the next prompt is refused with it. On any event,
     /// observer or not, so that a stop made outside a running turn (an
     /// observer that ends late, `turn.end`, `session.start`) is not lost on
-    /// a turn that is over or has not begun.
-    pub(crate) fn stopped(&self, hook: &str, note: &str) {
+    /// a turn that is over or has not begun. One made by a hook of no turn
+    /// (`session.start`'s, `turn` being `t_0`) also stops the turn running
+    /// then, if one is: nothing of it that has not started runs. Only a stop
+    /// this start's own look made comes here: a hook not started because
+    /// its turn was stopped already has failed (`decide`).
+    pub(crate) fn stopped(&self, hook: &str, turn: &TurnId, note: &str) {
         (self.parts.tell)(format!(
             "The hook `{}` was stopped by the look at the protected paths: {note}",
             in_code(hook)
         ));
+        // A hook with no turn of its own (`session.start`'s) stops the turn
+        // running now, if one is, as a call of its own would: nothing of it
+        // that has not started does. A loop's hook's look stopped its own
+        // turn already.
+        if turn_number(turn) == 0
+            && let Some(running) = (self.running)()
+        {
+            self.parts
+                .policy
+                .stop_turn(turn_number(&running), note.to_owned());
+        }
         *self
             .stop
             .lock()
@@ -484,6 +666,26 @@ impl HookCommands {
     ) -> HookOutcome {
         let name = in_code(&hook.name).into_owned();
         let failed = |why: String| HookOutcome::Failed(format!("The hook `{name}` failed: {why}."));
+        // Its time began when it was asked: what it waits for here, its
+        // turn among the runs at once and the baseline of the look, is
+        // within it.
+        let asked = self.parts.clock.monotonic();
+        let not_in_time = || {
+            failed(format!(
+                "it did not start within its {} ms: other hooks were running",
+                hook.timeout.as_millis()
+            ))
+        };
+        let Some(Ok(_permit)) = self
+            .within(
+                asked,
+                hook.timeout,
+                Arc::clone(&self.at_once).acquire_owned(),
+            )
+            .await
+        else {
+            return not_in_time();
+        };
         // `{path}`: each file the call reads or writes, once, by place, in
         // the system's plain form (never `\\?\C:\…`).
         let mut keys = Vec::new();
@@ -536,7 +738,7 @@ impl HookCommands {
             }
             Err(error) => return failed(format!("the event could not be written: {error}")),
         };
-        let request = ExecRequest {
+        let mut request = ExecRequest {
             program: hook.program.clone(),
             args,
             cwd: None,
@@ -559,8 +761,17 @@ impl HookCommands {
         let _writing = if request.write_roots.is_empty() {
             None
         } else {
-            Some(self.writing.lock().await)
+            match self.within(asked, hook.timeout, self.writing.lock()).await {
+                Some(writing) => Some(writing),
+                None => return not_in_time(),
+            }
         };
+        // What is left of its time, for its decision, its looks and its run.
+        let left = hook
+            .timeout
+            .saturating_sub(self.parts.clock.monotonic().saturating_sub(asked));
+        request.timeout = left;
+        request.call_left = left;
         if !request.write_roots.is_empty() {
             cineris_base::hook::await_point!(A_HOOK_WRITES);
         }
@@ -593,7 +804,7 @@ impl HookCommands {
         match ran {
             Ok(output) => outcome(hook, &output).unwrap_or_else(failed),
             Err(HostError::Stopped(note)) => {
-                self.stopped(&hook.name, &note);
+                self.stopped(&hook.name, &cx.turn, &note);
                 HookOutcome::Stopped(note)
             }
             Err(HostError::Denied(why) | HostError::Failed(why) | HostError::NotHere(why)) => {
@@ -750,7 +961,11 @@ fn decide(
         },
     };
     hook_may_run(&decision, managed, start.read_only_asks, hook.source).map_err(|not| match not {
-        NotRun::Stopped(reason) => HostError::Stopped(reason),
+        // Its turn was stopped before it: it starts nothing, and is no stop
+        // of its own, which `HookCommands::stopped` would tell again.
+        NotRun::Stopped(_) => {
+            HostError::Failed("it was not started: its turn was stopped".to_owned())
+        }
         NotRun::Denied(reason) => HostError::Denied(format!(
             "it was not started: a permission rule refuses it: {}",
             visible(&reason)
