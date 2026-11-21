@@ -167,10 +167,21 @@
       "type": "object"
     },
     "extensions": {
-      "description": "Extensions by name.",
-      "type": "object",
-      "x-cineris-reserved": true,
-      "x-cineris-trust": "runs code"
+      "additionalProperties": {
+        "additionalProperties": true,
+        "properties": {
+          "enabled": {
+            "default": true,
+            "description": "Whether the extension is loaded. `false` keeps it out of every new session, its tools, commands and prompt with it; its pin is kept, so `true` again needs no new approval unless its folder changed.",
+            "type": "boolean",
+            "x-cineris-effect": "next session",
+            "x-cineris-trust": "user only"
+          }
+        },
+        "type": "object"
+      },
+      "description": "Extensions by name: `[extensions.<name>]`, which only turns one off (`cineris ext disable` writes it). The user's alone: a project's entry is ignored, since a project's extension is kept out by not trusting the project, and a project may not turn the user's own off.",
+      "type": "object"
     },
     "hooks": {
       "description": "Hooks by name.",
