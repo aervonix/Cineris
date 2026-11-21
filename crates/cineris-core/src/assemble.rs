@@ -318,6 +318,8 @@ pub(crate) struct Assembled {
     /// Whether git may read the repository's own configuration: the shell's
     /// look and the base capture read it, and a reload lowers it.
     pub(crate) repository: Arc<std::sync::atomic::AtomicBool>,
+    /// The session's extensions, to find once its loop runs (step 28).
+    pub(crate) extensions: crate::ext::found::Pending,
 }
 
 /// The root of the workspace at `path`, as a session opened there would
@@ -535,6 +537,9 @@ pub(crate) struct TrustQuestion {
     pub(crate) rules_shown: bool,
     /// Git was listed: a yes trusts it, and a keep declines it.
     pub(crate) git_shown: bool,
+    /// The project's extensions that were listed, as they were read: a yes
+    /// pins each (step 28).
+    pub(crate) extensions: Vec<Definition>,
 }
 
 /// A person's answer to the trust question.
@@ -631,11 +636,20 @@ pub(crate) fn look(
         return Ok((trust, None));
     }
     // A trusted project is asked about only what is new in it: its rules
-    // changed and not kept out, or git, now that it is a repository.
+    // changed and not kept out, git, now that it is a repository, or an
+    // extension not approved as it is now (step 28), looked for with a look
+    // at its folder of extensions, two when it has a `.cineris`.
     let rules_new = !trust.rules && !trust.rules_declined;
-    if trust.standing != TrustStanding::Untrusted && !rules_new && !trust.git_new {
-        return Ok((trust, None));
-    }
+    let quiet = trust.standing != TrustStanding::Untrusted && !rules_new && !trust.git_new;
+    let looked_in = if quiet {
+        let found = crate::ext::found::in_project(&place.resolver);
+        if found.found.is_empty() {
+            return Ok((trust, None));
+        }
+        Some(found)
+    } else {
+        None
+    };
     let key = place.root.project_key();
     let Some(state) = place.state.as_ref() else {
         return Ok((trust, None));
@@ -653,6 +667,17 @@ pub(crate) fn look(
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .contains(&key)
     {
+        return Ok((trust, None));
+    }
+    // A project not trusted is looked in only now, for what a yes would
+    // trust it with.
+    let extensions = crate::ext::found::asked(
+        looked_in.unwrap_or_else(|| crate::ext::found::in_project(&place.resolver)),
+        &place.resolver,
+        place.load.dirs.config.as_deref(),
+        &stored,
+    );
+    if quiet && extensions.pins.is_empty() {
         return Ok((trust, None));
     }
     let trusted = stored.is_trusted();
@@ -738,6 +763,7 @@ pub(crate) fn look(
             changed: false,
         });
     }
+    resources.extend(extensions.resources);
     if resources.is_empty() {
         return Ok((trust, None));
     }
@@ -749,6 +775,7 @@ pub(crate) fn look(
         trusted,
         rules_shown,
         git_shown,
+        extensions: extensions.pins,
     };
     Ok((trust, Some(question)))
 }
@@ -809,11 +836,13 @@ pub(crate) fn answer_trust(
     };
     match answer {
         TrustAnswer::Yes => {
-            let pin = if question.rules_shown {
+            let mut pin = if question.rules_shown {
                 vec![question.pin.clone()]
             } else {
                 Vec::new()
             };
+            // Each extension listed, as it was read when it was listed.
+            pin.extend(question.extensions.iter().cloned());
             let kept = if question.trusted {
                 store.approve(&question.key, &pin, question.git_shown)
             } else {
@@ -834,7 +863,15 @@ pub(crate) fn answer_trust(
         TrustAnswer::Keep => {
             let rules = question.rules_shown.then_some(&question.pin);
             match store.keep_without(&question.key, rules, question.git_shown) {
-                Ok(_) => self::trust(inner, place.state.as_ref(), &place.root, &place.load),
+                Ok(_) => {
+                    // The extensions listed stay unapproved, and the store
+                    // keeps no record of a keep of them: they are not
+                    // asked about again in this core, as after not now.
+                    if !question.extensions.is_empty() {
+                        not_now();
+                    }
+                    self::trust(inner, place.state.as_ref(), &place.root, &place.load)
+                }
                 Err(failure) if gone(&failure) => gone_trust(),
                 Err(failure) => {
                     not_now();
@@ -2520,9 +2557,11 @@ pub(crate) fn assemble(
     ));
     // The extensions' tools, in the registry behind `tool_search` and
     // `tool_call`: registered from what each registered when it was
-    // approved, with no engine started (step 28).
+    // approved, with no engine started (step 28). Those a caller hands in
+    // (`CoreOptions::extensions`, a test's) here; those the session finds,
+    // by a task of their own once its loop runs (`ext::found`).
     #[cfg(feature = "scripts")]
-    if !options.extensions.is_empty() {
+    let ext_parts = {
         let tell_hooks = Arc::clone(&hooks);
         let parts = Arc::new(crate::ext::HostParts {
             policy: Arc::clone(&policy),
@@ -2578,7 +2617,32 @@ pub(crate) fn assemble(
         for left_out in crate::ext::register(options.extensions.clone(), &parts, &registry) {
             told.push(left_out);
         }
-    }
+        parts
+    };
+    #[cfg(feature = "scripts")]
+    let extensions = Some(crate::ext::found::Finding {
+        resolver: Arc::clone(&resolver),
+        config_dir: load.dirs.config.clone(),
+        state: state_dir.clone(),
+        // A project's folder of extensions is looked in only while the
+        // project is trusted.
+        project: matches!(
+            standing,
+            TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
+        )
+        .then(|| project.clone()),
+        disabled: settings
+            .extensions
+            .iter()
+            .filter(|(_, extension)| !extension.enabled)
+            .map(|(name, _)| name.clone())
+            .collect(),
+        registry: Arc::clone(&registry),
+        parts: ext_parts,
+        cancel: options.cancel.child(),
+    });
+    #[cfg(not(feature = "scripts"))]
+    let extensions = ();
     let mut toolbox = Toolbox::read_only(Arc::clone(&registry))
         .with(WriteTool::new(editing.clone()))
         .with(EditTool::new(editing))
@@ -2922,6 +2986,7 @@ pub(crate) fn assemble(
         accounts,
         shell_live,
         repository,
+        extensions,
     })
 }
 
