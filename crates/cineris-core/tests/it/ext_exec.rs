@@ -1500,17 +1500,16 @@ mod confined {
         });
     }
 
-    /// At `unrestricted` the shell's commands run as they are, and the look
-    /// at what one changed runs git as it is; an extension's program is
-    /// still confined, by its own launcher, and the look at what it changed
-    /// runs git inside the sandbox, as the program ran (the review of the
-    /// extensions' process starts). A program that plants a clean filter in
-    /// a trusted repository's configuration does not have the harness run
-    /// it with the user's rights: the mark the filter makes, outside every
-    /// write root, never appears, and the change to `.git/config`, a
-    /// protected path, stops the call. `harness_git`'s tests are the
-    /// control: at `unrestricted` the look after a shell command runs the
-    /// same filter.
+    /// At `unrestricted` an extension's program is still confined, by its
+    /// own launcher. A program that plants a clean filter in a trusted
+    /// repository's configuration does not have the harness run it with the
+    /// user's rights: the mark the filter makes, outside every write root,
+    /// never appears, and the change to `.git/config`, a protected path,
+    /// stops the call (the review of the extensions' process starts). Since
+    /// the third security fix the change is put back before the look at
+    /// what the program changed asks git, and that git runs inside the
+    /// sandbox at every level besides (`harness_git`'s
+    /// `sys_at_unrestricted_the_harness_git_still_runs_inside_the_sandbox`).
     #[test]
     fn sys_the_look_after_a_program_runs_git_confined_at_unrestricted() {
         use cineris_testkit::scratch::git;
@@ -1612,11 +1611,13 @@ mod confined {
         });
     }
 
-    /// A program with a write root that plants a hook in the folder the
-    /// repository's configuration names for its hooks (`core.hooksPath`),
-    /// which is not on the protected list, has it found and put back, and
-    /// its call stopped: the folder is watched around a program as around
-    /// a confined command (the third security fix).
+    /// A program with a write root that names a folder for the repository's
+    /// hooks (`core.hooksPath`) in a file the configuration includes, and
+    /// plants a hook there, in the same run: neither is on the protected
+    /// list. What the configuration names is read again before the look
+    /// after the program, so the hook is found and put back, the included
+    /// file with it, and the call stopped, as around a confined command (the
+    /// third security fix).
     #[test]
     fn sys_a_hook_a_program_plants_in_the_hooks_folder_is_put_back() {
         use cineris_testkit::scratch::git;
@@ -1630,13 +1631,19 @@ mod confined {
             &world.workspace,
             &["init", "--quiet", "--initial-branch=main"],
         );
-        git(&world.workspace, &["config", "core.hooksPath", ".githooks"]);
+        git(
+            &world.workspace,
+            &["config", "include.path", "../shared.gitconfig"],
+        );
+        world.put("shared.gitconfig", "");
         let probe = extension(&world, "probe", "exec = [\"sh\"]\nwrite = [\"**\"]");
         world.provider.push(run_call(
             "c1",
             "probe",
             &json!({"program": "sh", "args": [
-                "-c", "mkdir -p .githooks && printf 'evil\\n' > .githooks/pre-push"
+                "-c",
+                "printf '[core]\\n\\thooksPath = .githooks\\n' > shared.gitconfig && mkdir -p \
+                 .githooks && printf 'evil\\n' > .githooks/pre-push"
             ]}),
         ));
         world.provider.push(says("Done."));
@@ -1654,6 +1661,7 @@ mod confined {
                 "{answer}"
             );
             assert!(world.read(".githooks/pre-push").is_none());
+            assert_eq!(world.read("shared.gitconfig").as_deref(), Some(""));
             front.close().await;
         });
     }

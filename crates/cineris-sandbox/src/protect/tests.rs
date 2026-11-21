@@ -815,6 +815,35 @@ mod putting_back {
         );
     }
 
+    /// A folder above a protected one, not watched itself (`.github`, above
+    /// `.github/workflows`), swapped for a link to a folder outside that
+    /// holds a `workflows` of its own: nothing on the way to a protected
+    /// path is followed when it is put back, so nothing is written or given
+    /// a mode where the link leads, and the paths are left, to be put back
+    /// by hand.
+    #[test]
+    fn a_path_under_a_folder_that_is_a_link_now_is_left_alone() {
+        let scratch = workspace("put_back_under_a_link");
+        let ws = scratch.join("ws");
+        scratch.file("ws/.github/workflows/ci.yml", "on: push\n");
+        let theirs = scratch.file("outside/github/workflows/ci.yml", "theirs\n");
+        let folder = scratch.join("outside/github/workflows");
+        set_mode(&folder, 0o751);
+        let (_, put) = put_back_after(&ws, |ws| {
+            fs::rename(ws.join(".github"), scratch.join("moved-github")).unwrap();
+            symlink(scratch.join("outside/github"), ws.join(".github")).unwrap();
+        });
+        assert_eq!(fs::read_to_string(&theirs).unwrap(), "theirs\n");
+        assert_eq!(mode(&folder), 0o751);
+        assert!(
+            put.left
+                .iter()
+                .any(|one| one.path == ws.join(".github/workflows/ci.yml")),
+            "{:?}",
+            put.left
+        );
+    }
+
     /// The directory a path lies in is swapped for a link to a folder
     /// outside after it was opened and before the path is written: the
     /// write goes to the directory that was opened, never where the link

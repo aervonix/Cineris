@@ -1217,7 +1217,7 @@ fn a_write_entry_that_holds_the_harness_files_is_left_out_and_the_sandbox_stays_
 /// and nothing is said of it, as before the third security fix.
 #[test]
 fn where_the_sandbox_does_not_enforce_no_write_entry_is_left_out() {
-    let world = World::new("left_out_not_enforcing", []);
+    let world = World::new("left_out_not_enforcing", [crate::says("Hello.")]);
     world.user_config("[sandbox]\nwrite = [\"~\"]\n");
     let core = world.core_with(|options| {
         options.launcher = Some(launcher());
@@ -1226,6 +1226,9 @@ fn where_the_sandbox_does_not_enforce_no_write_entry_is_left_out() {
     world.run(async {
         let front = Front::start(&world, &core).await;
         assert_eq!(front.state.sandbox, SandboxStatus::Off);
+        notices_until(&front, |notice| notice.contains("Landlock")).await;
+        // A turn, so that every notice of the session's start has been sent.
+        front.turn("hello").await;
         let notices = notices_until(&front, |notice| notice.contains("Landlock")).await;
         assert!(
             !notices.iter().any(|notice| notice.contains("is left out")),
