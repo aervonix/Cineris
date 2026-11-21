@@ -12,7 +12,7 @@ The second of step 28's pull requests: `cineris.http.fetch`, an extension's HTTP
 
 | Budget | Measured | Where |
 |---|---|---|
-| Binary size | On Linux the client adds no package: `reqwest` and `rustls` were linked for the providers, and `rustls-native-certs` was built under the platform's verifier. On Windows it adds `rustls-native-certs` and `schannel`, which were in the lock and not in that build. `cineris-llm` turns on `tokio`'s `rt`, which the workspace already builds. The pull request's `pr-size` gives the bytes | [dependencies.md](../../../dependencies.md) |
+| Binary size | On Linux the client adds no package: `reqwest` and `rustls` were linked for the providers, and `rustls-native-certs` was built under the platform's verifier. On Windows it adds `rustls-native-certs` and `schannel`, which were in the lock and not in that build. `cineris-llm` turns on `tokio`'s `rt`, which the workspace already builds. Linux musl `dist` 15.12 MiB of 20 MiB, + 69,664 bytes on main; Windows `dist` 18.11 MiB of 25 MiB, + 109,056 bytes | The pull request's `pr-size` jobs, run 44842130923; [ci.md](../ci.md) |
 | The Windows verifier | A fixture certificate whose issuer, OCSP responder and revocation list name a local port: with the platform's verifier, the Windows runner's fetch connected to that port; with rustls over the system's roots, nothing did | Try runs 44832771217 (before) and 44833232058 (after) |
 | Start-up | Untouched: the client is made only when a script fetches | `cineris-core::it extensions` |
 
