@@ -12,9 +12,7 @@
     reason = "an integration test prepares real files, fails by panicking, and says when it skips"
 )]
 
-mod cache;
 mod capability;
-mod discover;
 mod engine;
 mod folder;
 mod manifest;
