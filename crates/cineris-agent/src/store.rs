@@ -161,6 +161,11 @@ pub struct EpochStart {
     /// it (section 6), and `None` when it holds none: what a later change
     /// to the index is measured against (since step 28).
     pub index: Option<ContentHash>,
+    /// The extensions whose text the prompt holds (section 7), each with the
+    /// hash of its part: what a resume whose new prompt does not hold one as
+    /// it was names to the model (since step 28). Empty in an epoch written
+    /// before.
+    pub texts: Vec<(String, ContentHash)>,
     /// The log does not hold the prompt or the tools as they were sent:
     /// the secret filter masked something in them. Such an epoch is not
     /// gone on with when the session is read again. Set by the store when

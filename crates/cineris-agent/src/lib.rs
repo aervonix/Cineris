@@ -74,7 +74,8 @@ pub use context::{
     ExtensionsSource, FileText, GUIDED_NOTES, INDEX_CAP, INDEX_CHANGED, INDEX_EMPTY,
     InstructionFiles, MapAnswer, MapPending, MapSource, MemoryInstructionFiles, NOTICE_LEAD,
     NoInstructionFiles, PROFILE_CHANGED, PROFILE_EMPTY, PrefixDifference, ProfileSource, RepoMap,
-    SKILLS_CAP, SUMMARY_INSTRUCTIONS, check_prefix, render_index, withdrawn_text,
+    SKILLS_CAP, SUMMARY_INSTRUCTIONS, TEXTS_END, TEXTS_LEAD, TEXTS_REPLACED, check_prefix,
+    render_index, withdrawn_text,
 };
 pub use events::EventSink;
 pub use guard::RepetitionLimits;

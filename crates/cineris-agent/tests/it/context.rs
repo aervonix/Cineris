@@ -1477,6 +1477,7 @@ fn resumed(world: &World, system: &str) -> (Rig, MemorySessionStore) {
                 instructions: vec![("AGENTS.md".to_owned(), ContentHash::of(b"x"))],
                 profile: None,
                 index: None,
+                texts: Vec::new(),
                 altered: false,
                 variants: None,
             }),

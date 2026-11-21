@@ -46,6 +46,18 @@ use crate::store::{EpochReason, EpochStart, Record, StoreError, Summary};
 use crate::timing::Spend;
 use crate::usage::add_request;
 
+/// What the extensions' source answered.
+pub(super) enum Asked {
+    /// The session has no extensions.
+    Unasked,
+    /// What sections 6 and 7 are to hold.
+    Answered(crate::context::ExtensionSections),
+    /// The source failed: it holds no text.
+    Failed,
+    /// The turn was stopped before the answer came.
+    Cancelled,
+}
+
 /// A summary taken in the background, while it runs and once it is done.
 pub(super) enum Background {
     Running(Job),
@@ -292,8 +304,10 @@ impl Session {
         self.env.workspace.paths.root().clone()
     }
 
-    /// Reads the instruction files and builds the system prompt.
-    async fn build_prompt(&mut self) -> (Built, Discovered) {
+    /// Reads the instruction files and builds the system prompt. With what
+    /// the extensions' source answered, so that a turn's start that goes on
+    /// in its epoch does not ask it again.
+    async fn build_prompt(&mut self, turn: &Turn) -> (Built, Discovered, Asked) {
         let (found, io, cap) = {
             let parts = &self.context.parts;
             (
@@ -313,29 +327,52 @@ impl Session {
         let profile = Self::profile_now(self.context.parts.profile.clone())
             .await
             .unwrap_or_default();
-        let extensions = Self::extensions_now(self.context.parts.extensions.clone()).await;
+        let asked = Self::extensions_now(self.context.parts.extensions.clone(), &turn.cancel).await;
         let parts = &self.context.parts;
+        // No answer, no section: a prompt holds no text it was not given.
+        let extensions = match &asked {
+            Asked::Answered(sections) => Some(sections),
+            _ => None,
+        };
         let built = build(&Sections {
             environment: Some(&parts.environment),
             instructions: &discovered.texts,
             profile: Some(&profile),
-            extensions: extensions.as_ref(),
+            extensions,
             append: parts.append.as_deref(),
             guided: self.model.variants.prompt_style == "guided",
         });
-        (built, discovered)
+        (built, discovered, asked)
     }
 
-    /// What sections 6 and 7 are to hold now, asked on the blocking pool.
-    /// `None` when the session has no extensions, or the answer did not
-    /// come.
+    /// What sections 6 and 7 are to hold now, asked on the blocking pool
+    /// under the turn's token.
     async fn extensions_now(
         source: Option<Arc<dyn crate::context::ExtensionsSource>>,
-    ) -> Option<crate::context::ExtensionSections> {
-        let source = source?;
-        run_blocking(&CancelToken::new(), move |_| source.sections())
-            .await
-            .ok()
+        cancel: &CancelToken,
+    ) -> Asked {
+        let Some(source) = source else {
+            return Asked::Unasked;
+        };
+        match run_blocking(cancel, move |_| source.sections()).await {
+            Ok(sections) => Asked::Answered(sections),
+            Err(cineris_tools::BlockingError::Cancelled) => Asked::Cancelled,
+            Err(cineris_tools::BlockingError::Panicked(_)) => Asked::Failed,
+        }
+    }
+
+    /// Tells the user of each extension whose text section 7's cap left out
+    /// of the prompt an epoch begins with, wholly or cut: once an epoch, as
+    /// it begins. The model is not told.
+    fn warn_left_out(&self, turn: &Turn, built: &Built) {
+        for text in &built.left_out {
+            self.notify(
+                turn,
+                Notice::Info(InfoNotice {
+                    message: crate::context::left_out_text(text),
+                }),
+            );
+        }
     }
 
     /// Tells the user what the cap left out, or what could not be read.
@@ -371,6 +408,11 @@ impl Session {
             instructions: discovered.marks.clone(),
             profile: built.profile,
             index: built.index,
+            texts: built
+                .texts
+                .iter()
+                .map(|mark| (mark.name.clone(), mark.hash))
+                .collect(),
             altered: false,
             variants: Some(self.model.variants.clone()),
         }
@@ -413,8 +455,9 @@ impl Session {
     pub(super) async fn context_turn_start(&mut self, turn: &Turn) -> Result<(), StoreError> {
         self.refresh_main();
         let mut begun = false;
+        let mut answer = None;
         if self.context.epoch.is_none() || self.context.unchecked {
-            let (built, discovered) = self.build_prompt().await;
+            let (built, discovered, asked) = self.build_prompt(turn).await;
             self.warn_instructions(turn, &discovered);
             // An epoch whose prompt the log does not hold as it was sent
             // (the filter masked something in it) cannot go on: its next
@@ -445,6 +488,7 @@ impl Session {
                 // `base` holds.
                 self.context.unchecked = false;
                 self.context.given_texts = built.texts.clone();
+                answer = Some(asked);
                 let today = date_of(self.clock.now());
                 if self
                     .context
@@ -466,9 +510,17 @@ impl Session {
                 } else {
                     EpochReason::Resume
                 };
+                // The texts the epoch before held, recorded with it.
+                let before: Vec<(String, ContentHash)> = self
+                    .context
+                    .epoch
+                    .as_ref()
+                    .map(|epoch| epoch.texts.clone())
+                    .unwrap_or_default();
                 let epoch = self.epoch_start(&built, &discovered, reason);
                 self.begin_epoch(turn, epoch, None).await?;
                 self.context.given_texts = built.texts.clone();
+                self.warn_left_out(turn, &built);
                 begun = true;
                 // The history goes on under the new prompt. A notice of an
                 // older profile in it would stand after the prompt's
@@ -488,12 +540,34 @@ impl Session {
                     )
                     .await?;
                 }
+                // Then a text the history went on under, and that the new
+                // prompt does not hold as it was, is named, whether or not
+                // the history holds a notice: what it said is not to be
+                // followed on the strength of the history.
+                let gone: Vec<String> = before
+                    .iter()
+                    .filter(|(name, hash)| {
+                        !built
+                            .texts
+                            .iter()
+                            .any(|mark| mark.name == *name && mark.hash == *hash)
+                    })
+                    .map(|(name, _)| name.clone())
+                    .collect();
+                if !gone.is_empty() {
+                    self.record_notice(
+                        turn,
+                        NoticeSource::Extensions,
+                        crate::context::replaced_text(&gone),
+                    )
+                    .await?;
+                }
             }
         }
         if !begun {
             self.instruction_changes(turn).await?;
             self.profile_changes(turn, false).await?;
-            self.extension_changes(turn).await?;
+            self.extension_changes(turn, answer).await?;
         }
         Ok(())
     }
@@ -504,31 +578,19 @@ impl Session {
     /// (removed, disabled, changed) is withdrawn by a notice that names it;
     /// then an index that is not the one the model has follows whole. An
     /// extension added waits for the next epoch.
-    async fn extension_changes(&mut self, turn: &Turn) -> Result<(), StoreError> {
-        let Some(now) = Self::extensions_now(self.context.parts.extensions.clone()).await else {
+    async fn extension_changes(
+        &mut self,
+        turn: &Turn,
+        answer: Option<Asked>,
+    ) -> Result<(), StoreError> {
+        let asked = match answer {
+            Some(asked) => asked,
+            None => Self::extensions_now(self.context.parts.extensions.clone(), &turn.cancel).await,
+        };
+        self.withdraw_texts(turn, &asked).await?;
+        let Asked::Answered(now) = asked else {
             return Ok(());
         };
-        // Each held against its own text, whether or not the cap leaves
-        // room for it: an extension another pushes past the cap is as it
-        // was.
-        let texts = crate::context::text_marks(&now.prompts);
-        let gone: Vec<crate::context::TextMark> = self
-            .context
-            .given_texts
-            .iter()
-            .filter(|given| !texts.contains(given))
-            .cloned()
-            .collect();
-        for mark in gone {
-            self.record_notice(
-                turn,
-                NoticeSource::Extensions,
-                crate::context::withdrawn_text(&mark.name),
-            )
-            .await?;
-            self.context.given_texts.retain(|given| *given != mark);
-            self.context.withdrew = true;
-        }
         let index = crate::context::render_index(&now);
         let hash = crate::context::index_hash(&index);
         if hash != self.context.given_index {
@@ -713,9 +775,51 @@ impl Session {
         Ok(())
     }
 
+    /// Withdraws each extension's text the model has that the source's
+    /// answer does not hold as it is: one removed, disabled or changed. Each
+    /// is held against its own text, whether or not the cap leaves room for
+    /// it, so that an extension another pushes past the cap is as it was.
+    /// An answer that did not come (the source failed) holds no text: what
+    /// the model has is withdrawn, failing closed. A turn stopped meanwhile
+    /// withdraws nothing. A summary prepared in the background may carry a
+    /// text withdrawn now, and is dropped.
+    async fn withdraw_texts(&mut self, turn: &Turn, asked: &Asked) -> Result<(), StoreError> {
+        let texts = match asked {
+            Asked::Answered(now) => crate::context::text_marks(&now.prompts),
+            Asked::Failed => Vec::new(),
+            Asked::Unasked | Asked::Cancelled => return Ok(()),
+        };
+        let gone: Vec<crate::context::TextMark> = self
+            .context
+            .given_texts
+            .iter()
+            .filter(|given| !texts.contains(given))
+            .cloned()
+            .collect();
+        if gone.is_empty() {
+            return Ok(());
+        }
+        self.drop_background();
+        for mark in gone {
+            self.record_notice(
+                turn,
+                NoticeSource::Extensions,
+                crate::context::withdrawn_text(&mark.name),
+            )
+            .await?;
+            self.context.given_texts.retain(|given| *given != mark);
+            self.context
+                .withdrawn
+                .push(cineris_base::in_code(&mark.name).into_owned());
+        }
+        Ok(())
+    }
+
     /// Before each request, at a safe boundary: a change of the main
-    /// role's model starts an epoch, and instruction files under
-    /// directories a tool has first touched are given.
+    /// role's model starts an epoch, an extension's text the model has and
+    /// that is no longer in force is withdrawn (the index waits for the next
+    /// turn's start), and instruction files under directories a tool has
+    /// first touched are given.
     pub(super) async fn context_before_request(&mut self, turn: &Turn) -> Result<(), StoreError> {
         if let Some(epoch) = &self.context.epoch {
             let info = &self.model.entry.info;
@@ -742,6 +846,14 @@ impl Session {
                 };
                 self.begin_epoch(turn, next, None).await?;
             }
+        }
+        // Within a turn too, a text taken back is withdrawn before the next
+        // request: a headless run is one turn. Asked only while the model
+        // has a text.
+        if self.context.epoch.is_some() && !self.context.given_texts.is_empty() {
+            let asked =
+                Self::extensions_now(self.context.parts.extensions.clone(), &turn.cancel).await;
+            self.withdraw_texts(turn, &asked).await?;
         }
         self.nested_instructions(turn).await
     }
@@ -1119,7 +1231,9 @@ impl Session {
                 budget,
             )
         };
-        request.messages.push(instructions_message(focus));
+        request
+            .messages
+            .push(instructions_message(focus, &self.context.withdrawn));
         request
     }
 
@@ -1767,7 +1881,7 @@ impl Session {
     ) -> Result<u64, Unfinished> {
         // The new epoch's models, before its prompt is built.
         self.take_epoch_models();
-        let (built, discovered) = self.build_prompt().await;
+        let (built, discovered, _) = self.build_prompt(turn).await;
         self.warn_instructions(turn, &discovered);
         let root = self.root();
         let today = date_of(self.clock.now());
@@ -1835,6 +1949,7 @@ impl Session {
             .await
             .map_err(Unfinished::Store)?;
         self.context.given_texts = built.texts.clone();
+        self.warn_left_out(turn, &built);
         self.context.carried_before = Some(carried_value);
         self.context.touched = crate::context::Touched::default();
         self.shared.lock().history = true;

@@ -9,9 +9,11 @@ use std::sync::{Arc, Mutex};
 
 use cineris_agent::{
     ContextSettings, EXTENSIONS_AGAIN, EpochReason, ExtensionPrompt, ExtensionSections,
-    ExtensionsSource, INDEX_CHANGED, INDEX_EMPTY, NOTICE_LEAD, render_index, withdrawn_text,
+    ExtensionsSource, INDEX_CHANGED, INDEX_EMPTY, NOTICE_LEAD, TEXTS_END, TEXTS_LEAD,
+    TEXTS_REPLACED, render_index, withdrawn_text,
 };
 use cineris_base::ContentHash;
+use cineris_protocol::event::Notice;
 use cineris_protocol::item::NoticeSource;
 use cineris_protocol::{Item, Message, Part, Role};
 use cineris_tools::SourceSummary;
@@ -22,30 +24,52 @@ use crate::{Rig, Setup, World, calls, lock, says};
 const SKILLS: &str = "Skills: instructions for particular kinds of task.\n- pdf: Fill in PDF \
     forms. (.cineris/skills/pdf/SKILL.md)";
 
-const NOTES: &str = "## From the extension `notes`, written by its author\n\nWrite notes.";
-const TRACKER: &str = "## From the extension `tracker`, written by its author\n\nUse the tracker.";
+const NOTES: &str = "## From the extension `notes`, written by its author\n\n> Write notes.";
+const TRACKER: &str =
+    "## From the extension `tracker`, written by its author\n\n> Use the tracker.";
 
-/// Sections the test sets.
+/// Sections the test sets; `None` makes the source fail, as a panic does.
 struct Scripted {
-    sections: Mutex<ExtensionSections>,
+    sections: Mutex<Option<ExtensionSections>>,
 }
 
 impl Scripted {
     fn new(sections: ExtensionSections) -> Arc<Self> {
         Arc::new(Self {
-            sections: Mutex::new(sections),
+            sections: Mutex::new(Some(sections)),
         })
     }
 
+    fn fail(&self) {
+        *lock(&self.sections) = None;
+    }
+
     fn set(&self, sections: ExtensionSections) {
-        *lock(&self.sections) = sections;
+        *lock(&self.sections) = Some(sections);
     }
 }
 
 impl ExtensionsSource for Scripted {
+    #[expect(
+        clippy::panic,
+        reason = "a source that fails, as the loop must take one: it answers nothing"
+    )]
     fn sections(&self) -> ExtensionSections {
-        lock(&self.sections).clone()
+        let sections = lock(&self.sections).clone();
+        sections.unwrap_or_else(|| panic!("the source fails"))
     }
+}
+
+/// The text of every `info` notice the session sent its front ends.
+fn infos(rig: &Rig) -> Vec<String> {
+    rig.events
+        .notices()
+        .into_iter()
+        .filter_map(|notice| match notice {
+            Notice::Info(info) => Some(info.message),
+            _ => None,
+        })
+        .collect()
 }
 
 fn tool_source(name: &str, tools: usize, description: &str) -> SourceSummary {
@@ -173,7 +197,9 @@ fn both_sections_are_in_the_epochs_prompt_and_the_index_is_recorded() {
     let system = &systems(&world)[0];
     let index = render_index(&two());
     assert!(
-        system.ends_with(&format!("\n\n{index}\n\n{NOTES}\n\n{TRACKER}")),
+        system.ends_with(&format!(
+            "\n\n{index}\n\n{TEXTS_LEAD}\n\n{NOTES}\n\n{TRACKER}\n\n{TEXTS_END}"
+        )),
         "{system}"
     );
     let epochs = rig.store.epochs();
@@ -386,7 +412,16 @@ fn a_resume_whose_texts_differ_begins_a_new_epoch() {
     turn(&world, &same, "fourth", 1);
     assert_eq!(same.store.epochs().len(), 3);
     assert_eq!(systems(&world)[3], systems(&world)[2]);
-    assert_eq!(told(&same), Vec::<String>::new(), "no notice of the source");
+    // Each new prompt named what went or changed since the epoch before:
+    // `tracker`'s text, then `notes`' and `tracker`'s (back as it was
+    // first), after the notice that the prompt is as it is, the history
+    // holding a notice of the source by then. The resume that goes on adds
+    // nothing.
+    let named = told(&same);
+    assert_eq!(named.len(), 3, "{named:#?}");
+    assert!(named[0].starts_with(&format!("{TEXTS_REPLACED} `tracker`.")));
+    assert_eq!(named[1], EXTENSIONS_AGAIN);
+    assert!(named[2].starts_with(&format!("{TEXTS_REPLACED} `notes`, `tracker`.")));
 }
 
 /// Section 6 is outside `base`: a resume whose index differs goes on in its
@@ -590,8 +625,10 @@ fn a_compaction_builds_both_sections_as_they_are_and_replays_no_older_notice() {
     );
     let last = world.provider.requests().last().unwrap().clone();
     assert!(
-        last.system
-            .ends_with(&format!("{}\n\n{TRACKER}", render_index(&third))),
+        last.system.ends_with(&format!(
+            "{}\n\n{TEXTS_LEAD}\n\n{TRACKER}\n\n{TEXTS_END}",
+            render_index(&third)
+        )),
         "{}",
         last.system
     );
@@ -642,7 +679,7 @@ fn a_text_another_pushes_past_the_cap_is_not_withdrawn() {
         "extensions_past_the_cap",
         [says("One."), says("Two."), says("Three.")],
     );
-    // Four texts of 4 KiB: the first three whole, the fourth cut.
+    // Four texts of 4 KiB: the cap, all whole.
     let full = |letter: char| letter.to_string().repeat(cineris_agent::EXTENSION_TEXT_CAP);
     let four: Vec<ExtensionPrompt> = ['b', 'c', 'd', 'e']
         .into_iter()
@@ -656,12 +693,8 @@ fn a_text_another_pushes_past_the_cap_is_not_withdrawn() {
     let source = Scripted::new(sections(four.clone()));
     let rig = with_extensions(&world, &source).start(&world);
     turn(&world, &rig, "first", 1);
-    assert!(systems(&world)[0].contains("## From the extension `e`"));
-    assert!(
-        !systems(&world)[0].contains(&full('e')),
-        "the fourth is cut"
-    );
-    // `a` comes first by name: `d` and `e` would be cut or left out now.
+    assert!(systems(&world)[0].contains(&format!("> {}", full('e'))));
+    // `a` comes first by name: `e` would be left out now.
     let mut five = vec![prompt("a", &full('a'))];
     five.extend(four.clone());
     source.set(sections(five));
@@ -742,4 +775,241 @@ fn a_withdrawal_is_of_a_text_the_epoch_in_force_holds() {
     });
     turn(&world, &resumed, "third", 2);
     assert_eq!(told(&resumed), [withdrawn_text("notes")]);
+}
+
+/// What section 7's cap leaves out of a prompt is told to the user, not to
+/// the model, once an epoch, as it begins: not at the turns after, and
+/// again at a compaction's new prompt; not by a resume that goes on in its
+/// epoch, whose prompt was told when it began.
+#[test]
+fn what_the_cap_leaves_out_is_told_to_the_user_once_an_epoch() {
+    let world = World::new(
+        "extensions_cap_told",
+        [
+            says("One."),
+            says("Two."),
+            says("A summary."),
+            says("Three."),
+        ],
+    );
+    let full = |letter: char| letter.to_string().repeat(cineris_agent::EXTENSION_TEXT_CAP);
+    let sections = ExtensionSections {
+        skills: SKILLS.to_owned(),
+        sources: Vec::new(),
+        prompts: ['b', 'c', 'd', 'e', 'f']
+            .into_iter()
+            .map(|letter| prompt(&letter.to_string(), &full(letter)))
+            .collect(),
+    };
+    let source = Scripted::new(sections.clone());
+    let mut setup = with_extensions(&world, &source);
+    setup.context = ContextSettings {
+        keep_recent_tokens: 10_000,
+        ..ContextSettings::default()
+    };
+    let rig = setup.start(&world);
+    turn(&world, &rig, "first", 1);
+    turn(&world, &rig, "second", 2);
+    // Four texts of 4 KiB are the cap: the fifth is left out.
+    let told = [
+        "The text the extension `f` gives the system prompt is left out, to keep the \
+         extensions' part of the system prompt within 16 KiB: the model is not given it."
+            .to_owned(),
+    ];
+    assert_eq!(infos(&rig), told, "once, as it began");
+    let sent: String = world
+        .provider
+        .requests()
+        .iter()
+        .flat_map(|request| request.messages.iter().map(text))
+        .collect();
+    assert!(!sent.contains("is left out"), "the model is not told");
+    rig.handle.compact(None).expect("a compaction");
+    world.run(async {
+        rig.events.turns(3).await;
+    });
+    assert_eq!(rig.store.epochs().len(), 2);
+    assert_eq!(infos(&rig), [told[0].clone(), told[0].clone()]);
+
+    let mut setup = with_extensions(&world, &Scripted::new(sections));
+    setup.memory = rig.store.clone();
+    setup.context = ContextSettings {
+        keep_recent_tokens: 10_000,
+        ..ContextSettings::default()
+    };
+    let resumed = setup.start(&world);
+    turn(&world, &resumed, "third", 1);
+    assert_eq!(resumed.store.epochs().len(), 2, "it goes on");
+    assert!(infos(&resumed).is_empty());
+}
+
+/// Within a turn, a text taken back is withdrawn before the next request
+/// (the early review's M1): a headless run is one turn. The extension is
+/// disabled while a tool of the turn runs, and the request after the round
+/// carries the withdrawal; the index waits for the next turn's start.
+#[test]
+fn a_text_taken_back_during_a_turn_is_withdrawn_before_its_next_request() {
+    let world = World::new(
+        "extensions_mid_turn",
+        [
+            calls(&[("c1", "read", json!({"path": "a", "gate": "tool"}))]),
+            says("Done."),
+        ],
+    );
+    let source = Scripted::new(two());
+    let rig = with_extensions(&world, &source).start(&world);
+    world.run(async {
+        rig.prompt("first");
+        world.log.has("start read a").await;
+        source.set(without_notes());
+        world.gates.open("tool");
+        rig.events.turns(1).await;
+    });
+    assert_eq!(told(&rig), [withdrawn_text("notes")], "no index notice yet");
+    let requests = world.provider.requests();
+    assert_eq!(requests.len(), 2);
+    let notice = format!("{NOTICE_LEAD}{}", withdrawn_text("notes"));
+    assert!(
+        !requests[0]
+            .messages
+            .iter()
+            .any(|message| text(message) == notice)
+    );
+    assert_eq!(
+        requests[1].messages.last().map(text),
+        Some(notice),
+        "the withdrawal is the last word before the request"
+    );
+    assert_eq!(requests[1].system, requests[0].system);
+}
+
+/// A resume that begins an epoch because section 7 changed between two
+/// processes names the extensions whose text went or changed, from what
+/// the epoch before recorded of its texts (the early review's L2), though
+/// its history holds no notice of the source.
+#[test]
+fn a_resume_names_the_texts_that_went_or_changed_since_its_epoch() {
+    let world = World::new(
+        "extensions_resume_named",
+        [says("One."), says("Two."), says("Three.")],
+    );
+    let rig = with_extensions(&world, &Scripted::new(two())).start(&world);
+    turn(&world, &rig, "first", 1);
+    let epochs = rig.store.epochs();
+    assert_eq!(
+        epochs[0]
+            .texts
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["notes", "tracker"]
+    );
+    // `notes` disabled, `tracker` changed.
+    let changed = ExtensionSections {
+        prompts: vec![prompt("tracker", "Use the tracker for every task.")],
+        ..without_notes()
+    };
+    let resumed = again(&world, &rig, changed.clone()).start(&world);
+    turn(&world, &resumed, "second", 1);
+    assert_eq!(resumed.store.epochs().len(), 2);
+    let named = told(&resumed);
+    assert_eq!(named.len(), 1, "{named:#?}");
+    assert!(
+        named[0].starts_with(&format!("{TEXTS_REPLACED} `notes`, `tracker`.")),
+        "{}",
+        named[0]
+    );
+    // Read again, it is no withdrawal: the epoch goes on.
+    let third = again(&world, &resumed, changed).start(&world);
+    turn(&world, &third, "third", 1);
+    assert_eq!(third.store.epochs().len(), 2);
+    assert_eq!(told(&third).len(), 1);
+}
+
+/// A compaction's summary is asked to leave out what a text withdrawn in
+/// the history it covers asked for (the early review's L3): live, and in a
+/// session read again before it compacts, which reads the withdrawals back
+/// from the history since the last summary; and the summary after that,
+/// of a history that withdrew nothing more, is not.
+#[test]
+fn a_summary_is_asked_to_leave_out_a_withdrawn_text() {
+    let world = World::new(
+        "extensions_summary_leaves_out",
+        [
+            says("One."),
+            says("Two."),
+            says("A summary."),
+            says("Three."),
+            says("A second summary."),
+            says("A third summary."),
+        ],
+    );
+    let source = Scripted::new(two());
+    let rig = with_extensions(&world, &source).start(&world);
+    turn(&world, &rig, "first", 1);
+    source.set(without_notes());
+    turn(&world, &rig, "second", 2);
+    assert_eq!(told(&rig)[0], withdrawn_text("notes"));
+    rig.handle.compact(None).expect("a compaction");
+    world.run(async {
+        rig.events.turns(3).await;
+    });
+    // `tracker`'s text taken back in the new epoch.
+    let none = ExtensionSections {
+        prompts: Vec::new(),
+        ..without_notes()
+    };
+    source.set(none.clone());
+    turn(&world, &rig, "third", 4);
+    // Read again by another process, which compacts twice.
+    let resumed = again(&world, &rig, none).start(&world);
+    for turns in [1, 2] {
+        resumed.handle.compact(None).expect("a compaction");
+        world.run(async {
+            resumed.events.turns(turns).await;
+        });
+    }
+    let requests = world.provider.requests();
+    assert_eq!(requests.len(), 6);
+    let asked =
+        |request: &cineris_llm::ModelRequest| request.messages.last().map(text).unwrap_or_default();
+    let live = asked(&requests[2]);
+    assert!(
+        live.contains(
+            "The text of the extensions `notes` was withdrawn from the system prompt in this \
+             conversation: leave out of the summary what that text asked for"
+        ),
+        "{live}"
+    );
+    let read_again = asked(&requests[4]);
+    assert!(
+        read_again.contains("The text of the extensions `tracker` was withdrawn"),
+        "{read_again}"
+    );
+    assert!(
+        !read_again.contains("`notes`"),
+        "summarised already: {read_again}"
+    );
+    assert!(
+        !asked(&requests[5]).contains("was withdrawn"),
+        "{}",
+        asked(&requests[5])
+    );
+}
+
+/// A source that fails while an epoch is in force holds no text (the early
+/// review's L6): what the model has of section 7 is withdrawn, failing
+/// closed, and the index is left as it is.
+#[test]
+fn a_source_that_fails_withdraws_the_texts_the_model_has() {
+    let world = World::new("extensions_failed", [says("One."), says("Two.")]);
+    let source = Scripted::new(two());
+    let rig = with_extensions(&world, &source).start(&world);
+    turn(&world, &rig, "first", 1);
+    source.fail();
+    turn(&world, &rig, "second", 2);
+    assert_eq!(
+        told(&rig),
+        [withdrawn_text("notes"), withdrawn_text("tracker")]
+    );
 }

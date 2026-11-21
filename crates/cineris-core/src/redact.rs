@@ -552,6 +552,7 @@ mod tests {
                     instructions: Vec::new(),
                     profile: None,
                     index: None,
+                    texts: Vec::new(),
                     variants: std::collections::BTreeMap::new(),
                 }),
                 false,

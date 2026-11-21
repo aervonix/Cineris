@@ -509,11 +509,26 @@ pub struct Epoch {
     /// holds no index. Added in step 28.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub index: Option<ContentHash>,
+    /// The extensions whose text the system prompt holds (section 7), each
+    /// with the hash of its part: what a resume whose new prompt does not
+    /// hold one as it was names to the model. Absent when it holds none.
+    /// Added in step 28.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<TextMark>,
     /// The choice at each variant point the epoch's requests are made with
     /// (`edit_format`, `tool_schema`, `prompt_style`), fixed for the epoch.
     /// Added in step 16; absent before.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub variants: std::collections::BTreeMap<String, String>,
+}
+
+/// An extension's text as an epoch's system prompt holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextMark {
+    /// The extension's name.
+    pub name: String,
+    /// The hash of its part of the prompt.
+    pub hash: ContentHash,
 }
 
 /// An instruction file as an epoch's system prompt holds it.
@@ -1278,6 +1293,39 @@ mod tests {
         );
     }
 
+    /// An `epoch` line with no index and no texts in its prompt, as every
+    /// line before step 28 is, has neither key, and is read with none: a
+    /// build that knows neither reads the line as it always did.
+    #[test]
+    fn an_epoch_line_without_the_index_or_the_texts_is_read_with_none() {
+        let epoch = Epoch {
+            provider: "p".into(),
+            protocol: "test".into(),
+            model: "m".into(),
+            effort: None,
+            system: "be brief".into(),
+            tools: Vec::new(),
+            hash: Epoch::hash_of("be brief", &[]),
+            reason: Some("start".into()),
+            base: Some(ContentHash::of(b"base")),
+            instructions: Vec::new(),
+            profile: None,
+            index: None,
+            texts: Vec::new(),
+            variants: std::collections::BTreeMap::new(),
+        };
+        let line = round_trip(Body::Epoch(epoch));
+        let Some(fields) = line.get("epoch").or(Some(&line)).and_then(Value::as_object) else {
+            panic!("{line}");
+        };
+        assert!(
+            !fields.contains_key("index") && !fields.contains_key("texts"),
+            "{line}"
+        );
+        assert!(!line.to_string().contains("\"index\""), "{line}");
+        assert!(!line.to_string().contains("\"texts\""), "{line}");
+    }
+
     #[test]
     fn every_known_kind_round_trips() {
         let hash = ContentHash::of(b"x");
@@ -1352,6 +1400,10 @@ mod tests {
             }],
             profile: Some(ContentHash::of(b"Project profile")),
             index: Some(ContentHash::of(b"Skills")),
+            texts: vec![TextMark {
+                name: "tracker".into(),
+                hash: ContentHash::of(b"## From the extension"),
+            }],
             variants: [("tool_schema".to_owned(), "loose".to_owned())]
                 .into_iter()
                 .collect(),
