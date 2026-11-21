@@ -81,6 +81,10 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
 
+### cineris-ext
+
+- [an-engine-test-that-advances-its-clock-before-the-script-spins](an-engine-test-that-advances-its-clock-before-the-script-spins.md): A test of the cap on extensions' threads left running can see its script interrupted where it should be left running, when a slow runner has not yet brought the script to the loop that never looks at the interrupt; one CI flake. Owner: step 28's script hooks (its fifth part).
+
 ### cineris-index
 
 - [a-memory-peak-test-near-its-limit](a-memory-peak-test-near-its-limit.md): `outlines::outlining_a_name_of_a_megabyte_takes_little_memory` went 84 KiB over its 4 MiB peak once on a hosted Linux runner, in a pull request that did not touch `cineris-index`. Owner: `cineris-index`'s next change, or a tooling step.
