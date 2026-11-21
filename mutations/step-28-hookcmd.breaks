@@ -30,7 +30,7 @@ in: Merger::set
 find: if trust == Trust::KeptApart && source.authority.is_project() {
 replace: if trust == Trust::KeptApart && source.authority.is_project() && false {
 caught-by:
-    cineris-config::it hooks::a_lock_keeps_a_projects_hook_of_its_name_out
+    cineris-config::it layers::a_value_cannot_replace_a_table_that_holds_a_locked_key
 
 [break] the-merge-admits-a-projects-hook
 rule: A project's value kept apart is never merged. Survives: `Merger::set` returns before the trust rules for such a value, so this arm is a second guard.
@@ -263,13 +263,12 @@ caught-by:
     cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
 
 [break] a-session-runs-an-untrusted-projects-hooks
-rule: A session runs a project's hooks only while the project is trusted.
+rule: A session runs a project's hooks only while the project is trusted. Survives: the trust store gives every definition of a project not trusted the standing `Untrusted`, so `in_session` approves none of its hooks without this check either.
 file: crates/cineris-core/src/assemble.rs
 in: assemble
 find: let trusted = matches!(
 replace: let trusted = true || matches!(
-caught-by:
-    cineris-core::it hook_commands::a_projects_hook_is_listed_pinned_and_never_passes_a_question
+expect: survives
 
 # ------------------------------------------------ the core: the start
 
@@ -384,11 +383,12 @@ replace: if false {
 caught-by:
     ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
 
-[break] a-hook-is-given-ten-times-its-time
-rule: A hook is stopped, its process tree with it, when its time is up on the session's clock.
+[break] a-hook-past-its-time-is-not-said-to-be
+rule: A hook stopped at its time, on the session's clock, has failed, saying it ran past its time.
 file: crates/cineris-core/src/ext/hook_command.rs
-in: HookCommands::run
-find: timeout: hook.timeout
-replace: timeout: hook.timeout * 10
+in: outcome
+find: if output.timed_out {
+replace: if false {
 caught-by:
+    ext::hook_command::tests::a_runs_end_and_output_decide_its_outcome
     cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
