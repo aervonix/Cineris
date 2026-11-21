@@ -282,16 +282,22 @@ impl Manifest {
     }
 }
 
-/// The registry's rules for a name, which is also a source of tools:
-/// ASCII letters, digits, `_`, `-` and `.`, not starting with `.`.
-fn check_name(name: &str) -> Result<(), ManifestError> {
-    let fine = !name.is_empty()
+/// Whether `name` follows the registry's rules for an extension's name,
+/// which is also a source of tools: 1 to 64 of ASCII letters, digits, `_`,
+/// `-` and `.`, not starting with `.`. The registration cache asks it of
+/// each entry's name.
+pub(crate) fn is_name(name: &str) -> bool {
+    !name.is_empty()
         && name.len() <= MAX_NAME
         && !name.starts_with('.')
         && name.chars().all(|character| {
             character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
-        });
-    if fine {
+        })
+}
+
+/// The registry's rules for a name ([`is_name`]).
+fn check_name(name: &str) -> Result<(), ManifestError> {
+    if is_name(name) {
         Ok(())
     } else {
         Err(refused(format!(
