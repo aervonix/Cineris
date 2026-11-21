@@ -25,3 +25,4 @@ pub mod folder;
 pub mod host;
 pub mod manifest;
 pub mod registration;
+pub mod source;
