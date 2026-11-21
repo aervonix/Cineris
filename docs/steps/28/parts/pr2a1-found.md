@@ -21,7 +21,7 @@ The first part of step 28's second pull request ([answered.md](../answered.md), 
   The interactive application's dialog names a changed extension apart from changed rules, and says what a keep of one does; the protocol's doc comments say the same.
 - **Hot-reload** (`ext::watched`).
   What the extensions were found in, stamped without following a link and looked at in order at each turn's start; a change has every folder found and judged again, an extension that no longer stands approved withdrawn and one that now does loaded before the turn ([12-extensions.md](../../../architecture/12-extensions.md), "Hot-reload").
-- **The break lists:** [mutations/step-28-pins.breaks](../../../../mutations/step-28-pins.breaks), [step-28-found.breaks](../../../../mutations/step-28-found.breaks), [step-28-state.breaks](../../../../mutations/step-28-state.breaks) and [step-28-pinned.breaks](../../../../mutations/step-28-pinned.breaks).
+- **The breaks:** the parts' lists (`step-28-pins`, `step-28-found`, `step-28-state`, `step-28-pinned`) are put together in the step's, [mutations/step-28.breaks](../../../../mutations/step-28.breaks).
 
 **Settled by the maintainers during the build:**
 
