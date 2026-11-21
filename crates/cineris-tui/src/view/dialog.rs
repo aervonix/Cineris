@@ -134,7 +134,10 @@ pub fn approval(
     let question_rows = lines.len();
     // The line that says a hook changed the call, which `reasons` holds for
     // a client that does not read `replaced`, is drawn once, below.
-    let replaced_line = request.replaced.as_ref().map(|replaced| replaced.reason_line());
+    let replaced_line = request
+        .replaced
+        .as_ref()
+        .map(|replaced| replaced.reason_line());
     if !view.leaving {
         for reason in &request.reasons {
             if replaced_line.as_ref() == Some(reason) {
@@ -180,9 +183,19 @@ pub fn approval(
             )
         };
         detail.extend(indented("The model wrote:", muted, 4, prose));
-        detail.extend(indented(&arguments(replaced.original.as_ref()), code, 6, width));
+        detail.extend(indented(
+            &arguments(replaced.original.as_ref()),
+            code,
+            6,
+            width,
+        ));
         detail.extend(indented("The hook's, which would run:", muted, 4, prose));
-        detail.extend(indented(&arguments(Some(&replaced.arguments)), code, 6, width));
+        detail.extend(indented(
+            &arguments(Some(&replaced.arguments)),
+            code,
+            6,
+            width,
+        ));
         detail.push(Line::new());
     }
     match &request.detail {

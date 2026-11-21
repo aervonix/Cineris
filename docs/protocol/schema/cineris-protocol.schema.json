@@ -5065,7 +5065,7 @@
               "type": "null"
             }
           ],
-          "description": "How it was sent: `steer` for a steering message. Absent for a prompt\nthat started a turn."
+          "description": "How it was sent while a turn ran, as its user message would have\nsaid: `steer` for a steering message, whether it was refused at a\nboundary of the running turn or as the prompt of a turn of its own\n(one that found no boundary); `queue` for a queued prompt. Absent\nfor a prompt sent to an idle session."
         },
         "hooks": {
           "description": "The hooks that refused it, each with its reason or its failure.",

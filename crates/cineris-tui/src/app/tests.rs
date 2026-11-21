@@ -691,9 +691,16 @@ fn an_approval_a_hook_changed_shows_both_sets_of_arguments() {
     });
     let rows = text(&app.frame(at).1);
     let all = rows.join("\n");
-    assert_eq!(all.matches("The hook `offline` changed").count(), 1, "{all}");
+    assert_eq!(
+        all.matches("The hook `offline` changed").count(),
+        1,
+        "{all}"
+    );
     assert!(all.contains(r#"{"command":"cargo test"}"#), "{all}");
-    assert!(all.contains(r#"{"command":"cargo test --offline"}"#), "{all}");
+    assert!(
+        all.contains(r#"{"command":"cargo test --offline"}"#),
+        "{all}"
+    );
     assert!(!all.contains("Allow this session"), "{all}");
     key(&mut app, "y", at);
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);

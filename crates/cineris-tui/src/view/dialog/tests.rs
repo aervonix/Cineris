@@ -408,7 +408,10 @@ fn every_field_of_an_approval_escapes_what_acts_unseen() {
 #[test]
 fn a_replacement_shows_the_hook_and_both_sets_of_arguments() {
     use cineris_protocol::item::{HookReason, ReplacedArguments};
-    let mut asked = request(command("cargo test --offline", false), "Run cargo test --offline");
+    let mut asked = request(
+        command("cargo test --offline", false),
+        "Run cargo test --offline",
+    );
     let replaced = ReplacedArguments {
         hook: "offline".to_owned(),
         arguments: serde_json::json!({"command": "cargo test --offline"}),
@@ -457,7 +460,11 @@ fn a_replacement_shows_the_hook_and_both_sets_of_arguments() {
         .map(str::to_owned),
         "{rows:#?}"
     );
-    assert_eq!(rows[from + 5], "    cargo test --offline", "then what would run");
+    assert_eq!(
+        rows[from + 5],
+        "    cargo test --offline",
+        "then what would run"
+    );
     let all = rows.join("\n");
     assert_eq!(all.matches("The hook `slow`").count(), 1, "{all}");
     assert_eq!(all.matches("The hook `offline`").count(), 1, "{all}");
@@ -472,7 +479,10 @@ fn a_hook_that_asked_is_named_when_the_reasons_do_not_say_it() {
         reason: None,
     }];
     let rows = text(&approval(&asked, &view(10), 99, &look()));
-    assert_eq!(rows[2], "  The hook `look` asks about this call.", "{rows:#?}");
+    assert_eq!(
+        rows[2], "  The hook `look` asks about this call.",
+        "{rows:#?}"
+    );
 }
 
 /// What a hook gave (its name, its reason, both sets of arguments) is

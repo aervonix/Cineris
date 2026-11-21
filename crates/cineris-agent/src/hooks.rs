@@ -39,11 +39,13 @@
 //!   runs beside the loop, to its own time; a failure is logged.
 //! - **Every wait is on the session's timer,** so tests use the fake one.
 
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::task::Poll;
 use std::time::Duration;
 
-use cineris_base::{AbsPath, SharedTimer};
+use cineris_base::{AbsPath, CancelToken, SharedTimer};
 use cineris_protocol::event::TurnOutcome;
 use cineris_protocol::item::{Delivery, HookReason, ReplacedArguments, ToolOutcome};
 use cineris_protocol::{CallId, Part, SessionId, TurnId};
@@ -72,6 +74,15 @@ pub const TEXT_CAP: usize = 8 * 1024;
 /// The most of a replacement's arguments that its call's result shows the
 /// model, in bytes of JSON.
 const SHOWN_ARGUMENTS: usize = 4 * 1024;
+
+/// The largest replacement of a call's arguments, in bytes of JSON: one
+/// larger is refused before it is put in a question or an item. (A hook's
+/// whole answer is smaller than this, as the core reads it.)
+pub const ARGUMENTS_CAP: usize = 256 * 1024;
+
+/// The most runs of one observer that go on at once, by its name: a run
+/// beyond them is skipped, and the skip logged.
+pub const OBSERVE_CONCURRENT: usize = 4;
 
 /// The tool that calls a dynamic tool by name: a replacement of its
 /// arguments may not name another tool, and a hook's filter matches the
@@ -378,6 +389,14 @@ fn text_of(parts: &[Part]) -> String {
 }
 
 /// What one run of a hook came to.
+///
+/// - A command that writes nothing is `Nothing`; one that writes one JSON
+///   value is `Answer`.
+/// - A script's function that returns `undefined` is `Nothing`; any other
+///   value is `Answer`, `null` included.
+/// - The loop reads `Answer(null)` as it reads `Nothing`: no opinion, the
+///   one JSON value that says nothing. Any other value that is not an
+///   object is outside the contract, and a failure.
 #[derive(Debug, Clone, PartialEq)]
 pub enum HookOutcome {
     /// It answered nothing: no opinion.
@@ -386,7 +405,9 @@ pub enum HookOutcome {
     /// contract.
     Answer(Json),
     /// It failed: it could not start or was refused, exited with a failure,
-    /// wrote what is not one JSON value, or was stopped. Why, in words.
+    /// wrote what is not one JSON value, or was stopped. Why, in words: the
+    /// loop cuts it at [`TEXT_CAP`] and writes what acts unseen in it as
+    /// escapes before anyone is shown it.
     Failed(String),
 }
 
@@ -394,7 +415,8 @@ pub enum HookOutcome {
 ///
 /// **No method has a default body**, as for [`Policy`](crate::Policy).
 pub trait Hook: Send + Sync {
-    /// Its name, as the user and the model are shown it.
+    /// Its name, as the user and the model are shown it. The loop writes it
+    /// in its own text inside backticks, escaped (`cineris_base::in_code`).
     fn name(&self) -> &str;
 
     /// Whether it only observes (`observe = true`): the loop runs it and
@@ -407,9 +429,17 @@ pub trait Hook: Send + Sync {
     fn timeout(&self) -> Option<Duration>;
 
     /// Runs the hook once with `input`, to its end. The loop drops the
-    /// future when the hook's time is up, the turn is interrupted, or the
-    /// response its call came from is thrown away: **dropped, it stops the
-    /// hook**, a program it started included. It never puts a question.
+    /// future when the hook's time is up, the turn is interrupted, the
+    /// response its call came from is thrown away, or the session closes:
+    /// **dropped, it stops the hook**, a program it started included. It
+    /// never puts a question.
+    ///
+    /// **The hook's time starts when it is asked,** when this is called:
+    /// time it spends waiting for its turn counts. A script's hook that
+    /// queues behind a busy runtime (the extension's tool, or another
+    /// hook's call, running) is using its own time, and fails when it is up
+    /// as any hook does. The implementation keeps no queue of its own that
+    /// the loop does not see.
     fn run<'a>(&'a self, input: &'a HookInput) -> BoxFuture<'a, HookOutcome>;
 }
 
@@ -421,12 +451,24 @@ pub trait Hooks: Send + Sync {
     /// for an event about no tool). Asked first at every point, on the
     /// loop's own path, so it must be cheap: no allocation, no I/O. `false`
     /// passes the point at once.
+    ///
+    /// **It is `false` only when no hook, in any state, would match:** a
+    /// hook that cannot run now (an extension that changed, is unreadable,
+    /// failed to register, or is not approved again) is still on its event,
+    /// so that a gate it holds does not lapse. It and
+    /// [`matching`](Self::matching) read one snapshot of the hooks, so that
+    /// a `true` is followed by the hooks it saw.
     fn wants(&self, event: HookEvent, target: Option<ToolTarget<'_>>) -> bool;
 
     /// The hooks on `event` whose filter matches `target`, in any order:
-    /// asked only after [`wants`](Self::wants) said yes. Each is the hook as
-    /// it is now; a change of the configuration after this does not reach
-    /// a run begun from it.
+    /// asked only after [`wants`](Self::wants) said yes, from the same
+    /// snapshot. Each is the hook as it is now; a change of the
+    /// configuration after this does not reach a run begun from it.
+    ///
+    /// **A hook that cannot run is returned all the same,** as one whose
+    /// [`Hook::run`] gives [`HookOutcome::Failed`] with why and the command
+    /// that approves or disables it: where hooks gate, that refuses, and
+    /// elsewhere the user is told. It is never left out.
     fn matching(&self, event: HookEvent, target: Option<ToolTarget<'_>>) -> Vec<Arc<dyn Hook>>;
 
     /// Whether a call whose arguments a hook replaced may be put to the
@@ -450,6 +492,31 @@ pub struct LoopHooks {
     /// What the loop waits on for each hook's time: the session's timer, so
     /// that a test's fake timer keeps it.
     pub timer: SharedTimer,
+    /// What every observer runs under: the session's, once the session is
+    /// opened with them, so that none outlives it.
+    cancel: CancelToken,
+    /// How many runs of each observer, by its name, are going on.
+    observing: Arc<Mutex<HashMap<String, usize>>>,
+}
+
+impl LoopHooks {
+    /// A session's hooks, kept on `timer`.
+    #[must_use]
+    pub fn new(hooks: Arc<dyn Hooks>, timer: SharedTimer) -> Self {
+        Self {
+            hooks,
+            timer,
+            cancel: CancelToken::new(),
+            observing: Arc::default(),
+        }
+    }
+
+    /// The hooks of the session whose token is `cancel`: their observers
+    /// run under a child of it.
+    pub(crate) fn for_session(mut self, cancel: &CancelToken) -> Self {
+        self.cancel = cancel.child();
+        self
+    }
 }
 
 impl std::fmt::Debug for LoopHooks {
@@ -506,8 +573,9 @@ struct Answer {
     context: Option<String>,
 }
 
-/// Cuts `text` to [`TEXT_CAP`] bytes at a character's edge, and marks the
-/// cut.
+/// What a hook wrote, as the harness passes it on: cut to [`TEXT_CAP`]
+/// bytes at a character's edge, the cut marked, and every character that
+/// acts unseen written as an escape, but for its line breaks.
 fn capped(mut text: String) -> String {
     if text.len() > TEXT_CAP {
         let mut end = TEXT_CAP;
@@ -517,7 +585,31 @@ fn capped(mut text: String) -> String {
         text.truncate(end);
         text.push_str(" […]");
     }
-    text
+    match cineris_base::visible_keeping(&text, &['\n']) {
+        Cow::Borrowed(_) => text,
+        Cow::Owned(escaped) => escaped,
+    }
+}
+
+/// A hook's name as the harness writes it inside backticks.
+fn named(hook: &str) -> Cow<'_, str> {
+    cineris_base::in_code(hook)
+}
+
+/// A hook's text under the harness's line that names it: every line after
+/// `> `, and an empty line as `>`, as section 7 quotes an extension's text,
+/// so that no line of it reads as the harness's own.
+fn quoted(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            if line.is_empty() {
+                ">".to_owned()
+            } else {
+                format!("> {line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A field's name as a failure shows it: at most 64 bytes of it.
@@ -538,9 +630,14 @@ fn shown_key(key: &str) -> String {
 ///   and `arguments` (any JSON).
 /// - `tool.after`, `turn.end` and `compaction.before`: `context` (text)
 ///   alone: what the hook adds.
+///
+/// `null` says nothing, as an empty answer does. Text is passed on as
+/// [`capped`] makes it.
 fn read(event: HookEvent, value: Json) -> Result<Answer, String> {
-    let Json::Object(fields) = value else {
-        return Err("its answer is not a JSON object".to_owned());
+    let fields = match value {
+        Json::Object(fields) => fields,
+        Json::Null => return Ok(Answer::default()),
+        _ => return Err("its answer is not a JSON object".to_owned()),
     };
     let mut answer = Answer::default();
     for (key, value) in fields {
@@ -677,17 +774,30 @@ fn time_of(hook: &dyn Hook) -> Duration {
     }
 }
 
-/// Runs `hooks` with `input`: each observer on a task of its own, not
-/// waited for; the rest together, each within its time, and what each said.
+/// Whether a point runs its observers: at the first time it is reached,
+/// and not when a call is decided again, since an observer decides
+/// nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Observers {
+    Run,
+    Skip,
+}
+
+/// Runs `hooks` with `input`: each observer, unless `observers` says to
+/// skip them, on a task of its own and not waited for; the rest together,
+/// each within its time, and what each said.
 pub(crate) async fn ask_all(
     set: &LoopHooks,
     hooks: Vec<Arc<dyn Hook>>,
     input: HookInput,
+    observers: Observers,
 ) -> Vec<Heard> {
-    let (observers, waited): (Vec<_>, Vec<_>) = hooks.into_iter().partition(|hook| hook.observes());
+    let (observing, waited): (Vec<_>, Vec<_>) = hooks.into_iter().partition(|hook| hook.observes());
     let input = Arc::new(input);
-    for hook in observers {
-        observe(set.timer.clone(), hook, Arc::clone(&input));
+    if observers == Observers::Run {
+        for hook in observing {
+            observe(set, hook, Arc::clone(&input));
+        }
     }
     let event = input.event;
     let runs: Vec<BoxFuture<'_, Heard>> = waited
@@ -702,7 +812,7 @@ pub(crate) async fn ask_all(
                         "it did not answer within {} s",
                         limit.as_secs_f64()
                     )),
-                    Some(HookOutcome::Failed(why)) => Err(why),
+                    Some(HookOutcome::Failed(why)) => Err(capped(why)),
                     Some(HookOutcome::Nothing) => Ok(Answer::default()),
                     Some(HookOutcome::Answer(value)) => read(event, value),
                 };
@@ -720,17 +830,59 @@ pub(crate) async fn ask_all(
     heard
 }
 
-/// Runs an observer on a task of its own, to its time, and logs a failure.
-fn observe(timer: SharedTimer, hook: Arc<dyn Hook>, input: Arc<HookInput>) {
+/// One run of an observer counted while it goes on.
+struct Observing {
+    runs: Arc<Mutex<HashMap<String, usize>>>,
+    name: String,
+}
+
+impl Drop for Observing {
+    fn drop(&mut self) {
+        let mut runs = self.runs.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(count) = runs.get_mut(&self.name) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                runs.remove(&self.name);
+            }
+        }
+    }
+}
+
+/// Runs an observer on a task of its own, to its time, under the session's
+/// token, and logs a failure. A run beyond [`OBSERVE_CONCURRENT`] of the
+/// same observer is skipped, and the skip logged.
+fn observe(set: &LoopHooks, hook: Arc<dyn Hook>, input: Arc<HookInput>) {
+    let name = hook.name().to_owned();
+    {
+        let mut runs = set.observing.lock().unwrap_or_else(PoisonError::into_inner);
+        let count = runs.entry(name.clone()).or_insert(0);
+        if *count >= OBSERVE_CONCURRENT {
+            tracing::warn!(
+                hook = name,
+                event = input.event.as_str(),
+                "an observing hook was not run: {OBSERVE_CONCURRENT} runs of it are going on"
+            );
+            return;
+        }
+        *count += 1;
+    }
+    let counted = Observing {
+        runs: Arc::clone(&set.observing),
+        name,
+    };
+    let (timer, cancel) = (set.timer.clone(), set.cancel.clone());
     tokio::spawn(async move {
+        let _counted = counted;
         let limit = time_of(hook.as_ref());
-        let failure = match within(&timer, limit, hook.run(&input)).await {
-            None => Some(format!(
+        let failure = match cancel.race(within(&timer, limit, hook.run(&input))).await {
+            // The session closed: stopped with it.
+            None => None,
+            Some(None) => Some(format!(
                 "it did not end within {} s, and was stopped",
                 limit.as_secs_f64()
             )),
-            Some(HookOutcome::Failed(why)) => Some(why),
-            Some(_) => None,
+            Some(Some(HookOutcome::Failed(why))) => Some(capped(why)),
+            Some(Some(_)) => None,
         };
         if let Some(failure) = failure {
             tracing::warn!(
@@ -769,11 +921,11 @@ fn refusal(heard: &Heard) -> String {
         Ok(Answer {
             reason: Some(reason),
             ..
-        }) => format!("the hook `{}` refused it: {reason}", heard.hook),
-        Ok(_) => format!("the hook `{}` refused it", heard.hook),
+        }) => format!("the hook `{}` refused it: {reason}", named(&heard.hook)),
+        Ok(_) => format!("the hook `{}` refused it", named(&heard.hook)),
         Err(failure) => format!(
             "the hook `{}` failed, and a hook that fails refuses: {failure}",
-            heard.hook
+            named(&heard.hook)
         ),
     }
 }
@@ -796,7 +948,7 @@ pub(crate) fn before(heard: Vec<Heard>) -> Before {
     if replacing.len() > 1 {
         let names: Vec<String> = replacing
             .iter()
-            .map(|one| format!("`{}`", one.hook))
+            .map(|one| format!("`{}`", named(&one.hook)))
             .collect();
         return Before::Deny(format!(
             "the hooks {} each replaced its arguments, and a call runs with one hook's \
@@ -879,8 +1031,8 @@ pub(crate) fn refused_prompt(hooks: &[HookReason], steering: bool) -> String {
     let each: Vec<String> = hooks
         .iter()
         .map(|hook| match &hook.reason {
-            Some(reason) => format!("`{}`: {reason}", hook.hook),
-            None => format!("`{}`", hook.hook),
+            Some(reason) => format!("`{}`: {reason}", named(&hook.hook)),
+            None => format!("`{}`", named(&hook.hook)),
         })
         .collect();
     format!(
@@ -889,19 +1041,22 @@ pub(crate) fn refused_prompt(hooks: &[HookReason], steering: bool) -> String {
     )
 }
 
-/// The notice a hook's context is added to the conversation as, under a
-/// line that names the hook.
+/// The notice a hook's context is added to the conversation as: quoted,
+/// under a line that names the hook.
 pub(crate) fn context_notice(hook: &str, context: &str) -> String {
     format!(
-        "The hook `{hook}` adds this to the prompt before it. It is the hook's text, not the \
-         user's.\n\n{context}"
+        "The hook `{}` adds this to the prompt before it. It is the hook's text, not the \
+         user's:\n\n{}",
+        named(hook),
+        quoted(context)
     )
 }
 
 /// The line a call's result begins with when a hook replaced its
-/// arguments: which hook, and what it put in their place.
+/// arguments and the user was asked about them: which hook, and what it
+/// put in their place.
 pub(crate) fn replaced_note(replaced: &ReplacedArguments) -> String {
-    let mut shown = replaced.arguments.to_string();
+    let mut shown = cineris_base::visible(&replaced.arguments.to_string()).into_owned();
     if shown.len() > SHOWN_ARGUMENTS {
         let all = shown.len();
         let mut end = SHOWN_ARGUMENTS;
@@ -912,15 +1067,22 @@ pub(crate) fn replaced_note(replaced: &ReplacedArguments) -> String {
         shown.push_str(&format!(" […] ({all} bytes in all)"));
     }
     let mut note = format!(
-        "The hook `{}` put these arguments in place of the ones you wrote, and the user was \
-         asked about the call with them: {shown}.",
-        replaced.hook
+        "The hook `{}` put these arguments in place of the ones you wrote, and the call was \
+         asked about with them: {shown}.",
+        named(&replaced.hook)
     );
     if let Some(reason) = &replaced.reason {
         note.push_str(" Its reason: ");
         note.push_str(reason);
     }
     note
+}
+
+/// Whether a replacement is too large to be put in a question and an item:
+/// `Some` with its size.
+pub(crate) fn too_large(replacement: &Json) -> Option<usize> {
+    let size = replacement.to_string().len();
+    (size > ARGUMENTS_CAP).then_some(size)
 }
 
 /// What the hooks of an event that only adds (`tool.after`, `turn.end`,
@@ -948,37 +1110,44 @@ pub(crate) fn added(event: HookEvent, heard: Vec<Heard>) -> Added {
             Ok(_) => {}
             Err(failure) => added.failed.push(format!(
                 "The hook `{}` failed on `{event}`, so it added nothing: {failure}.",
-                one.hook
+                named(&one.hook)
             )),
         }
     }
     added
 }
 
-/// The note a `tool.after` hook's text is added to a call's result as.
+/// The note a `tool.after` hook's text is added to a call's result as:
+/// quoted, under a line that names the hook.
 pub(crate) fn result_note(hook: &str, text: &str) -> String {
     format!(
-        "The hook `{hook}` adds this note to the result above. It is the hook's text, not the \
-         tool's.\n\n{text}"
+        "The hook `{}` adds this note to the result above. It is the hook's text, not the \
+         tool's:\n\n{}",
+        named(hook),
+        quoted(text)
     )
 }
 
-/// The notice a `turn.end` hook's text is given to the next turn as.
+/// The notice a `turn.end` hook's text is given to the next turn as:
+/// quoted, under a line that names the hook.
 pub(crate) fn turn_end_notice(hook: &str, text: &str) -> String {
     format!(
-        "The hook `{hook}` adds this after the turn before ended. It is the hook's text, not the \
-         user's.\n\n{text}"
+        "The hook `{}` adds this after the turn before ended. It is the hook's text, not the \
+         user's:\n\n{}",
+        named(hook),
+        quoted(text)
     )
 }
 
-/// What a `compaction.before` hook's text is added to a summary's
-/// instructions as: under a line that names the hook.
+/// What `compaction.before` hooks' texts are added to a summary's
+/// instructions as: each quoted, under a line that names its hook.
 pub(crate) fn summary_instructions(added: &[(String, String)]) -> String {
     let mut text = String::new();
     for (hook, instructions) in added {
         text.push_str(&format!(
-            "\n\nInstructions for the summary from the hook `{hook}`, not from the user:\n\
-             {instructions}"
+            "\n\nInstructions for the summary from the hook `{}`, not from the user:\n{}",
+            named(hook),
+            quoted(instructions)
         ));
     }
     text
@@ -1018,6 +1187,9 @@ mod tests {
         let before = HookEvent::ToolBefore;
         let submit = HookEvent::PromptSubmit;
         assert_eq!(read(before, json!({})), Ok(Answer::default()));
+        // `null` says nothing, as a script's `null` or an empty answer does.
+        assert_eq!(read(before, Json::Null), Ok(Answer::default()));
+        assert_eq!(read(submit, Json::Null), Ok(Answer::default()));
         assert!(read(before, json!({"decision": "ask", "reason": "why"})).is_ok());
         assert!(read(before, json!({"arguments": {"path": "b"}})).is_ok());
         assert!(read(submit, json!({"decision": "deny", "context": "x"})).is_ok());

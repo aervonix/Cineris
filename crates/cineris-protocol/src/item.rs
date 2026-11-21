@@ -112,6 +112,20 @@ pub struct HookReason {
     pub reason: Option<String>,
 }
 
+/// A hook's name as a line of `reasons` writes it inside backticks: a
+/// backtick or a backslash in it after a backslash, so that the name cannot
+/// end the quoting. A client escapes what acts unseen as it draws the line.
+fn in_backticks(name: &str) -> String {
+    let mut quoted = String::with_capacity(name.len());
+    for character in name.chars() {
+        if matches!(character, '`' | '\\') {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    quoted
+}
+
 impl HookReason {
     /// The line of an approval's `reasons` that says this hook asked
     /// (since step 28): what a client that does not read `hooks` shows,
@@ -119,8 +133,11 @@ impl HookReason {
     #[must_use]
     pub fn asking_line(&self) -> String {
         match &self.reason {
-            Some(reason) => format!("The hook `{}` asks: {reason}", self.hook),
-            None => format!("The hook `{}` asks about this call.", self.hook),
+            Some(reason) => format!("The hook `{}` asks: {reason}", in_backticks(&self.hook)),
+            None => format!(
+                "The hook `{}` asks about this call.",
+                in_backticks(&self.hook)
+            ),
         }
     }
 }
@@ -134,7 +151,7 @@ impl ReplacedArguments {
         format!(
             "The hook `{}` changed the arguments the model wrote: the call would run with the \
              hook's.",
-            self.hook
+            in_backticks(&self.hook)
         )
     }
 }

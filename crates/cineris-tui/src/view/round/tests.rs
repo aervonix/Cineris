@@ -352,7 +352,8 @@ fn a_call_a_hook_changed_names_the_hook_on_its_line() {
         .find(|line| line.contains("Run cargo test -p parser"))
         .expect("the command's line");
     assert!(
-        run.contains("exit 101") && run.contains("  arguments from the hook offline\\u{202e}\u{241b}"),
+        run.contains("exit 101")
+            && run.contains("  arguments from the hook offline\\u{202e}\u{241b}"),
         "{run}"
     );
     assert_eq!(text.matches("arguments from the hook").count(), 1, "{text}");

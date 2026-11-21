@@ -155,11 +155,11 @@ caught-by:
     cineris-agent::it hooks::a_replacement_the_user_refuses_does_not_run
 
 [break] nobody-to-ask-allows-a-replacement
-rule: Where nobody can be asked, a call whose arguments a hook replaced is refused.
+rule: Where nobody can be asked, a question a hook put (a replacement, or a hook's ask) is refused.
 file: crates/cineris-agent/src/policy.rs
 in: AllowAll::ask
-find: let replaced = call.hooks.is_some_and(|hooks| hooks.replaced.is_some());
-replace: let replaced = call.hooks.is_some_and(|hooks| hooks.replaced.is_some()) && false;
+find: let verdict = match call.hooks {
+replace: let verdict = match None::<&HookQuestion> {
 caught-by:
     cineris-agent policy::tests::nobody_to_ask_refuses_a_replacement_and_allows_the_rest
 
@@ -350,8 +350,8 @@ caught-by:
 rule: An interrupt ends the turn while a prompt's hooks are asked, and the prompt is given back.
 file: crates/cineris-agent/src/turn.rs
 in: Session::submit
-find: turn.cancel.race(hooks::ask_all(set, matched, input)).await?
-replace: Some(hooks::ask_all(set, matched, input).await)?
+find: turn.cancel.race(hooks::ask_all(set, matched, input, Observers::Run)).await?
+replace: Some(hooks::ask_all(set, matched, input, Observers::Run).await)?
 caught-by:
     cineris-agent::it hooks::an_interrupt_while_the_prompts_hooks_are_asked_gives_the_prompt_back
 
@@ -586,3 +586,180 @@ find: self.give_back(&text.join("\n"));
 replace: let _ = &text;
 caught-by:
     cineris-tui app::tests::a_prompt_a_hook_refused_comes_back_into_the_editor_with_why
+
+# What the early review of round 1 found, each held by a test.
+
+[break] a-calls-hooks-ignore-an-interrupt
+rule: An interrupt, or a response thrown away, while a call's `tool.before` hooks are asked stops them at once.
+file: crates/cineris-agent/src/round.rs
+in: Planning::hooked
+find: self.cx.cancel.race(hooks::ask_all(set, matched, input, self.observers)).await
+replace: Some(hooks::ask_all(set, matched, input, self.observers).await)
+caught-by:
+    cineris-agent::it hooks::an_interrupt_while_a_calls_hooks_are_asked_stops_them
+    cineris-agent::it hooks::a_response_thrown_away_while_a_calls_hooks_are_asked_stops_them
+
+[break] the-kept-runs-key-ignores-a-replacement
+rule: A run kept from a response thrown away is not used for the same call when a hook replaced its arguments.
+file: crates/cineris-agent/src/round.rs
+in: Round::planned
+find: call.key = format!("{}\u{0}{}\u{0}{}", call.name, call.arguments, replaced.arguments);
+replace: let _ = &replaced.arguments;
+caught-by:
+    cineris-agent::it hooks::a_kept_run_is_not_used_for_a_call_a_hook_replaced
+
+[break] a-replacements-deny-becomes-a-question
+rule: A replacement the policy denies stands: it is not put to the user.
+file: crates/cineris-agent/src/round.rs
+in: Planning::replace
+find: self.refused(replanned, why)
+replace: self.planned(replanned, Decision::Ask)
+caught-by:
+    cineris-agent::it hooks::a_replacement_the_policy_denies_or_stops_stands
+
+[break] an-observer-is-not-held-to-its-time
+rule: An observer runs to its own time on the session's timer.
+file: crates/cineris-agent/src/hooks.rs
+in: observe
+find: within(&timer, limit, hook.run(&input))
+replace: async { Some(hook.run(&input).await) }
+caught-by:
+    cineris-agent::it hooks::an_observer_is_never_waited_for_and_its_answer_is_not_read
+    cineris-agent::it hooks::an_observer_is_stopped_when_its_session_closes
+
+[break] a-hooks-text-is-not-cut
+rule: What a hook writes is cut at the cap.
+file: crates/cineris-agent/src/hooks.rs
+in: capped
+find: if text.len() > TEXT_CAP {
+replace: if false {
+caught-by:
+    cineris-agent hooks::tests::a_long_reason_is_cut_at_a_character
+    cineris-agent::it hooks::a_hooks_failure_is_cut_before_it_is_shown
+
+[break] a-hooks-failure-is-not-cut
+rule: A hook's failure is cut at the cap, and what acts unseen in it escaped, before anyone is shown it.
+file: crates/cineris-agent/src/hooks.rs
+in: ask_all
+find: Some(HookOutcome::Failed(why)) => Err(capped(why))
+replace: Some(HookOutcome::Failed(why)) => Err(why)
+caught-by:
+    cineris-agent::it hooks::a_hooks_failure_is_cut_before_it_is_shown
+
+[break] the-question-shows-no-hooks
+rule: The question about a call shows what its hooks said.
+file: crates/cineris-agent/src/round.rs
+in: Round::ask
+find: hooks: hooked.as_deref()
+replace: hooks: None
+caught-by:
+    cineris-agent::it hooks::a_hook_that_asks_turns_an_allowed_call_into_a_question_with_its_reason
+    cineris-agent::it hooks::a_replacement_is_planned_decided_checked_and_always_put_to_the_user
+
+[break] a-hooks-context-is-not-quoted
+rule: A hook's context is quoted under the line that names the hook, so that no line of it reads as the harness's.
+file: crates/cineris-agent/src/hooks.rs
+in: context_notice
+find: quoted(context)
+replace: context.to_owned()
+caught-by:
+    cineris-agent::it hooks::a_hooks_text_is_quoted_and_its_name_escaped_in_the_harnesss_words
+
+[break] a-hooks-name-is-not-escaped
+rule: A hook's name is written inside backticks escaped, so that it cannot end them.
+file: crates/cineris-agent/src/hooks.rs
+in: named
+find: cineris_base::in_code(hook)
+replace: Cow::Borrowed(hook)
+caught-by:
+    cineris-agent::it hooks::a_hooks_text_is_quoted_and_its_name_escaped_in_the_harnesss_words
+
+[break] an-observer-runs-at-every-decision
+rule: An observer runs at a call's first decision, and not when it is decided again.
+file: crates/cineris-agent/src/round.rs
+in: Round::decide_again
+find: self.plan(call, &tool, Observers::Skip);
+replace: self.plan(call, &tool, Observers::Run);
+caught-by:
+    cineris-agent::it hooks::an_observer_runs_at_a_calls_first_decision_only
+
+[break] an-observer-runs-without-a-limit
+rule: No more than a few runs of one observer go on at once.
+file: crates/cineris-agent/src/hooks.rs
+in: observe
+find: if *count >= OBSERVE_CONCURRENT {
+replace: if false {
+caught-by:
+    cineris-agent::it hooks::an_observer_runs_at_most_a_few_times_at_once
+
+[break] an-observer-outlives-its-session
+rule: An observer runs under the session's token, and is stopped when the session closes.
+file: crates/cineris-agent/src/turn.rs
+in: Session::open
+find: hooks: hooks.map(|set| set.for_session(&cancel))
+replace: hooks
+caught-by:
+    cineris-agent::it hooks::an_observer_is_stopped_when_its_session_closes
+
+[break] a-replacement-is-not-held-to-its-size
+rule: A replacement larger than the cap is refused before it is put in a question or an item.
+file: crates/cineris-agent/src/round.rs
+in: Planning::replace
+find: if let Some(size) = hooks::too_large(&replacement) {
+replace: if let Some(size) = None::<usize> {
+caught-by:
+    cineris-agent::it hooks::a_replacement_larger_than_the_cap_is_refused
+
+[break] a-null-answer-refuses
+rule: An answer of `null` says nothing, as an empty one does.
+file: crates/cineris-agent/src/hooks.rs
+in: read
+find: Json::Null => return Ok(Answer::default())
+replace: Json::Null => return Err("null".to_owned())
+caught-by:
+    cineris-agent hooks::tests::an_answer_is_read_strictly_by_its_events_contract
+
+[break] a-replacement-never-answered-is-said-to-have-been
+rule: A call's result and item say a hook's arguments were asked about only once the question was answered.
+file: crates/cineris-agent/src/round.rs
+in: Call::replaced_and_asked
+find: self.replaced().filter(|_| self.answered)
+replace: self.replaced()
+caught-by:
+    cineris-agent::it hooks::a_replacement_never_asked_about_is_not_said_to_have_been
+
+[break] an-answer-is-not-marked
+rule: A call whose question was answered says so in its result, for a hook's arguments.
+file: crates/cineris-agent/src/round.rs
+in: Round::answered
+find: self.calls[position].answered = true;
+replace: let _ = position;
+caught-by:
+    cineris-agent::it hooks::a_replacement_is_planned_decided_checked_and_always_put_to_the_user
+
+[break] a-steering-turns-prompt-is-called-the-prompt
+rule: A steering message refused as the prompt of a turn of its own is given back as a steering message.
+file: crates/cineris-agent/src/turn.rs
+in: Session::begin
+find: let steering = prompt.delivery == Some(Delivery::Steer);
+replace: let steering = false;
+caught-by:
+    cineris-agent::it hooks::a_steering_message_refused_as_its_own_turns_prompt_is_still_one
+
+[break] an-interrupted-boundary-drops-its-notices
+rule: A notice taken at a boundary where the turn was interrupted waits for the next turn.
+file: crates/cineris-agent/src/turn.rs
+in: Session::return_pending
+find: inbox.pending.push_front(pending);
+replace: drop(pending);
+caught-by:
+    cineris-agent::it hooks::an_interrupt_while_a_steering_messages_hooks_are_asked_gives_it_back
+
+[break] an-interrupted-boundary-drops-its-steering-messages
+rule: A steering message taken at a boundary where the turn was interrupted is given back.
+file: crates/cineris-agent/src/turn.rs
+in: Session::return_pending
+find: Pending::Steer(input) => self.give_back(turn, input, Some(Delivery::Steer), Vec::new(), hooks::RETURNED_UNASKED.to_owned())
+replace: Pending::Steer(_) => {}
+caught-by:
+    cineris-agent::it hooks::an_interrupt_while_a_steering_messages_hooks_are_asked_gives_it_back
