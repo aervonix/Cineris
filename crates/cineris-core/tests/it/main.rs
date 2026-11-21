@@ -34,6 +34,8 @@ mod day;
 mod events;
 #[cfg(feature = "scripts")]
 mod ext_exec;
+#[cfg(feature = "scripts")]
+mod ext_state;
 mod extensions;
 mod gates;
 mod harness_git;

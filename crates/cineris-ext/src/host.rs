@@ -198,13 +198,17 @@ pub struct FetchOutput {
     pub cut: bool,
 }
 
-/// Which store a value is kept in.
+/// Which store a value is kept in. Either is the extension's own, keyed by
+/// where it comes from and its name: a project's `tracker` never reads or
+/// writes the user's `tracker`'s values. Neither needs a capability or asks
+/// a question: it touches nothing but the extension's own values.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scope {
-    /// The session's, kept in its log: a resume or a fork has it as it was
-    /// there.
+    /// The session's, kept in its log: a resume has it as the session left
+    /// it, a fork as it was at the fork's point, and a rewind leaves it.
     Session,
-    /// The project's, kept in the state directory.
+    /// The project's, kept in the state directory: every later session of
+    /// the project has it.
     Project,
 }
 
@@ -279,14 +283,16 @@ pub trait Host: Send + Sync {
     /// Says what the call is doing, for the user.
     fn progress(&self, text: String);
 
-    /// A stored value.
+    /// A stored value of the extension's: `None` when there is none.
     fn state_get(
         &self,
         key: String,
         scope: Scope,
     ) -> HostFuture<'_, Result<Option<Json>, HostError>>;
 
-    /// Stores a value; `None` removes it.
+    /// Stores a value of the extension's; `None` removes it. A value is
+    /// never JSON's `null`: [`serve`] gives `null` as `None`. Refused, with
+    /// nothing kept, when the values would grow past [`STATE_MAX_BYTES`].
     fn state_set(
         &self,
         key: String,
@@ -371,7 +377,7 @@ pub enum HostCall {
     StateSet {
         /// The key.
         key: String,
-        /// The value; `None` removes it.
+        /// The value; `None`, or JSON's `null`, removes it.
         value: Option<Json>,
         /// The store.
         scope: Scope,
@@ -397,6 +403,11 @@ pub const EXEC_MAX_STDIN: usize = 1024 * 1024;
 pub const FS_MAX_BYTES: usize = 1024 * 1024;
 /// The longest key of a stored value.
 pub const STATE_MAX_KEY: usize = 256;
+/// The most an extension keeps in one scope: the bytes of its values
+/// together, as the compact JSON of one object, `{"key":value,…}`. A
+/// `set` that would take them past it, and grow them, is refused, and
+/// nothing is kept.
+pub const STATE_MAX_BYTES: usize = 64 * 1024;
 /// The longest text of a notice to the user.
 pub const NOTIFY_MAX: usize = 1024;
 /// The longest progress line.
@@ -778,6 +789,9 @@ pub async fn serve<H: Host + ?Sized>(
         }
         HostCall::StateSet { key, value, scope } => {
             check_key(&key)?;
+            // `null` is what `get` gives for a key with no value, so a set
+            // to it removes the key: a stored value is never `null`.
+            let value = value.filter(|value| !value.is_null());
             host.state_set(key, value, scope).await?;
             Ok(Json::Null)
         }

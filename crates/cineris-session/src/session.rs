@@ -904,8 +904,10 @@ impl Session {
 impl Log {
     /// Forks the session: a new session in the same project whose log
     /// begins with a copy of the branch that ends at `at` (the active one
-    /// when `at` is `None`) and the session's base state. Leases, outcomes
-    /// and metadata are not copied: the new session records its own lease.
+    /// when `at` is `None`), the session's base state, and the extensions'
+    /// records written before the next entry of the conversation after `at`
+    /// (all of them when none came after it). Leases, outcomes and metadata
+    /// are not copied: the new session records its own lease.
     /// The original is not changed. The artifacts and stored contents are
     /// shared by hard links where the file system allows, copied otherwise.
     ///
@@ -950,6 +952,17 @@ impl Log {
             .filter(|&index| index != 0)
             .collect();
         copied.extend(self.record_indices(&Kind::Base));
+        // An extension's records as they were at the point the fork goes
+        // back to: those written before the next entry of the conversation
+        // after it in the file, every one when none came after it. So an
+        // extension's `session` values are in the fork as they were while
+        // that point was the conversation's latest (`cineris.state`).
+        let until = self.index_of(&end).and_then(|at| self.next_tree_index(at));
+        copied.extend(
+            self.record_indices(&Kind::Ext)
+                .into_iter()
+                .filter(|&index| until.is_none_or(|until| index < until)),
+        );
         copied.sort_unstable();
 
         let header = Entry {
