@@ -458,6 +458,34 @@ mod tests {
         ))
     }
 
+    /// A trusted project's entry that does not compile is told once and is
+    /// on no event: nobody approved it, so it holds no gate (the review of
+    /// step 28's second pull request, H1, and its re-check). An untrusted
+    /// project's is not even told. The user's holds its event either way.
+    #[test]
+    fn a_projects_refused_entry_is_on_no_event_trusted_or_not() {
+        let refused = settings(HookEventName::ToolBefore, &["check", "--file={path}"]);
+        let configured = Configured::of(&loaded(
+            &[("mine", refused.clone())],
+            vec![project_hook("theirs", refused)],
+        ));
+        for trusted in [false, true] {
+            let session = in_session(configured.clone(), trusted, None, &[]);
+            let on: Vec<&str> = session
+                .refused
+                .iter()
+                .map(|refused| refused.name.as_str())
+                .collect();
+            assert_eq!(on, ["mine"], "trusted: {trusted}");
+            assert_eq!(
+                session.told.iter().any(|told| told.contains("`theirs`")),
+                trusted,
+                "{:?}",
+                session.told
+            );
+        }
+    }
+
     /// The trust question lists a project's hook in words, every text as
     /// code, and pins it by the hash of what it shows; one approved as it
     /// is is not listed again, one changed says so.

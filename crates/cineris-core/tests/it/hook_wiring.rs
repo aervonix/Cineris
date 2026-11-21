@@ -58,11 +58,22 @@ fn told(front: &Front, words: &str) -> bool {
     front.notices().iter().any(|notice| notice.contains(words))
 }
 
-/// Polls `operation` while the runtime runs every other task as far as it
-/// can: what a test does to show that something does not happen. Whether
-/// the operation finished meanwhile (it is not polled after).
-async fn run_beside<F: std::future::Future>(mut operation: std::pin::Pin<&mut F>) -> bool {
-    for _ in 0..64 {
+/// Yields until `ready` says so: the runtime's other tasks reach the state
+/// it names, with no count of yields that a slow machine could fall short
+/// of.
+async fn until(ready: impl Fn() -> bool) {
+    while !ready() {
+        tokio::task::yield_now().await;
+    }
+}
+
+/// Polls `operation` until `ready` says so, the runtime's other tasks
+/// running between polls. Fails when the operation ends first.
+async fn drive_until<F: std::future::Future>(
+    mut operation: std::pin::Pin<&mut F>,
+    ready: impl Fn() -> bool,
+) {
+    while !ready() {
         let mut once = std::pin::pin!(tokio::task::yield_now());
         let finished = std::future::poll_fn(|context| {
             if operation.as_mut().poll(context).is_ready() {
@@ -71,58 +82,81 @@ async fn run_beside<F: std::future::Future>(mut operation: std::pin::Pin<&mut F>
             once.as_mut().poll(context).map(|()| false)
         })
         .await;
-        if finished {
-            return true;
-        }
+        assert!(
+            !finished,
+            "the operation ended before the state it was driven to"
+        );
     }
-    false
+}
+
+/// How many of the timer's running waits are `length` long.
+fn waits_of(world: &World, length: Duration) -> usize {
+    world
+        .timer
+        .running()
+        .iter()
+        .filter(|wait| **wait == length)
+        .count()
 }
 
 /// A user's hooks that start nothing, in one world: a rule refuses every
 /// start of this binary, so that each hook is told apart by why it failed.
+/// The hooks the test runs by hand are on `compaction.before`, which no
+/// turn here reaches, so that the loop starts none of them beside a phase.
 ///
 /// The first session, at `supervised`:
 /// - its first prompt waits for its `session.start` hook that is waited
-///   for (one the rule refuses, which the user is told of) before the loop
-///   has it;
+///   for (one the rule refuses, which the user is told of): the prompt is
+///   held at the wait while the hook is not yet heard;
 /// - a refused entry whose `tools` cannot be read holds `tool.before` for
 ///   every call (failing closed), with why; and a reload that takes it out
-///   leaves it in force,
-///   the hooks' configuration taking effect in the next session, so that
-///   no gate lapses and none is given that the session was not opened
-///   with;
+///   leaves it in force, the hooks' configuration taking effect in the
+///   next session, so that no gate lapses and none is given that the
+///   session was not opened with;
 /// - a hook a rule denies, or a rule of the managed configuration asks
 ///   about, starts nothing, and says which;
 /// - an event of more than 1 MiB is no hook's input;
 /// - two starts with a write root never run at once: they share one
 ///   baseline of the look at the protected paths, so the first holds it at
-///   the point after it is taken, and the second does not reach that point
-///   until the first is let go;
+///   the point after it is taken while the second waits for it;
 /// - a prompt is text and images: a part of another kind is refused before
 ///   the loop has it.
 ///
 /// The second, opened after the reload: the refused entry is gone, so the
-/// calls run; and an entry that uses `{path}` does not run for a call that
+/// calls run; an entry that uses `{path}` does not run for a call that
 /// names no file within the workspace (a listing, which names a folder; a
 /// read outside it, whose file it is never handed: settled by the
 /// maintainers), while a gating one that lists no `tools` is warned of once
-/// as the session opens.
+/// as the session opens; a waited `turn.end` hook has at most four runs
+/// going, and a fifth is not started, and says so; and a run let go before
+/// it is first polled (the review of step 28's second pull request, M3)
+/// starts nothing: it never reaches the baseline its write root would take.
 ///
 /// The third, at `read-only`: a hook with `write = true` is given no write
 /// root, so its start does not take the baseline.
 ///
-/// The fourth, opened after a reload that adds an observer of
-/// `session.start` with `write = true` (only there, so that no start of it
-/// in an earlier session takes the baseline the second session's two
-/// starts are counted at), closes while that observer is still at work,
-/// held at the point after it takes the baseline: the close waits for it,
-/// as for every run of the session's hooks (the review of step 28's second
-/// pull request, M1 and M3).
+/// The fourth, opened after a reload that adds nine observers of
+/// `session.start` with `write = true`: one holds the baseline at its
+/// point, seven wait for it, and the ninth waits for a place among the
+/// observers within its own time, and fails when that is up; a hook that is
+/// waited for starts all the same, as the observers have a pool of their
+/// own (the re-check of that review: they starved a gate, which failed
+/// closed). The close lets go of what waits, which starts nothing, and
+/// waits for what runs (M1, M3).
+///
+/// The fifth and sixth end together when the core shuts down: neither's
+/// `session.end` hooks wait for the other's.
 ///
 /// And an observer of `session.start` that fails, never waited for, is
 /// logged.
 #[test]
 fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
+    use cineris_core::ext::{
+        A_CLOSE_WAITS_FOR_A_RUN, A_FIRST_TURN_WAITS, A_HOOK_WRITES, A_SESSION_ENDS,
+        A_SESSION_START_HOOK_IS_HEARD,
+    };
+    use cineris_testkit::Hold;
+
     let world = World::new("hook_users", []);
     let outside = world.dir.join("outside.txt");
     std::fs::write(&outside, "outside\n").unwrap();
@@ -150,65 +184,69 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
         ),
     )
     .unwrap();
-    let config = |gate: bool, scribe: bool| {
+    let config = |gate: bool, scribes: bool| {
         let fails = this_binary("fail", &[]);
-        format!(
-            "{}{}",
-            no_start_of_this_binary(),
-            [
-                if gate {
-                    refused_entry("gate", "tool.before", "tools = [\"not a name\"]\n")
-                } else {
-                    String::new()
-                },
-                entry("ready", "session.start", &fails, ""),
-                entry("watch", "session.start", &fails, "observe = true"),
-                if scribe {
-                    entry(
-                        "scribe",
-                        "session.start",
-                        &fails,
-                        "observe = true\nwrite = true",
-                    )
-                } else {
-                    String::new()
-                },
-                entry(
-                    "per-file",
-                    "tool.before",
-                    &this_binary("fail", &["{path}"]),
-                    ""
-                ),
-                entry("cap", "turn.end", &fails, ""),
-                entry("first", "turn.end", &fails, "write = true"),
-                entry("second", "turn.end", &fails, "write = true"),
-                entry(
-                    "held",
-                    "turn.end",
-                    &[held.display().to_string(), "x".to_owned()],
-                    ""
-                ),
-            ]
-            .concat()
-        )
+        let mut entries = vec![
+            if gate {
+                refused_entry("gate", "tool.before", "tools = [\"not a name\"]\n")
+            } else {
+                String::new()
+            },
+            entry("ready", "session.start", &fails, ""),
+            entry("watch", "session.start", &fails, "observe = true"),
+            entry(
+                "per-file",
+                "tool.before",
+                &this_binary("fail", &["{path}"]),
+                "",
+            ),
+            entry("cap", "turn.end", &fails, ""),
+            entry("first", "compaction.before", &fails, "write = true"),
+            entry("second", "compaction.before", &fails, "write = true"),
+            entry(
+                "held",
+                "compaction.before",
+                &[held.display().to_string(), "x".to_owned()],
+                "",
+            ),
+            entry("bye", "session.end", &fails, "observe = true"),
+        ];
+        if scribes {
+            for number in 1..=9 {
+                let time = if number == 9 { "90s" } else { "2m" };
+                entries.push(entry(
+                    &format!("scribe{number}"),
+                    "session.start",
+                    &fails,
+                    &format!("observe = true\nwrite = true\ntimeout = \"{time}\""),
+                ));
+            }
+        }
+        format!("{}{}", no_start_of_this_binary(), entries.concat())
     };
     world.user_config(&config(true, false));
     let core = world.core();
     let warnings = crate::extensions::Warnings::default();
     let logged = std::sync::Arc::clone(&warnings.0);
+    let logged_says = |words: &[&str]| {
+        logged
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|line| words.iter().all(|word| line.contains(word)))
+    };
     tracing::subscriber::with_default(warnings, || {
         world.run(async {
-            let hears =
-                cineris_testkit::Hold::new(cineris_core::ext::A_SESSION_START_HOOK_IS_HEARD);
+            // The first prompt waits for the `session.start` hook, which is
+            // not heard yet.
+            let hears = Hold::new(A_SESSION_START_HOOK_IS_HEARD);
+            let waits = Hold::new(A_FIRST_TURN_WAITS);
             let front = start(&world, &core).await;
-            // The first prompt waits for the `session.start` hook.
             let mut first = std::pin::pin!(front.prompt("look"));
+            waits.drive_until_reached(first.as_mut()).await;
             hears.drive_until_reached(first.as_mut()).await;
-            let sent = run_beside(first.as_mut()).await;
-            assert!(
-                !sent && world.provider.requests().is_empty(),
-                "the first prompt did not wait for the `session.start` hook"
-            );
+            waits.release();
+            drop(waits);
             hears.release();
             drop(hears);
             first.await;
@@ -275,8 +313,10 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
             };
             assert!(why.contains("a hook is given at most 1 MiB"), "{why}");
 
-            // Two starts with a write root, one at a time.
-            let writes = cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES);
+            // Two starts with a write root, one at a time: the first holds
+            // the baseline at its point, and the second waits for it
+            // within its own time (its five seconds on the clock).
+            let writes = Hold::new(A_HOOK_WRITES);
             let mut one =
                 std::pin::pin!(core.run_hook_command(&front.session, "first", turn_end()));
             let mut two =
@@ -304,9 +344,10 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
                 done
             });
             writes.drive_until_reached(both.as_mut()).await;
-            // Everything else runs as far as it can: the other start waits
-            // for the baseline, and does not reach the point.
-            run_beside(both.as_mut()).await;
+            drive_until(both.as_mut(), || {
+                waits_of(&world, Duration::from_secs(5)) == 1
+            })
+            .await;
             assert_eq!(writes.arrivals(), 1, "two starts with a write root at once");
             writes.release();
             let (one, two) = both.await;
@@ -350,11 +391,39 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
                 assert_eq!(*outcome, "success", "{tool}: {text}");
             }
             assert_eq!(results.len(), 2);
+            // A waited `turn.end` hook's fifth run at once.
+            let said = core
+                .hook_runs_at_its_point(&front.session, "cap", 5)
+                .await
+                .unwrap();
+            let (four, fifth) = said.split_at(4);
+            for one in four {
+                assert!(
+                    one.as_deref()
+                        .is_some_and(|why| why.contains("a permission rule refuses it")),
+                    "{said:?}"
+                );
+            }
+            assert!(
+                fifth[0]
+                    .as_deref()
+                    .is_some_and(|why| why.contains("4 runs of it are going on")),
+                "{said:?}"
+            );
+            // A run let go before it is first polled starts nothing: the
+            // close waits for its task, which never reaches the baseline.
+            let writes = Hold::new(A_HOOK_WRITES).skipping(usize::MAX);
+            core.let_go_of_a_hook_run(&front.session, "first").unwrap();
             front.close().await;
+            assert_eq!(
+                writes.arrivals(),
+                0,
+                "a run let go before it was polled went on to start"
+            );
+            drop(writes);
 
             // At `read-only`, no write root.
-            let writes =
-                cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES).skipping(usize::MAX);
+            let writes = Hold::new(A_HOOK_WRITES).skipping(usize::MAX);
             let front = Front::start_as(
                 &world,
                 &core,
@@ -371,7 +440,7 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
                 .await;
             assert!(matches!(ran, Ok(HookOutcome::Failed(_))), "{ran:?}");
             assert_eq!(writes.arrivals(), 0, "a write root at read-only");
-            // The observer the fourth session closes beside.
+            // The observers the fourth session opens with.
             world.user_config(&config(false, true));
             front
                 .op(Op::ConfigReload(ConfigReloadParams::default()))
@@ -380,23 +449,83 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
             front.close().await;
             drop(writes);
 
-            // The close waits for a run still at work.
-            let writes = cineris_testkit::Hold::new(cineris_core::ext::A_HOOK_WRITES);
+            // Nine observers with a write root: one holds the baseline,
+            // seven wait for it (each its two minutes on the clock), and the
+            // ninth waits for a place (its ninety seconds).
+            let writes = Hold::new(A_HOOK_WRITES);
             let front = start(&world, &core).await;
+            let mut idle = std::pin::pin!(std::future::pending::<()>());
+            writes.drive_until_reached(idle.as_mut()).await;
+            until(|| {
+                waits_of(&world, Duration::from_secs(120)) == 7
+                    && waits_of(&world, Duration::from_secs(90)) == 1
+            })
+            .await;
+            // A hook that is waited for starts all the same; were it kept
+            // out, its five seconds would be moved past, and it would fail
+            // closed.
+            let mut gated =
+                std::pin::pin!(core.run_hook_command(&front.session, "cap", turn_end()));
+            let mut moved = false;
+            let gated = std::future::poll_fn(|context| {
+                if let std::task::Poll::Ready(done) = gated.as_mut().poll(context) {
+                    return std::task::Poll::Ready(done);
+                }
+                if !moved && waits_of(&world, Duration::from_secs(5)) > 0 {
+                    moved = true;
+                    world.timer.advance(Duration::from_secs(5));
+                }
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            })
+            .await
+            .unwrap();
+            let HookOutcome::Failed(why) = &gated else {
+                panic!("{gated:?}");
+            };
+            assert!(
+                why.contains("a permission rule refuses it"),
+                "a hook that is waited for was kept out by observers: {why}"
+            );
+            // The ninth observer's time is up while it waits for a place.
+            world.timer.advance(Duration::from_secs(90));
+            until(|| logged_says(&["scribe9", "did not start within its 90000 ms"])).await;
+            assert!(
+                logged_says(&["scribe9", "other hooks were running"]),
+                "the ninth observer did not wait for a place: {:?}",
+                logged.lock().unwrap()
+            );
+            // The close lets go of the seven that wait, and waits for the
+            // one at the baseline.
+            let closing = Hold::new(A_CLOSE_WAITS_FOR_A_RUN);
             let mut close = std::pin::pin!(front.close());
-            writes.drive_until_reached(close.as_mut()).await;
-            let closed = run_beside(close.as_mut()).await;
-            assert!(!closed, "the close did not wait for a hook still at work");
+            closing.drive_until_reached(close.as_mut()).await;
+            closing.release();
+            drop(closing);
             writes.release();
             close.await;
+            assert_eq!(
+                writes.arrivals(),
+                1,
+                "a start the close let go of went on to the baseline"
+            );
+            drop(writes);
+
+            // Two sessions' ends, together.
+            let ends = Hold::new(A_SESSION_ENDS);
+            let five = start(&world, &core).await;
+            let six = start(&world, &core).await;
+            let mut down = std::pin::pin!(core.shutdown());
+            ends.drive_until_reached_times(2, down.as_mut()).await;
+            ends.release();
+            down.await;
+            drop((five, six));
         });
     });
-    let logged = logged.lock().unwrap();
     assert!(
-        logged.iter().any(
-            |line| line.contains("a `session.start` observer failed") && line.contains("watch")
-        ),
-        "{logged:?}"
+        logged_says(&["a `session.start` observer failed", "watch"]),
+        "{:?}",
+        logged.lock().unwrap()
     );
 }
 
@@ -406,8 +535,9 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
 /// entry and a refused `prompt.submit` one in it, the prompt is sent and
 /// the call runs as with no hooks at all, and the user is told of neither,
 /// nor warned of an entry of it that relies on `{path}`. A session with no
-/// `prompt.submit` hook keeps nobody's prompt for giving back (M5): it
-/// hands the loop no ticket.
+/// hooks keeps nothing of a prompt once it is recorded (M5): its ticket,
+/// which is all the core keeps of it (the ticket and the client it came
+/// from, never the prompt's parts), is let go.
 #[test]
 fn an_untrusted_projects_refused_entries_change_nothing() {
     let world = World::new(
@@ -436,7 +566,11 @@ fn an_untrusted_projects_refused_entries_change_nothing() {
         let front = start(&world, &core).await;
         let ended = front.turn("read it").await;
         assert_eq!(ended.outcome, TurnOutcome::Completed, "{ended:?}");
-        assert_eq!(core.prompt_tickets(&front.session).unwrap(), (0, 0));
+        assert_eq!(
+            core.prompt_tickets(&front.session).unwrap(),
+            (1, 0),
+            "one ticket was handed out, and none is kept once the prompt is recorded"
+        );
         let results = front.results();
         let [(tool, outcome, text)] = results.as_slice() else {
             panic!("{results:?}");
@@ -621,7 +755,7 @@ fn a_projects_hooks_reach_a_session_only_through_trust() {
         assert_eq!(
             core.prompt_tickets(&front.session).unwrap(),
             (1, 0),
-            "the sender of a prompt given back is kept"
+            "one ticket was handed out, and none is kept once the prompt is given back"
         );
         front.close().await;
     });
@@ -733,7 +867,8 @@ fn a_projects_hooks_reach_a_session_only_through_trust() {
 /// 28's second pull request, M1: one outlived its session); a
 /// `session.end` hook runs as the session closes, and one that runs on is
 /// stopped when the close's five seconds on the session's clock are up
-/// (M8).
+/// (M8): the clock is moved past its own time in the same step, and it is
+/// the close's stop that ends it, not its time.
 #[test]
 fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
     let world = World::new("hook_session_own", [says("Hi.")]);
@@ -766,8 +901,10 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
                 &this_binary("write", &[&ended.display().to_string()]),
                 "observe = true",
             ),
+            // The first of the session's `session.end` hooks by name, so
+            // that the close's wait is on it when its five seconds are up.
             entry(
-                "late",
+                "drags",
                 "session.end",
                 &this_binary("hang", &[]),
                 "observe = true\ntimeout = \"7s\"",
@@ -776,6 +913,9 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
         .concat(),
     );
     let core = world.core();
+    let warnings = crate::extensions::Warnings::default();
+    let logged = std::sync::Arc::clone(&warnings.0);
+    let _logging = tracing::subscriber::set_default(warnings);
     world.run(async {
         let front = Front::start(&world, &core).await;
         // The observer is running.
@@ -807,14 +947,17 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
             "{notice}"
         );
         assert!(!ended.exists(), "not before the close");
-        // The close: the `late` hook runs on until the close's five seconds
-        // are up, moved once `ends` has written its file and `late` runs.
+        // The close: the `drags` hook runs on until the close's five
+        // seconds are up, moved once `ends` has written its file and `drags`
+        // runs; and past its own seven in the same step, so that a close
+        // with no bound of its own has it end by its time instead.
         let mut close = std::pin::pin!(front.close());
         let mut up = std::pin::pin!(async {
             while !(ended.exists() && world.timer.running().contains(&Duration::from_secs(7))) {
                 tokio::task::yield_now().await;
             }
             world.timer.advance(Duration::from_secs(5));
+            world.timer.advance(Duration::from_secs(2));
         });
         let mut advanced = false;
         std::future::poll_fn(|context| {
@@ -830,6 +973,15 @@ fn sys_a_sessions_own_hooks_run_as_it_opens_and_closes() {
         );
     });
     assert!(ended.exists(), "the `session.end` hook ran at the close");
+    let logged = logged.lock().unwrap();
+    let drags: Vec<&String> = logged
+        .iter()
+        .filter(|line| line.contains("a `session.end` hook failed") && line.contains("drags"))
+        .collect();
+    assert!(
+        drags.len() == 1 && drags[0].contains("interrupted") && !drags[0].contains("ran past"),
+        "the close's five seconds did not stop the hook: {logged:?}"
+    );
 }
 
 #[cfg(target_os = "linux")]

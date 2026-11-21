@@ -1265,28 +1265,8 @@ impl Core {
         let sessions: Vec<SessionId> = lock(&self.inner.sessions).keys().cloned().collect();
         // Together, so that the sessions' `session.end` hooks, given up to
         // five seconds each, are not given them one session after another.
-        let mut ends: Vec<_> = sessions
-            .iter()
-            .map(|session| Some(Box::pin(self.end(session))))
-            .collect();
-        std::future::poll_fn(|context| {
-            let mut pending = false;
-            for end in &mut ends {
-                if let Some(running) = end {
-                    if running.as_mut().poll(context).is_ready() {
-                        *end = None;
-                    } else {
-                        pending = true;
-                    }
-                }
-            }
-            if pending {
-                std::task::Poll::Pending
-            } else {
-                std::task::Poll::Ready(())
-            }
-        })
-        .await;
+        let ends = sessions.iter().map(|session| self.end(session));
+        together(ends).await;
         // A shell still being asked its version is waited for, so that the
         // answer is kept: each ask is bounded by its own time limit.
         let probes = std::mem::take(&mut *lock(&self.inner.probes));
@@ -1757,23 +1737,16 @@ impl Core {
                 }
                 // Refused with `history_changing` while a rewind is under
                 // way, under the session's own lock. Who sent it is noted
-                // first, by a ticket the loop carries with the prompt, where
-                // a `prompt.submit` hook may refuse it and give it back; let
-                // go when the loop refuses it (the review of step 28's second
-                // pull request, M5).
-                #[cfg(feature = "scripts")]
-                let ticket = live
-                    .command_hooks
-                    .wants_prompt()
-                    .then(|| live.sink.sent_by(client.0));
-                #[cfg(not(feature = "scripts"))]
-                let ticket = None;
+                // first, by a ticket the loop carries with the prompt: a hook,
+                // or a stop that comes after it was sent, may refuse it and
+                // give it back. Every prompt takes one, a few kept at most;
+                // let go when the loop refuses it (the review of step 28's
+                // second pull request, M5, and its re-check).
+                let ticket = live.sink.sent_by(client.0);
                 let result = live
                     .handle
-                    .prompt_with(params.input, params.delivery, ticket);
-                if result.is_err()
-                    && let Some(ticket) = ticket
-                {
+                    .prompt_with(params.input, params.delivery, Some(ticket));
+                if result.is_err() {
                     let _ = live.sink.forget(ticket);
                 }
                 Ok(OpResult::TurnStart(result?))
@@ -2805,6 +2778,29 @@ fn config_overrides(
         &mut overrides,
     )?;
     Ok(overrides)
+}
+
+/// Runs `futures` together, to the end of every one.
+async fn together<F: std::future::Future<Output = ()>>(futures: impl Iterator<Item = F>) {
+    let mut running: Vec<_> = futures.map(|future| Some(Box::pin(future))).collect();
+    std::future::poll_fn(|context| {
+        let mut pending = false;
+        for slot in &mut running {
+            if let Some(future) = slot {
+                if future.as_mut().poll(context).is_ready() {
+                    *slot = None;
+                } else {
+                    pending = true;
+                }
+            }
+        }
+        if pending {
+            std::task::Poll::Pending
+        } else {
+            std::task::Poll::Ready(())
+        }
+    })
+    .await;
 }
 
 #[cfg(test)]

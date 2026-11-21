@@ -6869,8 +6869,8 @@ caught-by:
 rule: Hook starts with a write root run one at a time: they share one baseline of the look at the protected paths.
 file: crates/cineris-core/src/ext/hook_command.rs
 in: HookCommands::run
-find: Some(writing) => Some(writing),
-replace: Some(writing) => { drop(writing); None::<tokio::sync::MutexGuard<'_, ()>> }
+find: Waited::Done(writing) => Some(writing),
+replace: Waited::Done(writing) => { drop(writing); None::<tokio::sync::MutexGuard<'_, ()>> }
 caught-by:
     cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
@@ -6895,13 +6895,13 @@ caught-by:
 # ------------------------------- round 3: the review of the second pull request
 
 [break] a-session-start-hook-is-not-under-the-sessions-token
-rule: Every `session.start` run is under the session's token, which the close fires (M1). Its symptom is a close that waits for ever, caught when the test's time runs out.
+rule: Every `session.start` run is under the session's token, which the close fires (M1).
 file: crates/cineris-core/src/ext/hook_command.rs
-in: SessionHooks::runs_of
-find: self.commands.session.child()
+in: run_token
+find: session.child()
 replace: CancelToken::new()
 caught-by:
-    cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
+    ext::hook_command::tests::a_session_start_run_is_under_the_sessions_token_and_a_session_end_one_is_not
 
 [break] the-close-waits-for-no-hook
 rule: The close stops what of the session's hooks still runs, and waits for every run, before the `session.end` hooks and the close's look (M1, M3).
@@ -6942,14 +6942,23 @@ replace: if false
 caught-by:
     cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
 
-[break] a-hook-let-go-runs-on
-rule: A hook run whose wait is let go (its turn interrupted) is stopped, its process tree with it, even before the wait is first polled (M3). Its symptom is a close that waits for ever, caught when the test's time runs out.
+[break] a-hook-run-is-stopped-only-once-polled
+rule: A hook run whose wait is let go is stopped even when the wait was never polled: the stop is made before the run, not in the wait (M3, and the re-check of the second pull request).
 file: crates/cineris-core/src/ext/hook_points.rs
 in: CommandRun::run
 find: let stop = StopOnDrop(cancel.clone(), kill.clone());
 replace: let stop = (cancel.clone(), kill.clone());
 caught-by:
-    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+[break] a-hook-let-go-runs-on
+rule: A hook run whose wait is let go (its turn interrupted) is stopped, its process tree with it (M3).
+file: crates/cineris-core/src/ext/hook_points.rs
+in: StopOnDrop::drop
+find: self.0.cancel(); self.1.cancel();
+replace:
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-reasons-line-breaks-are-kept
 rule: An answer's `reason` has its line breaks folded to spaces, on the core's own events too (M4).
@@ -6988,33 +6997,8 @@ replace: if false {
 caught-by:
     events::tests::a_prompts_sender_is_let_go_as_it_is_settled_and_the_running_turn_is_known
 
-[break] a-session-with-no-prompt-hook-keeps-senders
-rule: Who sent a prompt is noted only where a `prompt.submit` hook could refuse it: a session with none hands the loop no ticket (M5).
-file: crates/cineris-core/src/core.rs
-find: .wants_prompt().then(|| live.sink.sent_by(client.0))
-replace: .wants_prompt().then_some(()).or(Some(())).map(|()| live.sink.sent_by(client.0))
-caught-by:
-    cineris-core::it hook_wiring::an_untrusted_projects_refused_entries_change_nothing
-
-[break] a-prompts-sender-is-not-noted
-rule: Who sent a prompt is noted where a `prompt.submit` hook could refuse it, so that it is given back whole to its sender alone.
-file: crates/cineris-core/src/core.rs
-find: .wants_prompt().then(|| live.sink.sent_by(client.0))
-replace: .wants_prompt().then(|| live.sink.sent_by(client.0)).filter(|_| false)
-caught-by:
-    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
-
-[break] a-refused-prompt-gate-keeps-no-sender
-rule: A refused entry on `prompt.submit` is a hook that may refuse a prompt: who sent one is noted for it.
-file: crates/cineris-core/src/ext/hook_command.rs
-in: SessionHooks::wants_prompt
-find: .any(|refused| refused.event == Some(Event::PromptSubmit))
-replace: .any(|_| false)
-caught-by:
-    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
-
 [break] the-close-gives-session-end-hooks-no-bound
-rule: A session's `session.end` hooks are given up to five seconds on the session's clock as it closes (M8). Its symptom is a close that waits for ever, caught when the test's time runs out.
+rule: A session's `session.end` hooks are given up to five seconds on the session's clock as it closes (M8): it is the close's stop that ends one that runs on, not its own time.
 file: crates/cineris-core/src/ext/hook_command.rs
 in: SessionHooks::end
 find: let mut over = timer.sleep(SESSION_END_TIME);
@@ -7023,13 +7007,12 @@ caught-by:
     cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
 
 [break] the-first-turn-does-not-wait-for-session-start
-rule: The first prompt waits for the `session.start` hooks that are waited for. Caught where a `session.start` hook's stop must refuse the first prompt: without the wait, the prompt reaches the loop while the hook still runs. The tests that hold the hook show the wait, but cannot show its absence without a wait of real time, as the prompt's own looks at the files take some.
-os: linux
+rule: The first prompt waits for the `session.start` hooks that are waited for: held at the wait while the hook is not heard.
 file: crates/cineris-core/src/core.rs
 find: live.command_hooks.started().await;
 replace:
 caught-by:
-    cineris-core::it hook_wiring::confined::sys_a_hooks_stop_outside_a_turn_is_told_and_refuses_the_next_prompt
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 
 [break] a-hook-of-no-tools-is-on-no-call
 rule: A refused entry whose `tools` cannot be read is on every call: it fails closed.
@@ -7039,6 +7022,87 @@ find: (None, Some(_)) => true,
 replace: (None, Some(_)) => false,
 caught-by:
     cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+[break] a-prompt-has-no-ticket
+rule: Every prompt is handed to the loop with a ticket, so that one refused, by a hook or by a stop that came after it was sent, goes back whole to its sender alone (M5, and the re-check of the second pull request).
+file: crates/cineris-core/src/core.rs
+find: .prompt_with(params.input, params.delivery, Some(ticket));
+replace: .prompt_with(params.input, params.delivery, None);
+caught-by:
+    cineris-core::it hook_wiring::a_projects_hooks_reach_a_session_only_through_trust
+
+[break] a-late-stops-refused-prompt-has-no-ticket
+rule: A prompt sent before a stop that then refuses it goes back whole to its sender (the re-check of the second pull request).
+os: linux
+file: crates/cineris-core/src/core.rs
+find: .prompt_with(params.input, params.delivery, Some(ticket));
+replace: .prompt_with(params.input, params.delivery, Some(ticket).filter(|_| live.command_hooks.commands.stop_pending()));
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
+
+[break] observers-share-the-gates-pool
+rule: Observers have a pool of runs at once of their own: they never keep a hook that is waited for from starting (the re-check of the second pull request, N1).
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: let pool = if hook.observe {
+replace: let pool = if false {
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+[break] observers-are-not-capped
+rule: At most eight observers of a session run at once; the rest wait for a place, within their own time.
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::new
+find: observing_at_once: Arc::new(tokio::sync::Semaphore::new(RUNS_AT_ONCE))
+replace: observing_at_once: Arc::new(tokio::sync::Semaphore::new(tokio::sync::Semaphore::MAX_PERMITS))
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+[break] a-run-let-go-waits-its-turn
+rule: A run let go while it waits for a place or for the baseline (its session closed, its turn interrupted) waits no more and starts nothing (the re-check of the second pull request).
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::within
+find: if let_go.as_mut().poll(context).is_ready() {
+replace: if false && let_go.as_mut().poll(context).is_ready() {
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+[break] a-waited-turn-end-hook-is-not-capped
+rule: A waited `turn.end` hook has at most four runs going: a fifth is not started, and says so.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: CommandRun::run
+find: && self.running.load(std::sync::atomic::Ordering::Acquire) >= TURN_END_AT_ONCE
+replace: && false
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+[break] sessions-end-one-after-another
+rule: The core's shutdown ends its sessions together, so that one's `session.end` hooks do not wait for another's.
+file: crates/cineris-core/src/core.rs
+in: Core::shutdown_now
+find: together(ends).await;
+replace: for end in ends { end.await; }
+caught-by:
+    cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
+
+[break] a-trusted-projects-refused-entry-gates
+rule: A trusted project's entry that does not compile holds no gate: nobody approved it (H1, and the re-check of the second pull request).
+file: crates/cineris-core/src/ext/hooks.rs
+in: in_session
+find: .partition(|refused| refused.source == Source::User)
+replace: .partition(|refused| refused.source == Source::User || trusted)
+caught-by:
+    ext::hooks::tests::a_projects_refused_entry_is_on_no_event_trusted_or_not
+
+[break] every-failure-is-a-stop
+rule: Only a stop this start's own look made is told as one and holds back a prompt; a hook that failed, not started for a stopped turn among them, is none (M2, and the re-check of the second pull request).
+os: linux
+file: crates/cineris-core/src/ext/hook_command.rs
+in: HookCommands::run
+find: Err(HostError::Denied(why) | HostError::Failed(why) | HostError::NotHere(why)) => {
+replace: Err(HostError::Denied(why) | HostError::Failed(why) | HostError::NotHere(why)) => { self.stopped(&hook.name, &cx.turn, &why);
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
 
 # From mutations/step-28-hookseam.breaks (part `hookseam`).
 # Step 28, the loop's hook seam: `cineris_agent::Hooks` at `prompt.submit`
