@@ -2901,13 +2901,13 @@ caught-by:
     discover::every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape
 
 [break] found-manifest-refusal-shown-raw
-rule: A manifest's refusal, which quotes what the manifest says, is shown with every character that acts unseen written as an escape.
+rule: A manifest's refusal, which quotes what the manifest says, is shown with every character that acts unseen written as an escape. Since the fresh review of step 28 the manifest's own refusals escape what they quote (`in_code`, and `manifest::reader_said` for what the TOML reader quotes; `pinned-reader-key-raw` breaks that guard), so discovery's escaping is a second guard, and its break alone survives.
 file: crates/cineris-ext/src/discover.rs
 in: extension_in
-find: Manifest::of(&snapshot).map_err(|error| refused(&visible(&error.to_string())))?;
-replace: Manifest::of(&snapshot).map_err(|error| refused(&error.to_string()))?;
-caught-by:
-    discover::every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape
+find: Err(error) => return Some(Err(refused(&visible(&error.to_string()))))
+replace: Err(error) => return Some(Err(refused(&error.to_string())))
+occurrence: 2
+expect: survives
 
 # ------------------------------------------------------------ the cache, read strictly
 
@@ -3960,8 +3960,8 @@ caught-by:
 rule: Each extension's folder is stamped before it is read, so that a change made as it is read is seen at the next look.
 file: crates/cineris-ext/src/discover.rs
 in: extension_in
-find: seen(Seen::Extension(root.source, &folder)); cineris_base::hook::point(AN_EXTENSION_IS_READ); let snapshot = Snapshot::read(&folder).map_err(|error| refused(&visible(&error.to_string())))?; cineris_base::hook::point(AN_EXTENSION_WAS_READ);
-replace: cineris_base::hook::point(AN_EXTENSION_IS_READ); let snapshot = Snapshot::read(&folder).map_err(|error| refused(&visible(&error.to_string())))?; cineris_base::hook::point(AN_EXTENSION_WAS_READ); seen(Seen::Extension(root.source, &folder));
+find: if !seen(Seen::Extension(root.source, &folder)) { return None; } cineris_base::hook::point(AN_EXTENSION_IS_READ); let (read, read_bytes) = Snapshot::read_counted(&folder);
+replace: cineris_base::hook::point(AN_EXTENSION_IS_READ); let (read, read_bytes) = Snapshot::read_counted(&folder); cineris_base::hook::point(AN_EXTENSION_WAS_READ); if !seen(Seen::Extension(root.source, &folder)) { return None; }
 packages: cineris-core
 caught-by:
     extensions_review::a_file_changed_as_its_folder_is_read_is_seen_at_the_first_turn
@@ -3970,8 +3970,8 @@ caught-by:
 rule: What the trust question read of a project's extensions is stamped as it read it: a folder changed while the question is open is withdrawn at the session's first look.
 file: crates/cineris-core/src/ext/found.rs
 in: in_project
-find: Seen::Extension(_, folder) => watched.note_tree(folder, clock)
-replace: Seen::Extension(_, folder) => drop(folder)
+find: Seen::Extension(_, folder) => watched.note_tree(folder, clock, &mut left)
+replace: Seen::Extension(_, folder) => { drop(folder); left > 0 }
 caught-by:
     extensions_review::a_folder_changed_while_the_question_is_open_is_pinned_as_listed_and_withdrawn
 
@@ -4187,6 +4187,135 @@ replace: path.shown()
 occurrence: 1
 caught-by:
     extensions::a_question_about_a_scripts_read_shows_its_path_as_code_it_cannot_end
+
+# ------------------------------------------------------------ the fresh review
+
+[break] pinned-confined-said-of-the-question-load
+rule: What an extension's programs can do is said of the load a yes puts in force, not of the trust question's own load, which may hold back a `sandbox.write` that turns the sandbox off.
+file: crates/cineris-core/src/assemble.rs
+in: look
+find: let confined = programs_confined(inner, &load, &place.root, place.state.as_ref());
+replace: let confined = programs_confined(inner, &trust.loaded, &place.root, place.state.as_ref());
+caught-by:
+    extensions_review::what_an_extensions_programs_can_do_is_said_of_the_load_a_yes_puts_in_force
+
+[break] pinned-confined-with-harness-files-writable
+rule: Where the sandbox enforces, an extension's programs are said to be confined only when no write root of the session holds the harness's own files.
+file: crates/cineris-core/src/assemble.rs
+in: programs_confined
+find: && !holds_harness_files(
+replace: || holds_harness_files(
+caught-by:
+    extensions_review::what_an_extensions_programs_can_do_is_said_of_the_load_a_yes_puts_in_force
+
+[break] ext-root-of-a-glob-ending-in-a-separator-is-the-workspace
+rule: A `write` glob that ends in a separator gives the launcher its folder whole, not the workspace: a bare name is told by the glob having no separator, not by the names left once empty ones are dropped.
+file: crates/cineris-ext/src/capability.rs
+in: write_root
+find: if !glob.contains(['/', '\\']) {
+replace: if glob.split(['/', '\\']).filter(|name| !name.is_empty()).count() < 2 {
+caught-by:
+    capability::tests::a_glob_that_ends_in_a_separator_gives_its_folder
+
+[break] ext-root-of-a-glob-ending-in-a-separator-is-its-parent
+rule: A `write` glob that ends in a separator names a folder, all of it: `a/b/` gives `a/b`, not `a`.
+file: crates/cineris-ext/src/capability.rs
+in: write_root
+find: let folder = glob.ends_with(['/', '\\']);
+replace: let folder = glob.is_empty();
+caught-by:
+    capability::tests::a_glob_that_ends_in_a_separator_gives_its_folder
+
+[break] pinned-words-name-folders-of-their-own
+rule: The folders an approval says an extension's programs write are the launcher's write roots, made by its own code.
+file: crates/cineris-core/src/ext/found.rs
+in: write_folders
+find: cineris_ext::capability::write_roots(&workspace, globs)
+replace: globs.iter().map(|glob| workspace.join(glob.trim_end_matches(['/', '*'])).unwrap_or_else(|_| workspace.clone())).collect::<Vec<_>>()
+caught-by:
+    ext::found::tests::the_folders_an_approval_names_are_the_launchers_write_roots
+
+[break] pinned-root-bytes-of-folders-left-out-uncounted
+rule: Every folder read counts toward a root's 16 MiB, one left out after its read too.
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: *bytes += read_bytes;
+replace: *bytes += read_bytes * u64::from(read.as_ref().is_ok_and(|snapshot| Manifest::of(snapshot).is_ok()));
+caught-by:
+    discover::past_16_mib_a_root_the_rest_are_left_out_unread_though_none_had_a_manifest
+
+[break] pinned-unwatched-folder-read-on
+rule: A folder its caller would not watch is not read, and neither is the rest of its root.
+file: crates/cineris-ext/src/discover.rs
+in: look_in
+find: None => unwatched = 1
+replace: None => {}
+caught-by:
+    discover::a_folder_the_caller_would_not_watch_and_the_rest_of_its_root_are_left_out_unread
+
+[break] pinned-unwatched-root-listed-whole
+rule: A root of which a folder was not watched counts as not listed whole, so that its names are taken.
+file: crates/cineris-ext/src/discover.rs
+in: look_in
+find: if !discovered.cut.contains(&root.source) {
+replace: if discovered.cut.contains(&root.source) {
+caught-by:
+    discover::a_folder_the_caller_would_not_watch_and_the_rest_of_its_root_are_left_out_unread
+
+[break] pinned-places-unbounded
+rule: The places a root's extensions may stamp are bounded by count: a folder walked past the bound is reported, and nothing past it is stamped.
+file: crates/cineris-core/src/ext/watched.rs
+in: Watched::walk
+find: let Some(less) = left.checked_sub(1) else {
+replace: let Some(less) = Some(left.saturating_sub(1)) else {
+occurrence: 1
+caught-by:
+    ext::watched::tests::the_places_a_root_stamps_are_bounded_by_count
+
+[break] pinned-place-stamped-twice
+rule: A place is stamped once, told by a set and not by a look through every place stamped.
+file: crates/cineris-core/src/ext/watched.rs
+in: Watched::note
+find: if !self.known.insert(place.clone()) {
+replace: if !self.known.insert(place.clone()) && false {
+caught-by:
+    ext::watched::tests::the_places_a_root_stamps_are_bounded_by_count
+
+[break] pinned-folder-name-shown-visible
+rule: A folder's name in a refusal is shown as code it cannot end: a backtick in it is escaped, not only what acts unseen.
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: let shown = format!("{}/{}", opened.shown, in_code(&name.to_string_lossy()));
+replace: let shown = format!("{}/{}", opened.shown, visible(&name.to_string_lossy()));
+caught-by:
+    discover::every_name_a_refusal_shows_as_code_cannot_end_its_code
+
+[break] pinned-folder-error-names-visible
+rule: A name inside an extension's folder that a refusal quotes (a link, here) is shown as code it cannot end.
+file: crates/cineris-ext/src/folder.rs
+find: "`{}` is a link: an extension's folder holds only files and folders, so that nothing in it can lead out of it", in_code(.0)
+replace: "`{}` is a link: an extension's folder holds only files and folders, so that nothing in it can lead out of it", .0
+caught-by:
+    discover::every_name_a_refusal_shows_as_code_cannot_end_its_code
+
+[break] pinned-reader-key-raw
+rule: A key the TOML reader quotes from a manifest, one it does not know, is shown as code it cannot end.
+file: crates/cineris-ext/src/manifest.rs
+in: reader_said
+find: in_code(&rest[..at])
+replace: &rest[..at]
+caught-by:
+    discover::every_name_a_refusal_shows_as_code_cannot_end_its_code
+
+[break] pinned-trust-command-without-a-launcher
+rule: `cineris permissions trust` judges whether an extension's programs are confined as a session does, with the launcher the sessions are given.
+file: crates/cineris-cli/src/commands.rs
+in: Context::core
+find: .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)]));
+replace: .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)])).filter(|_| false);
+os: linux
+caught-by:
+    commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
 
 # From mutations/step-28-pins.breaks (part `pins`).
 # Step 28, the user's own pins (`pins.toml`, `cineris-policy`'s

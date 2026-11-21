@@ -226,46 +226,63 @@ impl Capabilities {
     }
 
     /// The folders a program the extension runs may write, where the
-    /// sandbox confines it: for each `write` glob, the folder before its
-    /// first wildcard (`out/**` gives `out`; `**/*.rs`, and a glob with no
-    /// `/`, which matches at any depth, give the workspace; a glob that
-    /// names one file gives its folder). None when the manifest has no
+    /// sandbox confines it ([`write_roots`]). None when the manifest has no
     /// `write`. A program may then write anything inside these folders,
     /// not only the files the globs name: the sandbox confines by folder.
     #[must_use]
     pub fn write_roots(&self) -> Vec<AbsPath> {
-        let mut roots: Vec<AbsPath> = Vec::new();
-        for glob in &self.declared.write {
-            let root = write_root(&self.workspace, glob);
-            if roots.iter().any(|known| root.starts_with(known)) {
-                continue;
-            }
-            roots.retain(|known| !known.starts_with(&root));
-            roots.push(root);
-        }
-        roots
+        write_roots(&self.workspace, &self.declared.write)
     }
+}
+
+/// The folders within `workspace` that the `write` globs give a program
+/// the extension runs, where the sandbox confines it: for each glob, the
+/// folder before its first wildcard (`out/**` gives `out`; a glob that ends
+/// in a separator names its folder whole, so `out/` gives `out` too;
+/// `**/*.rs`, and a glob with no separator, which matches at any depth,
+/// give the workspace; a glob that names one file gives its folder). A
+/// folder inside another is the other's. What an approval says of the
+/// folders is made from this too, so that it names what the launcher
+/// grants.
+#[must_use]
+pub fn write_roots(workspace: &AbsPath, globs: &[String]) -> Vec<AbsPath> {
+    let mut roots: Vec<AbsPath> = Vec::new();
+    for glob in globs {
+        let root = write_root(workspace, glob);
+        if roots.iter().any(|known| root.starts_with(known)) {
+            continue;
+        }
+        roots.retain(|known| !known.starts_with(&root));
+        roots.push(root);
+    }
+    roots
 }
 
 /// The folder a write glob's literal start names, within `workspace`.
 fn write_root(workspace: &AbsPath, glob: &str) -> AbsPath {
+    // A glob with no separator matches that name at any depth. Told by the
+    // separator, not by the names left once empty ones are dropped: `out/`
+    // is one name and a folder (the fresh review of step 28 found it read
+    // as a name at any depth, which granted the whole workspace).
+    if !glob.contains(['/', '\\']) {
+        return workspace.clone();
+    }
+    // A glob that ends in a separator names a folder, all of it.
+    let folder = glob.ends_with(['/', '\\']);
     let names: Vec<&str> = glob
         .split(['/', '\\'])
         .filter(|name| !name.is_empty())
         .collect();
-    // A glob with no separator matches that name at any depth.
-    if names.len() < 2 {
-        return workspace.clone();
-    }
     let wild = |name: &str| name.contains(['*', '?', '[', '{']);
     let literal: Vec<&str> = names
         .iter()
         .copied()
         .take_while(|name| !wild(name))
         .collect();
-    // All of it literal: one file, written in its folder.
-    let literal = if literal.len() == names.len() {
-        &literal[..literal.len() - 1]
+    // All of it literal: one file, written in its folder; or, ending in a
+    // separator, that folder.
+    let literal = if literal.len() == names.len() && !folder {
+        &literal[..literal.len().saturating_sub(1)]
     } else {
         &literal[..]
     };
@@ -309,5 +326,16 @@ mod tests {
         // A root inside another is the other's.
         assert_eq!(roots(&["out/a/**", "out/**"]), ["/work/app/out"]);
         assert!(roots(&[]).is_empty());
+    }
+
+    /// A glob that ends in a separator names its folder whole, and empty
+    /// names between separators are none (the fresh review of step 28:
+    /// `out/` granted the whole workspace, and `a/b/` only `a`).
+    #[test]
+    fn a_glob_that_ends_in_a_separator_gives_its_folder() {
+        assert_eq!(roots(&["out/"]), ["/work/app/out"]);
+        assert_eq!(roots(&["a/b/"]), ["/work/app/a/b"]);
+        assert_eq!(roots(&["x//y/**"]), ["/work/app/x/y"]);
+        assert_eq!(roots(&["/out"]), ["/work/app"]);
     }
 }

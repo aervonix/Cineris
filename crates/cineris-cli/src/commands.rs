@@ -65,6 +65,12 @@ impl Context {
                 flag: flag.clone(),
             })
             .collect();
+        // The launcher a session is given, which starts no command here: what
+        // `permissions trust` says an extension's programs can do is then
+        // what a session would let them do (the fresh review of step 28).
+        options.launcher = std::env::current_exe()
+            .ok()
+            .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)]));
         Core::start(options).map_err(|error| self.fail(&error))
     }
 
