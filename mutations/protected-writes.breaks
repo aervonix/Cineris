@@ -169,13 +169,31 @@ caught-by:
     ext::protected::tests::every_protected_path_and_what_is_below_it_is_refused_and_nothing_beside_it
 
 [break] a-repository-above-the-workspace-is-not-looked-for
-rule: A workspace in a folder git takes for a repository refuses every write.
+rule: A workspace in one of the own folders of a repository above it refuses every write.
 file: crates/cineris-core/src/ext/protected.rs
 in: repository_on_the_way
-find: workspace.ancestors().skip(1).find(|folder| repository(folder))
-replace: workspace.ancestors().skip(1).find(|_| false)
+find: own && repository(folder)
+replace: own && repository(folder) && false
 caught-by:
     ext::protected::tests::a_workspace_that_is_or_is_in_a_repository_refuses_every_write
+
+[break] a-worktree-of-a-bare-repository-refuses-every-write
+rule: A workspace that is a worktree of a bare repository, beside the repository's own folders, writes as any workspace does.
+file: crates/cineris-core/src/ext/protected.rs
+in: repository_on_the_way
+find: own && repository(folder)
+replace: (own || true) && repository(folder)
+caught-by:
+    ext::protected::tests::a_workspace_that_is_or_is_in_a_repository_refuses_every_write
+
+[break] a-refusal-is-logged-with-the-scripts-name-raw
+rule: The path in a refusal's log line is escaped, as the extension's own log lines are: a name the script chose cannot act unseen there.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::refuse_protected
+find: path = %path.shown()
+replace: path = %path.data()
+caught-by:
+    cineris-core::it extensions::a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked
 
 [break] a-repository-is-put-together-one-write-at-a-time
 rule: A write that would give a folder holding `HEAD` its `objects` or `refs` is refused.

@@ -32,9 +32,14 @@
 //!   `.cargo/config.toml`, `.cargo/config`, `.npmrc`, `.yarnrc`,
 //!   `.yarnrc.yml` and `.envrc`, their names compared without regard to
 //!   case (protecting too much is the safe side); and everything in a
-//!   folder, the workspace's or one above it, that holds `HEAD`, `objects`
-//!   and `refs`, which git takes for a repository, or that holds `HEAD`
-//!   and would be given `objects` or `refs` by the write.
+//!   folder that holds `HEAD`, `objects` and `refs`, which git takes for a
+//!   repository (the workspace itself, or one above whose own folders the
+//!   workspace is in, but not one it is a worktree of), or that holds
+//!   `HEAD` and would be given `objects` or `refs` by the write.
+//!
+//! A refusal names the path, and the protected path it is in when that is
+//! in the workspace; one outside it is not named, since where the workspace
+//! is, is not the script's to learn.
 //!
 //! **Judged by place.** The write's target is where the session's path
 //! resolver led the script's path (`..`, every link followed, the spelling
@@ -60,14 +65,38 @@ const CARGO_FILES: [&str; 2] = ["config.toml", "config"];
 /// repository.
 const BESIDE_HEAD: [&str; 2] = ["objects", "refs"];
 
+/// A repository's own folders: a workspace in one of them is in the
+/// repository's data, where one beside them (a worktree of a bare
+/// repository, `git worktree add main`) is not.
+const OWN_FOLDERS: [&str; 7] = [
+    "hooks",
+    "info",
+    "objects",
+    "refs",
+    "logs",
+    "modules",
+    "worktrees",
+];
+
 /// A protected entry that a write would change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Entry {
     /// In the workspace: its names from the workspace's root, joined with
     /// `/` (empty for the workspace itself).
     Inside(String),
-    /// A protected path that holds the workspace.
-    Around(PathBuf),
+    /// A protected path outside the workspace, which holds it when it is
+    /// matched. Its place is not named in the refusal: where the workspace
+    /// is, is not the script's to learn.
+    Around(Holder),
+}
+
+/// What a protected path outside the workspace is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Holder {
+    /// One of the lease's (`sandbox.protect`).
+    Lease,
+    /// A folder git takes for a repository, or one named `.git`.
+    Repository,
 }
 
 /// A protected path, at a place.
@@ -98,11 +127,7 @@ pub(crate) fn refusal(
         entry_of(&at, &workspace, &above, &places, style)
             .or_else(|| repository_on_the_way(&at, &workspace, style))
     }?;
-    let home = matches!(entry, Entry::Around(_))
-        .then(|| paths.resolve("~").ok())
-        .flatten()
-        .map(|home| home.to_fs_path());
-    Some(words(target, &entry, home.as_deref()))
+    Some(words(target, &entry))
 }
 
 /// The protected paths as they are written: the names of
@@ -126,7 +151,7 @@ pub(crate) fn written(workspace: &Path, roots: &[String], style: PathStyle) -> V
         }
         let entry = match style.strip_location_prefix(&at, workspace) {
             Some(below) => Entry::Inside(names_of(&below, style).join("/")),
-            None => Entry::Around(at.clone()),
+            None => Entry::Around(Holder::Lease),
         };
         places.push(Place { at, entry });
     }
@@ -149,7 +174,7 @@ fn leading(paths: &PathResolver, workspace: &Path, places: &mut Vec<Place>, styl
                 Some(link) => (names.clone(), Some(link)),
                 None => continue,
             },
-            Entry::Around(at) => (at.to_string_lossy().into_owned(), None),
+            Entry::Around(_) => (place.at.to_string_lossy().into_owned(), None),
         };
         let leads = match paths.resolve(&asked) {
             Ok(resolved) => resolved.to_fs_path(),
@@ -283,25 +308,21 @@ pub(crate) fn entry_of(
         }
         return Some(match at.checked_sub(above.len()) {
             Some(inside) => Entry::Inside(below[..=inside].join("/")),
-            // One of the workspace's own folders: the workspace is in it.
-            None => Entry::Around(
-                workspace
-                    .ancestors()
-                    .nth(above.len() - 1 - at)
-                    .unwrap_or(workspace)
-                    .to_path_buf(),
-            ),
+            // One of the workspace's own folders, a `.git`: the workspace
+            // is in it.
+            None => Entry::Around(Holder::Repository),
         });
     }
     None
 }
 
-/// The first folder git takes for a repository on the way to `target`:
-/// one above the workspace or the workspace itself, or one between it and
-/// the target (the target not), that holds `HEAD`, `objects` and `refs`,
-/// as a bare repository made of plain files does; or one below the
-/// workspace that holds `HEAD` where the write would make `objects` or
-/// `refs`, so that a repository is not put together one write at a time.
+/// The first folder git takes for a repository on the way to `target`,
+/// one that holds `HEAD`, `objects` and `refs`, as a bare repository made
+/// of plain files does: one above the workspace whose own folders
+/// ([`OWN_FOLDERS`]) the workspace is in; the workspace itself; or one
+/// between it and the target (the target not). Or one below the workspace
+/// that holds `HEAD` where the write would make `objects` or `refs`, so
+/// that a repository is not put together one write at a time.
 #[allow(
     clippy::disallowed_methods,
     reason = "it looks at the file system on the blocking pool"
@@ -311,14 +332,24 @@ fn repository_on_the_way(target: &Path, workspace: &Path, style: PathStyle) -> O
     let repository = |folder: &Path| {
         there(folder.join("HEAD")) && BESIDE_HEAD.iter().all(|part| there(folder.join(part)))
     };
+    let same = |name: &str, protected: &str| {
+        name.eq_ignore_ascii_case(protected) || style.same_name(name, protected)
+    };
     let names = names_of(&style.strip_location_prefix(target, workspace)?, style);
-    // Git looks for a repository in each folder up from where it starts.
-    if let Some(folder) = workspace
-        .ancestors()
-        .skip(1)
-        .find(|folder| repository(folder))
-    {
-        return Some(Entry::Around(folder.to_path_buf()));
+    // Git looks for a repository in each folder up from where it starts. A
+    // worktree of a bare repository is a folder of it beside its data, and
+    // writes as any workspace does (its `.git` file is refused by name);
+    // one in the repository's own folders is in its data.
+    let mut child = workspace;
+    for folder in workspace.ancestors().skip(1) {
+        let own = child
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| OWN_FOLDERS.iter().any(|own| same(name, own)));
+        if own && repository(folder) {
+            return Some(Entry::Around(Holder::Repository));
+        }
+        child = folder;
     }
     let mut folder = workspace.to_path_buf();
     for (at, name) in names.iter().enumerate() {
@@ -335,8 +366,9 @@ fn repository_on_the_way(target: &Path, workspace: &Path, style: PathStyle) -> O
 }
 
 /// The refusal's words: the target, as code, relative to the workspace, and
-/// the protected entry it is in, relative to the workspace or under `~`.
-fn words(target: &ResolvedPath, entry: &Entry, home: Option<&Path>) -> String {
+/// the protected entry it is in, relative to the workspace; one outside it
+/// is not named.
+fn words(target: &ResolvedPath, entry: &Entry) -> String {
     let shown = cineris_base::in_code(&target.data()).into_owned();
     let what = match entry {
         Entry::Inside(names) if names.eq_ignore_ascii_case(&target.data()) => {
@@ -349,9 +381,12 @@ fn words(target: &ResolvedPath, entry: &Entry, home: Option<&Path>) -> String {
             "`{shown}` is in `{}`, a protected path",
             cineris_base::in_code(names)
         ),
-        Entry::Around(root) => format!(
-            "`{shown}` is in `{}`, a protected path",
-            cineris_base::in_code(&super::found::shown_path(root, home))
+        Entry::Around(Holder::Lease) => {
+            format!("`{shown}` is in the workspace, which is inside a protected path")
+        }
+        Entry::Around(Holder::Repository) => format!(
+            "`{shown}` is in the workspace, which is inside a folder that git takes for a \
+             repository"
         ),
     };
     format!(
@@ -423,7 +458,7 @@ mod tests {
         )
         .map(|entry| match entry {
             Entry::Inside(names) => names,
-            Entry::Around(root) => root.to_string_lossy().into_owned(),
+            Entry::Around(holder) => format!("({holder:?})"),
         })
     }
 
@@ -486,14 +521,14 @@ mod tests {
         let around = placed(ws.0, style, &["/work"]);
         assert_eq!(
             judged("/work/app/src/a.rs", ws, &around, style).as_deref(),
-            Some("/work")
+            Some("(Lease)")
         );
         // A workspace inside a `.git` folder, and one that is a `.cargo`.
         let in_git = ("/work/.git/app", &["work", ".git", "app"][..]);
         let places = placed(in_git.0, style, &[]);
         assert_eq!(
             judged("/work/.git/app/src/a.rs", in_git, &places, style).as_deref(),
-            Some("/work/.git")
+            Some("(Repository)")
         );
         let cargo = ("/srv/u/.cargo", &["srv", "u", ".cargo"][..]);
         let places = placed(cargo.0, style, &[]);
@@ -553,7 +588,7 @@ mod tests {
         let around = placed(ws.0, style, &["c:/work"]);
         assert_eq!(
             judged(r"\\?\C:\Work\App\src\a.rs", ws, &around, style).as_deref(),
-            Some("c:/work")
+            Some("(Lease)")
         );
         let share = (r"\\server\share\app", &["app"][..]);
         let on_share = placed(share.0, style, &[]);
@@ -652,35 +687,44 @@ mod tests {
         assert!(refused("src/main.rs", &all).is_some());
     }
 
-    /// A workspace that git takes for a repository, or that is in one,
-    /// refuses every write.
+    /// A workspace that git takes for a repository, or that is in one of a
+    /// repository's own folders, refuses every write, and the refusal does
+    /// not say where the repository is; a worktree of a bare repository,
+    /// beside its own folders, writes as any workspace does.
     #[test]
     fn a_workspace_that_is_or_is_in_a_repository_refuses_every_write() {
         let scratch = Scratch::outside("cineris-core-unit", "ext_protected_repository_around");
-        for root in ["bare", "outer"] {
-            for part in ["objects", "refs"] {
+        for root in ["bare", "repo"] {
+            for part in ["objects", "refs", "worktrees"] {
                 std::fs::create_dir_all(scratch.path().join(root).join(part)).unwrap();
             }
             std::fs::write(scratch.path().join(root).join("HEAD"), "ref: x\n").unwrap();
         }
-        let bare = PathResolver::new(&scratch.path().join("bare"), PathOptions::new()).unwrap();
-        let words = refusal(&bare, &bare.resolve("src/a.rs").unwrap(), &NONE_MORE).unwrap();
+        let refused = |workspace: &Path| {
+            let paths = PathResolver::new(workspace, PathOptions::new()).unwrap();
+            refusal(&paths, &paths.resolve("src/a.rs").unwrap(), &NONE_MORE)
+        };
+        let words = refused(&scratch.path().join("bare")).unwrap();
         assert!(
             words.starts_with("`src/a.rs` is in the workspace, which git takes for a repository"),
             "{words}"
         );
-        let inner = scratch.dir("outer/ws");
-        let paths = PathResolver::new(&inner, PathOptions::new()).unwrap();
-        let words = refusal(&paths, &paths.resolve("src/a.rs").unwrap(), &NONE_MORE).unwrap();
-        let outer = paths.root().to_fs_path();
-        let outer = outer.parent().unwrap();
-        assert!(
-            words.starts_with(&format!(
-                "`src/a.rs` is in `{}`, a protected path",
-                cineris_base::in_code(&outer.display().to_string())
-            )),
-            "{words}"
-        );
+        // `git clone --bare URL repo; cd repo; git worktree add main`.
+        assert_eq!(refused(&scratch.dir("repo/main")), None);
+        for own in ["repo/hooks", "repo/Worktrees/main"] {
+            let words = refused(&scratch.dir(own)).unwrap_or_else(|| panic!("{own}"));
+            assert!(
+                words.starts_with(
+                    "`src/a.rs` is in the workspace, which is inside a folder that git takes for \
+                     a repository, and "
+                ),
+                "{words}"
+            );
+            assert!(
+                !words.contains("ext_protected_repository_around"),
+                "{words}"
+            );
+        }
     }
 
     /// A protected path that is a link is judged where it leads too: a
@@ -726,10 +770,9 @@ mod tests {
         };
         let words = refused("src/main.rs", &around).expect("refused");
         assert!(
-            words.starts_with(&format!(
-                "`src/main.rs` is in `{}`, a protected path",
-                cineris_base::in_code(&alias.display().to_string())
-            )),
+            words.starts_with(
+                "`src/main.rs` is in the workspace, which is inside a protected path, and "
+            ),
             "{words}"
         );
     }

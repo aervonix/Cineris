@@ -492,7 +492,7 @@ impl CallHost<'_> {
                 // log says it.
                 tracing::warn!(
                     extension = self.extension,
-                    path = %path.data(),
+                    path = %path.shown(),
                     "refused an extension's write of a protected path"
                 );
                 Err(HostError::Denied(why))
