@@ -112,6 +112,7 @@ fn turn(turn: u64, prompt: &str, pieces: &[&str], output: &str) -> Vec<Vec<Inbou
                 artifacts: Vec::new(),
                 duration_ms: Some(3400),
                 created_at: None,
+                replaced: None,
             }),
         })),
         event(Event::TurnCompleted(TurnCompleted {

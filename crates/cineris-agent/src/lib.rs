@@ -14,6 +14,7 @@
 //! | [`state`] | [`TurnState`], the table of transitions, and [`Observer`]. |
 //! | [`store`] | [`SessionStore`], what the loop needs from a session's log, and [`MemorySessionStore`]. |
 //! | [`policy`] | [`Policy`], what it asks of the permission engine, and [`AllowAll`]. |
+//! | [`hooks`] | [`Hooks`], the seam the loop reaches hooks through, and [`Hook`], one of them. |
 //! | [`toolset`] | [`ToolSet`], the tools a session offers. |
 //! | [`context`] | What is sent to the model: the system prompt, instruction files, context epochs, the budget and compaction, from [`ContextParts`]. |
 //! | [`verify`] | [`Verifier`], the verification stage, and [`NoVerifier`]. |
@@ -55,6 +56,7 @@ pub mod config;
 pub mod context;
 pub mod events;
 pub mod guard;
+pub mod hooks;
 pub mod ledger;
 pub mod policy;
 pub mod reconfigure;
@@ -79,6 +81,10 @@ pub use context::{
 };
 pub use events::EventSink;
 pub use guard::RepetitionLimits;
+pub use hooks::{
+    Hook, HookEvent, HookInput, HookOutcome, HookQuestion, HookSubject, Hooks, LoopHooks,
+    ToolTarget,
+};
 pub use ledger::{Account, CatchUp, Ledger, LimitReached, Spent};
 pub use policy::{AllowAll, Decision, PlannedCall, Policy, Verdict};
 pub use reconfigure::{Compaction, EpochChange, EpochContext, Reconfigure};

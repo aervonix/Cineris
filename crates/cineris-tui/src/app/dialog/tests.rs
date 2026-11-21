@@ -30,6 +30,8 @@ fn dialog() -> Dialog {
         choices: vec![ApprovalChoice::AllowOnce, ApprovalChoice::Deny],
         reasons: Vec::new(),
         adds: Vec::new(),
+        hooks: Vec::new(),
+        replaced: None,
     };
     Dialog::approval(RequestId::Number(1), request, false)
 }

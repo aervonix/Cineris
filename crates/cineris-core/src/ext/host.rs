@@ -88,6 +88,7 @@ impl CallHost<'_> {
             arguments: &arguments,
             plan: &plan,
             preview,
+            hooks: None,
         };
         match self.parts.policy.decide(&planned) {
             // What the session's shell calls read-only may not be the

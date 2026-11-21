@@ -138,8 +138,12 @@ export interface ApprovalRequest {
   choices: Array<ApprovalChoice>;
   /** Exactly what would happen. */
   detail: ApprovalDetail;
+  /** The `tool.before` hooks that put the question (since step 28): each that answered `ask`, with its reason. A hook only narrows, so it may put a question about a call the rules alone would have allowed. */
+  hooks?: Array<HookReason>;
   /** Why the call needs an answer, a reason an entry: the rule that asks, the part of a command that is not on a safe list, a protected path. */
   reasons?: Array<string>;
+  /** The arguments a hook put in place of the model's (since step 28), with the model's own as `original`: the call would run with the hook's, and `summary` and `detail` describe it so. Such a question is always put, whatever the rules say, and offers only `allow_once` and `deny`. */
+  replaced?: ReplacedArguments | null;
   /** The session. */
   session_id: SessionId;
   /** The call in one line. */
@@ -727,6 +731,14 @@ export interface HeadlessVerification {
   verdict: Verification;
 }
 
+/** A hook, named where what it answered shows: a hook that asked, refused or replaced something (since step 28, `docs/architecture/12-extensions.md`, "Tier 3: hooks"). */
+export interface HookReason {
+  /** The hook's name: its `[hooks.<name>]`, or the one an extension's script hook is shown by. */
+  hook: string;
+  /** What it gave as its reason, or how it failed. Absent when it gave none. */
+  reason?: string | null;
+}
+
 /** An image. Input only. */
 export interface ImagePart {
   /** The stored artifact that holds the image. */
@@ -1060,7 +1072,9 @@ export type Notice = ({
     kind: "info";
   } & InfoNotice) | ({
     kind: "verification";
-  } & VerificationNotice);
+  } & VerificationNotice) | ({
+    kind: "prompt_returned";
+  } & PromptReturnedNotice);
 
 /** A message the harness added to the conversation. The model sees it. This is not the `notice` event ([`Notice`](crate::event::Notice)), which tells front ends about something transient and is never sent to the model. */
 export interface NoticeItem {
@@ -1075,7 +1089,7 @@ export interface NoticeItem {
 }
 
 /** Why the harness added a notice to the conversation. */
-export type NoticeSource = "instructions" | "plan" | "repetition" | "verification" | "limit" | "harness" | "map" | "profile" | "extensions" | (string & {});
+export type NoticeSource = "instructions" | "plan" | "repetition" | "verification" | "limit" | "harness" | "map" | "profile" | "extensions" | "hook" | (string & {});
 
 /** What produced an assistant message. Raw blocks are valid only for replay to the same protocol, and to a model that can read them. */
 export interface Origin {
@@ -1348,6 +1362,18 @@ export interface ProjectUpdated {
   removed?: Array<EntryId>;
 }
 
+/** Notice: a prompt given back to the front end, for its editor, and never sent to the model (since step 28). A `prompt.submit` hook refused it, and `hooks` names each that did, with its reason; or the turn was interrupted while its hooks were asked, and `hooks` is empty. A prompt that would have started a turn ends that turn `denied` (or `interrupted`); a steering message is dropped, and the running turn goes on. */
+export interface PromptReturnedNotice {
+  /** How it was sent: `steer` for a steering message. Absent for a prompt that started a turn. */
+  delivery?: Delivery | null;
+  /** The hooks that refused it, each with its reason or its failure. */
+  hooks?: Array<HookReason>;
+  /** The notice in words: which hooks refused the prompt, and why. */
+  message: string;
+  /** The prompt, as it was sent. */
+  parts: Array<Part>;
+}
+
 /** Something the provider produced that the neutral model does not name: server-side tool use and its results, compaction blocks, fallback markers. */
 export interface ProviderBlockPart {
   /** The provider's name for the block type, for display. */
@@ -1433,6 +1459,18 @@ export interface RefreshOutcome {
   limits?: ProviderLimits | null;
   /** The provider. */
   provider: ProviderId;
+}
+
+/** Arguments a `tool.before` hook put in place of the ones the model wrote (since step 28). Such a call is always put to the user, who may allow it once or refuse it. */
+export interface ReplacedArguments {
+  /** The arguments the call runs with: the hook's. */
+  arguments: unknown;
+  /** The hook that replaced them. */
+  hook: string;
+  /** The arguments the model wrote, where the message that carries the call is not at hand: in an approval request. Absent in a tool result, whose call in the assistant message has them. */
+  original?: unknown;
+  /** What the hook gave as its reason. */
+  reason?: string | null;
 }
 
 /** The id that ties a response to its request: a number or a string, chosen by the side that sends the request. */
@@ -2106,6 +2144,8 @@ export interface ToolResultItem {
   outcome: ToolOutcome;
   /** A structured payload for front ends, whose shape belongs to the tool: a diff, an exit status, match counts. */
   payload?: unknown;
+  /** The arguments a hook put in place of the model's, when one did and the call was put to the user with them (since step 28): what ran, if it ran, and which hook chose it. The model's own are in its call. (Boxed: it is rare, and every item would otherwise be its size.) */
+  replaced?: ReplacedArguments | null;
   /** The tool's name. */
   tool: string;
 }

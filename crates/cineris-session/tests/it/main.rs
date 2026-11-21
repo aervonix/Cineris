@@ -190,6 +190,7 @@ pub(crate) fn tool_result(id: &str, call: &str) -> Body {
         artifacts: Vec::new(),
         duration_ms: Some(3),
         created_at: None,
+        replaced: None,
     })
 }
 

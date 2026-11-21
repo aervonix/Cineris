@@ -17,7 +17,7 @@ use crate::event::SessionEvent;
 use crate::ids::{
     ApprovalId, ArtifactId, CallId, ItemId, ProjectKey, ProviderId, SessionId, Timestamp, TurnId,
 };
-use crate::item::{Delivery, Item, Plan};
+use crate::item::{Delivery, HookReason, Item, Plan, ReplacedArguments};
 use crate::jsonrpc::{self, ErrorObject, Notification, Request, RequestId};
 use crate::lease::{Effect, Rule};
 use crate::message::Part;
@@ -1157,6 +1157,18 @@ pub struct ApprovalRequest {
     /// on. Empty when only this one call can be allowed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub adds: Vec<AddedRule>,
+    /// The `tool.before` hooks that put the question (since step 28): each
+    /// that answered `ask`, with its reason. A hook only narrows, so it may
+    /// put a question about a call the rules alone would have allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HookReason>,
+    /// The arguments a hook put in place of the model's (since step 28),
+    /// with the model's own as `original`: the call would run with the
+    /// hook's, and `summary` and `detail` describe it so. Such a question
+    /// is always put, whatever the rules say, and offers only `allow_once`
+    /// and `deny`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<ReplacedArguments>,
 }
 
 /// A rule an answer to an approval request would add: always an `allow`.

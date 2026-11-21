@@ -352,6 +352,7 @@ fn turn_events(running: bool) -> Vec<Event> {
                 artifacts: Vec::new(),
                 duration_ms: Some(20),
                 created_at: None,
+                replaced: None,
             }),
         })
     };

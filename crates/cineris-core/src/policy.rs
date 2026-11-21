@@ -1364,6 +1364,9 @@ impl EnginePolicy {
                         pattern: rule.pattern.clone(),
                     })
                     .collect(),
+                // From `call.hooks`, with the core's part of step 28.
+                hooks: Vec::new(),
+                replaced: None,
             };
             let (id, mut answer) = self.clients.ask(
                 call.session,
@@ -1650,6 +1653,7 @@ mod tests {
                 arguments: &arguments,
                 plan: &plan,
                 preview: None,
+                hooks: None,
             };
             assert_eq!(
                 detail(&call, false),
@@ -1672,6 +1676,7 @@ mod tests {
             arguments: &arguments,
             plan: &plan,
             preview: None,
+            hooks: None,
         };
         assert_eq!(
             detail(&call, false),
