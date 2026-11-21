@@ -176,6 +176,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### The tooling and CI
 
 - [a-commit-settled-to-nothing-by-hand-in-a-rebase](a-commit-settled-to-nothing-by-hand-in-a-rebase.md): A commit a person settles to nothing during `cargo xtask rebase` is dropped by git and not named in its report. Owner: the maintainers.
+- [a-kept-scratch-folder-test-that-fails-on-windows](a-kept-scratch-folder-test-that-fails-on-windows.md): The `mutate` test of a failed baseline's kept scratch folder with two jobs fails now and then on a Windows runner; Linux passes it. Owner: the maintainers.
 - [a-known-flake-in-a-breaks-own-run](a-known-flake-in-a-breaks-own-run.md): A known flake that fails in a break's own run of `mutate` makes a break that names no test look caught. Owner: a later tooling step.
 - [a-retried-tests-standard-error-in-the-report](a-retried-tests-standard-error-in-the-report.md): `xtask` reads a retried test's standard error from its first attempt, not the last. Owner: a later tooling step.
 - [actionlint-in-the-checks](actionlint-in-the-checks.md): The workflows are not linted by actionlint, which the pinned install action cannot supply as a checksummed binary. Owner: the owner.
