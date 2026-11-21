@@ -39,6 +39,7 @@ mod context;
 mod denials;
 mod early;
 mod extensions;
+mod hooks;
 mod interrupt;
 mod limits;
 mod map;
@@ -689,6 +690,9 @@ pub struct ScriptedPolicy {
     panics_deciding: Mutex<Vec<String>>,
     /// The calls that were asked about, by their plan's summary, in order.
     asked: Mutex<Vec<String>>,
+    /// What each question was put with, in order: the arguments it showed
+    /// and what it showed of the call's hooks.
+    asked_with: Mutex<Vec<Asked>>,
     /// The questions that were dropped before they were answered.
     withdrawn: Arc<Mutex<Vec<String>>>,
     /// Each question waits at the gate named after its tool, when one is
@@ -752,6 +756,11 @@ impl ScriptedPolicy {
         lock(&self.asked).clone()
     }
 
+    /// What each question was put with, in order.
+    pub fn asked_with(&self) -> Vec<Asked> {
+        lock(&self.asked_with).clone()
+    }
+
     /// Interrupts `session` in the same step as the next answer is given.
     pub fn interrupt_as_it_answers(&self, session: &SessionHandle) {
         *lock(&self.interrupts) = Some(session.clone());
@@ -797,6 +806,17 @@ impl ScriptedPolicy {
             self.wake.notified().await;
         }
     }
+}
+
+/// What one question was put with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Asked {
+    /// The plan's summary.
+    pub summary: String,
+    /// The arguments the question showed.
+    pub arguments: Json,
+    /// What it showed of the call's hooks.
+    pub hooks: Option<cineris_agent::HookQuestion>,
 }
 
 /// Notes a question that is dropped while it is still open.
@@ -864,6 +884,11 @@ impl Policy for ScriptedPolicy {
     fn ask<'a>(&'a self, call: PlannedCall<'a>) -> BoxFuture<'a, Verdict> {
         Box::pin(async move {
             let tool = call.spec.name.clone();
+            lock(&self.asked_with).push(Asked {
+                summary: call.plan.summary.clone(),
+                arguments: call.arguments.clone(),
+                hooks: call.hooks.cloned(),
+            });
             lock(&self.asked).push(call.plan.summary.clone());
             self.wake.notify_one();
             assert!(
@@ -1115,6 +1140,8 @@ pub struct Setup {
     /// Where sections 6 and 7 of the prompt come from, when the session
     /// has extensions.
     pub extensions: Option<Arc<dyn cineris_agent::ExtensionsSource>>,
+    /// The session's hooks, when it has any (`hooks.rs`'s fakes).
+    pub hooks: Option<cineris_agent::LoopHooks>,
 }
 
 /// One session, with everything it does remembered.
@@ -1156,6 +1183,7 @@ impl Setup {
             map: None,
             profile: None,
             extensions: None,
+            hooks: None,
         }
     }
 
@@ -1220,6 +1248,7 @@ impl Setup {
             config: self.config,
             cancel: CancelToken::new(),
             observer: Some(Arc::clone(&seen) as Arc<dyn Observer>),
+            hooks: self.hooks,
         };
         let (session, handle) = world
             .runtime

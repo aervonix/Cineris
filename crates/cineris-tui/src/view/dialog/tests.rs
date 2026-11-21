@@ -28,6 +28,8 @@ fn request(detail: ApprovalDetail, summary: &str) -> ApprovalRequest {
         choices: vec![ApprovalChoice::AllowOnce, ApprovalChoice::Deny],
         reasons: vec!["CI configuration is protected, so a change to it always asks.".to_owned()],
         adds: Vec::new(),
+        hooks: Vec::new(),
+        replaced: None,
     }
 }
 

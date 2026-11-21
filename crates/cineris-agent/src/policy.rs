@@ -28,6 +28,8 @@ use std::sync::Arc;
 use cineris_protocol::{CallId, ItemId, SessionId, TurnId};
 use cineris_tools::{BoxFuture, ChangePreview, Json, OpenGate, Plan, ReadGate, ToolSpec};
 
+use crate::hooks::HookQuestion;
+
 /// One planned tool call, as the policy is shown it.
 #[derive(Debug, Clone, Copy)]
 pub struct PlannedCall<'a> {
@@ -54,6 +56,19 @@ pub struct PlannedCall<'a> {
     /// question it puts, and `None` to [`Policy::decide`] and for a tool
     /// that changes no file.
     pub preview: Option<&'a ChangePreview>,
+    /// What the call's `tool.before` hooks said that the question must show
+    /// (step 28): the hooks that asked, and a replacement of the arguments.
+    /// Given to [`Policy::ask`] only, and `None` for a call no hook
+    /// narrowed.
+    ///
+    /// With it, [`Policy::ask`] puts the question **even when the rules
+    /// alone would allow the call**: a hook that asks turns an allowed call
+    /// into a question. With a replacement (`replaced`), `arguments` and
+    /// `plan` are the hook's, the model's own are its `original`, and the
+    /// question offers only "allow once" and "deny", keeps no rule, and
+    /// where nobody can be asked is answered "deny", whatever a default
+    /// answer would be: a replacement is new work nobody chose.
+    pub hooks: Option<&'a HookQuestion>,
 }
 
 /// What the policy says of a planned call, before anybody is asked.
@@ -173,8 +188,21 @@ impl Policy for AllowAll {
         Decision::Allow
     }
 
-    fn ask<'a>(&'a self, _call: PlannedCall<'a>) -> BoxFuture<'a, Verdict> {
-        Box::pin(std::future::ready(Verdict::Allow))
+    /// Allows what it is asked about, with nobody to ask: but for a call
+    /// whose arguments a hook replaced, which only a person may allow.
+    fn ask<'a>(&'a self, call: PlannedCall<'a>) -> BoxFuture<'a, Verdict> {
+        let replaced = call.hooks.is_some_and(|hooks| hooks.replaced.is_some());
+        Box::pin(std::future::ready(if replaced {
+            Verdict::Deny {
+                note: Some(
+                    "Nobody could be asked, and only a person may allow arguments a hook \
+                     replaced."
+                        .to_owned(),
+                ),
+            }
+        } else {
+            Verdict::Allow
+        }))
     }
 
     fn answers_may_stop(&self) -> bool {
@@ -187,5 +215,57 @@ impl Policy for AllowAll {
 
     fn read_gate(&self) -> Arc<dyn ReadGate> {
         Arc::new(OpenGate)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cineris_protocol::item::{HookReason, ReplacedArguments};
+    use serde_json::json;
+
+    use super::*;
+
+    /// Where nobody can be asked, a call whose arguments a hook replaced is
+    /// refused: `AllowAll` asks nobody. A hook that only asked is allowed,
+    /// as everything else it is asked about.
+    #[test]
+    fn nobody_to_ask_refuses_a_replacement_and_allows_the_rest() {
+        let (session, turn) = (SessionId::new("s_1"), TurnId::new("t_1"));
+        let (call_id, item) = (CallId::new("c_1"), ItemId::new("i_1"));
+        let spec = ToolSpec::new("write", "", json!({"type": "object"}));
+        let arguments = json!({"path": "b"});
+        let plan = Plan::new("write b", ());
+        let asked = HookQuestion {
+            asked: vec![HookReason {
+                hook: "look".to_owned(),
+                reason: None,
+            }],
+            replaced: None,
+        };
+        let replaced = HookQuestion {
+            asked: Vec::new(),
+            replaced: Some(ReplacedArguments {
+                hook: "swap".to_owned(),
+                arguments: arguments.clone(),
+                original: Some(json!({"path": "a"})),
+                reason: None,
+            }),
+        };
+        let ask = |hooks| {
+            cineris_testkit::block_on(AllowAll.ask(PlannedCall {
+                session: &session,
+                turn: &turn,
+                call_id: &call_id,
+                item: &item,
+                spec: &spec,
+                arguments: &arguments,
+                plan: &plan,
+                preview: None,
+                hooks,
+            }))
+        };
+        assert_eq!(ask(None), Verdict::Allow);
+        assert_eq!(ask(Some(&asked)), Verdict::Allow);
+        assert!(matches!(ask(Some(&replaced)), Verdict::Deny { .. }));
     }
 }

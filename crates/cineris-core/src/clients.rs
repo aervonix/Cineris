@@ -870,6 +870,8 @@ mod tests {
             choices: vec![ApprovalChoice::AllowOnce, ApprovalChoice::Deny],
             reasons: Vec::new(),
             adds: Vec::new(),
+            hooks: Vec::new(),
+            replaced: None,
         })
     }
 

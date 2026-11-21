@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::ErrorData;
 use crate::ids::{CallId, EntryId, ItemId, SessionId, Timestamp, TurnId};
-use crate::item::{ArtifactRef, Item, Plan, StopReason};
+use crate::item::{ArtifactRef, Delivery, HookReason, Item, Plan, StopReason};
+use crate::message::Part;
 use crate::jsonrpc::RequestId;
 use crate::open::{open_enum, open_union};
 use crate::project::ProjectEntry;
@@ -273,6 +274,29 @@ pub struct InfoNotice {
     pub message: String,
 }
 
+/// Notice: a prompt given back to the front end, for its editor, and never
+/// sent to the model (since step 28). A `prompt.submit` hook refused it,
+/// and `hooks` names each that did, with its reason; or the turn was
+/// interrupted while its hooks were asked, and `hooks` is empty. A prompt
+/// that would have started a turn ends that turn `denied` (or
+/// `interrupted`); a steering message is dropped, and the running turn goes
+/// on.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PromptReturnedNotice {
+    /// The notice in words: which hooks refused the prompt, and why.
+    pub message: String,
+    /// The prompt, as it was sent.
+    pub parts: Vec<Part>,
+    /// How it was sent: `steer` for a steering message. Absent for a prompt
+    /// that started a turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<Delivery>,
+    /// The hooks that refused it, each with its reason or its failure.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HookReason>,
+}
+
 open_union! {
     /// Something transient that front ends should show. It is never sent to
     /// the model and is not an item.
@@ -299,6 +323,9 @@ open_union! {
         /// The project's checks: a round starting or ended, or checks
         /// offered (since step 19).
         Verification(VerificationNotice) => "verification",
+        /// A prompt given back, not sent to the model: a hook refused it
+        /// (since step 28).
+        PromptReturned(PromptReturnedNotice) => "prompt_returned",
     }
 }
 
@@ -317,6 +344,7 @@ impl Notice {
             Self::SpeedCooldown(notice) => Some(&notice.message),
             Self::Info(notice) => Some(&notice.message),
             Self::Verification(notice) => Some(&notice.message),
+            Self::PromptReturned(notice) => Some(&notice.message),
             Self::Unknown(unknown) => unknown.message(),
         }
     }

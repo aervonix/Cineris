@@ -69,6 +69,7 @@ fn result(id: &str, call: &str) -> Item {
         artifacts: Vec::new(),
         duration_ms: None,
         created_at: None,
+        replaced: None,
     })
 }
 
@@ -534,6 +535,7 @@ fn payload_result(id: &str, tool: &str, outcome: ToolOutcome, payload: serde_jso
         artifacts: Vec::new(),
         duration_ms: None,
         created_at: None,
+        replaced: None,
     })
 }
 

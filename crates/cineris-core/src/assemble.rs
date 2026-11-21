@@ -3306,6 +3306,9 @@ pub(crate) fn assemble(
         },
         cancel,
         observer: None,
+        // The core's implementation of the seam comes with its own part of
+        // step 28.
+        hooks: None,
     };
 
     let mut notices: Vec<Event> = Vec::new();

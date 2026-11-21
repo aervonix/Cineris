@@ -616,6 +616,7 @@ impl Session {
                 artifacts: Vec::new(),
                 duration_ms: None,
                 created_at: Some(self.options.clock.now().to_timestamp()),
+                replaced: None,
             };
             let entry = self.append(turn.as_ref(), Body::ToolResult(result))?;
             repaired.push(Repaired {

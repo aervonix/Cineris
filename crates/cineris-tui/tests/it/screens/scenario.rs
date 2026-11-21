@@ -577,6 +577,8 @@ fn request(
         ],
         reasons,
         adds: Vec::new(),
+        hooks: Vec::new(),
+        replaced: None,
     }
 }
 

@@ -2867,6 +2867,7 @@ fn rounds(app: &mut App, link: &Scripted, turn: u64, commands: &[(&str, &str)], 
                 artifacts: Vec::new(),
                 duration_ms: Some(100),
                 created_at: None,
+                replaced: None,
             }),
         }))));
     }

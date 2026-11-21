@@ -642,6 +642,8 @@ pub fn approval(call: &str) -> ServerRequest {
         ],
         reasons: vec!["`cargo build` is not on the safe list.".to_owned()],
         adds: Vec::new(),
+        hooks: Vec::new(),
+        replaced: None,
     })
 }
 
