@@ -697,8 +697,41 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 out!("Removed {removed} of {}.\n", ids.len());
                 Ok(exit::COMPLETED)
             }
-            PermissionsCommand::Trust => {
-                let trusted = core.trust_project(&project).map_err(fail)?;
+            PermissionsCommand::Trust { with_extensions } => {
+                // Its extensions are shown as the trust question shows
+                // them, and approved only on a yes at a terminal or, with
+                // none to ask at, by the flag (since step 28).
+                let extensions = core.project_extensions(&project).map_err(fail)?;
+                let mut approved = Vec::new();
+                if !extensions.is_empty() {
+                    let mut listing = String::from(
+                        "Its extensions, which trusting them would let run, as they are now:\n",
+                    );
+                    for extension in &extensions {
+                        listing.push_str(&format!("  {}\n", extension.detail));
+                    }
+                    out!("{listing}");
+                    let at_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
+                    if approves_extensions(at_terminal, with_extensions, || {
+                        out!("Approve these extensions too? [y/N] ");
+                        let mut line = String::new();
+                        io::stdin().read_line(&mut line).map(|_| line)
+                    }) {
+                        approved = extensions;
+                    } else {
+                        context.say(&format!(
+                            "the project's extensions were left unapproved: `{} permissions \
+                             trust` asks again{}",
+                            context.name,
+                            if at_terminal {
+                                ""
+                            } else {
+                                ", or approves them with --with-extensions"
+                            }
+                        ));
+                    }
+                }
+                let trusted = core.trust_project_with(&project, &approved).map_err(fail)?;
                 let mut out = format!(
                     "{} {}{}.\n",
                     if trusted.was_trusted && trusted.git {
@@ -735,6 +768,17 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                             rule.pattern
                         ));
                     }
+                }
+                if !trusted.extensions.is_empty() {
+                    out.push_str(&format!(
+                        "Approved its extensions: {}.\n",
+                        trusted
+                            .extensions
+                            .iter()
+                            .map(|name| format!("`{name}`"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
                 }
                 if !trusted.settings.is_empty() {
                     out.push_str("Its settings that now apply:\n");
@@ -867,6 +911,22 @@ pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
     })())
 }
 
+/// Whether `permissions trust` approves the project's extensions it showed:
+/// at a terminal, only on a yes to its question (anything else, an empty
+/// line or none at all, is no); with no terminal to ask at, only with
+/// `--with-extensions` (since step 28).
+fn approves_extensions(
+    at_terminal: bool,
+    with_extensions: bool,
+    answer: impl FnOnce() -> io::Result<String>,
+) -> bool {
+    if at_terminal {
+        answer().is_ok_and(|line| matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    } else {
+        with_extensions
+    }
+}
+
 /// Reads a key for `provider` at the terminal, without echo
 /// (`cineris_tui::secret::read_key`): `Esc` or `Ctrl+C` stores nothing, and
 /// a signal ends the command with its code.
@@ -931,6 +991,31 @@ mod tests {
 
     use super::*;
     use crate::json::tests::parsed;
+
+    /// `permissions trust` approves a project's extensions only on a yes at
+    /// a terminal, no being the default, and with no terminal only with the
+    /// flag, which a terminal's question outranks.
+    #[test]
+    fn a_projects_extensions_are_approved_only_on_a_yes_or_the_flag() {
+        let said = |line: &str| {
+            let line = line.to_owned();
+            move || Ok(line)
+        };
+        for yes in ["y\n", "Y\n", "yes\n", " Yes \n"] {
+            assert!(approves_extensions(true, false, said(yes)), "{yes:?}");
+        }
+        for no in ["\n", "n\n", "no\n", "", "yess\n", "ok\n"] {
+            assert!(!approves_extensions(true, false, said(no)), "{no:?}");
+            assert!(!approves_extensions(true, true, said(no)), "{no:?}");
+        }
+        assert!(!approves_extensions(true, true, || Err(io::Error::other(
+            "no input"
+        ))));
+        // With no terminal, the flag alone decides, and nothing is read.
+        let unread = || -> io::Result<String> { panic!("nothing is asked without a terminal") };
+        assert!(!approves_extensions(false, false, unread));
+        assert!(approves_extensions(false, true, unread));
+    }
 
     /// Every hostile name, inside a text that is otherwise plain.
     fn hostile_texts() -> Vec<(String, String)> {

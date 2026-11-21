@@ -39,6 +39,10 @@ mod ext_state;
 mod extensions;
 #[cfg(feature = "scripts")]
 mod extensions_found;
+#[cfg(feature = "scripts")]
+mod extensions_reload;
+#[cfg(feature = "scripts")]
+mod extensions_trust;
 mod gates;
 mod harness_git;
 mod index;

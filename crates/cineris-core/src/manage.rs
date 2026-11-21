@@ -114,6 +114,24 @@ pub struct Trusted {
     /// Whether the project is a git repository, whose git is trusted now
     /// with the rest (since the follow-ups of step 23).
     pub git: bool,
+    /// The names of the project's extensions approved with it, as they
+    /// were shown (since step 28).
+    pub extensions: Vec<String>,
+}
+
+/// One of a project's extensions that `cineris permissions trust` can
+/// approve with the project (since step 28): what the trust question shows
+/// of it, and the definition approving it pins, of the folder as it was
+/// read to be shown.
+#[derive(Debug, Clone)]
+pub struct ProjectExtension {
+    /// Its name.
+    pub name: String,
+    /// What it may do, in words: the trust question's own text.
+    pub detail: String,
+    /// Whether it was approved before, at another hash.
+    pub changed: bool,
+    definition: Definition,
 }
 
 impl Core {
@@ -365,6 +383,65 @@ impl Core {
     /// When the project's configuration is invalid, or the trust store
     /// cannot be read or written.
     pub fn trust_project(&self, project: &Project) -> Result<Trusted, OpError> {
+        self.trust_project_with(project, &[])
+    }
+
+    /// The project's extensions that trusting it could approve: those not
+    /// approved as they are now, each as the trust question lists it (one
+    /// whose name a folder of the user's own extensions takes is not
+    /// listed: it is not used whatever is approved). Nothing is approved.
+    ///
+    /// # Errors
+    ///
+    /// When the workspace cannot be resolved, or the trust store cannot be
+    /// read.
+    pub fn project_extensions(&self, project: &Project) -> Result<Vec<ProjectExtension>, OpError> {
+        let options = &self.inner.options;
+        let mut paths = PathOptions::new();
+        if let Some(home) = options.env.home().as_deref().and_then(resolve_dir) {
+            paths = paths.home(home);
+        }
+        let resolver = PathResolver::new(&project.root, paths)
+            .map_err(|failure| error(ErrorKind::Usage, "invalid_workspace", failure.to_string()))?;
+        let stored = self
+            .trust_store()?
+            .project(&project.key)
+            .map_err(|failure| error(ErrorKind::Internal, "store_failed", failure.to_string()))?;
+        let found = crate::ext::found::in_project(&resolver);
+        if found.found.is_empty() {
+            return Ok(Vec::new());
+        }
+        let dirs = options
+            .dirs
+            .clone()
+            .unwrap_or_else(|| cineris_config::Dirs::from_env(&options.env));
+        let users = crate::ext::found::UserNames::listed(&resolver, dirs.config.as_deref());
+        let asked = crate::ext::found::asked(&found, &users, &stored);
+        Ok(asked
+            .resources
+            .into_iter()
+            .zip(asked.pins)
+            .map(|(resource, definition)| ProjectExtension {
+                name: resource.name,
+                detail: resource.detail,
+                changed: resource.changed,
+                definition,
+            })
+            .collect())
+    }
+
+    /// [`trust_project`](Self::trust_project), approving `extensions` with
+    /// it (from [`project_extensions`](Self::project_extensions), which
+    /// the person was shown): each pinned as it was read to be shown.
+    ///
+    /// # Errors
+    ///
+    /// As [`trust_project`](Self::trust_project).
+    pub fn trust_project_with(
+        &self,
+        project: &Project,
+        extensions: &[ProjectExtension],
+    ) -> Result<Trusted, OpError> {
         let rules = self.pinned(project)?;
         // What an untrusted load holds back is what trust now turns on.
         let settings =
@@ -377,7 +454,12 @@ impl Core {
         };
         let stored = store.project(&project.key).map_err(failed)?;
         let (was_trusted, was_refused) = (stored.is_trusted(), stored.is_refused());
-        let pin = [Definition::of_project_rules(&rules)];
+        let mut pin = vec![Definition::of_project_rules(&rules)];
+        pin.extend(
+            extensions
+                .iter()
+                .map(|extension| extension.definition.clone()),
+        );
         let git = in_git_at(&project.root);
         if was_trusted {
             store.approve(&project.key, &pin, git).map_err(failed)?;
@@ -395,6 +477,10 @@ impl Core {
             was_trusted,
             was_refused,
             git,
+            extensions: extensions
+                .iter()
+                .map(|extension| extension.name.clone())
+                .collect(),
         })
     }
 

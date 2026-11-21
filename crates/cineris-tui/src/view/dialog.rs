@@ -362,15 +362,21 @@ pub fn third_trust_answer(request: &TrustRequest) -> &'static str {
     if !request.trusted {
         return "Never for this project";
     }
-    let git = request
-        .resources
-        .iter()
-        .any(|resource| resource.kind == TrustResourceKind::Repository);
-    let rules = request.resources.iter().any(|resource| resource.changed);
-    match (git, rules) {
-        (true, true) => "Keep trusting it, without these",
-        (true, false) => "Keep trusting it, without git",
-        _ => "Keep trusting it, without the new rules",
+    let has = |kind: TrustResourceKind| {
+        request
+            .resources
+            .iter()
+            .any(|resource| resource.kind == kind)
+    };
+    let git = has(TrustResourceKind::Repository);
+    let rules = has(TrustResourceKind::Rules);
+    let extensions = has(TrustResourceKind::Extension);
+    // Named by the kind of what is new: an extension changed is no rule
+    // changed (the early review of step 28's second part).
+    match (git, rules, extensions) {
+        (true, false, false) => "Keep trusting it, without git",
+        (false, true, false) => "Keep trusting it, without the new rules",
+        _ => "Keep trusting it, without these",
     }
 }
 
@@ -383,7 +389,23 @@ fn trust_answers_said(request: &TrustRequest, offered: bool) -> String {
     } else {
         ""
     };
-    let rest = if request.trusted {
+    let extensions = request
+        .resources
+        .iter()
+        .any(|resource| resource.kind == TrustResourceKind::Extension);
+    let others = request
+        .resources
+        .iter()
+        .any(|resource| resource.kind != TrustResourceKind::Extension);
+    // A keep of an extension is kept for this run alone: the next start
+    // asks again.
+    let rest = if request.trusted && extensions && others {
+        "not now asks again at the next start; keep trusting it leaves them off, asks again of \
+         its extensions at the next start, and of the rest when they change."
+    } else if request.trusted && extensions {
+        "not now asks again at the next start; keep trusting it leaves them off until the next \
+         start, which asks again."
+    } else if request.trusted {
         "not now asks again at the next start; keep trusting it leaves them off and asks no \
          more until they change."
     } else {
@@ -453,7 +475,9 @@ pub fn trust(request: &TrustRequest, view: &TrustView, width: usize, look: &Look
     let mut detail: Vec<Line> = Vec::new();
     let mut changed = false;
     for resource in &request.resources {
-        changed |= resource.changed;
+        // Said of the rules alone: a changed extension says so in its own
+        // detail.
+        changed |= resource.changed && resource.kind == TrustResourceKind::Rules;
         let detail_text = sanitize(&resource.detail).into_owned();
         let (label, text) = match &resource.kind {
             TrustResourceKind::Repository => ("git", detail_text),

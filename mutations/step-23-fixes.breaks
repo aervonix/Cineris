@@ -618,7 +618,7 @@ caught-by:
 [break] a-yes-the-store-cannot-keep-fails-the-open
 rule: A yes the trust store cannot keep still opens the session, trusted for that session.
 file: crates/cineris-core/src/assemble.rs
-in: answer_trust
+in: kept_answer
 find: trusted_unkept(inner, &place.load, question, &failure, trust.repository)
 replace: Err(error(ErrorKind::Internal, "store_failed", failure.to_string()))
 caught-by:
@@ -627,10 +627,10 @@ caught-by:
 [break] a-never-the-store-cannot-keep-is-asked-again
 rule: A never the trust store cannot keep is taken as not now: the core does not ask again.
 file: crates/cineris-core/src/assemble.rs
-in: answer_trust
+in: kept_answer
 find: not_now();
 replace: let _ = 0;
-occurrence: 2
+occurrence: 3
 caught-by:
     cineris-core::it trusting::an_answer_the_store_cannot_keep_still_opens_the_session
 
@@ -785,7 +785,7 @@ caught-by:
 [break] a-yes-after-untrust-is-trust-afresh
 rule: A yes to a rules-changed question whose project's trust was taken away meanwhile (revoked or refused) writes nothing and trusts nothing: a never said meanwhile stays.
 file: crates/cineris-core/src/assemble.rs
-in: answer_trust
+in: kept_answer
 find: store.approve(&question.key, &pin, question.git_shown)
 replace: store.approve(&question.key, &pin, question.git_shown).or_else(|_| store.trust(&question.key, &question.root, &pin, question.git_shown))
 caught-by:
@@ -794,7 +794,7 @@ caught-by:
 [break] a-yes-after-untrust-is-kept-for-the-session
 rule: A yes to a rules-changed question whose project's trust was taken away meanwhile is not taken as an answer the store could not keep: the session is not trusted for itself.
 file: crates/cineris-core/src/assemble.rs
-in: answer_trust
+in: kept_answer
 find:
     if question.trusted {
                     !now.is_trusted()
