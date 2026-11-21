@@ -1472,6 +1472,15 @@ impl Round {
         }
         // The call the policy stopped the turn over is void with the rest.
         // If the next response makes it again, the policy is shown it again.
+        //
+        // A stop from a call's run goes too. A kept run that stopped the
+        // turn stops it again when the next response uses it
+        // ([`adopt`](Self::adopt)); one it does not use is discarded, and
+        // its stop with it. Neither happens today: both stops that mark a
+        // result (a confined command, an extension's call) have side
+        // effects, and such a call never starts while a response streams,
+        // so only a run that changes nothing is ever kept. A tool that
+        // changes nothing and marks a stop would need this looked at again.
         self.stopped = None;
         for call in std::mem::take(&mut self.calls) {
             if call.shown {
