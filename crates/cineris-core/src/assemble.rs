@@ -2991,7 +2991,7 @@ pub(crate) fn assemble(
     let command_hooks = {
         let trusted = matches!(
             standing,
-            TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
+            TrustStanding::ForTheRun | TrustStanding::Trusted | TrustStanding::RulesChanged
         );
         let configured = crate::ext::hooks::Configured::of(&loaded);
         let stored = match stored {
