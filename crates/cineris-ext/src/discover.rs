@@ -61,12 +61,26 @@
 //! - **The same folder given as two roots** is looked in once, as the first
 //!   root given; the second is left out with the first one's name.
 //!
-//! **Two extensions of one name.** One root cannot hold two (their folders'
-//! names differ). From two roots of different sources (the user's `tracker`
-//! and the project's `tracker`) both are found: they are different
-//! extensions, pinned in different stores and keyed by [`Source`]. Two
-//! roots of one source that each hold one are given once, from the first
-//! root; the second is left out with the first one's folder.
+//! **Two extensions of one name.** From two roots of different sources (the
+//! user's `tracker` and the project's `tracker`) both are found: they are
+//! different extensions, pinned in different stores and keyed by
+//! [`Source`]. Within one source, a name is one extension's:
+//!
+//! - **Two roots of one source that each hold the same name** give it once,
+//!   from the first root given; the second is left out with the first one's
+//!   folder.
+//! - **Names that differ only in case** (`Tracker` and `tracker`, in one
+//!   root or in two of one source) **are all refused, on every system**, each
+//!   left out naming the others: on Windows they are one name, where they
+//!   would share one folder and what an extension keeps under its name (its
+//!   `project` state file among it), and only a folder made case-sensitive
+//!   can hold both. None is kept, so that nothing depends on which was
+//!   listed first, and a set of extensions behaves the same on every
+//!   system. The names are compared with ASCII's case folded, which is the
+//!   whole of Unicode's folding for them: a manifest's name is ASCII
+//!   letters, digits, `_`, `-` and `.` (the registry's rules), and a found
+//!   extension's name is its folder's, exactly. Windows' own table of case
+//!   agrees on ASCII.
 //!
 //! **Caps.** At most [`MAX_ENTRIES`] entries of a root are listed (a file
 //! counts, since each costs a look); past it the rest of the root is not
@@ -77,7 +91,9 @@
 //!
 //! **The order is fixed:** the roots in the order given, and in each the
 //! folders by their names' bytes. What was left out follows the same
-//! order, a root's count of folders past its cap after its folders.
+//! order, a root's count of folders past its cap after its folders, and
+//! then the extensions left out for their names, in the order they were
+//! found.
 //!
 //! **What the user is shown.** A folder is shown relative to the workspace
 //! for the project's, under `~` for the user's (absolute only for a user's
@@ -96,6 +112,7 @@
     reason = "finding extensions reads folders and files; callers run it on the blocking pool"
 )]
 
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, FileType};
 use std::io;
@@ -213,7 +230,8 @@ pub struct Discovered {
     /// The extensions, the roots in the order given and each root's by
     /// name.
     pub found: Vec<Found>,
-    /// What was left out, in the same order.
+    /// What was left out, in the same order, and then the extensions left
+    /// out for their names.
     pub left_out: Vec<LeftOut>,
     /// How many roots were resolved through the path resolver: those that
     /// are there, and those that could not be ruled out with a look or two.
@@ -255,7 +273,85 @@ pub fn discover(roots: &[Root], paths: &PathResolver) -> Discovered {
         look_in(root, &opened, &mut discovered);
         looked.push((opened.real, opened.shown));
     }
+    settle_names(&mut discovered);
     discovered
+}
+
+/// Leaves out the extensions one source's names make ambiguous, in the
+/// order they were found (the [module](self) documentation says why): a
+/// name a later root of the same source holds again (the first stands),
+/// and every one of names that differ only in case (none stands).
+fn settle_names(discovered: &mut Discovered) {
+    let found = std::mem::take(&mut discovered.found);
+    // Each source's names, their case folded: which extensions have each.
+    let mut groups: BTreeMap<(Source, String), Vec<usize>> = BTreeMap::new();
+    for (index, one) in found.iter().enumerate() {
+        groups
+            .entry((one.source, one.manifest.name.to_ascii_lowercase()))
+            .or_default()
+            .push(index);
+    }
+    let mut refused: Vec<Option<String>> = vec![None; found.len()];
+    for members in groups.values() {
+        let first = &found[members[0]];
+        let whose = whose(first.source);
+        let one_spelling = members
+            .iter()
+            .all(|&member| found[member].manifest.name == first.manifest.name);
+        for (position, &member) in members.iter().enumerate() {
+            let this = &found[member];
+            if one_spelling {
+                if position > 0 {
+                    refused[member] = Some(format!(
+                        "the {whose} extension `{}` was found first, in `{}`",
+                        visible(&this.manifest.name),
+                        first.shown
+                    ));
+                }
+                continue;
+            }
+            let others: Vec<String> = members
+                .iter()
+                .filter(|&&other| other != member)
+                .map(|&other| format!("`{}`", found[other].shown))
+                .collect();
+            let (those, none) = if others.len() == 1 {
+                (format!("that of the {whose} extension"), "neither is used")
+            } else {
+                (
+                    format!("those of the {whose} extensions"),
+                    "none of them is used",
+                )
+            };
+            refused[member] = Some(format!(
+                "its name `{}` differs only in case from {those} {}: names that differ only in \
+                 case are one name on Windows, where they would share what an extension keeps \
+                 under its name, so {none}",
+                visible(&this.manifest.name),
+                listed(&others)
+            ));
+        }
+    }
+    for (one, refused) in found.into_iter().zip(refused) {
+        match refused {
+            None => discovered.found.push(one),
+            Some(why) => discovered.left_out.push(LeftOut {
+                reason: format!("the extension folder `{}` was left out: {why}", one.shown),
+                source: one.source,
+                folder: one.folder,
+                shown: one.shown,
+            }),
+        }
+    }
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn listed(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
 }
 
 /// The names of `dir` below the workspace, when it is written as a place
@@ -542,27 +638,7 @@ fn look_in(root: &Root, opened: &Opened, discovered: &mut Discovered) {
         }
         read += 1;
         match extension_in(root, opened, &name, kind) {
-            Ok(found) => {
-                let earlier = discovered.found.iter().find(|earlier| {
-                    earlier.source == found.source && earlier.manifest.name == found.manifest.name
-                });
-                if let Some(earlier) = earlier {
-                    let reason = format!(
-                        "the extension folder `{}` was left out: the {whose} extension `{}` was found first, in `{}`",
-                        found.shown,
-                        visible(&found.manifest.name),
-                        earlier.shown
-                    );
-                    discovered.left_out.push(LeftOut {
-                        source: found.source,
-                        folder: found.folder,
-                        shown: found.shown,
-                        reason,
-                    });
-                } else {
-                    discovered.found.push(found);
-                }
-            }
+            Ok(found) => discovered.found.push(found),
             Err(left) => discovered.left_out.push(left),
         }
     }
