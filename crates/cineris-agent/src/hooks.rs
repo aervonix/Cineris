@@ -24,11 +24,17 @@
 //!   ([`Hooks::check_replacement`]), and then put to the user whatever the
 //!   rules would have said. Two hooks that both replace the arguments
 //!   refuse the call.
-//! - **A hook that fails refuses.** One that fails, does not answer within
-//!   its time, or answers with anything outside its event's contract counts
-//!   as `deny`, with the failure named. The answer is enforced, so it is
-//!   read strictly: a field the event does not take, a value of the wrong
-//!   type, or a decision it does not know is a failure.
+//! - **A hook that fails refuses, where hooks gate.** One that fails, does
+//!   not answer within its time, or answers with anything outside its
+//!   event's contract counts as `deny` on `prompt.submit` and
+//!   `tool.before`, with the failure named. The answer is read strictly on
+//!   every event: a field the event does not take, a value of the wrong
+//!   type, or a decision it does not know is a failure. On the events that
+//!   only add (`tool.after`, `turn.end`, `compaction.before`) a failure is
+//!   shown to the user and adds nothing.
+//! - **What a hook adds is labelled with its name:** a note on a call's
+//!   result, a notice for the next turn, instructions for a summary, each
+//!   under a line that names the hook and says the text is the hook's.
 //! - **An observer is never waited for,** and its answer is not read. It
 //!   runs beside the loop, to its own time; a failure is logged.
 //! - **Every wait is on the session's timer,** so tests use the fake one.
@@ -38,7 +44,8 @@ use std::task::Poll;
 use std::time::Duration;
 
 use cineris_base::{AbsPath, SharedTimer};
-use cineris_protocol::item::{Delivery, HookReason, ReplacedArguments};
+use cineris_protocol::event::TurnOutcome;
+use cineris_protocol::item::{Delivery, HookReason, ReplacedArguments, ToolOutcome};
 use cineris_protocol::{CallId, Part, SessionId, TurnId};
 use cineris_tools::{BoxFuture, Effect, Json};
 
@@ -82,6 +89,17 @@ pub enum HookEvent {
     /// it; nothing has asked or run yet. A hook may refuse it, ask about it,
     /// or replace its arguments.
     ToolBefore,
+    /// A tool call ran, and its result is not recorded yet. A hook may add a
+    /// note to the result. Waited for.
+    ToolAfter,
+    /// A turn ended, whatever its outcome. A hook may add a notice for the
+    /// next turn. Not waited for: the notice is delivered at the next
+    /// turn's start if it is in by then, else at the next safe boundary.
+    TurnEnd,
+    /// A summary is about to be requested: by hand, at the threshold, after
+    /// a request did not fit, or in the background. A hook may add
+    /// instructions for the summary. Waited for.
+    CompactionBefore,
 }
 
 impl HookEvent {
@@ -91,6 +109,43 @@ impl HookEvent {
         match self {
             Self::PromptSubmit => "prompt.submit",
             Self::ToolBefore => "tool.before",
+            Self::ToolAfter => "tool.after",
+            Self::TurnEnd => "turn.end",
+            Self::CompactionBefore => "compaction.before",
+        }
+    }
+
+    /// Whether its hooks gate: their `deny` and their failure refuse what
+    /// they are asked about. On the other events they only add.
+    #[must_use]
+    pub const fn gates(self) -> bool {
+        matches!(self, Self::PromptSubmit | Self::ToolBefore)
+    }
+}
+
+/// What set off a compaction, as a `compaction.before` hook is told it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CompactionTrigger {
+    /// The user asked for it (`session/compact`).
+    Manual,
+    /// The next request was past the compaction threshold.
+    Threshold,
+    /// The provider said a request did not fit.
+    Overflow,
+    /// A summary prepared in the background, ahead of need.
+    Background,
+}
+
+impl CompactionTrigger {
+    /// The trigger as a hook's input says it.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Threshold => "threshold",
+            Self::Overflow => "overflow",
+            Self::Background => "background",
         }
     }
 }
@@ -176,6 +231,38 @@ pub enum HookSubject {
         /// command's `{path}` is filled from.
         effects: Vec<Effect>,
     },
+    /// A tool call that ran, and its result (`tool.after`).
+    Ran {
+        /// The tool's name.
+        tool: String,
+        /// The provider's id for the call.
+        call_id: CallId,
+        /// The arguments it ran with: a hook's replacement, if one was
+        /// allowed, and otherwise the model's.
+        arguments: Json,
+        /// The plan in one line.
+        summary: String,
+        /// What its plan said it touches, its paths resolved.
+        effects: Vec<Effect>,
+        /// How it ended.
+        outcome: ToolOutcome,
+        /// The text of its result, as the model will be shown it.
+        result: String,
+    },
+    /// A turn that ended (`turn.end`).
+    TurnEnded {
+        /// How it ended.
+        outcome: TurnOutcome,
+        /// The code of the error it ended with, if it ended with one.
+        error: Option<String>,
+    },
+    /// A summary about to be requested (`compaction.before`).
+    Compaction {
+        /// What set it off.
+        trigger: CompactionTrigger,
+        /// What the user asked the summary to keep in particular.
+        focus: Option<String>,
+    },
 }
 
 impl HookInput {
@@ -200,9 +287,18 @@ impl HookInput {
 
     /// The input as the contract gives it to a hook: one JSON object with
     /// `event`, `session_id`, `turn_id` and `workspace`, and the event's own
-    /// fields. A prompt's are `prompt` (its text) and, for one sent while a
-    /// turn ran, `delivery`; a call's are `tool`, `call_id`, `arguments` and
-    /// `plan` (the plan in one line).
+    /// fields.
+    ///
+    /// - `prompt.submit`: `prompt` (its text) and, for one sent while a turn
+    ///   ran, `delivery`.
+    /// - `tool.before`: `tool`, `call_id`, `arguments` (as the model wrote
+    ///   them) and `plan` (the plan in one line).
+    /// - `tool.after`: the same, `arguments` being those it ran with, and
+    ///   `result`: `{outcome, content}`, its outcome and its text.
+    /// - `turn.end`: `outcome`, and `error` (the code) when it ended with
+    ///   one.
+    /// - `compaction.before`: `trigger` (`manual`, `threshold`, `overflow`
+    ///   or `background`), and `focus` when the user gave one.
     #[must_use]
     pub fn to_json(&self) -> Json {
         let mut object = serde_json::Map::new();
@@ -231,6 +327,36 @@ impl HookInput {
                 object.insert("call_id".to_owned(), call_id.as_str().into());
                 object.insert("arguments".to_owned(), arguments.clone());
                 object.insert("plan".to_owned(), summary.as_str().into());
+            }
+            HookSubject::Ran {
+                tool,
+                call_id,
+                arguments,
+                summary,
+                effects: _,
+                outcome,
+                result,
+            } => {
+                object.insert("tool".to_owned(), tool.as_str().into());
+                object.insert("call_id".to_owned(), call_id.as_str().into());
+                object.insert("arguments".to_owned(), arguments.clone());
+                object.insert("plan".to_owned(), summary.as_str().into());
+                object.insert(
+                    "result".to_owned(),
+                    serde_json::json!({"outcome": outcome.as_str(), "content": result}),
+                );
+            }
+            HookSubject::TurnEnded { outcome, error } => {
+                object.insert("outcome".to_owned(), outcome.as_str().into());
+                if let Some(error) = error {
+                    object.insert("error".to_owned(), error.as_str().into());
+                }
+            }
+            HookSubject::Compaction { trigger, focus } => {
+                object.insert("trigger".to_owned(), trigger.as_str().into());
+                if let Some(focus) = focus {
+                    object.insert("focus".to_owned(), focus.as_str().into());
+                }
             }
         }
         Json::Object(object)
@@ -345,6 +471,22 @@ pub struct HookQuestion {
     pub replaced: Option<ReplacedArguments>,
 }
 
+impl HookQuestion {
+    /// The lines an approval's `reasons` holds for these hooks, after the
+    /// rules' own: one for each hook that asked, and one that says a hook
+    /// changed the call. So a client that reads neither `hooks` nor
+    /// `replaced` still shows why it is asked, and that the call is not the
+    /// one the model wrote.
+    #[must_use]
+    pub fn reasons(&self) -> Vec<String> {
+        self.asked
+            .iter()
+            .map(HookReason::asking_line)
+            .chain(self.replaced.as_ref().map(ReplacedArguments::reason_line))
+            .collect()
+    }
+}
+
 // --------------------------------------------------------------- answers
 
 /// A decision a hook's answer may hold.
@@ -388,10 +530,14 @@ fn shown_key(key: &str) -> String {
 }
 
 /// Reads one hook's answer by `event`'s contract, strictly: an object
-/// whose fields are each one the event takes, of its type. `decision` is
-/// `allow`, `deny` or (for `tool.before`) `ask`; `reason` is text;
-/// `arguments` (`tool.before` only) is any JSON; `context`
-/// (`prompt.submit` only) is text.
+/// whose fields are each one the event takes, of its type.
+///
+/// - `prompt.submit`: `decision` (`allow` or `deny`), `reason` and
+///   `context`, both text.
+/// - `tool.before`: `decision` (`allow`, `deny` or `ask`), `reason` (text)
+///   and `arguments` (any JSON).
+/// - `tool.after`, `turn.end` and `compaction.before`: `context` (text)
+///   alone: what the hook adds.
 fn read(event: HookEvent, value: Json) -> Result<Answer, String> {
     let Json::Object(fields) = value else {
         return Err("its answer is not a JSON object".to_owned());
@@ -403,7 +549,7 @@ fn read(event: HookEvent, value: Json) -> Result<Answer, String> {
             _ => Err(format!("its `{}` is not text", shown_key(&key))),
         };
         match (key.as_str(), event) {
-            ("decision", _) => {
+            ("decision", HookEvent::PromptSubmit | HookEvent::ToolBefore) => {
                 let Json::String(decision) = value else {
                     return Err("its `decision` is not text".to_owned());
                 };
@@ -419,9 +565,15 @@ fn read(event: HookEvent, value: Json) -> Result<Answer, String> {
                     }
                 });
             }
-            ("reason", _) => answer.reason = Some(text(value)?),
+            ("reason", HookEvent::PromptSubmit | HookEvent::ToolBefore) => {
+                answer.reason = Some(text(value)?);
+            }
             ("arguments", HookEvent::ToolBefore) => answer.arguments = Some(value),
             ("context", HookEvent::PromptSubmit) => answer.context = Some(text(value)?),
+            (
+                "context",
+                HookEvent::ToolAfter | HookEvent::TurnEnd | HookEvent::CompactionBefore,
+            ) => answer.context = Some(text(value)?),
             (other, _) => {
                 return Err(format!(
                     "its answer has `{}`, which a `{event}` hook's answer does not have",
@@ -771,6 +923,67 @@ pub(crate) fn replaced_note(replaced: &ReplacedArguments) -> String {
     note
 }
 
+/// What the hooks of an event that only adds (`tool.after`, `turn.end`,
+/// `compaction.before`) said together.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct Added {
+    /// What each added: the hook's name and its text, in the order of
+    /// their names.
+    pub(crate) texts: Vec<(String, String)>,
+    /// The line for the user that says each hook that failed, and how: a
+    /// failure adds nothing.
+    pub(crate) failed: Vec<String>,
+}
+
+/// Combines what an event's hooks that only add said: each one's text,
+/// and each failure, which adds nothing.
+pub(crate) fn added(event: HookEvent, heard: Vec<Heard>) -> Added {
+    let mut added = Added::default();
+    for one in heard {
+        match one.answer {
+            Ok(Answer {
+                context: Some(text),
+                ..
+            }) if !text.is_empty() => added.texts.push((one.hook, text)),
+            Ok(_) => {}
+            Err(failure) => added.failed.push(format!(
+                "The hook `{}` failed on `{event}`, so it added nothing: {failure}.",
+                one.hook
+            )),
+        }
+    }
+    added
+}
+
+/// The note a `tool.after` hook's text is added to a call's result as.
+pub(crate) fn result_note(hook: &str, text: &str) -> String {
+    format!(
+        "The hook `{hook}` adds this note to the result above. It is the hook's text, not the \
+         tool's.\n\n{text}"
+    )
+}
+
+/// The notice a `turn.end` hook's text is given to the next turn as.
+pub(crate) fn turn_end_notice(hook: &str, text: &str) -> String {
+    format!(
+        "The hook `{hook}` adds this after the turn before ended. It is the hook's text, not the \
+         user's.\n\n{text}"
+    )
+}
+
+/// What a `compaction.before` hook's text is added to a summary's
+/// instructions as: under a line that names the hook.
+pub(crate) fn summary_instructions(added: &[(String, String)]) -> String {
+    let mut text = String::new();
+    for (hook, instructions) in added {
+        text.push_str(&format!(
+            "\n\nInstructions for the summary from the hook `{hook}`, not from the user:\n\
+             {instructions}"
+        ));
+    }
+    text
+}
+
 /// Whether a replacement of a `tool_call`'s arguments names another tool
 /// than the model's call did, which a hook may not do. `Some` with the
 /// tool it names instead.
@@ -823,6 +1036,60 @@ mod tests {
             let failure = read(event, value.clone()).expect_err(&value.to_string());
             assert!(failure.contains(says), "{failure} for {value}");
         }
+        // The events that only add take `context` alone.
+        for event in [
+            HookEvent::ToolAfter,
+            HookEvent::TurnEnd,
+            HookEvent::CompactionBefore,
+        ] {
+            assert!(read(event, json!({"context": "x"})).is_ok(), "{event}");
+            assert!(read(event, json!({})).is_ok(), "{event}");
+            for field in ["decision", "reason", "arguments"] {
+                let failure = read(event, json!({ field: "deny" })).expect_err(field);
+                assert!(failure.contains(&format!("`{field}`")), "{failure}");
+            }
+        }
+    }
+
+    #[test]
+    fn what_hooks_add_is_kept_and_a_failure_adds_nothing() {
+        let event = HookEvent::ToolAfter;
+        let added = added(
+            event,
+            vec![
+                heard("a-note", json!({"context": "checked"}), event),
+                heard("b-empty", json!({"context": ""}), event),
+                heard("c-silent", json!({}), event),
+                heard("d-odd", json!({"decision": "deny"}), event),
+            ],
+        );
+        assert_eq!(added.texts, [("a-note".to_owned(), "checked".to_owned())]);
+        assert_eq!(added.failed.len(), 1);
+        assert!(added.failed[0].starts_with("The hook `d-odd` failed on `tool.after`"));
+    }
+
+    #[test]
+    fn a_questions_reasons_name_each_hook_and_the_replacement() {
+        let question = HookQuestion {
+            asked: vec![HookReason {
+                hook: "slow".to_owned(),
+                reason: Some("tests take a while".to_owned()),
+            }],
+            replaced: Some(ReplacedArguments {
+                hook: "offline".to_owned(),
+                arguments: json!({}),
+                original: Some(json!({})),
+                reason: None,
+            }),
+        };
+        assert_eq!(
+            question.reasons(),
+            [
+                "The hook `slow` asks: tests take a while",
+                "The hook `offline` changed the arguments the model wrote: the call would run \
+                 with the hook's.",
+            ]
+        );
     }
 
     #[test]
