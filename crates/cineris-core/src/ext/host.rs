@@ -43,6 +43,9 @@ pub(crate) struct CallHost<'a> {
     pub(crate) full_name: &'a str,
     /// The extension's name.
     pub(crate) extension: &'a str,
+    /// Where the extension comes from: with its name, it keys the values
+    /// the extension keeps.
+    pub(crate) source: cineris_ext::source::Source,
     /// What the script said it is doing, for the call's output.
     pub(crate) progress: &'a Mutex<Vec<String>>,
 }
@@ -114,6 +117,11 @@ impl CallHost<'_> {
             }
             _ => Err(HostError::Denied("it was not allowed".to_owned())),
         }
+    }
+
+    /// Whose values the extension's `cineris.state` reads and writes.
+    fn owner(&self) -> super::state::Owner {
+        super::state::Owner::new(self.source, self.extension)
     }
 
     /// The call's context with the extension's own table of files: the `write` tool
@@ -365,26 +373,26 @@ impl Host for CallHost<'_> {
 
     fn state_get(
         &self,
-        _key: String,
-        _scope: Scope,
+        key: String,
+        scope: Scope,
     ) -> HostFuture<'_, Result<Option<Json>, HostError>> {
-        Box::pin(async move {
-            Err(HostError::Failed(
-                "`cineris.state` is not available in this build yet".to_owned(),
-            ))
-        })
+        // No permission question: `state` touches only the extension's own
+        // values, keyed by where it comes from and its name.
+        Box::pin(async move { self.parts.state.get(self.owner(), key, scope).await })
     }
 
     fn state_set(
         &self,
-        _key: String,
-        _value: Option<Json>,
-        _scope: Scope,
+        key: String,
+        value: Option<Json>,
+        scope: Scope,
     ) -> HostFuture<'_, Result<(), HostError>> {
         Box::pin(async move {
-            Err(HostError::Failed(
-                "`cineris.state` is not available in this build yet".to_owned(),
-            ))
+            let turn = self.cx.call.as_ref().map(|call| call.turn.clone());
+            self.parts
+                .state
+                .set(self.owner(), key, value, scope, turn)
+                .await
         })
     }
 

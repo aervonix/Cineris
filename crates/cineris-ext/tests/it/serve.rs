@@ -531,3 +531,99 @@ fn a_notice_and_a_line_of_the_log_show_nothing_unseen() {
         assert!(!noted.chars().any(char::is_control), "{noted:?}");
     }
 }
+
+fn state_get(key: &str, scope: Scope) -> HostCall {
+    HostCall::StateGet {
+        key: key.to_owned(),
+        scope,
+    }
+}
+
+fn state_set(key: &str, value: Option<serde_json::Value>, scope: Scope) -> HostCall {
+    HostCall::StateSet {
+        key: key.to_owned(),
+        value,
+        scope,
+    }
+}
+
+/// A stored value needs no capability and is served in a tool call, a hook
+/// and a command alike: it touches only the extension's own values. A key
+/// with no value gives `null`, and a set to `null` reaches the host as a
+/// removal, so a stored value is never `null`.
+#[test]
+fn a_value_needs_no_capability_and_a_set_to_null_removes_it() {
+    let host = FakeHost::new();
+    let capabilities = capabilities("");
+    let served = |call: HostCall, phase: Phase| {
+        block_on(serve(
+            call,
+            &capabilities,
+            &host,
+            phase,
+            Duration::from_secs(5),
+        ))
+    };
+    for phase in [Phase::Tool, Phase::Hook, Phase::Command] {
+        assert_eq!(
+            served(state_get("n", Scope::Session), phase).unwrap(),
+            json!(null)
+        );
+        served(state_set("n", Some(json!({"a": 1})), Scope::Session), phase).unwrap();
+        assert_eq!(
+            served(state_get("n", Scope::Session), phase).unwrap(),
+            json!({"a": 1})
+        );
+        assert_eq!(
+            served(state_get("n", Scope::Project), phase).unwrap(),
+            json!(null),
+            "the project's values are another store"
+        );
+        served(state_set("n", Some(json!(null)), Scope::Session), phase).unwrap();
+        assert_eq!(
+            served(state_get("n", Scope::Session), phase).unwrap(),
+            json!(null)
+        );
+        assert!(
+            host.state.lock().unwrap().is_empty(),
+            "a set to `null` removes the value"
+        );
+    }
+}
+
+/// A key is 1 to 256 bytes, counted in bytes: at 256 it is served, empty
+/// or past it the call is refused before the host, in either scope.
+#[test]
+fn a_key_is_one_to_256_bytes() {
+    let host = FakeHost::new();
+    let capabilities = capabilities("");
+    let served = |call: HostCall| {
+        block_on(serve(
+            call,
+            &capabilities,
+            &host,
+            Phase::Tool,
+            Duration::from_secs(5),
+        ))
+    };
+    for scope in [Scope::Session, Scope::Project] {
+        // 256 bytes of 128 characters, and of 256.
+        for key in ["é".repeat(128), "k".repeat(256)] {
+            served(state_set(&key, Some(json!(1)), scope)).unwrap();
+            assert_eq!(served(state_get(&key, scope)).unwrap(), json!(1));
+        }
+        for key in [String::new(), "é".repeat(129), "k".repeat(257)] {
+            for call in [
+                state_set(&key, Some(json!(1)), scope),
+                state_get(&key, scope),
+            ] {
+                let refused = served(call);
+                assert!(
+                    matches!(&refused, Err(HostError::Failed(why)) if why.contains("1 to 256 bytes")),
+                    "{refused:?}"
+                );
+            }
+        }
+    }
+    assert_eq!(host.state.lock().unwrap().len(), 4);
+}
