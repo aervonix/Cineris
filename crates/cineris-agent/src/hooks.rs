@@ -179,6 +179,25 @@ pub enum HookSubject {
 }
 
 impl HookInput {
+    /// The input of `event` about `subject`: for an implementation's own
+    /// tests, since the loop makes every one it gives.
+    #[must_use]
+    pub fn new(
+        event: HookEvent,
+        session: SessionId,
+        turn: TurnId,
+        workspace: AbsPath,
+        subject: HookSubject,
+    ) -> Self {
+        Self {
+            event,
+            session,
+            turn,
+            workspace,
+            subject,
+        }
+    }
+
     /// The input as the contract gives it to a hook: one JSON object with
     /// `event`, `session_id`, `turn_id` and `workspace`, and the event's own
     /// fields. A prompt's are `prompt` (its text) and, for one sent while a
