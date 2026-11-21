@@ -6870,7 +6870,7 @@ rule: Hook starts with a write root run one at a time: they share one baseline o
 file: crates/cineris-core/src/ext/hook_command.rs
 in: HookCommands::run
 find: Some(writing) => Some(writing),
-replace: Some(writing) => { drop(writing); None }
+replace: Some(writing) => { drop(writing); None::<tokio::sync::MutexGuard<'_, ()>> }
 caught-by:
     cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 

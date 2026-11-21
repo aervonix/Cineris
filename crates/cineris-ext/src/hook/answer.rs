@@ -242,14 +242,14 @@ impl Answer {
     /// [`Answer::read`] of a value [`value`] read already: `None` for
     /// nothing.
     ///
-    /// **It reads the core's own events** (`session.start`, `session.end`),
-    /// which the loop does not have. For the loop's events the loop's own
-    /// reading (`cineris_agent`'s hooks, `read`) is the source of truth, and
-    /// this one agrees with it field for field, so the two cannot drift: a
-    /// change to either is a change to both. A `reason`'s line breaks are
-    /// folded to spaces, as the loop folds them: it lands in the harness's
-    /// own text, where a line of its own could pass for one of the
-    /// harness's.
+    /// **It is the reader of the core's own events** (`session.start`,
+    /// `session.end`), which the loop does not run. It reads every event's
+    /// contract, but for the loop's events the loop's own reading
+    /// (`cineris_agent`'s hooks, `read`) is the source of truth: a change
+    /// to the contract is made there, and here to match. A `reason` is on
+    /// one line here as there, each line break a space, since it lands in
+    /// the harness's own text, where a line of its own could pass for one
+    /// of the harness's.
     ///
     /// # Errors
     ///
