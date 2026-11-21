@@ -26,6 +26,7 @@
     reason = "a look at each place found, on the blocking pool"
 )]
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -104,11 +105,24 @@ fn identity(_: &std::fs::Metadata) -> Option<(u64, i64, i64)> {
     None
 }
 
-/// The places a session's extensions were found in, each with its stamp.
+/// The places a session's extensions were found in, each with its stamp,
+/// in the order they were stamped, and the set of them, so that a place is
+/// stamped once at no cost of a look through the others (the fresh review
+/// of step 28: a look through the list for each place made a crafted
+/// folder of 65,000 places take a minute).
 #[derive(Debug, Default)]
 pub(crate) struct Watched {
     places: Vec<(PathBuf, Stamp, UtcTime)>,
+    known: HashSet<PathBuf>,
 }
+
+/// The most places stamped within the extensions of one root, their
+/// folders, the folders in them and their files together. Past it the rest
+/// of the root is not read: what cannot be watched for a change is not
+/// loaded, and the root counts as not listed whole, so that its names are
+/// taken (the fresh review of step 28). A user's few extensions of a few
+/// files each are far below it.
+pub(crate) const MAX_PLACES_PER_ROOT: usize = 4096;
 
 /// The most places stamped within one extension's folder: its snapshot's
 /// own cap on entries, past which it is not read either.
@@ -132,30 +146,54 @@ impl Watched {
     /// Stamps `place` now, after what is stamped already; a place stamped
     /// already keeps its first stamp.
     pub(crate) fn note(&mut self, place: PathBuf, clock: &SharedClock) {
-        if self.places.iter().any(|(known, _, _)| *known == place) {
+        if !self.known.insert(place.clone()) {
             return;
         }
         let stamp = Stamp::of(&place);
         self.places.push((place, stamp, clock.now()));
     }
 
+    /// How many places are stamped.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.places.len()
+    }
+
     /// Stamps an extension's `folder` now, before it is read: the folder,
     /// then each folder in it, an empty one included, before what is in
     /// that, and each file, walked with no link followed, within the caps
     /// its snapshot is read within. A link in it is stamped as a link and
-    /// not walked into.
-    pub(crate) fn note_tree(&mut self, folder: &Path, clock: &SharedClock) {
+    /// not walked into. Each place stamped takes one of `left`, what its
+    /// root may still stamp ([`MAX_PLACES_PER_ROOT`]): `false` when they ran out
+    /// before the folder was stamped whole, and it is then not to be read.
+    pub(crate) fn note_tree(
+        &mut self,
+        folder: &Path,
+        clock: &SharedClock,
+        left: &mut usize,
+    ) -> bool {
         let mut count = 0;
-        self.walk(folder, 0, &mut count, clock);
+        self.walk(folder, 0, &mut count, clock, left)
     }
 
-    fn walk(&mut self, folder: &Path, depth: usize, count: &mut usize, clock: &SharedClock) {
+    fn walk(
+        &mut self,
+        folder: &Path,
+        depth: usize,
+        count: &mut usize,
+        clock: &SharedClock,
+        left: &mut usize,
+    ) -> bool {
+        let Some(less) = left.checked_sub(1) else {
+            return false;
+        };
+        *left = less;
         self.note(folder.to_path_buf(), clock);
         if depth > MAX_DEPTH {
-            return;
+            return true;
         }
         let Ok(entries) = std::fs::read_dir(folder) else {
-            return;
+            return true;
         };
         let mut inside: Vec<(PathBuf, bool)> = Vec::new();
         for entry in entries.flatten() {
@@ -170,17 +208,24 @@ impl Watched {
         inside.sort();
         for (path, is_folder) in inside {
             if is_folder {
-                self.walk(&path, depth + 1, count, clock);
+                if !self.walk(&path, depth + 1, count, clock, left) {
+                    return false;
+                }
             } else {
+                let Some(less) = left.checked_sub(1) else {
+                    return false;
+                };
+                *left = less;
                 self.note(path, clock);
             }
         }
+        true
     }
 
     /// What is stamped in `other`, after what is stamped here.
     pub(crate) fn extend(&mut self, other: Self) {
         for (place, stamp, taken) in other.places {
-            if !self.places.iter().any(|(known, _, _)| *known == place) {
+            if self.known.insert(place.clone()) {
                 self.places.push((place, stamp, taken));
             }
         }
@@ -282,6 +327,39 @@ mod tests {
         let now: SharedClock = Arc::new(cineris_base::SystemClock::new());
         let watched = Watched::stamp(vec![dir.join("gone")], &now);
         assert_eq!(watched.changed(), Some(dir.join("gone")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a root may stamp is bounded by count: a folder walked past it is
+    /// reported, and nothing past the bound is stamped; a place stamped
+    /// twice is stamped once.
+    #[test]
+    fn the_places_a_root_stamps_are_bounded_by_count() {
+        let dir = std::env::temp_dir().join(format!("cineris-core-bounded-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for name in ["a", "b", "c", "d", "e"] {
+            std::fs::create_dir_all(dir.join("ext").join(name)).unwrap();
+        }
+        let clock: SharedClock = Arc::new(FakeClock::starting_at("2001-01-01T00:00:00Z").unwrap());
+        // The folder and its five: six places.
+        let mut watched = Watched::default();
+        let mut left = 6;
+        assert!(watched.note_tree(&dir.join("ext"), &clock, &mut left));
+        assert_eq!((watched.len(), left), (6, 0));
+        let mut watched = Watched::default();
+        let mut left = 4;
+        assert!(!watched.note_tree(&dir.join("ext"), &clock, &mut left));
+        assert_eq!((watched.len(), left), (4, 0));
+        // Nothing is stamped twice, by a walk or by a merge.
+        let mut again = Watched::default();
+        let mut plenty = MAX_PLACES_PER_ROOT;
+        assert!(again.note_tree(&dir.join("ext"), &clock, &mut plenty));
+        again.note(dir.join("ext/a"), &clock);
+        let mut other = Watched::default();
+        other.note(dir.join("ext/b"), &clock);
+        other.note(dir.join("elsewhere"), &clock);
+        again.extend(other);
+        assert_eq!(again.len(), 7);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

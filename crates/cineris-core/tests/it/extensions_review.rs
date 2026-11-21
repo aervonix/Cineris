@@ -604,3 +604,114 @@ fn a_cached_entry_that_does_not_fit_the_extension_is_not_used() {
         assert!(entry.registration.hooks.is_empty(), "{test}");
     }
 }
+
+// ------------------------------------------------------------ the fresh review
+
+/// What an extension's programs can do is said of the load a yes puts in
+/// force, where the sandbox enforces (the fresh review of step 28): a
+/// project whose own `sandbox.write` names a folder that holds the
+/// harness's files, which the question's own load holds back and which
+/// turns the sandbox off for the project's trusted sessions, is said not to
+/// confine them; without that setting they are said to be confined.
+#[test]
+fn what_an_extensions_programs_can_do_is_said_of_the_load_a_yes_puts_in_force() {
+    for (test, writes_home) in [
+        ("review_confined_by_the_trusted_load", true),
+        ("review_confined_where_enforcing", false),
+    ] {
+        let world = World::new(test, []);
+        if writes_home {
+            // The home folder holds the harness's configuration and state.
+            world.project_config(&format!(
+                "[sandbox]\nwrite = [\"{}\"]\n",
+                world.home.display().to_string().replace('\\', "\\\\")
+            ));
+        }
+        write_extension(&projects(&world), "exec = [\"sh\"]", "x");
+        let core = world.core_with(|options| {
+            options.launcher = Some(crate::sandbox::launcher());
+            options.sandbox = Some(cineris_sandbox::support::Support::Landlock(8));
+        });
+        world.run(async {
+            let (front, asked) = open_answering(&world, &core, not_now()).await;
+            let detail = listed_detail(&asked);
+            if writes_home {
+                assert!(
+                    detail.contains(cineris_core::ext::NOT_CONFINED),
+                    "{test}: {detail}"
+                );
+            } else {
+                assert!(
+                    !detail.contains(cineris_core::ext::NOT_CONFINED)
+                        && detail.contains("Its programs are confined"),
+                    "{test}: {detail}"
+                );
+            }
+            front.close().await;
+        });
+    }
+}
+
+/// A crafted folder of extensions, 64 folders of 1,023 empty folders each,
+/// is looked at within its bounds (the fresh review of step 28: about
+/// 65,000 places, each stamped after a look through all the others, took a
+/// minute on the trust question's look, again on the session's, and at
+/// every turn's start). The trust question's look, a trusted session's
+/// opening and its first two turns, each under a second; a measurement,
+/// run by `cargo xtask perf -p cineris-core`.
+#[test]
+#[ignore = "a measurement: `cargo xtask perf -p cineris-core`"]
+fn perf_a_crafted_folder_of_extensions_is_looked_at_within_its_bounds() {
+    let bound = Duration::from_secs(1);
+    let craft = |world: &World| {
+        let root = world.workspace.join(".cineris/extensions");
+        for folder in 0..64 {
+            let extension = root.join(format!("e{folder:02}"));
+            for inside in 0..1023 {
+                std::fs::create_dir_all(extension.join(format!("d{inside:04}"))).unwrap();
+            }
+        }
+    };
+    // The trust question's look, of a project not trusted.
+    let world = World::new("perf_crafted_question", []);
+    world.project_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"e00/*\"\naction = \"allow\"\n",
+    );
+    craft(&world);
+    let core = world.core();
+    let asked = world.run(async {
+        let start = std::time::Instant::now();
+        let (front, _) = open_answering(&world, &core, not_now()).await;
+        let took = start.elapsed();
+        front.close().await;
+        took
+    });
+    // A trusted project's session: its finding, and the look at each
+    // turn's start.
+    let world = World::new("perf_crafted_session", [says("Done."), says("Done.")]);
+    craft(&world);
+    trust(&world, &[]);
+    let core = world.core();
+    let (opened, first, second) = world.run(async {
+        let start = std::time::Instant::now();
+        let (front, _) = open_answering(&world, &core, not_now()).await;
+        let opened = start.elapsed();
+        let start = std::time::Instant::now();
+        front.turn("go").await;
+        let first = start.elapsed();
+        let start = std::time::Instant::now();
+        front.turn("go").await;
+        let second = start.elapsed();
+        front.close().await;
+        (opened, first, second)
+    });
+    for (what, took) in [
+        ("crafted_extensions.question_look", asked),
+        ("crafted_extensions.session_open", opened),
+        ("crafted_extensions.first_turn", first),
+        ("crafted_extensions.second_turn", second),
+    ] {
+        cineris_testkit::numbers::report(what, took.as_secs_f64() * 1e3, "ms");
+        assert!(took < bound, "{what}: {took:?}");
+    }
+}

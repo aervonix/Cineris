@@ -422,6 +422,20 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
             shown(&plain)
         );
     }
+    // What it says the programs can do is what a session on this machine
+    // would let them do (the fresh review of step 28: the command's core
+    // had no launcher, and said they were not confined where sessions
+    // confine them).
+    let enforcing = matches!(
+        cineris_sandbox::support::detect().assess(),
+        cineris_sandbox::support::Assessment::Enforcing { .. }
+    );
+    assert_eq!(
+        plain.stdout.contains(cineris_core::ext::NOT_CONFINED),
+        !enforcing,
+        "{}",
+        shown(&plain)
+    );
     assert!(
         plain.stderr.contains("left unapproved") && plain.stderr.contains("--with-extensions"),
         "{}",

@@ -681,6 +681,21 @@ pub(crate) fn look(
     let rules_new = !trust.rules && !trust.rules_declined;
     let quiet = trust.standing != TrustStanding::Untrusted && !rules_new && !trust.git_new;
     let (found, watched) = crate::ext::found::in_project(&place.resolver, &inner.options.clock);
+    let trusted_load = |profile: Option<&str>| {
+        let mut options = place.load.clone();
+        options.trust = cineris_config::ProjectTrust::Trusted;
+        if let Some(profile) = profile {
+            options.profile = Some(profile.to_owned());
+        }
+        cineris_config::load(&options).map_err(|failure| {
+            Box::new(ErrorData::new(
+                ErrorKind::Config,
+                "invalid_configuration",
+                failure.render(&inner.options.env),
+            ))
+        })
+    };
+    let mut peeked = None;
     let extensions = if found.found.is_empty() {
         crate::ext::found::Asked::default()
     } else {
@@ -688,7 +703,13 @@ pub(crate) fn look(
             &place.resolver,
             place.load.dirs.config.as_deref(),
         );
-        let confined = programs_confined(inner, &trust.loaded, &place.root, place.state.as_ref());
+        // What its programs can do is said of the load a yes puts in force,
+        // the project's own settings in it: the question's own may hold back
+        // a `sandbox.write` that turns the sandbox off (the fresh review of
+        // step 28).
+        let load = trusted_load(None)?;
+        let confined = programs_confined(inner, &load, &place.root, place.state.as_ref());
+        peeked = Some(load);
         crate::ext::found::asked(&found, &users, &stored, confined)
     };
     // Handed to the session without the extensions' bytes, its places
@@ -706,21 +727,10 @@ pub(crate) fn look(
     } else {
         in_git(&place.root)
     };
-    let trusted_load = |profile: Option<&str>| {
-        let mut options = place.load.clone();
-        options.trust = cineris_config::ProjectTrust::Trusted;
-        if let Some(profile) = profile {
-            options.profile = Some(profile.to_owned());
-        }
-        cineris_config::load(&options).map_err(|failure| {
-            Box::new(ErrorData::new(
-                ErrorKind::Config,
-                "invalid_configuration",
-                failure.render(&inner.options.env),
-            ))
-        })
+    let peek = match peeked {
+        Some(peek) => peek,
+        None => trusted_load(None)?,
     };
-    let peek = trusted_load(None)?;
     let rules = pinned_rules(&peek, &|profile| trusted_load(Some(profile)))?;
     let mut resources = Vec::new();
     if git_shown {

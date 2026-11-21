@@ -25,7 +25,7 @@ use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
-use cineris_base::{ContentHash, ContentHasher, OpenError, open_regular};
+use cineris_base::{ContentHash, ContentHasher, OpenError, in_code, open_regular};
 
 /// The most files an extension's folder may hold.
 pub const MAX_FILES: usize = 256;
@@ -44,12 +44,14 @@ pub const MAX_ENTRIES: usize = 1024;
 /// extension is never the hash of anything else the harness pins.
 const DOMAIN: &[u8] = b"cineris extension folder, version 1\n";
 
-/// Why a folder could not be read as an extension.
+/// Why a folder could not be read as an extension. Each name in it is
+/// shown as code it cannot end (`cineris_base::in_code`): the names come
+/// from whoever made the folder, a repository among them.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum FolderError {
     /// The folder, or something in it, could not be read.
-    #[error("`{path}` could not be read: {reason}")]
+    #[error("`{}` could not be read: {reason}", in_code(.path))]
     Unreadable {
         /// The path, relative to the folder (empty for the folder itself).
         path: String,
@@ -58,27 +60,28 @@ pub enum FolderError {
     },
     /// A link, a junction or another reparse point that leads somewhere.
     #[error(
-        "`{0}` is a link: an extension's folder holds only files and folders, so that nothing in it can lead out of it"
+        "`{}` is a link: an extension's folder holds only files and folders, so that nothing in it can lead out of it",
+        in_code(.0)
     )]
     Link(String),
     /// Something that is neither a regular file nor a directory: a FIFO, a
     /// socket, a device.
-    #[error("`{0}` is not a regular file or a folder")]
+    #[error("`{}` is not a regular file or a folder", in_code(.0))]
     NotRegular(String),
     /// A name that is not valid Unicode.
-    #[error("a name in `{0}` is not valid Unicode")]
+    #[error("a name in `{}` is not valid Unicode", in_code(.0))]
     Name(String),
     /// More files than [`MAX_FILES`].
     #[error("the folder holds more than {MAX_FILES} files")]
     TooManyFiles,
     /// A file larger than [`MAX_FILE_BYTES`].
-    #[error("`{0}` is larger than 1 MiB")]
+    #[error("`{}` is larger than 1 MiB", in_code(.0))]
     FileTooLarge(String),
     /// More bytes in all than [`MAX_TOTAL_BYTES`].
     #[error("the folder holds more than 4 MiB")]
     TooLarge,
     /// A file deeper than [`MAX_DEPTH`].
-    #[error("`{0}` is more than {MAX_DEPTH} folders deep")]
+    #[error("`{}` is more than {MAX_DEPTH} folders deep", in_code(.0))]
     TooDeep(String),
     /// More entries, folders and files together, than [`MAX_ENTRIES`].
     #[error("the folder holds more than {MAX_ENTRIES} files and folders")]
@@ -112,8 +115,22 @@ impl Snapshot {
     ///
     /// [`FolderError`] says what in the folder could not be taken.
     pub fn read(folder: &Path) -> Result<Self, FolderError> {
-        let mut files = BTreeMap::new();
+        Self::read_counted(folder).0
+    }
+
+    /// [`Snapshot::read`], and the bytes of files it read, a read refused
+    /// part way included: what a bound on reading counts (the fresh review
+    /// of step 28: a folder refused after its read was read for nothing).
+    ///
+    /// It blocks: call it on the blocking pool.
+    pub fn read_counted(folder: &Path) -> (Result<Self, FolderError>, u64) {
         let mut total = 0_u64;
+        let read = Self::read_into_total(folder, &mut total);
+        (read, total)
+    }
+
+    fn read_into_total(folder: &Path, total: &mut u64) -> Result<Self, FolderError> {
+        let mut files = BTreeMap::new();
         let metadata = fs::metadata(folder).map_err(|error| FolderError::Unreadable {
             path: String::new(),
             reason: error.to_string(),
@@ -125,7 +142,7 @@ impl Snapshot {
             });
         }
         let mut entries = 0;
-        read_into(folder, "", 0, &mut files, &mut total, &mut entries)?;
+        read_into(folder, "", 0, &mut files, total, &mut entries)?;
         Ok(Self::from_files(files))
     }
 
