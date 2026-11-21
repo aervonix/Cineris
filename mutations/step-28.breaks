@@ -7678,8 +7678,8 @@ caught-by:
 rule: A hook's failure is cut at the cap, and what acts unseen in it escaped, before anyone is shown it.
 file: crates/cineris-agent/src/hooks.rs
 in: ask_all
-find: Some(HookOutcome::Failed(why)) => Err(capped(why))
-replace: Some(HookOutcome::Failed(why)) => Err(why)
+find: Some(HookOutcome::Failed(why)) => Err(on_one_line(capped(why)))
+replace: Some(HookOutcome::Failed(why)) => Err(on_one_line(why))
 caught-by:
     cineris-agent::it hooks::a_prompt_hook_that_fails_or_times_out_refuses_the_prompt
 
@@ -7974,3 +7974,13 @@ find: error.code == code::PROMPT_DENIED
 replace: error.code == "never"
 caught-by:
     cineris-tui app::tests::a_prompt_a_hook_refused_comes_back_into_the_editor_with_why
+
+[break] a-hooks-failure-keeps-its-line-breaks
+rule: A waited hook's failure is on one line, as a reason is, in the refusal, the prompt given back and the turn's error (the re-check of the hook seam's fixes).
+file: crates/cineris-agent/src/hooks.rs
+in: ask_all
+find: Some(HookOutcome::Failed(why)) => Err(on_one_line(capped(why)))
+replace: Some(HookOutcome::Failed(why)) => Err(capped(why))
+caught-by:
+    cineris-agent::it hooks::a_tool_before_hook_that_fails_or_does_not_answer_in_its_time_refuses_the_call
+    cineris-agent::it hooks::a_prompt_hook_that_fails_or_times_out_refuses_the_prompt

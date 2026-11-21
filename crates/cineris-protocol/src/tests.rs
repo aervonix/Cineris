@@ -6,6 +6,15 @@
 //! version 1 looks like on the wire. A change that makes these tests fail has
 //! changed the wire form, which is either a mistake or a new protocol
 //! version: the transcript is not edited to make a test pass.
+//!
+//! **Its example text of a hook follows the server's wording.** The lines
+//! of a hook (the message of a prompt given back, a hook's context as a
+//! notice, an approval's `reasons` lines, the note that begins the result
+//! of a call that ran with a hook's arguments) hold what the functions in
+//! `cineris-agent` that write them write, and a test there checks them
+//! against those functions
+//! (`hooks::tests::the_golden_transcripts_hook_lines_are_what_the_loop_writes`).
+//! They are changed only with those functions, in the same change.
 
 use std::collections::{BTreeMap, BTreeSet};
 
