@@ -1020,8 +1020,9 @@ fn a_root_that_is_not_there_costs_a_look_a_name_and_no_resolve() {
         seen.push(place.to_path_buf());
     });
     assert_eq!(found, Found::default());
+    // Each as the resolver writes it: on Windows its `\\?\` form.
     let workspace = resolver.root().to_fs_path();
-    let home = scratch.join("home");
+    let home = resolver.home().unwrap().to_fs_path();
     assert_eq!(
         seen,
         [
@@ -1137,7 +1138,8 @@ fn a_root_through_a_link_is_named_where_it_would_be() {
     // The link to nothing: where it leads.
     let leads = scratch.join("home/dotfiles/agents");
     assert!(
-        ways.iter().any(|way| way == &leads),
+        ways.iter()
+            .any(|way| cineris_base::same_location(way, &leads)),
         "{leads:?} is not named: {ways:#?}"
     );
     assert_eq!(
@@ -1149,38 +1151,42 @@ fn a_root_through_a_link_is_named_where_it_would_be() {
     );
 }
 
-/// A root reads at most 8 MiB of `SKILL.md` files, every byte read
-/// counting: the skills past it are left out, unread, with the reason.
+/// A root reads at most its budget of `SKILL.md` files (8 MiB in a
+/// session), every byte read counting: the skills past it are left out,
+/// unread, with the reason. Measured with a budget of 256 KiB.
 #[test]
 fn a_root_reads_at_most_its_bytes_of_skills() {
     let scratch = Scratch::outside(
         "cineris-ext-unit",
         "a_root_reads_at_most_its_bytes_of_skills",
     );
-    // 130 skills of a little under 64 KiB each: about 8.1 MiB.
-    let padding = "x".repeat(64 * 1024 - 200);
-    for n in 0..130 {
+    // Six skills of 60 KiB each: four fit in the budget.
+    let padding = "x".repeat(60 * 1024 - 40);
+    for n in 0..6 {
         scratch.file(
-            format!("home/proj/.cineris/skills/s{n:03}/SKILL.md"),
-            format!("---\nname: s{n:03}\ndescription: One.\n---\n{padding}\n"),
+            format!("home/proj/.cineris/skills/s{n}/SKILL.md"),
+            format!("---\nname: s{n}\ndescription: One.\n---\n{padding}\n"),
         );
     }
-    let found = find(&scratch, &Root::standard(false));
-    let past: Vec<&LeftOut> = found
-        .left_out
-        .iter()
-        .filter(|left| left.reason == Reason::PastTheRootsBytes)
-        .collect();
-    assert!(!past.is_empty(), "{:?}", found.left_out);
-    let read = found.skills.len() + found.not_listed;
-    assert_eq!(read + past.len(), 130);
-    let size = (padding.len() + 40) as u64;
-    assert!((read as u64) * size <= MAX_ROOT_BYTES, "{read}");
-    assert!(((read + 1) as u64) * size > MAX_ROOT_BYTES - size, "{read}");
-    // By name: the first ones were read, the last ones left out.
-    assert!(
-        past.iter()
-            .all(|left| left.path.as_str() > ".cineris/skills/s099/SKILL.md"),
-        "{past:?}"
+    let found = find_within(
+        &resolver(&scratch),
+        &Root::standard(false),
+        &mut |_| {},
+        256 * 1024,
     );
+    assert_eq!(
+        listed(&found)
+            .iter()
+            .map(|(name, _)| *name)
+            .collect::<Vec<_>>(),
+        ["s0", "s1", "s2", "s3"]
+    );
+    assert_eq!(
+        left(&found),
+        [
+            (".cineris/skills/s4/SKILL.md", &Reason::PastTheRootsBytes),
+            (".cineris/skills/s5/SKILL.md", &Reason::PastTheRootsBytes)
+        ]
+    );
+    assert_eq!(MAX_ROOT_BYTES, 8 * 1024 * 1024);
 }

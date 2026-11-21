@@ -117,7 +117,7 @@ caught-by:
 [break] one-name-is-listed-twice
 rule: One name is one skill: of two skills with one name, one is taken and the other left out with its reason.
 file: crates/cineris-ext/src/skills.rs
-in: find_seeing
+in: find_within
 find: kept.name == skill.name
 replace: false
 caught-by:
@@ -126,7 +126,7 @@ caught-by:
 [break] the-users-skill-is-taken-over-the-projects
 rule: Of two skills with one name, the project's is taken over the user's.
 file: crates/cineris-ext/src/skills.rs
-in: find_seeing
+in: find_within
 find: .then_with(|| one.skill.owner.cmp(&other.skill.owner))
 replace:
 caught-by:
@@ -135,7 +135,7 @@ caught-by:
 [break] the-layouts-order-is-the-lists
 rule: Of two skills with one name and one owner, `.cineris/` is taken over `.agents/` over `.claude/`, whatever order the roots are given in.
 file: crates/cineris-ext/src/skills.rs
-in: find_seeing
+in: find_within
 find: .then_with(|| one.skill.layout.cmp(&other.skill.layout))
 replace:
 caught-by:
@@ -144,7 +144,7 @@ caught-by:
 [break] skills-past-the-cap-are-listed
 rule: At most 100 skills are listed; the rest are counted.
 file: crates/cineris-ext/src/skills.rs
-in: find_seeing
+in: find_within
 find: skills.truncate(MAX_SKILLS);
 replace:
 caught-by:

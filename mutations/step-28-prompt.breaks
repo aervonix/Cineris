@@ -548,7 +548,7 @@ caught-by:
 [break] a-root-of-skills-that-is-not-there-is-resolved
 rule: A root of skills that is not there costs a look at each name on the way to it, and is not resolved.
 file: crates/cineris-ext/src/skills.rs
-in: find_seeing
+in: find_within
 find: if certainly_absent(resolver, root, seen) { continue; }
 replace:
 packages: cineris-ext,cineris-core
@@ -657,11 +657,11 @@ caught-by:
     cineris-ext skills::tests::a_root_through_a_link_is_named_where_it_would_be
 
 [break] a-root-reads-its-skills-without-a-budget
-rule: A root reads at most 8 MiB of `SKILL.md` files: the skills past it are left out, unread.
+rule: A root reads at most its budget of `SKILL.md` files (8 MiB in a session): the skills past it are left out, unread, by their length or by what was read past it.
 file: crates/cineris-ext/src/skills.rs
-in: find_seeing
-find: left: std::cell::Cell::new(MAX_ROOT_BYTES)
-replace: left: std::cell::Cell::new(u64::MAX)
+in: read_capped
+find: let before = left.get();
+replace: let before = u64::MAX;
 caught-by:
     cineris-ext skills::tests::a_root_reads_at_most_its_bytes_of_skills
 

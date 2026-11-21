@@ -357,6 +357,17 @@ pub fn find_seeing(
     roots: &[Root],
     seen: &mut dyn FnMut(Seen<'_>),
 ) -> Found {
+    find_within(resolver, roots, seen, MAX_ROOT_BYTES)
+}
+
+/// [`find_seeing`], a root reading at most `max_root_bytes` of `SKILL.md`
+/// files: [`MAX_ROOT_BYTES`], or less for a test.
+fn find_within(
+    resolver: &PathResolver,
+    roots: &[Root],
+    seen: &mut dyn FnMut(Seen<'_>),
+    max_root_bytes: u64,
+) -> Found {
     let places = Places {
         workspace: resolver.root().to_fs_path(),
         home: std::cell::OnceCell::new(),
@@ -382,7 +393,7 @@ pub fn find_seeing(
                 index,
                 real: &real,
                 shown: &shown,
-                left: std::cell::Cell::new(MAX_ROOT_BYTES),
+                left: std::cell::Cell::new(max_root_bytes),
             },
             &mut candidates,
             &mut left_out,
@@ -431,20 +442,31 @@ pub fn find_seeing(
 /// name that is not a folder, a `..`): the resolver decides then. A user's
 /// root with no home directory is not there.
 fn certainly_absent(resolver: &PathResolver, root: &Root, seen: &mut dyn FnMut(Seen<'_>)) -> bool {
-    let (mut at, rest) = if root.path == "~" || root.path.starts_with("~/") {
+    // The separators the resolver reads: `/`, and `\` too on Windows.
+    let separator = |character: char| character == '/' || (cfg!(windows) && character == '\\');
+    let path = Path::new(&root.path);
+    let home_rest = root
+        .path
+        .strip_prefix('~')
+        .filter(|rest| rest.is_empty() || rest.starts_with(separator));
+    let (mut at, rest) = if let Some(rest) = home_rest {
         match resolver.home() {
-            Some(home) => (home.to_fs_path(), root.path.get(1..).unwrap_or_default()),
+            Some(home) => (home.to_fs_path(), rest),
             None => return true,
         }
-    } else if Path::new(&root.path).is_absolute() {
+    } else if path.is_absolute() {
         let at = PathBuf::from(&root.path);
         seen(Seen::Way(&at));
         cineris_base::hook::point(A_NAME_IS_LOOKED_AT);
         return missing(std::fs::symlink_metadata(&at));
+    } else if path.has_root() || matches!(path.components().next(), Some(Component::Prefix(_))) {
+        // Rooted on Windows without being absolute (`\x`, `C:x`): the
+        // resolver reads it.
+        return false;
     } else {
         (resolver.root().to_fs_path(), root.path.as_str())
     };
-    for name in rest.split('/') {
+    for name in rest.split(separator) {
         match name {
             "" | "." => continue,
             ".." => return false,
@@ -806,12 +828,12 @@ fn read_capped(path: &Path, left: &std::cell::Cell<u64>) -> Result<Option<String
     if too_large(metadata.len()) {
         return Err(Reason::TooLarge);
     }
-    if metadata.len() > left.get() {
+    let before = left.get();
+    if metadata.len() > before {
         return Err(Reason::PastTheRootsBytes);
     }
     // One byte past either cap says the file is larger, whatever its
     // metadata said a moment before.
-    let before = left.get();
     let mut bytes = Vec::new();
     let read = file
         .take(MAX_SKILL_BYTES.min(before) + 1)
