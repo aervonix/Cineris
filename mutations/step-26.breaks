@@ -376,7 +376,7 @@ caught-by:
     cineris-core::it sandbox::sys_undo_does_not_write_through_a_link_a_command_planted
 
 [break] a-stopped-turn-runs-another-command
-rule: Once a command stopped the turn, no call of the turn that changes anything runs, even one decided before the stop. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result: a command found to only read runs beside other calls that only read. The policy's decision of a stopped turn holds that window too.
+rule: Once a command stopped the turn, no call of the turn that changes anything runs, even one decided before the stop. This is the only guard of a call the round has already started (its task spawned, its tool not yet called) when another call's run stops the turn: neither the round's stop nor the policy's decision again reaches a running call. Only a command found to only read can be running then, beside another. No test reaches it, and none did before the stop-ends-turn step either: the test this break named passed with it made (found by that step's review). A test can be written with `cineris_agent::BEFORE_A_CALL_RUNS`: `docs/outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md`.
 file: crates/cineris-core/src/checkpoints.rs
 in: StopsWithTurn::run
 find: && let Some(reason) = self.policy.stopped_turn(cx.turn)

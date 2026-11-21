@@ -1479,8 +1479,9 @@ impl Round {
         // its stop with it. Neither happens today: both stops that mark a
         // result (a confined command, an extension's call) have side
         // effects, and such a call never starts while a response streams,
-        // so only a run that changes nothing is ever kept. A tool that
-        // changes nothing and marks a stop would need this looked at again.
+        // so only a run of a call with no side effects is ever kept. A tool
+        // with no side effects that marks a stop would need this looked at
+        // again.
         self.stopped = None;
         for call in std::mem::take(&mut self.calls) {
             if call.shown {
