@@ -131,6 +131,32 @@ fn a_run_that_stops_the_turn_keeps_the_calls_after_it_from_running() {
     }
 }
 
+/// A call that changes nothing can stop the turn too: a command found to
+/// only read is still looked around for protected paths, and the rig's
+/// `read` stands in for it. No call is decided again after it, so the
+/// round's own stop is all that keeps the write waiting for it, and
+/// written after it, from running.
+#[test]
+fn a_run_that_changes_nothing_and_stops_the_turn_keeps_a_waiting_call_from_running() {
+    let response = calls(&[
+        ("c1", "read", json!({"path": "a", "stop": REASON})),
+        ("c2", "write", json!({"path": "a"})),
+    ]);
+    let world = World::new("run_stop_read", [response, says("Unused.")]);
+    let rig = Setup::new(&world).start(&world);
+    world.run(async {
+        rig.prompt("go");
+        rig.events.turns(1).await;
+    });
+
+    assert_eq!(rig.events.ends()[0].outcome, TurnOutcome::Denied);
+    assert_eq!(world.provider.requests().len(), 1);
+    assert_eq!(world.log.count("end read a"), 1);
+    assert_eq!(world.log.count("start write a"), 0, "the write ran");
+    let results = results(&rig);
+    assert_eq!(results[1].outcome, ToolOutcome::Denied, "{:?}", results[1]);
+}
+
 /// An ordinary failing result is not a stop: the model is told, and asked
 /// again, whether the call was the last of its response or not.
 #[test]

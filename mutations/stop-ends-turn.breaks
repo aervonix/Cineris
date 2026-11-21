@@ -40,8 +40,8 @@ in: Round::stop_at
 find: if matches!(self.calls[other].state, CallState::Ready(_))
 replace: if matches!(self.calls[other].state, CallState::Pending)
 caught-by:
-    cineris-agent::it run_stops::a_run_that_stops_the_turn_keeps_the_calls_after_it_from_running
-    cineris-agent::it denials::a_stop_from_the_policy_ends_the_turn_denied_with_a_result_for_every_call
+    cineris-agent::it run_stops::a_run_that_changes_nothing_and_stops_the_turn_keeps_a_waiting_call_from_running
+    cineris-agent::it denials::a_stop_as_the_answer_to_a_question_ends_the_turn_denied
 
 [break] the-output-policy-drops-the-mark
 rule: The output policy keeps a result's stop mark.

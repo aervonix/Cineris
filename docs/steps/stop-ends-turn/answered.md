@@ -27,6 +27,7 @@ In the agent rig (`crates/cineris-agent/tests/it/run_stops.rs`), whose fake tool
 
 - the stopped call last in its response: one request, `remaining` 1, the turn and the streamed `turn.completed` `denied` with the stop's reason, the call's own result kept, and the next prompt answered with a whole history;
 - a stop in the middle of a response: the read before it runs, the write and the command after it do not, each gets the denial, no request follows;
+- a stop from a call that changes nothing (a command found to only read is still looked around for protected paths): a write waiting for it does not run. After a call that may have changed the file system the round decides every later call again anyway, which hid the round's own stop from the first test of a stop in the middle (found by `mutate`);
 - an ordinary failing result, in the middle and last: the calls after it run, and the model is asked again;
 - a kept run with the mark, used by the response sent again: the turn ends `denied`;
 - the stopgap's path above.
