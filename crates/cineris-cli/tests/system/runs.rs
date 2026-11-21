@@ -214,7 +214,7 @@ fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_den
     std::fs::write(
         folder.join("extension.toml"),
         "api = 1\nname = \"probe\"\nversion = \"1\"\ndescription = \"A test extension\"\nmain = \
-         \"main.js\"\n[capabilities]\nwrite = [\".github/**\"]\n",
+         \"main.js\"\n[capabilities]\nwrite = [\".env\"]\n",
     )
     .unwrap();
     // A script that catches the refusal and would go on: the stop ends its
@@ -222,7 +222,7 @@ fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_den
     std::fs::write(
         folder.join("main.js"),
         "cineris.tool({ name: 'ci', run: async () => { try { await \
-         cineris.fs.write('.github/workflows/ci.yml', 'on: push\\n') } catch (e) { } return \
+         cineris.fs.write('.env', 'TOKEN=1\\n') } catch (e) { } return \
          'went on' } });\n",
     )
     .unwrap();
@@ -259,7 +259,7 @@ fn sys_exit_6_when_an_extensions_host_call_stops_the_last_call_under_fail_on_den
         "the model was asked again: {record}"
     );
     assert_eq!(record["requests"], 1, "{record}");
-    assert!(!machine.workspace.join(".github/workflows/ci.yml").exists());
+    assert!(!machine.workspace.join(".env").exists());
 }
 
 #[test]
