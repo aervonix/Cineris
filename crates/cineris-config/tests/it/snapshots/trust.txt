@@ -130,6 +130,6 @@ terminal.clipboard                 user only
 rpc.approval_timeout               user only
 rpc.stalled_client                 user only
 hooks.*                            runs code
-extensions.*                       runs code
+extensions.*.enabled               user only
 skills.*                           user only
 mcp.*                              runs code

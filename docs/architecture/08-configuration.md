@@ -234,7 +234,7 @@ A repository must not be able to take over the harness by containing a configura
 | Class of key | Examples | Project layer |
 |---|---|---|
 | Harmless preferences | how much reasoning is shown, the `standard` speed tier, whether a refused tier falls back and how long its cooldown lasts, a `deny` or `ask` permission rule, a protected path | Applied always. |
-| Can run code | hooks, extensions, MCP servers, custom commands with shell steps | Applied only after the user trusts the project, and pinned by hash ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md)). |
+| Can run code | hooks, a project's extensions (its `.cineris/extensions/` folder: its `[extensions.<name>]` entries are the user's alone and only turn one off), MCP servers, custom commands with shell steps | Applied only after the user trusts the project, and pinned by hash ([06-permissions-and-sandbox.md](06-permissions-and-sandbox.md)). |
 | Can widen access | permission `allow` rules, sandbox `write` paths, network on, a permission mode above the one in effect (up to `supervised`) | Applied only after trust. Shown to the user at that time. |
 | Can raise cost | a speed tier other than `standard`, for the session or for a role; the model, for the main role and each other role (`model.main`, `fast`, `judge`), and a role's `provider`; the reasoning level (`model.effort`, a role's `effort`); `model.max_output`; `retry.attempts` | Applied only after trust; until then the user's own value applies. Shown to the user at that time. |
 | First limit | a limit under `[limits]` where there was none, which could stop every turn (since step 23) | Applied only after trust; until then the session runs without it. Shown to the user at that time. |
@@ -291,7 +291,8 @@ The schema, in outline. The full list, generated from the declarations, is the [
 | `[keys]` | Key bindings ([09-tui.md](09-tui.md), "The editor as built"): a table for each context of the key map (`editor`, `menu`, `picker`, `toggle`, `search`, `focus`, `dialog`, `global`), from an action's name to the keys bound to it. | **Declared in step 23,** user-only. The interface checks the names and the keys, and says each entry it cannot use. |
 | `[terminal]` | Capability overrides, each defaulting to automatic detection. All terminal quirks live here. | **Declared in step 23:** `sync`, `keyboard`, `color` (`none`, `16`, `256`, `truecolor`), `hyperlinks` and `unicode`, each user-only and read at start. |
 | `[rpc]` | The RPC server's waits: `approval_timeout`, `stalled_client` (since step 27). The user's alone: read once, when `cineris serve` starts. | Declared. |
-| `[hooks.<name>]`, `[extensions.<name>]`, `[skills]` | [12-extensions.md](12-extensions.md) | Reserved. |
+| `[extensions.<name>]` | [12-extensions.md](12-extensions.md) | `enabled` alone, the user's (since step 28). |
+| `[hooks.<name>]`, `[skills]` | [12-extensions.md](12-extensions.md) | Reserved. |
 | `[mcp.servers.<name>]`, `[mcp]` | [13-mcp.md](13-mcp.md) | Reserved. |
 
 **Values from elsewhere.** A value can be written as `{ env = "NAME" }` to read an environment variable when it is used, where the reference says a key takes "text, or `{ env = "NAME" }`": today a provider's extra headers. A value read this way is a `Secret`, and so is literal text in such a key (see "Credentials"). There is no general interpolation syntax and no "run this command to get a value" form in the first release: a configuration file that runs commands is a larger attack surface than the feature is worth.

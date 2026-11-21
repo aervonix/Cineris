@@ -141,9 +141,13 @@ settings! {
         /// Hooks by name.
         [reserved RunsCode]
         pub hooks: Reserved,
-        /// Extensions by name.
-        [reserved RunsCode]
-        pub extensions: Reserved,
+        /// Extensions by name: `[extensions.<name>]`, which only turns one
+        /// off (`cineris ext disable` writes it). The user's alone: a
+        /// project's entry is ignored, since a project's extension is kept
+        /// out by not trusting the project, and a project may not turn the
+        /// user's own off.
+        [nested]
+        pub extensions: BTreeMap<String, ExtensionSettings>,
         /// Where skills are looked for.
         [reserved UserOnly]
         pub skills: Reserved,
@@ -247,6 +251,19 @@ settings! {
         /// trust.
         [BySpeed, Now]
         pub speed: Option<Speed>,
+    }
+}
+
+settings! {
+    /// One extension's entry. An extension's capabilities are its
+    /// manifest's, approved with it, and are not set here.
+    pub struct ExtensionSettings {
+        /// Whether the extension is loaded. `false` keeps it out of every
+        /// new session, its tools, commands and prompt with it; its pin is
+        /// kept, so `true` again needs no new approval unless its folder
+        /// changed.
+        [UserOnly, NextSession]
+        pub enabled: bool = true,
     }
 }
 
