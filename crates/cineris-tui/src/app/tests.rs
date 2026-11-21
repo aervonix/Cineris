@@ -2024,11 +2024,47 @@ fn a_trusted_projects_question_offers_to_keep_its_trust_and_not_never() {
     use cineris_protocol::methods::TrustResponse;
     let git = || resource(Kind::Repository, "git", "Git may read it.", false);
     let rule = || resource(Kind::Rules, "permissions.rules", "allow exec make *", true);
-    for (resources, label) in [
-        (vec![rule()], "x Keep trusting it, without the new rules"),
-        (vec![git()], "x Keep trusting it, without git"),
-        (vec![git(), rule()], "x Keep trusting it, without these"),
+    let extension = || {
+        resource(
+            Kind::Extension,
+            "probe",
+            "`probe` in `.cineris/extensions/probe`. It has changed since you approved it.",
+            true,
+        )
+    };
+    for (resources, label, said) in [
+        (
+            vec![rule()],
+            "x Keep trusting it, without the new rules",
+            "asks no more until they change",
+        ),
+        (
+            vec![git()],
+            "x Keep trusting it, without git",
+            "asks no more until they change",
+        ),
+        (
+            vec![git(), rule()],
+            "x Keep trusting it, without these",
+            "asks no more until they change",
+        ),
+        // An extension changed is not rules changed, and a keep of it is
+        // asked about again at the next start (the early review of step
+        // 28's second part).
+        (
+            vec![extension()],
+            "x Keep trusting it, without these",
+            "until the next start, which asks again",
+        ),
+        (
+            vec![rule(), extension()],
+            "x Keep trusting it, without these",
+            "asks again of its extensions at the next start",
+        ),
     ] {
+        let rules_listed = resources
+            .iter()
+            .any(|resource| resource.kind == Kind::Rules);
         let now = Instant::now();
         let (mut app, link) = app(now);
         app.resize(120, 40);
@@ -2046,14 +2082,25 @@ fn a_trusted_projects_question_offers_to_keep_its_trust_and_not_never() {
             "You trust this project.",
             "y Trust it",
             label,
-            "asks no more until they change",
         ] {
             assert!(
                 rows.iter().any(|row| row.contains(shown)),
                 "{shown}: {rows:#?}"
             );
         }
+        let joined = rows
+            .join(" ")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(joined.contains(said), "{said}: {rows:#?}");
         assert!(!rows.iter().any(|row| row.contains("Never")), "{rows:#?}");
+        assert_eq!(
+            rows.iter()
+                .any(|row| row.contains("Its rules have changed since you trusted it")),
+            rules_listed,
+            "{rows:#?}"
+        );
         key(&mut app, "x", at);
         let given = std::mem::take(&mut link.script().answers);
         assert_eq!(

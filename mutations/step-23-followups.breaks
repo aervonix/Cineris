@@ -251,7 +251,7 @@ caught-by:
 [break] permissions-trust-leaves-git-out
 rule: `cineris permissions trust` in a repository trusts git with the rest.
 file: crates/cineris-core/src/manage.rs
-in: Core::trust_project
+in: trust_project_with
 find: let git = in_git_at(&project.root);
 replace: let git = false;
 caught-by:

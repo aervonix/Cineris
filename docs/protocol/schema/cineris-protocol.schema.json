@@ -7540,7 +7540,7 @@
           "description": "The session."
         },
         "trusted": {
-          "description": "The project is trusted already, and the question is about what is\nnew in it: its rules changed (each resource marked `changed`), or\ngit, now that it is a repository. `never` is not an answer to it;\n`keep` is (since the follow-ups of step 23).",
+          "description": "The project is trusted already, and the question is about what is\nnew in it: its rules changed (each resource marked `changed`), git,\nnow that it is a repository, or (since step 28) an extension new in\nit or changed since it was approved (`changed`). `never` is not an\nanswer to it; `keep` is (since the follow-ups of step 23), which of\nan extension is kept by the core for its run alone.",
           "type": "boolean"
         },
         "workspace": {
@@ -7560,7 +7560,7 @@
       "properties": {
         "changed": {
           "default": false,
-          "description": "Whether it was trusted before and has changed since.",
+          "description": "Whether it was approved before and has changed since: a project's\nrules trusted as other rules, or (since step 28) an extension\napproved at another hash, whose `detail` says so too.",
           "type": "boolean"
         },
         "detail": {

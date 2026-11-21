@@ -389,3 +389,64 @@ fn sys_project_writes_lists_accepts_and_turns_off_entries() {
         shown(&unread)
     );
 }
+
+/// `permissions trust` shows a project's extensions as the trust question
+/// does, and with no terminal to ask at approves them only with
+/// `--with-extensions`: without it, it trusts the rules and says the
+/// extensions were left unapproved (step 28).
+#[test]
+fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask() {
+    let machine = Machine::new("sys_trust_extensions");
+    let folder = machine.workspace.join(".cineris/extensions/probe");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("extension.toml"),
+        "api = 1\nname = \"probe\"\nversion = \"1\"\ndescription = \"A test extension\"\nmain = \
+         \"main.js\"\n[capabilities]\nexec = [\"gh\"]\n",
+    )
+    .unwrap();
+    std::fs::write(folder.join("main.js"), "// nothing yet\n").unwrap();
+    let trust_file = machine.dirs().state.unwrap().join("trust.toml");
+    let pinned = || std::fs::read_to_string(&trust_file).unwrap_or_default();
+
+    let plain = machine.run(&["permissions", "trust"]);
+    plain.expect_code(0);
+    for shown_too in [
+        "Its extensions",
+        "`probe` in `.cineris/extensions/probe`.",
+        "It may run `gh`",
+    ] {
+        assert!(
+            plain.stdout.contains(shown_too),
+            "{shown_too}: {}",
+            shown(&plain)
+        );
+    }
+    assert!(
+        plain.stderr.contains("left unapproved") && plain.stderr.contains("--with-extensions"),
+        "{}",
+        shown(&plain)
+    );
+    assert!(!pinned().contains("kind = \"extension\""), "{}", pinned());
+
+    let flagged = machine.run(&["permissions", "trust", "--with-extensions"]);
+    flagged.expect_code(0);
+    assert!(
+        flagged.stdout.contains("Approved its extensions: `probe`."),
+        "{}",
+        shown(&flagged)
+    );
+    let file = pinned();
+    assert!(
+        file.contains("kind = \"extension\"") && file.contains("name = \"probe\""),
+        "{file}"
+    );
+    // Approved as it is, it is not offered again.
+    let again = machine.run(&["permissions", "trust"]);
+    again.expect_code(0);
+    assert!(
+        !again.stdout.contains("Its extensions"),
+        "{}",
+        shown(&again)
+    );
+}

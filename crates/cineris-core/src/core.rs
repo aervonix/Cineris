@@ -411,9 +411,10 @@ pub(crate) struct Live {
     lease_count: AtomicU64,
     /// The project's knowledge as this session has it.
     pub(crate) knowledge: Option<Arc<crate::knowledge::Knowledge>>,
-    /// Whether the session's extensions are found and registered: a turn
-    /// waits for it before it starts (step 28).
-    pub(crate) extensions: Arc<crate::ext::found::Ready>,
+    /// The session's extensions: a turn waits for them to be found and
+    /// registered before it starts, and its start looks again at what they
+    /// were found in (step 28).
+    pub(crate) extensions: Arc<crate::ext::found::Extensions>,
 }
 
 impl Inner {
@@ -1116,6 +1117,8 @@ impl Core {
         // A question that holds the session (an undo's) ends as no answer:
         // nothing it would do runs on a session that has ended.
         self.inner.clients.withdraw(Some(session));
+        // Its extensions' finding ends with it.
+        live.extensions.stop();
         live.handle.close();
         let task = lock(&live.task).take();
         if let Some(task) = task {
@@ -1653,8 +1656,10 @@ impl Core {
                 // Asked as a prompt decides: a turn a prompt has started
                 // and the loop has not picked up yet holds the session too,
                 // and a look then would let it end before this prompt
-                // queues behind it.
+                // queues behind it. What the extensions were found in is
+                // looked at then too, and what a change loads is waited for.
                 if !live.handle.turn_running() {
+                    live.extensions.recheck().await;
                     crate::reload::at_turn_start(self, &live).await;
                 }
                 // Refused with `history_changing` while a rewind is under
