@@ -426,7 +426,27 @@ impl UserNames {
 
     /// The user's folder of extensions, listed and read no further. Blocks.
     pub(crate) fn listed(resolver: &PathResolver, config_dir: Option<&Path>) -> Self {
-        let listed = config_dir.map(|config| discover::names(&[Root::user(config)], resolver));
+        Self::listed_within(resolver, config_dir, super::watched::MAX_PLACES_PER_ROOT)
+    }
+
+    /// [`UserNames::listed`], the user's root counting as not listed whole
+    /// past `bound` places within its extensions, as the session's finding
+    /// counts them: the question and the session then agree on which names
+    /// are the user's (the re-check of step 28's fresh review).
+    pub(crate) fn listed_within(
+        resolver: &PathResolver,
+        config_dir: Option<&Path>,
+        bound: usize,
+    ) -> Self {
+        let clock: SharedClock = Arc::new(cineris_base::SystemClock::new());
+        let mut watched = Watched::default();
+        let mut left = bound;
+        let listed = config_dir.map(|config| {
+            discover::names_seeing(&[Root::user(config)], resolver, &mut |seen| match seen {
+                Seen::Root(..) => true,
+                Seen::Extension(_, folder) => watched.note_tree(folder, &clock, &mut left),
+            })
+        });
         Self::of(listed.as_ref())
     }
 
@@ -736,6 +756,33 @@ mod pipeline;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The user's names are taken within the bound on places the session
+    /// watches: past it, the user's root takes every name, as it does in the
+    /// session's finding.
+    #[test]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a test makes the folders it lists, on the test's own thread"
+    )]
+    fn the_users_names_are_taken_within_the_bound_on_places_the_session_watches() {
+        let dir = std::env::temp_dir().join(format!("cineris-core-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for inside in 0..10 {
+            std::fs::create_dir_all(dir.join(format!("cfg/extensions/probe/d{inside}"))).unwrap();
+        }
+        std::fs::create_dir_all(dir.join("work")).unwrap();
+        let resolver =
+            PathResolver::new(&dir.join("work"), cineris_base::PathOptions::new()).unwrap();
+        let within = UserNames::listed_within(&resolver, Some(&dir.join("cfg")), 100);
+        assert!(within.takes("probe") && !within.takes("other"));
+        let past = UserNames::listed_within(&resolver, Some(&dir.join("cfg")), 5);
+        assert!(
+            past.takes("other"),
+            "past the bound every name is the user's"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// What an approval says of an extension's programs follows whether
     /// they are confined on the system (the full review of step 28): where

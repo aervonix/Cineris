@@ -3695,9 +3695,9 @@ caught-by:
 [break] pinned-users-folder-read-for-its-names
 rule: The trust question only lists the user's folder for the names it takes, and reads none of its extensions.
 file: crates/cineris-core/src/ext/found.rs
-in: UserNames::listed
-find: discover::names(&[Root::user(config)], resolver)
-replace: discover::discover(&[Root::user(config)], resolver)
+in: UserNames::listed_within
+find: discover::names_seeing(&[Root::user(config)], resolver
+replace: discover::discover_seeing(&[Root::user(config)], resolver
 caught-by:
     extensions_trust::each_folder_is_read_once_when_a_session_opens
 
@@ -4316,6 +4316,52 @@ replace: .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)]))
 os: linux
 caught-by:
     commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+
+[break] pinned-sandbox-off-unwarned
+rule: The trust question warns, before the yes, of a write root of the project's own configuration that holds the harness's files, which trusting it would turn the sandbox off with.
+file: crates/cineris-core/src/assemble.rs
+in: harness_write_warnings
+find: holds_harness_files(&sandbox_grant(inner, &with, root, &question), &with, state, launcher)
+replace: holds_harness_files(&sandbox_grant(inner, &with, root, &question), &with, state, launcher) && false
+caught-by:
+    extensions_review::the_trust_question_warns_of_a_write_root_that_would_turn_the_sandbox_off
+
+[break] pinned-file-over-its-cap-read
+rule: A file over its 1 MiB cap is refused by its length before it is read: nothing of it is read.
+file: crates/cineris-ext/src/folder.rs
+in: read_file
+find: if metadata.len() > MAX_FILE_BYTES {
+replace: if metadata.len() > MAX_FILE_BYTES * 4 {
+caught-by:
+    folder::tests::a_read_reports_every_byte_it_read_and_reads_no_file_past_a_cap
+
+[break] pinned-folder-read-past-its-total
+rule: A file that would take its folder past 4 MiB is refused by its length before it is read.
+file: crates/cineris-ext/src/folder.rs
+in: read_file
+find: if total.saturating_add(metadata.len()) > MAX_TOTAL_BYTES {
+replace: if total.saturating_add(metadata.len()) > MAX_TOTAL_BYTES * 2 {
+caught-by:
+    folder::tests::a_read_reports_every_byte_it_read_and_reads_no_file_past_a_cap
+
+[break] pinned-question-names-unbounded
+rule: The trust question takes the user's names within the bound on places the session watches, so that the two agree on which names are the user's.
+file: crates/cineris-core/src/ext/found.rs
+in: UserNames::listed_within
+find: Seen::Extension(_, folder) => watched.note_tree(folder, &clock, &mut left)
+replace: Seen::Extension(..) => true
+caught-by:
+    ext::found::tests::the_users_names_are_taken_within_the_bound_on_places_the_session_watches
+
+[break] pinned-names-seeing-not-cut
+rule: A root of which the names' caller would not watch a folder counts as not listed whole.
+file: crates/cineris-ext/src/discover.rs
+in: names_seeing
+find: if !discovered.cut.contains(&root.source) {
+replace: if discovered.cut.contains(&root.source) {
+packages: cineris-core
+caught-by:
+    ext::found::tests::the_users_names_are_taken_within_the_bound_on_places_the_session_watches
 
 # From mutations/step-28-pins.breaks (part `pins`).
 # Step 28, the user's own pins (`pins.toml`, `cineris-policy`'s

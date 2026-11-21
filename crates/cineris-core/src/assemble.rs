@@ -706,10 +706,15 @@ pub(crate) fn look(
         // What its programs can do is said of the load a yes puts in force,
         // the project's own settings in it: the question's own may hold back
         // a `sandbox.write` that turns the sandbox off (the fresh review of
-        // step 28).
-        let load = trusted_load(None)?;
-        let confined = programs_confined(inner, &load, &place.root, place.state.as_ref());
-        peeked = Some(load);
+        // step 28). A project whose rules are trusted has it loaded already.
+        let confined = if trust.rules {
+            programs_confined(inner, &trust.loaded, &place.root, place.state.as_ref())
+        } else {
+            let load = trusted_load(None)?;
+            let confined = programs_confined(inner, &load, &place.root, place.state.as_ref());
+            peeked = Some(load);
+            confined
+        };
         crate::ext::found::asked(&found, &users, &stored, confined)
     };
     // Handed to the session without the extensions' bytes, its places
@@ -791,6 +796,27 @@ pub(crate) fn look(
         });
     }
     resources.extend(extensions.resources);
+    // A held-back write root that would turn the sandbox off is said before
+    // anything else it lists (the maintainers, after the fresh review of
+    // step 28): what trust turns on there is the sandbox off.
+    if rules_shown {
+        let warnings: Vec<TrustResource> = harness_write_warnings(
+            inner,
+            &trust.loaded,
+            &peek,
+            &place.root,
+            place.state.as_ref(),
+        )
+        .into_iter()
+        .map(|detail| TrustResource {
+            kind: TrustResourceKind::Settings,
+            name: "sandbox.write".to_owned(),
+            detail,
+            changed: false,
+        })
+        .collect();
+        resources.splice(0..0, warnings);
+    }
     if resources.is_empty() {
         return Ok((trust, None));
     }
@@ -1707,6 +1733,69 @@ pub(crate) fn programs_confined(
             state,
             inner.sandbox.program(),
         )
+}
+
+/// What the trust question says of each write root a yes would add that
+/// holds the harness's own files, and so would turn the sandbox off for the
+/// project's sessions (the maintainers, after the fresh review of step 28;
+/// `outstanding/a-projects-write-root-holding-the-harness-files-turns-the-sandbox-off.md`).
+/// A root counts as a yes would add it when the load `trusted` holds it and
+/// the load `held`, the one in force without that yes, does not; it is
+/// judged as a session's start judges its roots ([`holds_harness_files`]).
+/// Nothing is said where the sandbox would not enforce anyway: it is off,
+/// there is none, or what is in force already turns it off.
+pub(crate) fn harness_write_warnings(
+    inner: &Inner,
+    held: &Loaded,
+    trusted: &Loaded,
+    root: &AbsPath,
+    state: Option<&StateDir>,
+) -> Vec<String> {
+    let (sandbox, _) = inner.sandbox.state(trusted.settings.sandbox.enabled);
+    let question = SessionId::new("s_question");
+    let launcher = inner.sandbox.program();
+    if sandbox != SandboxState::Enforcing
+        || holds_harness_files(
+            &sandbox_grant(inner, held, root, &question),
+            held,
+            state,
+            launcher,
+        )
+    {
+        return Vec::new();
+    }
+    let home = inner.options.env.home();
+    trusted
+        .settings
+        .sandbox
+        .write
+        .iter()
+        .filter(|entry| !held.settings.sandbox.write.contains(entry))
+        .filter(|entry| {
+            let mut with = held.clone();
+            with.settings.sandbox.write.push((*entry).clone());
+            holds_harness_files(
+                &sandbox_grant(inner, &with, root, &question),
+                &with,
+                state,
+                launcher,
+            )
+        })
+        .map(|entry| {
+            let shown = placed_entry(entry, home.as_deref(), root)
+                .as_deref()
+                .and_then(resolve_dir)
+                .map_or_else(
+                    || entry.clone(),
+                    |placed| crate::ext::found::shown_path(&placed.to_fs_path(), home.as_deref()),
+                );
+            format!(
+                "This project's configuration asks to write in `{}`, which holds Cineris's own \
+                 files. If you trust it, its sessions run without the sandbox.",
+                cineris_base::in_code(&shown)
+            )
+        })
+        .collect()
 }
 
 /// Whether a write root of `policy` holds the harness's configuration,
