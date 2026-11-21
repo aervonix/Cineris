@@ -547,7 +547,9 @@ fn sys_past_its_bound_the_look_at_protected_paths_warns_and_does_not_stop() {
         let ended = front.turn("write two files").await;
         let results = front.results();
         assert!(
-            results[0].2.contains("looked at only in part"),
+            results[0]
+                .2
+                .contains("looked at only in part: the look stopped at its bound"),
             "{results:?}"
         );
         // A warning, not a stop: the next call ran, and the turn ended as
@@ -1005,6 +1007,71 @@ fn sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_agai
         assert_eq!(again(front.notices()), 1, "{:?}", front.notices());
         // Put back by hand: nothing more is said.
         world.put(".git/config", "[core]\n");
+        front.turn("and again").await;
+        assert_eq!(again(front.notices()), 1, "{:?}", front.notices());
+        front.close().await;
+    });
+}
+
+/// A hook a confined command plants larger than what the put-back keeps is
+/// left as it is and named to put back by hand (the maintainers' rule); and
+/// every turn's start says it again while it is as the command left it, at
+/// `unrestricted` too, until it is put back by hand (the narrow check of
+/// the third security fix: it was told once, and the next look took it as
+/// it was).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_what_could_not_be_put_back_is_told_again_at_each_turns_start() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("by_hand_again", []);
+    world.put(".git/config", "[core]\n");
+    world.put(".git/hooks/pre-commit.sample", "#!/bin/sh\n");
+    world.put(
+        "plant.sh",
+        "printf '#!/bin/sh\\nevil\\n' > .git/hooks/pre-commit\n\
+         head -c 300000 /dev/zero | tr '\\0' '#' >> .git/hooks/pre-commit\n",
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh plant.sh"}))]));
+    world.provider.push(says("Next."));
+    world.provider.push(says("Again."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("plant").await;
+        let shown = front.results()[0].2.clone();
+        assert!(
+            shown.contains("must be put back by hand: `.git/hooks/pre-commit` (created)"),
+            "{shown}"
+        );
+        assert!(world.workspace.join(".git/hooks/pre-commit").exists());
+        let again = |notices: Vec<String>| -> usize {
+            notices
+                .iter()
+                .filter(|notice| {
+                    notice.starts_with(
+                        "Still not put back. `.git/hooks/pre-commit` was changed by a command \
+                         run in the sandbox and could not be put back. Git, and so the model's \
+                         own git commands, will run what it now names",
+                    )
+                })
+                .count()
+        };
+        set_level(&front, Level::Unrestricted).await;
+        front.turn("go on").await;
+        assert_eq!(again(front.notices()), 1, "{:?}", front.notices());
+        // Put back by hand: nothing more is said.
+        std::fs::remove_file(world.workspace.join(".git/hooks/pre-commit")).unwrap();
         front.turn("and again").await;
         assert_eq!(again(front.notices()), 1, "{:?}", front.notices());
         front.close().await;

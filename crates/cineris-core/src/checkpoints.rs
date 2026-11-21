@@ -728,7 +728,7 @@ impl RecordingShell {
                         let keep = sandbox.kept_in().map(std::path::Path::to_path_buf);
                         sandbox.protected().map(|watch| {
                             let found = protected_changes(&watch, &before, &roots, keep.as_deref());
-                            sandbox.remember_kept_nowhere(&before, &found);
+                            sandbox.remember_by_hand(&found);
                             found
                         })
                     })
