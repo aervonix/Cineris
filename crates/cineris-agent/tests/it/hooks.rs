@@ -254,7 +254,7 @@ fn hooked_with(
 /// wait on something a break keeps from happening fails at once, and not
 /// when its time runs out.
 async fn soon(done: impl Fn() -> bool) -> bool {
-    for _ in 0..512 {
+    for _ in 0..4096 {
         if done() {
             return true;
         }
@@ -700,9 +700,15 @@ fn what_its_hooks_said_before_is_dropped_as_a_call_is_decided_again() {
         rig.policy.narrow();
         world.gates.open("ask plain");
         hook.runs(2).await;
-        timer.sleeping().await;
+        assert!(
+            soon(|| !timer.running().is_empty()).await,
+            "held on its time"
+        );
         let _ = rig.handle.interrupt();
-        rig.events.turns(1).await;
+        assert!(
+            soon(|| rig.events.ends().len() == 1).await,
+            "the interrupt waited for the hook"
+        );
     });
     let result = &results(&rig)[1];
     assert_eq!(result.outcome, ToolOutcome::Interrupted);
@@ -1289,7 +1295,10 @@ fn an_interrupt_while_the_prompts_hooks_are_asked_gives_the_prompt_back() {
     hooks.add(FakeHook::on("slow", HookEvent::PromptSubmit).replies([Reply::Never]));
     world.run(async {
         rig.prompt("go");
-        timer.sleeping().await;
+        assert!(
+            soon(|| !timer.running().is_empty()).await,
+            "held on its time"
+        );
         let _ = rig.handle.interrupt();
         assert!(
             soon(|| rig.events.ends().len() == 1).await,
@@ -1339,7 +1348,10 @@ fn hooks_across_the_turns_of_one_session() {
         rig.prompt("write a");
         rig.events.turns(1).await;
         rig.prompt("deploy");
-        rig.events.turns(2).await;
+        assert!(
+            soon(|| rig.events.ends().len() == 2).await,
+            "the refused prompt's turn did not end"
+        );
         rig.prompt("run the tests");
         world.log.has("start shell test").await;
         rig.steer("faster");
@@ -2145,7 +2157,10 @@ fn an_observer_runs_at_most_a_few_times_at_once() {
     );
     world.run(async {
         rig.prompt("go");
-        rig.events.turns(1).await;
+        assert!(
+            soon(|| rig.events.ends().len() == 1).await,
+            "the turn waited for an observer"
+        );
         crate::settle().await;
     });
     assert_eq!(
@@ -2175,7 +2190,10 @@ fn an_observer_is_stopped_when_its_session_closes() {
     );
     world.run(async {
         rig.prompt("go");
-        rig.events.turns(1).await;
+        assert!(
+            soon(|| rig.events.ends().len() == 1).await,
+            "the turn waited for an observer"
+        );
         assert!(soon(|| timer.running().len() == 1).await);
         rig.handle.close();
         assert!(
