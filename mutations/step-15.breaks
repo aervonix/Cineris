@@ -95,8 +95,8 @@ caught-by:
 rule: The user's appended text is the last section of the system prompt.
 file: crates/cineris-agent/src/context/prompt.rs
 in: build
-find: let instructions_at = parts.len();
-replace: if let Some(append) = sections.append { parts.push(append.to_owned()); } let instructions_at = parts.len();
+find: let mut outside = Vec::new();
+replace: if let Some(append) = sections.append { parts.push(append.to_owned()); } let mut outside = Vec::new();
 caught-by:
     cineris-agent context::prompt::tests::the_sections_come_in_their_order_and_the_appended_text_last
 

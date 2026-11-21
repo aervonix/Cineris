@@ -69,10 +69,11 @@ pub mod verify;
 
 pub use config::{LoopConfig, Models, RoleModel, SessionInfo, UtilityCall, Workspace};
 pub use context::{
-    Assembled, CORE_INSTRUCTIONS, ContextError, ContextParts, ContextSettings, Environment,
-    FileText, GUIDED_NOTES, InstructionFiles, MapAnswer, MapPending, MapSource,
+    Assembled, CORE_INSTRUCTIONS, ContextError, ContextParts, ContextSettings, EXTENSION_TEXT_CAP,
+    EXTENSIONS_CAP, Environment, ExtensionPrompt, ExtensionSections, ExtensionsSource, FileText,
+    GUIDED_NOTES, INDEX_CAP, InstructionFiles, MapAnswer, MapPending, MapSource,
     MemoryInstructionFiles, NOTICE_LEAD, NoInstructionFiles, PROFILE_CHANGED, PROFILE_EMPTY,
-    PrefixDifference, ProfileSource, RepoMap, SUMMARY_INSTRUCTIONS, check_prefix,
+    PrefixDifference, ProfileSource, RepoMap, SKILLS_CAP, SUMMARY_INSTRUCTIONS, check_prefix,
 };
 pub use events::EventSink;
 pub use guard::RepetitionLimits;
