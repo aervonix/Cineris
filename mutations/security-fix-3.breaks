@@ -727,10 +727,17 @@ caught-by:
     cineris-core::it sandbox::sys_what_could_not_be_put_back_is_told_again_at_each_turns_start
 
 [break] closed-folders-opened-one-level-a-round
-rule: Every folder under one opened again that the look before listed is opened too, all the way down, before the next look, so folders closed deeper than the rounds go hide nothing.
+rule: Every folder under one opened again that the look before listed is opened too, all the way down, before the next look, so folders closed deeper than the rounds go hide nothing, in one look. Its other guard: a pass that only opens folders is no round, so opening one level a pass, with a look after each, still reaches the bottom; this one bounds the looks it takes. A break of either alone is caught by neither's test (`protect::tests::putting_back::a_hook_behind_five_closed_folders_is_found_and_taken_away` passes), and the two together are `closed-folders-outrun-the-rounds`.
 file: crates/cineris-sandbox/src/protect.rs
 in: Watch::put_back
 find: for under in before.listed_in(&folder) {
 replace: for under in Vec::<PathBuf>::new() {
-caught-by:
-    cineris-sandbox protect::tests::putting_back::a_hook_behind_five_closed_folders_is_found_and_taken_away
+expect: survives
+
+[break] closed-folders-outrun-the-rounds
+rule: A pass that only opens folders is no round: the rounds bound the put-back's own, so folders closed deeper than the rounds go are opened. (With the opening all the way down in place, this break alone survives; it is caught with that one broken too, which is the code the last review of the third security fix found.)
+file: crates/cineris-sandbox/src/protect.rs
+in: Watch::put_back
+find: if !round.is_empty() || rounds == 0 {
+replace: if true {
+expect: survives
