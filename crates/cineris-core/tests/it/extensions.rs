@@ -400,6 +400,8 @@ impl tracing::Subscriber for Warnings {
 /// Windows' tier 2).
 #[test]
 fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_is_asked() {
+    // A protected path whose name holds a character that acts unseen.
+    const UNSEEN: &str = ".git/x\u{202e}y";
     let world = World::new(
         "ext_protected_writes",
         [
@@ -448,7 +450,7 @@ fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_
                    try {{ await cineris.fs.write(path, 'planted\\n'); lines.push(path + '\\t' + 'wrote') }} \
                    catch (e) {{ lines.push(path + '\\t' + e.message) }} }} \
                  return lines.join('\\n') }} }});",
-            serde_json::to_string(&protected).unwrap()
+            serde_json::to_string(&[&protected[..], &[UNSEEN][..]].concat()).unwrap()
         ),
     );
     let core = world.core_with(|options| options.extensions = vec![extension]);
@@ -513,6 +515,15 @@ fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_
             }),
             "{logged:?}"
         );
+        // A name the script chose is in the log escaped, as its own log
+        // lines are.
+        assert!(
+            logged
+                .iter()
+                .any(|line| line.contains(&format!("path={}", cineris_base::visible(UNSEEN)))),
+            "{logged:?}"
+        );
+        assert!(!logged.iter().any(|line| line.contains('\u{202e}')));
         front.close().await;
 
         let front = Front::start_as(
@@ -539,6 +550,7 @@ fn a_host_write_of_a_protected_path_is_refused_at_every_level_before_the_engine_
         ".github/workflows/ci.yml",
         "vendor/lib/.git/config",
         "crates/x/.cargo/config.toml",
+        UNSEEN,
     ] {
         assert_eq!(world.read(path), None, "{path}");
     }
