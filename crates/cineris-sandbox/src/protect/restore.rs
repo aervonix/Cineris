@@ -88,12 +88,34 @@ pub(super) fn put_back(before: &Snapshot, changed: &[Changed], keeper: &mut Keep
 }
 
 /// The name a kept copy of `path` is given in its folder: its count, and
-/// the path's last name.
+/// the path's last name, shortened to [`NAME_BYTES`] so that the copy's
+/// name fits where the path's did (the narrow check of the third security
+/// fix: a name near the system's bound did not, with the count before it).
 fn copy_name(count: usize, path: &Path) -> String {
     let name = path
         .file_name()
         .map_or_else(|| "file".into(), |name| name.to_string_lossy());
-    format!("{count:03}-{name}")
+    let mut short = String::new();
+    for character in name.chars() {
+        if short.len() + character.len_utf8() > NAME_BYTES {
+            break;
+        }
+        short.push(character);
+    }
+    format!("{count:03}-{short}")
+}
+
+/// The most of a path's last name a kept copy's name holds.
+const NAME_BYTES: usize = 200;
+
+/// Gives the folder at `path` its owner's right to list it back, through a
+/// descriptor that needs no read right, where a command took it away: the
+/// look that follows sees what is in it. It blocks.
+pub(super) fn reopen(path: &Path) {
+    #[cfg(target_os = "linux")]
+    let _ = linux::reopen(path);
+    #[cfg(not(target_os = "linux"))]
+    let _ = path;
 }
 
 #[cfg(target_os = "linux")]
@@ -247,18 +269,88 @@ mod linux {
             .clone()
             .ok_or_else(|| io::Error::other("nowhere to keep what is replaced"))?;
         cineris_base::private::create_dir_all(&into)?;
-        let copy = into.join(copy_name(keeper.kept.len() + 1, path));
-        let mut file = cineris_base::private::create_new(&copy)?;
+        // The next name free in the folder: it holds the copies of every
+        // put-back of the session, and of a session opened again (the
+        // narrow check of the third security fix: each put-back counted
+        // from one, and a second copy of a file of the same name was
+        // refused).
+        let mut count = keeper.kept.len() + 1;
+        let (copy, mut file) = loop {
+            let copy = into.join(copy_name(count, path));
+            match cineris_base::private::create_new(&copy) {
+                Ok(file) => break (copy, file),
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists && count < COPIES => {
+                    count += 1;
+                }
+                Err(error) => return Err(error),
+            }
+        };
         file.write_all(&content)?;
         keeper.kept.push((path.to_owned(), copy));
         Ok(())
+    }
+
+    /// The most copies the folder is looked through for a free name.
+    const COPIES: usize = 100_000;
+
+    /// Gives the folder `path` its owner's right to list it, through an
+    /// `O_PATH` descriptor, keeping the rest of its mode.
+    pub(super) fn reopen(path: &Path) -> io::Result<()> {
+        let (dir, name) = parent_of(path)?;
+        let (now, mode) = mode_at(&dir, &name)?;
+        if now != Now::Directory {
+            return Ok(());
+        }
+        chmod_at(&dir, &name, (mode & 0o7777) | 0o500, Now::Directory)
+    }
+
+    /// What `name` in `dir` is, with its mode, with no link followed.
+    fn mode_at(dir: &OwnedFd, name: &CString) -> io::Result<(Now, u32)> {
+        // SAFETY: `stat` is a plain C struct; `fstatat` fills it.
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: an open directory, a NUL-terminated name, a pointer to a
+        // `stat` this function owns, and a flag that does not follow a
+        // link at the name.
+        let done = unsafe {
+            libc::fstatat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                std::ptr::addr_of_mut!(stat),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if done != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let now = match stat.st_mode & libc::S_IFMT {
+            libc::S_IFDIR => Now::Directory,
+            libc::S_IFREG => Now::File,
+            _ => Now::Other,
+        };
+        Ok((now, stat.st_mode))
     }
 
     /// The content of the regular file `name` in `dir`, opened with no link
     /// followed and without waiting: an error past [`KEEP_BYTES`].
     fn read_at(dir: &OwnedFd, name: &CString) -> io::Result<Vec<u8>> {
         use std::io::Read;
-        let file = std::fs::File::from(open_at(dir, name, libc::O_RDONLY | libc::O_NONBLOCK, 0)?);
+        let flags = libc::O_RDONLY | libc::O_NONBLOCK;
+        let opened = match open_at(dir, name, flags, 0) {
+            // A file its owner may not read (a program runs without the
+            // right): given its owner's read right through a descriptor
+            // that needs none, since it is written over or removed next
+            // (the narrow check of the third security fix).
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                let (now, mode) = mode_at(dir, name)?;
+                if now != Now::File {
+                    return Err(error);
+                }
+                chmod_at(dir, name, (mode & 0o7777) | 0o400, Now::File)?;
+                open_at(dir, name, flags, 0)?
+            }
+            other => other?,
+        };
+        let file = std::fs::File::from(opened);
         let metadata = file.metadata()?;
         if !metadata.is_file() || metadata.len() > KEEP_BYTES {
             return Err(io::Error::other("too large to keep, or not a file"));
@@ -522,8 +614,10 @@ mod linux {
     /// nothing.
     fn write_at(dir: &OwnedFd, name: &CString, content: &[u8], mode: u32) -> io::Result<()> {
         use cineris_base::rng::{Rng, SystemRng};
+        // The name shortened, so that the name of its own fits where the
+        // name did (the narrow check of the third security fix).
         let mut temporary = b".".to_vec();
-        temporary.extend_from_slice(name.as_bytes());
+        temporary.extend(name.as_bytes().iter().take(super::NAME_BYTES));
         temporary
             .extend_from_slice(format!(".cineris-{:016x}", SystemRng::new().next_u64()).as_bytes());
         let temporary = c_name(&temporary)?;

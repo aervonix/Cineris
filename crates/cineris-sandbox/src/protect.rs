@@ -292,6 +292,16 @@ impl Watch {
             // it leads (found by the review of step 26).
             if look.through_a_link(path) {
                 look.asked.insert(path.clone());
+                // The link itself is recorded, so that one a command made
+                // is taken for made and removed (the narrow check of the
+                // third security fix: `ln -s tools .githooks` brought a
+                // hook written where nothing watched under the name git
+                // runs, and nothing was named).
+                if let Some(link) = look.first_link_on_the_way(path)
+                    && !look.entries.contains_key(&link)
+                {
+                    look.record(&link);
+                }
                 continue;
             }
             look.record_tree(path);
@@ -348,10 +358,24 @@ impl Watch {
         let mut seen: Vec<Changed> = changed.to_vec();
         let mut round: Vec<Changed> = changed.to_vec();
         let mut rounds = 0;
+        let mut reopened: Vec<PathBuf> = Vec::new();
         loop {
             restore::put_back(before, &round, &mut keeper);
             rounds += 1;
             let (left, after) = self.changes_since(before);
+            // A folder the look before listed and this one cannot (a
+            // command took its read right away, though it is no protected
+            // path itself: `.git/modules`): given its owner's right to list
+            // it back, and looked at again, so that what is in it is put
+            // back too (the narrow check of the third security fix).
+            let closed: Vec<PathBuf> = after
+                .unlistable()
+                .iter()
+                .filter(|folder| {
+                    before.was_listed(folder) && may(folder) && !reopened.contains(folder)
+                })
+                .cloned()
+                .collect();
             // A directory made again is a directory with its mode, as it
             // was, under another inode: what lies in it is compared on its
             // own.
@@ -376,9 +400,9 @@ impl Watch {
                 .cloned()
                 .collect();
             // Another round only where this one showed what the last did not
-            // (a mode put back on a directory that hid what is in it), and
-            // within the bound.
-            if new.is_empty() || rounds >= ROUNDS {
+            // (a mode put back on a directory that hid what is in it), or a
+            // folder was opened again, and within the bound.
+            if (new.is_empty() && closed.is_empty()) || rounds >= ROUNDS {
                 // Put back only where the last look reached: a path it did
                 // not reach is not known to be as it was.
                 let restored = seen
@@ -398,8 +422,13 @@ impl Watch {
                     left,
                     kept: keeper.kept,
                     unkept,
+                    reopened,
                     after,
                 };
+            }
+            for folder in closed {
+                restore::reopen(&folder);
+                reopened.push(folder);
             }
             seen.extend(new);
             round = left.into_iter().filter(|one| may(&one.path)).collect();
@@ -428,7 +457,7 @@ pub const READING_A_PROTECTED_FILE: &str =
 /// The most rounds of a put-back: each puts back what the look after the
 /// round before found, which a mode put back can show (a directory a
 /// command made unreadable hid what it planted in it).
-const ROUNDS: usize = 3;
+const ROUNDS: usize = 4;
 
 /// What [`Watch::put_back`] did.
 #[derive(Debug, Clone)]
@@ -448,6 +477,9 @@ pub struct PutBack {
     /// What is left as it is, of `left`, because what it holds could not be
     /// kept first: too large, or nowhere to keep it.
     pub unkept: Vec<PathBuf>,
+    /// The folders the look before listed and a look after could not, which
+    /// were given their owner's right to list them back.
+    pub reopened: Vec<PathBuf>,
     /// The look taken after putting back.
     pub after: Snapshot,
 }
@@ -457,6 +489,12 @@ impl Snapshot {
     #[must_use]
     pub fn is_complete(&self) -> bool {
         self.complete
+    }
+
+    /// Whether this look went through every entry of `folder`.
+    #[must_use]
+    pub fn was_listed(&self, folder: &Path) -> bool {
+        self.listed.contains(folder)
     }
 
     /// Whether this look stopped at its bound (its time, or the directories
@@ -691,6 +729,22 @@ impl Look {
     }
 
     /// Whether a directory between the workspace and `path` is a link.
+    /// The first folder on the way to `path`, inside the workspace, that is
+    /// a link.
+    fn first_link_on_the_way(&self, path: &Path) -> Option<PathBuf> {
+        let below = cineris_base::strip_location_prefix(path, &self.root)?;
+        let mut walked = self.root.clone();
+        let parts: Vec<_> = below.components().collect();
+        for part in parts.iter().take(parts.len().saturating_sub(1)) {
+            walked.push(part);
+            if fs::symlink_metadata(&walked).is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                return Some(walked);
+            }
+        }
+        None
+    }
+
     fn through_a_link(&self, path: &Path) -> bool {
         // By place: a fixed protected path is written plainly, and the
         // workspace's form may be extended-length on Windows.
@@ -928,19 +982,30 @@ impl Look {
         // the one in the main repository, which was not watched.
         self.follow_commondir(git);
         let modules = git.join("modules");
-        if fs::symlink_metadata(&modules).is_ok_and(|metadata| metadata.is_dir()) {
+        // Each folder gone through whole is marked so, as the walk marks
+        // the folders it lists: one a command then closes to every look is
+        // opened again by the put-back (the narrow check of the third
+        // security fix).
+        if fs::symlink_metadata(&modules).is_ok_and(|metadata| metadata.is_dir())
+            && let Some(children) = self.list(&modules)
+        {
             // A module that is a link is not looked through.
-            for (module, is_dir) in self.list(&modules).unwrap_or_default() {
+            for (module, is_dir) in children {
                 if is_dir {
                     self.record_git(&module);
                 } else {
                     self.record(&module);
                 }
             }
+            if !self.out_of_time() {
+                self.through.insert(modules);
+            }
         }
         let worktrees = git.join("worktrees");
-        if fs::symlink_metadata(&worktrees).is_ok_and(|metadata| metadata.is_dir()) {
-            for (worktree, is_dir) in self.list(&worktrees).unwrap_or_default() {
+        if fs::symlink_metadata(&worktrees).is_ok_and(|metadata| metadata.is_dir())
+            && let Some(children) = self.list(&worktrees)
+        {
+            for (worktree, is_dir) in children {
                 if !is_dir {
                     self.record(&worktree);
                     continue;
@@ -949,6 +1014,9 @@ impl Look {
                 for part in WORKTREE_PARTS {
                     self.record(&worktree.join(part));
                 }
+            }
+            if !self.out_of_time() {
+                self.through.insert(worktrees);
             }
         }
     }

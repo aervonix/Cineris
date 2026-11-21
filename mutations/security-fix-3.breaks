@@ -306,7 +306,7 @@ caught-by:
 [break] one-round-only
 rule: The put-back goes on while a round shows what the one before could not, so that what a folder hid is put back once the folder is open again.
 file: crates/cineris-sandbox/src/protect.rs
-find: const ROUNDS: usize = 3;
+find: const ROUNDS: usize = 4;
 replace: const ROUNDS: usize = 1;
 packages: cineris-sandbox,cineris-core
 caught-by:
@@ -453,11 +453,11 @@ file: crates/cineris-sandbox/src/protect.rs
 in: Look::out_of_time
 find: self.stopped }
 replace: self.stopped || !self.complete }
-packages: cineris-sandbox,cineris-core
 caught-by:
-    cineris-sandbox protect::tests::putting_back::a_folder_no_look_can_list_hides_nothing_else
     cineris-sandbox protect::tests::putting_back::a_folder_no_look_can_list_does_not_blind_the_rest
-    cineris-core::it harness_git::sys_a_hook_planted_beside_a_folder_no_look_can_list_is_put_back
+# The two tests of a folder the command made unlistable do not catch it on
+# their own: the put-back's rounds open the folder and look again, and the
+# look that follows goes past it.
 
 [break] a-folder-the-command-made-not-opened
 rule: A folder the command made, which it may have closed to its owner, is opened to its owner, so that what is in it is put back.
@@ -548,8 +548,8 @@ caught-by:
 rule: A kept copy is the session's own: made owner-only.
 file: crates/cineris-sandbox/src/protect/restore.rs
 in: keep
-find: let mut file = cineris_base::private::create_new(&copy)?;
-replace: let mut file = std::fs::File::create(&copy)?;
+find: match cineris_base::private::create_new(&copy) {
+replace: match std::fs::File::create_new(&copy) {
 packages: cineris-sandbox,cineris-core
 caught-by:
     cineris-sandbox protect::tests::putting_back::what_a_file_held_is_kept_and_one_too_large_is_left
@@ -599,24 +599,124 @@ caught-by:
 rule: What a session kept in memory could not put back is remembered, with the look before it, to be told again.
 file: crates/cineris-core/src/checkpoints.rs
 in: RecordingShell::run_by
-find: sandbox.remember_kept_nowhere(&before, &found);
-replace: let _ = &before;
+find: sandbox.remember_by_hand(&found);
+replace: let _ = &found;
 caught-by:
     cineris-core::it sandbox::sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again
 
 [break] kept-nowhere-not-told-at-a-turns-start
 rule: At a turn's start, what a session kept in memory could not put back, and that is still so, is told again.
 file: crates/cineris-core/src/core.rs
-find: crate::sandbox::tell_what_is_kept_nowhere(&live).await;
+find: crate::sandbox::tell_what_is_still_by_hand(&live).await;
 replace:
 caught-by:
     cineris-core::it sandbox::sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again
+    cineris-core::it sandbox::sys_what_could_not_be_put_back_is_told_again_at_each_turns_start
 
 [break] kept-nowhere-told-once-put-back
 rule: What is as it was again is not told any more.
 file: crates/cineris-core/src/sandbox.rs
-in: SessionSandbox::still_kept_nowhere
-find: paths.retain(|path| changed.iter().any(|one| one.path == *path));
-replace: paths.retain(|_| true);
+in: SessionSandbox::still_by_hand
+find: left.paths.retain(|(path, _)| !since.iter().any(|one| one.path == *path));
+replace: left.paths.retain(|_| true);
 caught-by:
     cineris-core::it sandbox::sys_a_session_kept_in_memory_says_what_it_could_not_put_back_and_says_it_again
+    cineris-core::it sandbox::sys_what_could_not_be_put_back_is_told_again_at_each_turns_start
+
+# ------------------------------------------ the full review's narrow check
+
+[break] a-second-copy-refused
+rule: A copy takes the next free name in the session's folder, so a second put-back of a file of the same name is put back too.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: keep
+find: Err(error) if error.kind() == io::ErrorKind::AlreadyExists && count < COPIES =>
+replace: Err(error) if false && count < COPIES =>
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_second_put_back_of_the_same_file_takes_the_next_name
+
+[break] a-long-name-copied-whole
+rule: A kept copy's name holds at most 200 bytes of the path's name, so that it fits.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: copy_name
+find: if short.len() + character.len_utf8() > NAME_BYTES {
+replace: if false {
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_file_with_a_long_name_is_kept_under_a_name_that_fits
+
+[break] a-long-name-written-beside-whole
+rule: The name a file is written under beside its own holds at most 200 bytes of it, so that it fits.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: write_at
+find: temporary.extend(name.as_bytes().iter().take(super::NAME_BYTES));
+replace: temporary.extend(name.as_bytes().iter());
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_file_with_a_long_name_is_kept_under_a_name_that_fits
+
+[break] an-unreadable-file-not-kept
+rule: A file its owner may not read is given the right through a descriptor that needs none, so that it is kept and put back.
+file: crates/cineris-sandbox/src/protect/restore.rs
+in: read_at
+find: Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+replace: Err(error) if false => {
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_hook_its_owner_cannot_read_is_kept_and_removed
+
+[break] a-closed-folder-not-reopened
+rule: A folder the look before listed and a look after cannot is given its owner's right to list it back, and looked at again.
+file: crates/cineris-sandbox/src/protect.rs
+in: Watch::put_back
+find: restore::reopen(&folder);
+replace: let _ = &folder;
+packages: cineris-sandbox,cineris-core
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_folder_the_look_before_listed_and_a_command_closed_is_opened_and_looked_in
+    cineris-core::it harness_git::sys_a_filter_behind_a_folder_the_command_closed_is_put_back
+
+[break] modules-not-marked-listed
+rule: `.git/modules`, gone through whole, is marked as listed, so that a command that closes it has it opened again.
+file: crates/cineris-sandbox/src/protect.rs
+in: Look::record_git
+find: self.through.insert(modules);
+replace: let _ = modules;
+packages: cineris-sandbox,cineris-core
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_folder_the_look_before_listed_and_a_command_closed_is_opened_and_looked_in
+    cineris-core::it harness_git::sys_a_filter_behind_a_folder_the_command_closed_is_put_back
+
+[break] a-closed-folder-alone-not-put-back
+rule: A folder the command closed is a reason to put back, where nothing else was found.
+file: crates/cineris-core/src/sandbox.rs
+in: protected_changes
+find: if changed.is_empty() && !closed {
+replace: if changed.is_empty() {
+caught-by:
+    cineris-core::it harness_git::sys_a_filter_behind_a_folder_the_command_closed_is_put_back
+
+[break] the-link-on-the-way-not-recorded
+rule: A link on the way to a watched path is recorded, so that one a command made is taken for made and removed.
+file: crates/cineris-sandbox/src/protect.rs
+in: Watch::take
+find: look.record(&link);
+replace: let _ = &link;
+packages: cineris-sandbox,cineris-core
+caught-by:
+    cineris-sandbox protect::tests::putting_back::a_link_made_on_the_way_to_a_watched_name_is_taken_away
+    cineris-core::it harness_git::sys_a_hooks_folder_made_a_link_to_a_planted_hook_is_taken_away
+
+[break] configured-paths-only-as-named
+rule: What the configuration names is watched where it really is as well as by its name.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::follow_configured
+find: vec![path, real]
+replace: vec![path]
+caught-by:
+    cineris-core::it harness_git::sys_a_hook_in_a_hooks_folder_that_is_a_link_is_watched_where_it_is
+
+[break] by-hand-not-told-again
+rule: What a confined start changed and the put-back left to be put back by hand is told again at each turn's start, in a session that keeps its state too.
+file: crates/cineris-core/src/sandbox.rs
+in: SessionSandbox::remember_by_hand
+find: if found.left.is_empty() {
+replace: if found.left.is_empty() || found.kept_nowhere.is_empty() {
+caught-by:
+    cineris-core::it sandbox::sys_what_could_not_be_put_back_is_told_again_at_each_turns_start

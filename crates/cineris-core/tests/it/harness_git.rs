@@ -737,6 +737,167 @@ fn sys_a_hook_planted_beside_a_folder_no_look_can_list_is_put_back() {
     assert!(!zz.exists(), "{shown}");
 }
 
+/// `core.hooksPath` names a folder that is not there yet (`.githooks`): its
+/// hooks are watched by name. One confined command writes a hook where
+/// nothing watches (`tools/pre-commit`); the next makes the folder a link
+/// to it (`ln -s tools .githooks`). The link on the way to the watched
+/// names is recorded, taken for made and removed, so the next `git commit`
+/// runs nothing of it (found by the narrow check of the third security
+/// fix, where both turns ended with no note).
+#[test]
+fn sys_a_hooks_folder_made_a_link_to_a_planted_hook_is_taken_away() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("hooks_folder_link", []);
+    world.put("tracked.txt", "one\n");
+    git(
+        &world.workspace,
+        &["init", "--quiet", "--initial-branch=main"],
+    );
+    git(&world.workspace, &["config", "core.hooksPath", ".githooks"]);
+    // Scripts, so that no line names a path the engine asks about.
+    world.put(
+        "one.sh",
+        "mkdir -p tools\nprintf '#!/bin/sh\\nevil\\n' > tools/pre-commit\nchmod +x tools/pre-commit\n",
+    );
+    world.put("two.sh", "ln -s tools .githooks\n");
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh one.sh"}))]));
+    world.provider.push(says("One."));
+    world
+        .provider
+        .push(calls(&[("c2", "shell", json!({"command": "sh two.sh"}))]));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("one").await;
+        front.turn("two").await;
+        let shown: Vec<String> = front.results().iter().map(|one| one.2.clone()).collect();
+        front.close().await;
+        shown
+    });
+    assert!(
+        std::fs::symlink_metadata(world.workspace.join(".githooks")).is_err(),
+        "{shown:#?}"
+    );
+    assert!(
+        shown[1].contains("`.githooks` (created)") && shown[1].contains("They were put back"),
+        "{shown:#?}"
+    );
+}
+
+/// A confined command plants a filter in a submodule's configuration and
+/// then closes `.git/modules`, which the look lists and does not record, to
+/// every look (`chmod 311`): nothing else changed, so nothing would be put
+/// back. The folder the look before listed is given its owner's right to
+/// list it back, looked at again, and the configuration is put back (found
+/// by the narrow check of the third security fix).
+#[test]
+fn sys_a_filter_behind_a_folder_the_command_closed_is_put_back() {
+    use std::os::unix::fs::PermissionsExt;
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("closed_modules", []);
+    world.put(".git/config", "[core]\n");
+    world.put(".git/modules/sub/config", "[core]\n");
+    world.put(".git/modules/sub/HEAD", "ref: refs/heads/main\n");
+    world.put(
+        "plant.sh",
+        "printf '[core]\\n\\tfsmonitor = /tmp/evil\\n' > .git/modules/sub/config\n\
+         chmod 311 .git/modules\n",
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh plant.sh"}))]));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("plant").await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    let modules = world.workspace.join(".git/modules");
+    let mode = std::fs::metadata(&modules).unwrap().permissions().mode() & 0o777;
+    std::fs::set_permissions(&modules, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(mode, 0o711, "{shown}");
+    assert_eq!(
+        world.read(".git/modules/sub/config").as_deref(),
+        Some("[core]\n"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("given their owner's right to list them back")
+            && shown.contains("`.git/modules/sub/config` (modified)"),
+        "{shown}"
+    );
+}
+
+/// A hooks folder that is a link from before the session (`.githooks ->
+/// tools`, a common set-up): what the configuration names is watched where
+/// it really is too, so a hook a confined command changes through the
+/// folder's real name is found and put back.
+#[test]
+fn sys_a_hook_in_a_hooks_folder_that_is_a_link_is_watched_where_it_is() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("hooks_folder_is_a_link", []);
+    world.put("tracked.txt", "one\n");
+    world.put("tools/pre-commit", "#!/bin/sh\ncargo fmt --check\n");
+    std::os::unix::fs::symlink("tools", world.workspace.join(".githooks")).unwrap();
+    git(
+        &world.workspace,
+        &["init", "--quiet", "--initial-branch=main"],
+    );
+    git(&world.workspace, &["config", "core.hooksPath", ".githooks"]);
+    world.put(
+        "plant.sh",
+        "printf '#!/bin/sh\\nevil\\n' > tools/pre-commit\n",
+    );
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "sh plant.sh"}))]));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let shown = world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.turn("plant").await;
+        let shown = front.results()[0].2.clone();
+        front.close().await;
+        shown
+    });
+    assert_eq!(
+        world.read("tools/pre-commit").as_deref(),
+        Some("#!/bin/sh\ncargo fmt --check\n"),
+        "{shown}"
+    );
+    assert!(shown.contains("`tools/pre-commit` (modified)"), "{shown}");
+}
+
 /// A filter named by a bare name is never one in the workspace, even
 /// through an absolute directory of `PATH` (an activated `.venv/bin`):
 /// the harness's git, unasked, would run a file a command wrote. The same

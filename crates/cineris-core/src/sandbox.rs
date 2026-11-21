@@ -190,12 +190,13 @@ pub(crate) struct SessionSandbox {
     /// over or removes (in its session directory, with its other state):
     /// `None` for a session kept in memory, which then writes over nothing.
     keep: OnceLock<PathBuf>,
-    /// In a session kept in memory, what a confined start changed and the
-    /// put-back left because nothing could be kept first, with the look
-    /// before it: told again at each turn's start while it still differs
-    /// (the maintainers' settlement after the full review of the third
-    /// security fix).
-    kept_nowhere: std::sync::Mutex<Vec<(Snapshot, Vec<PathBuf>)>>,
+    /// What a confined start changed and the put-back left, to be put back
+    /// by hand, with the look after it: told again at each turn's start
+    /// while it is still as the start left it (the maintainers' settlement
+    /// after the full review of the third security fix, for a session kept
+    /// in memory, and after its narrow check, for everything named by
+    /// hand).
+    by_hand: std::sync::Mutex<Vec<ByHand>>,
     /// The workspace, as the session's paths give it: what a name told to
     /// the user is relative to.
     workspace: PathBuf,
@@ -274,7 +275,7 @@ impl SessionSandbox {
             watch,
             configured: std::sync::RwLock::new(Vec::new()),
             keep: OnceLock::new(),
-            kept_nowhere: std::sync::Mutex::new(Vec::new()),
+            by_hand: std::sync::Mutex::new(Vec::new()),
             workspace: workspace.to_path_buf(),
             starts: tokio::sync::Mutex::new(()),
             last_after: std::sync::Mutex::new(None),
@@ -308,31 +309,37 @@ impl SessionSandbox {
         &self.workspace
     }
 
-    /// Remembers what `found` left because nothing could be kept first, in a
-    /// session kept in memory, with `before`, the look it differs from.
-    pub(crate) fn remember_kept_nowhere(&self, before: &Snapshot, found: &Found) {
-        if found.kept_nowhere.is_empty() {
+    /// Remembers what `found` left to be put back by hand, with the look
+    /// after the start, which it is compared with.
+    pub(crate) fn remember_by_hand(&self, found: &Found) {
+        if found.left.is_empty() {
             return;
         }
-        self.kept_nowhere
+        let paths = found
+            .left
+            .iter()
+            .map(|one| (one.path.clone(), found.kept_nowhere.contains(&one.path)))
+            .collect();
+        self.by_hand
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((before.clone(), found.kept_nowhere.clone()));
+            .push(ByHand {
+                after: found.after.clone(),
+                paths,
+            });
     }
 
-    /// What a confined start changed and the put-back left because nothing
-    /// could be kept first, and that still differs from the look before it:
-    /// a look now, only while there is something to ask about. What is as it
-    /// was again is forgotten. It blocks.
+    /// What a confined start changed and the put-back left to be put back by
+    /// hand, and that is still as the start left it: a look now, taken only
+    /// while there is something to ask about. Each path comes with whether
+    /// it was left because the session keeps nothing on disk. What changed
+    /// since (put back by hand, or changed again) is forgotten. It blocks.
     #[allow(
         clippy::disallowed_methods,
         reason = "a look at the protected paths, on the blocking pool"
     )]
-    pub(crate) fn still_kept_nowhere(&self) -> Vec<PathBuf> {
-        let mut remembered = self
-            .kept_nowhere
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+    pub(crate) fn still_by_hand(&self) -> Vec<(PathBuf, bool)> {
+        let mut remembered = self.by_hand.lock().unwrap_or_else(PoisonError::into_inner);
         if remembered.is_empty() {
             return Vec::new();
         }
@@ -340,16 +347,17 @@ impl SessionSandbox {
             return Vec::new();
         };
         let now = watch.take();
-        let mut still = Vec::new();
-        remembered.retain_mut(|(before, paths)| {
-            let changed = before.compare(&now);
-            paths.retain(|path| changed.iter().any(|one| one.path == *path));
-            for path in paths.iter() {
-                if !still.contains(path) {
-                    still.push(path.clone());
+        let mut still: Vec<(PathBuf, bool)> = Vec::new();
+        remembered.retain_mut(|left| {
+            let since = left.after.compare(&now);
+            left.paths
+                .retain(|(path, _)| !since.iter().any(|one| one.path == *path));
+            for (path, nowhere) in &left.paths {
+                if !still.iter().any(|(known, _)| known == path) {
+                    still.push((path.clone(), *nowhere));
                 }
             }
-            !paths.is_empty()
+            !left.paths.is_empty()
         });
         still
     }
@@ -540,7 +548,18 @@ impl SessionSandbox {
         let kept: Vec<PathBuf> =
             cineris_tools::shell::changes::configured_paths(git, root, CONFIGURED_CAP)
                 .into_iter()
-                .map(|path| where_it_is(&path))
+                // As named, so that a link on its way is the look's to see
+                // (the narrow check of the third security fix), and where
+                // it really is, so that a place inside a write root reached
+                // by another name is watched too.
+                .flat_map(|path| {
+                    let real = where_it_is(&path);
+                    if real == path {
+                        vec![path]
+                    } else {
+                        vec![path, real]
+                    }
+                })
                 .filter(|path| watched_by_name(path, root))
                 .filter(|path| {
                     roots
@@ -853,6 +872,9 @@ pub(crate) struct Found {
     /// because what it holds could not be kept first: there is nowhere to
     /// keep it.
     pub(crate) kept_nowhere: Vec<PathBuf>,
+    /// The folders the look before listed and the look after could not,
+    /// given their owner's right to list them back.
+    pub(crate) reopened: Vec<PathBuf>,
     /// Whether the look before and the last look stopped at their bound.
     pub(crate) stopped: (bool, bool),
     /// Whether the look before and the look after were complete.
@@ -893,7 +915,14 @@ pub(crate) fn protected_changes(
     let (all, after) = watch.changes_since(before);
     let (changed, mut outside): (Vec<Changed>, Vec<Changed>) =
         all.into_iter().partition(|one| within(&one.path));
-    if changed.is_empty() {
+    // A folder the look before listed and this one cannot hides what is in
+    // it: the put-back opens it and looks again, even where nothing else
+    // was found (the narrow check of the third security fix).
+    let closed = after
+        .unlistable()
+        .iter()
+        .any(|folder| before.was_listed(folder) && within(folder));
+    if changed.is_empty() && !closed {
         return Found {
             changed,
             left: Vec::new(),
@@ -902,6 +931,7 @@ pub(crate) fn protected_changes(
             kept: Vec::new(),
             unlistable: unlistable(&after),
             kept_nowhere: Vec::new(),
+            reopened: Vec::new(),
             stopped: (before.stopped_at_its_bound(), after.stopped_at_its_bound()),
             complete: (before.is_complete(), after.is_complete()),
             after,
@@ -932,6 +962,7 @@ pub(crate) fn protected_changes(
         } else {
             Vec::new()
         },
+        reopened: put.reopened,
         stopped: (
             before.stopped_at_its_bound(),
             put.after.stopped_at_its_bound(),
@@ -948,6 +979,7 @@ impl Found {
     pub(crate) fn stops_the_turn(&self) -> bool {
         !self.changed.is_empty()
             || !self.outside.is_empty()
+            || !self.reopened.is_empty()
             || (self.stopped.1 && !self.stopped.0)
             || self.unlistable.iter().any(|(_, new)| *new)
     }
@@ -1059,6 +1091,15 @@ pub(crate) fn protected_note(found: &Found, root: &Path) -> Option<String> {
             shown(&mut found.outside.iter()).join(", ")
         ));
     }
+    if !found.reopened.is_empty() {
+        let folders: Vec<String> = found.reopened.iter().map(|folder| name(folder)).collect();
+        lines.push(format!(
+            "[The command made these folders so that no look could list them, and they were \
+             given their owner's right to list them back, so that what is in them was looked \
+             at: {}. The turn stops here, so that the user can look.]",
+            folders.join(", ")
+        ));
+    }
     if !found.unlistable.is_empty() {
         let folders: Vec<String> = found
             .unlistable
@@ -1101,6 +1142,36 @@ pub(crate) fn protected_note(found: &Found, root: &Path) -> Option<String> {
     (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
+/// What a confined start changed and the put-back left to be put back by
+/// hand, remembered to be told again at each turn's start.
+#[derive(Debug)]
+struct ByHand {
+    /// The look after the start, the put-back's last: a path still as it
+    /// holds it is still as the start left it.
+    after: Snapshot,
+    /// Each path, and whether it was left because the session keeps
+    /// nothing on disk.
+    paths: Vec<(PathBuf, bool)>,
+}
+
+/// What the user is told, again, of protected paths a confined start
+/// changed that could not be put back, in a session that keeps its state:
+/// `names` are the paths, each in backticks already.
+pub(crate) fn by_hand_words(names: &[String]) -> String {
+    let (were, it, name) = if names.len() == 1 {
+        ("was", "it", "names")
+    } else {
+        ("were", "them", "name")
+    };
+    let what = if names.len() == 1 { "it" } else { "they" };
+    format!(
+        "{} {were} changed by a command run in the sandbox and could not be put back. Git, and \
+         so the model's own git commands, will run what {what} now {name}, as will any other \
+         tool that reads {it}. Put {it} back by hand before continuing.",
+        names.join(", ")
+    )
+}
+
 /// What the user and the model are told of protected paths a confined
 /// start changed, in a session kept in memory, that could not be put back:
 /// `names` are the paths, each in backticks already.
@@ -1120,28 +1191,43 @@ pub(crate) fn kept_nowhere_words(names: &[String]) -> String {
     )
 }
 
-/// Tells the user, at a turn's start, what a confined start changed in this
-/// session kept in memory and that is still not put back: the stop that
-/// named it may have been passed over, and the level raised since.
-pub(crate) async fn tell_what_is_kept_nowhere(live: &crate::core::Live) {
+/// Tells the user, at a turn's start, what a confined start changed and
+/// is still not put back, as the start left it: the stop that named it may
+/// have been passed over, and the level raised since, where the model's own
+/// git runs outside the sandbox.
+pub(crate) async fn tell_what_is_still_by_hand(live: &crate::core::Live) {
     let sandbox = Arc::clone(&live.sandbox);
-    let Ok(still) = tokio::task::spawn_blocking(move || sandbox.still_kept_nowhere()).await else {
+    let Ok(still) = tokio::task::spawn_blocking(move || sandbox.still_by_hand()).await else {
         return;
     };
     if still.is_empty() {
         return;
     }
     let root = live.sandbox.workspace().to_path_buf();
-    let names: Vec<String> = still
+    let name = |path: &Path| {
+        let path = path.strip_prefix(&root).unwrap_or(path);
+        format!("`{}`", cineris_base::visible(&path.to_string_lossy()))
+    };
+    let nowhere: Vec<String> = still
         .iter()
-        .map(|path| {
-            let path = path.strip_prefix(&root).unwrap_or(path);
-            format!("`{}`", cineris_base::visible(&path.to_string_lossy()))
-        })
+        .filter(|(_, nowhere)| *nowhere)
+        .map(|(path, _)| name(path))
         .collect();
+    let other: Vec<String> = still
+        .iter()
+        .filter(|(_, nowhere)| !*nowhere)
+        .map(|(path, _)| name(path))
+        .collect();
+    let mut said = Vec::new();
+    if !nowhere.is_empty() {
+        said.push(kept_nowhere_words(&nowhere));
+    }
+    if !other.is_empty() {
+        said.push(by_hand_words(&other));
+    }
     live.hooks.emit(cineris_protocol::event::Event::Notice(
         cineris_protocol::Notice::Sandbox(cineris_protocol::event::SandboxNotice {
-            message: format!("Still not put back. {}", kept_nowhere_words(&names)),
+            message: format!("Still not put back. {}", said.join(" ")),
             status: if live.sandbox.confines() {
                 SandboxStatus::Enforcing
             } else {
@@ -1297,6 +1383,7 @@ mod tests {
             kept: Vec::new(),
             unlistable: Vec::new(),
             kept_nowhere: Vec::new(),
+            reopened: Vec::new(),
             stopped: (false, false),
             complete: (true, true),
             after: Snapshot::default(),
@@ -1338,6 +1425,7 @@ mod tests {
             kept: Vec::new(),
             unlistable: Vec::new(),
             kept_nowhere: vec![config],
+            reopened: Vec::new(),
             stopped: (false, false),
             complete: (true, true),
             after: Snapshot::default(),
