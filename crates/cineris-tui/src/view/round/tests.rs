@@ -61,6 +61,7 @@ pub(crate) fn scenario() -> Round {
                 measure: Measure::Lines { first: 120, last: 178 },
                 took: None,
                 detail: Detail::None,
+                hook: None,
             },
             Call {
                 verb: "Edit".to_owned(),
@@ -69,6 +70,7 @@ pub(crate) fn scenario() -> Round {
                 measure: Measure::Changes { added: 5, removed: 1 },
                 took: None,
                 detail: Detail::Diff(scan_number_diff()),
+                hook: None,
             },
             Call {
                 verb: "Run".to_owned(),
@@ -82,6 +84,7 @@ pub(crate) fn scenario() -> Round {
                      test result: FAILED. 47 passed; 1 failed; 0 ignored; finished in 0.02s\n"
                         .to_owned(),
                 ),
+                hook: None,
             },
         ],
         open: None,
@@ -328,6 +331,32 @@ fn paths_names_and_output_are_shown_safely() {
     assert!(text.contains("│   Building [===] 3/3 "), "{text}");
     assert!(text.contains("│   failed: see\u{241b}[31m red"), "{text}");
     for width in [10, 40, 59, 79, 119] {
+        let lines = round(&round_, Placement::Committed, 0, width, &look);
+        let found = problems(&lines, width);
+        assert!(found.is_empty(), "{width}: {found:?}");
+    }
+}
+
+/// A call that ran with a hook's arguments names the hook on its line,
+/// after its measure, with what acts unseen in the name made visible (step
+/// 28).
+#[test]
+fn a_call_a_hook_changed_names_the_hook_on_its_line() {
+    let look = look();
+    let mut round_ = scenario();
+    round_.calls[2].hook = Some("offline\u{202e}\u{1b}".to_owned());
+    let lines = round(&round_, Placement::Committed, 0, 119, &look);
+    let text = texts(&lines).join("\n");
+    let run = text
+        .lines()
+        .find(|line| line.contains("Run cargo test -p parser"))
+        .expect("the command's line");
+    assert!(
+        run.contains("exit 101") && run.contains("  arguments from the hook offline\\u{202e}\u{241b}"),
+        "{run}"
+    );
+    assert_eq!(text.matches("arguments from the hook").count(), 1, "{text}");
+    for width in [10, 40, 119] {
         let lines = round(&round_, Placement::Committed, 0, width, &look);
         let found = problems(&lines, width);
         assert!(found.is_empty(), "{width}: {found:?}");

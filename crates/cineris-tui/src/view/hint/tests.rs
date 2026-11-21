@@ -241,6 +241,7 @@ fn a_tab_or_a_line_break_in_a_one_row_field_reaches_no_line() {
                 measure: crate::view::Measure::Note(odd.to_owned()),
                 took: Some(Duration::from_millis(100)),
                 detail: crate::view::Detail::None,
+                hook: None,
             }],
             open: Some(false),
         },

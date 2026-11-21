@@ -198,7 +198,7 @@
           "description": "Exactly what would happen."
         },
         "hooks": {
-          "description": "The `tool.before` hooks that put the question (since step 28): each\nthat answered `ask`, with its reason. A hook only narrows, so it may\nput a question about a call the rules alone would have allowed.",
+          "description": "The `tool.before` hooks that put the question (since step 28): each\nthat answered `ask`, with its reason. A hook only narrows, so it may\nput a question about a call the rules alone would have allowed.\n`reasons` holds a line for each as well\n([`HookReason::asking_line`]), and one for `replaced`\n([`ReplacedArguments::reason_line`]), for a client that reads neither.",
           "items": {
             "$ref": "#/$defs/HookReason"
           },

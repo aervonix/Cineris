@@ -132,10 +132,38 @@ pub fn approval(
         lines.push(line);
     }
     let question_rows = lines.len();
+    // The line that says a hook changed the call, which `reasons` holds for
+    // a client that does not read `replaced`, is drawn once, below.
+    let replaced_line = request.replaced.as_ref().map(|replaced| replaced.reason_line());
     if !view.leaving {
         for reason in &request.reasons {
+            if replaced_line.as_ref() == Some(reason) {
+                continue;
+            }
             lines.extend(indented(&sanitize(reason), muted, 2, prose));
         }
+        // Each hook that asked, unless `reasons` said it already.
+        for hook in &request.hooks {
+            let asks = hook.asking_line();
+            if !request.reasons.contains(&asks) {
+                lines.extend(indented(&sanitize(&asks), muted, 2, prose));
+            }
+        }
+    }
+    // A hook put its arguments in place of the model's: said in the warning
+    // colour, whatever else the dialog leaves out, and both sets of
+    // arguments lead the detail.
+    if let (Some(replaced), Some(mut said)) = (&request.replaced, replaced_line) {
+        if let Some(reason) = &replaced.reason {
+            said.push_str(" Its reason: ");
+            said.push_str(reason);
+        }
+        lines.extend(indented(
+            &sanitize(&said),
+            theme.style(Token::Warning),
+            2,
+            prose,
+        ));
     }
     lines.push(Line::new());
 
@@ -143,6 +171,20 @@ pub fn approval(
     let mut after: Vec<Line> = Vec::new();
     // A diff's line wider than the window loses its end.
     let mut sideways = false;
+    if let Some(replaced) = &request.replaced {
+        let code = theme.style(Token::Code);
+        let arguments = |value: Option<&serde_json::Value>| {
+            value.map_or_else(
+                || "(not given)".to_owned(),
+                |value| sanitize(&value.to_string()).into_owned(),
+            )
+        };
+        detail.extend(indented("The model wrote:", muted, 4, prose));
+        detail.extend(indented(&arguments(replaced.original.as_ref()), code, 6, width));
+        detail.extend(indented("The hook's, which would run:", muted, 4, prose));
+        detail.extend(indented(&arguments(Some(&replaced.arguments)), code, 6, width));
+        detail.push(Line::new());
+    }
     match &request.detail {
         ApprovalDetail::Command(command) => {
             let accent = theme.style(Token::AccentText);

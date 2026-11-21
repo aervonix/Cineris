@@ -61,6 +61,7 @@ fn running_round(lines: usize) -> Round {
                 },
                 took: None,
                 detail: Detail::Diff(diff),
+                hook: None,
             },
             Call {
                 verb: "Run".to_owned(),
@@ -69,6 +70,7 @@ fn running_round(lines: usize) -> Round {
                 measure: Measure::None,
                 took: None,
                 detail: Detail::None,
+                hook: None,
             },
         ],
         open: Some(true),
