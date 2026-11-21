@@ -295,6 +295,12 @@ pub struct CoreOptions {
     /// a test's, whose names resolve as it says. `None`: the system's
     /// resolver, on the core's timer.
     pub fetcher: Option<cineris_llm::Fetcher>,
+    /// The most bytes an extension's `cineris.state` `session` records may
+    /// hold in one session's log, when less than the 16 MiB they may
+    /// otherwise (`cineris_ext::host::STATE_MAX_SESSION_LOG`): a test's,
+    /// which reaches the edge without writing 16 MiB. It only ever
+    /// tightens. `None`: 16 MiB.
+    pub ext_session_budget: Option<usize>,
 }
 
 impl std::fmt::Debug for CoreOptions {
@@ -359,6 +365,7 @@ impl CoreOptions {
             allow_unrestricted: true,
             extensions: Vec::new(),
             fetcher: None,
+            ext_session_budget: None,
         }
     }
 }

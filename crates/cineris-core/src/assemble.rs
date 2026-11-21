@@ -2516,6 +2516,7 @@ pub(crate) fn assemble(
             .as_ref()
             .and_then(|state| crate::ext::ProjectStore::new(state, &project)),
         Arc::clone(&clock),
+        options.ext_session_budget,
     ));
     // The extensions' tools, in the registry behind `tool_search` and
     // `tool_call`: registered from what each registered when it was
