@@ -40,7 +40,7 @@ The two tests that wrote a CI workflow to have a host write asked about (`a_host
 
 ## The breaks
 
-[mutations/protected-writes.breaks](../../../../mutations/protected-writes.breaks), run with `cargo xtask mutate protected-writes`: **23 breaks, each caught by the tests it names** (15 with the fix, 6 more with the review's fixes, 2 more with the re-check's, and the moved ones run again).
+[mutations/protected-writes.breaks](../../../../mutations/protected-writes.breaks), run with `cargo xtask mutate protected-writes`: **23 breaks, each caught by the tests it names** (15 with the fix, 6 more with the review's fixes, 2 more with the re-check's: the whole list ran on the review's fixes, and the seven breaks the re-check's fixes touched, or whose tests they changed, ran again on those).
 
 | Break | Caught by |
 |---|---|
@@ -56,7 +56,7 @@ The two tests that wrote a CI workflow to have a host write asked about (`a_host
 | A lease that protects everything lets a write through; the path not shown as code | The repository test |
 | A refusal not in the log at `warn`; its path logged raw | The session test (a name holding U+202E) |
 
-The tests ran on a Windows runner too, the session test with its Windows forms and the link tests making links there: try runs 44911938396 (the fix, 27 tests) and 44914950304 (the review's fixes, 28 tests).
+The tests ran on a Windows runner too, the session test with its Windows forms and the link tests making links there: try runs 44911938396 (the fix, 27 tests), 44914950304 (the review's fixes, 28 tests) and 44916328714 (the re-check's, 28 tests).
 
 ## The review
 
