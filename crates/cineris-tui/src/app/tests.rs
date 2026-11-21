@@ -658,6 +658,83 @@ fn a_key_straight_after_the_viewer_closes_does_not_answer() {
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
 
+/// An approval of a call whose arguments a hook replaced (step 28): the
+/// application's dialog says which hook changed it and shows both sets of
+/// arguments, and offers what the request offers, "allow once" and
+/// "deny"; `y` allows it once.
+#[test]
+fn an_approval_a_hook_changed_shows_both_sets_of_arguments() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let ServerRequest::Approval(mut request) = approval("c_1") else {
+        unreachable!("an approval");
+    };
+    request.summary = "Run cargo test --offline".to_owned();
+    request.detail = ApprovalDetail::Command(CommandDetail {
+        command: "cargo test --offline".to_owned(),
+        cwd: "/work/app".to_owned(),
+        outside_sandbox: false,
+    });
+    request.choices = vec![ApprovalChoice::AllowOnce, ApprovalChoice::Deny];
+    let replaced = cineris_protocol::item::ReplacedArguments {
+        hook: "offline".to_owned(),
+        arguments: serde_json::json!({"command": "cargo test --offline"}),
+        original: Some(serde_json::json!({"command": "cargo test"})),
+        reason: None,
+    };
+    request.reasons.push(replaced.reason_line());
+    request.replaced = Some(Box::new(replaced));
+    ask(&mut app, &link, 12, ServerRequest::Approval(request), now);
+    let at = app.deadline().map_or(now + dialog::GRACE * 2, |due| {
+        due.max(now + dialog::GRACE * 2)
+    });
+    let rows = text(&app.frame(at).1);
+    let all = rows.join("\n");
+    assert_eq!(all.matches("The hook `offline` changed").count(), 1, "{all}");
+    assert!(all.contains(r#"{"command":"cargo test"}"#), "{all}");
+    assert!(all.contains(r#"{"command":"cargo test --offline"}"#), "{all}");
+    assert!(!all.contains("Allow this session"), "{all}");
+    key(&mut app, "y", at);
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
+}
+
+/// A prompt a hook refused (step 28) comes back into the editor, and the
+/// transcript says which hook refused it and why.
+#[test]
+fn a_prompt_a_hook_refused_comes_back_into_the_editor_with_why() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    link.give(event(Event::Notice(
+        cineris_protocol::event::Notice::PromptReturned(
+            cineris_protocol::event::PromptReturnedNotice {
+                message: "A hook refused the prompt.".to_owned(),
+                parts: vec![Part::text("use the key sk-123")],
+                delivery: None,
+                hooks: vec![cineris_protocol::item::HookReason {
+                    hook: "no-keys".to_owned(),
+                    reason: Some("it names a key".to_owned()),
+                }],
+            },
+        ),
+    )));
+    drain(&mut app, now);
+    assert_eq!(app.input().editor().expanded(), "use the key sk-123");
+    let mut scrollback = Vec::new();
+    let live = screen(&mut app, now, &mut scrollback);
+    // The notice wraps: its words, one space between each.
+    let all = [scrollback, live].concat().join("\n");
+    let words = all.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        words.contains(
+            "A hook refused the prompt, which was not sent (no-keys: it names a key). It is back \
+             in the editor."
+        ),
+        "{all}"
+    );
+}
+
 /// After input that reached the editor while a dialog was up (a key it does
 /// not offer types into it): the frame the loop draws when the dialog is
 /// ready again, and a moment later, when a key answers it.

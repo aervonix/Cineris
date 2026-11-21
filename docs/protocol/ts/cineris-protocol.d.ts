@@ -138,7 +138,7 @@ export interface ApprovalRequest {
   choices: Array<ApprovalChoice>;
   /** Exactly what would happen. */
   detail: ApprovalDetail;
-  /** The `tool.before` hooks that put the question (since step 28): each that answered `ask`, with its reason. A hook only narrows, so it may put a question about a call the rules alone would have allowed. */
+  /** The `tool.before` hooks that put the question (since step 28): each that answered `ask`, with its reason. A hook only narrows, so it may put a question about a call the rules alone would have allowed. `reasons` holds a line for each as well ([`HookReason::asking_line`]), and one for `replaced` ([`ReplacedArguments::reason_line`]), for a client that reads neither. */
   hooks?: Array<HookReason>;
   /** Why the call needs an answer, a reason an entry: the rule that asks, the part of a command that is not on a safe list, a protected path. */
   reasons?: Array<string>;
