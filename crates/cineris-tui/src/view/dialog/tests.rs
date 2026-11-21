@@ -435,6 +435,50 @@ fn every_field_of_the_trust_question_escapes_what_acts_unseen() {
     );
 }
 
+/// Each line of a resource's detail is a row of its own: an extension's
+/// author's words, which the core puts on a line apart, begin a row, so
+/// that no quote in them can seem to close what the harness says before
+/// them (the full review of step 28).
+#[test]
+fn each_line_of_a_trust_resources_detail_begins_a_row() {
+    let request = TrustRequest {
+        session_id: SessionId::from("s_1"),
+        trusted: false,
+        workspace: "app".to_owned(),
+        resources: vec![TrustResource {
+            kind: TrustResourceKind::Extension,
+            name: "probe".to_owned(),
+            detail: "`probe` in `.cineris/extensions/probe`. It runs no program.\nIts author \
+                     describes it, in their words:\n\"Tracks issues\""
+                .to_owned(),
+            changed: false,
+        }],
+    };
+    let view = TrustView {
+        answers: answers(),
+        answers_hidden: false,
+        detail_rows: 10,
+        unsaid: false,
+    };
+    let rows = text(&trust(&request, &view, 120, &look()));
+    let at = |words: &str| {
+        rows.iter()
+            .position(|row| row.contains(words))
+            .unwrap_or_else(|| panic!("{words:?} is not drawn: {rows:#?}"))
+    };
+    let harness = at("It runs no program.");
+    let label = at("Its author describes it, in their words:");
+    let quoted = at("\"Tracks issues\"");
+    assert!(harness < label && label < quoted, "{rows:#?}");
+    // Nothing of the harness's words before the label on its row.
+    let before = &rows[label][..rows[label].find("Its author").unwrap()];
+    assert!(
+        !before.chars().any(char::is_alphanumeric),
+        "{:?}",
+        rows[label]
+    );
+}
+
 /// A question of the core's is drawn with what acts unseen escaped.
 /// What a rewind does to a file is said in words only where this build
 /// knows both what the file goes back to and whether it can: a target or a

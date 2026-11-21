@@ -7,10 +7,13 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use cineris_base::{CancelToken, ContentHash, PathResolver, SharedClock, visible};
+use cineris_base::{
+    CancelToken, ContentHash, PathResolver, SharedClock, SharedTimer, in_code, visible,
+};
 use cineris_config::StateDir;
 use cineris_ext::cache::{Entry, RegistrationCache};
-use cineris_ext::discover::{self, Discovered, Found, Root};
+use cineris_ext::discover::{self, Discovered, LeftOut, Root, Seen};
+use cineris_ext::folder::Snapshot;
 use cineris_ext::source::Source;
 use cineris_policy::{Definition, PinStore, ProjectTrust, Standing, TrustStore, UserPins};
 use cineris_protocol::ProjectKey;
@@ -18,11 +21,14 @@ use cineris_protocol::methods::TrustResourceKind;
 use cineris_tools::ToolRegistry;
 
 use super::{
-    BEFORE_AN_EXTENSION_IS_REGISTERED, BEFORE_THE_CACHE_IS_KEPT, Extensions, Pending, UserNames,
-    definition, in_project, sentence, with_paths_shown,
+    BEFORE_AN_EXTENSION_IS_REGISTERED, BEFORE_THE_CACHE_IS_KEPT, Extensions, Listed, Looked,
+    Pending, UserNames, in_project, sentence, with_paths_shown,
 };
 use crate::ext::watched::Watched;
 use crate::ext::{ApprovedExtension, HostParts};
+
+/// How the session is told something.
+type Tell = Arc<dyn Fn(String) + Send + Sync>;
 
 /// What a session finds its extensions with.
 pub(crate) struct Finding {
@@ -40,8 +46,9 @@ pub(crate) struct Finding {
     /// the run): its folder of extensions is looked in.
     pub(crate) project: Option<ProjectKey>,
     /// What the trust question found in the project's folder, when it
-    /// looked: used in place of a second reading of it.
-    pub(crate) project_found: Option<Discovered>,
+    /// looked: used in place of a second look, its places stamped as they
+    /// were before the question read them.
+    pub(crate) project_found: Option<Looked>,
     /// The project's extensions a yes the trust store could not keep
     /// approved, by the hashes shown: approved for this session.
     pub(crate) for_the_run: Vec<Definition>,
@@ -73,6 +80,8 @@ impl std::fmt::Debug for Finding {
 pub(crate) struct Shared {
     held: tokio::sync::Mutex<Option<Held>>,
     cancel: Mutex<Option<CancelToken>>,
+    /// The session's timer and how it is told, for a wait that is said.
+    waiting: Mutex<Option<(SharedTimer, Tell)>>,
 }
 
 impl std::fmt::Debug for Shared {
@@ -92,6 +101,9 @@ struct Held {
     parts: Arc<HostParts>,
     /// What is loaded, by the hash it was loaded at.
     loaded: Vec<Key>,
+    /// The hashes whose evaluation failed: not evaluated again until the
+    /// folder changes, which gives it another hash.
+    failed: Vec<ContentHash>,
     /// What the session was told of what was found: not said again.
     told: HashSet<String>,
     /// What it was found in, stamped.
@@ -118,11 +130,12 @@ struct Decided {
     told: Vec<String>,
     /// Approved, with what they registered from the cache.
     approved: Vec<ApprovedExtension>,
-    /// Approved, and missing from the cache: registered now.
-    missing: Vec<Found>,
+    /// Approved, and missing from the cache: registered now, from the
+    /// snapshot whose hash is the approved one.
+    missing: Vec<(Listed, Arc<Snapshot>)>,
     /// The cache, when it was read: written and pruned after.
     cache: Option<RegistrationCache>,
-    /// What everything was found in, stamped.
+    /// What everything was found in, stamped before it was read.
     watched: Watched,
 }
 
@@ -147,6 +160,10 @@ pub(crate) fn start(pending: Pending) -> Arc<Extensions> {
     };
     let extensions = Arc::new(Extensions::default());
     *lock(&extensions.held.cancel) = Some(finding.cancel.clone());
+    *lock(&extensions.held.waiting) = Some((
+        Arc::clone(&finding.parts.timer),
+        Arc::clone(&finding.parts.tell),
+    ));
     let task = Arc::clone(&extensions);
     tokio::spawn(async move {
         let _settles = Settles(Arc::clone(&task));
@@ -204,6 +221,7 @@ async fn first(extensions: &Extensions, finding: Finding) {
             registry,
             parts,
             loaded: Vec::new(),
+            failed: Vec::new(),
             told: HashSet::new(),
             watched: Watched::default(),
         };
@@ -250,6 +268,11 @@ impl Shared {
             cancel.cancel();
         }
     }
+
+    /// The session's timer and how it is told, once the finding started.
+    pub(crate) fn waiting(&self) -> Option<(SharedTimer, Tell)> {
+        lock(&self.waiting).clone()
+    }
 }
 
 impl Held {
@@ -263,7 +286,7 @@ impl Held {
     /// Finds and judges the extensions, withdraws what no longer stands
     /// approved as it was loaded, and loads what now stands approved: from
     /// the cache, or registered first. What is left of the cache's work.
-    async fn settle(&mut self, project_found: Option<Discovered>) -> Option<Kept> {
+    async fn settle(&mut self, project_found: Option<Looked>) -> Option<Kept> {
         let inputs = Arc::clone(&self.inputs);
         let Decided {
             told,
@@ -282,7 +305,7 @@ impl Held {
             .chain(
                 missing
                     .iter()
-                    .map(|one| (one.source, one.manifest.name.clone(), one.snapshot.hash())),
+                    .map(|(one, _)| (one.source, one.manifest.name.clone(), one.hash)),
             )
             .collect();
         for gone in self.loaded.iter().filter(|key| !wanted.contains(key)) {
@@ -290,7 +313,7 @@ impl Held {
             (self.parts.tell)(format!(
                 "The extension `{}` is withdrawn from this session: its tools are no longer \
                  offered.",
-                visible(&gone.1)
+                in_code(&gone.1)
             ));
         }
         self.loaded.retain(|key| wanted.contains(key));
@@ -303,27 +326,27 @@ impl Held {
             })
             .collect();
         let mut written: Vec<(ContentHash, Entry)> = Vec::new();
-        for found in missing {
-            let hash = found.snapshot.hash();
+        for (listed, snapshot) in missing {
+            let hash = listed.hash;
             if self
                 .loaded
-                .contains(&(found.source, found.manifest.name.clone(), hash))
+                .contains(&(listed.source, listed.manifest.name.clone(), hash))
+                // One whose evaluation failed is not evaluated again until
+                // its folder changes.
+                || self.failed.contains(&hash)
             {
                 continue;
             }
-            let name = visible(&found.manifest.name).into_owned();
+            let name = in_code(&listed.manifest.name).into_owned();
             // A turn that waits says why.
             (self.parts.tell)(format!(
                 "Registering the extension `{name}` (`{}`): what it registers is not in the \
                  registration cache, so it is evaluated once before the turn starts.",
-                found.shown
+                listed.shown
             ));
             cineris_base::hook::await_point!(BEFORE_AN_EXTENSION_IS_REGISTERED);
-            match cineris_ext::engine::register(
-                Arc::clone(&found.snapshot),
-                self.parts.timer.as_ref(),
-            )
-            .await
+            match cineris_ext::engine::register(Arc::clone(&snapshot), self.parts.timer.as_ref())
+                .await
             {
                 Ok((manifest, registration)) => {
                     // The prompt's text as the runtime reads it: from the
@@ -331,22 +354,27 @@ impl Held {
                     let prompt = manifest
                         .prompt
                         .as_deref()
-                        .and_then(|file| found.snapshot.file(file))
+                        .and_then(|file| snapshot.file(file))
                         .map(|bytes| String::from_utf8_lossy(bytes).into_owned());
                     written.push((hash, Entry::new(&manifest, registration.clone(), prompt)));
                     new.push(ApprovedExtension {
-                        source: found.source,
-                        folder: found.folder,
+                        source: listed.source,
+                        folder: listed.folder,
                         hash,
                         manifest,
                         registration,
                     });
                 }
-                Err(error) => (self.parts.tell)(format!(
-                    "The extension `{name}` (`{}`) could not be registered, so it is not \
-                     loaded: {error}",
-                    found.shown
-                )),
+                Err(error) => {
+                    self.failed.push(hash);
+                    // What a script threw, escaped; and said once.
+                    self.tell(format!(
+                        "The extension `{name}` (`{}`) could not be registered, so it is not \
+                         loaded: {}",
+                        listed.shown,
+                        visible(&error.to_string())
+                    ));
+                }
             }
         }
         let keys: Vec<Key> = new
@@ -374,32 +402,87 @@ async fn blocking<T: Send + 'static>(work: impl FnOnce() -> T + Send + 'static) 
         .ok()
 }
 
-/// Finds the extensions, decides how each stands, takes what the approved
-/// ones registered from the cache, and stamps what everything was found in.
-/// Blocks.
-fn decide(inputs: &Inputs, project_found: Option<Discovered>) -> Decided {
+/// The user's folder of extensions, looked in, each place stamped before it
+/// is read. Blocks.
+fn in_users(inputs: &Inputs, config: &std::path::Path, watched: &mut Watched) -> Discovered {
+    let clock = &inputs.clock;
+    let discovered = discover::discover_seeing(
+        &[Root::user(config)],
+        &inputs.resolver,
+        &mut |seen| match seen {
+            Seen::Root(_, real) => watched.note(real.to_path_buf(), clock),
+            Seen::Extension(_, folder) => watched.note_tree(folder, clock),
+        },
+    );
+    if !discovered
+        .roots
+        .iter()
+        .any(|(source, _)| *source == Source::User)
+    {
+        // Not there, or not opened: where it would be, so that one made
+        // later is a change.
+        let root = Root::user(config).dir;
+        let place = if root.is_absolute() {
+            Some(root)
+        } else {
+            root.to_str().and_then(|text| {
+                inputs
+                    .resolver
+                    .resolve(text)
+                    .ok()
+                    .map(|resolved| resolved.to_fs_path())
+            })
+        };
+        if let Some(place) = place {
+            watched.note(place, clock);
+        }
+    }
+    for left in &discovered.left_out {
+        watched.note(left.folder.clone(), clock);
+    }
+    discovered
+}
+
+/// Finds the extensions, decides how each stands, and takes what the
+/// approved ones registered from the cache. Every place is stamped before
+/// it is read. Blocks.
+fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     let mut decided = Decided::default();
+    let clock = &inputs.clock;
+    // The stores of the pins first: an approval made, or taken back, in
+    // another process is a change.
+    if let Some(state) = &inputs.state {
+        decided.watched.note(state.pins_file(), clock);
+        decided.watched.note(state.trust_file(), clock);
+    }
     let user = inputs
         .config_dir
         .as_ref()
-        .map(|config| discover::discover(&[Root::user(config)], &inputs.resolver));
+        .map(|config| in_users(inputs, config, &mut decided.watched));
     // The project's, while it is trusted: what the trust question read of
     // it, or a look now.
-    let project = inputs
-        .project
-        .as_ref()
-        .map(|_| project_found.unwrap_or_else(|| in_project(&inputs.resolver)));
-    decided.watched = Watched::stamp(
-        places(inputs, user.as_ref(), project.as_ref()),
-        &inputs.clock,
-    );
-    for discovered in [&user, &project].into_iter().flatten() {
-        decided.told.extend(
-            discovered
-                .left_out
-                .iter()
-                .map(|left| sentence(&left.reason)),
-        );
+    let project: Option<(Vec<Listed>, Vec<LeftOut>, Option<Discovered>)> =
+        inputs.project.as_ref().map(|_| match project_found {
+            Some(looked) => {
+                decided.watched.extend(looked.watched);
+                (looked.found, looked.left_out, None)
+            }
+            None => {
+                let (discovered, watched) = in_project(&inputs.resolver, clock);
+                decided.watched.extend(watched);
+                (
+                    discovered.found.iter().map(Listed::of).collect(),
+                    discovered.left_out.clone(),
+                    Some(discovered),
+                )
+            }
+        });
+    for left in user
+        .iter()
+        .flat_map(|user| &user.left_out)
+        .chain(project.iter().flat_map(|(_, left, _)| left))
+    {
+        decided.told.push(sentence(&left.reason));
     }
     let users = UserNames::of(user.as_ref());
     let mine: Vec<(String, String)> = user
@@ -412,20 +495,38 @@ fn decide(inputs: &Inputs, project_found: Option<Discovered>) -> Decided {
             )
         })
         .collect();
+    // Each one found, with its bytes when they were read now.
+    let mut candidates: Vec<(Listed, Option<Arc<Snapshot>>)> = user
+        .iter()
+        .flat_map(|user| &user.found)
+        .map(|found| (Listed::of(found), Some(Arc::clone(&found.snapshot))))
+        .collect();
+    let mut project_read: Option<Discovered> = None;
+    if let Some((found, _, read)) = project {
+        let bytes = |listed: &Listed| {
+            read.as_ref().and_then(|read| {
+                read.found
+                    .iter()
+                    .find(|found| found.folder == listed.folder)
+                    .map(|found| Arc::clone(&found.snapshot))
+            })
+        };
+        candidates.extend(found.into_iter().map(|listed| {
+            let snapshot = bytes(&listed);
+            (listed, snapshot)
+        }));
+        project_read = read;
+    }
     let mut pins: Option<Option<UserPins>> = None;
     let mut trust: Option<ProjectTrust> = None;
     let mut standing_approved = Vec::new();
-    let found = user
-        .into_iter()
-        .chain(project)
-        .flat_map(|discovered| discovered.found);
-    for found in found {
-        let name = visible(&found.manifest.name).into_owned();
-        let definition = definition(&found);
-        let standing = match found.source {
+    for (listed, snapshot) in candidates {
+        let name = in_code(&listed.manifest.name).into_owned();
+        let definition = listed.definition();
+        let standing = match listed.source {
             Source::User => {
                 // Turned off by the user: not loaded, and nothing asked.
-                if inputs.disabled.contains(&found.manifest.name) {
+                if inputs.disabled.contains(&listed.manifest.name) {
                     continue;
                 }
                 let Some(pins) = pins
@@ -435,15 +536,15 @@ fn decide(inputs: &Inputs, project_found: Option<Discovered>) -> Decided {
                     decided.told.push(format!(
                         "Your extension `{name}` (`{}`) is not loaded: the pin store, which \
                          holds what you approved of your own, could not be read (said above).",
-                        found.shown
+                        listed.shown
                     ));
                     continue;
                 };
                 pins.standing(&definition)
             }
             Source::Project => {
-                if users.takes(&found.manifest.name) {
-                    decided.told.push(taken(&found, &name, &mine, users.cut()));
+                if users.takes(&listed.manifest.name) {
+                    decided.told.push(taken(&listed, &name, &mine, users.cut()));
                     continue;
                 }
                 project_standing(
@@ -454,27 +555,25 @@ fn decide(inputs: &Inputs, project_found: Option<Discovered>) -> Decided {
             }
         };
         if standing == Standing::Approved {
-            standing_approved.push(found);
+            standing_approved.push((listed, snapshot));
         } else {
             decided
                 .told
-                .push(not_loaded(&found, &name, standing, inputs.trust_project));
+                .push(not_loaded(&listed, &name, standing, inputs.trust_project));
         }
     }
     if standing_approved.is_empty() {
         return decided;
     }
-    // Nothing is approved without a pin, nor pinned without a state
-    // directory: a yes the store could not keep approves for the session,
-    // and leaves nothing to keep.
-    let Some(state) = &inputs.state else {
-        decided.missing = standing_approved;
-        return decided;
-    };
-    let cache = RegistrationCache::new(state.registration_cache_file())
-        .with_clock(Arc::clone(&inputs.clock));
-    let loaded = cache.load();
-    if let Some(why) = &loaded.set_aside {
+    let loaded = inputs.state.as_ref().map(|state| {
+        let cache = RegistrationCache::new(state.registration_cache_file())
+            .with_clock(Arc::clone(&inputs.clock));
+        let loaded = cache.load();
+        (cache, loaded)
+    });
+    if let Some((cache, loaded)) = &loaded
+        && let Some(why) = &loaded.set_aside
+    {
         let file = cache.path().to_path_buf();
         let aside = cache.set_aside_path();
         decided.told.push(sentence(&with_paths_shown(
@@ -483,120 +582,53 @@ fn decide(inputs: &Inputs, project_found: Option<Discovered>) -> Decided {
             inputs.home.as_deref(),
         )));
     }
-    for found in standing_approved {
-        let hash = found.snapshot.hash();
-        match loaded.cache.get(&hash) {
-            // Keyed by the hash of the folder, whose manifest names it: an
-            // entry of another name is no entry of this one.
-            Some(entry) if entry.name == found.manifest.name => {
+    for (listed, snapshot) in standing_approved {
+        let entry = loaded
+            .as_ref()
+            .and_then(|(_, loaded)| loaded.cache.get(&listed.hash));
+        // Keyed by the hash of the folder, an entry is taken only when it
+        // fits the extension as it was read: its name, its `api`, hooks the
+        // manifest allows and the prompt file's text. A misfit is missing,
+        // and the extension is registered again (the cache's fixes).
+        let against = snapshot.as_deref().unwrap_or(&listed.prompt);
+        match entry {
+            Some(entry) if entry.fits(&listed.manifest, against).is_ok() => {
                 decided.approved.push(ApprovedExtension {
-                    source: found.source,
-                    folder: found.folder,
-                    hash,
-                    manifest: found.manifest,
+                    source: listed.source,
+                    folder: listed.folder,
+                    hash: listed.hash,
+                    manifest: listed.manifest,
                     registration: entry.registration.clone(),
                 });
             }
-            _ => decided.missing.push(found),
-        }
-    }
-    decided.cache = Some(cache);
-    decided
-}
-
-/// What everything was found in, in an order in which each folder comes
-/// before what is in it: the user's folder of extensions, the names on the
-/// way to the project's (no further than a link or a name that is not
-/// there), each extension's folder, the folders in it and its files, and
-/// each extension folder left out. Blocks.
-#[expect(
-    clippy::disallowed_methods,
-    reason = "a look at each name on the way to the project's folder, on the blocking pool"
-)]
-fn places(
-    inputs: &Inputs,
-    user: Option<&Discovered>,
-    project: Option<&Discovered>,
-) -> Vec<PathBuf> {
-    let mut places = Vec::new();
-    // The stores of the pins: an approval made, or taken back, in another
-    // process is a change.
-    if let Some(state) = &inputs.state {
-        places.push(state.pins_file());
-        places.push(state.trust_file());
-    }
-    if let Some(config) = &inputs.config_dir {
-        let looked = user.and_then(|user| {
-            user.roots
-                .iter()
-                .find(|(source, _)| *source == Source::User)
-                .map(|(_, real)| real.clone())
-        });
-        let root = Root::user(config).dir;
-        let place = looked.or_else(|| {
-            if root.is_absolute() {
-                Some(root.clone())
-            } else {
-                let text = root.to_str()?;
-                inputs
-                    .resolver
-                    .resolve(text)
-                    .ok()
-                    .map(|resolved| resolved.to_fs_path())
-            }
-        });
-        places.extend(place);
-    }
-    if project.is_some() {
-        // The names on the way, each looked at itself: one that is a link,
-        // or not there, is the last (a look through it would follow it).
-        let mut at = inputs.resolver.root().to_fs_path();
-        let mut way = vec![at.clone()];
-        for name in discover::PROJECT_FOLDER {
-            at.push(name);
-            way.push(at.clone());
-            match std::fs::symlink_metadata(&at) {
-                Ok(metadata) if metadata.is_dir() => {}
-                _ => break,
-            }
-        }
-        // The workspace itself only while it has no `.cineris`: creating
-        // one is a change to it.
-        if way.len() > 2 || std::fs::symlink_metadata(&way[1]).is_ok() {
-            way.remove(0);
-        }
-        places.extend(way);
-    }
-    for discovered in [user, project].into_iter().flatten() {
-        for found in &discovered.found {
-            places.push(found.folder.clone());
-            let mut folders: Vec<PathBuf> = Vec::new();
-            let mut files: Vec<PathBuf> = Vec::new();
-            for path in found.snapshot.paths() {
-                let names: Vec<&str> = path.split('/').collect();
-                let mut inner = found.folder.clone();
-                for (index, name) in names.iter().enumerate() {
-                    inner.push(name);
-                    if index + 1 < names.len() {
-                        if !folders.contains(&inner) {
-                            folders.push(inner.clone());
-                        }
-                    } else {
-                        files.push(inner.clone());
+            _ => {
+                // To register it its bytes are needed: what the question
+                // listed is read again, and registered only at the hash it
+                // was approved at.
+                let snapshot = snapshot.or_else(|| {
+                    let read =
+                        project_read.get_or_insert_with(|| in_project(&inputs.resolver, clock).0);
+                    read.found
+                        .iter()
+                        .find(|found| found.folder == listed.folder)
+                        .map(|found| Arc::clone(&found.snapshot))
+                });
+                match snapshot {
+                    Some(snapshot) if snapshot.hash() == listed.hash => {
+                        decided.missing.push((listed, snapshot));
                     }
+                    _ => decided.told.push(not_loaded(
+                        &listed,
+                        &in_code(&listed.manifest.name),
+                        Standing::Changed,
+                        inputs.trust_project,
+                    )),
                 }
             }
-            folders.sort();
-            places.extend(folders);
-            places.extend(files);
-        }
-        for left in &discovered.left_out {
-            if !places.contains(&left.folder) {
-                places.push(left.folder.clone());
-            }
         }
     }
-    places
+    decided.cache = loaded.map(|(cache, _)| cache);
+    decided
 }
 
 /// How a project's extension stands: approved for this session by a yes
@@ -651,7 +683,7 @@ fn project_trust(inputs: &Inputs) -> ProjectTrust {
 
 /// What the session is told of a project's extension whose name a folder
 /// of the user's takes.
-fn taken(found: &Found, name: &str, mine: &[(String, String)], cut: bool) -> String {
+fn taken(found: &Listed, name: &str, mine: &[(String, String)], cut: bool) -> String {
     let folded = found.manifest.name.to_ascii_lowercase();
     let shown = &found.shown;
     match mine.iter().find(|(user, _)| *user == folded) {
@@ -673,7 +705,7 @@ fn taken(found: &Found, name: &str, mine: &[(String, String)], cut: bool) -> Str
 
 /// What the session is told of an extension it does not load, and how to
 /// approve it.
-fn not_loaded(found: &Found, name: &str, standing: Standing, trust_project: bool) -> String {
+fn not_loaded(found: &Listed, name: &str, standing: Standing, trust_project: bool) -> String {
     let shown = &found.shown;
     // `--trust-project` puts no question: the command approves.
     let project_remedy = if trust_project {

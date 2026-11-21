@@ -244,10 +244,9 @@ fn roots_written_with_a_tilde_a_relative_path_and_dots_lead_to_the_same_extensio
         ]
     );
     let same = "it is the same folder as `.cineris/extensions`, which was looked in instead";
-    let projects = Root::project(&paths.root().to_fs_path())
-        .dir
-        .display()
-        .to_string();
+    // A root given absolute is shown as the user would read it: the
+    // project's relative to the workspace (the full review of step 28).
+    let projects = ".cineris/extensions".to_owned();
     assert_eq!(
         left(&discovered),
         [
@@ -345,7 +344,7 @@ fn a_projects_root_that_leads_out_of_the_workspace_gives_nothing_and_says_why() 
     extension(&scratch, "home/proj/tools/exts/inner", "inner");
     scratch.dir("home/proj/.cineris");
     let workspace = scratch.join("home/proj");
-    let written = project(&scratch).dir.display().to_string();
+    let written = ".cineris/extensions".to_owned();
     let outside = format!(
         "the project's folder of extensions `{written}` was not looked in: it leads out of the \
          workspace, and a project's extensions are read only from inside it"
@@ -735,6 +734,13 @@ fn every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape() {
         "api = 1\nname = \"be\\u001bll\"\nversion = \"1\"\nmain = \"main.js\"\n",
     );
     scratch.file("home/proj/.cineris/extensions/bell/main.js", "1");
+    // A key the manifest does not know, which the TOML reader's refusal
+    // quotes as it is: escaped by discovery, whose words these are not.
+    scratch.file(
+        "home/proj/.cineris/extensions/keyed/extension.toml",
+        "api = 1\nname = \"keyed\"\nversion = \"1\"\nmain = \"main.js\"\n\"x\\u202Ey\" = 1\n",
+    );
+    scratch.file("home/proj/.cineris/extensions/keyed/main.js", "1");
     let discovered = discover(&scratch, &[project(&scratch)]);
     assert_eq!(found(&discovered), []);
     let reasons: Vec<&str> = discovered
@@ -742,7 +748,7 @@ fn every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape() {
         .iter()
         .map(|left| left.reason.as_str())
         .collect();
-    assert_eq!(reasons.len(), 2, "{reasons:?}");
+    assert_eq!(reasons.len(), 3, "{reasons:?}");
     assert!(
         reasons[0].starts_with(
             "the extension folder `.cineris/extensions/bell` was left out: the manifest of the \
@@ -751,14 +757,20 @@ fn every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape() {
         "{}",
         reasons[0]
     );
+    assert!(
+        reasons[1].starts_with("the extension folder `.cineris/extensions/keyed` was left out")
+            && reasons[1].contains("x\\u{202e}y"),
+        "{}",
+        reasons[1]
+    );
     assert_eq!(
-        reasons[1],
+        reasons[2],
         "the extension folder `.cineris/extensions/txt\\u{202e}exe` was left out: its manifest \
          gives the name `txt`, and an extension's manifest (`extension.toml`) gives its folder's \
          own name, `txt\\u{202e}exe`"
     );
     assert_eq!(
-        discovered.left_out[1].shown,
+        discovered.left_out[2].shown,
         ".cineris/extensions/txt\\u{202e}exe"
     );
     for left in &discovered.left_out {
@@ -813,7 +825,7 @@ fn a_root_that_is_a_file_or_a_link_to_nothing_is_left_out_with_its_reason() {
         return;
     }
     let discovered = discover(&scratch, &[project(&scratch)]);
-    let written = project(&scratch).dir.display().to_string();
+    let written = ".cineris/extensions".to_owned();
     assert_eq!(
         left(&discovered),
         [(
@@ -899,4 +911,79 @@ fn every_folders_name_is_kept_and_names_reads_no_folder() {
     assert_eq!(read.arrivals(), 0, "no folder is read");
     assert!(named.found.is_empty());
     assert_eq!(named.names, wanted);
+}
+
+/// At most 16 MiB are read from one root: past them the rest of its folders
+/// are left out, the first by name read, and counted (the full review of
+/// step 28).
+#[test]
+fn past_16_mib_a_root_the_rest_are_left_out_and_counted() {
+    let scratch = scratch!("past_16_mib_a_root_the_rest_are_left_out_and_counted");
+    let mebibyte = vec![b'x'; 1024 * 1024 - 64];
+    // Each folder a little under its own cap of 4 MiB: four of them are a
+    // little under 16 MiB, so a fifth is read, and the sixth is not.
+    for name in ["a", "b", "c", "d", "e", "f"] {
+        extension(&scratch, &format!("home/cfg/extensions/{name}"), name);
+        for file in 0..4 {
+            scratch.file(
+                format!("home/cfg/extensions/{name}/data{file}.txt"),
+                &mebibyte,
+            );
+        }
+    }
+    let discovered = discover(&scratch, &[user(&scratch)]);
+    let names: Vec<&str> = found(&discovered)
+        .into_iter()
+        .map(|(_, name, _)| name)
+        .collect();
+    assert_eq!(names, ["a", "b", "c", "d", "e"]);
+    assert_eq!(
+        left(&discovered),
+        [(
+            Source::User,
+            "~/cfg/extensions",
+            "the user's folder of extensions `~/cfg/extensions` holds 1 more folder past the 16 \
+             MiB read from it, the first by name: it was left out"
+        )]
+    );
+}
+
+/// A folder swapped for a link while it is read is left out: it is looked
+/// at again after the read, and what is pinned is a folder of its own.
+#[test]
+fn a_folder_swapped_for_a_link_while_it_is_read_is_left_out() {
+    let scratch = scratch!("a_folder_swapped_for_a_link_while_it_is_read_is_left_out");
+    extension(&scratch, "home/cfg/extensions/probe", "probe");
+    let read = cineris_testkit::Hold::new(discover::AN_EXTENSION_WAS_READ);
+    let home = scratch.join("home");
+    let discovering = {
+        let home = home.clone();
+        std::thread::spawn(move || {
+            let workspace = home.join("proj");
+            std::fs::create_dir_all(&workspace).unwrap();
+            let paths = PathResolver::new(
+                &workspace,
+                PathOptions::new().home(AbsPath::from_os(&home).unwrap()),
+            )
+            .unwrap();
+            discover::discover(&[Root::user(&home.join("cfg"))], &paths)
+        })
+    };
+    read.reach();
+    let folder = home.join("cfg/extensions/probe");
+    let was = home.join("cfg/extensions/probe-was");
+    std::fs::rename(&folder, &was).unwrap();
+    let linked = make_link(&was, &folder, true);
+    read.release();
+    let discovered = discovering.join().unwrap();
+    if !linked {
+        return;
+    }
+    assert!(found(&discovered).is_empty(), "{:?}", found(&discovered));
+    assert!(
+        left(&discovered).iter().any(|(_, _, reason)| reason
+            .contains("it changed while it was read, and is no longer a folder of its own")),
+        "{:?}",
+        left(&discovered)
+    );
 }

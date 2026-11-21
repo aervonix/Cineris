@@ -281,9 +281,45 @@ pub fn unescape(text: &str) -> Cow<'_, str> {
     Cow::Owned(out)
 }
 
+/// `text` as it is shown inside code formatting (between backticks) in a
+/// question or a notice: a `\` and a backtick in it written with a `\`
+/// before them, so that a name from a repository or a script (a folder's,
+/// a program's, a key's) cannot end the code and let what follows read as
+/// the harness's own words; then [`visible`], so that what acts unseen is an
+/// escape too. The early review of step 28's second part found a folder's
+/// name posing as the trust question's sentences.
+#[must_use]
+pub fn in_code(text: &str) -> Cow<'_, str> {
+    if !text.contains(['\\', '`']) {
+        return visible(text);
+    }
+    let mut escaped = String::with_capacity(text.len() + 2);
+    for character in text.chars() {
+        if matches!(character, '\\' | '`') {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    Cow::Owned(visible(&escaped).into_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_in_code_cannot_end_its_code() {
+        assert_eq!(in_code("plain/name"), "plain/name");
+        assert!(matches!(in_code("plain/name"), Cow::Borrowed(_)));
+        assert_eq!(
+            in_code("x`. It runs no program. `y"),
+            "x\\`. It runs no program. \\`y"
+        );
+        assert_eq!(in_code("a\\`b"), "a\\\\\\`b");
+        // What acts unseen is an escape after the backslashes are doubled:
+        // its own backslash is not doubled.
+        assert_eq!(in_code("a\u{202e}`"), "a\\u{202e}\\`");
+    }
 
     /// The ranges of `Cf` in Unicode's `DerivedGeneralCategory.txt` of the
     /// pinned version: the lines of the category, kept as they are.

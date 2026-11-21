@@ -98,6 +98,8 @@ pub use secret::Secret;
 pub use secret_buf::SecretBuf;
 pub use time::{TimeError, UtcTime};
 pub use timer::{SharedTimer, Sleep, Timer};
-pub use visible::{acts_unseen, unescape, visible, visible_keeping, visible_keeping_after};
+pub use visible::{
+    acts_unseen, in_code, unescape, visible, visible_keeping, visible_keeping_after,
+};
 pub use watch::{FileStamp, TimedStamp, WatchList};
 pub use zone::{LocalDate, Zone};

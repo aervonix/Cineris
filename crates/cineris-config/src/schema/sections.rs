@@ -258,10 +258,12 @@ settings! {
     /// One extension's entry. An extension's capabilities are its
     /// manifest's, approved with it, and are not set here.
     pub struct ExtensionSettings {
-        /// Whether the extension is loaded. `false` keeps it out of every
-        /// new session, its tools, commands and prompt with it; its pin is
-        /// kept, so `true` again needs no new approval unless its folder
-        /// changed.
+        /// Whether the user's own extension of this name is loaded. `false`
+        /// keeps it out of every new session, its tools, commands and
+        /// prompt with it; its pin is kept, so `true` again needs no new
+        /// approval unless its folder changed. A project's extension of the
+        /// name is not turned off by it: a project's is kept out by not
+        /// trusting the project.
         [UserOnly, NextSession]
         pub enabled: bool = true,
     }

@@ -258,7 +258,7 @@ Every key a Cineris configuration file may hold. The design is in [architecture/
 
 | Key | Type | Default | From a project | Takes effect | What it is |
 |---|---|---|---|---|---|
-| `extensions.*.enabled` | `true` or `false` | `true` | user only | next session | Whether the extension is loaded. `false` keeps it out of every new session, its tools, commands and prompt with it; its pin is kept, so `true` again needs no new approval unless its folder changed. |
+| `extensions.*.enabled` | `true` or `false` | `true` | user only | next session | Whether the user's own extension of this name is loaded. `false` keeps it out of every new session, its tools, commands and prompt with it; its pin is kept, so `true` again needs no new approval unless its folder changed. A project's extension of the name is not turned off by it: a project's is kept out by not trusting the project. |
 
 ## Reserved sections
 

@@ -415,6 +415,9 @@ pub(crate) struct Live {
     /// registered before it starts, and its start looks again at what they
     /// were found in (step 28).
     pub(crate) extensions: Arc<crate::ext::found::Extensions>,
+    /// One turn's start at a time: the looks at its start and the prompt's
+    /// handing to the loop are one step (step 28).
+    pub(crate) turn_start: tokio::sync::Mutex<()>,
 }
 
 impl Inner {
@@ -927,6 +930,7 @@ impl Core {
             lease_count: AtomicU64::new(lease_count),
             knowledge,
             extensions,
+            turn_start: tokio::sync::Mutex::new(()),
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The client may have left, or a shutdown begun, while the session
@@ -1645,6 +1649,13 @@ impl Core {
             Op::TurnStart(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                // One start at a time: no other client's prompt starts a
+                // turn between the look below and this prompt's handing to
+                // the loop, so the look at what the extensions were found
+                // in never runs beside a turn (the full review of step 28).
+                // A prompt queued behind a running turn is not looked at
+                // again: its turn starts from the loop.
+                let _starting = live.turn_start.lock().await;
                 // No turn starts before the session's extensions are found
                 // and registered, an approved one the registration cache
                 // misses included: a gate one of them holds is never

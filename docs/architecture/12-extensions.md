@@ -248,19 +248,20 @@ There is no function that returns credentials, reads the session, changes config
 
 - **Where extensions are found** (`cineris_ext::discover`).
   An extension is a folder directly under one of two roots, the user's `<config dir>/extensions/` and the project's `.cineris/extensions/`, whose manifest gives the folder's own name: one that gives another is left out with both names, and a file beside the folders, or a folder whose name begins with `.`, is passed over.
-  Each folder is read whole into the snapshot whose hash is pinned.
+  Each folder is read whole into the snapshot whose hash is pinned, and looked at again, itself, after the read: one swapped for a link while it was read is left out (since the full review of step 28).
   A root is found through the session's path resolver and judged where it leads, compared by place: the user's may be a link, and is followed; the project's must lead inside the workspace, so a `.cineris` or a `.cineris/extensions` that is a link out of it gives nothing and says so; an extension's folder reached through a link is refused, as a link inside one is; the same folder given as two roots is looked in once.
   **A root that is not there costs one look,** and the resolver is not asked: the user's, given as an absolute path, is looked at as it is, and the project's one name at a time from the workspace's real location, without following a link (two looks for a workspace whose `.cineris` has no `extensions`).
   That is 1.2 µs a session with no extension on the reference machine, against 21 µs for resolving both roots (a release build, on an otherwise idle machine).
-  At most 1,024 entries of a root are listed, and the rest of it is not looked at, which is said; of those, at most 64 folders are read, the first by name, and the rest are left out, counted.
+  At most 1,024 entries of a root are listed, and the rest of it is not looked at, which is said; of those, at most 64 folders are read, the first by name, and none once 16 MiB have been read from the root (since the full review of step 28); the rest are left out, counted.
   The user's `tracker` and the project's `tracker` are both found, two extensions kept apart by where they come from.
   Within one source, extensions whose names differ only in case (`Tracker` and `tracker`, in one root or in two roots of one source) are all refused, on every system, each left out naming the others: on Windows they are one name and would share what an extension keeps, and none is kept, so that nothing depends on which was listed first.
-  Every refusal names the folder, with every character that acts unseen written as an escape, since a folder's name comes from a repository.
+  Every refusal names the folder, the project's relative to the workspace and the user's under `~`, as code it cannot end, since a folder's name comes from a repository: every character that acts unseen is written as an escape, and a backtick or a `\` has a `\` before it (`cineris_base::in_code`, which every question and notice uses for a path or a name it shows as code, since the full review of step 28).
   Discovery reads folders, and runs on the blocking pool, off the start-up path.
 - **The registration cache** (`cineris_ext::cache`) is `<state dir>/extensions/registered.json`, `{"version": 1, "entries": {"<content hash>": {"name", "api", "tools", "commands", "hooks", "prompt"}}}`: what each approved extension's script registered, under the hash of its folder, with the text of its prompt file, so that a session knows them without starting the engine.
   **It is read strictly** ([decision 0028](../decisions/0028-enforced-values-fail-closed.md)): a field this build does not know, a value of the wrong type, a key that is not a content hash or that is given twice, another `version`, more than 1,024 entries, an entry a live runtime could not have registered, or a file over 16 MiB or that is not a regular file sets the whole file aside.
   **An entry is checked by the code a script's registration meets** (`cineris_ext::registration`): each tool's and command's name (1 to 64 of ASCII letters, digits, `_`, `-` and `.`), description (2 KiB, nothing in it that acts unseen) and schema (an object of 16 KiB as JSON, every text of it shown as written); a command's arguments (16, each a name); a hook's event, its filter (64 entries, each a tool's name or `source/*` of at most 129 bytes) and its time (1 ms to 10 minutes); 64 tools, 32 commands and 32 hooks, and no tool or command name twice; and the entry's own name, an extension's, and its prompt, of 4 KiB.
   Whether its hooks are on events the manifest's `capabilities.hooks` lists cannot be asked as the file is read, since the file holds no manifest: `Entry::fits` asks it, with the entry's name, its `api` and its prompt's text, against the manifest and the snapshot of the extension it is taken for.
+  A session takes an entry only when it fits; one that does not is missing, and the extension is registered again. A project's extension that the trust question read is held with no bytes of its folder but its prompt file, as the question read it, which the entry is checked against.
   A file set aside is read as an empty cache, and moved to `registered.json.set-aside` while it is still the file that was read, so that a cache another session has just written is not moved for what the one before it held; one written in the moment between the look and the move is seen to be another file, and put back.
   A link at the file's name, a folder, or anything else that is not a regular file, is moved aside as it is (a link is moved, never what it leads to): left there, no write could replace it, and every session would register every approved extension again.
   A missing file is an empty cache.
@@ -283,11 +284,13 @@ There is no function that returns credentials, reads the session, changes config
 - **`cineris ext add` is the step's third pull request.**
   Until it is built, nothing in the harness writes `pins.toml`, so a user's own extension is pinned by no command, and the notice names the command that will pin it.
 - **A name is the user's** whenever the user's folder of extensions holds a folder of that name, compared with ASCII's case folded, whether that folder could be used or was left out (a link in it, a manifest refused): a user's extension left out does not free its name for a project's, to which the user's rules about it would apply.
-  A user's folder that cannot be listed whole takes every name.
+  A user's folder that is there and could not be opened or listed whole (a file, a link to nothing, a folder closed to the user) takes every name.
 - **Everything is decided before anything runs.**
   The folders, the pins, the trust store and the registration cache are read, and every standing decided, before any script is evaluated.
   An approved extension's tools, commands, hooks and prompt text are taken from the cache by its hash, with no engine started.
   One the cache misses fails closed: the snapshot whose hash was compared with the pin is evaluated once in a throwaway runtime, the session says so ("Registering the extension …"), what it registered is written to the cache, and it is loaded.
+  A project's extension the trust question listed is read again to be evaluated, and evaluated only when its folder's hash is still the one approved; otherwise the session says it changed.
+  An evaluation that fails is said once, what the script threw escaped, and the extension is not evaluated again in the session until its folder changes.
   No runtime is made for the session before an extension's first call.
   What discovery left out is said, with its reason.
   A cache set aside is said once, with its files under `~`, and every approved extension is registered again.
@@ -295,10 +298,13 @@ There is no function that returns credentials, reads the session, changes config
 - **Where it runs, and what waits.**
   On a task the core spawns once the session's loop runs, off the path that opens the session and so after the interactive application's first frame: the reads and writes on the blocking pool, each evaluation on a thread of its own.
   The first turn waits for the extensions' tools (`turn/start` waits before it hands its prompt to the loop, as it waits for the look at the configuration's files), not for the cache, which is written and pruned after.
+  A wait of more than three seconds, on the session's timer, is said once, and goes on: no turn starts while an approved extension's registration is missing, and each evaluation is bounded by the engine's own time (since the full review of step 28).
+  A turn's start is one step with the look at what the extensions were found in, one at a time in a session, so a look never runs beside another client's turn; a prompt queued behind a running turn is not looked at again, since its turn starts from the loop.
   A session closed meanwhile ends the task, and so does the core's end.
 - **Measured** (release build, an otherwise idle reference machine, 40 runs): a cache miss holds the first turn for one evaluation, a median of 0.34 ms for an extension of one tool, 0.50 ms of 16 and 0.98 ms of 64 (95th: 0.41, 0.58, 1.04 ms); misses are registered one after another.
   With no extension nothing of one is read: the session's finding costs one look at the user's folder, and the trust question's look, for a client that answers it, one at the project's, two with a `.cineris` and no `extensions` in it.
   With extensions, none is read on the path that opens the session but a project's, which the trust question reads once for a client that answers it, and which the session then takes on rather than reading it again.
+  With three typical extensions of a few KiB each (a release build, an otherwise idle reference machine, medians of 30; since the full review of step 28): opening a session costs what it does with none, 0.7 ms, with the user's, which are read after it; the trust question's look and read of three of a project's adds 0.14 ms (0.93 against 0.79 ms), and it keeps of each only its hash, manifest, shown text and prompt file; the first turn, 10 to 12 ms on that machine with them or without, shows no cost of finding and loading them.
 
 ## Self-written extensions
 
@@ -323,10 +329,12 @@ Covered with configuration in [08-configuration.md](08-configuration.md). For ex
 **As built in step 28** (`cineris-core`'s `ext::watched` and `ext::found`; [steps/28/parts/pr2a1-found.md](../steps/28/parts/pr2a1-found.md)).
 
 - **What is stamped:** what the extensions were found in.
-  The stores of the pins (`pins.toml`, `trust.toml`), the user's folder where it really is, the names on the way to the project's (none past a link or a name that is not there), each extension's folder, the folders in it and its files, and each extension folder left out.
+  The stores of the pins (`pins.toml`, `trust.toml`), the user's folder where it really is, the names on the way to the project's as written (none past a link or a name that is not there) and, where it really is, each name from the workspace down to it, each extension's folder, every folder in it (an empty one too) and its files, and each extension folder left out.
+  **Each place is stamped before it is read** (since the full review of step 28), so that a change made as it is read, or while the trust question that read it is open, is seen at the session's first look: the question's extensions are pinned as it read them, and withdrawn then.
   No stamp follows a link: a place is looked at itself, so a link a repository puts where a folder was is a change, and is never looked through (on Windows a look through a link to a share would send the account's credentials).
 - **When it is looked at:** at each turn's start, before the look at the configuration's files.
   The places are looked at in order, a folder before what is in it, stopping at the first change; a place modified within two seconds of its stamp counts as changed until that has passed.
+- **Before an extension's runtime starts,** at its first call, each name on the way to its folder is looked at itself: one that is no longer a folder of its own (a folder on the way swapped for a link, perhaps out of the workspace) refuses the start, and nothing is read through it (since the full review of step 28).
 - **What a change does:** every folder is found and judged again.
   An extension that no longer stands approved as it was loaded (changed, unpinned, its project's trust taken away, its folder behind a link out) is withdrawn, its tools out of the registry, and the session is told.
   One that now stands approved (pinned in another process, or changed back) is loaded before that turn starts, registered first if the cache misses it.
@@ -341,7 +349,7 @@ Covered with configuration in [08-configuration.md](08-configuration.md). For ex
 | No ambient access | A script can do nothing except call host functions. This holds on every OS. |
 | Declared capabilities | The manifest bounds what the extension may ask for. The runtime checks every host call against it. |
 | Policy still applies | After the manifest check, each host call goes through the permission engine like a built-in tool's effects. An extension's tool asks by default. |
-| The sandbox still applies | Programs run on an extension's behalf go through a sandbox launcher of the extension's own, with the manifest's write roots and no network unless `exec_network`, at every level, where the sandbox enforces. Where nothing confines programs (Windows in the first release), `write` and `exec_network = false` do not bind them, and the approval says the program runs outside the sandbox. |
+| The sandbox still applies | Programs run on an extension's behalf go through a sandbox launcher of the extension's own, with the manifest's write roots and no network unless `exec_network`, at every level, where the sandbox enforces. Where nothing confines programs (Windows in the first release), `write` and `exec_network = false` do not bind them, and the approval says so first: "Programs this extension runs are not confined on this system. They can do anything you can, including changing Cineris's own settings and approvals." (since the full review of step 28; [06-permissions-and-sandbox.md](06-permissions-and-sandbox.md), "As built in step 28's second pull request"). |
 | Review before load | Nothing the agent or a repository supplies runs before the user has seen it. |
 | Trust pinned by hash | Any change disables the extension until approved again. |
 | Limits | Memory, time and output size, per call and per runtime. |

@@ -99,6 +99,33 @@ impl LoadedExtension {
         if let Some(runtime) = slot.as_ref().filter(|runtime| runtime.is_alive()) {
             return Ok(Arc::clone(runtime));
         }
+        // The folder is read where it was found: each name on the way to
+        // it, looked at itself, is still a folder and no link (the full
+        // review of step 28: a folder on the way swapped for a link would
+        // have the read follow it, on Windows perhaps to a share).
+        let folder = self.approved.folder.clone();
+        let way = cineris_tools::run_blocking(&cineris_base::CancelToken::new(), move |_| {
+            super::watched::linked_on_the_way(&folder)
+        })
+        .await;
+        match way {
+            Ok(None) => {}
+            Ok(Some(linked)) => {
+                return Err(format!(
+                    "The extension `{}` could not start: `{}` on the way to its folder is no \
+                     longer a folder of its own, and a link is not followed to it",
+                    self.name(),
+                    cineris_base::in_code(&linked.display().to_string())
+                ));
+            }
+            Err(_) => {
+                return Err(format!(
+                    "The extension `{}` could not start: the way to its folder could not be \
+                     looked at",
+                    self.name()
+                ));
+            }
+        }
         let runtime = ScriptRuntime::start(
             self.name(),
             Source::Folder {

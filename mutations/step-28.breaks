@@ -2892,10 +2892,10 @@ caught-by:
 # ------------------------------------------------------------ what is shown
 
 [break] found-folder-name-shown-raw
-rule: A folder's name is shown with every character that acts unseen written as an escape: it comes from a repository.
+rule: A folder's name is shown as code it cannot end, with every character that acts unseen written as an escape: it comes from a repository.
 file: crates/cineris-ext/src/discover.rs
 in: extension_in
-find: visible(&name.to_string_lossy())
+find: in_code(&name.to_string_lossy())
 replace: name.to_string_lossy()
 caught-by:
     discover::every_refusal_names_the_folder_with_what_acts_unseen_written_as_an_escape
@@ -3286,8 +3286,8 @@ caught-by:
 rule: The user's folder of extensions, in the configuration directory as it is given (with `~`, relative, with `..`, through a link), is looked in.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: .map(|config| discover::discover(&[Root::user(config)], &inputs.resolver))
-replace: .filter(|_| false).map(|config| discover::discover(&[Root::user(config)], &inputs.resolver))
+find: .map(|config| in_users(inputs, config, &mut decided.watched))
+replace: .filter(|_| false).map(|config| in_users(inputs, config, &mut decided.watched))
 caught-by:
     extensions_found::a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started
     extensions_found::the_users_folder_is_found_through_a_config_dir_given_with_a_tilde_relatively_or_with_dots
@@ -3305,8 +3305,8 @@ caught-by:
 rule: What discovery left out is said to the session with its reason: a project's folder of extensions behind a link out of the workspace among it.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: .map(|left| sentence(&left.reason))
-replace: .filter(|_| false).map(|left| sentence(&left.reason))
+find: decided.told.push(sentence(&left.reason));
+replace: let _ = &left.reason;
 caught-by:
     extensions_found::a_projects_folder_of_extensions_behind_a_link_out_of_the_workspace_is_not_looked_in
 
@@ -3344,8 +3344,8 @@ caught-by:
 rule: The user's extension that `[extensions.<name>] enabled = false` turns off is not loaded, and nothing is said or asked of it.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: if inputs.disabled.contains(&found.manifest.name) {
-replace: if inputs.disabled.contains(&found.manifest.name) && false {
+find: if inputs.disabled.contains(&listed.manifest.name) {
+replace: if inputs.disabled.contains(&listed.manifest.name) && false {
 caught-by:
     extensions_found::a_users_extension_turned_off_is_not_loaded_and_nothing_is_asked
 
@@ -3353,8 +3353,8 @@ caught-by:
 rule: A project's extension that takes the name of one of the user's is not used, and the session says so.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: if users.takes(&found.manifest.name) {
-replace: if users.takes(&found.manifest.name) && false {
+find: if users.takes(&listed.manifest.name) {
+replace: if users.takes(&listed.manifest.name) && false {
 caught-by:
     extensions_found::a_projects_extension_of_a_users_name_is_not_used
 
@@ -3385,26 +3385,27 @@ caught-by:
 rule: An approved extension's registration is taken from the cache by its hash: nothing is evaluated, and no runtime made, before its first call.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: match loaded.cache.get(&hash) {
-replace: match loaded.cache.get(&hash).filter(|_| false) {
+find: .and_then(|(_, loaded)| loaded.cache.get(&listed.hash));
+replace: .and_then(|(_, loaded)| loaded.cache.get(&listed.hash).filter(|_| false));
 caught-by:
     extensions_found::a_pinned_users_extension_is_loaded_from_the_cache_with_no_engine_started
 
 [break] pinned-entry-of-another-name-taken
-rule: A cache entry is the registration of the folder its hash is of, whose manifest names it: an entry under that hash that names another extension is no entry of it.
+rule: A cache entry is taken for an extension only when it fits the extension as it was read: its name, its `api`, hooks the manifest allows and its prompt file's text. A misfit is missing, and the extension is registered again.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: Some(entry) if entry.name == found.manifest.name =>
+find: Some(entry) if entry.fits(&listed.manifest, against).is_ok() =>
 replace: Some(entry) =>
 caught-by:
     extensions_found::a_cache_entry_of_another_name_is_no_entry_of_this_one
+    extensions_review::a_cached_entry_that_does_not_fit_the_extension_is_not_used
 
 [break] pinned-missing-entry-left-out
 rule: A missing entry fails closed: an approved extension the cache does not hold is registered when the session opens, not left out.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: _ => decided.missing.push(found)
-replace: _ => drop(found)
+find: decided.missing.push((listed, snapshot));
+replace: drop((listed, snapshot));
 caught-by:
     extensions_found::an_approved_extension_the_cache_misses_is_registered_and_the_first_turn_waits_for_it
     extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
@@ -3432,8 +3433,8 @@ caught-by:
 rule: A registration cache set aside is said to the session, once.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: if let Some(why) = &loaded.set_aside {
-replace: if let Some(why) = loaded.set_aside.as_ref().filter(|_| false) {
+find: && let Some(why) = &loaded.set_aside
+replace: && let Some(why) = loaded.set_aside.as_ref().filter(|_| false)
 caught-by:
     extensions_found::a_cache_set_aside_is_said_once_and_what_is_approved_is_registered_again
 
@@ -3560,13 +3561,13 @@ caught-by:
     extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
 
 [break] pinned-words-say-the-network-wrong
-rule: The trust question says whether an extension's programs may reach the network, as its manifest says.
+rule: Where an extension's programs are confined, the trust question says whether they may reach the network, as its manifest says. (Where they are not, it claims no limit: the full review of step 28.)
 file: crates/cineris-core/src/ext/found.rs
 in: in_words
 find: if declared.exec_network {
 replace: if !declared.exec_network {
 caught-by:
-    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    ext::found::tests::what_an_extension_may_do_is_said_as_its_programs_are_confined_or_not
 
 [break] pinned-words-hide-what-a-hook-sees
 rule: The trust question says in words what each event an extension may hook lets it see.
@@ -3609,10 +3610,10 @@ caught-by:
     ext::found::tests::quoted_text_cannot_close_its_quotes
 
 [break] pinned-entries-not-escaped
-rule: The programs, globs and hosts the question shows are written with what acts unseen escaped.
+rule: The programs, globs and hosts the question shows are written as code they cannot end, with what acts unseen escaped.
 file: crates/cineris-core/src/ext/found.rs
 in: in_words
-find: .map(|item| format!("`{}`", visible(item)))
+find: .map(|item| format!("`{}`", in_code(item)))
 replace: .map(|item| format!("`{}`", item))
 caught-by:
     extensions_trust::every_text_of_the_manifest_is_shown_escaped
@@ -3621,7 +3622,7 @@ caught-by:
 rule: The version the question shows is written with what acts unseen escaped.
 file: crates/cineris-core/src/ext/found.rs
 in: in_words
-find: visible(&manifest.version)
+find: in_code(&manifest.version)
 replace: manifest.version.as_str()
 caught-by:
     extensions_trust::every_text_of_the_manifest_is_shown_escaped
@@ -3685,10 +3686,11 @@ caught-by:
 rule: What the trust question read of the project's folder is handed to the session, which does not read it again.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: .map(|_| project_found.unwrap_or_else(|| in_project(&inputs.resolver)))
-replace: .map(|_| in_project(&inputs.resolver))
+find: inputs.project.as_ref().map(|_| match project_found {
+replace: inputs.project.as_ref().map(|_| match project_found.filter(|_| false) {
 caught-by:
     extensions_trust::each_folder_is_read_once_when_a_session_opens
+    extensions_review::after_a_yes_what_the_question_read_is_not_read_again
 
 [break] pinned-users-folder-read-for-its-names
 rule: The trust question only lists the user's folder for the names it takes, and reads none of its extensions.
@@ -3916,20 +3918,21 @@ caught-by:
 [break] pinned-pins-unwatched
 rule: The stores of the pins are watched: an approval made in another process loads the extension at the next turn.
 file: crates/cineris-core/src/ext/found/pipeline.rs
-in: places
-find: places.push(state.pins_file());
+in: decide
+find: decided.watched.note(state.pins_file(), clock);
 replace: let _ = state.pins_file();
 caught-by:
     extensions_reload::an_extension_approved_in_a_session_is_loaded_at_the_next_turn
 
 [break] pinned-project-way-unwatched
-rule: The names on the way to the project's folder of extensions are watched, each itself: a folder swapped for a link out is seen.
-file: crates/cineris-core/src/ext/found/pipeline.rs
-in: places
-find: for name in discover::PROJECT_FOLDER {
-replace: for name in discover::PROJECT_FOLDER.into_iter().take(0) {
+rule: The names on the way to the project's folder of extensions, as written, are stamped, each itself: a folder of extensions made in a session is looked in at the next turn.
+file: crates/cineris-core/src/ext/found.rs
+in: in_project
+find: watched.note(at.clone(), clock);
+replace: let _ = &at;
+occurrence: 1
 caught-by:
-    extensions_reload::a_projects_folder_swapped_for_a_link_out_is_withdrawn
+    extensions_review::a_projects_folder_of_extensions_made_in_a_session_is_looked_in_at_the_next_turn
 
 # ------------------------------------------------------------ start-up
 
@@ -3940,6 +3943,250 @@ find: let extensions = crate::ext::found::start(extensions);
 replace: let extensions = crate::ext::found::start(extensions); extensions.wait().await;
 caught-by:
     extensions_reload::with_an_extension_nothing_of_it_is_read_until_the_session_is_open
+
+# ------------------------------------------------------------ the full review
+
+[break] pinned-way-to-the-real-folder-unwatched
+rule: Where a project's folder of extensions really is, each name from the workspace down to it is stamped: a folder on the way, behind a link inside the workspace, swapped for a link out is seen.
+file: crates/cineris-core/src/ext/found.rs
+in: in_project
+find: watched.note(at.clone(), clock);
+replace: let _ = &at;
+occurrence: 2
+caught-by:
+    extensions_review::a_folder_on_the_way_to_a_linked_folder_of_extensions_swapped_for_a_link_out_is_seen
+
+[break] pinned-stamped-after-the-read
+rule: Each extension's folder is stamped before it is read, so that a change made as it is read is seen at the next look.
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: seen(Seen::Extension(root.source, &folder)); cineris_base::hook::point(AN_EXTENSION_IS_READ); let snapshot = Snapshot::read(&folder).map_err(|error| refused(&visible(&error.to_string())))?; cineris_base::hook::point(AN_EXTENSION_WAS_READ);
+replace: cineris_base::hook::point(AN_EXTENSION_IS_READ); let snapshot = Snapshot::read(&folder).map_err(|error| refused(&visible(&error.to_string())))?; cineris_base::hook::point(AN_EXTENSION_WAS_READ); seen(Seen::Extension(root.source, &folder));
+packages: cineris-core
+caught-by:
+    extensions_review::a_file_changed_as_its_folder_is_read_is_seen_at_the_first_turn
+
+[break] pinned-question-folder-unstamped
+rule: What the trust question read of a project's extensions is stamped as it read it: a folder changed while the question is open is withdrawn at the session's first look.
+file: crates/cineris-core/src/ext/found.rs
+in: in_project
+find: Seen::Extension(_, folder) => watched.note_tree(folder, clock)
+replace: Seen::Extension(_, folder) => drop(folder)
+caught-by:
+    extensions_review::a_folder_changed_while_the_question_is_open_is_pinned_as_listed_and_withdrawn
+
+[break] pinned-folders-within-unstamped
+rule: Every folder within an extension's is stamped, an empty one too: a file put in it is a change.
+file: crates/cineris-core/src/ext/watched.rs
+in: Watched::walk
+find: self.note(folder.to_path_buf(), clock);
+replace: if depth == 0 { self.note(folder.to_path_buf(), clock); }
+caught-by:
+    extensions_review::a_file_put_in_an_empty_folder_of_an_extension_is_a_change
+
+[break] pinned-unsettled-taken-as-settled
+rule: A place modified within two seconds of its stamp is taken as changed until that has passed: a second write in the same step of the file system's clock would leave its time and size as they were.
+file: crates/cineris-core/src/ext/watched.rs
+in: Watched::changed
+find: (now != *stamp || unsettled(stamp, *taken))
+replace: (now != *stamp || unsettled(stamp, *taken) && false)
+caught-by:
+    ext::watched::tests::a_change_is_seen_and_nothing_is_looked_at_through_a_link
+
+[break] pinned-file-identity-unseen
+rule: On Unix a stamp holds which file a place is, and when its metadata changed: a file replaced by another of the same size and time is a change.
+file: crates/cineris-core/src/ext/watched.rs
+find: Some((metadata.ino(), metadata.ctime(), metadata.ctime_nsec()))
+replace: Some((metadata.ino() * 0, metadata.ctime() * 0, 0))
+os: linux
+caught-by:
+    ext::watched::tests::a_file_replaced_with_the_same_size_and_time_is_a_change
+
+[break] pinned-looked-at-again-after-the-read
+rule: A folder is looked at again, itself, after it is read: one swapped for a link while it was read is left out.
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: match fs::symlink_metadata(&folder) {
+replace: match fs::metadata(&folder) {
+caught-by:
+    discover::a_folder_swapped_for_a_link_while_it_is_read_is_left_out
+
+[break] pinned-root-over-16-mib-read
+rule: At most 16 MiB are read from one root: past them the rest of its folders are left out, and counted.
+file: crates/cineris-ext/src/discover.rs
+in: look_in
+find: if bytes >= MAX_ROOT_BYTES {
+replace: if bytes >= MAX_ROOT_BYTES * 4 {
+caught-by:
+    discover::past_16_mib_a_root_the_rest_are_left_out_and_counted
+
+[break] pinned-unopened-root-takes-no-name
+rule: A root that is there and could not be opened (a file, a link to nothing) was not listed whole, and takes every name: a trusted project's extension is not used in the place of one of the user's.
+file: crates/cineris-ext/src/discover.rs
+in: each_root
+find: if discovered.left_out.len() > refused {
+replace: if discovered.left_out.len() > refused && false {
+packages: cineris-core
+caught-by:
+    extensions_review::a_users_folder_that_cannot_be_opened_takes_every_name
+
+[break] pinned-root-shown-raw
+rule: A root is shown as code it cannot end: a folder's name with a backtick cannot write sentences that seem the harness's after it.
+file: crates/cineris-ext/src/discover.rs
+in: Places::show
+find: in_code(&text.unwrap_or_else(|| real.as_str().to_owned())).into_owned()
+replace: cineris_base::visible(&text.unwrap_or_else(|| real.as_str().to_owned())).into_owned()
+packages: cineris-core
+caught-by:
+    extensions_review::a_folders_name_cannot_pose_as_what_the_harness_says
+
+[break] pinned-code-takes-a-backtick
+rule: Text shown as code has every backtick and backslash in it escaped, so that it cannot end its code.
+file: crates/cineris-base/src/visible.rs
+in: in_code
+find: if matches!(character, '\\' | '`') {
+replace: if matches!(character, '\\') {
+packages: cineris-base, cineris-core
+caught-by:
+    cineris-base visible::tests::text_in_code_cannot_end_its_code
+    cineris-core::it extensions_review::a_folders_name_cannot_pose_as_what_the_harness_says
+    cineris-core::it ext_exec::a_question_about_a_program_shows_its_line_as_code_it_cannot_end
+
+[break] pinned-exec-line-raw
+rule: The question about a program an extension runs shows its line as code it cannot end.
+file: crates/cineris-core/src/ext/exec.rs
+find: cineris_base::in_code(&line)
+replace: line.as_str()
+caught-by:
+    ext_exec::a_question_about_a_program_shows_its_line_as_code_it_cannot_end
+
+[break] pinned-unconfined-said-confined
+rule: Where an extension's programs are not confined on the system, the approval says so before anything else, and claims no limit they do not have.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: } else if confined {
+replace: } else if confined || !confined {
+caught-by:
+    ext::found::tests::what_an_extension_may_do_is_said_as_its_programs_are_confined_or_not
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+
+[break] pinned-confined-without-a-sandbox
+rule: An approval takes an extension's programs as confined only where the session's commands would be: the sandbox enforcing, and no write root holding the harness's files.
+file: crates/cineris-core/src/assemble.rs
+in: programs_confined
+find: sandbox == SandboxState::Enforcing
+replace: sandbox == SandboxState::Enforcing || sandbox != SandboxState::Enforcing
+caught-by:
+    extensions_found::a_projects_extension_is_listed_by_the_trust_question_in_words_and_loaded_after_a_yes
+    extensions_trust::an_authors_description_cannot_pose_as_what_the_harness_says
+
+[break] pinned-any-host-said-as-a-star
+rule: `net = ["*"]` is said as what it is: any host on the internet, including addresses on the user's own network that have public addresses.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words
+find: HostPattern::Any => ANY_HOST.to_owned(),
+replace: HostPattern::Any => "`*`".to_owned(),
+caught-by:
+    ext::found::tests::what_an_extension_may_do_is_said_as_its_programs_are_confined_or_not
+
+[break] pinned-way-followed-to-start
+rule: Before an extension's runtime starts, each name on the way to its folder is looked at itself: a folder on the way swapped for a link is not followed, and no runtime starts.
+file: crates/cineris-core/src/ext/watched.rs
+in: linked_on_the_way
+find: _ => return Some(at)
+replace: _ => {}
+caught-by:
+    extensions_review::a_folder_on_the_way_swapped_for_a_link_is_not_followed_to_start_a_runtime
+
+[break] pinned-registered-from-the-folder-now
+rule: Registration evaluates the snapshot whose hash is the pinned one: a folder changed while its registration waits changes nothing that is evaluated or kept.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+find: cineris_ext::engine::register(Arc::clone(&snapshot), self.parts.timer.as_ref())
+replace: cineris_ext::engine::register(Arc::new(cineris_ext::folder::Snapshot::read(&listed.folder).unwrap_or_else(|_| (*snapshot).clone())), self.parts.timer.as_ref())
+caught-by:
+    extensions_review::registration_evaluates_the_snapshot_whose_hash_is_pinned
+
+[break] pinned-failed-registration-evaluated-again
+rule: An extension whose registration failed is not evaluated again while its folder is as it was.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+find: || self.failed.contains(&hash)
+replace: || false
+caught-by:
+    extensions_review::a_registration_that_fails_is_said_once_and_not_evaluated_again
+
+[break] pinned-failed-registration-raw
+rule: What a script threw as it registered is said with every character that acts unseen escaped.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+find: visible(&error.to_string())
+replace: error.to_string()
+caught-by:
+    extensions_review::a_registration_that_fails_is_said_once_and_not_evaluated_again
+
+[break] pinned-told-again
+rule: What the session was told of its extensions is not said again when they are found and judged again.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::tell
+find: if self.told.insert(message.clone()) {
+replace: if self.told.insert(message.clone()) || true {
+caught-by:
+    extensions_review::what_the_session_was_told_is_not_said_again_at_a_later_look
+
+[break] pinned-wait-unsaid
+rule: A turn that has waited a few seconds for the session's extensions says what it waits for, and goes on waiting.
+file: crates/cineris-core/src/ext/found.rs
+in: Extensions::wait
+find: tell(WAITING.to_owned());
+replace: drop(tell);
+caught-by:
+    extensions_review::a_turn_that_waits_for_the_extensions_says_so_after_a_few_seconds
+
+[break] pinned-for-the-run-changed-unsaid
+rule: An extension approved for the session by a yes the store could not keep, and changed since, stands changed: the session says it changed.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: project_standing
+find: _ if for_the_run.iter().any(|run| run.name == definition.name) => Standing::Changed,
+replace: _ if false => Standing::Changed,
+caught-by:
+    extensions_review::an_extension_approved_for_the_session_and_changed_since_is_said_to_have_changed
+
+[break] pinned-question-read-dropped
+rule: What the trust question read is handed on with its answer, so that the session does not read the project's folder again.
+file: crates/cineris-core/src/assemble.rs
+find: answered.found = found;
+replace: drop(found);
+caught-by:
+    extensions_review::after_a_yes_what_the_question_read_is_not_read_again
+    extensions_review::a_folder_changed_while_the_question_is_open_is_pinned_as_listed_and_withdrawn
+
+[break] pinned-users-names-listed-for-nothing
+rule: The user's folder is listed for its names only when the project's folder holds an extension: a question with none looks at nothing of the user's.
+file: crates/cineris-core/src/assemble.rs
+find: let extensions = if found.found.is_empty() {
+replace: let extensions = if false {
+caught-by:
+    extensions_reload::with_no_extension_a_session_looks_once_a_folder_and_reads_nothing
+
+[break] pins-over-the-size-read
+rule: A pin store larger than any could be is refused whole, not read as far as the cap.
+file: crates/cineris-policy/src/trust/pins.rs
+find: if size > MAX_BYTES {
+replace: if size > MAX_BYTES * 2 {
+caught-by:
+    pins::a_pin_store_that_is_not_understood_pins_nothing_and_is_left_as_it_is
+
+
+[break] pinned-host-read-raw
+rule: The question about a script's read shows its path as code it cannot end.
+file: crates/cineris-core/src/ext/host.rs
+find: cineris_base::in_code(&path.data())
+replace: path.shown()
+occurrence: 1
+caught-by:
+    extensions::a_question_about_a_scripts_read_shows_its_path_as_code_it_cannot_end
 
 # From mutations/step-28-pins.breaks (part `pins`).
 # Step 28, the user's own pins (`pins.toml`, `cineris-policy`'s

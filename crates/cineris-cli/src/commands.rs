@@ -708,7 +708,9 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         "Its extensions, which trusting them would let run, as they are now:\n",
                     );
                     for extension in &extensions {
-                        listing.push_str(&format!("  {}\n", extension.detail));
+                        // The author's words on a line of their own.
+                        listing
+                            .push_str(&format!("  {}\n", extension.detail.replace('\n', "\n    ")));
                     }
                     out!("{listing}");
                     let at_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
