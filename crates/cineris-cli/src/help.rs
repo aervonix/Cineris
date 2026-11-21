@@ -59,8 +59,8 @@ Commands:
 
 Options:
   --with-extensions  With trust, where there is no terminal to ask at:
-                     approve the extensions and hooks it shows. At a
-                     terminal the question decides, and this flag is
+                     approve the project's extensions and hooks it shows.
+                     At a terminal the question decides, and this flag is
                      ignored
 
 Trusting a project lets its configuration choose a model, allow what its
