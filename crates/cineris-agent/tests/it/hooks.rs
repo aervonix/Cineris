@@ -985,9 +985,11 @@ fn a_hook_that_does_not_answer_in_its_time_refuses_on_the_sessions_timer() {
 #[test]
 fn an_observer_is_never_waited_for_and_its_answer_is_not_read() {
     for (named, given) in [(None, 60), (Some(3_600), 600)] {
+        // Two reads: nothing either does is a change, so neither is decided
+        // again, and the observer is run once for each.
         let response = calls(&[
-            ("c1", "write", json!({"path": "a"})),
-            ("c2", "write", json!({"path": "b"})),
+            ("c1", "read", json!({"path": "a"})),
+            ("c2", "read", json!({"path": "b"})),
         ]);
         let Hooked {
             world,
@@ -995,9 +997,11 @@ fn an_observer_is_never_waited_for_and_its_answer_is_not_read() {
             hooks,
             timer,
         } = hooked("hook_observer", [response, says("Done.")]);
+        // Whichever call comes to it first, the observer never answers it,
+        // and refuses the other.
         let mut watching = FakeHook::on("watching", HookEvent::ToolBefore)
             .observing()
-            .tool("write")
+            .tool("read")
             .replies([Reply::Never, answer(json!({"decision": "deny"}))]);
         if let Some(named) = named {
             watching = watching.timeout(Duration::from_secs(named));
@@ -1012,8 +1016,8 @@ fn an_observer_is_never_waited_for_and_its_answer_is_not_read() {
             crate::settle().await;
         });
         assert_eq!(watching.inputs().len(), 2);
-        assert_eq!(world.log.count("end write a"), 1);
-        assert_eq!(world.log.count("end write b"), 1, "its deny was not read");
+        assert_eq!(world.log.count("end read a"), 1);
+        assert_eq!(world.log.count("end read b"), 1, "its deny was not read");
         assert!(rig.policy.asked().is_empty());
         assert!(timer.running().is_empty(), "stopped at its time");
     }
