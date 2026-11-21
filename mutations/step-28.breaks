@@ -5677,13 +5677,21 @@ caught-by:
     cineris-ext skills::tests::a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out
 
 [break] a-root-is-read-past-its-entry-cap
-rule: At most 1,000 entries are looked at in a root, and the rest are said not to have been.
+rule: At most 100 entries are looked at in a root, and the rest are said not to have been.
 file: crates/cineris-ext/src/skills.rs
 in: look_in
 find: names.len() == MAX_ENTRIES
 replace: false
 caught-by:
-    cineris-ext skills::tests::a_root_with_more_than_a_thousand_entries_is_looked_at_only_so_far
+    cineris-ext skills::tests::a_root_with_more_than_a_hundred_entries_is_looked_at_only_so_far
+
+[break] a-root-is-read-to-a-thousand-entries
+rule: A root's entries are looked at to 100, not to the 1,000 they were before step 28's re-check: a repository's roots are stamped at every turn's start.
+file: crates/cineris-ext/src/skills.rs
+find: pub const MAX_ENTRIES: usize = 100;
+replace: pub const MAX_ENTRIES: usize = 1_000;
+caught-by:
+    cineris-ext skills::tests::a_root_with_more_than_a_hundred_entries_is_looked_at_only_so_far
 
 [break] a-folder-linked-out-of-its-root-is-followed
 rule: A skill's folder reached through a link is followed only where it stays below its root: not out of it, and not to the root itself.

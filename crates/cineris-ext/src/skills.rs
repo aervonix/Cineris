@@ -97,8 +97,12 @@ pub const MAX_SKILL_BYTES: u64 = 64 * 1024;
 pub const MAX_ROOT_BYTES: u64 = 8 * 1024 * 1024;
 /// The most entries looked at in one root. Every entry counts, a file
 /// beside the skills' folders too, since each costs a look; past it the
-/// rest of the root is not read, and that is said.
-pub const MAX_ENTRIES: usize = 1_000;
+/// rest of the root is not read, and that is said. A repository's three
+/// roots are looked in whether or not it is trusted, and each entry is
+/// stamped again at every turn's start: at 1,000 that cost about 70 ms a
+/// turn on a hosted Windows runner, so the maintainers set 100 after step
+/// 28's re-check.
+pub const MAX_ENTRIES: usize = 100;
 /// The longest a skill's name is shown, in bytes.
 pub const MAX_NAME_BYTES: usize = 64;
 /// The longest a skill's description is shown, in bytes.
