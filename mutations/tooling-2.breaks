@@ -162,10 +162,41 @@ caught-by:
 rule: Each job builds in a directory of its own.
 file: xtask/src/mutate/drive.rs
 in: CargoRunner::new
-find: target: scratch.join(jobs::numbered("target", job))
-replace: target: scratch.join("target")
+find: target = scratch.join(jobs::numbered("target", job))
+replace: target = scratch.join("target")
 caught-by:
     mutate::drive::tests::each_job_has_a_build_directory_and_a_log_of_its_own
+
+# Added with the fix of two jobs' tests sharing one scratch base: under one
+# CINERIS_TEST_TMPDIR for the whole command, each test's two copies removed
+# and filled one folder, and a slow test failed by the other job's doing.
+
+[break] jobs-share-one-scratch-base
+rule: Each job's tests make their scratch folders under a base of the job's own, never another job's.
+file: xtask/src/mutate/drive.rs
+in: tests_base
+find: parent.join(format!("job-{}", job + 1))
+replace: parent.join("job-1")
+caught-by:
+    mutate::drive::tests::no_two_jobs_give_their_tests_one_scratch_base
+
+[break] tests-not-given-their-scratch-base
+rule: Cargo is started with the job's own scratch base as its tests' CINERIS_TEST_TMPDIR.
+file: xtask/src/mutate/drive.rs
+in: CargoRunner::command
+find: .env(TESTS_BASE, &self.tests)
+replace:
+caught-by:
+    mutate::drive::tests::each_jobs_cargo_is_given_the_jobs_own_scratch_base_for_its_tests
+
+[break] tests-scratch-base-left-behind
+rule: A job's tests' scratch base is removed after each run of them, whatever the run came to.
+file: xtask/src/mutate/drive.rs
+in: in_tests_base
+find: let _ = crate::combine::remove_tree(base);
+replace:
+caught-by:
+    mutate::drive::tests::the_tests_scratch_base_is_made_before_their_run_and_removed_after_whatever_it_came_to
 
 [break] watch-limit-of-a-system-test
 rule: The watch gives a system test the 60 s nextest gives it.
