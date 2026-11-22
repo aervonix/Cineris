@@ -903,7 +903,20 @@ impl Core {
             probe();
         }
         // The session's extensions, found now that the loop runs, off the
-        // path that opens it: the first turn waits for them (step 28).
+        // path that opens it: the first turn waits for them (step 28), and
+        // for the `session.start` hooks of those it loads, whose context is
+        // a notice of the hook's.
+        #[cfg(feature = "scripts")]
+        let extensions = extensions.map(|mut finding| {
+            let notice = handle.clone();
+            finding.session_start = Some(crate::ext::SessionStart {
+                session: handle.id().clone(),
+                notice: Arc::new(move |text: String| {
+                    notice.notice(cineris_protocol::item::NoticeSource::Hook, text);
+                }),
+            });
+            finding
+        });
         let extensions = crate::ext::found::start(extensions);
         // The repository index's first pass, now that the loop runs: never
         // on the path that puts the session together. With no map there is

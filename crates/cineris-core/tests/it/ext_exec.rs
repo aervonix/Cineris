@@ -39,7 +39,7 @@ fn extension(world: &World, name: &str, capabilities: &str) -> ApprovedExtension
 }
 
 /// [`extension`] with `script` as its main module.
-fn extension_running(
+pub(crate) fn extension_running(
     world: &World,
     name: &str,
     capabilities: &str,
@@ -84,7 +84,7 @@ fn echo_program() -> PathBuf {
 /// Puts this binary in `dir`, outside the workspace, as `name` (with
 /// `.exe` on Windows): a link to it on Unix, a hard link or a copy on
 /// Windows. Returns its path.
-fn place_echo(dir: &Path, name: &str) -> PathBuf {
+pub(crate) fn place_echo(dir: &Path, name: &str) -> PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     #[cfg(unix)]
     {
@@ -104,7 +104,7 @@ fn place_echo(dir: &Path, name: &str) -> PathBuf {
 
 /// The environment of the world's programs with `folders` first on
 /// `PATH`, and `extra`.
-fn path_with(
+pub(crate) fn path_with(
     world: &World,
     folders: &[&Path],
     extra: &[(&str, &str)],
@@ -132,7 +132,7 @@ fn echo_on_path(world: &World) -> Vec<(std::ffi::OsString, std::ffi::OsString)> 
 }
 
 /// The arguments that make this binary the echo, before `given`.
-fn echo_args(given: &[&str]) -> Vec<String> {
+pub(crate) fn echo_args(given: &[&str]) -> Vec<String> {
     ["--exact", "launcher_entry", "--nocapture", ECHO, "--"]
         .iter()
         .chain(given)

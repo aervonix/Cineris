@@ -12,9 +12,19 @@
 //! once" and "deny", and no answer to it keeps a rule. A write of a
 //! protected path is refused before the engine is asked, at every level
 //! (`super::protected`).
+//!
+//! **A hook's host calls** (the call's [`Phase::Hook`]): a hook decides by
+//! its answer and never puts a question (`docs/steps/28/answered.md`,
+//! points 2 and 6), so a call the engine would ask about is refused, naming
+//! the rule that would allow it; so is one the engine would allow as only
+//! reading where that reading may not be the program's. A hook may not ask
+//! the user, nor write (`cineris_ext::host::serve` refuses both first).
+//! Everything else is decided as a tool's host call is, the policy's stop
+//! of the turn included.
 
 use std::io::Read as _;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use cineris_agent::{Decision, PlannedCall, Policy as _, Verdict};
 
@@ -22,7 +32,7 @@ pub(crate) use crate::policy::HostQuestion;
 use cineris_base::path::ResolvedPath;
 use cineris_ext::host::{
     ExecOutput, ExecRequest, FS_MAX_BYTES, FetchOutput, FetchRequest, Host, HostError, HostFuture,
-    Listing, ManifestGate, Scope,
+    Listing, ManifestGate, Phase, Scope,
 };
 use cineris_protocol::lease::RuleAction;
 use cineris_tools::{
@@ -50,11 +60,24 @@ pub(crate) struct CallHost<'a> {
     pub(crate) source: cineris_ext::source::Source,
     /// What the script said it is doing, for the call's output.
     pub(crate) progress: &'a Mutex<Vec<String>>,
+    /// Which call of the extension it is: a tool's, or a hook's, whose
+    /// host calls put no question.
+    pub(crate) phase: Phase,
+    /// Set when a host call found its turn stopped already, by the
+    /// policy's stop: a stop its call then ends with is not one it made.
+    pub(crate) found_stopped: AtomicBool,
 }
 
 impl CallHost<'_> {
+    /// Whether a host call found the call's turn stopped by someone else's
+    /// stop: then a stop its call ends with is not its own.
+    pub(crate) fn found_stopped(&self) -> bool {
+        self.found_stopped.load(Ordering::SeqCst)
+    }
+
     /// Decides one host call: the policy's answer, or the person's when it
-    /// asks, as `how` says it is put. `Ok` when it may run.
+    /// asks, as `how` says it is put. `Ok` when it may run. A hook's call
+    /// is never put: where the engine would ask, it is refused.
     pub(crate) async fn decide(
         &self,
         summary: String,
@@ -100,9 +123,18 @@ impl CallHost<'_> {
                     reason.unwrap_or_else(|| "the permission rules refuse it".to_owned()),
                 ));
             }
-            Decision::Stop { reason } => return Err(HostError::Stopped(reason)),
+            Decision::Stop { reason } => {
+                self.found_stopped.store(true, Ordering::SeqCst);
+                return Err(HostError::Stopped(reason));
+            }
             Decision::Ask => {}
             _ => return Err(HostError::Denied("it was not allowed".to_owned())),
+        }
+        // A hook decides by its answer: it never puts a question, and what
+        // the engine would ask about is refused, saying what would allow it
+        // (`docs/steps/28/answered.md`, point 2).
+        if self.phase == Phase::Hook {
+            return Err(HostError::NotHere(self.no_question(&planned, &how)));
         }
         match self.parts.policy.ask_with(planned, Some(how)).await {
             Verdict::Allow => Ok(()),
@@ -119,6 +151,71 @@ impl CallHost<'_> {
                 Err(HostError::Stopped(reason))
             }
             _ => Err(HostError::Denied("it was not allowed".to_owned())),
+        }
+    }
+
+    /// Why a hook's host call that the engine would ask about is refused,
+    /// for the script: a hook puts no question, and what would let the call
+    /// run unasked, the rules the engine would offer to keep (or why none
+    /// can).
+    fn no_question(&self, planned: &PlannedCall<'_>, how: &HostQuestion) -> String {
+        let lead = "a hook may not put a question, and the permission engine would ask about this";
+        let rule = |effect: &str, pattern: &str| {
+            let pattern = serde_json::to_string(pattern).unwrap_or_default();
+            format!(
+                "`{}`",
+                cineris_base::in_code(&format!(
+                    "effect = \"{effect}\", match = {pattern}, action = \"allow\""
+                ))
+            )
+        };
+        match self.parts.policy.outcome(planned) {
+            cineris_policy::Outcome::Ask(question) if question.managed => format!(
+                "{lead}: a rule of the managed configuration asks about it, for a person to \
+                 decide each time, so no hook can run it"
+            ),
+            cineris_policy::Outcome::Ask(question) => {
+                let rules: Vec<String> = question
+                    .lifts
+                    .iter()
+                    .map(|lift| rule(lift.effect.as_str(), &lift.pattern))
+                    .collect();
+                let reasons = cineris_base::visible(&question.reasons.join(" ")).into_owned();
+                match rules.as_slice() {
+                    [] => {
+                        format!("{lead} ({reasons}), and no permission rule can allow it unasked")
+                    }
+                    [one] => {
+                        format!(
+                            "{lead} ({reasons}). A permission rule that allows it lets it run: {one}"
+                        )
+                    }
+                    more => format!(
+                        "{lead} ({reasons}). The permission rules that allow it let it run: {}",
+                        more.join(" and ")
+                    ),
+                }
+            }
+            // A program's line the engine reads as only reading, in a shell
+            // whose own commands are not the program that runs: asked about
+            // as `how` says, and allowed by a rule of its line.
+            _ if how.read_only_asks => {
+                let lines: Vec<String> = planned
+                    .plan
+                    .effects
+                    .iter()
+                    .filter_map(|effect| match effect {
+                        cineris_tools::Effect::Exec { command, .. } => Some(rule("exec", command)),
+                        _ => None,
+                    })
+                    .collect();
+                format!(
+                    "{lead}: what it reads as only reading may be another program than the one \
+                     that runs. A permission rule that allows it lets it run: {}",
+                    lines.join(" and ")
+                )
+            }
+            _ => lead.to_owned(),
         }
     }
 

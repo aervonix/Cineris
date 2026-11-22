@@ -183,7 +183,7 @@ fn records(front: &Front, world: &World) -> Vec<Value> {
 }
 
 /// Every project's file of values in the state directory.
-fn project_files(world: &World) -> Vec<PathBuf> {
+pub(crate) fn project_files(world: &World) -> Vec<PathBuf> {
     let projects = world.dirs().state.unwrap().join("projects");
     let mut found = Vec::new();
     for project in std::fs::read_dir(projects).into_iter().flatten().flatten() {

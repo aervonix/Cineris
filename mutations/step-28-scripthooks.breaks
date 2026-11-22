@@ -1,0 +1,163 @@
+# Step 28: script hooks, an extension's registered hooks on the loop's seam
+# and on the session's own events (docs/steps/28/answered.md, points 2, 6
+# and 8). Each rule of their run is broken here: on the seam beside the hook
+# commands, given the event's object, heard as the loop hears a hook, their
+# time from when they are asked, their run their own and stopped when it is
+# let go, their host calls a hook's (no question, under the hook's name),
+# nothing of them in a stopped turn, a stop of their own told, and only
+# while their extension is loaded as approved.
+
+[break] an-extensions-hooks-are-off-the-seam
+rule: The hooks a loaded extension registered are on the loop's points beside the hook commands: the seam's `matching` gives them.
+file: crates/cineris-core/src/ext/hook_points.rs
+find: matched.extend(self.scripts.matching(event, target));
+replace: let _ = self.scripts.matching(event, target);
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+
+[break] an-extensions-hooks-are-put-on-no-event
+rule: Registering a loaded extension puts the hooks it registered on their events.
+file: crates/cineris-core/src/ext/tools.rs
+find: hooks.add(&loaded)
+replace: { let _ = (hooks, &loaded); }
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+
+[break] a-hook-is-given-another-input
+rule: A script hook's function is given the event's object, `HookInput::to_json`, as a hook command is given it on its standard input.
+file: crates/cineris-core/src/ext/script_hooks.rs
+find: input.to_json()
+replace: serde_json::json!({})
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+
+[break] a-hooks-failure-is-no-opinion
+rule: A script hook that throws, or cannot run, has failed, which refuses where a hook gates.
+file: crates/cineris-core/src/ext/script_hooks.rs
+find: HookRan::Failed(why) => Heard::Failed(failed(name, &why))
+replace: HookRan::Failed(_) => Heard::Nothing
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+
+[break] a-hooks-answer-past-its-cap-is-heard
+rule: A script hook's answer is at most 64 KiB of JSON, as a hook command's is: a larger one is a failure.
+file: crates/cineris-core/src/ext/script_hooks.rs
+find: if size > MAX_ANSWER {
+replace: if size > 1024 * MAX_ANSWER {
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+
+[break] an-observing-hook-is-heard
+rule: A script hook registered with `observe: true` is an observer: never waited for, and its answer not read.
+file: crates/cineris-core/src/ext/script_hooks.rs
+find: observe: definition.observe
+replace: observe: definition.observe && false
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+
+[break] two-hooks-on-an-event-share-a-name
+rule: An extension's hooks on one event are told apart by their names: the second on it is `<extension>/hook.<event>.2`.
+file: crates/cineris-core/src/ext/script_hooks.rs
+find: let name = if *count == 1 {
+replace: let name = if *count >= 1 {
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hook_waiting_for_its_runtime_spends_its_own_time
+
+[break] a-hooks-host-call-puts-its-question
+rule: A hook's host call that the permission engine would ask about is refused, saying a hook may not put a question and naming the rule that would allow it: nobody is asked, so a hook runs only what the engine allows outright.
+file: crates/cineris-core/src/ext/host.rs
+find: if self.phase == Phase::Hook {
+replace: if self.phase == Phase::Evaluation {
+caught-by:
+    cineris-core::it extensions_hooks::a_hooks_host_calls_put_no_question
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
+
+[break] a-hooks-call-is-a-tools
+rule: A script hook's call is a hook's (`Phase::Hook`): its host calls put no question, and it may not ask the user or write.
+file: crates/cineris-core/src/ext/tools.rs
+find: phase: Phase::Hook
+replace: phase: Phase::Tool
+caught-by:
+    cineris-core::it extensions_hooks::a_hooks_host_calls_put_no_question
+
+[break] a-hooks-host-calls-are-decided-under-another-name
+rule: A hook's host calls are decided under the hook's name, `<extension>/hook.<event>`, so that a rule about the extension (`deny ext probe/*`) reaches them.
+file: crates/cineris-core/src/ext/tools.rs
+find: full_name: name
+replace: full_name: "hook"
+caught-by:
+    cineris-core::it extensions_hooks::a_hooks_host_calls_put_no_question
+
+[break] a-stopped-turns-hook-starts
+rule: A script hook asked after its turn stopped does not start, as a hook command does not: nothing of it runs, and it is no stop of its own. A host call of one that did start is refused by the policy's stop all the same, so this is shown by a hook that makes none.
+file: crates/cineris-core/src/ext/script_hooks.rs
+find: if policy.stopped_turn(turn_number(&self.turn)).is_some() {
+replace: if policy.stopped_turn(turn_number(&self.turn)).is_some() && false {
+caught-by:
+    cineris-core::it extensions_hooks::after_a_stop_of_the_turn_its_extensions_hooks_run_nothing
+
+[break] a-hooks-run-let-go-goes-on
+rule: Dropped, a script hook's run's future stops it, even before its first poll: its call is withdrawn, and no runtime is made for it.
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: StopOnDrop::drop
+find: self.0.cancel();
+replace: let _ = &self.0;
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hooks_runs_are_its_own_and_bounded
+
+[break] a-turn-ends-hook-runs-past-its-cap
+rule: A waited-for `turn.end` script hook has at most four runs going at once, as a hook command has: a fifth is not started, and says so.
+file: crates/cineris-core/src/ext/script_hooks.rs
+find: self.running.load(Ordering::Acquire) >= TURN_END_AT_ONCE
+replace: self.running.load(Ordering::Acquire) >= 1024 * TURN_END_AT_ONCE
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hooks_runs_are_its_own_and_bounded
+
+[break] a-withdrawn-extensions-hooks-stay
+rule: An extension withdrawn from the session takes its hooks off their events with it.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+find: self.scripts.withdraw(&gone.1);
+replace: let _ = &gone.1;
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_only_while_it_stands_approved
+
+[break] an-extensions-session-start-hook-is-not-heard
+rule: The `session.start` hooks of the extensions a session loads as it opens are heard before its first turn, each one's context a notice of the hook's.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+find: scripts.session_started(started, &*tell).await;
+replace: let _ = (started, &tell);
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hooks_run_as_its_session_opens_and_closes
+
+[break] an-extensions-session-end-hook-does-not-run
+rule: A session's extensions' `session.end` hooks run as it closes, beside its hook commands', within the same five seconds.
+file: crates/cineris-core/src/ext/hook_command.rs
+find: let scripts = self.scripts.session_ending(session);
+replace: let scripts = self.scripts.session_ending(session).into_iter().take(0).collect::<Vec<_>>();
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hooks_run_as_its_session_opens_and_closes
+
+[break] a-hooks-own-stop-is-not-told
+rule: A stop that a script hook's own program's look at the protected paths makes is told to the user at once and holds back the next prompt, as a hook command's is.
+os: linux
+file: crates/cineris-core/src/ext/script_hooks.rs
+find: self.commands.stopped(&self.name, &self.turn, note);
+replace: let _ = note;
+caught-by:
+    cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
+
+[break] a-hooks-time-up-in-the-queue-stops-the-runtime
+rule: A hook's call whose time is up while it waits for its turn is withdrawn before it starts, and the call the runtime serves goes on.
+file: crates/cineris-ext/src/engine/mod.rs
+find: Event::Deadline if withdrawn(&claim)
+replace: Event::Deadline if false && withdrawn(&claim)
+caught-by:
+    cineris-ext::it engine::a_hooks_time_runs_from_when_it_was_asked
+
+[break] a-hooks-time-runs-from-its-start
+rule: A hook's time runs from when it was asked: its deadline is what was left of its time when its call was sent, so that its wait for its turn counts.
+file: crates/cineris-ext/src/engine/mod.rs
+find: cx.timer.sleep(cx.time.saturating_sub(waited))
+replace: cx.timer.sleep(cx.time)
+caught-by:
+    cineris-ext::it engine::a_hooks_time_runs_from_when_it_was_asked

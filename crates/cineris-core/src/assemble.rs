@@ -2927,7 +2927,7 @@ pub(crate) fn assemble(
     #[cfg(feature = "scripts")]
     let ext_parts = {
         let tell_hooks = Arc::clone(&hooks);
-        let parts = Arc::new(crate::ext::HostParts {
+        Arc::new(crate::ext::HostParts {
             policy: Arc::clone(&policy),
             timer: Arc::clone(&options.timer),
             clock: Arc::clone(&options.clock),
@@ -2977,12 +2977,34 @@ pub(crate) fn assemble(
             }),
             tell: Arc::new(move |message: String| tell_hooks.tell(message)),
             state: Arc::clone(&ext_state),
-        });
-        for left_out in crate::ext::register(options.extensions.clone(), &parts, &registry) {
-            told.push(left_out);
-        }
-        parts
+        })
     };
+    // What runs the session's hooks: its hook commands, and the hooks of the
+    // extensions it loads, which are put on their events as each is.
+    #[cfg(feature = "scripts")]
+    let hook_commands = Arc::new(crate::ext::HookCommands::new(
+        Arc::clone(&ext_parts),
+        Arc::clone(&content),
+        cancel.child(),
+        {
+            let sink = Arc::clone(&sink);
+            Arc::new(move || sink.running_turn())
+        },
+    ));
+    #[cfg(feature = "scripts")]
+    let script_hooks = Arc::new(crate::ext::ScriptHooks::new(
+        Arc::clone(&hook_commands),
+        Arc::clone(&resolver),
+    ));
+    #[cfg(feature = "scripts")]
+    for left_out in crate::ext::register(
+        options.extensions.clone(),
+        &ext_parts,
+        &registry,
+        &script_hooks,
+    ) {
+        told.push(left_out);
+    }
     // The session's hook commands (step 28): the user's own, and the
     // project's that are approved as they are now, while it is trusted.
     // The store's reading the trust was worked out from decides a
@@ -3021,17 +3043,10 @@ pub(crate) fn assemble(
         Arc::new(crate::ext::SessionHooks {
             hooks: in_session.hooks,
             refused: in_session.refused,
-            commands: Arc::new(crate::ext::HookCommands::new(
-                Arc::clone(&ext_parts),
-                Arc::clone(&content),
-                cancel.child(),
-                {
-                    let sink = Arc::clone(&sink);
-                    Arc::new(move || sink.running_turn())
-                },
-            )),
+            commands: Arc::clone(&hook_commands),
             paths: Arc::clone(&resolver),
             starting: tokio::sync::Mutex::new(None),
+            scripts: Arc::clone(&script_hooks),
         })
     };
     #[cfg(not(feature = "scripts"))]
@@ -3077,6 +3092,9 @@ pub(crate) fn assemble(
         // default: read once, for the session.
         read_skill_folders: settings.permissions.read_skill_folders,
         prompt: Arc::clone(&prompt_parts),
+        scripts: Arc::clone(&script_hooks),
+        // Set by the core once the session is open.
+        session_start: None,
         cancel: options.cancel.child(),
     });
     // Without the script engine there is nothing to load.

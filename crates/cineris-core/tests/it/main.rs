@@ -40,6 +40,8 @@ mod extensions;
 #[cfg(feature = "scripts")]
 mod extensions_found;
 #[cfg(feature = "scripts")]
+mod extensions_hooks;
+#[cfg(feature = "scripts")]
 mod extensions_prompt;
 #[cfg(feature = "scripts")]
 mod extensions_reload;

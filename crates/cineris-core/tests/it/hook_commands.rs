@@ -265,6 +265,11 @@ pub(crate) fn for_edit(paths: &[&str]) -> HookRun {
 ///   refused before anyone is asked (`check_replacement`);
 /// - one that asks about a call the rules allow has the question put all
 ///   the same, saying which hook asked;
+/// - an extension's hook (a script's, beside the commands) runs a program
+///   a rule allows, and is refused one the engine would ask about, naming
+///   the rule that would allow it: a hook puts no question, so at
+///   `supervised` it runs only what the engine allows outright
+///   (`docs/steps/28/answered.md`, point 2);
 /// - one whose turn is interrupted while it runs, its own time far off, is
 ///   stopped, its process with it (M3).
 #[test]
@@ -287,6 +292,8 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
             crate::calls(&[("c5", "write", json!({"path": "notes.txt", "content": "x"}))]),
             crate::says("Done."),
             crate::calls(&[("c6", "outline", json!({"path": "src/a.rs"}))]),
+            crate::says("Done."),
+            crate::calls(&[("c8", "tool_search", json!({"query": "anything"}))]),
             crate::says("Done."),
             crate::calls(&[("c7", "shell", json!({"command": "echo never"}))]),
         ],
@@ -368,12 +375,48 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
                 &stuck.command,
                 "tools = [\"shell\"]\ntimeout = \"50s\"",
             ),
+            // An extension's hook's program: allowed by this rule alone.
+            "[[permissions.rules]]\neffect = \"exec\"\nmatch = \"probe-echo *\"\naction = \
+             \"allow\"\n"
+                .to_owned(),
         ]
         .concat(),
     );
     world.put("src/a.rs", "fn main() {}\n");
-    let env = world.shell_env(&[("ANTHROPIC_API_KEY", "sk-test-not-for-hooks")]);
-    let core = world.core_with(|options| options.shell_env = Some(env));
+    // An extension whose hook runs two programs on `PATH`: one the rule
+    // above allows, and one the engine would ask about.
+    let programs = world.dir.join("programs");
+    crate::ext_exec::place_echo(&programs, "probe-echo");
+    crate::ext_exec::place_echo(&programs, "probe-asked");
+    let words = |given: &str| serde_json::to_string(&crate::ext_exec::echo_args(&[given])).unwrap();
+    let gatekeeper = crate::ext_exec::extension_running(
+        &world,
+        "gatekeeper",
+        "exec = [\"probe-echo\", \"probe-asked\"]\nhooks = [\"tool.before\"]",
+        &format!(
+            "cineris.on('tool.before', {{ tools: ['tool_search'] }}, async () => {{\n\
+               const allowed = await cineris.exec('probe-echo', {});\n\
+               let asked;\n\
+               try {{ await cineris.exec('probe-asked', {}); asked = 'ran'; }}\n\
+               catch (err) {{ asked = String(err); }}\n\
+               const reported = allowed.stdout.includes('{}') ? ' and reported' : '';\n\
+               return {{ decision: 'deny', reason: 'allowed ran with ' + allowed.code + reported \
+             + '; asked: ' + asked }};\n\
+             }});\n",
+            words("allowed"),
+            words("asked"),
+            crate::ECHO_MARK,
+        ),
+    );
+    let env = crate::ext_exec::path_with(
+        &world,
+        &[&programs],
+        &[("ANTHROPIC_API_KEY", "sk-test-not-for-hooks")],
+    );
+    let core = world.core_with(|options| {
+        options.shell_env = Some(env);
+        options.extensions = vec![gatekeeper];
+    });
     world.run(async {
         let front = Front::start(&world, &core).await;
         front.answering(crate::Answering::allow_all());
@@ -560,6 +603,25 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
         // Allowed, it ran: this session has no index to outline from.
         assert_ne!(*outcome, "denied", "{text}");
 
+        // An extension's hook runs the program a rule allows, and is
+        // refused the one the engine would ask about, with the rule that
+        // would allow it: nobody is asked.
+        let asked_before = front.approvals().len();
+        front.turn("search the tools").await;
+        let results = front.results();
+        let (tool, outcome, text) = &results[6];
+        assert_eq!(tool, "tool_search");
+        assert_eq!(*outcome, "denied", "{text}");
+        assert!(text.contains("`gatekeeper/hook.tool.before`"), "{text}");
+        assert!(text.contains("allowed ran with 7 and reported"), "{text}");
+        assert!(
+            text.contains("asked: Error: a hook may not put a question")
+                && text.contains("effect = \"exec\"")
+                && text.contains("probe-asked"),
+            "{text}"
+        );
+        assert_eq!(front.approvals().len(), asked_before, "nobody was asked");
+
         // One whose turn is interrupted while it runs: stopped, though its
         // time is far off.
         let started = std::cell::Cell::new(None);
@@ -630,6 +692,10 @@ mod confined {
     /// question was open does not run, whatever the answer. One made late
     /// by a hook of an earlier turn leaves the running turn going, and
     /// refuses the prompt queued behind it, which goes back to its sender.
+    /// An extension's hook whose program's look finds a protected path
+    /// changed by hand is stopped by it in the same way: the user told at
+    /// once, and the next prompt held back. (A program whose line names a
+    /// protected path is one the engine asks about, which no hook runs.)
     #[test]
     fn sys_a_hooks_writes_are_confined_and_looked_at() {
         if !enforcing_here() {
@@ -659,10 +725,40 @@ mod confined {
                     &this_binary("write", &[".github/workflows/x.yml"]),
                     "write = true",
                 ),
+                // The extension's hook's program: allowed by this rule.
+                format!(
+                    "[[permissions.rules]]\neffect = \"exec\"\nmatch = {}\naction = \
+                     \"allow\"\n",
+                    serde_json::to_string(&format!(
+                        "{} *",
+                        std::env::current_exe().unwrap().display()
+                    ))
+                    .unwrap()
+                ),
             ]
             .concat(),
         );
-        let core = world.core_with(|options| options.launcher = Some(launcher()));
+        // An extension whose hook, on an event no turn reaches, runs a
+        // program with a write root.
+        let writes = this_binary("write", &["guarded.txt"]);
+        let guard = crate::ext_exec::extension_running(
+            &world,
+            "guard",
+            &format!(
+                "exec = [{}]\nwrite = [\"**\"]\nhooks = [\"compaction.before\"]",
+                serde_json::to_string(&writes[0]).unwrap()
+            ),
+            &format!(
+                "cineris.on('compaction.before', async () => {{ await cineris.exec({}, {}); \
+                 return {{ context: 'wrote' }}; }});\n",
+                serde_json::to_string(&writes[0]).unwrap(),
+                serde_json::to_string(&writes[1..]).unwrap()
+            ),
+        );
+        let core = world.core_with(|options| {
+            options.launcher = Some(launcher());
+            options.extensions = vec![guard];
+        });
         world.run(async {
             let front = Front::start(&world, &core).await;
             let after = || HookRun {
@@ -813,6 +909,35 @@ mod confined {
                 returned.parts,
                 [Part::text("next")],
                 "a prompt refused by a later stop did not come back to its sender"
+            );
+            // A protected path changed by hand: an extension's hook's
+            // program's own look finds it before the start and stops the
+            // turn, told at once, and the next prompt is held back, as a hook
+            // command's stop is.
+            world.put(".github/workflows/by-hand.yml", "on: push\n");
+            let said = core
+                .hook_runs_at_its_point(&front.session, "guard/hook.compaction.before", 1)
+                .await
+                .unwrap();
+            assert!(
+                said[0].as_deref().is_some_and(|why| {
+                    why.contains("changed since the last command") && why.contains("by-hand.yml")
+                }),
+                "{said:?}"
+            );
+            assert!(world.read("guarded.txt").is_none(), "the program ran");
+            front.drain();
+            assert!(
+                front.notices().iter().any(|notice| notice.contains(
+                    "The hook `guard/hook.compaction.before` was stopped by the look at the \
+                     protected paths"
+                )),
+                "{:?}",
+                front.notices()
+            );
+            assert_eq!(
+                front.turn("after the guard").await.outcome,
+                TurnOutcome::Denied
             );
             front.close().await;
         });

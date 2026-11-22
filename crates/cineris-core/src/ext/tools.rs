@@ -1,11 +1,13 @@
 //! An extension's tools in a session, run by the script engine.
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use cineris_base::path::AbsPath;
 use cineris_base::{SharedClock, SharedTimer};
 use cineris_ext::capability::Capabilities;
 use cineris_ext::engine::{CallContext, CallError, ScriptRuntime, Source, Target};
+use cineris_ext::host::Phase;
 use cineris_ext::registration::ToolDef;
 use cineris_protocol::lease::RuleAction;
 use cineris_tools::{
@@ -86,8 +88,88 @@ impl LoadedExtension {
         })
     }
 
-    fn name(&self) -> &str {
+    /// The extension's name.
+    pub(crate) fn name(&self) -> &str {
         &self.approved.manifest.name
+    }
+
+    /// What the extension was approved as: its manifest, and what it
+    /// registered then.
+    pub(crate) fn approved(&self) -> &ApprovedExtension {
+        &self.approved
+    }
+
+    /// What its calls are served with.
+    pub(crate) fn parts(&self) -> &Arc<HostParts> {
+        &self.parts
+    }
+
+    /// Runs the extension's hook `index`, called `name`, with `input`, as
+    /// a call of its runtime's own queue (`docs/steps/28/answered.md`, "The
+    /// runtime"): its time, `timed`, began when it was asked, so that its
+    /// wait for its turn is within it, and a call still waiting when it is
+    /// up is withdrawn before it starts. Its host calls are a hook's: they
+    /// put no question ([`Phase::Hook`]).
+    pub(crate) async fn call_hook(
+        &self,
+        index: usize,
+        name: &str,
+        input: Json,
+        cx: &RunCx,
+        (asked, time): (Duration, Duration),
+    ) -> HookRan {
+        // A run let go before it got here starts nothing, not even its
+        // runtime.
+        if cx.cancel.is_cancelled() {
+            return HookRan::Failed("it was let go before it started".to_owned());
+        }
+        let runtime = match self.runtime().await {
+            Ok(runtime) => runtime,
+            Err(error) => return HookRan::Failed(error),
+        };
+        let progress = Mutex::new(Vec::new());
+        let host = host::CallHost {
+            parts: &self.parts,
+            cx,
+            files: &self.files,
+            full_name: name,
+            extension: self.name(),
+            source: self.approved.source,
+            progress: &progress,
+            phase: Phase::Hook,
+            found_stopped: std::sync::atomic::AtomicBool::new(false),
+        };
+        let result = runtime
+            .call(
+                Target::Hook(index),
+                input,
+                CallContext {
+                    host: &host,
+                    capabilities: &self.capabilities,
+                    time,
+                    timer: self.parts.timer.as_ref(),
+                    clock: self.parts.clock.as_ref(),
+                    cancel: &cx.cancel,
+                    asked: Some(asked),
+                },
+            )
+            .await;
+        match result {
+            Ok(value) => HookRan::Answered(value),
+            // Its own program's look at the protected paths stopped the
+            // turn: a stop of its own, which the user is told of. One its
+            // host call found already made is not.
+            Err(CallError::Stopped(note)) if !host.found_stopped() => HookRan::Stopped(note),
+            Err(CallError::Stopped(_)) => {
+                HookRan::Failed("its turn was stopped, so nothing more of it ran".to_owned())
+            }
+            Err(CallError::TimedOut) => HookRan::Failed(format!(
+                "it did not answer within its {} ms",
+                time.as_millis()
+            )),
+            Err(CallError::Cancelled) => HookRan::Failed("it was let go".to_owned()),
+            Err(error) => HookRan::Failed(error.to_string()),
+        }
     }
 
     /// The live runtime, made when there is none or the last was torn
@@ -174,6 +256,8 @@ impl LoadedExtension {
             extension: self.name(),
             source: self.approved.source,
             progress: &progress,
+            phase: Phase::Tool,
+            found_stopped: std::sync::atomic::AtomicBool::new(false),
         };
         let result = runtime
             .call(
@@ -186,6 +270,7 @@ impl LoadedExtension {
                     timer: self.parts.timer.as_ref(),
                     clock: self.parts.clock.as_ref(),
                     cancel: &cx.cancel,
+                    asked: None,
                 },
             )
             .await;
@@ -226,6 +311,19 @@ impl LoadedExtension {
             Err(error) => ToolResult::error(format!("`{full_name}` failed: {error}")),
         }
     }
+}
+
+/// What came of one call of an extension's hook.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum HookRan {
+    /// It returned this value: `null` for `undefined` and `null`.
+    Answered(Json),
+    /// Its own program's look at the protected paths stopped its turn, with
+    /// what the user is told.
+    Stopped(String),
+    /// It could not run, threw, or was stopped, and why, in a clause that
+    /// follows "the hook failed:".
+    Failed(String),
 }
 
 /// One tool of an extension, as the registry holds it.
@@ -310,13 +408,15 @@ impl Tool for ExtensionTool {
 }
 
 /// Registers each approved extension's tools with `registry`, under the
-/// extension's name. Nothing runs. An extension whose capabilities do not
-/// compile, or whose name the registry refuses, is left out and named in
-/// what is returned.
+/// extension's name, and puts the hooks it registered on their events in
+/// `hooks`. Nothing runs. An extension whose capabilities do not compile,
+/// or whose name the registry refuses, is left out and named in what is
+/// returned.
 pub(crate) fn register(
     approved: Vec<ApprovedExtension>,
     parts: &Arc<HostParts>,
     registry: &ToolRegistry,
+    hooks: &super::ScriptHooks,
 ) -> Vec<String> {
     let mut left_out = Vec::new();
     for extension in approved {
@@ -336,8 +436,11 @@ pub(crate) fn register(
                 Arc::new(ExtensionTool::new(definition, Arc::clone(&loaded))) as Arc<dyn Tool>
             })
             .collect();
-        if let Err(error) = registry.set_source(&name, &description, tools) {
-            left_out.push(format!("The extension `{name}` is not loaded: {error}"));
+        match registry.set_source(&name, &description, tools) {
+            // Its hooks are the extension's: on their events only while it
+            // is loaded as it was approved.
+            Ok(()) => hooks.add(&loaded),
+            Err(error) => left_out.push(format!("The extension `{name}` is not loaded: {error}")),
         }
     }
     left_out

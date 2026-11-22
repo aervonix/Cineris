@@ -235,11 +235,14 @@ pub(crate) struct SessionHooks {
     pub(crate) paths: Arc<PathResolver>,
     /// The `session.start` hooks' run, which the first turn waits for.
     pub(crate) starting: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The hooks of the extensions the session has loaded, beside these
+    /// (`super::script_hooks`).
+    pub(crate) scripts: Arc<super::ScriptHooks>,
 }
 
 /// The JSON a hook of the session's own events is given: the event, the
 /// session and the workspace.
-fn session_input(event: Event, session: &SessionId, paths: &PathResolver) -> Json {
+pub(crate) fn session_input(event: Event, session: &SessionId, paths: &PathResolver) -> Json {
     json!({
         "event": event.as_str(),
         "session_id": session.as_str(),
@@ -249,7 +252,7 @@ fn session_input(event: Event, session: &SessionId, paths: &PathResolver) -> Jso
 
 /// What the model is told of a `session.start` hook's `context`: under a
 /// line that names the hook, every line quoted, what acts unseen escaped.
-fn session_notice(hook: &str, context: &str) -> String {
+pub(crate) fn session_notice(hook: &str, context: &str) -> String {
     let shown = cineris_base::visible_keeping(context, &['\n']);
     let quoted: Vec<String> = shown
         .split('\n')
@@ -398,16 +401,45 @@ impl SessionHooks {
         }
     }
 
-    /// Runs the session's `session.end` hooks as it closes: observed, their
-    /// answers not read, given up to [`SESSION_END_TIME`] on `timer`, after
-    /// which each is stopped, its process tree with it, and its look made.
+    /// Runs the session's `session.end` hooks as it closes, its extensions'
+    /// among them: observed, their answers not read, given up to
+    /// [`SESSION_END_TIME`] together on `timer`, after which each is
+    /// stopped, a hook command's process tree with it and its look made, and
+    /// waited for.
     pub(crate) async fn end(&self, session: &SessionId, timer: &cineris_base::SharedTimer) {
         let runs = self.runs_of(Event::SessionEnd, session);
-        if runs.is_empty() {
+        let scripts = self.scripts.session_ending(session);
+        if runs.is_empty() && scripts.is_empty() {
             return;
         }
         cineris_base::hook::await_point!(A_SESSION_ENDS);
         let mut over = timer.sleep(SESSION_END_TIME);
+        for (name, running) in scripts {
+            let stop = running.stopper();
+            let mut ended = std::pin::pin!(running.ended());
+            let in_time = std::future::poll_fn(|context| {
+                if let std::task::Poll::Ready(ended) = ended.as_mut().poll(context) {
+                    return std::task::Poll::Ready(Some(ended));
+                }
+                if over.as_mut().poll(context).is_ready() {
+                    return std::task::Poll::Ready(None);
+                }
+                std::task::Poll::Pending
+            })
+            .await;
+            let ended = match in_time {
+                Some(ended) => ended,
+                None => {
+                    // Its time is up: stopped, and waited for.
+                    stop.stop();
+                    ended.await
+                }
+            };
+            if let super::tools::HookRan::Failed(why) | super::tools::HookRan::Stopped(why) = ended
+            {
+                tracing::warn!(hook = %name, %why, "a `session.end` hook failed");
+            }
+        }
         for (name, _, cancel, mut task) in runs {
             let ended = std::future::poll_fn(|context| {
                 if let std::task::Poll::Ready(ended) = std::pin::Pin::new(&mut task).poll(context) {
@@ -579,13 +611,35 @@ impl HookCommands {
             let outcome = commands.run(&hook, &event_of, &cx).await;
             let _ = sender.send(outcome);
         });
+        self.keep(task);
+        receiver
+    }
+
+    /// Keeps `task`, a run of one of the session's hooks, until the close
+    /// waits for it: none outlives its session.
+    pub(crate) fn keep(&self, task: tokio::task::JoinHandle<()>) {
         let mut tasks = self
             .tasks
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         tasks.retain(|task| !task.is_finished());
         tasks.push(task);
-        receiver
+    }
+
+    /// A token for a run of the session's that its close stops: a child
+    /// of the session's.
+    pub(crate) fn runs_token(&self) -> CancelToken {
+        self.session.child()
+    }
+
+    /// The session's store of versions and artifacts.
+    pub(crate) fn content(&self) -> &Arc<dyn ContentStore> {
+        &self.content
+    }
+
+    /// What the session's extensions' calls are served with.
+    pub(crate) fn parts(&self) -> &Arc<HostParts> {
+        &self.parts
     }
 
     /// Waits for every run the session has: what the close does.
@@ -848,6 +902,9 @@ impl HookCommands {
             extension: "",
             source: hook.source,
             progress: &progress,
+            // A hook's, though its start is decided apart, unasked.
+            phase: cineris_ext::host::Phase::Hook,
+            found_stopped: std::sync::atomic::AtomicBool::new(false),
         };
         let policy = Arc::clone(&self.parts.policy);
         let decide = |start: ToDecide<'_>| decide(&policy, hook, cx, start);
@@ -963,7 +1020,7 @@ fn is_folder(path: &std::path::Path) -> bool {
 }
 
 /// The number of turn `turn` (`t_7` is 7): 0 when it has none.
-fn turn_number(turn: &TurnId) -> u32 {
+pub(crate) fn turn_number(turn: &TurnId) -> u32 {
     cineris_base::IdCounter::new("t_")
         .number_of(turn.as_str())
         .and_then(|number| u32::try_from(number).ok())
