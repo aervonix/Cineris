@@ -41,6 +41,16 @@
 //! - **Its host calls are a hook's** (`CallHost`, `Phase::Hook`): none puts
 //!   a question, so a call the engine would ask about is refused, and none
 //!   asks the user or writes.
+//! - **A gate does not lapse** (point 5): an extension that stands approved
+//!   and is not found as it was approved (changed, or unreadable as it is;
+//!   withdrawn by a turn's look, or so as the session opens) has its gating
+//!   hooks (`prompt.submit`, `tool.before`, not observing) held on their
+//!   events from the registration its pin names, each a hook whose run
+//!   fails with why and what approves or turns it off ([`Gate`]). Its other
+//!   hooks leave. One approved again joins at the next turn's start, in
+//!   their place. A runtime that cannot start (its files changed since the
+//!   turn's look, a thread of it left running) fails its hooks' runs the
+//!   same way, with what approves or turns it off.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -73,14 +83,63 @@ pub(crate) struct ScriptHooks {
     paths: Arc<PathResolver>,
     /// Every hook of every extension loaded now.
     on: Mutex<Vec<Arc<ScriptHook>>>,
+    /// The gating hooks of the extensions that stand approved and are not
+    /// found as approved: each fails.
+    held: Mutex<Vec<Arc<HeldHook>>>,
 }
 
 impl std::fmt::Debug for ScriptHooks {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ScriptHooks")
             .field("hooks", &lock(&self.on).len())
+            .field("held", &lock(&self.held).len())
             .finish_non_exhaustive()
     }
+}
+
+/// An extension that stands approved at `hash` and is not found as it was
+/// approved: its gating hooks are held, failing with `why`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Gate {
+    /// The extension's name.
+    pub(crate) name: String,
+    /// The hash its pin names.
+    pub(crate) hash: cineris_base::ContentHash,
+    /// Why its hooks cannot run, and what approves or turns it off: the
+    /// failure each of them gives.
+    pub(crate) why: String,
+    /// What it registered at that hash, as the registration cache keeps it:
+    /// `None` when the cache does not, and the session's own knowledge of
+    /// it, from when it was loaded at that hash, serves.
+    pub(crate) hooks: Option<Vec<cineris_ext::registration::HookDef>>,
+}
+
+/// Each hook of `definitions` on an event `allowed` lists (`None`: any), with
+/// its place among them and its name: the extension's, `hook.` and the
+/// event, and a number from the second on one event on.
+fn named<'a>(
+    extension: &str,
+    definitions: &'a [cineris_ext::registration::HookDef],
+    allowed: Option<&[Event]>,
+) -> Vec<(usize, String, Event, &'a cineris_ext::registration::HookDef)> {
+    let mut counts: HashMap<Event, usize> = HashMap::new();
+    let mut each = Vec::new();
+    for (index, definition) in definitions.iter().enumerate() {
+        let Some(event) = Event::parse(&definition.event)
+            .filter(|event| allowed.is_none_or(|allowed| allowed.contains(event)))
+        else {
+            continue;
+        };
+        let count = counts.entry(event).or_insert(0);
+        *count += 1;
+        let name = if *count == 1 {
+            format!("{extension}/hook.{}", event.as_str())
+        } else {
+            format!("{extension}/hook.{}.{count}", event.as_str())
+        };
+        each.push((index, name, event, definition));
+    }
+    each
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -112,6 +171,7 @@ impl ScriptHooks {
             commands,
             paths,
             on: Mutex::new(Vec::new()),
+            held: Mutex::new(Vec::new()),
         }
     }
 
@@ -121,23 +181,14 @@ impl ScriptHooks {
     pub(crate) fn add(&self, extension: &Arc<LoadedExtension>) {
         let approved = extension.approved();
         let allowed = &approved.manifest.capabilities.hooks;
-        let mut counts: HashMap<Event, usize> = HashMap::new();
         let mut added = Vec::new();
-        for (index, definition) in approved.registration.hooks.iter().enumerate() {
-            // What a live runtime and the cache both checked: an event the
-            // manifest lists.
-            let Some(event) =
-                Event::parse(&definition.event).filter(|event| allowed.contains(event))
-            else {
-                continue;
-            };
-            let count = counts.entry(event).or_insert(0);
-            *count += 1;
-            let name = if *count == 1 {
-                format!("{}/hook.{}", extension.name(), event.as_str())
-            } else {
-                format!("{}/hook.{}.{count}", extension.name(), event.as_str())
-            };
+        // What a live runtime and the cache both checked: events the
+        // manifest lists.
+        for (index, name, event, definition) in named(
+            extension.name(),
+            &approved.registration.hooks,
+            Some(allowed),
+        ) {
             added.push(Arc::new(ScriptHook {
                 name,
                 event,
@@ -153,7 +204,69 @@ impl ScriptHooks {
         }
         let mut on = lock(&self.on);
         on.retain(|hook| hook.extension.name() != extension.name());
+        // What was held of it, while it did not stand approved, left as the
+        // session's finding settled before loading it (`hold`).
         on.extend(added);
+    }
+
+    /// Holds the gates of `gates`, in place of those held before: each
+    /// one's gating hooks (`prompt.submit`, `tool.before`, not observing)
+    /// on their events as hooks that fail with its `why`, made from what it
+    /// registered at the hash approved (the cache's, or, when the cache does
+    /// not keep it, the session's own from when it was loaded or held at
+    /// that hash). A gate whose registration is known nowhere holds
+    /// nothing.
+    pub(crate) fn hold(&self, gates: Vec<Gate>) {
+        let on = lock(&self.on);
+        let mut held = lock(&self.held);
+        let mut next: Vec<Arc<HeldHook>> = Vec::new();
+        for gate in gates {
+            let made: Vec<HeldHook> = match &gate.hooks {
+                Some(definitions) => named(&gate.name, definitions, None)
+                    .into_iter()
+                    .filter(|(_, _, event, definition)| event.gates() && !definition.observe)
+                    .filter_map(|(_, name, event, definition)| {
+                        Some(HeldHook {
+                            name,
+                            extension: gate.name.clone(),
+                            hash: gate.hash,
+                            event: loop_event(event)?,
+                            filter: Filter::new(definition.tools.clone()),
+                            why: gate.why.clone(),
+                        })
+                    })
+                    .collect(),
+                None => on
+                    .iter()
+                    .filter(|hook| {
+                        hook.extension.name() == gate.name
+                            && hook.extension.approved().hash == gate.hash
+                            && hook.event.gates()
+                            && !hook.observe
+                    })
+                    .filter_map(|hook| {
+                        Some(HeldHook {
+                            name: hook.name.clone(),
+                            extension: gate.name.clone(),
+                            hash: gate.hash,
+                            event: loop_event(hook.event)?,
+                            filter: hook.filter.clone(),
+                            why: gate.why.clone(),
+                        })
+                    })
+                    .chain(
+                        held.iter()
+                            .filter(|hook| hook.extension == gate.name && hook.hash == gate.hash)
+                            .map(|hook| HeldHook {
+                                why: gate.why.clone(),
+                                ..HeldHook::clone(hook)
+                            }),
+                    )
+                    .collect(),
+            };
+            next.extend(made.into_iter().map(Arc::new));
+        }
+        *held = next;
     }
 
     /// Takes the hooks of the extension `name` off their events: it is
@@ -166,6 +279,9 @@ impl ScriptHooks {
     /// allocation.
     pub(crate) fn wants(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> bool {
         lock(&self.on).iter().any(|hook| hook.is_on(event, target))
+            || lock(&self.held)
+                .iter()
+                .any(|hook| hook.event == event && on_target(&hook.filter, target))
     }
 
     /// The hooks of extensions on `event` for `target`.
@@ -174,11 +290,18 @@ impl ScriptHooks {
         event: LoopEvent,
         target: Option<ToolTarget<'_>>,
     ) -> Vec<Arc<dyn Hook>> {
-        lock(&self.on)
+        let mut matched: Vec<Arc<dyn Hook>> = lock(&self.on)
             .iter()
             .filter(|hook| hook.is_on(event, target))
             .map(|hook| Arc::clone(hook) as Arc<dyn Hook>)
-            .collect()
+            .collect();
+        matched.extend(
+            lock(&self.held)
+                .iter()
+                .filter(|hook| hook.event == event && on_target(&hook.filter, target))
+                .map(|hook| Arc::clone(hook) as Arc<dyn Hook>),
+        );
+        matched
     }
 
     /// The hooks of extensions on one of the session's own events.
@@ -366,16 +489,52 @@ pub(crate) struct ScriptHook {
     running: Arc<AtomicUsize>,
 }
 
+/// Whether a hook on `filter` is on `target`: its `tools` that cannot be
+/// read put it on every call, failing closed.
+fn on_target(filter: &Result<Filter, String>, target: Option<ToolTarget<'_>>) -> bool {
+    match (filter, target) {
+        (Ok(filter), Some(target)) => filter.matches(target.tool, target.names),
+        (Err(_), Some(_)) | (_, None) => true,
+    }
+}
+
+/// A gating hook of an extension that stands approved and is not found as
+/// approved, held on its event: its run fails, with why and what approves
+/// or turns it off.
+#[derive(Debug, Clone)]
+struct HeldHook {
+    name: String,
+    /// Its extension's name.
+    extension: String,
+    /// The hash its extension was approved at.
+    hash: cineris_base::ContentHash,
+    event: LoopEvent,
+    filter: Result<Filter, String>,
+    why: String,
+}
+
+impl Hook for HeldHook {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn observes(&self) -> bool {
+        false
+    }
+
+    fn timeout(&self) -> Option<Duration> {
+        None
+    }
+
+    fn run<'a>(&'a self, _input: &'a HookInput) -> BoxFuture<'a, Heard> {
+        Box::pin(std::future::ready(Heard::Failed(self.why.clone())))
+    }
+}
+
 impl ScriptHook {
     /// Whether it is on `event` for `target`.
     fn is_on(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> bool {
-        loop_event(self.event) == Some(event)
-            && match (&self.filter, target) {
-                (Ok(filter), Some(target)) => filter.matches(target.tool, target.names),
-                // Its `tools` cannot be read: on every call, failing closed.
-                (Err(_), Some(_)) => true,
-                (_, None) => true,
-            }
+        loop_event(self.event) == Some(event) && on_target(&self.filter, target)
     }
 
     /// The time it is given, as the loop gives it: its own, or the default

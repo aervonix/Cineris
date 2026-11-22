@@ -1726,8 +1726,12 @@ impl Core {
                 // No turn starts before the session's extensions are found
                 // and registered, an approved one the registration cache
                 // misses included: a gate one of them holds is never
-                // skipped (step 28). At once once they are.
-                live.extensions.wait().await;
+                // skipped (step 28). At once once they are. Nor when their
+                // finding failed: no turn starts as if they were found.
+                live.extensions
+                    .wait()
+                    .await
+                    .map_err(|why| not_settled(&why))?;
                 // Nor before its `session.start` hooks that are waited for
                 // have answered, up to their time.
                 #[cfg(feature = "scripts")]
@@ -1741,7 +1745,10 @@ impl Core {
                 // queues behind it. What the extensions were found in is
                 // looked at then too, and what a change loads is waited for.
                 if !live.handle.turn_running() {
-                    live.extensions.recheck().await;
+                    live.extensions
+                        .recheck()
+                        .await
+                        .map_err(|why| not_settled(&why))?;
                     crate::reload::at_turn_start(self, &live).await;
                     // What a confined start changed that could not be put
                     // back, told again while it is still as the start left
@@ -1783,9 +1790,15 @@ impl Core {
                 // again at what they were found in when no turn runs, so
                 // that the prompt holds what they give it now (step 28).
                 let _starting = live.turn_start.lock().await;
-                live.extensions.wait().await;
+                live.extensions
+                    .wait()
+                    .await
+                    .map_err(|why| not_settled(&why))?;
                 if !live.handle.turn_running() {
-                    live.extensions.recheck().await;
+                    live.extensions
+                        .recheck()
+                        .await
+                        .map_err(|why| not_settled(&why))?;
                 }
                 live.handle.compact(params.focus)?;
                 Ok(OpResult::SessionCompact(Empty {}))
@@ -2814,6 +2827,22 @@ async fn together<F: std::future::Future<Output = ()>>(futures: impl Iterator<It
         }
     })
     .await;
+}
+
+/// What a turn's start, or a compaction's, is refused with when the
+/// session's extensions could not be found and registered (step 28): no
+/// turn starts as if they were, since a gate one of them holds would be
+/// skipped.
+fn not_settled(why: &str) -> OpError {
+    Box::new(cineris_protocol::error::ErrorData::new(
+        cineris_protocol::error::ErrorKind::Internal,
+        "extensions_not_settled",
+        format!(
+            "No turn starts: the session's extensions could not be found and registered ({}), \
+             and a gate one of them holds would be skipped. Close the session and open it again.",
+            cineris_base::visible(why)
+        ),
+    ))
 }
 
 #[cfg(test)]

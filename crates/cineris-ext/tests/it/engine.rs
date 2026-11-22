@@ -886,19 +886,25 @@ fn a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted() {
 
 /// A main module that will not stop is left running too; past the cap of
 /// threads left running, no extension is started at all, and why is said.
+/// The clock is moved only once the module has registered its tool, just
+/// before the loop that never looks at the interrupt: moved earlier, on a
+/// slow machine, the interrupt stopped the module before it reached the loop
+/// (one CI flake, `docs/outstanding/an-engine-test-that-advances-its-clock-before-the-script-spins.md`).
 #[test]
 fn past_the_cap_of_threads_left_running_no_extension_starts() {
-    use cineris_ext::engine::{EVALUATION_TIME, GRACE, MAX_ABANDONED};
+    use cineris_ext::engine::{A_DEFINITION_IS_REGISTERED, EVALUATION_TIME, GRACE, MAX_ABANDONED};
 
     let timer = timer();
+    // Counted, never held: how far each module has got.
+    let registered = cineris_testkit::Hold::new(A_DEFINITION_IS_REGISTERED).skipping(usize::MAX);
     // Each extension a different one: one whose thread was left running
     // is not started again.
     let spinning = |index: usize| {
         extension(
             "",
             &format!(
-                "// {index}\nArray.prototype.reverse.call({{ length: 2 ** 53 - 1 }});\n\
-                 cineris.tool({{ name: 't', run() {{}} }});"
+                "// {index}\ncineris.tool({{ name: 't', run() {{}} }});\n\
+                 Array.prototype.reverse.call({{ length: 2 ** 53 - 1 }});"
             ),
         )
     };
@@ -913,6 +919,20 @@ fn past_the_cap_of_threads_left_running_no_extension_starts() {
             ),
             async {
                 timer.sleeping_for(EVALUATION_TIME).await;
+                // Its tool is registered: the next thing it runs is the
+                // loop.
+                while registered.arrivals() <= index {
+                    let mut yielded = false;
+                    std::future::poll_fn(|context| {
+                        if yielded {
+                            return std::task::Poll::Ready(());
+                        }
+                        yielded = true;
+                        context.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    })
+                    .await;
+                }
                 timer.advance(EVALUATION_TIME);
                 timer.sleeping_for(GRACE).await;
                 timer.advance(GRACE);

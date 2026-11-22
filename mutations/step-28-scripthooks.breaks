@@ -161,3 +161,86 @@ find: cx.timer.sleep(cx.time.saturating_sub(waited))
 replace: cx.timer.sleep(cx.time)
 caught-by:
     cineris-ext::it engine::a_hooks_time_runs_from_when_it_was_asked
+
+# Round 2: what fails closed, and what the hooks keep.
+
+[break] a-finding-that-ended-settles-its-extensions
+rule: A session's finding of its extensions that ends before it is done (a panic in its work) fails them: no turn starts as if they were found.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Settles::drop
+find: self.0.ready.fail(FINDING_ENDED.to_owned());
+replace: self.0.ready.settle();
+caught-by:
+    cineris-core::it extensions_hooks::a_session_whose_finding_failed_starts_no_turn
+
+[break] a-failed-finding-lets-the-turn-start
+rule: While the session's extensions' finding has failed, a turn's start is refused with why, as is the next: neither waits for ever nor starts without a gate one of them may hold.
+file: crates/cineris-core/src/ext/found.rs
+in: Ready::outcome
+find: Some(why) => Err(why.clone()),
+replace: Some(_) => Ok(()),
+caught-by:
+    cineris-core::it extensions_hooks::a_session_whose_finding_failed_starts_no_turn
+
+[break] a-changed-extensions-gates-lapse
+rule: An extension that stands approved and is not found as approved has its gating hooks held on their events, failing, with why and what approves it or turns it off.
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: ScriptHooks::hold
+find: *held = next;
+replace: drop(next);
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+
+[break] a-held-gate-is-made-from-no-registration
+rule: A changed extension's gates are held from the registration its pin names, as the registration cache keeps it, so that one changed between two sessions holds its gates from the first turn, with no runtime made.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: .map(|entry| entry.registration.hooks.clone());
+replace: .map(|_| Vec::new());
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+
+[break] a-turned-off-extensions-gates-are-held
+rule: An extension the user turned off (`[extensions.<name>] enabled = false`) holds no gate, whatever stands of its pin: the user's word.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: Source::User => inputs.disabled.contains(&name),
+replace: Source::User => false && inputs.disabled.contains(&name),
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+
+[break] a-runtime-that-cannot-start-names-no-remedy
+rule: A hook whose extension's runtime cannot start (its files changed, a thread of it left running) fails, a gate closed, saying why and what approves the extension or turns it off.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::call_hook
+find: return HookRan::Failed(format!("{error}; {}", self.remedy()))
+replace: return HookRan::Failed(error)
+caught-by:
+    cineris-core::it extensions_hooks::an_extension_whose_runtime_cannot_start_fails_its_gates
+
+[break] a-hooks-state-is-another-sources
+rule: A hook's `cineris.state` is its extension's, keyed by where the extension comes from and its name, as its tool's is.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::call_hook
+find: source: self.approved.source
+replace: source: cineris_ext::source::Source::Project
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hooks_run_as_its_session_opens_and_closes
+
+[break] the-wait-for-session-start-hooks-says-the-finding
+rule: A first turn that has waited long for the `session.start` hooks of the session's extensions says that it waits for them, not for the extensions to be found.
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Shared::waiting_said
+find: if self.hearing.load(std::sync::atomic::Ordering::SeqCst) {
+replace: if false && self.hearing.load(std::sync::atomic::Ordering::SeqCst) {
+caught-by:
+    cineris-core::it extensions_hooks::an_extensions_hooks_run_as_its_session_opens_and_closes
+
+[break] a-hooks-programs-writes-are-recorded
+rule: What a script hook's program writes is not recorded in the round's checkpoint, as a hook command's writes are not: undo does not put it back.
+file: crates/cineris-core/src/ext/exec.rs
+in: run
+find: matches!(how, Decided::Host) && host.phase == cineris_ext::host::Phase::Tool
+replace: matches!(how, Decided::Host)
+caught-by:
+    cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
