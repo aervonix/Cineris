@@ -3865,7 +3865,7 @@ caught-by:
 [break] pinned-turn-start-looks-at-nothing
 rule: A turn's start looks again at what the extensions were found in.
 file: crates/cineris-core/src/core.rs
-find: live.extensions.recheck().await;
+find: live.extensions.recheck().await.map_err(|why| not_settled(&why))?;
 replace: let _ = &live.extensions;
 occurrence: 1
 caught-by:
@@ -4125,7 +4125,7 @@ caught-by:
 rule: A turn that has waited a few seconds for the session's extensions says what it waits for, and goes on waiting.
 file: crates/cineris-core/src/ext/found.rs
 in: Extensions::wait
-find: tell(WAITING.to_owned());
+find: tell(self.held.waiting_said());
 replace: drop(tell);
 caught-by:
     extensions_review::a_turn_that_waits_for_the_extensions_says_so_after_a_few_seconds
@@ -5442,7 +5442,7 @@ caught-by:
 [break] a-compaction-does-not-wait-for-the-extensions
 rule: A compaction may build a session's first prompt, and waits for the session's extensions as a turn does.
 file: crates/cineris-core/src/core.rs
-find: live.extensions.wait().await; if !live.handle.turn_running() { live.extensions.recheck().await; } live.handle.compact(params.focus)?;
+find: live.extensions.wait().await.map_err(|why| not_settled(&why))?; if !live.handle.turn_running() { live.extensions.recheck().await.map_err(|why| not_settled(&why))?; } live.handle.compact(params.focus)?;
 replace: live.handle.compact(params.focus)?;
 caught-by:
     cineris-core::it extensions_prompt::a_compaction_before_the_first_turn_waits_for_the_extensions
@@ -5596,7 +5596,7 @@ caught-by:
 [break] a-compaction-does-not-look-again
 rule: A compaction looks again at what the extensions were found in before it builds its epoch's prompt, as a turn's start does.
 file: crates/cineris-core/src/core.rs
-find: if !live.handle.turn_running() { live.extensions.recheck().await; }
+find: if !live.handle.turn_running() { live.extensions.recheck().await.map_err(|why| not_settled(&why))?; }
 replace:
 caught-by:
     cineris-core::it extensions_prompt::a_compaction_looks_again_before_it_builds_its_prompt

@@ -123,9 +123,11 @@ impl LoadedExtension {
         if cx.cancel.is_cancelled() {
             return HookRan::Failed("it was let go before it started".to_owned());
         }
+        // A runtime that cannot start fails the hook, a gate closed, with
+        // what approves or turns the extension off (point 5).
         let runtime = match self.runtime().await {
             Ok(runtime) => runtime,
-            Err(error) => return HookRan::Failed(error),
+            Err(error) => return HookRan::Failed(format!("{error}; {}", self.remedy())),
         };
         let progress = Mutex::new(Vec::new());
         let host = host::CallHost {
@@ -168,7 +170,25 @@ impl LoadedExtension {
                 time.as_millis()
             )),
             Err(CallError::Cancelled) => HookRan::Failed("it was let go".to_owned()),
+            Err(error @ CallError::Disabled) => {
+                HookRan::Failed(format!("{error}; {}", self.remedy()))
+            }
             Err(error) => HookRan::Failed(error.to_string()),
+        }
+    }
+
+    /// What approves the extension as it is now, or turns it off: for a
+    /// hook of it that cannot run.
+    fn remedy(&self) -> String {
+        match self.approved.source {
+            cineris_ext::source::Source::User => format!(
+                "`cineris ext add` with its folder approves it as it is now, and \
+                 `[extensions.{}] enabled = false` in your configuration turns it off",
+                cineris_base::in_code(self.name())
+            ),
+            cineris_ext::source::Source::Project => "the project's trust question lists it, to \
+                                                     approve it as it is now, when a session opens"
+                .to_owned(),
         }
     }
 

@@ -375,10 +375,15 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
                 &stuck.command,
                 "tools = [\"shell\"]\ntimeout = \"50s\"",
             ),
-            // An extension's hook's program: allowed by this rule alone.
+            // An extension's hook's programs: allowed by these rules alone.
             "[[permissions.rules]]\neffect = \"exec\"\nmatch = \"probe-echo *\"\naction = \
              \"allow\"\n"
                 .to_owned(),
+            format!(
+                "[[permissions.rules]]\neffect = \"exec\"\nmatch = {}\naction = \"allow\"\n",
+                serde_json::to_string(&format!("{} *", std::env::current_exe().unwrap().display()))
+                    .unwrap()
+            ),
         ]
         .concat(),
     );
@@ -389,12 +394,20 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
     crate::ext_exec::place_echo(&programs, "probe-echo");
     crate::ext_exec::place_echo(&programs, "probe-asked");
     let words = |given: &str| serde_json::to_string(&crate::ext_exec::echo_args(&[given])).unwrap();
+    // And a `tool.after` hook whose program writes the workspace.
+    let writes = this_binary("write", &["hooked.txt"]);
     let gatekeeper = crate::ext_exec::extension_running(
         &world,
         "gatekeeper",
-        "exec = [\"probe-echo\", \"probe-asked\"]\nhooks = [\"tool.before\"]",
         &format!(
-            "cineris.on('tool.before', {{ tools: ['tool_search'] }}, async () => {{\n\
+            "exec = [\"probe-echo\", \"probe-asked\", {}]\nwrite = [\"**\"]\nhooks = \
+             [\"tool.before\", \"tool.after\"]",
+            serde_json::to_string(&writes[0]).unwrap()
+        ),
+        &format!(
+            "cineris.on('tool.after', {{ tools: ['outline'] }}, async () => {{ \
+             await cineris.exec({}, {}); }});\n\
+             cineris.on('tool.before', {{ tools: ['tool_search'] }}, async () => {{\n\
                const allowed = await cineris.exec('probe-echo', {});\n\
                let asked;\n\
                try {{ await cineris.exec('probe-asked', {}); asked = 'ran'; }}\n\
@@ -403,6 +416,8 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
                return {{ decision: 'deny', reason: 'allowed ran with ' + allowed.code + reported \
              + '; asked: ' + asked }};\n\
              }});\n",
+            serde_json::to_string(&writes[0]).unwrap(),
+            serde_json::to_string(&writes[1..]).unwrap(),
             words("allowed"),
             words("asked"),
             crate::ECHO_MARK,
@@ -602,6 +617,21 @@ fn sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time() {
         assert_eq!(tool, "outline");
         // Allowed, it ran: this session has no index to outline from.
         assert_ne!(*outcome, "denied", "{text}");
+        // Its `tool.after` hook's program wrote the workspace, and what it
+        // wrote is not in the round's checkpoint, as a hook command's is
+        // not: undo does not put it back.
+        assert_eq!(
+            world.read("hooked.txt").as_deref(),
+            Some("written by a hook\n")
+        );
+        assert!(
+            !front
+                .log(&world)
+                .iter()
+                .any(|entry| entry["kind"] == "checkpoint"
+                    && entry.to_string().contains("hooked.txt")),
+            "a hook's program's writes were recorded in the round's checkpoint"
+        );
 
         // An extension's hook runs the program a rule allows, and is
         // refused the one the engine would ask about, with the rule that

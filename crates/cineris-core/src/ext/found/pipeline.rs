@@ -53,7 +53,7 @@ use super::{
 use crate::ext::prompt::PromptParts;
 use crate::ext::watched::{MAX_PLACES_PER_ROOT, Watched};
 use crate::ext::{ApprovedExtension, HostParts};
-use crate::ext::{ScriptHooks, SessionStart};
+use crate::ext::{Gate, ScriptHooks, SessionStart};
 
 /// How the session is told something.
 type Tell = Arc<dyn Fn(String) + Send + Sync>;
@@ -125,6 +125,9 @@ pub(crate) struct Shared {
     cancel: Mutex<Option<CancelToken>>,
     /// The session's timer and how it is told, for a wait that is said.
     waiting: Mutex<Option<(SharedTimer, Tell)>>,
+    /// Set once the extensions are found and their `session.start` hooks
+    /// are heard: what a wait that is said then waits for.
+    hearing: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for Shared {
@@ -195,6 +198,11 @@ struct Decided {
     cache: Option<RegistrationCache>,
     /// What everything was found in, stamped before it was read.
     watched: Watched,
+    /// The extensions that stand approved at a hash they are not found at
+    /// (changed, or unreadable as approved): their gating hooks are held on
+    /// their events, failing, from the registration their pin names
+    /// (`docs/steps/28/answered.md`, point 5).
+    held: Vec<Gate>,
 }
 
 /// The cache's part of the work, done after the session's extensions are
@@ -233,13 +241,19 @@ pub(crate) fn start(pending: Pending) -> Arc<Extensions> {
 
 /// Settles a session's extensions when it is dropped: when the work ends,
 /// however it ends (done, cancelled, or a panic), so that a turn never
-/// waits for work that is gone. What did not get registered is then not
-/// loaded.
+/// waits for work that is gone. Work that ended before it settled them
+/// fails them: no turn starts as if they were found, since a gate one of
+/// them holds would be skipped (a session that closes meanwhile starts no
+/// turn anyway).
 struct Settles(Arc<Extensions>);
+
+/// Why a session's extensions failed when their finding ended before it was
+/// done.
+pub(crate) const FINDING_ENDED: &str = "the work that finds them ended before it was done";
 
 impl Drop for Settles {
     fn drop(&mut self) {
-        self.0.ready.settle();
+        self.0.ready.fail(FINDING_ENDED.to_owned());
     }
 }
 
@@ -302,10 +316,22 @@ async fn first(extensions: &Extensions, finding: Finding) {
         (kept, tell)
     };
     let (kept, tell) = kept;
+    let kept = match kept {
+        Ok(kept) => kept,
+        Err(why) => {
+            // No turn starts: a gate one of them holds would be skipped.
+            extensions.ready.fail(why);
+            return;
+        }
+    };
     // The `session.start` hooks of the extensions it loaded as it opened:
     // the first turn waits for those that are waited for, as for a hook
     // command's (`docs/steps/28/answered.md`, point 6).
     if let Some(started) = &session_start {
+        extensions
+            .held
+            .hearing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         scripts.session_started(started, &*tell).await;
     }
     extensions.ready.settle();
@@ -347,7 +373,17 @@ impl Shared {
             if changed.is_none() {
                 return;
             }
-            held.settle(None).await
+            match held.settle(None).await {
+                Ok(kept) => kept,
+                Err(why) => {
+                    // What is loaded, and what is held, stays as it was.
+                    held.tell(format!(
+                        "The session's extensions were not found again after a change: {why}. \
+                         What was loaded, and what holds its gates, stays as it was."
+                    ));
+                    None
+                }
+            }
         };
         if let Some(kept) = kept {
             let _ = blocking(move || kept.keep()).await;
@@ -365,6 +401,16 @@ impl Shared {
     pub(crate) fn waiting(&self) -> Option<(SharedTimer, Tell)> {
         lock(&self.waiting).clone()
     }
+
+    /// What a turn that has waited long is told: of the finding, or, once
+    /// the extensions are found, of their `session.start` hooks.
+    pub(crate) fn waiting_said(&self) -> String {
+        if self.hearing.load(std::sync::atomic::Ordering::SeqCst) {
+            super::WAITING_FOR_HOOKS.to_owned()
+        } else {
+            super::WAITING.to_owned()
+        }
+    }
 }
 
 impl Held {
@@ -378,7 +424,12 @@ impl Held {
     /// Finds and judges the extensions, withdraws what no longer stands
     /// approved as it was loaded, and loads what now stands approved: from
     /// the cache, or registered first. What is left of the cache's work.
-    async fn settle(&mut self, project_found: Option<Looked>) -> Option<Kept> {
+    ///
+    /// # Errors
+    ///
+    /// Why they could not be found: the work that finds them did not
+    /// finish.
+    async fn settle(&mut self, project_found: Option<Looked>) -> Result<Option<Kept>, String> {
         let inputs = Arc::clone(&self.inputs);
         let Decided {
             told,
@@ -386,11 +437,18 @@ impl Held {
             missing,
             cache,
             watched,
-        } = blocking(move || decide(&inputs, project_found)).await?;
+            held,
+        } = blocking(move || decide(&inputs, project_found))
+            .await
+            .ok_or_else(|| "the work that finds and judges them did not finish".to_owned())?;
         self.watched = watched;
         for message in told {
             self.tell(message);
         }
+        // What stands approved and is not found as approved holds its gates,
+        // failing, from the registration approved: taken before a withdrawn
+        // extension's hooks leave, which they may be made from.
+        self.scripts.hold(held);
         let wanted: Vec<Key> = approved
             .iter()
             .map(|(one, _)| (one.source, one.manifest.name.clone(), one.hash))
@@ -518,13 +576,15 @@ impl Held {
                 })
                 .collect(),
         );
-        let state = self.inputs.state.clone()?;
-        cache.map(|cache| Kept {
+        let Some(state) = self.inputs.state.clone() else {
+            return Ok(None);
+        };
+        Ok(cache.map(|cache| Kept {
             cache,
             written,
             state,
             clock: Arc::clone(&self.inputs.clock),
-        })
+        }))
     }
 }
 
@@ -678,12 +738,18 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                 )
             }
         });
+    // What was found and could not be read as it is: an extension's gates
+    // are held when what was left out is one that stands approved.
+    let mut unreadable: Vec<(Source, String, String)> = Vec::new();
     for left in user
         .iter()
         .flat_map(|user| &user.left_out)
         .chain(project.iter().flat_map(|(_, left, _)| left))
     {
         decided.told.push(sentence(&left.reason));
+        if let Some(name) = left.folder.file_name().and_then(|name| name.to_str()) {
+            unreadable.push((left.source, name.to_owned(), left.shown.clone()));
+        }
     }
     let users = UserNames::of(user.as_ref());
     let mine: Vec<(String, String)> = user
@@ -721,6 +787,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     let mut pins: Option<Option<UserPins>> = None;
     let mut trust: Option<ProjectTrust> = None;
     let mut standing_approved = Vec::new();
+    let mut changed: Vec<(Source, String, String)> = Vec::new();
     for (listed, snapshot) in candidates {
         let name = in_code(&listed.manifest.name).into_owned();
         let definition = listed.definition();
@@ -758,12 +825,69 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
         if standing == Standing::Approved {
             standing_approved.push((listed, snapshot));
         } else {
+            if standing == Standing::Changed {
+                changed.push((
+                    listed.source,
+                    listed.manifest.name.clone(),
+                    listed.shown.clone(),
+                ));
+            }
             decided
                 .told
                 .push(not_loaded(&listed, &name, standing, inputs.trust_project));
         }
     }
-    if standing_approved.is_empty() {
+    // Each that stands approved at another hash than it is found at, or that
+    // is found and cannot be read as it is: its gates are held, from the
+    // registration its pin names. One the user turned off, one of a
+    // project's whose name is the user's, and one no pin names any more
+    // hold nothing: the user's word, or the approval taken back.
+    let mut pending: Vec<(Source, String, String, ContentHash, bool)> = Vec::new();
+    for (source, name, shown, was_changed) in changed
+        .into_iter()
+        .map(|(source, name, shown)| (source, name, shown, true))
+        .chain(
+            unreadable
+                .into_iter()
+                .map(|(source, name, shown)| (source, name, shown, false)),
+        )
+    {
+        let released = match source {
+            Source::User => inputs.disabled.contains(&name),
+            Source::Project => users.takes(&name),
+        };
+        if released
+            || pending
+                .iter()
+                .any(|held| held.0 == source && held.1 == name)
+        {
+            continue;
+        }
+        let pinned = match source {
+            Source::User => pins
+                .get_or_insert_with(|| user_pins(inputs, &mut decided.told))
+                .as_ref()
+                .and_then(|pins| pins.get(&TrustResourceKind::Extension, &name))
+                .map(|pin| pin.hash),
+            Source::Project => inputs
+                .for_the_run
+                .iter()
+                .find(|run| run.kind == TrustResourceKind::Extension && run.name == name)
+                .map(|run| run.hash)
+                .or_else(|| {
+                    trust
+                        .get_or_insert_with(|| project_trust(inputs))
+                        .pinned_of(&TrustResourceKind::Extension)
+                        .into_iter()
+                        .find(|(pinned, _)| *pinned == name)
+                        .map(|(_, hash)| hash)
+                }),
+        };
+        if let Some(hash) = pinned {
+            pending.push((source, name, shown, hash, was_changed));
+        }
+    }
+    if standing_approved.is_empty() && pending.is_empty() {
         return decided;
     }
     let loaded = inputs.state.as_ref().map(|state| {
@@ -821,18 +945,74 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                     Some(snapshot) if snapshot.hash() == listed.hash => {
                         decided.missing.push((listed, snapshot));
                     }
-                    _ => decided.told.push(not_loaded(
-                        &listed,
-                        &in_code(&listed.manifest.name),
-                        Standing::Changed,
-                        inputs.trust_project,
-                    )),
+                    _ => {
+                        decided.told.push(not_loaded(
+                            &listed,
+                            &in_code(&listed.manifest.name),
+                            Standing::Changed,
+                            inputs.trust_project,
+                        ));
+                        // Changed since the question read it at the hash
+                        // approved: its gates are held as any changed one's.
+                        pending.push((
+                            listed.source,
+                            listed.manifest.name.clone(),
+                            listed.shown.clone(),
+                            listed.hash,
+                            true,
+                        ));
+                    }
                 }
             }
         }
     }
+    for (source, name, shown, hash, was_changed) in pending {
+        // What it registered at the hash approved, as the cache keeps it;
+        // none when the cache does not, and the session's own then serves.
+        let hooks = loaded
+            .as_ref()
+            .and_then(|(_, loaded)| loaded.cache.get(&hash))
+            .filter(|entry| entry.name == name)
+            .map(|entry| entry.registration.hooks.clone());
+        decided.held.push(Gate {
+            why: held_why(source, &name, &shown, was_changed, inputs.trust_project),
+            name,
+            hash,
+            hooks,
+        });
+    }
     decided.cache = loaded.map(|(cache, _)| cache);
     decided
+}
+
+/// Why the gating hooks of an extension that stands approved at another
+/// hash than it is found at fail, and what approves it or turns it off: a
+/// sentence for the hook's failure.
+fn held_why(source: Source, name: &str, shown: &str, changed: bool, trust_project: bool) -> String {
+    let name = in_code(name);
+    let what = if changed {
+        "has changed since you approved it"
+    } else {
+        "cannot be read as you approved it (said above)"
+    };
+    match source {
+        Source::User => format!(
+            "Your extension `{name}` (`{shown}`) {what}, so its hook cannot run: `cineris ext add \
+             {shown}` approves it as it is now, and `[extensions.{name}] enabled = false` in your \
+             configuration turns it off"
+        ),
+        Source::Project => {
+            let remedy = if trust_project {
+                "`cineris permissions trust` shows it, to approve it as it is now"
+            } else {
+                "the project's trust question lists it, to approve it as it is now, when a session \
+                 opens"
+            };
+            format!(
+                "This project's extension `{name}` (`{shown}`) {what}, so its hook cannot run: {remedy}"
+            )
+        }
+    }
 }
 
 /// How a project's extension stands: approved for this session by a yes

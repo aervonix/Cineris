@@ -114,6 +114,13 @@ pub fn forget_abandoned(hash: &ContentHash) {
 /// it says the call started: a test holds it to give the call up then.
 pub const AFTER_A_CALL_IS_CLAIMED: &str = "cineris-ext: after a call is claimed";
 
+/// A point of a runtime's thread as a definition (`cineris.tool`,
+/// `cineris.command`, `cineris.on`) the main module made is taken, before
+/// the module goes on: a test counts it to know where the module's first
+/// evaluation has got to, which no host call can tell while it runs.
+pub const A_DEFINITION_IS_REGISTERED: &str =
+    "cineris-ext: a definition of the main module is taken";
+
 /// How many extension threads this process has abandoned.
 #[must_use]
 pub fn abandoned_threads() -> usize {

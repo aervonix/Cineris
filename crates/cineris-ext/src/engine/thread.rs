@@ -1179,6 +1179,7 @@ fn register<'js>(
         Ok(mut shared) => shared.add(ctx, entry),
         Err(_) => Err(INSIDE_ANOTHER.to_owned()),
     };
+    cineris_base::hook::point(super::A_DEFINITION_IS_REGISTERED);
     added.map_err(|message| Exception::throw_type(ctx, &message))
 }
 

@@ -432,6 +432,25 @@ impl ProjectTrust {
         self.older
     }
 
+    /// The names of the project's `kind` that the user approved, each with
+    /// the hash it was pinned at: none for a project that is not trusted.
+    /// What a session holds a changed extension's gates by (step 28: its
+    /// pinned registration is kept).
+    #[must_use]
+    pub fn pinned_of(&self, kind: &TrustResourceKind) -> Vec<(String, ContentHash)> {
+        self.project
+            .as_ref()
+            .map(|project| {
+                project
+                    .pinned
+                    .iter()
+                    .filter(|pin| pin.kind == kind.as_str())
+                    .map(|pin| (pin.name.clone(), pin.hash))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// How a definition stands.
     #[must_use]
     pub fn standing(&self, definition: &Definition) -> Standing {

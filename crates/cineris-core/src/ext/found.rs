@@ -97,6 +97,24 @@ use super::watched::Watched;
 #[cfg(feature = "scripts")]
 pub(crate) use pipeline::{Finding, start};
 
+impl crate::Core {
+    /// Ends the session `session`'s finding of its extensions where it
+    /// stands, as the end of its work before it is done would (a panic in
+    /// it): for the test that a session whose finding failed starts no turn.
+    ///
+    /// # Errors
+    ///
+    /// When the session is not open.
+    #[doc(hidden)]
+    pub fn end_the_finding_of(
+        &self,
+        session: &cineris_protocol::SessionId,
+    ) -> Result<(), crate::OpError> {
+        self.live(session)?.extensions.stop();
+        Ok(())
+    }
+}
+
 /// Where an approved extension that the registration cache does not hold
 /// is about to be evaluated, to register it: a point a test holds the
 /// session's finding of its extensions at, to see that the first turn
@@ -126,11 +144,22 @@ pub const WAITING: &str = "This turn waits for the session's extensions to be fo
                            registered, so that a gate one of them holds is not skipped. It \
                            starts once they are.";
 
+/// What the session is told when a turn has waited [`WAIT_SAID_AFTER`] for
+/// the `session.start` hooks of its extensions, which the first turn waits
+/// for once they are found.
+pub const WAITING_FOR_HOOKS: &str = "This turn waits for the `session.start` hooks of the \
+                                     session's extensions, which are heard before its first \
+                                     turn. It starts once each has answered, or its time is up.";
+
 /// Whether a session's extensions are settled: found, judged, registered
-/// where the cache missed one, and their tools in the session's registry.
+/// where the cache missed one, and their tools in the session's registry;
+/// or why their finding failed, which no turn passes over: a gate one of
+/// them holds would be skipped.
 #[derive(Debug, Default)]
 struct Ready {
     done: AtomicBool,
+    /// Why the finding failed, when it did: set before `done`.
+    failed: std::sync::Mutex<Option<String>>,
     settled: tokio::sync::Notify,
 }
 
@@ -140,16 +169,42 @@ impl Ready {
         self.settled.notify_waiters();
     }
 
+    /// The finding failed, and why: what every turn's start is told from now
+    /// on. A finding that settled already stays settled.
+    fn fail(&self, why: String) {
+        if self.done.load(Ordering::SeqCst) {
+            return;
+        }
+        *self
+            .failed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why);
+        self.settle();
+    }
+
     fn is_settled(&self) -> bool {
         self.done.load(Ordering::SeqCst)
     }
 
-    async fn wait(&self) {
+    /// How it settled: `Err` with why the finding failed.
+    fn outcome(&self) -> Result<(), String> {
+        match self
+            .failed
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            Some(why) => Err(why.clone()),
+            None => Ok(()),
+        }
+    }
+
+    async fn wait(&self) -> Result<(), String> {
         loop {
             // Made before the look, so that a settling in between wakes it.
             let settled = self.settled.notified();
             if self.done.load(Ordering::SeqCst) {
-                return;
+                return self.outcome();
             }
             settled.await;
         }
@@ -178,9 +233,14 @@ impl Extensions {
     /// is said, once, and goes on: a turn does not start while an approved
     /// extension's registration is missing, and each evaluation is bounded
     /// by the engine's own time.
-    pub(crate) async fn wait(&self) {
+    ///
+    /// # Errors
+    ///
+    /// Why their finding failed: no turn starts then, since a gate one of
+    /// them holds would be skipped.
+    pub(crate) async fn wait(&self) -> Result<(), String> {
         if self.ready.is_settled() {
-            return;
+            return self.ready.outcome();
         }
         #[cfg(feature = "scripts")]
         if let Some((timer, tell)) = self.held.waiting() {
@@ -197,21 +257,26 @@ impl Extensions {
             })
             .await;
             if !done {
-                tell(WAITING.to_owned());
-                ready.await;
+                tell(self.held.waiting_said());
+                return ready.await;
             }
-            return;
+            return self.ready.outcome();
         }
-        self.ready.wait().await;
+        self.ready.wait().await
     }
 
     /// Looks again at what the extensions were found in, at a turn's
     /// start: a change has them read and judged again, and the turn waits
     /// for what that loads.
-    pub(crate) async fn recheck(&self) {
-        self.wait().await;
+    ///
+    /// # Errors
+    ///
+    /// Why their finding failed, as [`Self::wait`].
+    pub(crate) async fn recheck(&self) -> Result<(), String> {
+        self.wait().await?;
         #[cfg(feature = "scripts")]
         self.held.recheck().await;
+        Ok(())
     }
 
     /// The session has ended: work still under way for it ends too.

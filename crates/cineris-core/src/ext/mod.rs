@@ -66,7 +66,7 @@ use cineris_ext::registration::Registration;
 
 pub use found::{
     ANY_HOST, BEFORE_AN_EXTENSION_IS_REGISTERED, BEFORE_THE_CACHE_IS_KEPT, NOT_CONFINED,
-    THE_QUESTIONS_TRUST_IS_READ, WAIT_SAID_AFTER, WAITING,
+    THE_QUESTIONS_TRUST_IS_READ, WAIT_SAID_AFTER, WAITING, WAITING_FOR_HOOKS,
 };
 
 #[cfg(feature = "scripts")]
@@ -83,7 +83,7 @@ pub(crate) use hook_points::PointHooks;
 #[cfg(feature = "scripts")]
 pub(crate) use prompt::PromptParts;
 #[cfg(feature = "scripts")]
-pub(crate) use script_hooks::{ScriptHooks, SessionStart};
+pub(crate) use script_hooks::{Gate, ScriptHooks, SessionStart};
 #[cfg(feature = "scripts")]
 pub(crate) use state::{ExtState, ProjectStore};
 #[cfg(feature = "scripts")]
