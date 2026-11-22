@@ -118,23 +118,11 @@ impl CallHost<'_> {
         // the engine's outcome, a question refused, saying what would allow
         // it.
         if self.phase == Phase::Hook {
-            if let Some(reason) = self.parts.policy.stopped_turn(self.cx.turn) {
+            if let Some(reason) = self.parts.policy.stopped_for_hooks(self.cx.turn) {
                 self.found_stopped.store(true, Ordering::SeqCst);
                 return Err(HostError::Stopped(reason));
             }
-            let lines: Vec<&str> = plan
-                .effects
-                .iter()
-                .filter_map(|effect| match effect {
-                    Effect::Exec { command, .. } => Some(command.as_str()),
-                    _ => None,
-                })
-                .collect();
-            return for_a_hook(
-                self.parts.policy.outcome(&planned),
-                how.read_only_asks,
-                &lines,
-            );
+            return for_a_hook(self.parts.policy.outcome(&planned), how.read_only_asks);
         }
         match self.parts.policy.decide(&planned) {
             // What the session's shell calls read-only may not be the
@@ -573,11 +561,7 @@ impl CallHost<'_> {
 /// (`read_only_asks`: another shell's own command or alias, or Windows' own
 /// lookup), when it counts as a question; a question is refused, naming the
 /// rules that would allow it (for a program, its `lines`), or why none can.
-fn for_a_hook(
-    outcome: cineris_policy::Outcome,
-    read_only_asks: bool,
-    lines: &[&str],
-) -> Result<(), HostError> {
+fn for_a_hook(outcome: cineris_policy::Outcome, read_only_asks: bool) -> Result<(), HostError> {
     let lead = "a hook may not put a question, and the permission engine would ask about this";
     let rule = |effect: &str, pattern: &str| {
         let pattern = serde_json::to_string(pattern).unwrap_or_default();
@@ -591,14 +575,20 @@ fn for_a_hook(
     let refused = match outcome {
         cineris_policy::Outcome::Allow { read_only: false } => return Ok(()),
         cineris_policy::Outcome::Allow { read_only: true } if !read_only_asks => return Ok(()),
-        cineris_policy::Outcome::Allow { read_only: true } => {
-            let rules: Vec<String> = lines.iter().map(|line| rule("exec", line)).collect();
-            format!(
-                "{lead}: what it reads as only reading may be another program than the one that \
-                 runs. A permission rule that allows it lets it run: {}",
-                rules.join(" and ")
-            )
-        }
+        // No rule can change it: the engine gives such a line its read-only
+        // outcome whatever the rules say (the maintainers' call on the full
+        // review of the script hooks, M2).
+        cineris_policy::Outcome::Allow { read_only: true } => "a hook may not put a question, and \
+                                                              on this system a hook cannot run a \
+                                                              line the engine reads as only \
+                                                              reading: the program that runs may \
+                                                              be another than the one the line \
+                                                              names (the shell's own command or \
+                                                              alias, or the one Windows' own \
+                                                              lookup finds). A hook command can \
+                                                              run it: the user's own runs where \
+                                                              the engine would ask"
+            .to_owned(),
         cineris_policy::Outcome::Deny { reason } => return Err(HostError::Denied(reason)),
         cineris_policy::Outcome::Ask(question) if question.managed => format!(
             "{lead}: a rule of the managed configuration asks about it, for a person to decide \
@@ -775,9 +765,10 @@ mod tests {
 
     /// A hook's host call is never put: the engine's allow runs it; its
     /// allow as only reading runs it unless that reading may not be the
-    /// program's (Windows, PowerShell, `cmd`), when it is refused, naming the
-    /// rule of its line that would allow it; a question is refused, naming
-    /// the rules the engine would keep, or the managed configuration's ask.
+    /// program's (Windows, PowerShell, `cmd`), when it is refused, naming no
+    /// rule, since none changes that outcome, and saying a hook command can
+    /// run it; a question is refused, naming the rules the engine would keep,
+    /// or the managed configuration's ask.
     #[test]
     fn a_hooks_host_call_is_never_put_and_a_read_only_line_another_shell_reads_is_refused() {
         use cineris_policy::{Outcome, Question};
@@ -791,26 +782,26 @@ mod tests {
             storable: false,
             managed,
         };
-        let lines = ["sort notes.txt"];
         assert_eq!(
-            for_a_hook(Outcome::Allow { read_only: false }, true, &lines),
+            for_a_hook(Outcome::Allow { read_only: false }, true),
             Ok(())
         );
         assert_eq!(
-            for_a_hook(Outcome::Allow { read_only: true }, false, &lines),
+            for_a_hook(Outcome::Allow { read_only: true }, false),
             Ok(())
         );
         let Err(HostError::NotHere(read_only)) =
-            for_a_hook(Outcome::Allow { read_only: true }, true, &lines)
+            for_a_hook(Outcome::Allow { read_only: true }, true)
         else {
             panic!("a line read as only reading in another shell ran in a hook");
         };
         assert!(
-            read_only.contains("a hook may not put a question")
-                && read_only.contains("match = \"sort notes.txt\""),
+            read_only.contains("on this system a hook cannot run a line the engine reads as only")
+                && read_only.contains("A hook command can run it")
+                && !read_only.contains("rule"),
             "{read_only}"
         );
-        let Err(HostError::NotHere(asked)) = for_a_hook(Outcome::Ask(question(false)), false, &[])
+        let Err(HostError::NotHere(asked)) = for_a_hook(Outcome::Ask(question(false)), false)
         else {
             panic!("a question was not refused");
         };
@@ -818,7 +809,7 @@ mod tests {
             asked.contains("effect = \"exec\", match = \"npm test\""),
             "{asked}"
         );
-        let Err(HostError::NotHere(managed)) = for_a_hook(Outcome::Ask(question(true)), false, &[])
+        let Err(HostError::NotHere(managed)) = for_a_hook(Outcome::Ask(question(true)), false)
         else {
             panic!("a managed question was not refused");
         };
@@ -828,8 +819,7 @@ mod tests {
                 Outcome::Deny {
                     reason: "a rule".to_owned()
                 },
-                false,
-                &[]
+                false
             ),
             Err(HostError::Denied("a rule".to_owned()))
         );

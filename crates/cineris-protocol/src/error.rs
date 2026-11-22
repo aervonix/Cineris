@@ -147,6 +147,11 @@ pub mod code {
     /// image: a prompt holds no other, as a hook sees its text (since step
     /// 28).
     pub const INVALID_PROMPT: &str = "invalid_prompt";
+    /// The session's extensions could not be found and registered (the work
+    /// that finds them ended before it was done), so no turn starts and no
+    /// compaction: one would skip a gate an extension may hold. Every later
+    /// start in the session is refused alike (since step 28).
+    pub const EXTENSIONS_NOT_SETTLED: &str = "extensions_not_settled";
 
     /// What a code that is not a plain one is kept as, where a provider's
     /// code would be kept: the statistics.

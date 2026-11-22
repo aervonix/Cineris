@@ -298,8 +298,14 @@ impl SessionHooks {
                 let cx = HookCx {
                     session: session.clone(),
                     // No turn of its own: a stop its look makes reaches the
-                    // next prompt (`HookCommands::stopped`).
-                    turn: TurnId::new("t_0"),
+                    // next prompt (`HookCommands::stopped`). A `session.end`
+                    // run is of no turn at all, so that a `session.start`
+                    // hook's stop does not refuse it.
+                    turn: TurnId::new(if event == Event::SessionEnd {
+                        NO_TURN
+                    } else {
+                        "t_0"
+                    }),
                     cancel: cancel.clone(),
                     kill: cancel.clone(),
                     paths: Arc::clone(&self.paths),
@@ -1043,6 +1049,12 @@ fn is_folder(path: &std::path::Path) -> bool {
 }
 
 /// The number of turn `turn` (`t_7` is 7): 0 when it has none.
+/// The turn of a `session.end` hook's run: none. A number no turn has and
+/// no stop names, so that a stop of a turn, the `session.start` hooks'
+/// (`t_0`) among them, refuses none of them (the full review of the script
+/// hooks, L8: both had `t_0`).
+pub(crate) const NO_TURN: &str = "t_4294967295";
+
 pub(crate) fn turn_number(turn: &TurnId) -> u32 {
     cineris_base::IdCounter::new("t_")
         .number_of(turn.as_str())
@@ -1089,7 +1101,7 @@ fn decide(
     // rule of the managed configuration is among what asks, which holds
     // the user's own hook back too, as the user's own check (step 19). No
     // second asking could answer otherwise (the early review's L4).
-    let (decision, managed) = match policy.stopped_turn(turn_number(&cx.turn)) {
+    let (decision, managed) = match policy.stopped_for_hooks(turn_number(&cx.turn)) {
         Some(reason) => (Decision::Stop { reason }, false),
         None => match policy.outcome(&planned) {
             cineris_policy::Outcome::Allow { read_only: true } => (Decision::AllowReadOnly, false),

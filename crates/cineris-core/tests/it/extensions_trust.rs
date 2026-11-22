@@ -342,6 +342,9 @@ fn keeping_the_trust_without_a_changed_extension_leaves_it_off_until_the_next_st
     write_extension(&folder, "", "the first");
     let first = definition(&folder);
     trust(&world, std::slice::from_ref(&first));
+    // Registered as it was approved, as an approval is: what it registered
+    // there (no hook) is what a change of it holds.
+    cache(&world, &folder);
     write_extension(&folder, "", "the second");
     let core = world.core();
     world.run(async {

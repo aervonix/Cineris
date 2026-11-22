@@ -380,6 +380,12 @@ pub(crate) struct EnginePolicy {
     /// refused after a later turn stops (the early review of the script
     /// hooks, L7).
     stopped: Mutex<StoppedTurns>,
+    /// The turns the loop's own stop ended (a call nobody could be asked
+    /// about, with `fail_on_denial`), and why: for their hooks alone, which
+    /// are refused, as of a turn stopped above. The round's calls are the
+    /// loop's to stop: one written before the refused call, and allowed,
+    /// still starts.
+    stopped_by_the_loop: Mutex<StoppedTurns>,
     denials: Mutex<Vec<PermissionDenial>>,
     /// Called before a command is decided: the project's knowledge looks
     /// at whether its files changed, and gives the engine the learned
@@ -461,6 +467,7 @@ impl EnginePolicy {
             waits_for_a_client: parts.waits_for_a_client,
             sandboxed: Arc::new(std::sync::atomic::AtomicBool::new(parts.sandboxed)),
             stopped: Mutex::new(StoppedTurns::default()),
+            stopped_by_the_loop: Mutex::new(StoppedTurns::default()),
             denials: Mutex::new(Vec::new()),
             before_command: std::sync::OnceLock::new(),
         }
@@ -499,6 +506,19 @@ impl EnginePolicy {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .reason(u64::from(turn))
+    }
+
+    /// Why turn number `turn` was stopped, if it was, as a hook of it sees
+    /// it: by the policy ([`stopped_turn`](Self::stopped_turn)), or by the
+    /// loop's own stop. A hook of either does not start, and a host call of
+    /// one still running is refused with the stop.
+    pub(crate) fn stopped_for_hooks(&self, turn: u32) -> Option<String> {
+        self.stopped_turn(turn).or_else(|| {
+            self.stopped_by_the_loop
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .reason(u64::from(turn))
+        })
     }
 
     /// Why `call`'s turn was stopped, if it was.
@@ -669,8 +689,9 @@ impl EnginePolicy {
         })
     }
 
-    /// The answer when nobody can be asked.
-    fn nobody(&self, call: &PlannedCall<'_>, question: &Question) -> Verdict {
+    /// The answer when nobody can be asked: of the loop's own call when
+    /// `loops`, or of an extension's host call, whose stop its host makes.
+    fn nobody(&self, call: &PlannedCall<'_>, question: &Question, loops: bool) -> Verdict {
         let reason = question.refusal();
         self.denials
             .lock()
@@ -683,6 +704,18 @@ impl EnginePolicy {
                 reason: question.reasons.join("; "),
             });
         if self.fail_on_denial {
+            // The turn stops, as the loop's `Stop` ends it, and its hooks
+            // know it: one still running has its host calls refused with the
+            // stop, and its later hooks do not start (the maintainers' call
+            // on the early review of the script hooks).
+            if loops
+                && let Some(turn) = cineris_base::IdCounter::new("t_").number_of(call.turn.as_str())
+            {
+                self.stopped_by_the_loop
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .stop(turn, reason.clone());
+            }
             Verdict::Stop { reason }
         } else {
             Verdict::Deny { note: Some(reason) }
@@ -1397,7 +1430,7 @@ impl EnginePolicy {
             // at once, as always.
             let waits = self.waits_for_a_client && subscribers.is_empty();
             if asked.is_empty() && !waits {
-                return self.nobody(&call, &question);
+                return self.nobody(&call, &question, host.is_none());
             }
             cineris_base::hook::await_point!(BEFORE_THE_APPROVAL_IS_OPEN);
 
@@ -1672,8 +1705,12 @@ mod tests {
         for turn in 3..=u64::try_from(STOPPED_KEPT).unwrap() + 2 {
             stopped.stop(turn, format!("turn {turn}"));
         }
+        // Eighteen turns stopped: the two oldest go past the bound of
+        // sixteen, and the rest are kept.
         assert_eq!(stopped.reason(1), None, "the oldest goes past the bound");
+        assert_eq!(stopped.reason(2), None, "the second oldest goes too");
         assert!(stopped.reason(3).is_some());
+        assert!(stopped.reason(18).is_some());
     }
 
     /// A skill's rule compiles whatever its folder is named, and matches

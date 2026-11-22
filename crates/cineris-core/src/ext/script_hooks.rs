@@ -86,6 +86,10 @@ pub(crate) struct ScriptHooks {
     /// The gating hooks of the extensions that stand approved and are not
     /// found as approved: each fails.
     held: Mutex<Vec<Arc<HeldHook>>>,
+    /// Each extension the session loaded, by its name and the hash it was
+    /// approved at: what it registered there is known, hooks or none, even
+    /// once it is withdrawn.
+    known: Mutex<Vec<(String, cineris_base::ContentHash)>>,
 }
 
 impl std::fmt::Debug for ScriptHooks {
@@ -122,36 +126,121 @@ pub(crate) struct Gate {
     pub(crate) unknown: Vec<Event>,
 }
 
+/// What an extension's way out of its held gates is from.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Stand<'a> {
+    /// It does not stand as it was approved: approve it again, or turn it
+    /// off. `trust_project`: the project is trusted for the run by the
+    /// command line, so no trust question is shown.
+    Unapproved {
+        /// Trusted for the run (`--trust-project`).
+        trust_project: bool,
+    },
+    /// The engine refuses its hash for the rest of the process (a thread of
+    /// it was left running): approving it again does not help.
+    Disabled,
+    /// Its folder is gone: turn it off, if it was removed on purpose.
+    Gone,
+    /// The store that holds its approval, `file` as the user is shown it,
+    /// cannot be read.
+    StoreUnreadable(&'a str),
+}
+
+/// `name` as a key of a TOML table's header: bare when it can be, quoted
+/// otherwise, so that `acme.lint` is one key (`[extensions."acme.lint"]`),
+/// not a table `lint` under `acme`.
+fn key(name: &str) -> String {
+    let bare = !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+    if bare {
+        name.to_owned()
+    } else {
+        let mut quoted = String::from("\"");
+        for c in name.chars() {
+            match c {
+                '"' => quoted.push_str("\\\""),
+                '\\' => quoted.push_str("\\\\"),
+                c => quoted.push(c),
+            }
+        }
+        quoted.push('"');
+        quoted
+    }
+}
+
 /// The way out of an extension's held gates, and of a hook of it that
 /// cannot run: what approves it again, or turns it off, as the harness has
-/// them now. The one place that says it, so that the commands that manage
-/// extensions (`cineris ext disable` and the rest of the step's third part)
-/// are named here once they are built. `shown` is its folder as the user is
-/// shown it, when known.
+/// them now, as it stands (`stand`). The one place that says it, so that the
+/// commands that manage extensions (`cineris ext disable`, `cineris ext
+/// remove` and the rest of the step's third part) are named here once they
+/// are built. `shown` is its folder as the user is shown it, when known.
 pub(crate) fn way_out(
     source: cineris_ext::source::Source,
     name: &str,
     shown: Option<&str>,
+    stand: Stand<'_>,
 ) -> String {
+    use cineris_ext::source::Source;
     let name = in_code(name);
-    match source {
-        cineris_ext::source::Source::User => {
-            let add = shown.map_or_else(
-                || "`cineris ext add` with its folder".to_owned(),
-                |shown| format!("`cineris ext add {shown}`"),
-            );
-            format!(
-                "approve it again as it is now, fixed first if it needs it ({add}), or turn it off: \
-                 set `[extensions.{name}] enabled = false` in your configuration, which takes \
-                 effect in the next session"
-            )
-        }
-        cineris_ext::source::Source::Project => "approve it again as it is now, fixed first if it \
-                                                 needs it (the project's trust question lists it \
-                                                 when a session opens, and `cineris permissions \
-                                                 trust` shows it), or take the project's trust \
-                                                 away (`cineris permissions untrust`)"
+    let add = shown.map_or_else(
+        || "`cineris ext add` with its folder".to_owned(),
+        |shown| format!("`cineris ext add {shown}`"),
+    );
+    let table = format!("`[extensions.{}] enabled = false`", key(&name));
+    match (source, stand) {
+        (Source::User, Stand::Unapproved { .. }) => format!(
+            "approve it again as it is now, fixed first if it needs it ({add}), or turn it off: set \
+             {table} in your configuration, which takes effect in the next session"
+        ),
+        (
+            Source::Project,
+            Stand::Unapproved {
+                trust_project: false,
+            },
+        ) => "approve it again as it is now, fixed first if it needs it (the project's trust \
+              question lists it when a session opens, and `cineris permissions trust` shows it), \
+              or take the project's trust away (`cineris permissions untrust`)"
             .to_owned(),
+        (
+            Source::Project,
+            Stand::Unapproved {
+                trust_project: true,
+            },
+        ) => "approve it again as it is now, fixed first if it needs it (`cineris permissions \
+              trust` shows it), or take the project's trust away (`cineris permissions untrust`) \
+              and start without `--trust-project`"
+            .to_owned(),
+        (Source::User, Stand::Disabled) => format!(
+            "turn it off ({table} in your configuration), or start Cineris again: this process \
+             does not start it again"
+        ),
+        (Source::Project, Stand::Disabled) => {
+            "take the project's trust away (`cineris permissions \
+                                               untrust`), or start Cineris again: this process \
+                                               does not start it again"
+                .to_owned()
+        }
+        // A deletion may be an unconfined program's, taking a gate away:
+        // only the user's word lets it go.
+        (Source::User, Stand::Gone) => format!(
+            "its folder is gone; if you removed it, turn it off with `enabled = false` (or, from \
+             the next release, `cineris ext remove {name}`)"
+        ),
+        (Source::Project, Stand::Gone) => {
+            "its folder is gone; if it was removed on purpose, trust \
+                                           the project again without it (`cineris permissions \
+                                           trust`), or take the project's trust away (`cineris \
+                                           permissions untrust`)"
+                .to_owned()
+        }
+        (Source::User, Stand::StoreUnreadable(file)) => {
+            format!("repair or remove `{file}`, then approve it again ({add})")
+        }
+        (Source::Project, Stand::StoreUnreadable(file)) => format!(
+            "repair or remove `{file}`, then trust the project again (`cineris permissions trust`)"
+        ),
     }
 }
 
@@ -221,6 +310,7 @@ impl ScriptHooks {
             paths,
             on: Mutex::new(Vec::new()),
             held: Mutex::new(Vec::new()),
+            known: Mutex::new(Vec::new()),
         }
     }
 
@@ -230,6 +320,13 @@ impl ScriptHooks {
     pub(crate) fn add(&self, extension: &Arc<LoadedExtension>) {
         let approved = extension.approved();
         let allowed = &approved.manifest.capabilities.hooks;
+        {
+            let mut known = lock(&self.known);
+            let key = (approved.manifest.name.clone(), approved.hash);
+            if !known.contains(&key) {
+                known.push(key);
+            }
+        }
         let mut added = Vec::new();
         // Its runs are under a token of its own, a child of the session's:
         // withdrawn, it stops what of it still runs.
@@ -275,6 +372,7 @@ impl ScriptHooks {
     pub(crate) fn hold(&self, gates: Vec<Gate>) -> Vec<(usize, Vec<LoopEvent>)> {
         let on = lock(&self.on);
         let mut held = lock(&self.held);
+        let known = lock(&self.known);
         let mut next: Vec<Arc<HeldHook>> = Vec::new();
         let mut holding: Vec<(usize, Vec<LoopEvent>)> = Vec::new();
         for (index, gate) in gates.into_iter().enumerate() {
@@ -321,9 +419,14 @@ impl ScriptHooks {
                     )
                     .collect(),
             };
-            // Known nowhere: each gating event its manifest lists, on every
-            // call and every prompt.
-            if made.is_empty() && gate.hooks.is_none() {
+            // Known nowhere (not in the cache, never loaded at that hash in
+            // this session): each gating event its manifest lists, or both,
+            // on every call and every prompt.
+            let unknown = gate.hooks.is_none()
+                && !known
+                    .iter()
+                    .any(|(name, hash)| *name == gate.name && *hash == gate.hash);
+            if made.is_empty() && unknown {
                 made = gate
                     .unknown
                     .iter()
@@ -483,7 +586,8 @@ impl ScriptHooks {
     /// the close gives its time, stops, and waits for.
     pub(crate) fn session_ending(&self, session: &SessionId) -> Vec<(String, Running)> {
         let input = session_input(Event::SessionEnd, session, &self.paths);
-        let turn = TurnId::new("t_0");
+        // Of no turn: a `session.start` hook's stop refuses none of them.
+        let turn = TurnId::new(super::hook_command::NO_TURN);
         self.of_session(Event::SessionEnd)
             .into_iter()
             .map(|hook| {
@@ -828,7 +932,7 @@ impl Call {
         // A stopped turn runs nothing more: a hook of it does not start,
         // and is no stop of its own (the maintainers, for hooks: a stopped
         // turn's hooks do not start).
-        if policy.stopped_turn(turn_number(&self.turn)).is_some() {
+        if policy.stopped_for_hooks(turn_number(&self.turn)).is_some() {
             return HookRan::Failed("it was not started: its turn was stopped".to_owned());
         }
         cineris_base::hook::await_point!(A_SCRIPT_HOOK_STARTS);
@@ -848,9 +952,12 @@ impl Call {
             call_id: CallId::new(format!("hook_{}", self.name)),
             item: ItemId::new(format!("hook_{}_{}", self.name, self.turn.as_str())),
         });
+        let commands = Arc::clone(&self.commands);
         let ran = self
             .extension
-            .call_hook(self.index, &self.name, input, &cx, timed)
+            .call_hook(self.index, &self.name, input, &cx, timed, &|task| {
+                commands.keep(task);
+            })
             .await;
         if let HookRan::Stopped(note) = &ran {
             // Told at once, and the next prompt held back, on any event.
@@ -858,5 +965,74 @@ impl Call {
         }
         cineris_base::hook::await_point!(A_SCRIPT_HOOK_ENDS);
         ran
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Stand, way_out};
+    use cineris_ext::source::Source;
+
+    /// The way out names an extension's table as TOML reads it: a dotted
+    /// name is one key, quoted, not a table under another (the full review
+    /// of the script hooks, L4).
+    #[test]
+    fn the_way_out_names_a_dotted_extensions_table_as_one_key() {
+        let unapproved = Stand::Unapproved {
+            trust_project: false,
+        };
+        let plain = way_out(Source::User, "lint", None, unapproved);
+        assert!(
+            plain.contains("`[extensions.lint] enabled = false`"),
+            "{plain}"
+        );
+        let dotted = way_out(Source::User, "acme.lint", None, unapproved);
+        assert!(
+            dotted.contains("`[extensions.\"acme.lint\"] enabled = false`"),
+            "{dotted}"
+        );
+        let disabled = way_out(Source::User, "acme.lint", None, Stand::Disabled);
+        assert!(
+            disabled.contains("[extensions.\"acme.lint\"]")
+                && disabled.contains("start Cineris again"),
+            "{disabled}"
+        );
+    }
+
+    /// Under `--trust-project` no trust question is shown, so the way out
+    /// of a project's extension's gate names none (the full review of the
+    /// script hooks); a project's disabled one is untrusted, or waits for a
+    /// new process (L5).
+    #[test]
+    fn a_projects_way_out_names_only_what_the_run_shows() {
+        let asked = way_out(
+            Source::Project,
+            "tracker",
+            None,
+            Stand::Unapproved {
+                trust_project: false,
+            },
+        );
+        assert!(asked.contains("the project's trust question"), "{asked}");
+        let for_the_run = way_out(
+            Source::Project,
+            "tracker",
+            None,
+            Stand::Unapproved {
+                trust_project: true,
+            },
+        );
+        assert!(
+            !for_the_run.contains("trust question")
+                && for_the_run.contains("`cineris permissions trust` shows it"),
+            "{for_the_run}"
+        );
+        let disabled = way_out(Source::Project, "tracker", None, Stand::Disabled);
+        assert!(
+            disabled.contains("`cineris permissions untrust`")
+                && disabled.contains("start Cineris again")
+                && !disabled.contains("approve it again"),
+            "{disabled}"
+        );
     }
 }

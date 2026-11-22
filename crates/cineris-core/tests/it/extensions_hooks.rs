@@ -79,7 +79,13 @@ fn prompt_op(session: &SessionId, text: &str) -> Op {
 /// `script` as its main module. Its folder.
 fn write(world: &World, capabilities: &str, script: &str) -> PathBuf {
     let folder = users(world);
-    std::fs::create_dir_all(&folder).unwrap();
+    write_in(&folder, capabilities, script);
+    folder
+}
+
+/// [`write`], into `folder`.
+fn write_in(folder: &std::path::Path, capabilities: &str, script: &str) {
+    std::fs::create_dir_all(folder).unwrap();
     std::fs::write(
         folder.join("extension.toml"),
         format!(
@@ -89,7 +95,6 @@ fn write(world: &World, capabilities: &str, script: &str) -> PathBuf {
     )
     .unwrap();
     std::fs::write(folder.join("main.js"), script).unwrap();
-    folder
 }
 
 /// [`write`], approved as it is: pinned, and what it registers cached.
@@ -729,7 +734,11 @@ fn a_session_whose_finding_failed_starts_no_turn() {
             front.op(prompt_op(&front.session, "again")).await,
         ] {
             let refused = refused.expect_err("a turn started");
-            assert_eq!(refused.code, "extensions_not_settled", "{refused:?}");
+            assert_eq!(
+                refused.code,
+                cineris_protocol::error::code::EXTENSIONS_NOT_SETTLED,
+                "{refused:?}"
+            );
             assert!(refused.message.starts_with("No turn starts"), "{refused:?}");
         }
         assert!(world.provider.requests().is_empty());
@@ -762,7 +771,11 @@ const GATES: &str = "cineris.on('tool.before', { tools: ['list'] }, () => undefi
 #[test]
 fn an_extensions_gates_are_held_while_it_does_not_stand_approved() {
     let mut responses = Vec::new();
-    responses.extend(one_call("c1", "list", json!({"path": "."})));
+    responses.push(calls(&[
+        ("c0", "read", json!({"path": "notes.md"})),
+        ("c1", "list", json!({"path": "."})),
+    ]));
+    responses.push(says("Done."));
     responses.extend(one_call("c2", "list", json!({"path": "."})));
     responses.push(calls(&[
         ("c3", "list", json!({"path": "."})),
@@ -782,7 +795,19 @@ fn an_extensions_gates_are_held_while_it_does_not_stand_approved() {
     let linked = world.run(async {
         let front = start(&world, &core).await;
         front.turn("changed since").await;
-        let (outcome, text) = last(&front);
+        // Held from the registration the cache keeps: on `list` alone, so
+        // the `read` beside it runs.
+        let results = front.results();
+        let outcome_of = |tool: &str| {
+            results
+                .iter()
+                .find(|(called, _, _)| called == tool)
+                .map(|(_, outcome, text)| (outcome.clone(), text.clone()))
+                .unwrap_or_else(|| panic!("no `{tool}`: {results:?}"))
+        };
+        let (outcome, text) = outcome_of("read");
+        assert_eq!(outcome, "success", "the held gate's filter is its own: {text}");
+        let (outcome, text) = outcome_of("list");
         assert_eq!(outcome, "denied", "{text}");
         for words in [
             "`probe/hook.tool.before` failed",
@@ -914,6 +939,7 @@ fn an_extension_whose_runtime_cannot_start_fails_its_gates() {
             "`probe/hook.tool.before` failed",
             "is disabled",
             "`[extensions.probe] enabled = false`",
+            "start Cineris again: this process does not start it again",
         ] {
             assert!(text.contains(words), "{words}: {text}");
         }
@@ -1052,13 +1078,15 @@ fn an_extension_never_registered_holds_the_gates_its_manifest_lists() {
 }
 
 /// An extension removed from where it was approved, and still pinned,
-/// holds its gates from what its pin's registration registered, failing,
-/// turns of one session (the early review of the script hooks, M1: only
-/// the user's word, the project's trust or the pin taken away withdraws
-/// them): its folder removed, its `tool.before` gate refuses, naming why;
-/// its pin taken away, nothing is held.
+/// holds its gates from what its pin's registration registered, failing
+/// (the early review of the script hooks, M1, and the maintainers' call on
+/// it: a deletion may be an unconfined program's, taking a gate away), two
+/// sessions of one core: its folder removed, its `tool.before` gate
+/// refuses, saying, to the model and to the user once, that its folder is
+/// gone and how to turn it off if it was removed on purpose; turned off so
+/// (`enabled = false`), a session opened after holds nothing.
 #[test]
-fn a_removed_extensions_gates_hold_until_its_pin_goes() {
+fn a_removed_extensions_gates_hold_until_it_is_turned_off() {
     let mut responses = Vec::new();
     for id in ["c1", "c2", "c3"] {
         responses.extend(one_call(id, "list", json!({"path": "."})));
@@ -1076,24 +1104,29 @@ fn a_removed_extensions_gates_hold_until_its_pin_goes() {
         front.turn("removed").await;
         let (outcome, text) = last(&front);
         assert_eq!(outcome, "denied", "{text}");
+        let gone = "its folder is gone; if you removed it, turn it off with `enabled = false` \
+                    (or, from the next release, `cineris ext remove probe`)";
         for words in [
             "`probe/hook.tool.before` failed",
-            "cannot be found where it was approved",
-            "`[extensions.probe] enabled = false`",
+            "the extension `probe` cannot be found where it was approved, so its gate refuses it",
+            gone,
         ] {
             assert!(text.contains(words), "{words}: {text}");
         }
-
-        cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world))
-            .unpin(
-                &cineris_protocol::methods::TrustResourceKind::Extension,
-                "probe",
-            )
-            .unwrap();
-        front.turn("unpinned").await;
-        let (outcome, text) = last(&front);
-        assert_eq!(outcome, "success", "{text}");
+        front.drain();
+        let told = format!(
+            "Your extension `probe` cannot be found where you approved it. Its gate on \
+             `tool.before` holds, refusing every call it is on: {gone}."
+        );
+        assert_eq!(told_times(&front, &told), 1, "{:?}", front.notices());
+        turn_it_off(&world, &front).await;
         front.close().await;
+
+        let next = start(&world, &core).await;
+        next.turn("turned off").await;
+        let (outcome, text) = last(&next);
+        assert_eq!(outcome, "success", "{text}");
+        next.close().await;
     });
 }
 
@@ -1328,6 +1361,389 @@ fn a_hooks_run_let_go_while_its_runtime_starts_ends_at_once() {
         drop(registers);
         let said = four.await.unwrap();
         assert!(said.iter().all(Option::is_none), "{said:?}");
+        front.close().await;
+    });
+}
+
+/// A gate on `list` that has no opinion.
+const LIST_GATE: &str = "cineris.on('tool.before', { tools: ['list'] }, () => undefined);\n";
+
+/// A changed extension whose approved registration is known nowhere (not
+/// in the registration cache, never loaded in the session) holds both
+/// gates, `tool.before` and `prompt.submit`, whatever its manifest as
+/// found says (the maintainers' call on the early review of the script
+/// hooks): changed to drop `capabilities.hooks`, it still refuses the
+/// prompt, which never reaches the model; turned off, a session opened
+/// after runs the call.
+#[test]
+fn a_changed_extension_whose_registration_is_not_known_holds_both_gates() {
+    let world = World::new(
+        "ext_hooks_changed_unknown",
+        one_call("c1", "list", json!({"path": "."})),
+    );
+    let folder = write(&world, "hooks = [\"tool.before\"]", LIST_GATE);
+    pin(&world, &folder);
+    write(&world, "", "// changed, its hooks dropped\n");
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        let ended = front.turn("look").await;
+        assert_eq!(ended.outcome, TurnOutcome::Denied, "{ended:?}");
+        front.drain();
+        let why = returned(&front);
+        for words in [
+            "`probe/hook.prompt.submit`",
+            "the extension `probe`",
+            "has changed since it was approved",
+        ] {
+            assert!(why.contains(words), "{words}: {why}");
+        }
+        assert_eq!(
+            told_times(
+                &front,
+                "Its gates on `prompt.submit` and `tool.before` hold, refusing every prompt"
+            ),
+            1,
+            "{:?}",
+            front.notices()
+        );
+        assert!(
+            world.provider.requests().is_empty(),
+            "a refused prompt reached the model"
+        );
+        turn_it_off(&world, &front).await;
+        front.close().await;
+
+        let next = start(&world, &core).await;
+        next.turn("turned off").await;
+        let (outcome, text) = last(&next);
+        assert_eq!(outcome, "success", "{text}");
+        next.close().await;
+    });
+}
+
+/// While the store of the user's pins cannot be read, each of the user's
+/// extensions found holds failing gates (the maintainers' calls on the
+/// early review of the script hooks, and the full review's L1), two
+/// sessions of one core:
+/// - never loaded in the session (the store unreadable as it opens), it
+///   holds one on each gating event its manifest lists, since no pin can
+///   say what was approved: its manifest lists `tool.before` with no tool,
+///   so every call is refused, naming why and the way out; the user is told
+///   once, the store's file under `~` and the fix; the core's own
+///   operations go on (the configuration is read again); the store removed
+///   and the extension approved again, it is loaded at the next turn's
+///   start, and the call runs;
+/// - loaded, then the store made unreadable, it is withdrawn and keeps the
+///   gates of what the session saw it register: its gate on `list` alone,
+///   so a `read` runs and a `list` is refused.
+#[test]
+fn an_unreadable_pin_store_holds_the_gates_of_the_users_extensions() {
+    let mut responses = Vec::new();
+    responses.extend(one_call("c1", "read", json!({"path": "notes.md"})));
+    responses.extend(one_call("c2", "list", json!({"path": "."})));
+    responses.extend(one_call("c3", "list", json!({"path": "."})));
+    responses.extend(one_call("c4", "list", json!({"path": "."})));
+    responses.extend(one_call("c5", "read", json!({"path": "notes.md"})));
+    responses.extend(one_call("c6", "list", json!({"path": "."})));
+    let world = World::new("ext_hooks_pins_unreadable", responses);
+    world.put("notes.md", "notes\n");
+    let folder = approved(&world, "hooks = [\"tool.before\", \"tool.after\"]", GATES);
+    let pins = state(&world).pins_file();
+    std::fs::write(&pins, "version = 9\n").unwrap();
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        let told = "could not be read, so your extensions cannot be judged";
+        for prompt in ["read it", "list it"] {
+            front.turn(prompt).await;
+            let (outcome, text) = last(&front);
+            assert_eq!(outcome, "denied", "{prompt}: {text}");
+            for words in [
+                "`probe/hook.tool.before` failed",
+                "the pin store could not be read",
+                "repair or remove `~/",
+                "then approve it again (`cineris ext add",
+            ] {
+                assert!(text.contains(words), "{words}: {text}");
+            }
+            front.drain();
+            assert_eq!(told_times(&front, told), 1, "{:?}", front.notices());
+        }
+        assert!(
+            front
+                .notices()
+                .iter()
+                .any(|notice| notice.contains(told) && notice.contains("The pin store (`~/")),
+            "{:?}",
+            front.notices()
+        );
+        reads_the_configuration_again(&front).await;
+        // The fix: the store removed, and the extension approved again.
+        std::fs::remove_file(&pins).unwrap();
+        pin(&world, &folder);
+        front.turn("fixed").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "success", "{text}");
+        front.close().await;
+
+        // Loaded, then the store made unreadable: what it registered holds.
+        let front = start(&world, &core).await;
+        front.turn("loaded").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "success", "{text}");
+        std::fs::write(&pins, "version = 9\n").unwrap();
+        front.turn("read it").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "success", "its gate is on `list` alone: {text}");
+        front.turn("list it").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "denied", "{text}");
+        assert!(text.contains("the pin store could not be read"), "{text}");
+        front.close().await;
+    });
+}
+
+/// While the trust store cannot be read, a project's extensions found hold
+/// failing gates on the gating events their manifests list, whatever the
+/// project's trust was, since no pin can say what was approved (the
+/// maintainers' call on the early review of the script hooks), turns of
+/// one session: the gate refuses, naming why and the way out; the user is
+/// told once, the store's file under `~`, that every project's extensions
+/// are gated until it is fixed, and how; the core's own operations go on;
+/// the store removed, nothing is held at the next turn's start.
+#[test]
+fn an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions() {
+    let mut responses = Vec::new();
+    for id in ["c1", "c2", "c3"] {
+        responses.extend(one_call(id, "list", json!({"path": "."})));
+    }
+    let world = World::new("ext_hooks_trust_unreadable", responses);
+    write_in(
+        &crate::extensions_found::projects(&world),
+        "hooks = [\"tool.before\", \"tool.after\"]",
+        GATES,
+    );
+    let store = state(&world).trust_file();
+    std::fs::write(&store, "version = 9\n").unwrap();
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        let told = "every project's extensions are gated";
+        for prompt in ["gated", "again"] {
+            front.turn(prompt).await;
+            let (outcome, text) = last(&front);
+            assert_eq!(outcome, "denied", "{text}");
+            for words in [
+                "`probe/hook.tool.before` failed",
+                "the trust store could not be read",
+                "repair or remove `~/",
+                "`cineris permissions trust`",
+            ] {
+                assert!(text.contains(words), "{words}: {text}");
+            }
+            front.drain();
+            assert_eq!(told_times(&front, told), 1, "{:?}", front.notices());
+        }
+        assert!(
+            front.notices().iter().any(|notice| notice.contains(told)
+                && notice.contains("The trust store (`~/")
+                && notice.contains("until it is fixed")),
+            "{:?}",
+            front.notices()
+        );
+        reads_the_configuration_again(&front).await;
+        // The fix: the store removed. The project is not trusted, so its
+        // extension is not loaded, and holds nothing.
+        std::fs::remove_file(&store).unwrap();
+        front.turn("fixed").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "success", "{text}");
+        front.close().await;
+    });
+}
+
+/// The core reads the configuration again: an operation of its own, which
+/// no hook gates, while gates hold.
+async fn reads_the_configuration_again(front: &Front) {
+    let reloaded = front
+        .op(Op::ConfigReload(ConfigReloadParams::default()))
+        .await;
+    assert!(
+        matches!(reloaded, Ok(OpResult::ConfigReload(_))),
+        "{reloaded:?}"
+    );
+}
+
+/// An observer on `list` that reads, then says it did, and a `turn.end`
+/// hook that says which turn it ran for.
+const STOPPED_BY_THE_LOOP: &str = "cineris.on('tool.before', { tools: ['list'], observe: true }, async () => {\n\
+       const text = await cineris.fs.read('notes.md');\n\
+       cineris.notify('read ' + text.trim());\n\
+     });\n\
+     cineris.on('turn.end', (e) => { cineris.notify('turn.end ran in ' + e.turn_id); });\n";
+
+/// A turn the loop's own stop ends (a call nobody can be asked about, with
+/// `fail_on_denial`) refuses its hooks as a turn the policy stopped does
+/// (the maintainers' call on the early review of the script hooks): a hook
+/// still running when the round's write stops the turn, which then reads,
+/// is refused, and the turn's `turn.end` hook does not start; the next turn
+/// is not stopped, and its own hooks run.
+#[test]
+fn a_turn_the_loops_own_stop_ends_refuses_its_hooks() {
+    let world = World::new(
+        "ext_hooks_loop_stopped",
+        [
+            calls(&[
+                ("c1", "list", json!({"path": "."})),
+                (
+                    "c2",
+                    "write",
+                    json!({"path": ".env", "content": "TOKEN=1\n"}),
+                ),
+            ]),
+            says("Done."),
+        ],
+    );
+    world.put("notes.md", "the notes\n");
+    approved(
+        &world,
+        "read = [\"**\"]\nhooks = [\"tool.before\", \"turn.end\"]",
+        STOPPED_BY_THE_LOOP,
+    );
+    let core = world.core_with(|options| options.fail_on_denial = true);
+    world.run(async {
+        let (front, _) = open_as(
+            &world,
+            &core,
+            ClientInfo::headless(),
+            TrustResponse::default(),
+        )
+        .await;
+        let starts = Hold::new(cineris_core::ext::A_SCRIPT_HOOK_STARTS);
+        let mut turn = std::pin::pin!(front.turn("look"));
+        starts.drive_until_reached(turn.as_mut()).await;
+        let ended = turn.await;
+        assert_eq!(ended.outcome, TurnOutcome::Denied, "{ended:?}");
+        assert_eq!(world.read(".env"), None);
+        let ends = Hold::new(cineris_core::ext::A_SCRIPT_HOOK_ENDS);
+        starts.release();
+        drop(starts);
+        let mut idle = std::pin::pin!(std::future::pending::<()>());
+        ends.drive_until_reached(idle.as_mut()).await;
+        ends.release();
+        drop(ends);
+        front.drain();
+        assert!(!told(&front, "read the notes"), "{:?}", front.notices());
+        let next = front.turn("again").await;
+        assert_eq!(next.outcome, TurnOutcome::Completed, "{next:?}");
+        front.until(|_| told(&front, "turn.end ran in t_2")).await;
+        assert!(
+            !told(&front, "turn.end ran in t_1"),
+            "a stopped turn's hook started: {:?}",
+            front.notices()
+        );
+        front.close().await;
+    });
+}
+
+/// [`LIST_GATE`]'s extension changed when its registration cache is set
+/// aside: approved and cached, the cache made unreadable, then changed to
+/// drop `capabilities.hooks`, it holds both gates in the next session, as
+/// one never registered does (the full review of the script hooks, M1).
+#[test]
+fn a_changed_extension_with_its_cache_set_aside_holds_both_gates() {
+    let world = World::new("ext_hooks_cache_aside", Vec::<Response>::new());
+    approved(&world, "hooks = [\"tool.before\"]", LIST_GATE);
+    std::fs::write(state(&world).registration_cache_file(), "not json").unwrap();
+    write(&world, "", "// changed, its hooks dropped\n");
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        let ended = front.turn("look").await;
+        assert_eq!(ended.outcome, TurnOutcome::Denied, "{ended:?}");
+        front.drain();
+        let why = returned(&front);
+        assert!(
+            why.contains("`probe/hook.prompt.submit`")
+                && why.contains("has changed since it was approved"),
+            "{why}"
+        );
+        assert!(world.provider.requests().is_empty());
+        front.close().await;
+    });
+}
+
+/// A hook's run let go while its extension's runtime starts leaves the
+/// start to go on, as a run of the session's, which its close waits for:
+/// no run outlives its session (the full review of the script hooks, L7).
+/// The start is held as the main module registers its hook; the close does
+/// not end before it is let go.
+#[test]
+fn a_runtime_start_a_hook_left_is_waited_for_by_the_close() {
+    let world = World::new("ext_hooks_start_kept", Vec::<Response>::new());
+    let extension = handed(&world, "hooks = [\"turn.end\"]", QUIET);
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    world.run(async {
+        let front = start(&world, &core).await;
+        let registers = Hold::new(cineris_ext::engine::A_DEFINITION_IS_REGISTERED);
+        {
+            let mut run = std::pin::pin!(core.hook_runs_at_its_point(
+                &front.session,
+                "probe/hook.turn.end",
+                1
+            ));
+            drive_until(run.as_mut(), || registers.wait_reached(Duration::ZERO)).await;
+        }
+        settle().await;
+        let mut close = std::pin::pin!(front.close());
+        for _ in 0..8 {
+            assert!(
+                poll_once(close.as_mut()).await.is_pending(),
+                "the close ended while a start it did not wait for went on"
+            );
+            settle().await;
+        }
+        registers.release();
+        drop(registers);
+        close.await;
+    });
+}
+
+/// Under `--trust-project`, which shows no trust question, a changed
+/// project's extension's held gate names none in its way out: it names
+/// `cineris permissions trust`, which shows the extension to approve it
+/// (the full review of the script hooks).
+#[test]
+fn under_trust_for_the_run_a_changed_projects_gate_names_no_question() {
+    let world = World::new(
+        "ext_hooks_trust_for_the_run",
+        one_call("c1", "list", json!({"path": "."})),
+    );
+    let folder = crate::extensions_found::projects(&world);
+    write_in(&folder, "hooks = [\"tool.before\", \"tool.after\"]", GATES);
+    crate::extensions_found::trust(
+        &world,
+        &[crate::extensions_trust::named_definition(&folder, "probe")],
+    );
+    cache(&world, &folder);
+    write_in(
+        &folder,
+        "hooks = [\"tool.before\", \"tool.after\"]",
+        &format!("// changed\n{GATES}"),
+    );
+    let core = world.core_with(|options| options.trust_project = true);
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("look").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "denied", "{text}");
+        assert!(
+            text.contains("has changed since it was approved")
+                && text.contains("`cineris permissions trust` shows it")
+                && !text.contains("trust question"),
+            "{text}"
+        );
         front.close().await;
     });
 }

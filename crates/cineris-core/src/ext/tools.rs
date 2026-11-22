@@ -20,6 +20,25 @@ use super::exec::ExecParts;
 use super::host;
 use crate::policy::EnginePolicy;
 
+/// Why an extension's runtime could not start.
+#[derive(Debug)]
+pub(crate) struct Refused {
+    /// Why, in a sentence that names the extension.
+    why: String,
+    /// The engine refuses its hash for the rest of the process.
+    disabled: bool,
+}
+
+impl Refused {
+    /// A refusal of the start for `why`, not a disabled one.
+    fn by(why: String) -> Self {
+        Self {
+            why,
+            disabled: false,
+        }
+    }
+}
+
 /// What every call of a session's extensions is served with.
 pub(crate) struct HostParts {
     pub(crate) policy: Arc<EnginePolicy>,
@@ -38,6 +57,10 @@ pub(crate) struct HostParts {
     pub(crate) tell: Arc<dyn Fn(String) + Send + Sync>,
     /// What the session's extensions keep: `cineris.state`.
     pub(crate) state: Arc<super::ExtState>,
+    /// The project is trusted for the run by the command line
+    /// (`--trust-project`): the way out of a project's extension's gate
+    /// names no trust question, which is not shown then.
+    pub(crate) trust_project: bool,
 }
 
 impl std::fmt::Debug for HostParts {
@@ -117,6 +140,7 @@ impl LoadedExtension {
         input: Json,
         cx: &RunCx,
         (asked, time): (Duration, Duration),
+        keep: &(dyn Fn(tokio::task::JoinHandle<()>) + Send + Sync),
     ) -> HookRan {
         // A run let go before it got here starts nothing, not even its
         // runtime.
@@ -128,21 +152,26 @@ impl LoadedExtension {
         // raced against the run's cancel: one let go meanwhile ends at once,
         // and the start goes on to its end on a task of its own, its grace
         // and a thread it leaves running counted (the early review of the
-        // script hooks, L5).
-        let starting = {
+        // script hooks, L5). That task is one of the session's runs, which
+        // its close waits for: no run outlives its session (the full review
+        // of the script hooks, L7).
+        let (started, starting) = tokio::sync::oneshot::channel();
+        keep({
             let extension = Arc::clone(self);
-            tokio::spawn(async move { extension.runtime().await })
-        };
+            tokio::spawn(async move {
+                let _ = started.send(extension.runtime().await);
+            })
+        });
         let runtime = match cx.cancel.race(starting).await {
             Some(Ok(Ok(runtime))) => runtime,
-            Some(Ok(Err(error))) => {
-                return HookRan::Failed(format!("{error}; {}", self.remedy()));
+            Some(Ok(Err(Refused { why, disabled }))) => {
+                return HookRan::Failed(format!("{why}; {}", self.remedy(disabled)));
             }
             Some(Err(_)) => {
                 return HookRan::Failed(format!(
                     "the extension `{}` could not start; {}",
                     cineris_base::in_code(self.name()),
-                    self.remedy()
+                    self.remedy(false)
                 ));
             }
             None => {
@@ -193,21 +222,30 @@ impl LoadedExtension {
             )),
             Err(CallError::Cancelled) => HookRan::Failed("it was let go".to_owned()),
             Err(error @ CallError::Disabled) => {
-                HookRan::Failed(format!("{error}; {}", self.remedy()))
+                HookRan::Failed(format!("{error}; {}", self.remedy(true)))
             }
             Err(error) => HookRan::Failed(error.to_string()),
         }
     }
 
     /// What approves the extension as it is now, or turns it off: for a
-    /// hook of it that cannot run.
-    fn remedy(&self) -> String {
-        super::script_hooks::way_out(self.approved.source, self.name(), None)
+    /// hook of it that cannot run. `disabled`: the engine refuses it for the
+    /// rest of the process (a thread of it was left running), so approving
+    /// it again does not help (the full review of the script hooks, L5).
+    fn remedy(&self, disabled: bool) -> String {
+        let stand = if disabled {
+            super::script_hooks::Stand::Disabled
+        } else {
+            super::script_hooks::Stand::Unapproved {
+                trust_project: self.parts.trust_project,
+            }
+        };
+        super::script_hooks::way_out(self.approved.source, self.name(), None, stand)
     }
 
     /// The live runtime, made when there is none or the last was torn
     /// down.
-    async fn runtime(&self) -> Result<Arc<ScriptRuntime>, String> {
+    async fn runtime(&self) -> Result<Arc<ScriptRuntime>, Refused> {
         let mut slot = self.runtime.lock().await;
         // An extension whose thread was left running is not started again
         // in this process: the engine refuses it, for every session.
@@ -226,19 +264,19 @@ impl LoadedExtension {
         match way {
             Ok(None) => {}
             Ok(Some(linked)) => {
-                return Err(format!(
+                return Err(Refused::by(format!(
                     "The extension `{}` could not start: `{}` on the way to its folder is no \
                      longer a folder of its own, and a link is not followed to it",
                     self.name(),
                     cineris_base::in_code(&linked.display().to_string())
-                ));
+                )));
             }
             Err(_) => {
-                return Err(format!(
+                return Err(Refused::by(format!(
                     "The extension `{}` could not start: the way to its folder could not be \
                      looked at",
                     self.name()
-                ));
+                )));
             }
         }
         let runtime = ScriptRuntime::start(
@@ -251,15 +289,18 @@ impl LoadedExtension {
             self.parts.timer.as_ref(),
         )
         .await
-        .map_err(|error| format!("The extension `{}` could not start: {error}", self.name()))?;
+        .map_err(|error| Refused {
+            disabled: matches!(error, cineris_ext::engine::LoadError::Disabled),
+            why: format!("The extension `{}` could not start: {error}", self.name()),
+        })?;
         // The capabilities and the time were taken from the approved
         // manifest: the snapshot whose hash was checked must hold that one
         // (the review of step 28: the two are separate fields).
         if runtime.manifest() != &self.approved.manifest {
-            return Err(format!(
+            return Err(Refused::by(format!(
                 "The extension `{}` could not start: its manifest is not the one approved",
                 self.name()
-            ));
+            )));
         }
         let runtime = Arc::new(runtime);
         *slot = Some(Arc::clone(&runtime));
@@ -276,7 +317,7 @@ impl LoadedExtension {
     ) -> ToolResult {
         let runtime = match self.runtime().await {
             Ok(runtime) => runtime,
-            Err(error) => return ToolResult::error(error),
+            Err(refused) => return ToolResult::error(refused.why),
         };
         let full_name = format!("{}/{tool}", self.name());
         let progress = Mutex::new(Vec::new());

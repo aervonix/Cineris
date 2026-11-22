@@ -665,15 +665,15 @@ pub async fn serve<H: Host + ?Sized>(
                     timeout: asked.min(time_left),
                     call_left: time_left,
                     network: capabilities.declared().exec_network,
-                    // Only a tool's call, whose round records what it
-                    // writes: a hook's or a command's program has none
-                    // (the maintainers, after the early review of the
-                    // script hooks; a hook that needs to write is a hook
-                    // command with `write = true`).
-                    write_roots: if phase == Phase::Tool {
-                        capabilities.write_roots()
-                    } else {
+                    // None for a hook's program (the maintainers, after
+                    // the early review of the script hooks; a hook that
+                    // needs to write is a hook command with `write =
+                    // true`). A command's keeps them, as before: the part
+                    // that wires commands decides them.
+                    write_roots: if phase == Phase::Hook {
                         Vec::new()
+                    } else {
+                        capabilities.write_roots()
                     },
                 })
                 .await?;

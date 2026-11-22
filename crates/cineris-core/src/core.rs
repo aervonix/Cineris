@@ -2836,7 +2836,7 @@ async fn together<F: std::future::Future<Output = ()>>(futures: impl Iterator<It
 fn not_settled(why: &str) -> OpError {
     Box::new(cineris_protocol::error::ErrorData::new(
         cineris_protocol::error::ErrorKind::Internal,
-        "extensions_not_settled",
+        cineris_protocol::error::code::EXTENSIONS_NOT_SETTLED,
         format!(
             "No turn starts: the session's extensions could not be found and registered ({}), \
              and a gate one of them holds would be skipped. Close the session and open it again.",
