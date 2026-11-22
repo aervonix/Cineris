@@ -72,14 +72,10 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [sessions-kept-with-no-client](sessions-kept-with-no-client.md): A session that `serve --socket` keeps after its last client goes is never ended by time, and runs its turn on with nobody watching. Owner: the owner, then a later step of the server.
 - [the-core-thread-waits-on-a-revokes-write](the-core-thread-waits-on-a-revokes-write.md): A change of level waits on the core thread for a revoke's or a record's write of the project's approvals, under the lock that keeps them from losing each other. Owner: the next change to the core's policy, or step 32.
 - [the-maps-files-of-recent-sessions](the-maps-files-of-recent-sessions.md): The map's ranking by the files of recent sessions has its seam (`RecentFiles`) and no source: step 16's tool records name no files. Owner: the step that has the statistics record files.
-- [the-policys-guards-of-a-stop-from-a-run-have-no-test](the-policys-guards-of-a-stop-from-a-run-have-no-test.md): Four breaks of the policy's side of a stop raised during a call's run survive every test (five before step 28's hook commands caught one again), because the round's own stop now ends the turn first; a test needs a point to wait at inside `RecordingShell`. Owner: the maintainers, after security fix 3 merges.
+- [the-policys-guards-of-a-stop-from-a-run-have-no-test](the-policys-guards-of-a-stop-from-a-run-have-no-test.md): Three breaks of the policy's side of a stop raised during a call's run survive every test (five before step 28's hooks caught two again), because the round's own stop now ends the turn first; a test needs a point to wait at inside `RecordingShell`. Owner: the maintainers, after security fix 3 merges.
 - [the-shell-version-after-a-shell-update](the-shell-version-after-a-shell-update.md): The first session after a shell is installed or updated has no shell version in its prompt, so the next resume is a `resume` epoch. Owner: step 33.
 - [the-top-of-a-tree-past-the-listing-cap](the-top-of-a-tree-past-the-listing-cap.md): A listing cut at 100,000 entries holds the first directories of a depth-first walk, not the top of the tree. Owner: a later index step, or step 33.
 - [what-start-up-opens-traced](what-start-up-opens-traced.md): The blocking check that start-up opens no file outside an allow-list does not exist; the index's part is checked with a held gate. Owner: the next start-up step, or step 33.
-
-### cineris-ext
-
-- [an-engine-test-that-advances-its-clock-before-the-script-spins](an-engine-test-that-advances-its-clock-before-the-script-spins.md): A test of the cap on extensions' threads left running can see its script interrupted where it should be left running, when a slow runner has not yet brought the script to the loop that never looks at the interrupt; one CI flake. Owner: step 28's script hooks (its fifth part).
 
 ### cineris-index
 

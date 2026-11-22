@@ -889,7 +889,7 @@ fn a_loop_the_interrupt_never_reaches_leaves_its_thread_and_is_counted() {
 /// The clock is moved only once the module has registered its tool, just
 /// before the loop that never looks at the interrupt: moved earlier, on a
 /// slow machine, the interrupt stopped the module before it reached the loop
-/// (one CI flake, `docs/outstanding/an-engine-test-that-advances-its-clock-before-the-script-spins.md`).
+/// (one CI flake, settled in `docs/steps/28/parts/pr2b2-script-hooks.md`).
 #[test]
 fn past_the_cap_of_threads_left_running_no_extension_starts() {
     use cineris_ext::engine::{A_DEFINITION_IS_REGISTERED, EVALUATION_TIME, GRACE, MAX_ABANDONED};
