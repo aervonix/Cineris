@@ -3,7 +3,8 @@
 //!
 //! One runtime an extension, each on a thread of its own, made the first
 //! time something of the extension's is used. A runtime runs one call at a
-//! time, to its end, and a call's time starts when it starts running. A
+//! time, to its end, and a call's time starts when it starts running, a
+//! hook's when it is asked ([`CallContext::asked`]). A
 //! script reaches nothing but the host functions: the context has only the
 //! built-in objects a script needs (no `Performance`, no `Proxy`), the
 //! binding adds nothing to the global object, the C library's `std` and
@@ -271,8 +272,21 @@ pub struct CallContext<'a, H: Host + ?Sized> {
     pub host: &'a H,
     /// The extension's capabilities, compiled for the workspace.
     pub capabilities: &'a Capabilities,
-    /// The call's time, from when it starts running.
+    /// The call's time: from when it starts running, or from [`asked`]
+    /// when that is given.
+    ///
+    /// [`asked`]: Self::asked
     pub time: Duration,
+    /// When the call's time began, on `clock`'s monotonic reading, for a
+    /// call whose time starts before it is sent: a hook's, whose time starts
+    /// when it is asked (`docs/architecture/12-extensions.md`, "Tier 3:
+    /// hooks"), so that its wait behind the runtime's other calls is within
+    /// it. Its deadline then runs from the first, and a call still waiting
+    /// for its turn when it comes is withdrawn before it starts, the
+    /// runtime's other calls going on; one that has started is stopped as
+    /// any call past its time is. `None`: from when it starts running, a
+    /// tool's and a command's.
+    pub asked: Option<Duration>,
     /// The session's timer.
     pub timer: &'a dyn Timer,
     /// The session's clock, which the timer moves: what is left of the
@@ -489,8 +503,13 @@ impl ScriptRuntime {
                 claim: Arc::clone(&claim),
             }))
             .map_err(|_| CallError::Gone)?;
-        let mut deadline: Option<cineris_base::Sleep> = None;
-        let mut started = cx.clock.monotonic();
+        // A hook's time began when it was asked: its deadline runs while it
+        // waits for its turn. Any other call's begins when it starts.
+        let mut started = cx.asked.unwrap_or_else(|| cx.clock.monotonic());
+        let mut deadline: Option<cineris_base::Sleep> = cx.asked.map(|asked| {
+            let waited = cx.clock.monotonic().saturating_sub(asked);
+            cx.timer.sleep(cx.time.saturating_sub(waited))
+        });
         let mut cancelled = pin!(cx.cancel.cancelled());
         loop {
             let event = poll_fn(|context| {
@@ -511,8 +530,10 @@ impl ScriptRuntime {
             match event {
                 Event::Reply(None) => return Err(CallError::Gone),
                 Event::Reply(Some(FromThread::Started)) => {
-                    started = cx.clock.monotonic();
-                    deadline = Some(cx.timer.sleep(cx.time));
+                    if cx.asked.is_none() {
+                        started = cx.clock.monotonic();
+                        deadline = Some(cx.timer.sleep(cx.time));
+                    }
                 }
                 Event::Reply(Some(FromThread::Call { id, call })) => {
                     let left = cx
@@ -591,6 +612,9 @@ impl ScriptRuntime {
                         other => CallError::Failed(other),
                     });
                 }
+                // A hook's time, up while it waits for its turn: withdrawn,
+                // and the call the runtime is serving goes on.
+                Event::Deadline if withdrawn(&claim) => return Err(CallError::TimedOut),
                 Event::Deadline => {
                     return Err(self
                         .stopped(&mut replies, cx.timer, CallError::TimedOut)
@@ -661,6 +685,14 @@ impl Drop for ScriptRuntime {
         self.stop.store(true, Ordering::SeqCst);
         let _ = self.inbox.send(ToThread::Shutdown);
     }
+}
+
+/// Takes a call that has not started from the thread: `true` when it was
+/// still waiting, and is now withdrawn, never to run.
+fn withdrawn(claim: &AtomicU8) -> bool {
+    claim
+        .compare_exchange(QUEUED, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
+        .is_ok()
 }
 
 /// Withdraws a call whose future was dropped before it started, and stops

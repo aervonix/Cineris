@@ -53,6 +53,7 @@ use super::{
 use crate::ext::prompt::PromptParts;
 use crate::ext::watched::{MAX_PLACES_PER_ROOT, Watched};
 use crate::ext::{ApprovedExtension, HostParts};
+use crate::ext::{ScriptHooks, SessionStart};
 
 /// How the session is told something.
 type Tell = Arc<dyn Fn(String) + Send + Sync>;
@@ -99,6 +100,11 @@ pub(crate) struct Finding {
     /// Where what the skills and the extensions give the system prompt is
     /// settled, for the loop to ask.
     pub(crate) prompt: Arc<PromptParts>,
+    /// Where the hooks of the extensions loaded are put on their events.
+    pub(crate) scripts: Arc<ScriptHooks>,
+    /// The session the `session.start` hooks of its extensions are heard
+    /// for, as it opened: set by the core once the session is open.
+    pub(crate) session_start: Option<SessionStart>,
     /// Ends the work when the session or the core ends.
     pub(crate) cancel: CancelToken,
 }
@@ -152,6 +158,8 @@ struct Held {
     texts: Vec<(Key, String)>,
     /// Where sections 6 and 7 are settled.
     prompt: Arc<PromptParts>,
+    /// Where the loaded extensions' hooks are put on their events.
+    scripts: Arc<ScriptHooks>,
     /// The session's rules for reading its skills' folders, changed on
     /// the blocking pool by the work that makes them.
     reads: Arc<Mutex<super::reads::SkillReads>>,
@@ -254,6 +262,8 @@ async fn first(extensions: &Extensions, finding: Finding) {
         skills,
         read_skill_folders,
         prompt,
+        scripts,
+        session_start,
         cancel: _,
     } = finding;
     let inputs = Arc::new(Inputs {
@@ -282,13 +292,22 @@ async fn first(extensions: &Extensions, finding: Finding) {
             skills_watched: Watched::default(),
             texts: Vec::new(),
             prompt,
+            scripts: Arc::clone(&scripts),
             reads: Arc::default(),
         };
         let kept = held.settle(project_found).await;
         held.find_skills().await;
+        let tell = Arc::clone(&held.parts.tell);
         *slot = Some(held);
-        kept
+        (kept, tell)
     };
+    let (kept, tell) = kept;
+    // The `session.start` hooks of the extensions it loaded as it opened:
+    // the first turn waits for those that are waited for, as for a hook
+    // command's (`docs/steps/28/answered.md`, point 6).
+    if let Some(started) = &session_start {
+        scripts.session_started(started, &*tell).await;
+    }
     extensions.ready.settle();
     if let Some(kept) = kept {
         cineris_base::hook::await_point!(BEFORE_THE_CACHE_IS_KEPT);
@@ -392,6 +411,9 @@ impl Held {
             .collect();
         self.prompt.withdraw(&gone);
         for gone in self.loaded.iter().filter(|key| !wanted.contains(key)) {
+            // Its hooks with it: an extension's hooks are on their events
+            // only while it is loaded as it was approved.
+            self.scripts.withdraw(&gone.1);
             self.registry.remove_source(&gone.1);
             (self.parts.tell)(format!(
                 "The extension `{}` is withdrawn from this session: its tools are no longer \
@@ -472,7 +494,7 @@ impl Held {
             .iter()
             .map(|one| (one.source, one.manifest.name.clone(), one.hash))
             .collect();
-        for message in crate::ext::register(new, &self.parts, &self.registry) {
+        for message in crate::ext::register(new, &self.parts, &self.registry, &self.scripts) {
             (self.parts.tell)(message);
         }
         self.loaded.extend(keys);

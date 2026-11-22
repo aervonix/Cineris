@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use cineris_base::path::{AbsPath, PathStyle};
-use cineris_base::{CancelToken, FakeClock};
+use cineris_base::{CancelToken, Clock as _, FakeClock};
 use cineris_ext::capability::Capabilities;
 use cineris_ext::engine::{
     CallContext, CallError, Failure, Limit, LoadError, ScriptRuntime, Source, Target, register,
@@ -70,6 +70,7 @@ fn call(
             timer,
             clock: timer.clock(),
             cancel: &cancel,
+            asked: None,
         },
     ))
 }
@@ -91,6 +92,7 @@ fn call_out_of_time(runtime: &ScriptRuntime, snapshot: &Snapshot, timer: &FakeTi
                 timer,
                 clock: timer.clock(),
                 cancel: &cancel,
+                asked: None,
             },
         ),
         async {
@@ -543,6 +545,7 @@ fn a_cancelled_call_ends_and_takes_its_runtime_down() {
                 timer: &timer,
                 clock: timer.clock(),
                 cancel: &cancel,
+                asked: None,
             },
         ),
         async {
@@ -999,6 +1002,119 @@ fn a_call_cancelled_before_its_turn_is_withdrawn_and_never_runs() {
     assert_eq!(third, Ok(json!(1)));
 }
 
+/// A hook's time runs from when it was asked, not from when its turn came
+/// (`docs/architecture/12-extensions.md`, "Tier 3: hooks"): one waiting
+/// behind the runtime's other call when its time is up is withdrawn before
+/// it starts, and never runs, while the call ahead of it goes on; one that
+/// has started is stopped at its time, counted from when it was asked.
+#[test]
+fn a_hooks_time_runs_from_when_it_was_asked() {
+    let timer = timer();
+    let snapshot = extension(
+        "hooks = [\"tool.before\"]",
+        "cineris.tool({ name: 'slow', run: async () => { await cineris.ask('go on?'); \
+         return 'answered' } });\n\
+         cineris.on('tool.before', () => { globalThis.n = (globalThis.n || 0) + 1; \
+         return globalThis.n });\n\
+         cineris.on('tool.before', () => { cineris.notify('spinning'); for (;;) {} });",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost {
+        slow_ask: Some((timer.clone(), Duration::from_secs(3))),
+        ..FakeHost::new()
+    };
+    let capabilities = capabilities(&snapshot);
+    let second = Duration::from_secs(1);
+    let (slow, ()) = block_on(join(
+        call_named(
+            &runtime,
+            "slow",
+            &host,
+            &capabilities,
+            &timer,
+            &CancelToken::new(),
+        ),
+        async {
+            // Asked while the tool waits for its answer: its second is up
+            // before its turn comes.
+            timer.sleeping_for(Duration::from_secs(3)).await;
+            let asked = timer.clock().monotonic();
+            let mut hook = std::pin::pin!(call_hook(
+                &runtime,
+                0,
+                &host,
+                &capabilities,
+                &timer,
+                (asked, second)
+            ));
+            let mut sent = false;
+            std::future::poll_fn(|context| {
+                if sent {
+                    return std::task::Poll::Ready(());
+                }
+                sent = true;
+                assert!(hook.as_mut().poll(context).is_pending());
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            })
+            .await;
+            timer.sleeping_for(second).await;
+            timer.advance(second);
+            assert_eq!(hook.await, Err(CallError::TimedOut));
+            assert!(runtime.is_alive(), "the call ahead of it goes on");
+            // Then the tool's answer comes.
+            timer.advance(2 * second);
+        },
+    ));
+    assert_eq!(slow, Ok(json!("answered")));
+    // The withdrawn hook never ran: this run is the first.
+    let now = timer.clock().monotonic();
+    let first = block_on(call_hook(
+        &runtime,
+        0,
+        &host,
+        &capabilities,
+        &timer,
+        (now, second),
+    ));
+    assert_eq!(first, Ok(json!(1)));
+    // Asked a second ago with two to run: it is stopped one second after it
+    // starts, and its runtime with it.
+    let asked = timer.clock().monotonic().saturating_sub(second);
+    let (spun, ()) = block_on(join(
+        call_hook(
+            &runtime,
+            1,
+            &host,
+            &capabilities,
+            &timer,
+            (asked, 2 * second),
+        ),
+        async {
+            // Its deadline is what was left of its time when it was sent:
+            // one second, not the two it was given. It has started: it is
+            // stopped at its time, not withdrawn.
+            while !host.asked().iter().any(|asked| asked == "notify spinning") {
+                let mut yielded = false;
+                std::future::poll_fn(|context| {
+                    if yielded {
+                        return std::task::Poll::Ready(());
+                    }
+                    yielded = true;
+                    context.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                })
+                .await;
+            }
+            assert_eq!(timer.running(), [second]);
+            timer.advance(second);
+            timer.advance(cineris_ext::engine::GRACE);
+        },
+    ));
+    assert_eq!(spun, Err(CallError::TimedOut));
+    assert!(!runtime.is_alive());
+}
+
 /// A call whose future is dropped before it ends stops its runtime: the
 /// script does not run on with nobody to stop it.
 #[test]
@@ -1020,6 +1136,7 @@ fn a_call_given_up_before_its_end_stops_its_runtime() {
                 timer: &timer,
                 clock: timer.clock(),
                 cancel: &cancel,
+                asked: None,
             },
         ));
         // Polled until its time is running: it has started.
@@ -1064,6 +1181,7 @@ fn a_cancelled_call_follows_its_program_to_the_end() {
                 timer: &timer,
                 clock: timer.clock(),
                 cancel: &cancel,
+                asked: None,
             },
         ),
         async {
@@ -1124,6 +1242,7 @@ fn a_call_the_thread_took_before_its_cancel_is_stopped_and_counted() {
                 timer: &timer,
                 clock: timer.clock(),
                 cancel: &cancel,
+                asked: None,
             },
         ),
         async {
@@ -1199,6 +1318,7 @@ fn a_call_given_up_before_its_turn_leaves_the_running_call_alone() {
                         timer: &timer,
                         clock: timer.clock(),
                         cancel: &cancel,
+                        asked: None,
                     },
                 ));
                 let mut polled = false;
@@ -1286,6 +1406,36 @@ async fn call_named(
                 timer,
                 clock: timer.clock(),
                 cancel,
+                asked: None,
+            },
+        )
+        .await
+}
+
+/// Runs the extension's hook `index`, whose time (`timed`: when it was
+/// asked, on the timer's clock, and how long it has) began when it was
+/// asked.
+async fn call_hook(
+    runtime: &ScriptRuntime,
+    index: usize,
+    host: &FakeHost,
+    capabilities: &Capabilities,
+    timer: &FakeTimer,
+    (asked, time): (Duration, Duration),
+) -> Result<Json, CallError> {
+    let cancel = CancelToken::new();
+    runtime
+        .call(
+            Target::Hook(index),
+            json!({"event": "tool.before"}),
+            CallContext {
+                host,
+                capabilities,
+                time,
+                timer,
+                clock: timer.clock(),
+                cancel: &cancel,
+                asked: Some(asked),
             },
         )
         .await
@@ -1311,6 +1461,7 @@ async fn call_async(
                 timer,
                 clock: timer.clock(),
                 cancel: &cancel,
+                asked: None,
             },
         )
         .await

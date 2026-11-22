@@ -22,6 +22,10 @@
 //!   on to the look.
 //! - **A replacement may not write a protected path** (`check_replacement`):
 //!   judged as an extension's write is (`super::protected`).
+//! - **An extension's hooks are beside them** (`super::script_hooks`), each
+//!   on its event while its extension is loaded as it was approved: they
+//!   join and leave with it, which happens as the session's finding settles
+//!   and at a turn's start, never while a turn's points are being asked.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -65,6 +69,9 @@ struct OnEvent {
 /// A session's hooks as the loop reaches them.
 pub(crate) struct PointHooks {
     on: Vec<OnEvent>,
+    /// The hooks of the extensions loaded now, beside the hook commands:
+    /// each only while its extension is loaded as it was approved.
+    scripts: Arc<super::ScriptHooks>,
     commands: Arc<HookCommands>,
     paths: Arc<cineris_base::PathResolver>,
 }
@@ -107,6 +114,7 @@ impl PointHooks {
         }
         Self {
             on,
+            scripts: Arc::clone(&hooks.scripts),
             commands: Arc::clone(&hooks.commands),
             paths: Arc::clone(&hooks.paths),
         }
@@ -132,6 +140,7 @@ impl Hooks for PointHooks {
                 .on
                 .iter()
                 .any(|hook| hook.event == event && on_target(hook.filter.as_ref(), target))
+            || self.scripts.wants(event, target)
     }
 
     fn matching(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> Vec<Arc<dyn Hook>> {
@@ -141,6 +150,7 @@ impl Hooks for PointHooks {
             .filter(|hook| hook.event == event && on_target(hook.filter.as_ref(), target))
             .map(|hook| Arc::clone(&hook.run))
             .collect();
+        matched.extend(self.scripts.matching(event, target));
         if event == LoopEvent::PromptSubmit && self.commands.stop_pending() {
             matched.push(Arc::new(Stopped {
                 commands: Arc::clone(&self.commands),

@@ -495,8 +495,9 @@ pub(crate) async fn run(
     // repository's configuration in its write roots (the review of the
     // extensions' process starts; every look since the third security fix).
     // A hook command's writes are not recorded: the page says undo does not
-    // put them back.
-    let records = matches!(how, Decided::Host);
+    // put them back. Nor are a script hook's program's, outside the call
+    // its hook is about, as a hook command's are not.
+    let records = matches!(how, Decided::Host) && host.phase == cineris_ext::host::Phase::Tool;
     let detector = (records && (!write_roots.is_empty() || launcher.is_none())).then(|| {
         let git = Arc::clone(&parts.git) as Arc<dyn cineris_base::git::Confinement>;
         Arc::new(

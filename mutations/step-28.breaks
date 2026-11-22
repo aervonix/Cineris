@@ -542,12 +542,13 @@ caught-by:
     cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
 
 [break] a-stopped-host-call-leaves-the-turn-going
-rule: A host call answered with a stop stops its turn through the policy. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result (`stop-ends-turn/an-extensions-stopped-call-is-not-marked`). Nothing else is decided in that turn after the stop today: the engine serves a script's host calls one at a time and ends the call, and its runtime, at the first stop, so the script makes no host call after it (`a-script-goes-on-in-a-stopped-turn`); an extension's tool runs alone; and the round refuses its later calls itself. A hook command makes no host call: its start is decided apart (`Decided::Unasked`), and a stopped turn's hook fails at that decision, so step 28's hooks do not reach this stop either; the pair of it in `look_after` is caught since they run (`exec-protected-change-does-not-stop-the-turn`). What is left is a script's host call after a stop (`docs/outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md`).
+rule: A host call answered with a stop stops its turn through the policy. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so the round's own calls do not show this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result (`stop-ends-turn/an-extensions-stopped-call-is-not-marked`). What only this stop reaches is the turn's script hooks after it (step 28's script hooks): the stopped call's `tool.after` hooks, in the same turn, start nothing, as a stopped turn's hooks do not start, only because this stop reached the policy; without it, they run, and their host calls are allowed. The pair of it in `look_after` is caught by a hook's look (`exec-protected-change-does-not-stop-the-turn`).
 file: crates/cineris-core/src/ext/host.rs
 in: CallHost::decide
 find: self.parts.policy.stop_turn(self.cx.turn, reason.clone());
 replace: let _ = self.parts.policy.stopped_turn(self.cx.turn);
-expect: survives
+caught-by:
+    cineris-core::it extensions_hooks::after_a_stop_of_the_turn_its_extensions_hooks_run_nothing
 
 [break] a-run-that-completed-after-a-denial-exits-0
 rule: Under `--fail-on-denial`, a turn that completed after a call nobody could answer is reported denied, and the run exits 6.

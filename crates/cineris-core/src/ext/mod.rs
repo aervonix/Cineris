@@ -21,6 +21,9 @@
 //! and pinned as the trust question showed it. Each start (`hook_command`)
 //! goes through `cineris.exec`'s own path (`exec::run`), decided by the
 //! permission engine without a question (`hook_command::hook_may_run`).
+//! The hooks a loaded extension's script registered (`script_hooks`) are
+//! beside them, each a call of the extension's runtime whose host calls put
+//! no question.
 //!
 //! The script engine is behind the `scripts` feature: without it, no
 //! extension's tool is registered, and no hook command is started yet: its
@@ -40,6 +43,8 @@ mod host;
 mod prompt;
 #[cfg(feature = "scripts")]
 mod protected;
+#[cfg(feature = "scripts")]
+mod script_hooks;
 #[cfg(feature = "scripts")]
 mod state;
 #[cfg(feature = "scripts")]
@@ -77,6 +82,8 @@ pub(crate) use hook_command::{HookCommands, SessionHooks};
 pub(crate) use hook_points::PointHooks;
 #[cfg(feature = "scripts")]
 pub(crate) use prompt::PromptParts;
+#[cfg(feature = "scripts")]
+pub(crate) use script_hooks::{ScriptHooks, SessionStart};
 #[cfg(feature = "scripts")]
 pub(crate) use state::{ExtState, ProjectStore};
 #[cfg(feature = "scripts")]
