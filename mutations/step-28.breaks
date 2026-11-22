@@ -78,6 +78,7 @@ rule: A hook cannot put a question: it decides by its answer.
 file: crates/cineris-ext/src/host.rs
 in: serve
 find: if phase == Phase::Hook {
+occurrence: 2
 replace: if phase == Phase::Evaluation {
 caught-by:
     cineris-ext::it serve::a_hook_cannot_put_a_question_and_only_a_tool_call_writes
@@ -3672,8 +3673,8 @@ caught-by:
 rule: What the trust question read of the project's folder is handed to the session, which does not read it again.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: inputs.project.as_ref().map(|_| match project_found {
-replace: inputs.project.as_ref().map(|_| match project_found.filter(|_| false) {
+find: .then(|| match project_found {
+replace: .then(|| match project_found.filter(|_| false) {
 caught-by:
     extensions_trust::each_folder_is_read_once_when_a_session_opens
     extensions_review::after_a_yes_what_the_question_read_is_not_read_again
@@ -6938,7 +6939,7 @@ rule: A hook of a turn that is stopped starts nothing.
 os: linux
 file: crates/cineris-core/src/ext/hook_command.rs
 in: decide
-find: match policy.stopped_turn(turn_number(&cx.turn)) {
+find: match policy.stopped_for_hooks(turn_number(&cx.turn)) {
 replace: match None::<String> {
 caught-by:
     cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at

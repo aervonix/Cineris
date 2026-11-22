@@ -1146,6 +1146,8 @@ fn a_hooks_program_has_no_write_root_and_a_tools_has_the_manifests() {
         "exec = [\"gh\"]\nwrite = [\"out/**\"]\nhooks = [\"tool.before\"]",
         "cineris.tool({ name: 't', description: 'a tool', run: async () => { \
            await cineris.exec('gh', ['from-the-tool']); return 'ok' } });\n\
+         cineris.command({ name: 'c', run: async () => { \
+           await cineris.exec('gh', ['from-the-command']); } });\n\
          cineris.on('tool.before', async () => { await cineris.exec('gh', ['from-the-hook']); \
            return null; });",
     );
@@ -1171,18 +1173,39 @@ fn a_hooks_program_has_no_write_root_and_a_tools_has_the_manifests() {
         &CancelToken::new(),
     ));
     assert_eq!(tool, Ok(json!("ok")));
+    // A command's keeps them, as before: the part that wires commands
+    // decides them (the full review of the script hooks, L9).
+    let cancel = CancelToken::new();
+    let command = block_on(runtime.call(
+        Target::Command("c".to_owned()),
+        json!({}),
+        CallContext {
+            host: &host,
+            capabilities: &capabilities,
+            time: TIME,
+            timer: &timer,
+            clock: timer.clock(),
+            cancel: &cancel,
+            asked: None,
+        },
+    ));
+    assert!(command.is_ok(), "{command:?}");
     let execs: Vec<String> = host
         .asked()
         .into_iter()
         .filter(|asked| asked.starts_with("exec "))
         .collect();
-    assert_eq!(execs.len(), 2, "{execs:?}");
+    assert_eq!(execs.len(), 3, "{execs:?}");
     assert!(
         execs[0].contains("from-the-hook") && execs[0].contains("roots=0"),
         "{execs:?}"
     );
     assert!(
         execs[1].contains("from-the-tool") && execs[1].contains("roots=1"),
+        "{execs:?}"
+    );
+    assert!(
+        execs[2].contains("from-the-command") && execs[2].contains("roots=1"),
         "{execs:?}"
     );
 }

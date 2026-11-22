@@ -265,12 +265,8 @@ caught-by:
 [break] fail-on-denial-does-not-stop
 rule: With `fail_on_denial`, a call that needs an answer nobody can give ends the turn through the loop's `Stop`.
 file: crates/cineris-core/src/policy.rs
-find:
-    if self.fail_on_denial {
-        Verdict::Stop { reason }
-replace:
-    if false && self.fail_on_denial {
-        Verdict::Stop { reason }
+find: if self.fail_on_denial {
+replace: if false && self.fail_on_denial {
 caught-by:
     cineris-core::it approvals::with_fail_on_denial_a_call_nobody_can_answer_ends_the_turn_as_denied
 
@@ -295,7 +291,7 @@ rule: A call that needs an answer runs only when somebody allows it: with nobody
 file: crates/cineris-core/src/policy.rs
 find:
     if asked.is_empty() && !waits {
-        return self.nobody(&call, &question);
+        return self.nobody(&call, &question, host.is_none());
     }
 replace:
     if asked.is_empty() && !waits {

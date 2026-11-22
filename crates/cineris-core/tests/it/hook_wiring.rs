@@ -993,7 +993,10 @@ mod confined {
 
     /// A hook whose look stops a turn outside any (here `session.start`,
     /// before the first) is told to the user at once, and the next prompt
-    /// is refused with it and given back, so that the user can look.
+    /// is refused with it and given back, so that the user can look. The
+    /// session's `session.end` hooks, a command's and a script's, are of no
+    /// turn, so that stop refuses neither: both run as the session closes
+    /// (the full review of the script hooks, L8: both had `t_0`).
     #[test]
     fn sys_a_hooks_stop_outside_a_turn_is_told_and_refuses_the_next_prompt() {
         if !enforcing_here() {
@@ -1001,13 +1004,34 @@ mod confined {
         }
         let world = World::new("hook_stop_outside", [says("Hi.")]);
         world.put(".github/README", "ci\n");
-        world.user_config(&entry(
-            "scribble",
-            "session.start",
-            &this_binary("write", &[".github/workflows/x.yml"]),
-            "write = true",
-        ));
-        let core = world.core_with(|options| options.launcher = Some(launcher()));
+        world.user_config(
+            &[
+                entry(
+                    "scribble",
+                    "session.start",
+                    &this_binary("write", &[".github/workflows/x.yml"]),
+                    "write = true",
+                ),
+                entry(
+                    "goodbye",
+                    "session.end",
+                    &this_binary("write", &["ended.txt"]),
+                    "write = true",
+                ),
+            ]
+            .concat(),
+        );
+        let farewell = crate::ext_exec::extension_running(
+            &world,
+            "probe",
+            "hooks = [\"session.end\"]",
+            "cineris.on('session.end', async () => { \
+               await cineris.state.set('ended', 'yes', { scope: 'project' }); });\n",
+        );
+        let core = world.core_with(|options| {
+            options.launcher = Some(launcher());
+            options.extensions = vec![farewell];
+        });
         world.run(async {
             let front = Front::start(&world, &core).await;
             let ended = front.turn("hello").await;
@@ -1038,6 +1062,16 @@ mod confined {
             );
             front.close().await;
         });
+        assert!(
+            world.read("ended.txt").is_some(),
+            "the `session.end` command was refused by a `session.start` hook's stop"
+        );
+        let kept = crate::ext_state::project_files(&world);
+        assert!(
+            kept.iter().any(|file| std::fs::read_to_string(file)
+                .is_ok_and(|text| text.contains("\"ended\":\"yes\""))),
+            "the `session.end` script hook was refused by a `session.start` hook's stop: {kept:?}"
+        );
     }
 
     /// A hook without `network` does not reach the network where commands

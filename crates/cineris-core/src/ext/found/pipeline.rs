@@ -53,7 +53,7 @@ use super::{
 use crate::ext::prompt::PromptParts;
 use crate::ext::watched::{MAX_PLACES_PER_ROOT, Watched};
 use crate::ext::{ApprovedExtension, HostParts};
-use crate::ext::{Gate, ScriptHooks, SessionStart, way_out};
+use crate::ext::{Gate, ScriptHooks, SessionStart, Stand, way_out};
 use cineris_ext::event::Event;
 
 /// How the session is told something.
@@ -565,6 +565,7 @@ impl Held {
                         hash,
                         &Unstood::Unregistered(listed.manifest.capabilities.hooks.clone()),
                         None,
+                        self.inputs.trust_project,
                     );
                     self.unloaded.push((key, held));
                 }
@@ -596,6 +597,7 @@ impl Held {
                     key.2,
                     &Unstood::Unloaded,
                     Some(hooks.clone()),
+                    self.inputs.trust_project,
                 );
                 self.unloaded.push((key.clone(), held));
             }
@@ -798,10 +800,14 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
         .config_dir
         .as_ref()
         .map(|config| in_users(inputs, config, &mut decided.watched));
-    // The project's, while it is trusted: what the trust question read of
-    // it, or a look now.
+    // The project's, while it is trusted, or while the trust store cannot
+    // be read, when its extensions hold their gates: what the trust
+    // question read of it, or a look now.
+    // Read once: a store that is not there is one failed look, and no
+    // parse (the full review of the script hooks, L6).
+    let (trust_read, trust_unreadable) = read_trust(inputs);
     let project: Option<(Vec<Listed>, Vec<LeftOut>, Option<Discovered>)> =
-        inputs.project.as_ref().map(|_| match project_found {
+        (inputs.project.is_some() || trust_unreadable.is_some()).then(|| match project_found {
             Some(looked) => {
                 decided.watched.extend(looked.watched);
                 (looked.found, looked.left_out, None)
@@ -863,9 +869,20 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
         project_read = read;
     }
     let mut pins: Option<Option<UserPins>> = None;
-    let mut trust: Option<ProjectTrust> = None;
+    let mut trust: Option<ProjectTrust> = Some(trust_read);
     let mut standing_approved = Vec::new();
-    let mut changed: Vec<(Source, String, String, Vec<Event>)> = Vec::new();
+    let mut changed: Vec<(Source, String, String)> = Vec::new();
+    // Where no store can say what was approved (it cannot be read), each
+    // found holds the gates its manifest lists, and is not loaded.
+    let mut store_held: Vec<Gate> = Vec::new();
+    let pins_file = inputs.state.as_ref().map(|state| {
+        let file = state.pins_file();
+        with_paths_shown(
+            &file.display().to_string(),
+            &[&file],
+            inputs.home.as_deref(),
+        )
+    });
     let found_names: Vec<(Source, String)> = candidates
         .iter()
         .map(|(listed, _)| (listed.source, listed.manifest.name.clone()))
@@ -888,6 +905,18 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                          holds what you approved of your own, could not be read (said above).",
                         listed.shown
                     ));
+                    store_held.push(gate(
+                        Source::User,
+                        &listed.manifest.name,
+                        Some(&listed.shown),
+                        listed.hash,
+                        &Unstood::PinsUnreadable(
+                            listed.manifest.capabilities.hooks.clone(),
+                            pins_file.clone().unwrap_or_default(),
+                        ),
+                        None,
+                        inputs.trust_project,
+                    ));
                     continue;
                 };
                 pins.standing(&definition)
@@ -897,11 +926,31 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                     decided.told.push(taken(&listed, &name, &mine, users.cut()));
                     continue;
                 }
-                project_standing(
+                let standing = project_standing(
                     trust.get_or_insert_with(|| project_trust(inputs)),
                     &inputs.for_the_run,
                     &definition,
-                )
+                );
+                // The trust store cannot be read: nothing says what was
+                // approved, but a yes of this session's own.
+                if standing != Standing::Approved
+                    && let Some(file) = &trust_unreadable
+                {
+                    store_held.push(gate(
+                        Source::Project,
+                        &listed.manifest.name,
+                        Some(&listed.shown),
+                        listed.hash,
+                        &Unstood::TrustUnreadable(
+                            listed.manifest.capabilities.hooks.clone(),
+                            file.clone(),
+                        ),
+                        None,
+                        inputs.trust_project,
+                    ));
+                    continue;
+                }
+                standing
             }
         };
         if standing == Standing::Approved {
@@ -912,7 +961,6 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                     listed.source,
                     listed.manifest.name.clone(),
                     listed.shown.clone(),
-                    listed.manifest.capabilities.hooks.clone(),
                 ));
             }
             decided
@@ -925,6 +973,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // registration its pin names. One the user turned off, one of a
     // project's whose name is the user's, and one no pin names any more
     // hold nothing: the user's word, or the approval taken back.
+    decided.held.extend(store_held);
     let mut pending: Vec<(Source, String, String, ContentHash, Unstood)> = Vec::new();
     let mut seen: Vec<(Source, String)> = found_names;
     seen.extend(
@@ -934,7 +983,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     );
     for (source, name, shown, was) in changed
         .into_iter()
-        .map(|(source, name, shown, events)| (source, name, shown, Unstood::Changed(events)))
+        .map(|(source, name, shown)| (source, name, shown, Unstood::Changed))
         .chain(
             unreadable
                 .into_iter()
@@ -1055,7 +1104,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                             listed.manifest.name.clone(),
                             listed.shown.clone(),
                             listed.hash,
-                            Unstood::Changed(listed.manifest.capabilities.hooks.clone()),
+                            Unstood::Changed,
                         ));
                     }
                 }
@@ -1072,9 +1121,15 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             .map(|entry| entry.registration.hooks.clone());
         // One not found has no folder to show, nor to approve from.
         let shown = (!matches!(was, Unstood::Missing)).then_some(shown.as_str());
-        decided
-            .held
-            .push(gate(source, &name, shown, hash, &was, hooks));
+        decided.held.push(gate(
+            source,
+            &name,
+            shown,
+            hash,
+            &was,
+            hooks,
+            inputs.trust_project,
+        ));
     }
     decided.cache = loaded.map(|(cache, _)| cache);
     decided
@@ -1086,9 +1141,10 @@ const GATES_HELD: &str = "{gates held}";
 /// How an extension that stands approved does not stand as it was
 /// approved: what decides the gates it holds.
 enum Unstood {
-    /// Found with another hash than its pin's; the events its manifest, as
-    /// found, lets it hook.
-    Changed(Vec<Event>),
+    /// Found with another hash than its pin's. Where what it registered at
+    /// that hash is known nowhere, it holds both gates: its manifest as
+    /// found is the change's, and says nothing of what was approved.
+    Changed,
     /// Found and not read as it is (a link in it, a file past its cap).
     Unreadable,
     /// Not found where it was approved.
@@ -1099,6 +1155,12 @@ enum Unstood {
     /// Approved and found as approved, and its first registration failed
     /// (said as it did): the events its manifest lets it hook.
     Unregistered(Vec<Event>),
+    /// Found while the store of the user's pins, `file` as shown, cannot be
+    /// read: the events its manifest lets it hook.
+    PinsUnreadable(Vec<Event>, String),
+    /// A project's, found while the trust store, `file` as shown, cannot be
+    /// read: the events its manifest lets it hook.
+    TrustUnreadable(Vec<Event>, String),
 }
 
 /// The gate an extension that stands approved and does not stand as it was
@@ -1112,14 +1174,23 @@ fn gate(
     hash: ContentHash,
     was: &Unstood,
     hooks: Option<Vec<cineris_ext::registration::HookDef>>,
+    trust_project: bool,
 ) -> Gate {
     let both = || vec![Event::PromptSubmit, Event::ToolBefore];
+    let stand = match was {
+        Unstood::Missing => Stand::Gone,
+        Unstood::PinsUnreadable(_, file) | Unstood::TrustUnreadable(_, file) => {
+            Stand::StoreUnreadable(file)
+        }
+        _ => Stand::Unapproved { trust_project },
+    };
+    let out = way_out(source, name, shown, stand);
     // What the model is told, short, and the user, with where it was said.
     let (what, told, unknown) = match was {
-        Unstood::Changed(events) => (
+        Unstood::Changed => (
             "has changed since it was approved",
             "has changed since you approved it",
-            events.clone(),
+            both(),
         ),
         Unstood::Unreadable => (
             "cannot be read as it was approved",
@@ -1141,6 +1212,16 @@ fn gate(
             "could not be registered (said above)",
             events.clone(),
         ),
+        Unstood::PinsUnreadable(events, _) => (
+            "cannot be judged: the pin store could not be read",
+            "",
+            events.clone(),
+        ),
+        Unstood::TrustUnreadable(events, _) => (
+            "cannot be judged: the trust store could not be read",
+            "",
+            events.clone(),
+        ),
     };
     let code = in_code(name);
     let whose = match source {
@@ -1153,14 +1234,25 @@ fn gate(
     Gate {
         name: name.to_owned(),
         hash,
-        why: format!(
-            "the extension `{code}`{at} {what}, so its gate refuses it: {}",
-            way_out(source, name, shown)
-        ),
-        notice: format!(
-            "{whose} `{code}`{at} {told}. {GATES_HELD}, until you {}.",
-            way_out(source, name, shown)
-        ),
+        why: format!("the extension `{code}`{at} {what}, so its gate refuses it: {out}"),
+        // The stores' notices are one a session, whatever the extension:
+        // the same words for each.
+        notice: match was {
+            Unstood::Missing => format!("{whose} `{code}` {told}. {GATES_HELD}: {out}."),
+            Unstood::PinsUnreadable(_, file) => format!(
+                "The pin store (`{file}`) could not be read, so your extensions cannot be judged: \
+                 each holds a gate on each gating event its manifest lists (`tool.before`, \
+                 `prompt.submit`), refusing every call or prompt it is on. For each, {}.",
+                way_out(source, name, None, stand)
+            ),
+            Unstood::TrustUnreadable(_, file) => format!(
+                "The trust store (`{file}`) could not be read, so no project's extensions can be \
+                 judged: until it is fixed, every project's extensions are gated, each holding a \
+                 gate on each gating event its manifest lists (`tool.before`, `prompt.submit`), \
+                 refusing every call or prompt it is on. To fix it, {out}."
+            ),
+            _ => format!("{whose} `{code}`{at} {told}. {GATES_HELD}, until you {out}."),
+        },
         hooks,
         unknown,
     }
@@ -1244,6 +1336,33 @@ fn user_pins(inputs: &Inputs, told: &mut Vec<String>) -> Option<UserPins> {
             )));
             None
         }
+    }
+}
+
+/// The project's trust as the store holds it (none while the project is
+/// not trusted), and where the store is, as the user is shown it, when it
+/// cannot be read: every project's extensions are then gated by their
+/// manifests. A store that cannot be read trusts nothing.
+fn read_trust(inputs: &Inputs) -> (ProjectTrust, Option<String>) {
+    let Some(state) = &inputs.state else {
+        return (ProjectTrust::untrusted(), None);
+    };
+    let file = state.trust_file();
+    let store = TrustStore::new(&file, Arc::clone(&inputs.clock));
+    let read = match &inputs.project {
+        Some(key) => store.project(key),
+        None => store.list().map(|_| ProjectTrust::untrusted()),
+    };
+    match read {
+        Ok(trust) => (trust, None),
+        Err(_) => (
+            ProjectTrust::untrusted(),
+            Some(with_paths_shown(
+                &file.display().to_string(),
+                &[&file],
+                inputs.home.as_deref(),
+            )),
+        ),
     }
 }
 
@@ -1351,4 +1470,90 @@ fn pinned(state: &StateDir, clock: &SharedClock) -> Option<Vec<ContentHash>> {
             .ok()?,
     );
     Some(pinned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What a session's finding costs with no extension, the stores of the
+    /// pins and of the trust absent and present (the full review of the
+    /// script hooks, L6): the whole of it, and the two reads the gates of an
+    /// extension that is gone or unjudged added (the pins, the trust), each
+    /// a failed look and no parse where its store is not there. A release
+    /// build's medians of 400: `cargo xtask perf -p cineris-core`.
+    #[test]
+    #[ignore = "a measurement: `cargo xtask perf -p cineris-core`"]
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a measurement makes its folders and stores on its own thread"
+    )]
+    fn perf_the_finding_with_no_extension() {
+        let dir = std::env::temp_dir().join(format!("cineris-core-finding-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let work = dir.join("work");
+        std::fs::create_dir_all(&work).unwrap();
+        std::fs::create_dir_all(dir.join("cfg")).unwrap();
+        let state = StateDir::new(dir.join("state"));
+        std::fs::create_dir_all(state.root()).unwrap();
+        let resolver =
+            Arc::new(PathResolver::new(&work, cineris_base::PathOptions::new()).unwrap());
+        let key = resolver.root().project_key();
+        let clock: SharedClock = Arc::new(cineris_base::SystemClock::new());
+        let inputs = Inputs {
+            resolver,
+            config_dir: Some(dir.join("cfg")),
+            home: Some(dir.clone()),
+            state: Some(state.clone()),
+            project: Some(key.clone()),
+            for_the_run: Vec::new(),
+            trust_project: false,
+            disabled: Vec::new(),
+            skills: Vec::new(),
+            read_skill_folders: false,
+            clock: Arc::clone(&clock),
+        };
+        let median = |run: &dyn Fn()| {
+            let mut took: Vec<f64> = (0..400)
+                .map(|_| {
+                    let began = std::time::Instant::now();
+                    run();
+                    began.elapsed().as_secs_f64() * 1e6
+                })
+                .collect();
+            took.sort_by(f64::total_cmp);
+            took[took.len() / 2]
+        };
+        for case in ["absent", "present"] {
+            if case == "present" {
+                // A pin of the user's that names no extension: one that
+                // names an extension not found would hold its gates.
+                PinStore::new(state.pins_file(), Arc::clone(&clock))
+                    .pin(&Definition::of(TrustResourceKind::Hook, "elsewhere", ["x"]))
+                    .unwrap();
+                TrustStore::new(state.trust_file(), Arc::clone(&clock))
+                    .trust(&key, "~/work", &[], false)
+                    .unwrap();
+            }
+            let whole = median(&|| {
+                let decided = decide(&inputs, None);
+                assert!(decided.approved.is_empty() && decided.held.is_empty());
+            });
+            let pins = median(&|| {
+                let _ = user_pins(&inputs, &mut Vec::new());
+            });
+            let trust = median(&|| {
+                let (_, unreadable) = read_trust(&inputs);
+                assert!(unreadable.is_none());
+            });
+            for (what, value) in [("whole", whole), ("pins_read", pins), ("trust_read", trust)] {
+                cineris_testkit::numbers::report(
+                    &format!("finding.no_extension.stores_{case}.{what}"),
+                    value,
+                    "us",
+                );
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

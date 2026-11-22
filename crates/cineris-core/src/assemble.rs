@@ -2977,6 +2977,7 @@ pub(crate) fn assemble(
             }),
             tell: Arc::new(move |message: String| tell_hooks.tell(message)),
             state: Arc::clone(&ext_state),
+            trust_project: options.trust_project,
         })
     };
     // What runs the session's hooks: its hook commands, and the hooks of the

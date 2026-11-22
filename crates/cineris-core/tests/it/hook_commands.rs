@@ -968,9 +968,11 @@ mod confined {
                     .hook_runs_in_turn(&front.session, "guard/hook.compaction.before", "t_99", 1)
                     .await
                     .unwrap();
-                // At `read-only` the engine asks about a program it does
-                // not know to only read, which no hook runs: refused, and
-                // nobody asked.
+                // At `read-only` the engine refuses the program before any
+                // write root matters: it asks about a program it does not
+                // know to only read, which no hook runs, so the hook is
+                // refused, and nobody asked. What the level pins is that
+                // the hook still writes nothing.
                 let failed = if level.is_some() {
                     "the level `read-only` asks"
                 } else {
