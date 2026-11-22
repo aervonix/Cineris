@@ -1,0 +1,8 @@
+On Windows, and in a PowerShell or `cmd` session, an extension's script hook can never run a line the engine reads as only reading (`git status`, `cat notes.txt`), and no rule of the user's changes that; settled with the engine's judging of a program by the session's shell.
+
+- Area: cineris-policy
+- Owner: step 32 (hardening pass)
+
+| Item | Who | When |
+|---|---|---|
+| **A hook cannot run a line read as only reading where the program that runs may be another.** A script hook's host calls put no question ([12-extensions.md](../architecture/12-extensions.md), "Tier 3: hooks"), so a hook runs only what the engine allows outright. The engine marks a line its read-only table names as only reading whatever the rules say (`cineris-policy`'s `judge_part`), and where the line's first word may be the shell's own command or alias, or the program Windows' own lookup finds, an allow as only reading counts as a question (`read_only_asks`, [an-extensions-program-is-judged-by-the-sessions-shell](an-extensions-program-is-judged-by-the-sessions-shell.md)). So `npm test`, with a rule that allows it, runs in a hook, and `git status` never does. Found by the full review of step 28's script hooks. **Since step 28** the hook's refusal says so and names no rule, since none would help, and says that a hook command can run it (the user's own runs where the engine would ask). **What would close it:** the engine saying that a rule of the user's allowed the line itself, so that an explicit `exec` allow decides it in a hook; or the same `Exec` effect that closes its sibling item, judged by the rows of real programs only. Either is the engine's to give, which step 28 may not change. | Step 32 (hardening pass), with its sibling item | Before the first release |
