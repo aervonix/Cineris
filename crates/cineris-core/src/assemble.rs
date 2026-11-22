@@ -2997,7 +2997,7 @@ pub(crate) fn assemble(
         Arc::clone(&resolver),
     ));
     #[cfg(feature = "scripts")]
-    for left_out in crate::ext::register(
+    for (_, left_out) in crate::ext::register(
         options.extensions.clone(),
         &ext_parts,
         &registry,

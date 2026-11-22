@@ -68,6 +68,36 @@ pub fn check_name(name: &str) -> Result<(), String> {
     }
 }
 
+/// The beginnings of a name that the harness's own calls of an extension
+/// take: a hook's host calls are decided under `<extension>/hook.<event>`,
+/// and a command's under `<extension>/command.<name>`, so no tool or command
+/// of the extension may be named so (the early review of the script hooks,
+/// L8).
+pub const RESERVED_PREFIXES: [&str; 2] = ["hook.", "command."];
+
+/// A name of a tool or a command an extension registers: a name
+/// ([`check_name`]) that does not begin with one of
+/// [`RESERVED_PREFIXES`], whatever its case.
+///
+/// # Errors
+///
+/// Why it is not one.
+pub fn check_contribution_name(name: &str) -> Result<(), String> {
+    check_name(name)?;
+    let folded = name.to_ascii_lowercase();
+    match RESERVED_PREFIXES
+        .iter()
+        .find(|prefix| folded.starts_with(**prefix))
+    {
+        Some(prefix) => Err(format!(
+            "`{}` cannot be a tool's or a command's name: names that begin with `{prefix}` are the \
+             harness's own, for its hooks' and commands' calls",
+            shown(name)
+        )),
+        None => Ok(()),
+    }
+}
+
 /// A description of a tool or a command: at most [`MAX_DESCRIPTION`], and
 /// shown as written, so with nothing in it that acts unseen but a line
 /// break and a tab.
@@ -250,7 +280,7 @@ impl ToolDef {
     ///
     /// Why it would not have.
     pub fn check(&self) -> Result<(), String> {
-        check_name(&self.name)?;
+        check_contribution_name(&self.name)?;
         check_description(&self.description)?;
         check_schema(&self.input)
     }
@@ -265,7 +295,7 @@ impl CommandDef {
     ///
     /// Why it would not have.
     pub fn check(&self) -> Result<(), String> {
-        check_name(&self.name)?;
+        check_contribution_name(&self.name)?;
         check_description(&self.description)?;
         if self.arguments.len() > MAX_ARGUMENTS {
             return Err(format!(

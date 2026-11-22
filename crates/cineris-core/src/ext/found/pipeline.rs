@@ -53,7 +53,8 @@ use super::{
 use crate::ext::prompt::PromptParts;
 use crate::ext::watched::{MAX_PLACES_PER_ROOT, Watched};
 use crate::ext::{ApprovedExtension, HostParts};
-use crate::ext::{Gate, ScriptHooks, SessionStart};
+use crate::ext::{Gate, ScriptHooks, SessionStart, way_out};
+use cineris_ext::event::Event;
 
 /// How the session is told something.
 type Tell = Arc<dyn Fn(String) + Send + Sync>;
@@ -163,6 +164,10 @@ struct Held {
     prompt: Arc<PromptParts>,
     /// Where the loaded extensions' hooks are put on their events.
     scripts: Arc<ScriptHooks>,
+    /// What stands approved and could not be loaded or registered (its
+    /// capabilities do not compile, the registry refused it, its first
+    /// registration failed): the gates it holds while it stays so.
+    unloaded: Vec<(Key, Gate)>,
     /// The session's rules for reading its skills' folders, changed on
     /// the blocking pool by the work that makes them.
     reads: Arc<Mutex<super::reads::SkillReads>>,
@@ -307,6 +312,7 @@ async fn first(extensions: &Extensions, finding: Finding) {
             texts: Vec::new(),
             prompt,
             scripts: Arc::clone(&scripts),
+            unloaded: Vec::new(),
             reads: Arc::default(),
         };
         let kept = held.settle(project_found).await;
@@ -445,10 +451,6 @@ impl Held {
         for message in told {
             self.tell(message);
         }
-        // What stands approved and is not found as approved holds its gates,
-        // failing, from the registration approved: taken before a withdrawn
-        // extension's hooks leave, which they may be made from.
-        self.scripts.hold(held);
         let wanted: Vec<Key> = approved
             .iter()
             .map(|(one, _)| (one.source, one.manifest.name.clone(), one.hash))
@@ -458,6 +460,13 @@ impl Held {
                     .map(|(one, _)| (one.source, one.manifest.name.clone(), one.hash)),
             )
             .collect();
+        // What stands approved and is not found as approved holds its gates,
+        // failing, from the registration approved, beside what stands
+        // approved and could not be loaded: taken before a withdrawn
+        // extension's hooks leave, which they may be made from.
+        self.unloaded.retain(|(key, _)| wanted.contains(key));
+        let found_gates = held;
+        self.hold_gates(&found_gates);
         // What is withdrawn leaves the prompt's snapshot first, its text and
         // its source together, then the registry: a text no later than its
         // tools.
@@ -545,6 +554,19 @@ impl Held {
                         listed.shown,
                         visible(&error.to_string())
                     ));
+                    // What it registers is known nowhere: each gating event
+                    // its manifest lists holds a failing gate (the
+                    // maintainers' call).
+                    let key = (listed.source, listed.manifest.name.clone(), hash);
+                    let held = gate(
+                        listed.source,
+                        &listed.manifest.name,
+                        Some(&listed.shown),
+                        hash,
+                        &Unstood::Unregistered(listed.manifest.capabilities.hooks.clone()),
+                        None,
+                    );
+                    self.unloaded.push((key, held));
                 }
             }
         }
@@ -552,10 +574,34 @@ impl Held {
             .iter()
             .map(|one| (one.source, one.manifest.name.clone(), one.hash))
             .collect();
-        for message in crate::ext::register(new, &self.parts, &self.registry, &self.scripts) {
-            (self.parts.tell)(message);
+        // What each registered: an extension that cannot be loaded holds its
+        // gates from it.
+        let known: Vec<(Key, Vec<cineris_ext::registration::HookDef>)> = new
+            .iter()
+            .map(|one| {
+                (
+                    (one.source, one.manifest.name.clone(), one.hash),
+                    one.registration.hooks.clone(),
+                )
+            })
+            .collect();
+        for (name, message) in crate::ext::register(new, &self.parts, &self.registry, &self.scripts)
+        {
+            (self.parts.tell)(message.clone());
+            if let Some((key, hooks)) = known.iter().find(|(key, _)| key.1 == name) {
+                let held = gate(
+                    key.0,
+                    &key.1,
+                    None,
+                    key.2,
+                    &Unstood::Unloaded,
+                    Some(hooks.clone()),
+                );
+                self.unloaded.push((key.clone(), held));
+            }
         }
         self.loaded.extend(keys);
+        self.hold_gates(&found_gates);
         // Section 7: the text of each extension loaded, as the cache holds
         // it, and only of one the registry took, as the turn will find it:
         // one whose capabilities did not compile is not loaded.
@@ -589,6 +635,38 @@ impl Held {
 }
 
 impl Held {
+    /// Holds the gates of `found` (what stands approved and is not found as
+    /// approved) and of what stands approved and could not be loaded, and
+    /// tells the user of each, once a session.
+    fn hold_gates(&mut self, found: &[Gate]) {
+        let gates: Vec<Gate> = found
+            .iter()
+            .cloned()
+            .chain(self.unloaded.iter().map(|(_, gate)| gate.clone()))
+            .collect();
+        let notices: Vec<String> = gates.iter().map(|gate| gate.notice.clone()).collect();
+        // Told once a session, in words, of each that holds a gate: the
+        // model's refusal of each call it gates stays short (the
+        // maintainers' call on the early review of the script hooks).
+        for (index, events) in self.scripts.hold(gates) {
+            let held = match events.as_slice() {
+                [cineris_agent::HookEvent::PromptSubmit] => {
+                    "Its gate on `prompt.submit` holds, refusing every prompt"
+                }
+                [cineris_agent::HookEvent::ToolBefore] => {
+                    "Its gate on `tool.before` holds, refusing every call it is on"
+                }
+                _ => {
+                    "Its gates on `prompt.submit` and `tool.before` hold, refusing every prompt, \
+                     and every call they are on"
+                }
+            };
+            let told = notices[index].replace(GATES_HELD, held);
+            // Said once a session, as all the finding tells.
+            self.tell(told);
+        }
+    }
+
     /// Finds the session's skills, each place stamped before it is read,
     /// and settles section 6's part of them. On the blocking pool.
     async fn find_skills(&mut self) {
@@ -787,7 +865,11 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     let mut pins: Option<Option<UserPins>> = None;
     let mut trust: Option<ProjectTrust> = None;
     let mut standing_approved = Vec::new();
-    let mut changed: Vec<(Source, String, String)> = Vec::new();
+    let mut changed: Vec<(Source, String, String, Vec<Event>)> = Vec::new();
+    let found_names: Vec<(Source, String)> = candidates
+        .iter()
+        .map(|(listed, _)| (listed.source, listed.manifest.name.clone()))
+        .collect();
     for (listed, snapshot) in candidates {
         let name = in_code(&listed.manifest.name).into_owned();
         let definition = listed.definition();
@@ -830,6 +912,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                     listed.source,
                     listed.manifest.name.clone(),
                     listed.shown.clone(),
+                    listed.manifest.capabilities.hooks.clone(),
                 ));
             }
             decided
@@ -842,15 +925,28 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // registration its pin names. One the user turned off, one of a
     // project's whose name is the user's, and one no pin names any more
     // hold nothing: the user's word, or the approval taken back.
-    let mut pending: Vec<(Source, String, String, ContentHash, bool)> = Vec::new();
-    for (source, name, shown, was_changed) in changed
+    let mut pending: Vec<(Source, String, String, ContentHash, Unstood)> = Vec::new();
+    let mut seen: Vec<(Source, String)> = found_names;
+    seen.extend(
+        unreadable
+            .iter()
+            .map(|(source, name, _)| (*source, name.clone())),
+    );
+    for (source, name, shown, was) in changed
         .into_iter()
-        .map(|(source, name, shown)| (source, name, shown, true))
+        .map(|(source, name, shown, events)| (source, name, shown, Unstood::Changed(events)))
         .chain(
             unreadable
                 .into_iter()
-                .map(|(source, name, shown)| (source, name, shown, false)),
+                .map(|(source, name, shown)| (source, name, shown, Unstood::Unreadable)),
         )
+        .chain(not_found(
+            inputs,
+            &seen,
+            &mut pins,
+            &mut trust,
+            &mut decided.told,
+        ))
     {
         let released = match source {
             Source::User => inputs.disabled.contains(&name),
@@ -884,7 +980,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                 }),
         };
         if let Some(hash) = pinned {
-            pending.push((source, name, shown, hash, was_changed));
+            pending.push((source, name, shown, hash, was));
         }
     }
     if standing_approved.is_empty() && pending.is_empty() {
@@ -959,14 +1055,14 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                             listed.manifest.name.clone(),
                             listed.shown.clone(),
                             listed.hash,
-                            true,
+                            Unstood::Changed(listed.manifest.capabilities.hooks.clone()),
                         ));
                     }
                 }
             }
         }
     }
-    for (source, name, shown, hash, was_changed) in pending {
+    for (source, name, shown, hash, was) in pending {
         // What it registered at the hash approved, as the cache keeps it;
         // none when the cache does not, and the session's own then serves.
         let hooks = loaded
@@ -974,45 +1070,142 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             .and_then(|(_, loaded)| loaded.cache.get(&hash))
             .filter(|entry| entry.name == name)
             .map(|entry| entry.registration.hooks.clone());
-        decided.held.push(Gate {
-            why: held_why(source, &name, &shown, was_changed, inputs.trust_project),
-            name,
-            hash,
-            hooks,
-        });
+        // One not found has no folder to show, nor to approve from.
+        let shown = (!matches!(was, Unstood::Missing)).then_some(shown.as_str());
+        decided
+            .held
+            .push(gate(source, &name, shown, hash, &was, hooks));
     }
     decided.cache = loaded.map(|(cache, _)| cache);
     decided
 }
 
-/// Why the gating hooks of an extension that stands approved at another
-/// hash than it is found at fail, and what approves it or turns it off: a
-/// sentence for the hook's failure.
-fn held_why(source: Source, name: &str, shown: &str, changed: bool, trust_project: bool) -> String {
-    let name = in_code(name);
-    let what = if changed {
-        "has changed since you approved it"
-    } else {
-        "cannot be read as you approved it (said above)"
-    };
-    match source {
-        Source::User => format!(
-            "Your extension `{name}` (`{shown}`) {what}, so its hook cannot run: `cineris ext add \
-             {shown}` approves it as it is now, and `[extensions.{name}] enabled = false` in your \
-             configuration turns it off"
+/// Where a gate's notice says what it holds, once its events are known.
+const GATES_HELD: &str = "{gates held}";
+
+/// How an extension that stands approved does not stand as it was
+/// approved: what decides the gates it holds.
+enum Unstood {
+    /// Found with another hash than its pin's; the events its manifest, as
+    /// found, lets it hook.
+    Changed(Vec<Event>),
+    /// Found and not read as it is (a link in it, a file past its cap).
+    Unreadable,
+    /// Not found where it was approved.
+    Missing,
+    /// Approved and found as approved, and not loaded (said as it was
+    /// found).
+    Unloaded,
+    /// Approved and found as approved, and its first registration failed
+    /// (said as it did): the events its manifest lets it hook.
+    Unregistered(Vec<Event>),
+}
+
+/// The gate an extension that stands approved and does not stand as it was
+/// approved holds, from `hooks`, what it registered at the hash approved,
+/// when known: its failure for the model, short, and its notice for the
+/// user, in words, with the way out ([`way_out`]).
+fn gate(
+    source: Source,
+    name: &str,
+    shown: Option<&str>,
+    hash: ContentHash,
+    was: &Unstood,
+    hooks: Option<Vec<cineris_ext::registration::HookDef>>,
+) -> Gate {
+    let both = || vec![Event::PromptSubmit, Event::ToolBefore];
+    // What the model is told, short, and the user, with where it was said.
+    let (what, told, unknown) = match was {
+        Unstood::Changed(events) => (
+            "has changed since it was approved",
+            "has changed since you approved it",
+            events.clone(),
         ),
-        Source::Project => {
-            let remedy = if trust_project {
-                "`cineris permissions trust` shows it, to approve it as it is now"
-            } else {
-                "the project's trust question lists it, to approve it as it is now, when a session \
-                 opens"
-            };
-            format!(
-                "This project's extension `{name}` (`{shown}`) {what}, so its hook cannot run: {remedy}"
-            )
+        Unstood::Unreadable => (
+            "cannot be read as it was approved",
+            "cannot be read as you approved it (said above)",
+            both(),
+        ),
+        Unstood::Missing => (
+            "cannot be found where it was approved",
+            "cannot be found where you approved it",
+            both(),
+        ),
+        Unstood::Unloaded => (
+            "could not be loaded",
+            "could not be loaded (said above)",
+            both(),
+        ),
+        Unstood::Unregistered(events) => (
+            "could not be registered",
+            "could not be registered (said above)",
+            events.clone(),
+        ),
+    };
+    let code = in_code(name);
+    let whose = match source {
+        Source::User => "Your extension",
+        Source::Project => "This project's extension",
+    };
+    let at = shown
+        .map(|shown| format!(" (`{shown}`)"))
+        .unwrap_or_default();
+    Gate {
+        name: name.to_owned(),
+        hash,
+        why: format!(
+            "the extension `{code}`{at} {what}, so its gate refuses it: {}",
+            way_out(source, name, shown)
+        ),
+        notice: format!(
+            "{whose} `{code}`{at} {told}. {GATES_HELD}, until you {}.",
+            way_out(source, name, shown)
+        ),
+        hooks,
+        unknown,
+    }
+}
+
+/// The extensions a pin names that were found nowhere, the user's while
+/// their folder of extensions is looked in, a trusted project's while it is:
+/// approved, and removed or moved (never released: only the user's word,
+/// the project's trust, or the pin taken away does that).
+fn not_found(
+    inputs: &Inputs,
+    seen: &[(Source, String)],
+    pins: &mut Option<Option<UserPins>>,
+    trust: &mut Option<ProjectTrust>,
+    told: &mut Vec<String>,
+) -> Vec<(Source, String, String, Unstood)> {
+    let mut missing = Vec::new();
+    if inputs.config_dir.is_some()
+        && let Some(pins) = pins.get_or_insert_with(|| user_pins(inputs, told)).as_ref()
+    {
+        for pin in pins.list() {
+            if pin.kind == TrustResourceKind::Extension
+                && !seen.contains(&(Source::User, pin.name.clone()))
+            {
+                // Not found, it has no folder to show.
+                missing.push((
+                    Source::User,
+                    pin.name.clone(),
+                    String::new(),
+                    Unstood::Missing,
+                ));
+            }
         }
     }
+    if inputs.project.is_some() {
+        let pinned = trust
+            .get_or_insert_with(|| project_trust(inputs))
+            .pinned_of(&TrustResourceKind::Extension);
+        for (name, _) in pinned {
+            if !seen.contains(&(Source::Project, name.clone())) {
+                missing.push((Source::Project, name, String::new(), Unstood::Missing));
+            }
+        }
+    }
+    missing
 }
 
 /// How a project's extension stands: approved for this session by a yes

@@ -113,6 +113,29 @@ impl CallHost<'_> {
             preview,
             hooks: None,
         };
+        // A hook decides by its answer: its call is decided once and never
+        // put (`docs/steps/28/answered.md`, point 2): its turn's stop, then
+        // the engine's outcome, a question refused, saying what would allow
+        // it.
+        if self.phase == Phase::Hook {
+            if let Some(reason) = self.parts.policy.stopped_turn(self.cx.turn) {
+                self.found_stopped.store(true, Ordering::SeqCst);
+                return Err(HostError::Stopped(reason));
+            }
+            let lines: Vec<&str> = plan
+                .effects
+                .iter()
+                .filter_map(|effect| match effect {
+                    Effect::Exec { command, .. } => Some(command.as_str()),
+                    _ => None,
+                })
+                .collect();
+            return for_a_hook(
+                self.parts.policy.outcome(&planned),
+                how.read_only_asks,
+                &lines,
+            );
+        }
         match self.parts.policy.decide(&planned) {
             // What the session's shell calls read-only may not be the
             // program that runs: asked, as `how` says.
@@ -130,12 +153,6 @@ impl CallHost<'_> {
             Decision::Ask => {}
             _ => return Err(HostError::Denied("it was not allowed".to_owned())),
         }
-        // A hook decides by its answer: it never puts a question, and what
-        // the engine would ask about is refused, saying what would allow it
-        // (`docs/steps/28/answered.md`, point 2).
-        if self.phase == Phase::Hook {
-            return Err(HostError::NotHere(self.no_question(&planned, &how)));
-        }
         match self.parts.policy.ask_with(planned, Some(how)).await {
             Verdict::Allow => Ok(()),
             Verdict::Deny { note } => Err(HostError::Denied(
@@ -151,71 +168,6 @@ impl CallHost<'_> {
                 Err(HostError::Stopped(reason))
             }
             _ => Err(HostError::Denied("it was not allowed".to_owned())),
-        }
-    }
-
-    /// Why a hook's host call that the engine would ask about is refused,
-    /// for the script: a hook puts no question, and what would let the call
-    /// run unasked, the rules the engine would offer to keep (or why none
-    /// can).
-    fn no_question(&self, planned: &PlannedCall<'_>, how: &HostQuestion) -> String {
-        let lead = "a hook may not put a question, and the permission engine would ask about this";
-        let rule = |effect: &str, pattern: &str| {
-            let pattern = serde_json::to_string(pattern).unwrap_or_default();
-            format!(
-                "`{}`",
-                cineris_base::in_code(&format!(
-                    "effect = \"{effect}\", match = {pattern}, action = \"allow\""
-                ))
-            )
-        };
-        match self.parts.policy.outcome(planned) {
-            cineris_policy::Outcome::Ask(question) if question.managed => format!(
-                "{lead}: a rule of the managed configuration asks about it, for a person to \
-                 decide each time, so no hook can run it"
-            ),
-            cineris_policy::Outcome::Ask(question) => {
-                let rules: Vec<String> = question
-                    .lifts
-                    .iter()
-                    .map(|lift| rule(lift.effect.as_str(), &lift.pattern))
-                    .collect();
-                let reasons = cineris_base::visible(&question.reasons.join(" ")).into_owned();
-                match rules.as_slice() {
-                    [] => {
-                        format!("{lead} ({reasons}), and no permission rule can allow it unasked")
-                    }
-                    [one] => {
-                        format!(
-                            "{lead} ({reasons}). A permission rule that allows it lets it run: {one}"
-                        )
-                    }
-                    more => format!(
-                        "{lead} ({reasons}). The permission rules that allow it let it run: {}",
-                        more.join(" and ")
-                    ),
-                }
-            }
-            // A program's line the engine reads as only reading, in a shell
-            // whose own commands are not the program that runs: asked about
-            // as `how` says, and allowed by a rule of its line.
-            _ if how.read_only_asks => {
-                let lines: Vec<String> = planned
-                    .plan
-                    .effects
-                    .iter()
-                    .filter_map(|effect| match effect {
-                        cineris_tools::Effect::Exec { command, .. } => Some(rule("exec", command)),
-                        _ => None,
-                    })
-                    .collect();
-                format!(
-                    "{lead}: what it reads as only reading may be another program than the one \
-                     that runs. A permission rule that allows it lets it run: {}",
-                    lines.join(" and ")
-                )
-            }
-            _ => lead.to_owned(),
         }
     }
 
@@ -615,6 +567,67 @@ impl CallHost<'_> {
     }
 }
 
+/// What a hook's host call comes to, by the engine's `outcome` of it: it is
+/// never put to anyone. Allowed, it runs; one the engine allows as only
+/// reading runs too, unless that reading may not be the program's
+/// (`read_only_asks`: another shell's own command or alias, or Windows' own
+/// lookup), when it counts as a question; a question is refused, naming the
+/// rules that would allow it (for a program, its `lines`), or why none can.
+fn for_a_hook(
+    outcome: cineris_policy::Outcome,
+    read_only_asks: bool,
+    lines: &[&str],
+) -> Result<(), HostError> {
+    let lead = "a hook may not put a question, and the permission engine would ask about this";
+    let rule = |effect: &str, pattern: &str| {
+        let pattern = serde_json::to_string(pattern).unwrap_or_default();
+        format!(
+            "`{}`",
+            cineris_base::in_code(&format!(
+                "effect = \"{effect}\", match = {pattern}, action = \"allow\""
+            ))
+        )
+    };
+    let refused = match outcome {
+        cineris_policy::Outcome::Allow { read_only: false } => return Ok(()),
+        cineris_policy::Outcome::Allow { read_only: true } if !read_only_asks => return Ok(()),
+        cineris_policy::Outcome::Allow { read_only: true } => {
+            let rules: Vec<String> = lines.iter().map(|line| rule("exec", line)).collect();
+            format!(
+                "{lead}: what it reads as only reading may be another program than the one that \
+                 runs. A permission rule that allows it lets it run: {}",
+                rules.join(" and ")
+            )
+        }
+        cineris_policy::Outcome::Deny { reason } => return Err(HostError::Denied(reason)),
+        cineris_policy::Outcome::Ask(question) if question.managed => format!(
+            "{lead}: a rule of the managed configuration asks about it, for a person to decide \
+             each time, so no hook can run it"
+        ),
+        cineris_policy::Outcome::Ask(question) => {
+            let rules: Vec<String> = question
+                .lifts
+                .iter()
+                .map(|lift| rule(lift.effect.as_str(), &lift.pattern))
+                .collect();
+            let reasons = cineris_base::visible(&question.reasons.join(" ")).into_owned();
+            match rules.as_slice() {
+                [] => format!("{lead} ({reasons}), and no permission rule can allow it unasked"),
+                [one] => {
+                    format!(
+                        "{lead} ({reasons}). A permission rule that allows it lets it run: {one}"
+                    )
+                }
+                more => format!(
+                    "{lead} ({reasons}). The permission rules that allow it let it run: {}",
+                    more.join(" and ")
+                ),
+            }
+        }
+    };
+    Err(HostError::NotHere(refused))
+}
+
 /// Refuses a plan that touches a path other than `checked`, the one the
 /// manifest judged: a tool resolves the path it is given again, and a
 /// folder above it may have become a link in between (the review of step
@@ -758,6 +771,68 @@ mod tests {
             body: Vec::new(),
             timeout: std::time::Duration::from_secs(1),
         }
+    }
+
+    /// A hook's host call is never put: the engine's allow runs it; its
+    /// allow as only reading runs it unless that reading may not be the
+    /// program's (Windows, PowerShell, `cmd`), when it is refused, naming the
+    /// rule of its line that would allow it; a question is refused, naming
+    /// the rules the engine would keep, or the managed configuration's ask.
+    #[test]
+    fn a_hooks_host_call_is_never_put_and_a_read_only_line_another_shell_reads_is_refused() {
+        use cineris_policy::{Outcome, Question};
+        let question = |managed: bool| Question {
+            reasons: vec!["The command is not known to be safe.".to_owned()],
+            lifts: vec![cineris_protocol::lease::Rule {
+                effect: cineris_protocol::lease::Effect::Exec,
+                pattern: "npm test".to_owned(),
+                action: RuleAction::Allow,
+            }],
+            storable: false,
+            managed,
+        };
+        let lines = ["sort notes.txt"];
+        assert_eq!(
+            for_a_hook(Outcome::Allow { read_only: false }, true, &lines),
+            Ok(())
+        );
+        assert_eq!(
+            for_a_hook(Outcome::Allow { read_only: true }, false, &lines),
+            Ok(())
+        );
+        let Err(HostError::NotHere(read_only)) =
+            for_a_hook(Outcome::Allow { read_only: true }, true, &lines)
+        else {
+            panic!("a line read as only reading in another shell ran in a hook");
+        };
+        assert!(
+            read_only.contains("a hook may not put a question")
+                && read_only.contains("match = \"sort notes.txt\""),
+            "{read_only}"
+        );
+        let Err(HostError::NotHere(asked)) = for_a_hook(Outcome::Ask(question(false)), false, &[])
+        else {
+            panic!("a question was not refused");
+        };
+        assert!(
+            asked.contains("effect = \"exec\", match = \"npm test\""),
+            "{asked}"
+        );
+        let Err(HostError::NotHere(managed)) = for_a_hook(Outcome::Ask(question(true)), false, &[])
+        else {
+            panic!("a managed question was not refused");
+        };
+        assert!(managed.contains("managed configuration"), "{managed}");
+        assert_eq!(
+            for_a_hook(
+                Outcome::Deny {
+                    reason: "a rule".to_owned()
+                },
+                false,
+                &[]
+            ),
+            Err(HostError::Denied("a rule".to_owned()))
+        );
     }
 
     #[test]

@@ -110,11 +110,11 @@ caught-by:
     cineris-ext::it engine::an_async_tool_awaits_host_functions_the_manifest_allows
 
 [break] programs-write-wherever-the-session-may
-rule: A program's write roots are made from the manifest's `write` globs.
+rule: A tool's program's write roots are made from the manifest's `write` globs.
 file: crates/cineris-ext/src/host.rs
 in: serve
-find: write_roots: capabilities.write_roots()
-replace: write_roots: Vec::new()
+find: capabilities.write_roots()
+replace: Vec::new()
 caught-by:
     cineris-ext::it serve::the_manifest_is_asked_before_the_host
 
@@ -1814,8 +1814,8 @@ caught-by:
 rule: A call whose future is given up before its turn is withdrawn, and the call the runtime serves goes on.
 file: crates/cineris-ext/src/engine/mod.rs
 in: StopIfDropped::drop
-find: .compare_exchange(QUEUED, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
-replace: .compare_exchange(QUEUED + 7, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
+find: if withdrawn(&self.claim) || has_ended(&self.claim) {
+replace: if has_ended(&self.claim) {
 caught-by:
     cineris-ext::it engine::a_call_given_up_before_its_turn_leaves_the_running_call_alone
 
@@ -4120,6 +4120,7 @@ find: if self.told.insert(message.clone()) {
 replace: if self.told.insert(message.clone()) || true {
 caught-by:
     extensions_review::what_the_session_was_told_is_not_said_again_at_a_later_look
+    extensions_hooks::a_changed_extensions_gates_hold_and_the_way_out_stays_open
 
 [break] pinned-wait-unsaid
 rule: A turn that has waited a few seconds for the session's extensions says what it waits for, and goes on waiting.
@@ -7011,8 +7012,8 @@ caught-by:
 rule: A session's `session.end` hooks are given up to five seconds on the session's clock as it closes (M8): it is the close's stop that ends one that runs on, not its own time.
 file: crates/cineris-core/src/ext/hook_command.rs
 in: SessionHooks::end
-find: let mut over = timer.sleep(SESSION_END_TIME);
-replace: let mut over: cineris_base::Sleep = Box::pin(std::future::pending());
+find: timer.sleep(SESSION_END_TIME)
+replace: std::future::pending::<()>()
 caught-by:
     cineris-core::it hook_wiring::sys_a_sessions_own_hooks_run_as_it_opens_and_closes
 
