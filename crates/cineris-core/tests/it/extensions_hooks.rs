@@ -398,8 +398,10 @@ const LET_GO: &str = "cineris.on('compaction.before', () => { cineris.notify('ra
 
 /// The run of an extension's hook is its own, two sessions of one world:
 /// - one let go before it is first polled runs nothing (the seam's
-///   contract: dropped, its future stops the hook, polled or not): its
-///   function never runs, and no runtime is made for it;
+///   contract: dropped, its future stops the hook, polled or not): no
+///   runtime is made for it; and one let go before another run of the
+///   extension's, which then makes its runtime and runs, is withdrawn: its
+///   function never runs ahead of the other in the runtime's queue;
 /// - a waited-for `turn.end` hook has at most four runs going at once, as a
 ///   hook command has, and a fifth is not started, and says so.
 #[test]
@@ -439,6 +441,15 @@ fn an_extensions_hooks_runs_are_its_own_and_bounded() {
     assert_eq!(cineris_ext::engine::runtimes_made(), made);
     world.run(async {
         let front = start(&world, &core).await;
+        // Let go, then another run, which the runtime takes after it if it
+        // was not withdrawn.
+        core.let_go_of_a_hook_run(&front.session, "probe/hook.compaction.before")
+            .unwrap();
+        let said = core
+            .hook_runs_at_its_point(&front.session, "probe/hook.turn.end", 1)
+            .await
+            .unwrap();
+        assert_eq!(said, [None]);
         let said = core
             .hook_runs_at_its_point(&front.session, "probe/hook.turn.end", 5)
             .await
@@ -452,6 +463,8 @@ fn an_extensions_hooks_runs_are_its_own_and_bounded() {
             "{said:?}"
         );
         front.close().await;
+        front.drain();
+        assert!(!told(&front, "ran after all"), "{:?}", front.notices());
     });
 }
 
