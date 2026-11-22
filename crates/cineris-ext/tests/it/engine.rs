@@ -1135,6 +1135,254 @@ fn a_hooks_time_runs_from_when_it_was_asked() {
     assert!(!runtime.is_alive());
 }
 
+/// A hook's program is given no write root, a tool's the manifest's (the
+/// maintainers, after the early review of the script hooks: writes are
+/// refused inside a hook, and a hook that needs to write is a hook command
+/// with `write = true`).
+#[test]
+fn a_hooks_program_has_no_write_root_and_a_tools_has_the_manifests() {
+    let timer = timer();
+    let snapshot = extension(
+        "exec = [\"gh\"]\nwrite = [\"out/**\"]\nhooks = [\"tool.before\"]",
+        "cineris.tool({ name: 't', description: 'a tool', run: async () => { \
+           await cineris.exec('gh', ['from-the-tool']); return 'ok' } });\n\
+         cineris.on('tool.before', async () => { await cineris.exec('gh', ['from-the-hook']); \
+           return null; });",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let capabilities = capabilities(&snapshot);
+    let now = timer.clock().monotonic();
+    let hooked = block_on(call_hook(
+        &runtime,
+        0,
+        &host,
+        &capabilities,
+        &timer,
+        (now, Duration::from_secs(5)),
+    ));
+    assert_eq!(hooked, Ok(Json::Null));
+    let tool = block_on(call_named(
+        &runtime,
+        "t",
+        &host,
+        &capabilities,
+        &timer,
+        &CancelToken::new(),
+    ));
+    assert_eq!(tool, Ok(json!("ok")));
+    let execs: Vec<String> = host
+        .asked()
+        .into_iter()
+        .filter(|asked| asked.starts_with("exec "))
+        .collect();
+    assert_eq!(execs.len(), 2, "{execs:?}");
+    assert!(
+        execs[0].contains("from-the-hook") && execs[0].contains("roots=0"),
+        "{execs:?}"
+    );
+    assert!(
+        execs[1].contains("from-the-tool") && execs[1].contains("roots=1"),
+        "{execs:?}"
+    );
+}
+
+/// What a call queued and did not await (a `then` of a promise it did not
+/// return) runs in that call, before its end, and never in the next call's
+/// phase: a hook's job that puts a question is refused as a hook's, and is
+/// not put in the extension's next call, a tool's that awaits a question of
+/// its own, while its call still runs (the early review of the script
+/// hooks, L1).
+#[test]
+fn a_calls_queued_job_runs_in_its_own_call() {
+    let timer = timer();
+    let snapshot = extension(
+        "hooks = [\"tool.before\"]",
+        "cineris.tool({ name: 't', description: 'a tool', run: async () => { \
+           await cineris.ask('asked from the tool'); return 'ok' } });\n\
+         cineris.on('tool.before', () => { \
+           Promise.resolve().then(() => cineris.ask('asked from the hook')); return null; });",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let capabilities = capabilities(&snapshot);
+    let now = timer.clock().monotonic();
+    let hooked = block_on(call_hook(
+        &runtime,
+        0,
+        &host,
+        &capabilities,
+        &timer,
+        (now, Duration::from_secs(5)),
+    ));
+    assert_eq!(hooked, Ok(Json::Null));
+    let tool = block_on(call_named(
+        &runtime,
+        "t",
+        &host,
+        &capabilities,
+        &timer,
+        &CancelToken::new(),
+    ));
+    assert_eq!(tool, Ok(json!("ok")));
+    assert!(
+        !host
+            .asked()
+            .iter()
+            .any(|asked| asked.contains("asked from the hook")),
+        "the hook's job put a question in the tool's call: {:?}",
+        host.asked()
+    );
+    assert!(
+        host.asked()
+            .iter()
+            .any(|asked| asked.contains("asked from the tool")),
+        "{:?}",
+        host.asked()
+    );
+}
+
+/// A host call of a call that has ended, one its script did not await, is
+/// not made (the early review of the script hooks, L2): the hook starts a
+/// program and returns at once, and the thread has told the hook's end
+/// before the core reads the program's call, so the program is not started.
+#[test]
+fn a_host_call_read_after_its_calls_end_is_not_made() {
+    use std::future::Future as _;
+    let timer = timer();
+    let snapshot = extension(
+        "exec = [\"gh\"]\nhooks = [\"tool.before\"]",
+        "cineris.on('tool.before', () => { cineris.exec('gh', ['x']); return null; });",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let capabilities = capabilities(&snapshot);
+    let now = timer.clock().monotonic();
+    // The thread is held as it takes the call, before it says the call
+    // started, so the core's first look finds nothing to read; let go, it
+    // runs the hook to its end, and is held again once it has told it,
+    // before the core reads what it said.
+    let claimed = cineris_testkit::Hold::new(cineris_ext::engine::AFTER_A_CALL_IS_CLAIMED);
+    let ended = cineris_testkit::Hold::new(cineris_ext::engine::AFTER_A_CALLS_END_IS_TOLD);
+    let mut hooked = std::pin::pin!(call_hook(
+        &runtime,
+        0,
+        &host,
+        &capabilities,
+        &timer,
+        (now, Duration::from_secs(5)),
+    ));
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    assert!(hooked.as_mut().poll(&mut context).is_pending());
+    claimed.reach();
+    claimed.release();
+    ended.reach();
+    let hooked = block_on(hooked);
+    ended.release();
+    assert_eq!(hooked, Ok(Json::Null));
+    assert!(
+        !host
+            .asked()
+            .iter()
+            .any(|asked| asked.starts_with("exec gh")),
+        "a program of a call that had ended was started: {:?}",
+        host.asked()
+    );
+}
+
+/// A host call a call did not await is not let stop the extension's next
+/// call: a hook that returns at once, leaving a program it started, is past
+/// its time while the program runs, and its time running out after its end
+/// stops nothing, so the extension's tool, queued behind it, runs to its end
+/// (the early review of the script hooks, L2: the hook's stop tore the
+/// runtime down under the tool). Whether the leftover program is made
+/// depends on whether its call is taken before the hook's end is known: one
+/// taken after is not made.
+#[test]
+fn a_calls_leftover_host_call_does_not_stop_the_next_call() {
+    let timer = timer();
+    let snapshot = extension(
+        "exec = [\"gh\"]\nhooks = [\"tool.before\"]",
+        "cineris.tool({ name: 'slow', description: 'a tool', run: async () => { \
+           await cineris.ask('go on?'); return 'answered' } });\n\
+         cineris.on('tool.before', () => { cineris.exec('gh', ['x']); return null; });",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost {
+        slow_exec: Some((timer.clone(), Duration::from_secs(3))),
+        slow_ask: Some((timer.clone(), Duration::from_secs(4))),
+        ..FakeHost::new()
+    };
+    let capabilities = capabilities(&snapshot);
+    let second = Duration::from_secs(1);
+    let now = timer.clock().monotonic();
+    let ((hooked, tool), ()) = block_on(join(
+        join(
+            call_hook(&runtime, 0, &host, &capabilities, &timer, (now, second)),
+            call_named(
+                &runtime,
+                "slow",
+                &host,
+                &capabilities,
+                &timer,
+                &CancelToken::new(),
+            ),
+        ),
+        async {
+            // The tool runs, its question open: then the clock moves past
+            // the hook's time, and on to the tool's answer, a second at a
+            // time, the real thread answering between moves.
+            timer.sleeping_for(Duration::from_secs(4)).await;
+            for _ in 0..5 {
+                timer.advance(second);
+                for _ in 0..50 {
+                    std::thread::yield_now();
+                    let mut yielded = false;
+                    std::future::poll_fn(|context| {
+                        if yielded {
+                            return std::task::Poll::Ready(());
+                        }
+                        yielded = true;
+                        context.waker().wake_by_ref();
+                        std::task::Poll::Pending
+                    })
+                    .await;
+                }
+            }
+        },
+    ));
+    assert_eq!(hooked, Ok(Json::Null));
+    assert_eq!(tool, Ok(json!("answered")), "{:?}", host.asked());
+    assert!(runtime.is_alive());
+}
+
+/// A tool or a command may not take a name that begins as the harness's own
+/// calls of an extension do (`hook.`, `command.`): a hook's host calls are
+/// decided under `<extension>/hook.<event>` (the early review of the script
+/// hooks, L8).
+#[test]
+fn a_tool_or_a_command_named_as_a_hooks_call_refuses_the_extension() {
+    let timer = timer();
+    for script in [
+        "cineris.tool({ name: 'hook.tool.before', run() {} });",
+        "cineris.tool({ name: 'Command.deploy', run() {} });",
+        "cineris.command({ name: 'hook.x', run() {} });",
+    ] {
+        let refused = start(&extension("", script), &timer).unwrap_err();
+        assert!(
+            refused.to_string().contains("the harness's own"),
+            "{script}: {refused}"
+        );
+    }
+    assert!(
+        start(
+            &extension("", "cineris.tool({ name: 'hooked', run() {} });"),
+            &timer
+        )
+        .is_ok()
+    );
+}
+
 /// A call whose future is dropped before it ends stops its runtime: the
 /// script does not run on with nobody to stop it.
 #[test]

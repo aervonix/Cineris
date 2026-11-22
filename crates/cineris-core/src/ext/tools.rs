@@ -111,7 +111,7 @@ impl LoadedExtension {
     /// up is withdrawn before it starts. Its host calls are a hook's: they
     /// put no question ([`Phase::Hook`]).
     pub(crate) async fn call_hook(
-        &self,
+        self: &Arc<Self>,
         index: usize,
         name: &str,
         input: Json,
@@ -124,10 +124,32 @@ impl LoadedExtension {
             return HookRan::Failed("it was let go before it started".to_owned());
         }
         // A runtime that cannot start fails the hook, a gate closed, with
-        // what approves or turns the extension off (point 5).
-        let runtime = match self.runtime().await {
-            Ok(runtime) => runtime,
-            Err(error) => return HookRan::Failed(format!("{error}; {}", self.remedy())),
+        // what approves or turns the extension off (point 5). Its start is
+        // raced against the run's cancel: one let go meanwhile ends at once,
+        // and the start goes on to its end on a task of its own, its grace
+        // and a thread it leaves running counted (the early review of the
+        // script hooks, L5).
+        let starting = {
+            let extension = Arc::clone(self);
+            tokio::spawn(async move { extension.runtime().await })
+        };
+        let runtime = match cx.cancel.race(starting).await {
+            Some(Ok(Ok(runtime))) => runtime,
+            Some(Ok(Err(error))) => {
+                return HookRan::Failed(format!("{error}; {}", self.remedy()));
+            }
+            Some(Err(_)) => {
+                return HookRan::Failed(format!(
+                    "the extension `{}` could not start; {}",
+                    cineris_base::in_code(self.name()),
+                    self.remedy()
+                ));
+            }
+            None => {
+                return HookRan::Failed(
+                    "it was let go before its extension's runtime started".to_owned(),
+                );
+            }
         };
         let progress = Mutex::new(Vec::new());
         let host = host::CallHost {
@@ -180,16 +202,7 @@ impl LoadedExtension {
     /// What approves the extension as it is now, or turns it off: for a
     /// hook of it that cannot run.
     fn remedy(&self) -> String {
-        match self.approved.source {
-            cineris_ext::source::Source::User => format!(
-                "`cineris ext add` with its folder approves it as it is now, and \
-                 `[extensions.{}] enabled = false` in your configuration turns it off",
-                cineris_base::in_code(self.name())
-            ),
-            cineris_ext::source::Source::Project => "the project's trust question lists it, to \
-                                                     approve it as it is now, when a session opens"
-                .to_owned(),
-        }
+        super::script_hooks::way_out(self.approved.source, self.name(), None)
     }
 
     /// The live runtime, made when there is none or the last was torn
@@ -431,13 +444,13 @@ impl Tool for ExtensionTool {
 /// extension's name, and puts the hooks it registered on their events in
 /// `hooks`. Nothing runs. An extension whose capabilities do not compile,
 /// or whose name the registry refuses, is left out and named in what is
-/// returned.
+/// returned, with what is told of it: the session holds its gates.
 pub(crate) fn register(
     approved: Vec<ApprovedExtension>,
     parts: &Arc<HostParts>,
     registry: &ToolRegistry,
     hooks: &super::ScriptHooks,
-) -> Vec<String> {
+) -> Vec<(String, String)> {
     let mut left_out = Vec::new();
     for extension in approved {
         let name = extension.manifest.name.clone();
@@ -446,7 +459,10 @@ pub(crate) fn register(
         let loaded = match LoadedExtension::new(extension, Arc::clone(parts)) {
             Ok(loaded) => Arc::new(loaded),
             Err(error) => {
-                left_out.push(format!("The extension `{name}` is not loaded: {error}"));
+                left_out.push((
+                    name.clone(),
+                    format!("The extension `{name}` is not loaded: {error}"),
+                ));
                 continue;
             }
         };
@@ -460,7 +476,10 @@ pub(crate) fn register(
             // Its hooks are the extension's: on their events only while it
             // is loaded as it was approved.
             Ok(()) => hooks.add(&loaded),
-            Err(error) => left_out.push(format!("The extension `{name}` is not loaded: {error}")),
+            Err(error) => left_out.push((
+                name.clone(),
+                format!("The extension `{name}` is not loaded: {error}"),
+            )),
         }
     }
     left_out

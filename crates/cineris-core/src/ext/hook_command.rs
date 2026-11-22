@@ -85,7 +85,7 @@ use cineris_ext::source::Source;
 use cineris_protocol::ids::{CallId, ItemId};
 use cineris_protocol::lease::RuleAction;
 use cineris_protocol::{SessionId, TurnId};
-use cineris_tools::{ContentStore, Effect, FileTable, Json, Plan, RunCx, ToolSpec};
+use cineris_tools::{BoxFuture, ContentStore, Effect, FileTable, Json, Plan, RunCx, ToolSpec};
 use serde_json::json;
 
 use super::exec::{self, Decided, ToDecide};
@@ -413,57 +413,80 @@ impl SessionHooks {
             return;
         }
         cineris_base::hook::await_point!(A_SESSION_ENDS);
-        let mut over = timer.sleep(SESSION_END_TIME);
+        // All run together within the five seconds; when they are up, every
+        // run still going is stopped at once, and all are waited for
+        // together, so that one stuck does not hold the close for the
+        // others' graces in turn (the early review of the script hooks, L5).
+        let mut stops: Vec<Box<dyn Fn() + Send + Sync>> = Vec::new();
+        let mut ending: Vec<Ending<'_>> = Vec::new();
         for (name, running) in scripts {
             let stop = running.stopper();
-            let mut ended = std::pin::pin!(running.ended());
-            let in_time = std::future::poll_fn(|context| {
-                if let std::task::Poll::Ready(ended) = ended.as_mut().poll(context) {
-                    return std::task::Poll::Ready(Some(ended));
+            stops.push(Box::new(move || stop.stop()));
+            ending.push(Box::pin(async move {
+                match running.ended().await {
+                    super::tools::HookRan::Failed(why) | super::tools::HookRan::Stopped(why) => {
+                        Some((name, why))
+                    }
+                    super::tools::HookRan::Answered(_) => None,
                 }
-                if over.as_mut().poll(context).is_ready() {
-                    return std::task::Poll::Ready(None);
-                }
-                std::task::Poll::Pending
-            })
-            .await;
-            let ended = match in_time {
-                Some(ended) => ended,
-                None => {
-                    // Its time is up: stopped, and waited for.
-                    stop.stop();
-                    ended.await
-                }
-            };
-            if let super::tools::HookRan::Failed(why) | super::tools::HookRan::Stopped(why) = ended
-            {
-                tracing::warn!(hook = %name, %why, "a `session.end` hook failed");
-            }
+            }));
         }
-        for (name, _, cancel, mut task) in runs {
-            let ended = std::future::poll_fn(|context| {
-                if let std::task::Poll::Ready(ended) = std::pin::Pin::new(&mut task).poll(context) {
-                    return std::task::Poll::Ready(Some(ended));
+        for (name, _, cancel, task) in runs {
+            // Stopped, a command's run is killed, and its look made.
+            let stop = cancel.clone();
+            stops.push(Box::new(move || stop.cancel()));
+            ending.push(Box::pin(async move {
+                match task.await {
+                    Ok(HookOutcome::Failed(why) | HookOutcome::Stopped(why)) => Some((name, why)),
+                    _ => None,
                 }
-                if over.as_mut().poll(context).is_ready() {
-                    return std::task::Poll::Ready(None);
-                }
-                std::task::Poll::Pending
-            })
-            .await;
-            let ended = match ended {
-                Some(ended) => ended,
-                None => {
-                    // Its time is up: stopped, and its look made.
-                    cancel.cancel();
-                    task.await
-                }
-            };
-            if let Ok(HookOutcome::Failed(why) | HookOutcome::Stopped(why)) = ended {
-                tracing::warn!(hook = %name, %why, "a `session.end` hook failed");
-            }
+            }));
+        }
+        let ended = end_together(ending, &stops, timer.sleep(SESSION_END_TIME)).await;
+        for (name, why) in ended.into_iter().flatten() {
+            tracing::warn!(hook = %name, %why, "a `session.end` hook failed");
         }
     }
+}
+
+/// A `session.end` run's end: the hook's name and its failure, if it failed.
+type Ending<'a> = BoxFuture<'a, Option<(String, String)>>;
+
+/// Waits for every run of `ending` to end; when `over` is up first, calls
+/// each of `stops` at once, and waits on for all of them together. What
+/// each said, in the order they ended.
+async fn end_together<'a, T>(
+    ending: Vec<BoxFuture<'a, T>>,
+    stops: &[Box<dyn Fn() + Send + Sync>],
+    over: impl Future<Output = ()>,
+) -> Vec<T> {
+    let mut over = std::pin::pin!(over);
+    let mut stopped = false;
+    let mut slots: Vec<Option<BoxFuture<'a, T>>> = ending.into_iter().map(Some).collect();
+    let mut said: Vec<T> = Vec::with_capacity(slots.len());
+    std::future::poll_fn(|context| {
+        for slot in &mut slots {
+            if let Some(running) = slot
+                && let std::task::Poll::Ready(one) = running.as_mut().poll(context)
+            {
+                said.push(one);
+                *slot = None;
+            }
+        }
+        if slots.iter().all(Option::is_none) {
+            return std::task::Poll::Ready(());
+        }
+        if !stopped && over.as_mut().poll(context).is_ready() {
+            stopped = true;
+            for stop in stops {
+                stop();
+            }
+            context.waker().wake_by_ref();
+        }
+        std::task::Poll::Pending
+    })
+    .await;
+    said
 }
 
 /// A hook's start with a write root has the one baseline of the look at
@@ -1166,6 +1189,46 @@ fn said(stderr: &[u8], cut: bool) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// When the close's five seconds are up, every `session.end` run still
+    /// going is stopped at once, and all are waited for together (the early
+    /// review of the script hooks, L5): one stuck does not hold the others'
+    /// stops back in turn.
+    #[test]
+    fn the_closes_runs_are_all_stopped_at_once_when_its_time_is_up() {
+        use std::future::Future as _;
+        type Stop = Box<dyn Fn() + Send + Sync>;
+        let mut ending: Vec<super::BoxFuture<'static, u8>> = Vec::new();
+        let mut stops: Vec<Stop> = Vec::new();
+        for which in 0..3_u8 {
+            let (sender, receiver) = tokio::sync::oneshot::channel::<()>();
+            let sender = std::sync::Mutex::new(Some(sender));
+            stops.push(Box::new(move || {
+                if let Some(sender) = sender
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .take()
+                {
+                    let _ = sender.send(());
+                }
+            }));
+            ending.push(Box::pin(async move {
+                let _ = receiver.await;
+                which
+            }));
+        }
+        let mut together =
+            std::pin::pin!(super::end_together(ending, &stops, std::future::ready(())));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        // The first poll finds the time up and stops them all; the next
+        // finds them all ended.
+        assert!(together.as_mut().poll(&mut context).is_pending());
+        let std::task::Poll::Ready(mut said) = together.as_mut().poll(&mut context) else {
+            panic!("a run was not stopped with the others");
+        };
+        said.sort_unstable();
+        assert_eq!(said, [0, 1, 2]);
+    }
+
     /// A `session.start` run is under the session's token, which the close
     /// fires; a `session.end` run, made after it, is not (the review of
     /// step 28's second pull request, M1: one outlived its session).

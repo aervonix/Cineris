@@ -722,10 +722,12 @@ mod confined {
     /// question was open does not run, whatever the answer. One made late
     /// by a hook of an earlier turn leaves the running turn going, and
     /// refuses the prompt queued behind it, which goes back to its sender.
-    /// An extension's hook whose program's look finds a protected path
-    /// changed by hand is stopped by it in the same way: the user told at
-    /// once, and the next prompt held back. (A program whose line names a
-    /// protected path is one the engine asks about, which no hook runs.)
+    /// An extension's hook's program has no write root, whatever its
+    /// manifest says (the maintainers' call on the early review of the
+    /// script hooks, M2): at `supervised` it runs confined with none, writes
+    /// nothing, and no look is made of it, so a protected path changed by
+    /// hand stops nothing; at `read-only` it is refused before it runs, as
+    /// one the engine would ask about, and writes nothing either.
     #[test]
     fn sys_a_hooks_writes_are_confined_and_looked_at() {
         if !enforcing_here() {
@@ -738,6 +740,7 @@ mod confined {
                 crate::calls(&[("c1", "shell", json!({"command": "touch made.txt"}))]),
                 crate::calls(&[("c2", "shell", json!({"command": "touch late.txt"}))]),
                 crate::says("Done."),
+                crate::says("Fine."),
             ],
         );
         world.put(".github/README", "ci\n");
@@ -779,8 +782,8 @@ mod confined {
                 serde_json::to_string(&writes[0]).unwrap()
             ),
             &format!(
-                "cineris.on('compaction.before', async () => {{ await cineris.exec({}, {}); \
-                 return {{ context: 'wrote' }}; }});\n",
+                "cineris.on('compaction.before', async () => {{ const ran = await \
+                 cineris.exec({}, {}); throw new Error('ran: ' + JSON.stringify(ran)); }});\n",
                 serde_json::to_string(&writes[0]).unwrap(),
                 serde_json::to_string(&writes[1..]).unwrap()
             ),
@@ -940,34 +943,62 @@ mod confined {
                 [Part::text("next")],
                 "a prompt refused by a later stop did not come back to its sender"
             );
-            // A protected path changed by hand: an extension's hook's
-            // program's own look finds it before the start and stops the
-            // turn, told at once, and the next prompt is held back, as a hook
-            // command's stop is.
+            // An extension's hook's program has no write root, at
+            // `supervised` and at `read-only`: it runs confined with none,
+            // and fails to write; no look is made of it, so a protected path
+            // changed by hand stops nothing, and no prompt is held back.
             world.put(".github/workflows/by-hand.yml", "on: push\n");
-            let said = core
-                .hook_runs_at_its_point(&front.session, "guard/hook.compaction.before", 1)
-                .await
-                .unwrap();
-            assert!(
-                said[0].as_deref().is_some_and(|why| {
-                    why.contains("changed since the last command") && why.contains("by-hand.yml")
-                }),
-                "{said:?}"
-            );
-            assert!(world.read("guarded.txt").is_none(), "the program ran");
+            for level in [None, Some(cineris_protocol::lease::Level::ReadOnly)] {
+                if let Some(level) = &level {
+                    front
+                        .op(Op::SessionSet(
+                            cineris_protocol::methods::SessionSetParams {
+                                session_id: front.session.clone(),
+                                settings: cineris_protocol::session::SessionSettings {
+                                    level: Some(level.clone()),
+                                    ..Default::default()
+                                },
+                            },
+                        ))
+                        .await
+                        .unwrap();
+                }
+                // Of a turn no stop has reached: the first was stopped.
+                let said = core
+                    .hook_runs_in_turn(&front.session, "guard/hook.compaction.before", "t_99", 1)
+                    .await
+                    .unwrap();
+                // At `read-only` the engine asks about a program it does
+                // not know to only read, which no hook runs: refused, and
+                // nobody asked.
+                let failed = if level.is_some() {
+                    "the level `read-only` asks"
+                } else {
+                    "the write failed"
+                };
+                assert!(
+                    said[0].as_deref().is_some_and(|why| why.contains(failed)
+                        && !why.contains("changed since the last command")),
+                    "{level:?}: {said:?}"
+                );
+                assert!(
+                    world.read("guarded.txt").is_none(),
+                    "{level:?}: a hook's program wrote"
+                );
+            }
             front.drain();
             assert!(
-                front.notices().iter().any(|notice| notice.contains(
-                    "The hook `guard/hook.compaction.before` was stopped by the look at the \
-                     protected paths"
-                )),
+                !front
+                    .notices()
+                    .iter()
+                    .any(|notice| notice.contains("was stopped by the look")
+                        && notice.contains("guard")),
                 "{:?}",
                 front.notices()
             );
             assert_eq!(
                 front.turn("after the guard").await.outcome,
-                TurnOutcome::Denied
+                TurnOutcome::Completed
             );
             front.close().await;
         });

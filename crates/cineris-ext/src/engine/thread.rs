@@ -39,8 +39,8 @@ use crate::host::{FetchCall, HostAnswer, HostCall, Phase, Scope};
 use crate::manifest::Manifest;
 use crate::registration::{
     CommandDef, HookDef, MAX_ARGUMENTS, MAX_COMMANDS, MAX_HOOK_TOOLS, MAX_HOOKS, MAX_TOOLS,
-    Registration, ToolDef, check_allowed, check_description, check_filter, check_name,
-    check_schema, check_timeout,
+    Registration, ToolDef, check_allowed, check_contribution_name, check_description, check_filter,
+    check_name, check_schema, check_timeout,
 };
 
 /// How many runtimes this process has made: the start-up test holds it at
@@ -114,6 +114,9 @@ pub(crate) const QUEUED: u8 = 0;
 pub(crate) const STARTED: u8 = 1;
 /// A call its caller gave up before it started.
 pub(crate) const WITHDRAWN: u8 = 2;
+/// A call the thread has run to its end: a host call of it the caller has
+/// not yet served is never served, and its time running out stops nothing.
+pub(crate) const ENDED: u8 = 3;
 
 /// What the thread says about a call.
 #[derive(Debug)]
@@ -422,6 +425,11 @@ impl Work<'_> {
             .begin(outbox.clone(), phase_of(&target));
         let (result, after) = self.call(&target, &input);
         self.shared.borrow_mut().end();
+        // Ended before it is told so: what of it is still on its way (a
+        // host call the script did not await) is not served, and its time
+        // stops nothing that runs after it (the early review of the script
+        // hooks, L2).
+        claim.store(ENDED, Ordering::SeqCst);
         // A runtime that is torn down says so before the call's end is
         // told: whoever hears of the end must not hand it another call.
         if let After::TornDown = after {
@@ -454,9 +462,20 @@ impl Work<'_> {
             }
         });
         let promise = match started {
-            Ok(Running::Value(value)) => return (Ok(value), After::Goes),
+            // What the call queued (a `then` it did not await) runs now, in
+            // the call's own phase, never in the next call's (the early
+            // review of the script hooks, L1).
+            Ok(Running::Value(value)) => {
+                return match self.run_jobs() {
+                    Ok(()) => (Ok(value), After::Goes),
+                    Err(failure) => (Err(failure), After::TornDown),
+                };
+            }
             Ok(Running::Promise(promise)) => promise,
             Err(failure) => {
+                if let Err(limit) = self.run_jobs() {
+                    return (Err(limit), After::TornDown);
+                }
                 let after = after_failure(&failure);
                 return (Err(failure), after);
             }
@@ -1201,7 +1220,7 @@ fn read_entry<'js>(
     match kind {
         "tool" => {
             let name = text("name")?;
-            check_name(&name).map_err(refuse)?;
+            check_contribution_name(&name).map_err(refuse)?;
             let description = def
                 .get::<_, Option<String>>("description")?
                 .unwrap_or_default();
@@ -1231,7 +1250,7 @@ fn read_entry<'js>(
         }
         "command" => {
             let name = text("name")?;
-            check_name(&name).map_err(refuse)?;
+            check_contribution_name(&name).map_err(refuse)?;
             let description = def
                 .get::<_, Option<String>>("description")?
                 .unwrap_or_default();

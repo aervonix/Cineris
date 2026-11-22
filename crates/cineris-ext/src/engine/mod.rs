@@ -41,7 +41,7 @@ use crate::host::{Host, HostCall, HostError, Phase, serve};
 use crate::manifest::{Manifest, ManifestError};
 use crate::registration::Registration;
 
-use thread::{FromThread, Invocation, Loaded, QUEUED, ToThread, WITHDRAWN};
+use thread::{ENDED, FromThread, Invocation, Loaded, QUEUED, ToThread, WITHDRAWN};
 
 /// The engine's stack limit for a script's calls.
 pub const STACK_BYTES: usize = 256 * 1024;
@@ -518,6 +518,9 @@ impl ScriptRuntime {
             cx.timer.sleep(cx.time.saturating_sub(waited))
         });
         let mut cancelled = pin!(cx.cancel.cancelled());
+        // Set once the call has ended and its cancel has come: only its end
+        // is waited for then.
+        let mut ended_cancel = false;
         loop {
             let event = poll_fn(|context| {
                 if let Poll::Ready(reply) = replies.poll_recv(context) {
@@ -528,7 +531,7 @@ impl ScriptRuntime {
                 {
                     return Poll::Ready(Event::Deadline);
                 }
-                if cancelled.as_mut().poll(context).is_ready() {
+                if !ended_cancel && cancelled.as_mut().poll(context).is_ready() {
                     return Poll::Ready(Event::Cancelled);
                 }
                 Poll::Pending
@@ -542,6 +545,11 @@ impl ScriptRuntime {
                         deadline = Some(cx.timer.sleep(cx.time));
                     }
                 }
+                // A host call of a call that has ended (one its script did
+                // not await) is not made: its end is on its way. One that
+                // only tells (`log`, `notify`, `progress`) is, at once.
+                Event::Reply(Some(FromThread::Call { call, .. }))
+                    if has_ended(&claim) && !only_tells(&call) => {}
                 Event::Reply(Some(FromThread::Call { id, call })) => {
                     let left = cx
                         .time
@@ -583,6 +591,14 @@ impl ScriptRuntime {
                         })
                         .await
                     };
+                    // Its time ran out, or it was cancelled, after it had
+                    // ended: nothing runs to be stopped, and its end, on its
+                    // way, is its result.
+                    if ending.is_some() && has_ended(&claim) {
+                        deadline = None;
+                        ended_cancel = true;
+                        continue;
+                    }
                     if let Some(error) = ending {
                         // A program whose look found its turn stopped says
                         // so, over the cancel or the deadline that ended it.
@@ -622,6 +638,8 @@ impl ScriptRuntime {
                 // A hook's time, up while it waits for its turn: withdrawn,
                 // and the call the runtime is serving goes on.
                 Event::Deadline if withdrawn(&claim) => return Err(CallError::TimedOut),
+                // Ended as its time ran out: its end is on its way.
+                Event::Deadline if has_ended(&claim) => deadline = None,
                 Event::Deadline => {
                     return Err(self
                         .stopped(&mut replies, cx.timer, CallError::TimedOut)
@@ -637,6 +655,8 @@ impl ScriptRuntime {
                 {
                     return Err(CallError::Cancelled);
                 }
+                // Ended as it was cancelled: its end is on its way.
+                Event::Cancelled if has_ended(&claim) => ended_cancel = true,
                 Event::Cancelled => {
                     return Err(self
                         .stopped(&mut replies, cx.timer, CallError::Cancelled)
@@ -694,6 +714,20 @@ impl Drop for ScriptRuntime {
     }
 }
 
+/// Whether a host call only tells something, at once, and is bounded by
+/// its count in a call: what is still made of a call that has ended.
+fn only_tells(call: &HostCall) -> bool {
+    matches!(
+        call,
+        HostCall::Log(_) | HostCall::Notify(_) | HostCall::Progress(_)
+    )
+}
+
+/// Whether the thread has run the call to its end.
+fn has_ended(claim: &AtomicU8) -> bool {
+    claim.load(Ordering::SeqCst) == ENDED
+}
+
 /// Takes a call that has not started from the thread: `true` when it was
 /// still waiting, and is now withdrawn, never to run.
 fn withdrawn(claim: &AtomicU8) -> bool {
@@ -721,11 +755,9 @@ impl Drop for StopIfDropped<'_> {
             return;
         };
         // Not started: withdrawn, and the call the runtime serves goes on.
-        if self
-            .claim
-            .compare_exchange(QUEUED, WITHDRAWN, Ordering::SeqCst, Ordering::SeqCst)
-            .is_ok()
-        {
+        // Ended already: nothing of it runs, and the runtime's next call is
+        // another's.
+        if withdrawn(&self.claim) || has_ended(&self.claim) {
             return;
         }
         runtime.stop.store(true, Ordering::SeqCst);

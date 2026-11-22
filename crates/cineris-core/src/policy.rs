@@ -311,6 +311,39 @@ pub(crate) fn reading_below(folder: &AbsPath) -> Option<cineris_protocol::lease:
     })
 }
 
+/// The most stopped turns a session keeps: those a hook still running may
+/// belong to (a turn's observers and its `turn.end` hooks run on after it).
+const STOPPED_KEPT: usize = 16;
+
+/// The turns a session stopped, the latest [`STOPPED_KEPT`], each with why.
+#[derive(Debug, Default)]
+struct StoppedTurns {
+    turns: std::collections::VecDeque<(u64, String)>,
+}
+
+impl StoppedTurns {
+    /// Turn `turn` is stopped, for `reason`: the latest reason of a turn
+    /// stopped again.
+    fn stop(&mut self, turn: u64, reason: String) {
+        if let Some(kept) = self.turns.iter_mut().find(|(stopped, _)| *stopped == turn) {
+            kept.1 = reason;
+            return;
+        }
+        self.turns.push_back((turn, reason));
+        while self.turns.len() > STOPPED_KEPT {
+            self.turns.pop_front();
+        }
+    }
+
+    /// Why turn `turn` was stopped, if it was and is still kept.
+    fn reason(&self, turn: u64) -> Option<String> {
+        self.turns
+            .iter()
+            .find(|(stopped, _)| *stopped == turn)
+            .map(|(_, reason)| reason.clone())
+    }
+}
+
 /// One session's engine, adapted.
 pub(crate) struct EnginePolicy {
     in_force: Arc<EngineInForce>,
@@ -341,9 +374,12 @@ pub(crate) struct EnginePolicy {
     /// follows the session's level, since nothing is confined at
     /// `unrestricted`.
     sandboxed: Arc<std::sync::atomic::AtomicBool>,
-    /// The turn whose later calls are stopped, and why: a confined command
-    /// changed protected paths in it.
-    stopped: Mutex<Option<(u64, String)>>,
+    /// The turns whose later calls are stopped, and why: a confined command
+    /// changed protected paths in each, or a host call was answered with a
+    /// stop. Several, so that a hook still running for a stopped turn stays
+    /// refused after a later turn stops (the early review of the script
+    /// hooks, L7).
+    stopped: Mutex<StoppedTurns>,
     denials: Mutex<Vec<PermissionDenial>>,
     /// Called before a command is decided: the project's knowledge looks
     /// at whether its files changed, and gives the engine the learned
@@ -424,7 +460,7 @@ impl EnginePolicy {
             stops_from_questions: parts.stops_from_questions,
             waits_for_a_client: parts.waits_for_a_client,
             sandboxed: Arc::new(std::sync::atomic::AtomicBool::new(parts.sandboxed)),
-            stopped: Mutex::new(None),
+            stopped: Mutex::new(StoppedTurns::default()),
             denials: Mutex::new(Vec::new()),
             before_command: std::sync::OnceLock::new(),
         }
@@ -450,28 +486,28 @@ impl EnginePolicy {
     /// call: the model is not asked again, even when it was the last call
     /// of its response.
     pub(crate) fn stop_turn(&self, turn: u32, reason: String) {
-        *self.stopped.lock().unwrap_or_else(PoisonError::into_inner) =
-            Some((u64::from(turn), reason));
+        self.stopped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .stop(u64::from(turn), reason);
         self.in_force.stop();
     }
 
     /// Why turn number `turn` was stopped, if it was.
     pub(crate) fn stopped_turn(&self, turn: u32) -> Option<String> {
-        let stopped = self.stopped.lock().unwrap_or_else(PoisonError::into_inner);
-        stopped
-            .as_ref()
-            .filter(|(stopped, _)| *stopped == u64::from(turn))
-            .map(|(_, reason)| reason.clone())
+        self.stopped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reason(u64::from(turn))
     }
 
     /// Why `call`'s turn was stopped, if it was.
     fn stopped(&self, call: &PlannedCall<'_>) -> Option<String> {
         let number = cineris_base::IdCounter::new("t_").number_of(call.turn.as_str())?;
-        let stopped = self.stopped.lock().unwrap_or_else(PoisonError::into_inner);
-        stopped
-            .as_ref()
-            .filter(|(turn, _)| *turn == number)
-            .map(|(_, reason)| reason.clone())
+        self.stopped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .reason(number)
     }
 
     /// Says whether commands run confined from now on.
@@ -1618,6 +1654,27 @@ mod tests {
     use cineris_policy::{Access, Outcome, Request};
 
     use super::*;
+
+    /// A turn stays stopped after a later one is, so that a hook still
+    /// running for it is refused all the same (the early review of the
+    /// script hooks, L7); the latest [`STOPPED_KEPT`] are kept, each with its
+    /// latest reason.
+    #[test]
+    fn a_stopped_turn_stays_stopped_after_a_later_one_is() {
+        let mut stopped = StoppedTurns::default();
+        stopped.stop(1, "the first".to_owned());
+        stopped.stop(2, "the second".to_owned());
+        assert_eq!(stopped.reason(1).as_deref(), Some("the first"));
+        assert_eq!(stopped.reason(2).as_deref(), Some("the second"));
+        assert_eq!(stopped.reason(3), None);
+        stopped.stop(1, "again".to_owned());
+        assert_eq!(stopped.reason(1).as_deref(), Some("again"));
+        for turn in 3..=u64::try_from(STOPPED_KEPT).unwrap() + 2 {
+            stopped.stop(turn, format!("turn {turn}"));
+        }
+        assert_eq!(stopped.reason(1), None, "the oldest goes past the bound");
+        assert!(stopped.reason(3).is_some());
+    }
 
     /// A skill's rule compiles whatever its folder is named, and matches
     /// its folder and what is below it alone: names that hold what a path

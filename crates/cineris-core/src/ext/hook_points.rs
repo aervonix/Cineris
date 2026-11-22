@@ -404,6 +404,7 @@ impl crate::Core {
         &self,
         session: &cineris_protocol::SessionId,
         name: &str,
+        turn: &str,
     ) -> Result<(Arc<dyn Hook>, HookInput), crate::OpError> {
         let live = self.live(session)?;
         let points = PointHooks::of(&live.command_hooks);
@@ -440,7 +441,7 @@ impl crate::Core {
         let input = HookInput::new(
             event,
             session.clone(),
-            cineris_protocol::TurnId::new("t_1"),
+            cineris_protocol::TurnId::new(turn),
             live.command_hooks.paths.root().clone(),
             subject,
         );
@@ -463,7 +464,25 @@ impl crate::Core {
         name: &str,
         count: usize,
     ) -> Result<Vec<Option<String>>, crate::OpError> {
-        let (hook, input) = self.hook_at_its_point(session, name)?;
+        self.hook_runs_in_turn(session, name, "t_1", count).await
+    }
+
+    /// [`hook_runs_at_its_point`](Self::hook_runs_at_its_point), the runs
+    /// of the turn `turn` (`t_<n>`): for a session whose first turn was
+    /// stopped, whose hooks start nothing.
+    ///
+    /// # Errors
+    ///
+    /// When the session is not open, or runs no such hook.
+    #[doc(hidden)]
+    pub async fn hook_runs_in_turn(
+        &self,
+        session: &cineris_protocol::SessionId,
+        name: &str,
+        turn: &str,
+        count: usize,
+    ) -> Result<Vec<Option<String>>, crate::OpError> {
+        let (hook, input) = self.hook_at_its_point(session, name, turn)?;
         let runs: Vec<_> = (0..count).map(|_| hook.run(&input)).collect();
         let mut said = Vec::with_capacity(count);
         for run in runs {
@@ -489,7 +508,7 @@ impl crate::Core {
         session: &cineris_protocol::SessionId,
         name: &str,
     ) -> Result<(), crate::OpError> {
-        let (hook, input) = self.hook_at_its_point(session, name)?;
+        let (hook, input) = self.hook_at_its_point(session, name, "t_1")?;
         drop(hook.run(&input));
         Ok(())
     }

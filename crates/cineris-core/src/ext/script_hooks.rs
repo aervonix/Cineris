@@ -105,13 +105,54 @@ pub(crate) struct Gate {
     pub(crate) name: String,
     /// The hash its pin names.
     pub(crate) hash: cineris_base::ContentHash,
-    /// Why its hooks cannot run, and what approves or turns it off: the
-    /// failure each of them gives.
+    /// The failure each of its held hooks gives the call or prompt it
+    /// refuses: short, as the model is given it.
     pub(crate) why: String,
+    /// What the user is told, once a session, in words: why it holds its
+    /// gates, and the way out ([`way_out`]).
+    pub(crate) notice: String,
     /// What it registered at that hash, as the registration cache keeps it:
     /// `None` when the cache does not, and the session's own knowledge of
     /// it, from when it was loaded at that hash, serves.
     pub(crate) hooks: Option<Vec<cineris_ext::registration::HookDef>>,
+    /// Where what it registered is known nowhere (a first registration that
+    /// failed): the gating events its manifest lists, or both when not even
+    /// that is known, each held on every call and every prompt (the
+    /// maintainers' call on the early review of the script hooks).
+    pub(crate) unknown: Vec<Event>,
+}
+
+/// The way out of an extension's held gates, and of a hook of it that
+/// cannot run: what approves it again, or turns it off, as the harness has
+/// them now. The one place that says it, so that the commands that manage
+/// extensions (`cineris ext disable` and the rest of the step's third part)
+/// are named here once they are built. `shown` is its folder as the user is
+/// shown it, when known.
+pub(crate) fn way_out(
+    source: cineris_ext::source::Source,
+    name: &str,
+    shown: Option<&str>,
+) -> String {
+    let name = in_code(name);
+    match source {
+        cineris_ext::source::Source::User => {
+            let add = shown.map_or_else(
+                || "`cineris ext add` with its folder".to_owned(),
+                |shown| format!("`cineris ext add {shown}`"),
+            );
+            format!(
+                "approve it again as it is now, fixed first if it needs it ({add}), or turn it off: \
+                 set `[extensions.{name}] enabled = false` in your configuration, which takes \
+                 effect in the next session"
+            )
+        }
+        cineris_ext::source::Source::Project => "approve it again as it is now, fixed first if it \
+                                                 needs it (the project's trust question lists it \
+                                                 when a session opens, and `cineris permissions \
+                                                 trust` shows it), or take the project's trust \
+                                                 away (`cineris permissions untrust`)"
+            .to_owned(),
+    }
 }
 
 /// Each hook of `definitions` on an event `allowed` lists (`None`: any), with
@@ -145,6 +186,14 @@ fn named<'a>(
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+/// A script hook's run has found its turn not stopped and is about to call
+/// its extension (a point a test can stop at: [`cineris_base::hook`]).
+pub const A_SCRIPT_HOOK_STARTS: &str = "core: a script hook's run is about to call its extension";
+
+/// A script hook's run has ended, and a stop of its own, if it made one,
+/// has been told (a point a test can stop at: [`cineris_base::hook`]).
+pub const A_SCRIPT_HOOK_ENDS: &str = "core: a script hook's run has ended";
 
 /// How a session's `session.start` hooks of its extensions are heard: the
 /// session they are of, and how a hook's context reaches it, as a notice
@@ -182,6 +231,9 @@ impl ScriptHooks {
         let approved = extension.approved();
         let allowed = &approved.manifest.capabilities.hooks;
         let mut added = Vec::new();
+        // Its runs are under a token of its own, a child of the session's:
+        // withdrawn, it stops what of it still runs.
+        let runs = self.commands.runs_token();
         // What a live runtime and the cache both checked: events the
         // manifest lists.
         for (index, name, event, definition) in named(
@@ -200,6 +252,7 @@ impl ScriptHooks {
                 commands: Arc::clone(&self.commands),
                 paths: Arc::clone(&self.paths),
                 running: Arc::default(),
+                runs: runs.clone(),
             }));
         }
         let mut on = lock(&self.on);
@@ -216,12 +269,16 @@ impl ScriptHooks {
     /// not keep it, the session's own from when it was loaded or held at
     /// that hash). A gate whose registration is known nowhere holds
     /// nothing.
-    pub(crate) fn hold(&self, gates: Vec<Gate>) {
+    ///
+    /// Gives, for each gate that holds a hook, its place in `gates` and the
+    /// events it holds.
+    pub(crate) fn hold(&self, gates: Vec<Gate>) -> Vec<(usize, Vec<LoopEvent>)> {
         let on = lock(&self.on);
         let mut held = lock(&self.held);
         let mut next: Vec<Arc<HeldHook>> = Vec::new();
-        for gate in gates {
-            let made: Vec<HeldHook> = match &gate.hooks {
+        let mut holding: Vec<(usize, Vec<LoopEvent>)> = Vec::new();
+        for (index, gate) in gates.into_iter().enumerate() {
+            let mut made: Vec<HeldHook> = match &gate.hooks {
                 Some(definitions) => named(&gate.name, definitions, None)
                     .into_iter()
                     .filter(|(_, _, event, definition)| event.gates() && !definition.observe)
@@ -264,15 +321,50 @@ impl ScriptHooks {
                     )
                     .collect(),
             };
+            // Known nowhere: each gating event its manifest lists, on every
+            // call and every prompt.
+            if made.is_empty() && gate.hooks.is_none() {
+                made = gate
+                    .unknown
+                    .iter()
+                    .filter(|event| event.gates())
+                    .filter_map(|event| {
+                        Some(HeldHook {
+                            name: format!("{}/hook.{}", gate.name, event.as_str()),
+                            extension: gate.name.clone(),
+                            hash: gate.hash,
+                            event: loop_event(*event)?,
+                            filter: Ok(Filter::default()),
+                            why: gate.why.clone(),
+                        })
+                    })
+                    .collect();
+            }
+            if !made.is_empty() {
+                let mut events: Vec<LoopEvent> = made.iter().map(|hook| hook.event).collect();
+                events.dedup();
+                if events.contains(&LoopEvent::PromptSubmit)
+                    && events.contains(&LoopEvent::ToolBefore)
+                {
+                    events = vec![LoopEvent::PromptSubmit, LoopEvent::ToolBefore];
+                }
+                holding.push((index, events));
+            }
             next.extend(made.into_iter().map(Arc::new));
         }
         *held = next;
+        holding
     }
 
     /// Takes the hooks of the extension `name` off their events: it is
-    /// withdrawn from the session.
+    /// withdrawn from the session. What of them still runs is stopped (the
+    /// early review of the script hooks, L6).
     pub(crate) fn withdraw(&self, name: &str) {
-        lock(&self.on).retain(|hook| hook.extension.name() != name);
+        let mut on = lock(&self.on);
+        for hook in on.iter().filter(|hook| hook.extension.name() == name) {
+            hook.runs.cancel();
+        }
+        on.retain(|hook| hook.extension.name() != name);
     }
 
     /// Whether a hook of an extension is on `event` for `target`: cheap, no
@@ -332,12 +424,7 @@ impl ScriptHooks {
         let turn = TurnId::new("t_0");
         let mut waited = Vec::new();
         for hook in hooks {
-            let running = hook.start(
-                input.clone(),
-                &started.session,
-                &turn,
-                self.commands.runs_token(),
-            );
+            let running = hook.start(input.clone(), &started.session, &turn, hook.runs.child());
             if hook.observe {
                 // Never waited for, its answer not read: a failure is
                 // logged, as an observer's is everywhere. Under the
@@ -487,6 +574,8 @@ pub(crate) struct ScriptHook {
     /// How many runs of it are going on: a waited-for `turn.end` hook has
     /// at most [`TURN_END_AT_ONCE`], as a hook command has.
     running: Arc<AtomicUsize>,
+    /// What its extension's runs are under: cancelled as it is withdrawn.
+    runs: CancelToken,
 }
 
 /// Whether a hook on `filter` is on `target`: its `tools` that cannot be
@@ -621,7 +710,7 @@ impl Hook for ScriptHook {
             input.to_json(),
             &input.session,
             &input.turn,
-            self.commands.runs_token(),
+            self.runs.child(),
         );
         Box::pin(async move { heard(&self.name, running.ended().await) })
     }
@@ -742,6 +831,7 @@ impl Call {
         if policy.stopped_turn(turn_number(&self.turn)).is_some() {
             return HookRan::Failed("it was not started: its turn was stopped".to_owned());
         }
+        cineris_base::hook::await_point!(A_SCRIPT_HOOK_STARTS);
         let cx = RunCx::new(
             Arc::clone(&self.paths),
             Arc::clone(self.commands.content()),
@@ -766,6 +856,7 @@ impl Call {
             // Told at once, and the next prompt held back, on any event.
             self.commands.stopped(&self.name, &self.turn, note);
         }
+        cineris_base::hook::await_point!(A_SCRIPT_HOOK_ENDS);
         ran
     }
 }
