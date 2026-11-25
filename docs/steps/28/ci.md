@@ -249,3 +249,52 @@ The pull request's `pr-size` jobs in run 44950381620, each against `main`'s own 
 | Windows, `x86_64-pc-windows-msvc` | 20,239,360 bytes (19.30 MiB) | 19,793,408 bytes | + 445,952 bytes (435.5 KiB) | 25 MiB |
 
 On Linux the crates that grew most are the standard library (+69 KB), `cineris_core` (+36 KB) and `cineris_agent` (+36 KB), from `cargo xtask size` in `try --final` (run 44947980446). Neither binary holds a path under a home folder.
+
+## The sixth pull request: script hooks
+
+<!-- written by cargo xtask ci-times, section "The sixth pull request: script hooks": it replaces this up to the end mark -->
+Pull request 127, on `main` at `d663b2e`. "Main" is main's own run at `d663b2e` (run 44961601958).
+The PR's run is 45700076473, at `676ae4b`.
+
+| Job | Main, `d663b2e` | The PR at `676ae4b` |
+|---|---|---|
+| `lint-linux` | 79 s | 78 s |
+| `test-linux` | 153 s | 135 s |
+| `lint-windows` | 111 s | 119 s |
+| `test-windows` | 262 s | 253 s |
+| `pr-size-linux` (blocks nothing) | — | 341 s |
+| `ts-client` (blocks nothing) | 0 s | 73 s |
+| `pr-size-windows` (blocks nothing) | — | 433 s |
+
+| Time above process start, against the budget | Linux, main (3 ms) | Linux, `676ae4b` (3 ms) | Windows, main (7 ms) | Windows, `676ae4b` (6 ms) |
+|---|---|---|---|---|
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 15.9 s | 12.4 s | 17.3 s | 17.4 s |
+| Tier 2, integration (40 s) | 28.9 s | 25.6 s | 39.8 s | 41.8 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 43.1 s | 38.1 s | 78.7 s | 76.5 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "The sixth pull request: script hooks" -->
+
+Every job passed, `test-windows` in 4 min 13 s at `676ae4b` (run 45700076473), whose commits after `e1ca50f` are records only. On that runner (6 ms) its tier 2 was 41.8 s against `main`'s 39.8 s, over its budget of 40 s (a warning) and 18 s from its failure.
+
+## The sixth pull request, both trees on one runner
+
+`try --final` (run 45695681459, at `e1ca50f`): Windows, the median of 5 runs each, on one runner at 8.0 ms a process start. Copied from `cargo xtask try-result 45695681459`, as for the first pull request.
+
+| Tier | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 23.4 s (3,425 tests) | 23.3 s (3,418) | +0.1 s | 25 s |
+| 2, integration | 58.2 s (1,826 tests) | 55.2 s (1,810) | +3.0 s | 40 s |
+| 3, system | 91.8 s (233 tests) | 91.6 s (233) | +0.2 s | 90 s |
+
+The crate that moved in tier 2 is `cineris-core`, +2.75 s: the script hooks' rules, each a session and its turns, which on a hosted Windows runner cost about 8 ms an open and 6.6 ms a turn (`try` 45687580177). Folding the hook tests onto shared worlds saved 0.34 s of it (`try` 45693409169) and could save no more without changing what they check, the maintainers' limit. On this runner the pull request's tier 2 is 1.8 s from its failure at 60 s, and `main`'s 4.8 s ([main-windows-tiers-over-budget-on-slow-runners](../../outstanding/main-windows-tiers-over-budget-on-slow-runners.md)). The same run's tests on Linux 22.04 used 90%, 76% and 78% of the three tiers' budgets.
+
+## The sixth pull request: the binary's size
+
+The pull request's `pr-size` jobs in run 45700076473, each against `main`'s own size record (run 44961601992). The shipped `dist` build:
+
+| System | The PR | Main | Change | Budget |
+|---|---|---|---|---|
+| Linux, `x86_64-unknown-linux-musl` | 16,915,480 bytes (16.13 MiB) | 16,780,280 bytes | + 135,200 bytes (132.0 KiB) | 20 MiB |
+| Windows, `x86_64-pc-windows-msvc` | 20,422,144 bytes (19.48 MiB) | 20,239,360 bytes | + 182,784 bytes (178.5 KiB) | 25 MiB |
+
+On Linux the crates that grew most are `cineris_core` (+38.9 KB), the standard library (+28.4 KB) and `cineris_ext` (+9.3 KB), from `cargo xtask size` in `try --final` (run 45695681459). Neither binary holds a path under a home folder.
