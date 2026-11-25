@@ -86,10 +86,20 @@ pub(crate) struct ScriptHooks {
     /// The gating hooks of the extensions that stand approved and are not
     /// found as approved: each fails.
     held: Mutex<Vec<Arc<HeldHook>>>,
-    /// Each extension the session loaded, by its name and the hash it was
-    /// approved at: what it registered there is known, hooks or none, even
-    /// once it is withdrawn.
-    known: Mutex<Vec<(String, cineris_base::ContentHash)>>,
+    /// What the session saw each extension it loaded register: by where it
+    /// comes from, its name and the hash it was approved at, its hooks or
+    /// none, kept once it is withdrawn (the full review of the script hooks,
+    /// L-a, and its re-check: that one was seen is not what it registered).
+    known: Mutex<Vec<Seen>>,
+}
+
+/// What the session saw an extension it loaded register.
+#[derive(Debug, Clone)]
+struct Seen {
+    source: cineris_ext::source::Source,
+    name: String,
+    hash: cineris_base::ContentHash,
+    hooks: Vec<cineris_ext::registration::HookDef>,
 }
 
 impl std::fmt::Debug for ScriptHooks {
@@ -105,6 +115,8 @@ impl std::fmt::Debug for ScriptHooks {
 /// approved: its gating hooks are held, failing with `why`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Gate {
+    /// Where it comes from.
+    pub(crate) source: cineris_ext::source::Source,
     /// The extension's name.
     pub(crate) name: String,
     /// The hash its pin names.
@@ -124,6 +136,11 @@ pub(crate) struct Gate {
     /// that is known, each held on every call and every prompt (the
     /// maintainers' call on the early review of the script hooks).
     pub(crate) unknown: Vec<Event>,
+    /// Whether what the session saw it register at any hash serves, not at
+    /// `hash` alone: while the store of its approval cannot be read, a
+    /// loaded extension keeps its gates whatever it is found as now, or if
+    /// it is gone (the re-check of the full review, M1').
+    pub(crate) by_name: bool,
 }
 
 /// What an extension's way out of its held gates is from.
@@ -212,21 +229,23 @@ pub(crate) fn way_out(
               trust` shows it), or take the project's trust away (`cineris permissions untrust`) \
               and start without `--trust-project`"
             .to_owned(),
+        // Only a new hash or a new process starts it again (the re-check of
+        // the full review, L-c).
         (Source::User, Stand::Disabled) => format!(
-            "turn it off ({table} in your configuration), or start Cineris again: this process \
-             does not start it again"
+            "fix it and approve the fix ({add}), turn it off ({table} in your configuration), or \
+             start Cineris again"
         ),
-        (Source::Project, Stand::Disabled) => {
-            "take the project's trust away (`cineris permissions \
-                                               untrust`), or start Cineris again: this process \
-                                               does not start it again"
-                .to_owned()
-        }
+        (Source::Project, Stand::Disabled) => "fix it and approve the fix (the project's trust \
+                                               question lists it when a session opens, and \
+                                               `cineris permissions trust` shows it), take the \
+                                               project's trust away (`cineris permissions \
+                                               untrust`), or start Cineris again"
+            .to_owned(),
         // A deletion may be an unconfined program's, taking a gate away:
         // only the user's word lets it go.
         (Source::User, Stand::Gone) => format!(
-            "its folder is gone; if you removed it, turn it off with `enabled = false` (or, from \
-             the next release, `cineris ext remove {name}`)"
+            "its folder is gone; if you removed it, turn it off with {table} (or, from the next \
+             release, `cineris ext remove {name}`)"
         ),
         (Source::Project, Stand::Gone) => {
             "its folder is gone; if it was removed on purpose, trust \
@@ -322,10 +341,17 @@ impl ScriptHooks {
         let allowed = &approved.manifest.capabilities.hooks;
         {
             let mut known = lock(&self.known);
-            let key = (approved.manifest.name.clone(), approved.hash);
-            if !known.contains(&key) {
-                known.push(key);
-            }
+            known.retain(|seen| {
+                !(seen.source == approved.source
+                    && seen.name == approved.manifest.name
+                    && seen.hash == approved.hash)
+            });
+            known.push(Seen {
+                source: approved.source,
+                name: approved.manifest.name.clone(),
+                hash: approved.hash,
+                hooks: approved.registration.hooks.clone(),
+            });
         }
         let mut added = Vec::new();
         // Its runs are under a token of its own, a child of the session's:
@@ -370,13 +396,21 @@ impl ScriptHooks {
     /// Gives, for each gate that holds a hook, its place in `gates` and the
     /// events it holds.
     pub(crate) fn hold(&self, gates: Vec<Gate>) -> Vec<(usize, Vec<LoopEvent>)> {
-        let on = lock(&self.on);
         let mut held = lock(&self.held);
         let known = lock(&self.known);
         let mut next: Vec<Arc<HeldHook>> = Vec::new();
         let mut holding: Vec<(usize, Vec<LoopEvent>)> = Vec::new();
         for (index, gate) in gates.into_iter().enumerate() {
-            let mut made: Vec<HeldHook> = match &gate.hooks {
+            // What it registered at the hash approved: as the cache keeps
+            // it, or as the session saw it register; at any hash, the
+            // latest, where the store of its approval cannot be read.
+            let seen = known.iter().rev().find(|seen| {
+                seen.source == gate.source
+                    && seen.name == gate.name
+                    && (gate.by_name || seen.hash == gate.hash)
+            });
+            let definitions = gate.hooks.as_ref().or(seen.map(|seen| &seen.hooks));
+            let mut made: Vec<HeldHook> = match definitions {
                 Some(definitions) => named(&gate.name, definitions, None)
                     .into_iter()
                     .filter(|(_, _, event, definition)| event.gates() && !definition.observe)
@@ -391,42 +425,19 @@ impl ScriptHooks {
                         })
                     })
                     .collect(),
-                None => on
+                None => held
                     .iter()
-                    .filter(|hook| {
-                        hook.extension.name() == gate.name
-                            && hook.extension.approved().hash == gate.hash
-                            && hook.event.gates()
-                            && !hook.observe
+                    .filter(|hook| hook.extension == gate.name && hook.hash == gate.hash)
+                    .map(|hook| HeldHook {
+                        why: gate.why.clone(),
+                        ..HeldHook::clone(hook)
                     })
-                    .filter_map(|hook| {
-                        Some(HeldHook {
-                            name: hook.name.clone(),
-                            extension: gate.name.clone(),
-                            hash: gate.hash,
-                            event: loop_event(hook.event)?,
-                            filter: hook.filter.clone(),
-                            why: gate.why.clone(),
-                        })
-                    })
-                    .chain(
-                        held.iter()
-                            .filter(|hook| hook.extension == gate.name && hook.hash == gate.hash)
-                            .map(|hook| HeldHook {
-                                why: gate.why.clone(),
-                                ..HeldHook::clone(hook)
-                            }),
-                    )
                     .collect(),
             };
-            // Known nowhere (not in the cache, never loaded at that hash in
-            // this session): each gating event its manifest lists, or both,
-            // on every call and every prompt.
-            let unknown = gate.hooks.is_none()
-                && !known
-                    .iter()
-                    .any(|(name, hash)| *name == gate.name && *hash == gate.hash);
-            if made.is_empty() && unknown {
+            // Known nowhere (not in the cache, never loaded in this session):
+            // each gating event its manifest lists, or both, on every call
+            // and every prompt; none where nothing may gate the session.
+            if made.is_empty() && definitions.is_none() {
                 made = gate
                     .unknown
                     .iter()
@@ -457,6 +468,22 @@ impl ScriptHooks {
         }
         *held = next;
         holding
+    }
+
+    /// The extensions of `source` the session loaded, each by its name and
+    /// the hash it was last loaded at.
+    pub(crate) fn loaded_of(
+        &self,
+        source: cineris_ext::source::Source,
+    ) -> Vec<(String, cineris_base::ContentHash)> {
+        let known = lock(&self.known);
+        let mut named: Vec<(String, cineris_base::ContentHash)> = Vec::new();
+        for seen in known.iter().rev().filter(|seen| seen.source == source) {
+            if !named.iter().any(|(name, _)| *name == seen.name) {
+                named.push((seen.name.clone(), seen.hash));
+            }
+        }
+        named
     }
 
     /// Takes the hooks of the extension `name` off their events: it is
@@ -775,6 +802,14 @@ impl ScriptHook {
         let counted = Counted::new(&self.running);
         let asked = self.extension.parts().clock.monotonic();
         let time = self.time();
+        // What ends a runtime start the run leaves to go on: the session's
+        // close, or for a `session.end` run, which runs as the session
+        // closes, the end of its own time there.
+        let close = if self.event == Event::SessionEnd {
+            token.clone()
+        } else {
+            self.commands.runs_token()
+        };
         let call = Call {
             extension: Arc::clone(&self.extension),
             commands: Arc::clone(&self.commands),
@@ -785,6 +820,7 @@ impl ScriptHook {
             turn: turn.clone(),
             cancel: token,
             kill,
+            close,
         };
         let task = tokio::spawn(async move {
             let _counted = counted;
@@ -923,6 +959,8 @@ struct Call {
     turn: TurnId,
     cancel: CancelToken,
     kill: CancelToken,
+    /// What ends a runtime start this run leaves to go on.
+    close: CancelToken,
 }
 
 impl Call {
@@ -952,12 +990,16 @@ impl Call {
             call_id: CallId::new(format!("hook_{}", self.name)),
             item: ItemId::new(format!("hook_{}_{}", self.name, self.turn.as_str())),
         });
-        let commands = Arc::clone(&self.commands);
         let ran = self
             .extension
-            .call_hook(self.index, &self.name, input, &cx, timed, &|task| {
-                commands.keep(task);
-            })
+            .call_hook(
+                self.index,
+                &self.name,
+                input,
+                &cx,
+                timed,
+                (&self.commands, self.close.clone()),
+            )
             .await;
         if let HookRan::Stopped(note) = &ran {
             // Told at once, and the next prompt held back, on any event.

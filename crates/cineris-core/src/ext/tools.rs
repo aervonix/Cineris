@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use cineris_base::path::AbsPath;
-use cineris_base::{SharedClock, SharedTimer};
+use cineris_base::{CancelToken, SharedClock, SharedTimer};
 use cineris_ext::capability::Capabilities;
 use cineris_ext::engine::{CallContext, CallError, ScriptRuntime, Source, Target};
 use cineris_ext::host::Phase;
@@ -140,7 +140,7 @@ impl LoadedExtension {
         input: Json,
         cx: &RunCx,
         (asked, time): (Duration, Duration),
-        keep: &(dyn Fn(tokio::task::JoinHandle<()>) + Send + Sync),
+        (commands, close): (&super::HookCommands, CancelToken),
     ) -> HookRan {
         // A run let go before it got here starts nothing, not even its
         // runtime.
@@ -156,10 +156,13 @@ impl LoadedExtension {
         // its close waits for: no run outlives its session (the full review
         // of the script hooks, L7).
         let (started, starting) = tokio::sync::oneshot::channel();
-        keep({
+        commands.keep({
             let extension = Arc::clone(self);
             tokio::spawn(async move {
-                let _ = started.send(extension.runtime().await);
+                // Bounded by the close: once the session closes, the start
+                // is ended as its time's end ends it, within its grace (the
+                // re-check of the full review, L-d).
+                let _ = started.send(extension.runtime(&close).await);
             })
         });
         let runtime = match cx.cancel.race(starting).await {
@@ -221,11 +224,21 @@ impl LoadedExtension {
                 time.as_millis()
             )),
             Err(CallError::Cancelled) => HookRan::Failed("it was let go".to_owned()),
-            Err(error @ CallError::Disabled) => {
-                HookRan::Failed(format!("{error}; {}", self.remedy(true)))
+            Err(CallError::Disabled) => {
+                HookRan::Failed(format!("{}; {}", self.disabled(), self.remedy(true)))
             }
             Err(error) => HookRan::Failed(error.to_string()),
         }
+    }
+
+    /// Why the extension does not run in this process: a thread of it was
+    /// left running.
+    fn disabled(&self) -> String {
+        format!(
+            "The extension `{}` is not started in this process: a thread of it did not stop when \
+             its time was up, and was left running",
+            cineris_base::in_code(self.name())
+        )
     }
 
     /// What approves the extension as it is now, or turns it off: for a
@@ -245,7 +258,7 @@ impl LoadedExtension {
 
     /// The live runtime, made when there is none or the last was torn
     /// down.
-    async fn runtime(&self) -> Result<Arc<ScriptRuntime>, Refused> {
+    async fn runtime(&self, until: &CancelToken) -> Result<Arc<ScriptRuntime>, Refused> {
         let mut slot = self.runtime.lock().await;
         // An extension whose thread was left running is not started again
         // in this process: the engine refuses it, for every session.
@@ -279,7 +292,7 @@ impl LoadedExtension {
                 )));
             }
         }
-        let runtime = ScriptRuntime::start(
+        let runtime = ScriptRuntime::start_until(
             self.name(),
             Source::Folder {
                 path: self.approved.folder.clone(),
@@ -287,11 +300,30 @@ impl LoadedExtension {
             },
             Some(self.approved.registration.clone()),
             self.parts.timer.as_ref(),
+            until,
         )
         .await
-        .map_err(|error| Refused {
-            disabled: matches!(error, cineris_ext::engine::LoadError::Disabled),
-            why: format!("The extension `{}` could not start: {error}", self.name()),
+        .map_err(|error| match error {
+            // Only a new hash or a new process starts it: said whole, as the
+            // way out says it, not as the engine's sentence (the re-check of
+            // the full review, L-c).
+            cineris_ext::engine::LoadError::Disabled
+            | cineris_ext::engine::LoadError::Abandoned => Refused {
+                why: self.disabled(),
+                disabled: true,
+            },
+            cineris_ext::engine::LoadError::TooManyAbandoned(count) => Refused {
+                why: format!(
+                    "The extension `{}` could not start: {count} extension threads did not stop \
+                     when told to and are still running, so this process starts no extension",
+                    cineris_base::in_code(self.name())
+                ),
+                disabled: true,
+            },
+            error => Refused::by(format!(
+                "The extension `{}` could not start: {error}",
+                self.name()
+            )),
         })?;
         // The capabilities and the time were taken from the approved
         // manifest: the snapshot whose hash was checked must hold that one
@@ -315,8 +347,12 @@ impl LoadedExtension {
         cx: &RunCx,
         out: &mut dyn ToolOutput,
     ) -> ToolResult {
-        let runtime = match self.runtime().await {
+        let runtime = match self.runtime(&CancelToken::new()).await {
             Ok(runtime) => runtime,
+            Err(Refused {
+                why,
+                disabled: true,
+            }) => return ToolResult::error(format!("{why}; {}", self.remedy(true))),
             Err(refused) => return ToolResult::error(refused.why),
         };
         let full_name = format!("{}/{tool}", self.name());

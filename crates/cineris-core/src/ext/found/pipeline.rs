@@ -208,6 +208,11 @@ struct Decided {
     /// their events, failing, from the registration their pin names
     /// (`docs/steps/28/answered.md`, point 5).
     held: Vec<Gate>,
+    /// Each extension found, by where it comes from and its name.
+    found: Vec<(Source, String)>,
+    /// The stores of approvals that could not be read, by the source whose
+    /// approvals they hold, with the file as the user is shown it.
+    unread: Vec<(Source, String)>,
 }
 
 /// The cache's part of the work, done after the session's extensions are
@@ -443,10 +448,36 @@ impl Held {
             missing,
             cache,
             watched,
-            held,
+            mut held,
+            found,
+            unread,
         } = blocking(move || decide(&inputs, project_found))
             .await
             .ok_or_else(|| "the work that finds and judges them did not finish".to_owned())?;
+        // While a store of approvals cannot be read, what the session loaded
+        // of that source and is not found now (removed, or its folder left
+        // out) keeps its gates, from what the session saw it register (the
+        // re-check of the full review, M1').
+        for (source, file) in &unread {
+            for (name, hash) in self.scripts.loaded_of(*source) {
+                if found.contains(&(*source, name.clone())) {
+                    continue;
+                }
+                let was = match source {
+                    Source::User => Unstood::PinsUnreadable(Vec::new(), file.clone()),
+                    Source::Project => Unstood::TrustUnreadable(Vec::new(), file.clone()),
+                };
+                held.push(gate(
+                    *source,
+                    &name,
+                    None,
+                    hash,
+                    &was,
+                    None,
+                    self.inputs.trust_project,
+                ));
+            }
+        }
         self.watched = watched;
         for message in told {
             self.tell(message);
@@ -807,7 +838,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // parse (the full review of the script hooks, L6).
     let (trust_read, trust_unreadable) = read_trust(inputs);
     let project: Option<(Vec<Listed>, Vec<LeftOut>, Option<Discovered>)> =
-        (inputs.project.is_some() || trust_unreadable.is_some()).then(|| match project_found {
+        inputs.project.as_ref().map(|_| match project_found {
             Some(looked) => {
                 decided.watched.extend(looked.watched);
                 (looked.found, looked.left_out, None)
@@ -932,19 +963,26 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                     &definition,
                 );
                 // The trust store cannot be read: nothing says what was
-                // approved, but a yes of this session's own.
+                // approved, but a yes of this session's own. Only what the
+                // session loaded keeps its gates: no repository gates a
+                // session by itself (the owner's answer on the re-check of
+                // the full review, L-b; 2b-1's settled point 10).
                 if standing != Standing::Approved
                     && let Some(file) = &trust_unreadable
                 {
+                    let out = way_out(
+                        Source::Project,
+                        &listed.manifest.name,
+                        None,
+                        Stand::StoreUnreadable(file),
+                    );
+                    decided.told.push(trust_unread_notice(file, &out));
                     store_held.push(gate(
                         Source::Project,
                         &listed.manifest.name,
                         Some(&listed.shown),
                         listed.hash,
-                        &Unstood::TrustUnreadable(
-                            listed.manifest.capabilities.hooks.clone(),
-                            file.clone(),
-                        ),
+                        &Unstood::TrustUnreadable(Vec::new(), file.clone()),
                         None,
                         inputs.trust_project,
                     ));
@@ -974,6 +1012,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // project's whose name is the user's, and one no pin names any more
     // hold nothing: the user's word, or the approval taken back.
     decided.held.extend(store_held);
+    decided.found = found_names.clone();
     let mut pending: Vec<(Source, String, String, ContentHash, Unstood)> = Vec::new();
     let mut seen: Vec<(Source, String)> = found_names;
     seen.extend(
@@ -1032,6 +1071,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             pending.push((source, name, shown, hash, was));
         }
     }
+    decided.unread = unread_stores(&pins, trust_unreadable.as_ref(), pins_file.as_ref());
     if standing_approved.is_empty() && pending.is_empty() {
         return decided;
     }
@@ -1135,6 +1175,23 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     decided
 }
 
+/// The stores of approvals the finding could not read: the user's pins,
+/// when they were read and could not be, and the trust store.
+fn unread_stores(
+    pins: &Option<Option<UserPins>>,
+    trust: Option<&String>,
+    pins_file: Option<&String>,
+) -> Vec<(Source, String)> {
+    let mut unread = Vec::new();
+    if matches!(pins, Some(None)) {
+        unread.push((Source::User, pins_file.cloned().unwrap_or_default()));
+    }
+    if let Some(file) = trust {
+        unread.push((Source::Project, file.clone()));
+    }
+    unread
+}
+
 /// Where a gate's notice says what it holds, once its events are known.
 const GATES_HELD: &str = "{gates held}";
 
@@ -1232,6 +1289,7 @@ fn gate(
         .map(|shown| format!(" (`{shown}`)"))
         .unwrap_or_default();
     Gate {
+        source,
         name: name.to_owned(),
         hash,
         why: format!("the extension `{code}`{at} {what}, so its gate refuses it: {out}"),
@@ -1240,22 +1298,34 @@ fn gate(
         notice: match was {
             Unstood::Missing => format!("{whose} `{code}` {told}. {GATES_HELD}: {out}."),
             Unstood::PinsUnreadable(_, file) => format!(
-                "The pin store (`{file}`) could not be read, so your extensions cannot be judged: \
-                 each holds a gate on each gating event its manifest lists (`tool.before`, \
-                 `prompt.submit`), refusing every call or prompt it is on. For each, {}.",
+                "The pin store (`{file}`) could not be read, so your extensions cannot be judged, \
+                 and are not loaded: each one this session loaded keeps the gating hooks it \
+                 registered, and each other one found holds a gate on each gating event its \
+                 manifest lists (`tool.before`, `prompt.submit`), refusing every call or prompt it \
+                 is on. For each, {}.",
                 way_out(source, name, None, stand)
             ),
-            Unstood::TrustUnreadable(_, file) => format!(
-                "The trust store (`{file}`) could not be read, so no project's extensions can be \
-                 judged: until it is fixed, every project's extensions are gated, each holding a \
-                 gate on each gating event its manifest lists (`tool.before`, `prompt.submit`), \
-                 refusing every call or prompt it is on. To fix it, {out}."
-            ),
+            Unstood::TrustUnreadable(_, file) => trust_unread_notice(file, &out),
             _ => format!("{whose} `{code}`{at} {told}. {GATES_HELD}, until you {out}."),
         },
         hooks,
         unknown,
+        by_name: matches!(
+            was,
+            Unstood::PinsUnreadable(..) | Unstood::TrustUnreadable(..)
+        ),
     }
+}
+
+/// What the user is told, once, while the trust store, `file` as shown,
+/// cannot be read: the project's extensions are not loaded, and those the
+/// session had loaded keep their gates; `out` is the fix.
+fn trust_unread_notice(file: &str, out: &str) -> String {
+    format!(
+        "The trust store (`{file}`) could not be read, so this project's extensions are not \
+         loaded until it is fixed; those this session had loaded keep their gating hooks on \
+         their events, failing. To fix it, {out}."
+    )
 }
 
 /// The extensions a pin names that were found nowhere, the user's while
@@ -1349,11 +1419,12 @@ fn read_trust(inputs: &Inputs) -> (ProjectTrust, Option<String>) {
     };
     let file = state.trust_file();
     let store = TrustStore::new(&file, Arc::clone(&inputs.clock));
-    let read = match &inputs.project {
-        Some(key) => store.project(key),
-        None => store.list().map(|_| ProjectTrust::untrusted()),
+    // A project not trusted as the session opened has none of its
+    // extensions looked at, so its store is not read.
+    let Some(key) = &inputs.project else {
+        return (ProjectTrust::untrusted(), None);
     };
-    match read {
+    match store.project(key) {
         Ok(trust) => (trust, None),
         Err(_) => (
             ProjectTrust::untrusted(),
