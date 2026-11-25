@@ -53,7 +53,7 @@ use super::{
 use crate::ext::prompt::PromptParts;
 use crate::ext::watched::{MAX_PLACES_PER_ROOT, Watched};
 use crate::ext::{ApprovedExtension, HostParts};
-use crate::ext::{Gate, ScriptHooks, SessionStart, Stand, way_out};
+use crate::ext::{Gate, ScriptHooks, SeenHooks, SessionStart, Stand, way_out};
 use cineris_ext::event::Event;
 
 /// How the session is told something.
@@ -213,6 +213,10 @@ struct Decided {
     /// The stores of approvals that could not be read, by the source whose
     /// approvals they hold, with the file as the user is shown it.
     unread: Vec<(Source, String)>,
+    /// The sources whose store of approvals was read whole.
+    judged: Vec<Source>,
+    /// The extensions of those sources that stand approved, at any hash.
+    standing: Vec<(Source, String)>,
 }
 
 /// The cache's part of the work, done after the session's extensions are
@@ -451,9 +455,20 @@ impl Held {
             mut held,
             found,
             unread,
+            judged,
+            standing: still_approved,
         } = blocking(move || decide(&inputs, project_found))
             .await
             .ok_or_else(|| "the work that finds and judges them did not finish".to_owned())?;
+        // What left the session for good (its pin, or its project's trust,
+        // taken away) is forgotten: a store that cannot be read later gives
+        // it no gate back (the third re-check of the full review).
+        self.scripts.forget(|source, name| {
+            judged.contains(&source)
+                && !still_approved
+                    .iter()
+                    .any(|(approved, named)| *approved == source && named == name)
+        });
         // While a store of approvals cannot be read, what the session loaded
         // of that source and is not found now (removed, or its folder left
         // out) keeps its gates, from what the session saw it register (the
@@ -589,6 +604,14 @@ impl Held {
                     // its manifest lists holds a failing gate (the
                     // maintainers' call).
                     let key = (listed.source, listed.manifest.name.clone(), hash);
+                    // Known as approved, for a store that cannot be read
+                    // later (the third re-check of the full review, L1).
+                    self.scripts.note(
+                        listed.source,
+                        &listed.manifest.name,
+                        hash,
+                        SeenHooks::Events(listed.manifest.capabilities.hooks.clone()),
+                    );
                     let held = gate(
                         listed.source,
                         &listed.manifest.name,
@@ -621,6 +644,8 @@ impl Held {
         {
             (self.parts.tell)(message.clone());
             if let Some((key, hooks)) = known.iter().find(|(key, _)| key.1 == name) {
+                self.scripts
+                    .note(key.0, &key.1, key.2, SeenHooks::Registered(hooks.clone()));
                 let held = gate(
                     key.0,
                     &key.1,
@@ -906,6 +931,9 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     // Where no store can say what was approved (it cannot be read), each
     // found holds the gates its manifest lists, and is not loaded.
     let mut store_held: Vec<Gate> = Vec::new();
+    // The user's found while their pins cannot be read: gated once the
+    // registration cache is read (the third re-check of the full review, L2).
+    let mut pins_unread: Vec<(String, String, ContentHash, Vec<Event>)> = Vec::new();
     let pins_file = inputs.state.as_ref().map(|state| {
         let file = state.pins_file();
         with_paths_shown(
@@ -936,17 +964,11 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                          holds what you approved of your own, could not be read (said above).",
                         listed.shown
                     ));
-                    store_held.push(gate(
-                        Source::User,
-                        &listed.manifest.name,
-                        Some(&listed.shown),
+                    pins_unread.push((
+                        listed.manifest.name.clone(),
+                        listed.shown.clone(),
                         listed.hash,
-                        &Unstood::PinsUnreadable(
-                            listed.manifest.capabilities.hooks.clone(),
-                            pins_file.clone().unwrap_or_default(),
-                        ),
-                        None,
-                        inputs.trust_project,
+                        listed.manifest.capabilities.hooks.clone(),
                     ));
                     continue;
                 };
@@ -1072,7 +1094,37 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
         }
     }
     decided.unread = unread_stores(&pins, trust_unreadable.as_ref(), pins_file.as_ref());
-    if standing_approved.is_empty() && pending.is_empty() {
+    // What stands approved where its store was read whole: what left the
+    // session for good is the rest.
+    if let Some(Some(pins)) = &pins {
+        decided.judged.push(Source::User);
+        decided.standing.extend(
+            pins.list()
+                .iter()
+                .filter(|pin| pin.kind == TrustResourceKind::Extension)
+                .map(|pin| (Source::User, pin.name.clone())),
+        );
+    }
+    if inputs.project.is_some()
+        && trust_unreadable.is_none()
+        && let Some(trust) = &trust
+    {
+        decided.judged.push(Source::Project);
+        decided.standing.extend(
+            trust
+                .pinned_of(&TrustResourceKind::Extension)
+                .into_iter()
+                .map(|(name, _)| (Source::Project, name)),
+        );
+        decided.standing.extend(
+            inputs
+                .for_the_run
+                .iter()
+                .filter(|run| run.kind == TrustResourceKind::Extension)
+                .map(|run| (Source::Project, run.name.clone())),
+        );
+    }
+    if standing_approved.is_empty() && pending.is_empty() && pins_unread.is_empty() {
         return decided;
     }
     let loaded = inputs.state.as_ref().map(|state| {
@@ -1168,6 +1220,34 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             hash,
             &was,
             hooks,
+            inputs.trust_project,
+        ));
+    }
+    // The user's found while their pins cannot be read: the registration
+    // cache stands in for the store, pruned as it is to the hashes pinned
+    // when it was last written, so that its entries of the name are approved
+    // versions: their gating hooks, together; the manifest as found only
+    // where it has none. The cache keys an entry by its hash, and names it,
+    // with no source: an entry of a project's of the same name counts too,
+    // which errs toward a gate.
+    for (name, shown, hash, events) in pins_unread {
+        let approved: Option<Vec<cineris_ext::registration::HookDef>> =
+            loaded.as_ref().and_then(|(_, loaded)| {
+                let mut entries = loaded.cache.iter().filter(|(_, entry)| entry.name == name);
+                let first = entries.next()?;
+                let mut hooks = first.1.registration.hooks.clone();
+                for (_, entry) in entries {
+                    hooks.extend(entry.registration.hooks.iter().cloned());
+                }
+                Some(hooks)
+            });
+        decided.held.push(gate(
+            Source::User,
+            &name,
+            Some(&shown),
+            hash,
+            &Unstood::PinsUnreadable(events, pins_file.clone().unwrap_or_default()),
+            approved,
             inputs.trust_project,
         ));
     }

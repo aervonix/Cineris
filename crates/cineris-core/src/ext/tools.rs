@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use cineris_base::path::AbsPath;
-use cineris_base::{CancelToken, SharedClock, SharedTimer};
+use cineris_base::{SharedClock, SharedTimer};
 use cineris_ext::capability::Capabilities;
 use cineris_ext::engine::{CallContext, CallError, ScriptRuntime, Source, Target};
 use cineris_ext::host::Phase;
@@ -25,8 +25,21 @@ use crate::policy::EnginePolicy;
 pub(crate) struct Refused {
     /// Why, in a sentence that names the extension.
     why: String,
-    /// The engine refuses its hash for the rest of the process.
-    disabled: bool,
+    /// What helps.
+    stand: Refusal,
+}
+
+/// What helps a start that was refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// Approving it again, fixed, or turning it off.
+    Plain,
+    /// The engine refuses its hash for the rest of the process: a fix
+    /// approved, turning it off, or a new process.
+    Disabled,
+    /// Too many extensions' threads were left running: this process starts
+    /// none, so turning it off or a new process.
+    NoneStart,
 }
 
 impl Refused {
@@ -34,7 +47,7 @@ impl Refused {
     fn by(why: String) -> Self {
         Self {
             why,
-            disabled: false,
+            stand: Refusal::Plain,
         }
     }
 }
@@ -140,7 +153,6 @@ impl LoadedExtension {
         input: Json,
         cx: &RunCx,
         (asked, time): (Duration, Duration),
-        (commands, close): (&super::HookCommands, CancelToken),
     ) -> HookRan {
         // A run let go before it got here starts nothing, not even its
         // runtime.
@@ -150,31 +162,29 @@ impl LoadedExtension {
         // A runtime that cannot start fails the hook, a gate closed, with
         // what approves or turns the extension off (point 5). Its start is
         // raced against the run's cancel: one let go meanwhile ends at once,
-        // and the start goes on to its end on a task of its own, its grace
-        // and a thread it leaves running counted (the early review of the
-        // script hooks, L5). That task is one of the session's runs, which
-        // its close waits for: no run outlives its session (the full review
-        // of the script hooks, L7).
+        // and the start goes on to its end on a task of its own (the early
+        // review of the script hooks, L5). Nothing waits for that task, not
+        // the session's close: it runs on to its own evaluation time, and
+        // is left running and counted, its hash refused, only past that, as
+        // any start is. A first evaluation answers no host call, so it does
+        // nothing but evaluate; it holds neither the process's exit nor the
+        // core's shutdown (the maintainers, on the third re-check of the
+        // full review, L3).
         let (started, starting) = tokio::sync::oneshot::channel();
-        commands.keep({
-            let extension = Arc::clone(self);
-            tokio::spawn(async move {
-                // Bounded by the close: once the session closes, the start
-                // is ended as its time's end ends it, within its grace (the
-                // re-check of the full review, L-d).
-                let _ = started.send(extension.runtime(&close).await);
-            })
-        });
+        let extension = Arc::clone(self);
+        drop(tokio::spawn(async move {
+            let _ = started.send(extension.runtime().await);
+        }));
         let runtime = match cx.cancel.race(starting).await {
             Some(Ok(Ok(runtime))) => runtime,
-            Some(Ok(Err(Refused { why, disabled }))) => {
-                return HookRan::Failed(format!("{why}; {}", self.remedy(disabled)));
+            Some(Ok(Err(Refused { why, stand }))) => {
+                return HookRan::Failed(format!("{why}; {}", self.remedy(stand)));
             }
             Some(Err(_)) => {
                 return HookRan::Failed(format!(
                     "the extension `{}` could not start; {}",
                     cineris_base::in_code(self.name()),
-                    self.remedy(false)
+                    self.remedy(Refusal::Plain)
                 ));
             }
             None => {
@@ -224,9 +234,11 @@ impl LoadedExtension {
                 time.as_millis()
             )),
             Err(CallError::Cancelled) => HookRan::Failed("it was let go".to_owned()),
-            Err(CallError::Disabled) => {
-                HookRan::Failed(format!("{}; {}", self.disabled(), self.remedy(true)))
-            }
+            Err(CallError::Disabled) => HookRan::Failed(format!(
+                "{}; {}",
+                self.disabled(),
+                self.remedy(Refusal::Disabled)
+            )),
             Err(error) => HookRan::Failed(error.to_string()),
         }
     }
@@ -245,20 +257,20 @@ impl LoadedExtension {
     /// hook of it that cannot run. `disabled`: the engine refuses it for the
     /// rest of the process (a thread of it was left running), so approving
     /// it again does not help (the full review of the script hooks, L5).
-    fn remedy(&self, disabled: bool) -> String {
-        let stand = if disabled {
-            super::script_hooks::Stand::Disabled
-        } else {
-            super::script_hooks::Stand::Unapproved {
+    fn remedy(&self, refusal: Refusal) -> String {
+        let stand = match refusal {
+            Refusal::Plain => super::script_hooks::Stand::Unapproved {
                 trust_project: self.parts.trust_project,
-            }
+            },
+            Refusal::Disabled => super::script_hooks::Stand::Disabled,
+            Refusal::NoneStart => super::script_hooks::Stand::NoneStart,
         };
         super::script_hooks::way_out(self.approved.source, self.name(), None, stand)
     }
 
     /// The live runtime, made when there is none or the last was torn
     /// down.
-    async fn runtime(&self, until: &CancelToken) -> Result<Arc<ScriptRuntime>, Refused> {
+    async fn runtime(&self) -> Result<Arc<ScriptRuntime>, Refused> {
         let mut slot = self.runtime.lock().await;
         // An extension whose thread was left running is not started again
         // in this process: the engine refuses it, for every session.
@@ -292,7 +304,7 @@ impl LoadedExtension {
                 )));
             }
         }
-        let runtime = ScriptRuntime::start_until(
+        let runtime = ScriptRuntime::start(
             self.name(),
             Source::Folder {
                 path: self.approved.folder.clone(),
@@ -300,7 +312,6 @@ impl LoadedExtension {
             },
             Some(self.approved.registration.clone()),
             self.parts.timer.as_ref(),
-            until,
         )
         .await
         .map_err(|error| match error {
@@ -310,7 +321,7 @@ impl LoadedExtension {
             cineris_ext::engine::LoadError::Disabled
             | cineris_ext::engine::LoadError::Abandoned => Refused {
                 why: self.disabled(),
-                disabled: true,
+                stand: Refusal::Disabled,
             },
             cineris_ext::engine::LoadError::TooManyAbandoned(count) => Refused {
                 why: format!(
@@ -318,7 +329,7 @@ impl LoadedExtension {
                      when told to and are still running, so this process starts no extension",
                     cineris_base::in_code(self.name())
                 ),
-                disabled: true,
+                stand: Refusal::NoneStart,
             },
             error => Refused::by(format!(
                 "The extension `{}` could not start: {error}",
@@ -347,13 +358,15 @@ impl LoadedExtension {
         cx: &RunCx,
         out: &mut dyn ToolOutput,
     ) -> ToolResult {
-        let runtime = match self.runtime(&CancelToken::new()).await {
+        let runtime = match self.runtime().await {
             Ok(runtime) => runtime,
             Err(Refused {
                 why,
-                disabled: true,
-            }) => return ToolResult::error(format!("{why}; {}", self.remedy(true))),
-            Err(refused) => return ToolResult::error(refused.why),
+                stand: Refusal::Plain,
+            }) => return ToolResult::error(why),
+            Err(Refused { why, stand }) => {
+                return ToolResult::error(format!("{why}; {}", self.remedy(stand)));
+            }
         };
         let full_name = format!("{}/{tool}", self.name());
         let progress = Mutex::new(Vec::new());

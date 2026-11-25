@@ -345,25 +345,6 @@ impl ScriptRuntime {
         expected: Option<Registration>,
         timer: &dyn Timer,
     ) -> Result<Self, LoadError> {
-        Self::start_until(name, source, expected, timer, &CancelToken::new()).await
-    }
-
-    /// [`start`](Self::start), its evaluation ended as its time's end ends
-    /// it once `until` is cancelled: the script is stopped, and its thread
-    /// given its grace, then left running and counted if it does not stop.
-    /// A start nobody waits for any more (its session closing) is bounded
-    /// so by the grace, not by [`EVALUATION_TIME`].
-    ///
-    /// # Errors
-    ///
-    /// As [`start`](Self::start).
-    pub async fn start_until(
-        name: &str,
-        source: Source,
-        expected: Option<Registration>,
-        timer: &dyn Timer,
-        until: &CancelToken,
-    ) -> Result<Self, LoadError> {
         let abandoned = ABANDONED.load(Ordering::SeqCst);
         if abandoned >= MAX_ABANDONED {
             return Err(LoadError::TooManyAbandoned(abandoned));
@@ -394,7 +375,6 @@ impl ScriptRuntime {
         .map_err(|error| LoadError::Engine(format!("its thread could not start: {error}")))?;
         let mut readied = pin!(readied);
         let mut limit = timer.sleep(EVALUATION_TIME);
-        let mut ended = pin!(until.cancelled());
         let mut grace: Option<cineris_base::Sleep> = None;
         let loaded = poll_fn(|cx| {
             if let Poll::Ready(result) = readied.as_mut().poll(cx) {
@@ -404,7 +384,7 @@ impl ScriptRuntime {
                 if grace.as_mut().poll(cx).is_ready() {
                     return Poll::Ready(None);
                 }
-            } else if limit.as_mut().poll(cx).is_ready() || ended.as_mut().poll(cx).is_ready() {
+            } else if limit.as_mut().poll(cx).is_ready() {
                 stop.store(true, Ordering::SeqCst);
                 let mut wait = timer.sleep(GRACE);
                 // Polled once, so that it wakes this task when it is up.
