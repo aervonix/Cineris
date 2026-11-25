@@ -538,7 +538,7 @@ file: crates/cineris-core/src/ext/host.rs
 in: CallHost::decide
 find: Err(HostError::Stopped(reason))
 replace: Err(HostError::Denied(reason))
-occurrence: 2
+occurrence: 3
 caught-by:
     cineris-core::it extensions::a_host_call_nobody_can_answer_with_fail_on_denial_ends_the_scripts_call
 
