@@ -222,6 +222,9 @@ pub(crate) enum Stand<'a> {
     /// Too many extensions' threads were left running, so this process
     /// starts none: only turning it off, or a new process, helps.
     NoneStart,
+    /// Starts let go by closed sessions fill the cap: it clears by itself,
+    /// within their evaluation time.
+    LetGo,
     /// Its folder is gone: turn it off, if it was removed on purpose.
     Gone,
     /// The store that holds its approval, `file` as the user is shown it,
@@ -301,6 +304,9 @@ pub(crate) fn way_out(
             "fix it and approve the fix ({add}), turn it off ({table} in your configuration), or \
              start Cineris again"
         ),
+        (_, Stand::LetGo) => "wait: it clears within the evaluation time of the starts already \
+                               running (or start Cineris again)"
+            .to_owned(),
         (Source::User, Stand::NoneStart) => {
             format!("turn it off ({table} in your configuration), or start Cineris again")
         }
@@ -495,6 +501,9 @@ impl ScriptHooks {
                         })
                     })
                     .collect(),
+                // Under a store that cannot be read, what is held is made
+                // again whole each time.
+                None if gate.by_name => Vec::new(),
                 None => held
                     .iter()
                     .filter(|hook| hook.extension == gate.name && hook.hash == gate.hash)
@@ -509,15 +518,22 @@ impl ScriptHooks {
             // and every prompt; none where nothing may gate the session. One
             // known never registered: the events its approved manifest
             // lists.
+            // Where the registration cache stands in for an unreadable store,
+            // it only ever adds: its entries say nothing of whose they are
+            // (a project's of the same name among them), so the manifest's
+            // gating events hold beside its hooks (the fourth look at the
+            // script hooks, L1).
+            let manifest_too = gate.by_name && seen.is_none();
             let events = match &known_hooks {
                 Some(SeenHooks::Events(events)) => Some(events),
+                Some(SeenHooks::Registered(_)) if manifest_too => Some(&gate.unknown),
                 Some(SeenHooks::Registered(_)) => None,
                 None => Some(&gate.unknown),
             };
-            if made.is_empty()
+            if (made.is_empty() || manifest_too)
                 && let Some(events) = events
             {
-                made = events
+                let from_events: Vec<HeldHook> = events
                     .iter()
                     .filter(|event| event.gates())
                     .filter_map(|event| {
@@ -531,6 +547,7 @@ impl ScriptHooks {
                         })
                     })
                     .collect();
+                made.extend(from_events);
             }
             if !made.is_empty() {
                 let mut events: Vec<LoopEvent> = made.iter().map(|hook| hook.event).collect();

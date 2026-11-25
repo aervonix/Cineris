@@ -161,8 +161,11 @@ pub(crate) fn spawn(
         // from where the runtime starts.
         .stack_size(stack * 8 + 1024 * 1024)
         .spawn(move || {
-            let _alive = Alive(Arc::clone(&alive));
-            body(source, expected, stack, &stop, &alive, ready, &inbox);
+            {
+                let _alive = Alive(Arc::clone(&alive));
+                body(source, expected, stack, &stop, &alive, ready, &inbox);
+            }
+            cineris_base::hook::point(super::A_THREAD_ENDS);
         })?;
     Ok(sender)
 }

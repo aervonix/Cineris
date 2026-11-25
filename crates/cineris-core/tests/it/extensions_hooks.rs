@@ -1445,9 +1445,10 @@ fn a_changed_extension_whose_registration_is_not_known_holds_both_gates() {
 /// - never loaded in the session (the store unreadable as it opens), it
 ///   holds the gates of its approved versions as the registration cache
 ///   keeps them, which stands in for the store (the third re-check of the
-///   full review, L2): on `list` alone, so a `read` runs and a `list` is
-///   refused, naming why and the way out, changed to list no hook all the
-///   same; the user is told once, the store's file under `~` and the fix;
+///   full review, L2), beside a gate on each gating event its manifest as
+///   found lists, since the cache's entries say nothing of whose they are
+///   (the fourth look, L1): every call is refused, naming why and the way
+///   out, and, changed to list no hook, a `list` all the same; the user is told once, the store's file under `~` and the fix;
 ///   the core's own operations go on (the configuration is read again); the
 ///   store removed and the extension approved again, it is loaded at the
 ///   next turn's start, and the call runs;
@@ -1480,8 +1481,8 @@ fn an_unreadable_pin_store_holds_the_gates_of_the_users_extensions() {
         front.turn("read it").await;
         let (outcome, text) = last(&front);
         assert_eq!(
-            outcome, "success",
-            "the cache's gate is on `list` alone: {text}"
+            outcome, "denied",
+            "the manifest's gate holds beside the cache's: {text}"
         );
         for prompt in ["list it", "list again"] {
             front.turn(prompt).await;
@@ -1527,6 +1528,7 @@ fn an_unreadable_pin_store_holds_the_gates_of_the_users_extensions() {
         let (outcome, text) = last(&front);
         assert_eq!(outcome, "success", "{text}");
         std::fs::write(&pins, "version = 9\n").unwrap();
+        // Loaded: what it registered decides, not its manifest.
         front.turn("read it").await;
         let (outcome, text) = last(&front);
         assert_eq!(outcome, "success", "its gate is on `list` alone: {text}");
@@ -2024,7 +2026,10 @@ const TRIES_AS_IT_STARTS: &str = "cineris.on('turn.end', () => undefined);\n\
      tried(() => cineris.fs.write('started.txt', 'x'));\n\
      tried(() => cineris.exec('gh', ['x']));\n\
      tried(() => cineris.http.fetch('https://api.example.com/x'));\n\
-     tried(() => cineris.ask('may I?'));\n";
+     tried(() => cineris.ask('may I?'));\n\
+     tried(() => cineris.state.set('started', 'yes', { scope: 'project' }));\n\
+     tried(() => cineris.notify('started after all'));\n\
+     tried(() => cineris.log('started after all'));\n";
 
 /// A runtime start a hook's run leaves to go on, once the session closes,
 /// runs on, unawaited, to its own evaluation time (the maintainers, on the
@@ -2033,7 +2038,7 @@ const TRIES_AS_IT_STARTS: &str = "cineris.on('turn.end', () => undefined);\n\
 /// its evaluation time,
 /// - the close ends without it;
 /// - its main module's host calls, made after the close, are each refused
-///   with nothing done: it writes nothing;
+///   with nothing done: it writes no file, keeps no value, tells nothing;
 /// - it is never counted as left running, so a later session's hook of the
 ///   same extension, in the same process, runs, with a runtime of its own.
 #[test]
@@ -2083,6 +2088,10 @@ fn a_runtime_start_the_close_lets_go_runs_on_and_does_nothing() {
         world.read("started.txt").is_none(),
         "a first evaluation's write was done"
     );
+    assert!(
+        crate::ext_state::project_files(&world).is_empty(),
+        "a first evaluation's value was kept"
+    );
     assert_eq!(
         cineris_ext::engine::abandoned_threads(),
         abandoned,
@@ -2122,6 +2131,9 @@ fn a_runtime_start_the_close_lets_go_past_its_time_counts_once() {
             world.timer.running().contains(&evaluation)
         })
         .await;
+        // Let go and evaluating: it counts toward the cap.
+        assert_eq!(cineris_ext::engine::starts_let_go(), 1);
+        assert_eq!(cineris_ext::engine::abandoned_threads(), abandoned);
         world.timer.advance(evaluation);
         drive_until(idle.as_mut(), || world.timer.running().contains(&grace)).await;
         world.timer.advance(grace);
@@ -2133,7 +2145,9 @@ fn a_runtime_start_the_close_lets_go_past_its_time_counts_once() {
         drop(registers);
         settle().await;
     });
+    // Left running: the one count, no longer a start let go too.
     assert_eq!(cineris_ext::engine::abandoned_threads(), abandoned + 1);
+    assert_eq!(cineris_ext::engine::starts_let_go(), 0);
 }
 
 /// The core's shutdown does not wait for a runtime start a closed session's
@@ -2167,5 +2181,104 @@ fn the_cores_shutdown_ends_while_a_runtime_start_runs_on() {
         );
         registers.release();
         drop(registers);
+    });
+}
+
+/// Starts let go cannot stack (the fourth look at the script hooks, (b)):
+/// each start a closed session let go counts toward the cap of four while
+/// it evaluates. Four sessions of one process each close with a start of
+/// `probe` held; a fifth session's gate, another extension's, then cannot
+/// start its runtime: its `tool.before` refuses the call, failing closed,
+/// and the user is told once that it clears within the evaluation time;
+/// once one start ends within its time, it is released, and the gate runs
+/// again.
+#[test]
+fn starts_let_go_count_toward_the_cap_and_a_gate_holds_meanwhile() {
+    let mut responses = Vec::new();
+    for id in ["c1", "c2", "c3"] {
+        responses.extend(one_call(id, "list", json!({"path": "."})));
+    }
+    let world = World::new("ext_hooks_starts_cap", responses);
+    let probe = handed(&world, "hooks = [\"turn.end\"]", QUIET);
+    let gate =
+        crate::ext_exec::extension_running(&world, "gate", "hooks = [\"tool.before\"]", LIST_GATE);
+    let core = world.core_with(|options| options.extensions = vec![probe, gate]);
+    let abandoned = cineris_ext::engine::abandoned_threads();
+    world.run(async {
+        let registers = Hold::new(cineris_ext::engine::A_DEFINITION_IS_REGISTERED);
+        for held in 1..=4 {
+            let front = start(&world, &core).await;
+            {
+                let mut run = std::pin::pin!(core.hook_runs_at_its_point(
+                    &front.session,
+                    "probe/hook.turn.end",
+                    1
+                ));
+                drive_until(run.as_mut(), || {
+                    registers.wait_reached_times(held, Duration::ZERO)
+                })
+                .await;
+            }
+            settle().await;
+            front.close().await;
+        }
+        assert_eq!(cineris_ext::engine::starts_let_go(), 4);
+        let front = start(&world, &core).await;
+        let told =
+            "The extension `gate` could not start: 4 extension starts that closed sessions let go";
+        for prompt in ["capped", "still capped"] {
+            front.turn(prompt).await;
+            let (outcome, text) = last(&front);
+            assert_eq!(outcome, "denied", "{prompt}: {text}");
+            assert!(
+                text.contains("`gate/hook.tool.before` failed")
+                    && text.contains("extension starts that closed sessions let go")
+                    && text.contains("it clears within the evaluation time"),
+                "{text}"
+            );
+            front.drain();
+            assert_eq!(told_times(&front, told), 1, "{:?}", front.notices());
+        }
+        // One start ends within its time: released, and the gate runs.
+        registers.let_one_go();
+        let mut idle = std::pin::pin!(std::future::pending::<()>());
+        drive_until(idle.as_mut(), || cineris_ext::engine::starts_let_go() == 3).await;
+        registers.release();
+        drop(registers);
+        front.turn("released").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "success", "{text}");
+        front.close().await;
+    });
+    assert_eq!(cineris_ext::engine::abandoned_threads(), abandoned);
+}
+
+/// While the store of the user's pins cannot be read, the registration
+/// cache only ever adds to an extension's gates: a project's extension of
+/// the same name, with no hook, cached, does not lift the user's `probe`'s
+/// gate, which its manifest lists (the fourth look at the script hooks,
+/// L1).
+#[test]
+fn a_same_named_cache_entry_does_not_lift_a_gate_under_an_unreadable_pin_store() {
+    let world = World::new(
+        "ext_hooks_cache_same_name",
+        one_call("c1", "list", json!({"path": "."})),
+    );
+    let theirs = world.dir.join("elsewhere").join("probe");
+    write_in(&theirs, "", "// a project's, with no hook\n");
+    cache(&world, &theirs);
+    let folder = write(&world, "hooks = [\"tool.before\"]", LIST_GATE);
+    pin(&world, &folder);
+    std::fs::write(state(&world).pins_file(), "version = 9\n").unwrap();
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("list it").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(
+            outcome, "denied",
+            "a same-named cache entry lifted the gate: {text}"
+        );
+        front.close().await;
     });
 }

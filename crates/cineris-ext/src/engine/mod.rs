@@ -127,6 +127,89 @@ pub fn abandoned_threads() -> usize {
     ABANDONED.load(Ordering::SeqCst)
 }
 
+/// How many starts of a runtime nobody waits for any more are still
+/// evaluating: each counts toward [`MAX_ABANDONED`] while it runs, as one
+/// left running does, so that starts let go cannot stack.
+static LET_GO: AtomicUsize = AtomicUsize::new(0);
+
+/// How many starts nobody waits for any more are still evaluating.
+#[must_use]
+pub fn starts_let_go() -> usize {
+    LET_GO.load(Ordering::SeqCst)
+}
+
+/// A start's state, as [`StartWatch`] keeps it.
+const START_RUNNING: u8 = 0;
+const START_LET_GO: u8 = 1;
+const START_ENDED: u8 = 2;
+
+/// What its caller tells a runtime's start (the third re-check of the
+/// script hooks, (b)): let go ([`let_go`](Self::let_go)), the start, still
+/// evaluating, counts toward [`MAX_ABANDONED`] until it ends; ended within
+/// its time, it is released; left running, it is the one count of an
+/// abandoned thread, never two.
+#[derive(Debug, Clone, Default)]
+pub struct StartWatch {
+    state: Arc<AtomicU8>,
+}
+
+impl StartWatch {
+    /// Nobody waits for the start any more: it counts toward the cap until
+    /// it ends. Nothing when it has ended already.
+    pub fn let_go(&self) {
+        LET_GO.fetch_add(1, Ordering::SeqCst);
+        if self
+            .state
+            .compare_exchange(
+                START_RUNNING,
+                START_LET_GO,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_err()
+        {
+            LET_GO.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
+    /// The start has ended, however it did: released from the cap.
+    fn ended(&self) {
+        if self.state.swap(START_ENDED, Ordering::SeqCst) == START_LET_GO {
+            LET_GO.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+/// A runtime's start, to its end: its thread is told to stop when the start
+/// is dropped before it ends (its caller gone, the async runtime ended), so
+/// that a main module in a loop is interrupted rather than left to run for
+/// ever unnoticed; and its [`StartWatch`] is told it ended (the re-check of
+/// the script hooks, (a)).
+struct Starting<'a> {
+    stop: Option<Arc<AtomicBool>>,
+    watch: &'a StartWatch,
+}
+
+impl Starting<'_> {
+    /// It ended, as its result says: nothing to stop.
+    fn ended(mut self) {
+        self.stop = None;
+    }
+}
+
+impl Drop for Starting<'_> {
+    fn drop(&mut self) {
+        if let Some(stop) = &self.stop {
+            stop.store(true, Ordering::SeqCst);
+        }
+        self.watch.ended();
+    }
+}
+
+/// A point of a runtime's thread as it ends, however it ends (a point a
+/// test can stop at: [`cineris_base::hook`]).
+pub const A_THREAD_ENDS: &str = "cineris-ext: a runtime's thread ends";
+
 /// What a call runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Target {
@@ -227,6 +310,13 @@ pub enum LoadError {
          is started until the harness restarts"
     )]
     TooManyAbandoned(usize),
+    /// Starts of runtimes nobody waits for any more (their sessions closed)
+    /// are still evaluating, and with the threads left running reach the cap.
+    #[error(
+        "{0} extension starts that closed sessions let go are still evaluating, so no extension \
+         is started until one of them ends, which it does within its evaluation time"
+    )]
+    StartsLetGo(usize),
 }
 
 /// Why a call did not give a result.
@@ -345,9 +435,34 @@ impl ScriptRuntime {
         expected: Option<Registration>,
         timer: &dyn Timer,
     ) -> Result<Self, LoadError> {
+        Self::start_watched(name, source, expected, timer, &StartWatch::default()).await
+    }
+
+    /// [`start`](Self::start), told by `watch` when nobody waits for it any
+    /// more: it then counts toward [`MAX_ABANDONED`] until it ends.
+    ///
+    /// # Errors
+    ///
+    /// As [`start`](Self::start); and, while threads left running and starts
+    /// let go together reach [`MAX_ABANDONED`],
+    /// [`LoadError::StartsLetGo`].
+    pub async fn start_watched(
+        name: &str,
+        source: Source,
+        expected: Option<Registration>,
+        timer: &dyn Timer,
+        watch: &StartWatch,
+    ) -> Result<Self, LoadError> {
+        // Every way out of here tells `watch` the start ended; once its
+        // thread runs, a drop before its end stops it.
+        let mut starting = Starting { stop: None, watch };
         let abandoned = ABANDONED.load(Ordering::SeqCst);
         if abandoned >= MAX_ABANDONED {
             return Err(LoadError::TooManyAbandoned(abandoned));
+        }
+        let let_go = LET_GO.load(Ordering::SeqCst);
+        if abandoned + let_go >= MAX_ABANDONED {
+            return Err(LoadError::StartsLetGo(let_go));
         }
         let hash = match &source {
             Source::Folder { pinned, .. } => *pinned,
@@ -373,6 +488,7 @@ impl ScriptRuntime {
             ready,
         )
         .map_err(|error| LoadError::Engine(format!("its thread could not start: {error}")))?;
+        starting.stop = Some(Arc::clone(&stop));
         let mut readied = pin!(readied);
         let mut limit = timer.sleep(EVALUATION_TIME);
         let mut grace: Option<cineris_base::Sleep> = None;
@@ -394,6 +510,7 @@ impl ScriptRuntime {
             Poll::Pending
         })
         .await;
+        starting.ended();
         match loaded {
             Some(Ok(loaded)) => Ok(Self {
                 inbox,
