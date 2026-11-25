@@ -1757,3 +1757,32 @@ async fn call_async(
         )
         .await
 }
+
+/// A start whose future is dropped before it ends stops its thread, as a
+/// call's does: a main module in a loop is interrupted, and its thread ends,
+/// rather than run for ever with nobody to stop it (the fourth look at the
+/// script hooks, (a)). The start is held as the module registers its tool,
+/// just before its loop, and dropped there.
+#[test]
+fn a_start_dropped_before_its_end_stops_its_thread() {
+    use std::future::Future as _;
+    let timer = timer();
+    let snapshot = extension("", "cineris.tool({ name: 't', run() {} });\nfor (;;) {}");
+    let registers = cineris_testkit::Hold::new(cineris_ext::engine::A_DEFINITION_IS_REGISTERED);
+    let ends = cineris_testkit::Hold::new(cineris_ext::engine::A_THREAD_ENDS);
+    {
+        let mut starting = std::pin::pin!(ScriptRuntime::start(
+            "probe",
+            Source::Snapshot(Arc::clone(&snapshot)),
+            None,
+            &timer
+        ));
+        let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+        assert!(starting.as_mut().poll(&mut context).is_pending());
+        registers.reach();
+    }
+    registers.release();
+    // Interrupted in its loop, the thread ends: within the hold's bound.
+    ends.reach();
+    ends.release();
+}

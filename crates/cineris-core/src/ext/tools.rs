@@ -40,6 +40,8 @@ pub(crate) enum Refusal {
     /// Too many extensions' threads were left running: this process starts
     /// none, so turning it off or a new process.
     NoneStart,
+    /// Starts let go fill the cap: it clears within their evaluation time.
+    LetGo,
 }
 
 impl Refused {
@@ -94,6 +96,9 @@ pub(crate) struct LoadedExtension {
     files: Arc<FileTable>,
     runtime: tokio::sync::Mutex<Option<Arc<ScriptRuntime>>>,
     parts: Arc<HostParts>,
+    /// Whether the session was told its start is refused while starts let
+    /// go fill the cap: once.
+    cap_told: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for LoadedExtension {
@@ -119,6 +124,7 @@ impl LoadedExtension {
             capabilities,
             files: Arc::new(FileTable::new()),
             runtime: tokio::sync::Mutex::new(None),
+            cap_told: std::sync::atomic::AtomicBool::new(false),
 
             parts,
         })
@@ -172,8 +178,10 @@ impl LoadedExtension {
         // full review, L3).
         let (started, starting) = tokio::sync::oneshot::channel();
         let extension = Arc::clone(self);
+        let watch = cineris_ext::engine::StartWatch::default();
+        let watched = watch.clone();
         drop(tokio::spawn(async move {
-            let _ = started.send(extension.runtime().await);
+            let _ = started.send(extension.runtime(&watched).await);
         }));
         let runtime = match cx.cancel.race(starting).await {
             Some(Ok(Ok(runtime))) => runtime,
@@ -188,6 +196,11 @@ impl LoadedExtension {
                 ));
             }
             None => {
+                // Nobody waits for the start any more: while it evaluates it
+                // counts toward the cap of threads left running, so that
+                // starts let go cannot stack (the re-check of the script
+                // hooks, (b)).
+                watch.let_go();
                 return HookRan::Failed(
                     "it was let go before its extension's runtime started".to_owned(),
                 );
@@ -264,13 +277,17 @@ impl LoadedExtension {
             },
             Refusal::Disabled => super::script_hooks::Stand::Disabled,
             Refusal::NoneStart => super::script_hooks::Stand::NoneStart,
+            Refusal::LetGo => super::script_hooks::Stand::LetGo,
         };
         super::script_hooks::way_out(self.approved.source, self.name(), None, stand)
     }
 
     /// The live runtime, made when there is none or the last was torn
     /// down.
-    async fn runtime(&self) -> Result<Arc<ScriptRuntime>, Refused> {
+    async fn runtime(
+        &self,
+        watch: &cineris_ext::engine::StartWatch,
+    ) -> Result<Arc<ScriptRuntime>, Refused> {
         let mut slot = self.runtime.lock().await;
         // An extension whose thread was left running is not started again
         // in this process: the engine refuses it, for every session.
@@ -304,7 +321,7 @@ impl LoadedExtension {
                 )));
             }
         }
-        let runtime = ScriptRuntime::start(
+        let runtime = ScriptRuntime::start_watched(
             self.name(),
             Source::Folder {
                 path: self.approved.folder.clone(),
@@ -312,6 +329,7 @@ impl LoadedExtension {
             },
             Some(self.approved.registration.clone()),
             self.parts.timer.as_ref(),
+            watch,
         )
         .await
         .map_err(|error| match error {
@@ -331,6 +349,29 @@ impl LoadedExtension {
                 ),
                 stand: Refusal::NoneStart,
             },
+            // Starts let go fill the cap: refused, a gate failing closed,
+            // until one of them ends, within its evaluation time; the user
+            // is told once.
+            cineris_ext::engine::LoadError::StartsLetGo(count) => {
+                let why = format!(
+                    "The extension `{}` could not start: {count} extension starts that closed \
+                     sessions let go are still evaluating, so this process starts no extension \
+                     until one of them ends, which it does within its evaluation time",
+                    cineris_base::in_code(self.name())
+                );
+                if !self
+                    .cap_told
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    (self.parts.tell)(format!(
+                        "{why}. Its gating hooks refuse what they are on until then."
+                    ));
+                }
+                Refused {
+                    why,
+                    stand: Refusal::LetGo,
+                }
+            }
             error => Refused::by(format!(
                 "The extension `{}` could not start: {error}",
                 self.name()
@@ -358,7 +399,10 @@ impl LoadedExtension {
         cx: &RunCx,
         out: &mut dyn ToolOutput,
     ) -> ToolResult {
-        let runtime = match self.runtime().await {
+        let runtime = match self
+            .runtime(&cineris_ext::engine::StartWatch::default())
+            .await
+        {
             Ok(runtime) => runtime,
             Err(Refused {
                 why,

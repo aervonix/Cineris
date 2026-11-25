@@ -1457,7 +1457,7 @@ caught-by:
 [break] a-main-module-that-will-not-stop-is-not-counted
 rule: A main module that does not stop within its grace is said so, and counted.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::start
+in: ScriptRuntime::start_watched
 find: None if grace.is_some() => {
 replace: None if grace.is_some() && false => {
 caught-by:
@@ -1466,7 +1466,7 @@ caught-by:
 [break] the-cap-of-threads-left-running-is-not-held
 rule: Past the cap of threads left running, no extension is started.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::start
+in: ScriptRuntime::start_watched
 find: if abandoned >= MAX_ABANDONED {
 replace: if abandoned >= MAX_ABANDONED * 100 {
 caught-by:
@@ -1475,7 +1475,7 @@ caught-by:
 [break] an-extension-whose-thread-was-left-is-started-again
 rule: An extension whose thread was left running is not started again in the process.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::start
+in: ScriptRuntime::start_watched
 find: if is_disabled(&hash) {
 replace: if is_disabled(&hash) && name.is_empty() {
 packages: cineris-ext,cineris-core
@@ -8316,8 +8316,8 @@ caught-by:
 rule: Where what an extension registers was never known (its first registration failed), each gating event its manifest lists holds a failing gate, on every call or prompt, naming the extension, why and the way out (the maintainers' call).
 file: crates/cineris-core/src/ext/script_hooks.rs
 in: ScriptHooks::hold
-find: if made.is_empty() && let Some(events) = events {
-replace: if false && made.is_empty() && let Some(events) = events {
+find: if (made.is_empty() || manifest_too) && let Some(events) = events {
+replace: if false && (made.is_empty() || manifest_too) && let Some(events) = events {
 caught-by:
     cineris-core::it extensions_hooks::an_extension_never_registered_holds_the_gates_its_manifest_lists
 
@@ -8705,3 +8705,63 @@ find: self.scripts.forget(|source, name| {
 replace: self.scripts.forget(|source, name| false && {
 caught-by:
     cineris-core::it extensions_hooks::an_extension_unpinned_gets_no_gate_back_when_the_pin_store_breaks
+
+# The fourth look at the script hooks, and the maintainers' additions.
+
+[break] a-dropped-start-leaves-its-thread-running
+rule: A runtime's start dropped before it ends tells its thread to stop, as a call's does, so that a main module in a loop is interrupted rather than left to run for ever unnoticed (the fourth look at the script hooks, (a)).
+file: crates/cineris-ext/src/engine/mod.rs
+in: Starting::drop
+find: if let Some(stop) = &self.stop {
+replace: if let Some(stop) = self.stop.as_ref().filter(|_| false) {
+caught-by:
+    cineris-ext::it engine::a_start_dropped_before_its_end_stops_its_thread
+
+[break] starts-let-go-are-not-counted
+rule: A start nobody waits for any more counts toward the cap of threads left running while it evaluates: past the cap no extension starts, so that starts let go cannot stack (the fourth look at the script hooks, (b)).
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::start_watched
+packages: cineris-ext,cineris-core
+find: if abandoned + let_go >= MAX_ABANDONED {
+replace: if false && abandoned + let_go >= MAX_ABANDONED {
+caught-by:
+    cineris-core::it extensions_hooks::starts_let_go_count_toward_the_cap_and_a_gate_holds_meanwhile
+
+[break] a-start-let-go-is-not-told-so
+rule: A hook's run that lets go of its extension's runtime start tells the start so, and the start counts toward the cap until it ends.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::call_hook
+find: watch.let_go();
+replace: let _ = &watch;
+caught-by:
+    cineris-core::it extensions_hooks::a_runtime_start_the_close_lets_go_past_its_time_counts_once
+    cineris-core::it extensions_hooks::starts_let_go_count_toward_the_cap_and_a_gate_holds_meanwhile
+
+[break] an-abandoned-start-let-go-counts-twice
+rule: A start let go that is then left running is the one count of a thread left running, released from the starts let go, never two counts.
+file: crates/cineris-ext/src/engine/mod.rs
+in: StartWatch::ended
+packages: cineris-ext,cineris-core
+find: if self.state.swap(START_ENDED, Ordering::SeqCst) == START_LET_GO {
+replace: if false && self.state.swap(START_ENDED, Ordering::SeqCst) == START_LET_GO {
+caught-by:
+    cineris-core::it extensions_hooks::a_runtime_start_the_close_lets_go_past_its_time_counts_once
+
+[break] the-caps-refusal-is-told-each-time
+rule: When starts let go fill the cap, the user is told once that the extension cannot start and that it clears within the evaluation time; its gates refuse meanwhile.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::runtime
+find: !self.cap_told.swap(true, std::sync::atomic::Ordering::SeqCst)
+replace: true
+caught-by:
+    cineris-core::it extensions_hooks::starts_let_go_count_toward_the_cap_and_a_gate_holds_meanwhile
+
+[break] a-cache-entry-lifts-a-gate
+rule: Where the registration cache stands in for an unreadable pin store, it only ever adds: the manifest's gating events hold beside its hooks, since its entries say nothing of whose they are (the fourth look at the script hooks, L1).
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: ScriptHooks::hold
+find: let manifest_too = gate.by_name && seen.is_none();
+replace: let manifest_too = false;
+caught-by:
+    cineris-core::it extensions_hooks::a_same_named_cache_entry_does_not_lift_a_gate_under_an_unreadable_pin_store
+    cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
