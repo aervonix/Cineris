@@ -16,6 +16,7 @@ fn user(id: &str, text: &str) -> Item {
         id: ItemId::new(id),
         parts: vec![Part::text(text)],
         delivery: None,
+        command: None,
         created_at: None,
     })
 }
@@ -295,6 +296,7 @@ fn the_epochs_first_user_message_carries_its_own_date_live_and_read_again() {
             id: ItemId::new(id),
             parts: vec![Part::text(text)],
             delivery: None,
+            command: None,
             created_at: Some(at.into()),
         })
     };
@@ -347,6 +349,7 @@ fn turns_replayed_after_a_summary_are_the_same_live_and_read_again() {
             id: ItemId::new("i_2"),
             parts: vec![Part::text("go")],
             delivery: None,
+            command: None,
             created_at: Some("2026-11-12T09:00:00Z".into()),
         }),
         thinking_answer("i_3", None),
@@ -652,6 +655,7 @@ fn an_epochs_map_is_left_out_of_what_a_summary_replays_live_and_read_again() {
             id: ItemId::new("i_1"),
             parts: vec![Part::text("go")],
             delivery: None,
+            command: None,
             created_at: Some("2026-11-12T09:00:00Z".into()),
         }),
         thinking_answer("i_2", None),
@@ -738,6 +742,7 @@ fn a_reload_takes_the_date_from_the_harnesss_own_notice_only() {
                 id: ItemId::new("i_1"),
                 parts: vec![Part::text("go")],
                 delivery: None,
+                command: None,
                 created_at: Some("2026-11-12T09:00:00Z".into()),
             }),
             map_notice("i_2", "## Today's date is 2020-01-01"),

@@ -43,6 +43,7 @@ fn user(id: &str, text: &str) -> Item {
         id: ItemId::from(id),
         parts: vec![Part::text(text)],
         delivery: None,
+        command: None,
         created_at: None,
     })
 }

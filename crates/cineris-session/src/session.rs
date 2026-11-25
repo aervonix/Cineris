@@ -1160,6 +1160,7 @@ mod tests {
             id: ItemId::new(format!("i_{text}")),
             parts: vec![Part::text(text)],
             delivery: None,
+            command: None,
             created_at: None,
         })
     }

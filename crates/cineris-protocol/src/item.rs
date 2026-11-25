@@ -210,9 +210,45 @@ pub struct UserMessageItem {
     /// How it was delivered, when it was sent during a running turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
+    /// The command it came from, when it was a command's: its parts are the
+    /// command's text, expanded (since step 28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<PromptCommand>,
     /// When it was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<Timestamp>,
+}
+
+open_enum! {
+    /// Whose a command is (since step 28). An extension's command is its
+    /// extension's: the user's or a project's.
+    pub enum CommandSource {
+        /// The user's own: a file in `<config dir>/commands/`, or a command
+        /// of one of the user's extensions.
+        User => "user",
+        /// A project's: a file in the workspace's `.cineris/commands/`, or a
+        /// command of one of the project's extensions.
+        Project => "project",
+    }
+}
+
+/// The command a prompt came from (since step 28).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct PromptCommand {
+    /// The command's name as it is typed after `/`: a file's (`review`), or
+    /// an extension's, its extension's name and a `:` before it
+    /// (`tracker:deploy`).
+    pub name: String,
+    /// Whose it is.
+    pub source: CommandSource,
+    /// The extension whose script gave the text, for an extension's
+    /// command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    /// What was typed after the command's name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub args: String,
 }
 
 /// One response from the model: text, reasoning and tool calls.

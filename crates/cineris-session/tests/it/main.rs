@@ -139,6 +139,7 @@ pub(crate) fn user(text: &str) -> Body {
         id: ItemId::new(format!("i_u{}", text.len())),
         parts: vec![Part::text(text)],
         delivery: None,
+        command: None,
         created_at: None,
     })
 }
@@ -148,6 +149,7 @@ pub(crate) fn user_item(id: &str, text: &str) -> Item {
         id: ItemId::new(id),
         parts: vec![Part::text(text)],
         delivery: None,
+        command: None,
         created_at: None,
     })
 }

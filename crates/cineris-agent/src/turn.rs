@@ -34,7 +34,8 @@ use cineris_protocol::event::{
     TurnStarted, UsageUpdated, Verification, VerificationNotice,
 };
 use cineris_protocol::item::{
-    AssistantMessageItem, Delivery, HookReason, NoticeItem, NoticeSource, UserMessageItem,
+    AssistantMessageItem, Delivery, HookReason, NoticeItem, NoticeSource, PromptCommand,
+    UserMessageItem,
 };
 use cineris_protocol::message::Origin;
 use cineris_protocol::model::ModelRole;
@@ -870,6 +871,7 @@ impl Session {
             id: self.item_ids.next_id(),
             parts: prompt.input,
             delivery: prompt.delivery,
+            command: prompt.command,
             created_at: Some(self.clock.now().to_timestamp()),
         });
         self.record_shown(turn, item).await?;
@@ -1024,6 +1026,7 @@ impl Session {
         turn: &Turn,
         input: Vec<Part>,
         ticket: Option<u64>,
+        command: Option<PromptCommand>,
     ) -> Option<Result<(), StoreError>> {
         let mut context = Vec::new();
         let steer = Some(Delivery::Steer);
@@ -1052,6 +1055,7 @@ impl Session {
             id: self.item_ids.next_id(),
             parts: input,
             delivery: steer,
+            command,
             created_at: Some(self.clock.now().to_timestamp()),
         });
         if let Err(error) = self.record_shown(turn, item).await {
@@ -1071,7 +1075,7 @@ impl Session {
         let mut kept = Vec::new();
         for pending in rest {
             match pending {
-                Pending::Steer { input, ticket } => self.give_back(
+                Pending::Steer { input, ticket, .. } => self.give_back(
                     turn,
                     input,
                     Some(Delivery::Steer),
@@ -1104,8 +1108,12 @@ impl Session {
         let mut pending = std::mem::take(&mut self.shared.lock().pending);
         while let Some(next) = pending.pop_front() {
             let recorded = match next {
-                Pending::Steer { input, ticket } => {
-                    match self.deliver_steer(turn, input, ticket).await {
+                Pending::Steer {
+                    input,
+                    ticket,
+                    command,
+                } => {
+                    match self.deliver_steer(turn, input, ticket, command).await {
                         Some(recorded) => recorded,
                         None => {
                             self.return_pending(turn, pending);
@@ -2228,7 +2236,11 @@ impl Session {
             .iter()
             .position(|pending| matches!(pending, Pending::Steer { .. }));
         let (turn, prompt) = if let Some(position) = steering
-            && let Some(Pending::Steer { input, ticket }) = inbox.pending.remove(position)
+            && let Some(Pending::Steer {
+                input,
+                ticket,
+                command,
+            }) = inbox.pending.remove(position)
         {
             let prompt = Prompt {
                 input,
@@ -2236,6 +2248,7 @@ impl Session {
                 compact: None,
                 verify: false,
                 ticket,
+                command,
             };
             (inbox.turn_ids.next_id(), prompt)
         } else if let Some(queued) = inbox.queue.pop_front() {
@@ -2272,6 +2285,7 @@ impl Session {
             compact: Some(focus),
             verify: false,
             ticket: None,
+            command: None,
         };
         let running = Running {
             id: inbox.turn_ids.next_id(),
@@ -2291,7 +2305,12 @@ impl Session {
         inbox.pending = notices.into();
         let mut held = std::mem::take(&mut inbox.held);
         for pending in steering {
-            if let Pending::Steer { input, ticket } = pending {
+            if let Pending::Steer {
+                input,
+                ticket,
+                command,
+            } = pending
+            {
                 held.push_back(Queued {
                     turn: inbox.turn_ids.next_id(),
                     prompt: Prompt {
@@ -2300,6 +2319,7 @@ impl Session {
                         compact: None,
                         verify: false,
                         ticket,
+                        command,
                     },
                 });
             }

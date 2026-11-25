@@ -1280,6 +1280,7 @@ mod tests {
             id: "i_1".into(),
             parts: vec![Part::text("hello\nthere")],
             delivery: None,
+            command: None,
             created_at: None,
         };
         let line = round_trip(Body::User(user));

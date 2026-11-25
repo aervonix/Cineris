@@ -29,6 +29,7 @@
 mod assemble;
 mod checkpoints;
 mod clients;
+mod commands;
 mod content;
 pub mod core;
 mod day;

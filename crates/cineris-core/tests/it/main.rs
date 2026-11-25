@@ -839,6 +839,7 @@ impl Front {
             session_id: self.session.clone(),
             input: vec![Part::text(text)],
             delivery: None,
+            command: None,
         }))
         .await
         .expect("the prompt is accepted");

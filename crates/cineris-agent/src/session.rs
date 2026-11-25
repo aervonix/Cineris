@@ -20,7 +20,7 @@ use cineris_base::{CancelToken, IdCounter};
 use cineris_llm::SpeedCooldowns;
 use cineris_protocol::error::code;
 use cineris_protocol::event::{Event, SessionUpdated};
-use cineris_protocol::item::{Delivery, NoticeSource};
+use cineris_protocol::item::{Delivery, NoticeSource, PromptCommand};
 use cineris_protocol::lease::Level;
 use cineris_protocol::methods::{Disposition, TurnInterruptResult, TurnStartResult};
 use cineris_protocol::model::ModelRole;
@@ -112,6 +112,9 @@ pub(crate) struct Prompt {
     /// The server's ticket for the prompt
     /// ([`SessionHandle::prompt_with`]), carried untouched.
     pub(crate) ticket: Option<u64>,
+    /// The command the prompt came from, when it was a command's
+    /// ([`SessionHandle::prompt_from`]), carried untouched to its record.
+    pub(crate) command: Option<PromptCommand>,
 }
 
 /// A prompt waiting to become a turn, with the id that turn will have.
@@ -128,6 +131,9 @@ pub(crate) enum Pending {
     Steer {
         input: Vec<Part>,
         ticket: Option<u64>,
+        /// The command it came from, when it was a command's, carried
+        /// untouched to its record.
+        command: Option<PromptCommand>,
     },
     /// A notice for the model: an edit to the plan, changed instructions.
     Notice { source: NoticeSource, text: String },
@@ -331,6 +337,25 @@ impl SessionHandle {
         delivery: Option<Delivery>,
         ticket: Option<u64>,
     ) -> Result<TurnStartResult, Box<ErrorData>> {
+        self.prompt_from(input, delivery, ticket, None)
+    }
+
+    /// [`prompt_with`](Self::prompt_with), for a prompt that is a
+    /// command's text, expanded (since step 28): `command` is carried with
+    /// it, untouched, wherever it goes, and its user message records it
+    /// ([`UserMessageItem::command`](cineris_protocol::item::UserMessageItem::command)).
+    /// A prompt given back carries no command: its parts are the text.
+    ///
+    /// # Errors
+    ///
+    /// As [`prompt`](Self::prompt).
+    pub fn prompt_from(
+        &self,
+        input: Vec<Part>,
+        delivery: Option<Delivery>,
+        ticket: Option<u64>,
+        command: Option<PromptCommand>,
+    ) -> Result<TurnStartResult, Box<ErrorData>> {
         let shared = &self.shared;
         let mut inbox = shared.lock();
         if inbox.closed {
@@ -359,6 +384,7 @@ impl SessionHandle {
                 compact: None,
                 verify: false,
                 ticket,
+                command,
             });
             // What was held follows this prompt, ahead of anything queued
             // from here on.
@@ -374,7 +400,11 @@ impl SessionHandle {
         };
         match delivery {
             Some(Delivery::Steer) => {
-                inbox.pending.push_back(Pending::Steer { input, ticket });
+                inbox.pending.push_back(Pending::Steer {
+                    input,
+                    ticket,
+                    command,
+                });
                 Ok(TurnStartResult {
                     turn_id: running.id,
                     disposition: Disposition::Steering,
@@ -390,6 +420,7 @@ impl SessionHandle {
                         compact: None,
                         verify: false,
                         ticket,
+                        command,
                     },
                 });
                 shared.emit_updated(&inbox);
@@ -430,7 +461,7 @@ impl SessionHandle {
         let mut undelivered = Vec::new();
         let mut settled = Vec::new();
         inbox.pending.retain(|pending| match pending {
-            Pending::Steer { input, ticket } => {
+            Pending::Steer { input, ticket, .. } => {
                 undelivered.push(input.clone());
                 settled.push(*ticket);
                 false
@@ -534,6 +565,7 @@ impl SessionHandle {
             compact: Some(focus),
             verify: false,
             ticket: None,
+            command: None,
         });
         drop(inbox);
         shared.wake.notify_one();
@@ -587,6 +619,7 @@ impl SessionHandle {
             compact: None,
             verify: true,
             ticket: None,
+            command: None,
         });
         drop(inbox);
         shared.wake.notify_one();

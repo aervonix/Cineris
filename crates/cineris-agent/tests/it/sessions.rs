@@ -135,6 +135,7 @@ fn a_resumed_session_sends_its_history_and_continues_its_ids() {
             id: ItemId::new("i_40"),
             parts: vec![Part::text("What is in a?")],
             delivery: None,
+            command: None,
             created_at: None,
         }),
         Item::AssistantMessage(AssistantMessageItem {

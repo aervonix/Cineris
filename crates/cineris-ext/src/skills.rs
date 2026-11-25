@@ -889,6 +889,11 @@ pub use cineris_base::one_line;
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FrontMatter {
     fields: Vec<(String, String)>,
+    /// The keys given more than once, each once, in the order met.
+    repeated: Vec<String>,
+    /// The lines at the block's first column that are neither a field, a
+    /// comment nor blank: what a strict reader refuses.
+    unread: Vec<String>,
 }
 
 impl FrontMatter {
@@ -906,8 +911,11 @@ impl FrontMatter {
         let mut body = Vec::new();
         for line in lines {
             if matches!(line.trim_end(), "---" | "...") {
+                let (fields, repeated, unread) = fields_of(&body);
                 return Some(Self {
-                    fields: fields_of(&body),
+                    fields,
+                    repeated,
+                    unread,
                 });
             }
             body.push(line);
@@ -930,11 +938,30 @@ impl FrontMatter {
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
     }
+
+    /// The keys the block gives more than once (each kept at its first
+    /// value), for a reader that refuses that (a custom command's, since
+    /// step 28).
+    #[must_use]
+    pub fn repeated(&self) -> &[String] {
+        &self.repeated
+    }
+
+    /// The lines at the block's first column that are not a field, a
+    /// comment or blank, as written: passed over here, refused by a strict
+    /// reader.
+    #[must_use]
+    pub fn unread(&self) -> &[String] {
+        &self.unread
+    }
 }
 
-/// The fields of a block's lines.
-fn fields_of(body: &[&str]) -> Vec<(String, String)> {
+/// The fields of a block's lines, the keys given again, and the lines
+/// read as none.
+fn fields_of(body: &[&str]) -> (Vec<(String, String)>, Vec<String>, Vec<String>) {
     let mut out: Vec<(String, String)> = Vec::new();
+    let mut repeated: Vec<String> = Vec::new();
+    let mut unread: Vec<String> = Vec::new();
     let mut at = 0;
     while at < body.len() {
         let line = body[at];
@@ -943,6 +970,7 @@ fn fields_of(body: &[&str]) -> Vec<(String, String)> {
             continue;
         }
         let Some((key, rest)) = split_key(line) else {
+            unread.push(line.to_owned());
             continue;
         };
         let start = at;
@@ -950,12 +978,15 @@ fn fields_of(body: &[&str]) -> Vec<(String, String)> {
             at += 1;
         }
         if out.iter().any(|(earlier, _)| *earlier == key) {
+            if !repeated.contains(&key) {
+                repeated.push(key);
+            }
             continue;
         }
         let value = scalar(rest, &body[start..at]);
         out.push((key, value));
     }
-    out
+    (out, repeated, unread)
 }
 
 fn indented(line: &str) -> bool {

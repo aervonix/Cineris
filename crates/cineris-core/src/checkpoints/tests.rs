@@ -169,6 +169,7 @@ impl World {
             id: ItemId::new(format!("i_{}", self.turns)),
             parts: vec![Part::text("change things")],
             delivery: None,
+            command: None,
             created_at: None,
         });
         self.session.append(Some(&turn), prompt).unwrap();

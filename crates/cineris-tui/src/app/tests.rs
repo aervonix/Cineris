@@ -890,6 +890,7 @@ fn a_turn_shows_the_message_the_answer_and_its_end() {
                 id: ItemId::from("i_1"),
                 parts: vec![Part::text("why does it fail?")],
                 delivery: None,
+                command: None,
                 created_at: None,
             }),
         })),
@@ -3206,6 +3207,7 @@ fn a_resumed_session_draws_its_history_then_what_came_after() {
         id: ItemId::from("i_1"),
         parts: vec![Part::text("fix the build")],
         delivery: None,
+        command: None,
         created_at: None,
     });
     let answer = Item::AssistantMessage(AssistantMessageItem {

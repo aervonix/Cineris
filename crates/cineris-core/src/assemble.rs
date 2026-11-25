@@ -606,15 +606,21 @@ struct Place {
     state: Option<StateDir>,
 }
 
-fn place(inner: &Inner, wanted: &Wanted) -> Result<Place, Box<ErrorData>> {
-    let options = &inner.options;
-    let env = &options.env;
-    let home = env.home().as_deref().and_then(resolve_dir);
+/// The resolver of a session in `workspace`: the home directory the
+/// core's environment gives is what `~` stands for.
+pub(crate) fn path_options(inner: &Inner) -> PathOptions {
+    let home = inner.options.env.home().as_deref().and_then(resolve_dir);
     let mut path_options = PathOptions::new();
     if let Some(home) = home {
         path_options = path_options.home(home);
     }
-    let resolver = PathResolver::new(&wanted.workspace, path_options).map_err(|failure| {
+    path_options
+}
+
+fn place(inner: &Inner, wanted: &Wanted) -> Result<Place, Box<ErrorData>> {
+    let options = &inner.options;
+    let env = &options.env;
+    let resolver = PathResolver::new(&wanted.workspace, path_options(inner)).map_err(|failure| {
         error(
             ErrorKind::Usage,
             "invalid_workspace",

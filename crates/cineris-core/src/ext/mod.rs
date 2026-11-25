@@ -48,7 +48,7 @@ mod script_hooks;
 #[cfg(feature = "scripts")]
 mod state;
 #[cfg(feature = "scripts")]
-mod tools;
+pub(crate) mod tools;
 #[cfg_attr(
     not(feature = "scripts"),
     allow(

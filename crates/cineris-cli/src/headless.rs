@@ -417,6 +417,7 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
                 session_id: session.clone(),
                 input: vec![Part::text(front.plan.prompt.clone())],
                 delivery: None,
+                command: None,
             }),
         )
         .await;

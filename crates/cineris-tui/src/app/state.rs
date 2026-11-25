@@ -1447,6 +1447,7 @@ impl App {
             session_id: sent.session.clone(),
             input: vec![Part::text(sent.text.clone())],
             delivery,
+            command: None,
         }));
         self.pending.insert(ticket, Pending::Prompt(sent));
         ticket

@@ -908,6 +908,7 @@ mod confined {
                     session_id: front.session.clone(),
                     input: vec![Part::text("next")],
                     delivery: Some(Delivery::Queue),
+                    command: None,
                 }))
                 .await
                 .unwrap();

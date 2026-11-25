@@ -304,6 +304,7 @@ fn a_client_that_takes_nothing_is_closed_and_the_session_goes_on() {
             session_id: session.clone(),
             input: vec![Part::text("go")],
             delivery: None,
+            command: None,
         })
         .to_request(RequestId::Number(50))
         .unwrap(),
@@ -383,6 +384,7 @@ fn a_slow_client_is_sent_merged_deltas_and_a_resync() {
             session_id: session.clone(),
             input: vec![Part::text("go")],
             delivery: None,
+            command: None,
         })
         .to_request(RequestId::Number(50))
         .unwrap(),
@@ -814,6 +816,7 @@ fn the_role_given_at_initialize_binds_the_client() {
             session_id: session,
             input: vec![Part::text("go")],
             delivery: None,
+            command: None,
         }))
         .unwrap_err();
     assert_eq!(refused.code, "role_not_allowed");
@@ -846,6 +849,7 @@ fn a_kept_session_survives_its_client_and_another_opens_it() {
             session_id: session.clone(),
             input: vec![Part::text("go")],
             delivery: None,
+            command: None,
         }))
         .expect("a turn starts");
     // The client goes: its input ends, and its connection with it.
@@ -925,6 +929,7 @@ fn a_supervisor_cannot_answer_beyond_the_servers_grant_and_the_user_does() {
             session_id: session.clone(),
             input: vec![Part::text("build it")],
             delivery: None,
+            command: None,
         }))
         .expect("a turn starts");
     let approval = |lines: &mut conformance::Lines| loop {

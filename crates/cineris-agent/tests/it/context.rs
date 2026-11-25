@@ -1437,6 +1437,7 @@ fn resumed(world: &World, system: &str) -> (Rig, MemorySessionStore) {
                 id: ItemId::new("i_1"),
                 parts: vec![Part::text("before")],
                 delivery: None,
+                command: None,
                 created_at: Some("2026-11-12T09:00:00Z".into()),
             }),
             Item::AssistantMessage(cineris_protocol::item::AssistantMessageItem {
@@ -1906,6 +1907,7 @@ fn an_epoch_whose_prompt_the_log_holds_masked_is_not_gone_on_with() {
                 id: ItemId::new("i_1"),
                 parts: vec![Part::text("before")],
                 delivery: None,
+                command: None,
                 created_at: None,
             })),
         ] {

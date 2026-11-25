@@ -480,6 +480,78 @@ impl LoadedExtension {
     }
 }
 
+impl LoadedExtension {
+    /// Runs the extension's command `command` with `input` (`{args,
+    /// arguments}`), outside any round, and gives what its script returned
+    /// (since step 28's commands). Its host calls are a command's
+    /// ([`Phase::Command`]): decided under `<extension>/command.<name>`, a
+    /// question put where the engine asks, `cineris.fs.write` refused, and
+    /// its programs given the manifest's write roots, as on `main`. Its
+    /// time is the manifest's, from when it starts.
+    ///
+    /// # Errors
+    ///
+    /// Why it could not run, or how it failed, in a sentence that names it.
+    pub(crate) async fn call_command(
+        &self,
+        command: &str,
+        input: Json,
+        cx: &RunCx,
+    ) -> Result<Json, String> {
+        let full_name = format!("{}/command.{command}", self.name());
+        let shown = format!("/{}:{command}", self.name());
+        let runtime = match self
+            .runtime(&cineris_ext::engine::StartWatch::default())
+            .await
+        {
+            Ok(runtime) => runtime,
+            Err(Refused {
+                why,
+                stand: Refusal::Plain,
+            }) => return Err(why),
+            Err(Refused { why, stand }) => return Err(format!("{why}; {}", self.remedy(stand))),
+        };
+        let progress = Mutex::new(Vec::new());
+        let host = host::CallHost {
+            parts: &self.parts,
+            cx,
+            files: &self.files,
+            full_name: &full_name,
+            extension: self.name(),
+            source: self.approved.source,
+            progress: &progress,
+            phase: Phase::Command,
+            found_stopped: std::sync::atomic::AtomicBool::new(false),
+        };
+        let result = runtime
+            .call(
+                Target::Command(command.to_owned()),
+                input,
+                CallContext {
+                    host: &host,
+                    capabilities: &self.capabilities,
+                    time: self.approved.manifest.limits.time,
+                    timer: self.parts.timer.as_ref(),
+                    clock: self.parts.clock.as_ref(),
+                    cancel: &cx.cancel,
+                    asked: None,
+                },
+            )
+            .await;
+        match result {
+            Ok(value) => Ok(value),
+            Err(CallError::Cancelled) => Err(format!("`{shown}` was interrupted")),
+            Err(CallError::Stopped(reason)) => Err(format!("`{shown}` was stopped: {reason}")),
+            Err(CallError::Disabled) => Err(format!(
+                "{}; {}",
+                self.disabled(),
+                self.remedy(Refusal::Disabled)
+            )),
+            Err(error) => Err(format!("`{shown}` failed: {error}")),
+        }
+    }
+}
+
 /// What came of one call of an extension's hook.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum HookRan {

@@ -88,6 +88,9 @@ pub(crate) struct ScriptHooks {
     held: Mutex<Vec<Arc<HeldHook>>>,
     /// What the session knows each extension it approved registered.
     known: Mutex<Known>,
+    /// The extensions loaded now, whose commands may be sent (since step
+    /// 28's commands).
+    loaded: Mutex<Vec<Arc<LoadedExtension>>>,
 }
 
 /// What the session knows each extension it approved registered, at the
@@ -408,6 +411,7 @@ impl ScriptHooks {
             on: Mutex::new(Vec::new()),
             held: Mutex::new(Vec::new()),
             known: Mutex::new(Known::default()),
+            loaded: Mutex::new(Vec::new()),
         }
     }
 
@@ -447,6 +451,11 @@ impl ScriptHooks {
                 running: Arc::default(),
                 runs: runs.clone(),
             }));
+        }
+        {
+            let mut loaded = lock(&self.loaded);
+            loaded.retain(|other| other.name() != extension.name());
+            loaded.push(Arc::clone(extension));
         }
         let mut on = lock(&self.on);
         on.retain(|hook| hook.extension.name() != extension.name());
@@ -617,11 +626,20 @@ impl ScriptHooks {
     /// withdrawn from the session. What of them still runs is stopped (the
     /// early review of the script hooks, L6).
     pub(crate) fn withdraw(&self, name: &str) {
+        lock(&self.loaded).retain(|extension| extension.name() != name);
         let mut on = lock(&self.on);
         for hook in on.iter().filter(|hook| hook.extension.name() == name) {
             hook.runs.cancel();
         }
         on.retain(|hook| hook.extension.name() != name);
+    }
+
+    /// The extensions loaded now, by name: what a command of one is run
+    /// by.
+    pub(crate) fn extensions(&self) -> Vec<Arc<LoadedExtension>> {
+        let mut loaded = lock(&self.loaded).clone();
+        loaded.sort_by(|one, other| one.name().cmp(other.name()));
+        loaded
     }
 
     /// Whether a hook of an extension is on `event` for `target`: cheap, no

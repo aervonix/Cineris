@@ -1270,6 +1270,7 @@ fn a_prompt_queued_behind_a_turn_not_yet_begun_does_not_look() {
                 session_id: front.session.clone(),
                 input: vec![cineris_protocol::message::Part::text("second")],
                 delivery: Some(cineris_protocol::item::Delivery::Queue),
+                command: None,
             }))
             .await
             .expect("the second prompt is accepted");
