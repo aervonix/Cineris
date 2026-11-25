@@ -303,6 +303,7 @@ fn prompt_with(text: &'static str, delivery: cineris_protocol::item::Delivery) -
             session_id: ctx.session(),
             input: vec![cineris_protocol::Part::text(text)],
             delivery: Some(delivery.clone()),
+            command: None,
         })
     })
 }
@@ -330,6 +331,7 @@ fn prompt(text: &'static str) -> Step {
             session_id: ctx.session(),
             input: vec![cineris_protocol::Part::text(text)],
             delivery: None,
+            command: None,
         })
     })
 }

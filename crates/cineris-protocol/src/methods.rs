@@ -590,6 +590,99 @@ pub struct TurnStartParams {
     /// when the session is idle.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
+    /// A command to send in place of a prompt written out (since step 28):
+    /// the core expands it, and the expanded text is the prompt, before
+    /// any `prompt.submit` hook sees it. `input` is then empty. A server
+    /// that answers `commands/list` reads it; one that does not would
+    /// take the empty `input` alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<CommandCall>,
+}
+
+/// A command named in `turn/start` (since step 28).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CommandCall {
+    /// Its name, as `commands/list` gives it, without the `/`.
+    pub name: String,
+    /// What was typed after the name: its arguments, as words, a word in
+    /// double quotes holding spaces, and `name=value` for an argument by
+    /// its name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub args: String,
+}
+
+/// `commands/list` (since step 28).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CommandsListParams {
+    /// The session whose commands they are: its workspace's and the
+    /// user's, and those of the extensions it has loaded.
+    pub session_id: SessionId,
+}
+
+/// The result of `commands/list`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CommandsListResult {
+    /// The commands that may be sent, by name.
+    pub commands: Vec<CommandInfo>,
+    /// The commands found that are not used, and why.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_used: Vec<CommandNotUsed>,
+}
+
+/// One command `commands/list` gives.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CommandInfo {
+    /// Its name, without the `/`.
+    pub name: String,
+    /// Whose it is.
+    pub source: crate::item::CommandSource,
+    /// The extension whose script handles it, for an extension's command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    /// Its description, for a menu. Empty when it gives none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The arguments it names, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub arguments: Vec<CommandArgument>,
+    /// Its file, relative to the workspace for a project's, under `~` for
+    /// the user's; absent for an extension's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+}
+
+/// An argument a command names.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CommandArgument {
+    /// Its name.
+    pub name: String,
+    /// What it is when it is not given, if anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+/// A command found and not used, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct CommandNotUsed {
+    /// Its name, as it would be typed; empty when the file's name is none.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// Whose it is.
+    pub source: crate::item::CommandSource,
+    /// The extension it is of, for an extension's command.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
+    /// Its file, or the folder left out, as [`CommandInfo::path`] shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Why it is not used, in a sentence.
+    pub reason: String,
 }
 
 open_enum! {
@@ -1609,6 +1702,9 @@ methods! {
     McpStatus(Empty) -> McpStatusResult => "mcp/status",
     /// The state of the extensions.
     ExtensionsStatus(Empty) -> ExtensionsStatusResult => "extensions/status",
+    /// The custom commands a session may send, and those found and not
+    /// used, with why. Only reads.
+    CommandsList(CommandsListParams) -> CommandsListResult => "commands/list",
     /// Stops the server cleanly.
     Shutdown(Empty) -> Empty => "shutdown",
 }

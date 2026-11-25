@@ -90,7 +90,7 @@ enum Back {
 /// starting state, when that has not finished.
 const BASE_WAIT: Duration = Duration::from_secs(2);
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     // Each change behind these locks is whole before the lock is let go.
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -1670,6 +1670,9 @@ impl Core {
                     truncated,
                 }))
             }
+            Op::CommandsList(params) => Ok(OpResult::CommandsList(
+                crate::commands::list(self, client, &params).await?,
+            )),
             Op::ProjectDetect(params) => Ok(OpResult::ProjectDetect(
                 crate::reads::detect(self, client, &params).await?,
             )),
@@ -1716,6 +1719,15 @@ impl Core {
                         ),
                     ));
                 }
+                // A command is sent in place of a prompt written out: its text
+                // is the prompt, so nothing else may come with it.
+                if params.command.is_some() && !params.input.is_empty() {
+                    return Err(error(
+                        ErrorKind::Usage,
+                        code::INVALID_PROMPT,
+                        "A prompt that names a command holds nothing else: its `input` is empty.",
+                    ));
+                }
                 // One start at a time: no other client's prompt starts a
                 // turn between the look below and this prompt's handing to
                 // the loop, so the look at what the extensions were found
@@ -1755,6 +1767,17 @@ impl Core {
                     // it (the third security fix).
                     crate::sandbox::tell_what_is_still_by_hand(&live).await;
                 }
+                // A command is expanded here, once the session's extensions
+                // are settled and looked at again, before the loop takes the
+                // prompt: its `prompt.submit` hooks see the expanded text, and
+                // a gate they hold refuses it (step 28).
+                let (input, command) = match params.command {
+                    Some(call) => {
+                        let (input, command) = crate::commands::expand(self, &live, call).await?;
+                        (input, Some(command))
+                    }
+                    None => (params.input, None),
+                };
                 // Refused with `history_changing` while a rewind is under
                 // way, under the session's own lock. Who sent it is noted
                 // first, by a ticket the loop carries with the prompt: a hook,
@@ -1763,9 +1786,9 @@ impl Core {
                 // let go when the loop refuses it (the review of step 28's
                 // second pull request, M5, and its re-check).
                 let ticket = live.sink.sent_by(client.0);
-                let result = live
-                    .handle
-                    .prompt_with(params.input, params.delivery, Some(ticket));
+                let result =
+                    live.handle
+                        .prompt_from(input, params.delivery, Some(ticket), command);
                 if result.is_err() {
                     let _ = live.sink.forget(ticket);
                 }

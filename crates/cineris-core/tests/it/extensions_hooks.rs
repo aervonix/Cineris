@@ -81,6 +81,7 @@ fn prompt_op(session: &SessionId, text: &str) -> Op {
         session_id: session.clone(),
         input: vec![Part::text(text)],
         delivery: None,
+        command: None,
     })
 }
 

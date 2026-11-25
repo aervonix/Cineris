@@ -738,6 +738,7 @@ fn no_turn_starts_while_a_rewind_is_under_way() {
                 session_id: front.session.clone(),
                 input: vec![cineris_protocol::Part::text("three")],
                 delivery: None,
+                command: None,
             }))
             .await
             .expect_err("a turn started under a rewind");

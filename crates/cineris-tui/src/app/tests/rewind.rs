@@ -21,6 +21,7 @@ fn user(id: &str, text: &str) -> Item {
         id: ItemId::from(id),
         parts: vec![Part::text(text)],
         delivery: None,
+        command: None,
         created_at: Some(Timestamp::from("2026-11-15T14:32:10Z")),
     })
 }
@@ -227,6 +228,7 @@ fn the_points_are_read_page_by_page_and_steering_is_no_point() {
         id: ItemId::from("i_2s"),
         parts: vec![Part::text("and keep it short")],
         delivery: Some(ItemDelivery::Steer),
+        command: None,
         created_at: None,
     };
     items.insert(2, Item::UserMessage(steer));

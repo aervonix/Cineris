@@ -215,6 +215,7 @@ fn two_clients_share_a_session_over_the_socket() {
             session_id: session,
             input: vec![cineris_protocol::Part::text("hi")],
             delivery: None,
+            command: None,
         }))
         .unwrap();
     for lines in [&mut first, &mut second] {

@@ -517,6 +517,7 @@ mod tests {
                     id: ItemId::new(format!("i_{number}")),
                     parts: vec![Part::text("go")],
                     delivery: None,
+                    command: None,
                     created_at: None,
                 }),
                 redacted,

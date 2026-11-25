@@ -14,6 +14,8 @@ export type ProtocolVersion = 1;
 
 /** Requests a client sends to the server, by method name. */
 export interface ClientMethods {
+  /** The custom commands a session may send, and those found and not used, with why. Only reads. */
+  "commands/list": { params: CommandsListParams; result: CommandsListResult };
   /** Reads the effective configuration. */
   "config/get": { params: ConfigGetParams; result: ConfigGetResult };
   /** Re-reads the configuration files, judges the project's trust again, and applies what changed to the open sessions. */
@@ -293,6 +295,22 @@ export interface ClientCapabilities {
 /** What a client is to the sessions it opens. */
 export type ClientRole = "user" | "supervisor" | "observer" | (string & {});
 
+/** An argument a command names. */
+export interface CommandArgument {
+  /** What it is when it is not given, if anything. */
+  default?: string | null;
+  /** Its name. */
+  name: string;
+}
+
+/** A command named in `turn/start` (since step 28). */
+export interface CommandCall {
+  /** What was typed after the name: its arguments, as words, a word in double quotes holding spaces, and `name=value` for an argument by its name. */
+  args?: string;
+  /** Its name, as `commands/list` gives it, without the `/`. */
+  name: string;
+}
+
 /** The detail of an approval for a command. */
 export interface CommandDetail {
   /** The full command line. Nothing is shortened. */
@@ -303,8 +321,55 @@ export interface CommandDetail {
   outside_sandbox?: boolean;
 }
 
+/** One command `commands/list` gives. */
+export interface CommandInfo {
+  /** The arguments it names, in order. */
+  arguments?: Array<CommandArgument>;
+  /** Its description, for a menu. Empty when it gives none. */
+  description?: string;
+  /** The extension whose script handles it, for an extension's command. */
+  extension?: string | null;
+  /** Its name, without the `/`. */
+  name: string;
+  /** Its file, relative to the workspace for a project's, under `~` for the user's; absent for an extension's. */
+  path?: string | null;
+  /** Whose it is. */
+  source: CommandSource;
+}
+
+/** A command found and not used, and why. */
+export interface CommandNotUsed {
+  /** The extension it is of, for an extension's command. */
+  extension?: string | null;
+  /** Its name, as it would be typed; empty when the file's name is none. */
+  name?: string;
+  /** Its file, or the folder left out, as [`CommandInfo::path`] shows it. */
+  path?: string | null;
+  /** Why it is not used, in a sentence. */
+  reason: string;
+  /** Whose it is. */
+  source: CommandSource;
+}
+
 /** What a command entry is for. */
 export type CommandPurpose = "build" | "test" | "check" | "format" | "run" | (string & {});
+
+/** Whose a command is (since step 28). An extension's command is its extension's: the user's or a project's. */
+export type CommandSource = "user" | "project" | (string & {});
+
+/** `commands/list` (since step 28). */
+export interface CommandsListParams {
+  /** The session whose commands they are: its workspace's and the user's, and those of the extensions it has loaded. */
+  session_id: SessionId;
+}
+
+/** The result of `commands/list`. */
+export interface CommandsListResult {
+  /** The commands that may be sent, by name. */
+  commands: Array<CommandInfo>;
+  /** The commands found that are not used, and why. */
+  not_used?: Array<CommandNotUsed>;
+}
 
 /** Notice: a compaction started, finished or failed. */
 export interface CompactionNotice {
@@ -1362,6 +1427,18 @@ export interface ProjectUpdated {
   removed?: Array<EntryId>;
 }
 
+/** The command a prompt came from (since step 28). */
+export interface PromptCommand {
+  /** What was typed after the command's name. */
+  args?: string;
+  /** The extension whose script gave the text, for an extension's command. */
+  extension?: string | null;
+  /** The command's name as it is typed after `/`: a file's (`review`), or an extension's, its extension's name and a `:` before it (`tracker:deploy`). */
+  name: string;
+  /** Whose it is. */
+  source: CommandSource;
+}
+
 /** Notice: a prompt given back to the front end, for its editor, and never sent to the model (since step 28). A `prompt.submit` hook refused it, and `hooks` names each that did, with its reason; or the turn was interrupted while its hooks were asked, and `hooks` is empty. A prompt that would have started a turn ends that turn `denied` (or `interrupted`); a steering message is dropped, and the running turn goes on. */
 export interface PromptReturnedNotice {
   /** How it was sent while a turn ran, as its user message would have said: `steer` for a steering message, whether it was refused at a boundary of the running turn or as the prompt of a turn of its own (one that found no boundary); `queue` for a queued prompt. Absent for a prompt sent to an idle session. */
@@ -2256,6 +2333,8 @@ export type TurnOutcome = "completed" | "failed" | "interrupted" | "limit" | "de
 
 /** `turn/start` */
 export interface TurnStartParams {
+  /** A command to send in place of a prompt written out (since step 28): the core expands it, and the expanded text is the prompt, before any `prompt.submit` hook sees it. `input` is then empty. A server that answers `commands/list` reads it; one that does not would take the empty `input` alone. */
+  command?: CommandCall | null;
   /** How to deliver it if a turn is running. Required then, and ignored when the session is idle. */
   delivery?: Delivery | null;
   /** The prompt: text and images. */
@@ -2381,6 +2460,8 @@ export interface UsageUpdated {
 
 /** A message from the user. */
 export interface UserMessageItem {
+  /** The command it came from, when it was a command's: its parts are the command's text, expanded (since step 28). */
+  command?: PromptCommand | null;
   /** When it was recorded. */
   created_at?: Timestamp | null;
   /** How it was delivered, when it was sent during a running turn. */

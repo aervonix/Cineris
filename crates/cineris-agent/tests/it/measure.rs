@@ -41,6 +41,7 @@ fn long_history() -> Vec<Item> {
                 "Look at module {round} and say what it does."
             ))],
             delivery: None,
+            command: None,
             created_at: Some("2026-11-14T09:00:00Z".into()),
         }));
         let call = CallId::new(format!("c{round}"));

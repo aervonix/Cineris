@@ -545,6 +545,7 @@ fn before_a_steering_message_is_just_before_it() {
                 session_id: front.session.clone(),
                 input: vec![Part::text("and test it")],
                 delivery: Some(Delivery::Steer),
+                command: None,
             }))
             .await
             .expect("the steering is taken");

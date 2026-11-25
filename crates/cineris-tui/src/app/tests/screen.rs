@@ -59,6 +59,7 @@ fn turn(turn: u64, prompt: &str, pieces: &[&str], output: &str) -> Vec<Vec<Inbou
                 id: ItemId::from(format!("u{turn}").as_str()),
                 parts: vec![Part::text(prompt)],
                 delivery: None,
+                command: None,
                 created_at: None,
             }),
         })),

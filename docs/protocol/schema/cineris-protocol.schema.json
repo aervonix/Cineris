@@ -750,6 +750,43 @@
       ],
       "description": "What a client is to the sessions it opens."
     },
+    "CommandArgument": {
+      "description": "An argument a command names.",
+      "properties": {
+        "default": {
+          "description": "What it is when it is not given, if anything.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Its name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "CommandCall": {
+      "description": "A command named in `turn/start` (since step 28).",
+      "properties": {
+        "args": {
+          "description": "What was typed after the name: its arguments, as words, a word in\ndouble quotes holding spaces, and `name=value` for an argument by\nits name.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Its name, as `commands/list` gives it, without the `/`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
     "CommandDetail": {
       "description": "The detail of an approval for a command.",
       "properties": {
@@ -770,6 +807,85 @@
       "required": [
         "command",
         "cwd"
+      ],
+      "type": "object"
+    },
+    "CommandInfo": {
+      "description": "One command `commands/list` gives.",
+      "properties": {
+        "arguments": {
+          "description": "The arguments it names, in order.",
+          "items": {
+            "$ref": "#/$defs/CommandArgument"
+          },
+          "type": "array"
+        },
+        "description": {
+          "description": "Its description, for a menu. Empty when it gives none.",
+          "type": "string"
+        },
+        "extension": {
+          "description": "The extension whose script handles it, for an extension's command.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Its name, without the `/`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Its file, relative to the workspace for a project's, under `~` for\nthe user's; absent for an extension's.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/CommandSource",
+          "description": "Whose it is."
+        }
+      },
+      "required": [
+        "name",
+        "source"
+      ],
+      "type": "object"
+    },
+    "CommandNotUsed": {
+      "description": "A command found and not used, and why.",
+      "properties": {
+        "extension": {
+          "description": "The extension it is of, for an extension's command.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Its name, as it would be typed; empty when the file's name is none.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Its file, or the folder left out, as [`CommandInfo::path`] shows it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why it is not used, in a sentence.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/CommandSource",
+          "description": "Whose it is."
+        }
+      },
+      "required": [
+        "source",
+        "reason"
       ],
       "type": "object"
     },
@@ -802,6 +918,60 @@
         }
       ],
       "description": "What a command entry is for."
+    },
+    "CommandSource": {
+      "anyOf": [
+        {
+          "const": "user",
+          "description": "The user's own: a file in `<config dir>/commands/`, or a command of one of the user's extensions."
+        },
+        {
+          "const": "project",
+          "description": "A project's: a file in the workspace's `.cineris/commands/`, or a command of one of the project's extensions."
+        },
+        {
+          "description": "A value this version of the protocol does not know. Receivers need a default branch.",
+          "type": "string",
+          "x-cineris-open": true
+        }
+      ],
+      "description": "Whose a command is (since step 28). An extension's command is its extension's: the user's or a project's."
+    },
+    "CommandsListParams": {
+      "description": "`commands/list` (since step 28).",
+      "properties": {
+        "session_id": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The session whose commands they are: its workspace's and the\nuser's, and those of the extensions it has loaded."
+        }
+      },
+      "required": [
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "CommandsListResult": {
+      "description": "The result of `commands/list`.",
+      "properties": {
+        "commands": {
+          "description": "The commands that may be sent, by name.",
+          "items": {
+            "$ref": "#/$defs/CommandInfo"
+          },
+          "type": "array"
+        },
+        "not_used": {
+          "description": "The commands found that are not used, and why.",
+          "items": {
+            "$ref": "#/$defs/CommandNotUsed"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "commands"
+      ],
+      "type": "object"
     },
     "CompactionNotice": {
       "description": "Notice: a compaction started, finished or failed.",
@@ -5053,6 +5223,35 @@
       },
       "type": "object"
     },
+    "PromptCommand": {
+      "description": "The command a prompt came from (since step 28).",
+      "properties": {
+        "args": {
+          "description": "What was typed after the command's name.",
+          "type": "string"
+        },
+        "extension": {
+          "description": "The extension whose script gave the text, for an extension's\ncommand.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "The command's name as it is typed after `/`: a file's (`review`), or\nan extension's, its extension's name and a `:` before it\n(`tracker:deploy`).",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/CommandSource",
+          "description": "Whose it is."
+        }
+      },
+      "required": [
+        "name",
+        "source"
+      ],
+      "type": "object"
+    },
     "PromptReturnedNotice": {
       "description": "Notice: a prompt given back to the front end, for its editor, and never\nsent to the model (since step 28). A `prompt.submit` hook refused it,\nand `hooks` names each that did, with its reason; or the turn was\ninterrupted while its hooks were asked, and `hooks` is empty. A prompt\nthat would have started a turn ends that turn `denied` (or\n`interrupted`); a steering message is dropped, and the running turn goes\non.",
       "properties": {
@@ -7956,6 +8155,17 @@
     "TurnStartParams": {
       "description": "`turn/start`",
       "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CommandCall"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A command to send in place of a prompt written out (since step 28):\nthe core expands it, and the expanded text is the prompt, before\nany `prompt.submit` hook sees it. `input` is then empty. A server\nthat answers `commands/list` reads it; one that does not would\ntake the empty `input` alone."
+        },
         "delivery": {
           "anyOf": [
             {
@@ -8386,6 +8596,17 @@
     "UserMessageItem": {
       "description": "A message from the user.",
       "properties": {
+        "command": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptCommand"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The command it came from, when it was a command's: its parts are the\ncommand's text, expanded (since step 28)."
+        },
         "created_at": {
           "anyOf": [
             {
@@ -8595,6 +8816,15 @@
   "title": "Cineris protocol",
   "x-cineris-methods": {
     "client": {
+      "commands/list": {
+        "description": "The custom commands a session may send, and those found and not used, with why. Only reads.",
+        "params": {
+          "$ref": "#/$defs/CommandsListParams"
+        },
+        "result": {
+          "$ref": "#/$defs/CommandsListResult"
+        }
+      },
       "config/get": {
         "description": "Reads the effective configuration.",
         "params": {

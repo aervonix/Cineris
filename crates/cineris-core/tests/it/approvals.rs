@@ -1015,6 +1015,7 @@ fn a_wait_for_a_question_goes_on_while_a_turn_is_queued() {
                     session_id: front.session.clone(),
                     input: vec![cineris_protocol::message::Part::text("second")],
                     delivery: Some(cineris_protocol::item::Delivery::Queue),
+                    command: None,
                 },
             ))
             .await

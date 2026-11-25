@@ -19,6 +19,8 @@
 //! - [`event`]: the seven events hooks run on;
 //! - [`hook`]: a hook's contract: its filter of tools, its answer read
 //!   strictly, and a hook command compiled from its configuration's entry;
+//! - [`commands`]: custom commands from Markdown files, their front matter
+//!   read strictly and their bodies expanded;
 //! - [`skills`]: the skills in the project's and the user's folders, and
 //!   the list of them in section 6 of the system prompt.
 //!
@@ -27,6 +29,7 @@
 
 pub mod cache;
 pub mod capability;
+pub mod commands;
 pub mod discover;
 #[cfg(feature = "scripts")]
 pub mod engine;

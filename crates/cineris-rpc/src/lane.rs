@@ -69,6 +69,7 @@ pub fn reads(op: &Op) -> bool {
             | Op::WorkspaceWarm(_)
             | Op::McpStatus(_)
             | Op::ExtensionsStatus(_)
+            | Op::CommandsList(_)
     )
 }
 

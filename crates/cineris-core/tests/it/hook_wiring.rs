@@ -366,6 +366,7 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
                         raw: None,
                     })],
                     delivery: None,
+                    command: None,
                 }))
                 .await
                 .unwrap_err();

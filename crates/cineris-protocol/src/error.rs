@@ -152,6 +152,18 @@ pub mod code {
     /// compaction: one would skip a gate an extension may hold. Every later
     /// start in the session is refused alike (since step 28).
     pub const EXTENSIONS_NOT_SETTLED: &str = "extensions_not_settled";
+    /// `turn/start` named a command the session does not have (since step
+    /// 28).
+    pub const UNKNOWN_COMMAND: &str = "unknown_command";
+    /// `turn/start` named a command with arguments it does not take, or
+    /// without one it needs (since step 28).
+    pub const COMMAND_ARGUMENTS: &str = "command_arguments";
+    /// `turn/start` named a command that is not used, or one whose settings
+    /// profile cannot be applied, and the message says why (since step 28).
+    pub const COMMAND_REFUSED: &str = "command_refused";
+    /// `turn/start` named an extension's command whose script failed, or
+    /// gave no text to send (since step 28).
+    pub const COMMAND_FAILED: &str = "command_failed";
 
     /// What a code that is not a plain one is kept as, where a provider's
     /// code would be kept: the statistics.
