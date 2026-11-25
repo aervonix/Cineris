@@ -44,6 +44,8 @@ The second part of step 28's hooks ([answered.md](../answered.md), "The design, 
 
 **The fifth look** (of those): no high. **Medium:** a start let go before it began, waiting on its runtime's lock or the look at the names on the way, was counted and never released, so that four such could stop every extension of the process from starting while the user was told it would clear (now the count is held only while a start runs, by the guard that releases it on every way out). **Low:** gates held from the cache for an extension the session never loaded lapsed if a store then became unreadable (now they are known as the rest are). It confirmed that every place a script thread is awaited from a future stops the thread when dropped.
 
+**The narrow check** (of those two fixes alone, the maintainers capping the reviews there): both right, no high or medium. **Left as it is, a low:** the cap bounds the starts that begin, not starts already running when they are let go, so sessions that start an extension at the same moment and then close together can take the count past four by as many as started at once; the overshoot is bounded and fails closed, further starts refused until it drains.
+
 ## What was measured
 
 | What | Measured | Where |
