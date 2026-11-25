@@ -549,7 +549,7 @@ in: CallHost::decide
 find: self.parts.policy.stop_turn(self.cx.turn, reason.clone());
 replace: let _ = self.parts.policy.stopped_turn(self.cx.turn);
 caught-by:
-    cineris-core::it extensions_hooks::after_a_stop_of_the_turn_its_extensions_hooks_run_nothing
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-run-that-completed-after-a-denial-exits-0
 rule: Under `--fail-on-denial`, a turn that completed after a call nobody could answer is reported denied, and the run exits 6.
@@ -4121,7 +4121,7 @@ find: if self.told.insert(message.clone()) {
 replace: if self.told.insert(message.clone()) || true {
 caught-by:
     extensions_review::what_the_session_was_told_is_not_said_again_at_a_later_look
-    extensions_hooks::a_changed_extensions_gates_hold_and_the_way_out_stays_open
+    extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] pinned-wait-unsaid
 rule: A turn that has waited a few seconds for the session's extensions says what it waits for, and goes on waiting.
@@ -8077,7 +8077,7 @@ file: crates/cineris-core/src/ext/hook_points.rs
 find: matched.extend(self.scripts.matching(event, target));
 replace: let _ = self.scripts.matching(event, target);
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] an-extensions-hooks-are-put-on-no-event
 rule: Registering a loaded extension puts the hooks it registered on their events.
@@ -8085,7 +8085,7 @@ file: crates/cineris-core/src/ext/tools.rs
 find: hooks.add(&loaded)
 replace: { let _ = (hooks, &loaded); }
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hook-is-given-another-input
 rule: A script hook's function is given the event's object, `HookInput::to_json`, as a hook command is given it on its standard input.
@@ -8093,7 +8093,7 @@ file: crates/cineris-core/src/ext/script_hooks.rs
 find: input.to_json()
 replace: serde_json::json!({})
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-failure-is-no-opinion
 rule: A script hook that throws, or cannot run, has failed, which refuses where a hook gates.
@@ -8101,7 +8101,7 @@ file: crates/cineris-core/src/ext/script_hooks.rs
 find: HookRan::Failed(why) => Heard::Failed(failed(name, &why))
 replace: HookRan::Failed(_) => Heard::Nothing
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-answer-past-its-cap-is-heard
 rule: A script hook's answer is at most 64 KiB of JSON, as a hook command's is: a larger one is a failure.
@@ -8109,7 +8109,7 @@ file: crates/cineris-core/src/ext/script_hooks.rs
 find: if size > MAX_ANSWER {
 replace: if size > 1024 * MAX_ANSWER {
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] an-observing-hook-is-heard
 rule: A script hook registered with `observe: true` is an observer: never waited for, and its answer not read.
@@ -8117,7 +8117,7 @@ file: crates/cineris-core/src/ext/script_hooks.rs
 find: observe: definition.observe
 replace: observe: definition.observe && false
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hook_is_on_its_event_and_its_answer_is_read
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] two-hooks-on-an-event-share-a-name
 rule: An extension's hooks on one event are told apart by their names: the second on it is `<extension>/hook.<event>.2`.
@@ -8125,7 +8125,7 @@ file: crates/cineris-core/src/ext/script_hooks.rs
 find: let name = if *count == 1 {
 replace: let name = if *count >= 1 {
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hook_waiting_for_its_runtime_spends_its_own_time
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-host-call-puts-its-question
 rule: A hook's host call that the permission engine would ask about is refused, saying a hook may not put a question and naming the rule that would allow it: nobody is asked, so a hook runs only what the engine allows outright.
@@ -8133,7 +8133,7 @@ file: crates/cineris-core/src/ext/host.rs
 find: if self.phase == Phase::Hook {
 replace: if self.phase == Phase::Evaluation {
 caught-by:
-    cineris-core::it extensions_hooks::a_hooks_host_calls_put_no_question
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
     cineris-core::it hook_commands::sys_a_hook_command_gates_replaces_fails_and_runs_past_its_time
 
 [break] a-hooks-call-is-a-tools
@@ -8142,7 +8142,7 @@ file: crates/cineris-core/src/ext/tools.rs
 find: phase: Phase::Hook
 replace: phase: Phase::Tool
 caught-by:
-    cineris-core::it extensions_hooks::a_hooks_host_calls_put_no_question
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-host-calls-are-decided-under-another-name
 rule: A hook's host calls are decided under the hook's name, `<extension>/hook.<event>`, so that a rule about the extension (`deny ext probe/*`) reaches them.
@@ -8150,7 +8150,7 @@ file: crates/cineris-core/src/ext/tools.rs
 find: full_name: name
 replace: full_name: "hook"
 caught-by:
-    cineris-core::it extensions_hooks::a_hooks_host_calls_put_no_question
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-stopped-turns-hook-starts
 rule: A script hook asked after its turn stopped does not start, as a hook command does not: nothing of it runs, and it is no stop of its own. A host call of one that did start is refused by the policy's stop all the same, so this is shown by a hook that makes none.
@@ -8158,7 +8158,7 @@ file: crates/cineris-core/src/ext/script_hooks.rs
 find: if policy.stopped_for_hooks(turn_number(&self.turn)).is_some() {
 replace: if policy.stopped_for_hooks(turn_number(&self.turn)).is_some() && false {
 caught-by:
-    cineris-core::it extensions_hooks::after_a_stop_of_the_turn_its_extensions_hooks_run_nothing
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-run-let-go-goes-on
 rule: Dropped, a script hook's run's future stops it, even before its first poll: its call is withdrawn, and no runtime is made for it.
@@ -8167,7 +8167,7 @@ in: StopOnDrop::drop
 find: self.0.cancel();
 replace: let _ = &self.0;
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hooks_runs_are_its_own_and_bounded
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-turn-ends-hook-runs-past-its-cap
 rule: A waited-for `turn.end` script hook has at most four runs going at once, as a hook command has: a fifth is not started, and says so.
@@ -8175,7 +8175,7 @@ file: crates/cineris-core/src/ext/script_hooks.rs
 find: self.running.load(Ordering::Acquire) >= TURN_END_AT_ONCE
 replace: self.running.load(Ordering::Acquire) >= 1024 * TURN_END_AT_ONCE
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hooks_runs_are_its_own_and_bounded
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-withdrawn-extensions-hooks-stay
 rule: An extension withdrawn from the session takes its hooks off their events with it: one that only adds (`tool.after`) adds nothing more, while its gates (`tool.before`, `prompt.submit`) are held in their place, failing, as long as it stands approved (the early review of the script hooks, M1).
@@ -8183,8 +8183,8 @@ file: crates/cineris-core/src/ext/found/pipeline.rs
 find: self.scripts.withdraw(&gone.1);
 replace: let _ = &gone.1;
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_only_while_it_stands_approved
-    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] an-extensions-session-start-hook-is-not-heard
 rule: The `session.start` hooks of the extensions a session loads as it opens are heard before its first turn, each one's context a notice of the hook's.
@@ -8192,7 +8192,7 @@ file: crates/cineris-core/src/ext/found/pipeline.rs
 find: scripts.session_started(started, &*tell).await;
 replace: let _ = (started, &tell);
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hooks_run_as_its_session_opens_and_closes
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] an-extensions-session-end-hook-does-not-run
 rule: A session's extensions' `session.end` hooks run as it closes, beside its hook commands', within the same five seconds.
@@ -8200,7 +8200,7 @@ file: crates/cineris-core/src/ext/hook_command.rs
 find: let scripts = self.scripts.session_ending(session);
 replace: let scripts = self.scripts.session_ending(session).into_iter().take(0).collect::<Vec<_>>();
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hooks_run_as_its_session_opens_and_closes
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-own-stop-is-not-told
 rule: A stop that a script hook's own program's look at the protected paths makes is told to the user at once and holds back the next prompt, as a hook command's is. Since a hook's program has no write root (the maintainers' call on the early review of the script hooks, M2), no look is made of it, and no hook's own stop can come: no test can reach this. It is kept, as the code that tells such a stop is, for a hook that is ever given a write root again.
@@ -8235,7 +8235,7 @@ in: Settles::drop
 find: self.0.ready.fail(FINDING_ENDED.to_owned());
 replace: self.0.ready.settle();
 caught-by:
-    cineris-core::it extensions_hooks::a_session_whose_finding_failed_starts_no_turn
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-failed-finding-lets-the-turn-start
 rule: While the session's extensions' finding has failed, a turn's start is refused with why, as is the next: neither waits for ever nor starts without a gate one of them may hold.
@@ -8244,7 +8244,7 @@ in: Ready::outcome
 find: Some(why) => Err(why.clone()),
 replace: Some(_) => Ok(()),
 caught-by:
-    cineris-core::it extensions_hooks::a_session_whose_finding_failed_starts_no_turn
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-changed-extensions-gates-lapse
 rule: An extension that stands approved and is not found as approved has its gating hooks held on their events, failing, with why and what approves it or turns it off.
@@ -8253,7 +8253,7 @@ in: ScriptHooks::hold
 find: *held = next;
 replace: drop(next);
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-held-gate-is-made-from-no-registration
 rule: A changed extension's gates are held from the registration its pin names, as the registration cache keeps it, so that one changed between two sessions holds its gates from the first turn, with no runtime made.
@@ -8262,7 +8262,7 @@ in: decide
 find: .map(|entry| entry.registration.hooks.clone());
 replace: .map(|_| Vec::new());
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-turned-off-extensions-gates-are-held
 rule: An extension the user turned off (`[extensions.<name>] enabled = false`) holds no gate, whatever stands of its pin: the user's word.
@@ -8271,7 +8271,7 @@ in: decide
 find: Source::User => inputs.disabled.contains(&name),
 replace: Source::User => false && inputs.disabled.contains(&name),
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-runtime-that-cannot-start-names-no-remedy
 rule: A hook whose extension's runtime cannot start (its files changed, a thread of it left running) fails, a gate closed, saying why and what approves the extension or turns it off.
@@ -8289,7 +8289,7 @@ in: LoadedExtension::call_hook
 find: source: self.approved.source
 replace: source: cineris_ext::source::Source::Project
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hooks_run_as_its_session_opens_and_closes
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] the-wait-for-session-start-hooks-says-the-finding
 rule: A first turn that has waited long for the `session.start` hooks of the session's extensions says that it waits for them, not for the extensions to be found.
@@ -8298,7 +8298,7 @@ in: Shared::waiting_said
 find: if self.hearing.load(std::sync::atomic::Ordering::SeqCst) {
 replace: if false && self.hearing.load(std::sync::atomic::Ordering::SeqCst) {
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_hooks_run_as_its_session_opens_and_closes
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-programs-writes-are-recorded
 rule: What a script hook's program writes is not recorded in the round's checkpoint, as a hook command's writes are not: undo does not put it back.
@@ -8319,17 +8319,16 @@ in: ScriptHooks::hold
 find: if (made.is_empty() || manifest_too) && let Some(events) = events {
 replace: if false && (made.is_empty() || manifest_too) && let Some(events) = events {
 caught-by:
-    cineris-core::it extensions_hooks::an_extension_never_registered_holds_the_gates_its_manifest_lists
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-never-registered-extension-holds-every-gate
 rule: An extension never registered holds a gate on the gating events its manifest lists, and on no other: one that lists `tool.before` alone refuses calls, and leaves prompts alone.
 file: crates/cineris-core/src/ext/found/pipeline.rs
-in: gate
-find: events.clone()
-occurrence: 1
-replace: both()
+in: Held::settle
+find: SeenHooks::Events(listed.manifest.capabilities.hooks.clone())
+replace: SeenHooks::Events(vec![Event::PromptSubmit, Event::ToolBefore])
 caught-by:
-    cineris-core::it extensions_hooks::an_extension_never_registered_holds_the_gates_its_manifest_lists
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] an-unloaded-extension-holds-no-gate
 rule: An extension approved and found as approved that cannot be loaded (its capabilities do not compile, the registry refuses it) holds its gates from what it registered, failing.
@@ -8338,7 +8337,7 @@ in: Held::settle
 find: self.unloaded.push((key.clone(), held));
 replace: let _ = (key, held);
 caught-by:
-    cineris-core::it extensions_hooks::an_extension_that_cannot_be_loaded_holds_its_gates
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-removed-extensions-gates-lapse
 rule: An extension removed from where it was approved, and still pinned, holds its gates, failing: only the user's word, the project's trust or the pin taken away withdraws them.
@@ -8347,7 +8346,7 @@ in: decide
 find: .chain(not_found(inputs, &seen, &mut pins, &mut trust, &mut decided.told))
 replace: .chain(Vec::<(Source, String, String, Unstood)>::new())
 caught-by:
-    cineris-core::it extensions_hooks::a_removed_extensions_gates_hold_until_it_is_turned_off
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-held-gates-notice-is-not-told
 rule: The user is told of an extension's held gates, in words: what holds them, what they refuse, and the way out.
@@ -8356,9 +8355,7 @@ in: Held::hold_gates
 find: self.tell(told);
 replace: let _ = told;
 caught-by:
-    cineris-core::it extensions_hooks::a_changed_extensions_gates_hold_and_the_way_out_stays_open
-    cineris-core::it extensions_hooks::an_extension_never_registered_holds_the_gates_its_manifest_lists
-    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-hooks-program-has-the-manifests-write-roots
 rule: A hook's program has no write root, whatever its manifest says (the maintainers' call on the early review of the script hooks, M2); a tool's and a command's keep the manifest's, as on `main`, a command's left to the part that wires commands (the full review's L9).
@@ -8421,7 +8418,7 @@ in: LoadedExtension::call_hook
 find: Err(CallError::Stopped(note)) if !host.found_stopped() => HookRan::Stopped(note)
 replace: Err(CallError::Stopped(note)) if true || !host.found_stopped() => HookRan::Stopped(note)
 caught-by:
-    cineris-core::it extensions_hooks::a_hook_that_finds_its_turn_stopped_is_no_stop_of_its_own
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-host-call-in-a-stopped-turn-runs
 rule: A hook's host call in a turn the policy stopped is refused with the stop, before anything of it runs.
@@ -8430,7 +8427,7 @@ in: CallHost::decide
 find: if let Some(reason) = self.parts.policy.stopped_for_hooks(self.cx.turn) {
 replace: if let Some(reason) = self.parts.policy.stopped_for_hooks(self.cx.turn).filter(|_| false) {
 caught-by:
-    cineris-core::it extensions_hooks::a_hook_that_finds_its_turn_stopped_is_no_stop_of_its_own
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-hooks-read-only-line-another-shell-reads-runs
 rule: A hook's program that the engine reads as only reading runs unasked only where that reading is the program's own; where another shell may read the line otherwise (`read_only_asks`: PowerShell, `cmd`, Windows' own lookup) it is refused, naming the rule of its line that would allow it, since a hook puts no question.
@@ -8448,7 +8445,7 @@ in: LoadedExtension::call_hook
 find: asked: Some(asked)
 replace: asked: None
 caught-by:
-    cineris-core::it extensions_hooks::a_hooks_time_at_its_point_runs_from_when_it_was_asked
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] the-closes-runs-are-stopped-in-turn
 rule: When the close's five seconds are up, every `session.end` run still going is stopped at once, and all are waited for together.
@@ -8466,7 +8463,7 @@ in: LoadedExtension::call_hook
 find: let runtime = match cx.cancel.race(starting).await {
 replace: let runtime = match Some(starting.await) {
 caught-by:
-    cineris-core::it extensions_hooks::a_hooks_run_let_go_while_its_runtime_starts_ends_at_once
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
     cineris-core::it extensions_hooks::a_runtime_start_the_close_lets_go_runs_on_and_does_nothing
 
 [break] a-withdrawn-extensions-runs-go-on
@@ -8476,7 +8473,7 @@ in: ScriptHooks::withdraw
 find: hook.runs.cancel();
 replace: let _ = &hook.runs;
 caught-by:
-    cineris-core::it extensions_hooks::a_withdrawn_extensions_runs_stop
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-later-stop-frees-an-earlier-turn
 rule: A turn stays stopped after a later one is, so that a hook still running for it is refused all the same; the latest sixteen are kept.
@@ -8496,7 +8493,7 @@ in: EnginePolicy::nobody
 find: if loops
 replace: if false && loops
 caught-by:
-    cineris-core::it extensions_hooks::a_turn_the_loops_own_stop_ends_refuses_its_hooks
+    cineris-core::it extensions_hooks::an_extensions_hooks_are_on_their_events_and_the_loop_reads_them
 
 [break] a-removed-extensions-way-out-is-an-approval
 rule: An extension removed from where it was approved, and still pinned, says that its folder is gone and that, if it was removed on purpose, it is turned off with `enabled = false`: a deletion may be an unconfined program's, taking a gate away.
@@ -8505,7 +8502,7 @@ in: gate
 find: Unstood::Missing => Stand::Gone,
 replace: Unstood::Missing => Stand::Unapproved { trust_project },
 caught-by:
-    cineris-core::it extensions_hooks::a_removed_extensions_gates_hold_until_it_is_turned_off
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-changed-unknown-extension-holds-no-gate
 rule: A changed extension whose approved registration is known nowhere holds both gates, `tool.before` and `prompt.submit`, whatever its changed manifest lists.
@@ -8514,7 +8511,7 @@ in: gate
 find: "has changed since you approved it", both()
 replace: "has changed since you approved it", Vec::new()
 caught-by:
-    cineris-core::it extensions_hooks::a_changed_extension_whose_registration_is_not_known_holds_both_gates
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-loaded-extensions-registration-is-forgotten
 rule: What an extension the session loaded registered at its approved hash is known, hooks or none, after it is withdrawn: a change of one that registered no gate holds none.
@@ -8523,7 +8520,7 @@ in: ScriptHooks::hold
 find: cached.or(seen.cloned())
 replace: cached
 caught-by:
-    cineris-core::it extensions_hooks::a_changed_extension_the_session_saw_register_no_gate_holds_none
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
     cineris-core::it extensions_review::an_extension_approved_for_the_session_and_changed_since_is_said_to_have_changed
 
 [break] an-unreadable-pin-store-holds-no-gate
@@ -8533,7 +8530,7 @@ in: decide
 find: pins_unread.push((
 replace: drop((
 caught-by:
-    cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 [break] an-unreadable-trust-store-holds-no-gate
 rule: While the trust store cannot be read, a project's extensions found hold failing gates on the gating events their manifests list, whatever the project's trust was, told once with the store's file, that every project's extensions are gated until it is fixed, and how.
@@ -8542,7 +8539,7 @@ in: decide
 find: store_held.push(gate(Source::Project
 replace: drop(gate(Source::Project
 caught-by:
-    cineris-core::it extensions_hooks::an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 [break] a-loaded-extensions-gates-are-its-manifests
 rule: While a store of approvals cannot be read, an extension the session loaded keeps the gates of what it saw it register, not its manifest's list: one whose gate is on `list` alone still lets a `read` run (the full review, L1).
@@ -8551,7 +8548,7 @@ in: Known::note
 find: self.seen.push(Seen {
 replace: drop(Seen {
 caught-by:
-    cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 [break] the-stopped-turns-are-kept-past-their-bound
 rule: The policy keeps the latest sixteen stopped turns, and no more (the full review, L3).
@@ -8606,7 +8603,7 @@ in: ScriptHooks::hold
 find: filter: Filter::new(definition.tools.clone())
 replace: filter: Ok(Filter::default())
 caught-by:
-    cineris-core::it extensions_hooks::an_extensions_gates_are_held_while_it_does_not_stand_approved
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-projects-way-out-names-the-question-for-the-run
 rule: Under `--trust-project`, which shows no trust question, a project's extension's way out names none (the full review).
@@ -8615,7 +8612,7 @@ in: gate
 find: _ => Stand::Unapproved { trust_project }
 replace: _ => Stand::Unapproved { trust_project: false }
 caught-by:
-    cineris-core::it extensions_hooks::under_trust_for_the_run_a_changed_projects_gate_names_no_question
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 # The re-check of the full review, and the owner's answer on L-b.
 
@@ -8627,9 +8624,7 @@ find: (by_name || seen.hash == hash)
 replace: seen.hash == hash
 caught-by:
     cineris-core ext::script_hooks::tests::what_is_known_of_each_extension_is_its_latest_alone
-    cineris-core::it extensions_hooks::an_extension_approved_for_the_run_keeps_its_gates_while_the_store_is_unread
-    cineris-core::it extensions_hooks::an_extension_never_registered_keeps_its_gates_while_the_trust_store_is_unread
-    cineris-core::it extensions_hooks::an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 [break] a-removed-extension-under-an-unread-store-holds-nothing
 rule: While the store of its approval cannot be read, an extension the session loaded and that is gone keeps the gates it registered: nothing else can say it was approved (the re-check of the full review, M1').
@@ -8638,8 +8633,7 @@ in: Held::settle
 find: for (source, file) in &unread {
 replace: for (source, file) in unread.iter().take(0) {
 caught-by:
-    cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
-    cineris-core::it extensions_hooks::an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 [break] an-unreadable-trust-store-gates-what-was-never-loaded
 rule: While the trust store cannot be read, a project's extension the session never loaded holds nothing: no repository gates a session by itself (the owner's answer on the re-check of the full review, L-b).
@@ -8648,7 +8642,7 @@ in: decide
 find: &Unstood::TrustUnreadable(Vec::new(), file.clone())
 replace: &Unstood::TrustUnreadable(listed.manifest.capabilities.hooks.clone(), file.clone())
 caught-by:
-    cineris-core::it extensions_hooks::an_unreadable_trust_store_gates_nothing_of_a_project_the_session_never_loaded
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 [break] a-disabled-start-says-approve-again
 rule: An extension the engine refuses for the rest of the process says, whole, that only a fix approved, turning it off or a new process helps, not the engine's sentence that approving it again starts it (the re-check of the full review, L-c).
@@ -8666,7 +8660,7 @@ in: way_out
 in-string: turn it off with {table} (or
 replace: turn it off with `enabled = false` (or
 caught-by:
-    cineris-core::it extensions_hooks::a_removed_extensions_gates_hold_until_it_is_turned_off
+    cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 # The third re-check of the full review.
 
@@ -8677,7 +8671,7 @@ in: Held::settle
 find: SeenHooks::Events(listed.manifest.capabilities.hooks.clone())
 replace: SeenHooks::Events(Vec::new())
 caught-by:
-    cineris-core::it extensions_hooks::an_extension_never_registered_keeps_its_gates_while_the_trust_store_is_unread
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 [break] an-unreadable-pin-store-ignores-the-cache
 rule: While the store of the user's pins cannot be read, the registration cache stands in for it: one never loaded holds the gates of its approved versions as the cache keeps them, and its manifest as found only where the cache has none (the third re-check of the full review, L2).
@@ -8686,7 +8680,7 @@ in: decide
 find: let first = entries.next()?;
 replace: let first = entries.next().filter(|_| false)?;
 caught-by:
-    cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 [break] what-is-known-grows-without-bound
 rule: What the session knows each extension registered is the latest alone, by where it comes from and its name (the third re-check of the full review, L4).
@@ -8704,7 +8698,7 @@ in: Held::settle
 find: self.scripts.forget(|source, name| {
 replace: self.scripts.forget(|source, name| false && {
 caught-by:
-    cineris-core::it extensions_hooks::an_extension_unpinned_gets_no_gate_back_when_the_pin_store_breaks
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 # The fourth look at the script hooks, and the maintainers' additions.
 
@@ -8763,8 +8757,7 @@ in: ScriptHooks::hold
 find: let manifest_too = gate.by_name && seen.is_none();
 replace: let manifest_too = false;
 caught-by:
-    cineris-core::it extensions_hooks::a_same_named_cache_entry_does_not_lift_a_gate_under_an_unreadable_pin_store
-    cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension
 
 # The fifth look at the script hooks.
 
@@ -8786,5 +8779,4 @@ in: ScriptHooks::hold
 find: if !gate.by_name && let Some(hooks) = &gate.hooks {
 replace: if false && let Some(hooks) = &gate.hooks {
 caught-by:
-    cineris-core::it extensions_hooks::a_gate_held_from_the_cache_is_kept_when_the_pin_store_breaks
-    cineris-core::it extensions_hooks::a_gate_held_from_the_cache_is_kept_when_the_trust_store_breaks
+    cineris-core::it extensions_hooks::a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension

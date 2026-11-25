@@ -4,9 +4,18 @@
 //! points 2, 6 and 8; `docs/architecture/12-extensions.md`, "Tier 3:
 //! hooks"). End to end, through the core: the user's extension found,
 //! judged by its pin and taken from the registration cache, as
-//! `extensions_found` has it, each test's story the turns of one session.
+//! `extensions_found` has it, each rule's story the turns of one session.
 //! None starts a process: a hook's `cineris.exec` is a phase of the hook
 //! commands' chained `sys_` test.
+//!
+//! The rules are parts of three tests, each with a world of its own, so
+//! that a test's process starts once for many of them (a test process's
+//! first core, session and turn cost a hosted Windows runner about 8 ms
+//! more than the next ones). A rule that leaves a runtime start or a
+//! thread running past its session, or counts the starts let go or the
+//! threads left running, is a test of its own: what one rule left in the
+//! process would be counted with another's. The parts that count the
+//! runtimes the process has made come first in their tests.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -157,6 +166,99 @@ async fn turn_it_off(world: &World, front: &Front) {
     );
 }
 
+/// Runs `rule`, one of the rules a folded test checks, each with a world of
+/// its own: a rule that fails names itself after the panic's message, so
+/// that the test's failure says which rule broke.
+fn part(name: &str, rule: fn()) {
+    struct Named<'a>(&'a str);
+    impl Drop for Named<'_> {
+        #[expect(
+            clippy::print_stderr,
+            reason = "a failing rule names itself where the test runner shows a failure"
+        )]
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                eprintln!("the rule that failed: `{}`", self.0);
+            }
+        }
+    }
+    let _named = Named(name);
+    rule();
+}
+
+/// Runs each rule named, a function of this file, as a [`part`] of one
+/// test, in order.
+macro_rules! parts {
+    ($($rule:ident),+ $(,)?) => {
+        $(part(stringify!($rule), $rule);)+
+    };
+}
+
+/// An extension's hooks on their events, as the loop reads what they
+/// answer, and none in a turn already stopped: each part below is a rule,
+/// with a world, a core and sessions of its own. The two parts that count
+/// the runtimes this process has made come first, before any other part
+/// has made one.
+#[test]
+fn an_extensions_hooks_are_on_their_events_and_the_loop_reads_them() {
+    parts![
+        an_extensions_hooks_runs_are_its_own_and_bounded,
+        a_session_end_hook_starts_its_runtime_as_the_session_closes,
+        an_extensions_hook_is_on_its_event_and_its_answer_is_read,
+        an_extensions_hook_waiting_for_its_runtime_spends_its_own_time,
+        a_hooks_host_calls_put_no_question,
+        an_extensions_hooks_are_on_their_events_only_while_it_stands_approved,
+        an_extensions_hooks_run_as_its_session_opens_and_closes,
+        a_hooks_time_at_its_point_runs_from_when_it_was_asked,
+        a_withdrawn_extensions_runs_stop,
+        a_hooks_run_let_go_while_its_runtime_starts_ends_at_once,
+        after_a_stop_of_the_turn_its_extensions_hooks_run_nothing,
+        a_hook_that_finds_its_turn_stopped_is_no_stop_of_its_own,
+        a_turn_the_loops_own_stop_ends_refuses_its_hooks,
+    ];
+}
+
+/// An extension's gates hold, failing, while it does not stand approved as
+/// it is found, and the way out of them stays open: each part below is a
+/// rule, with a world, a core and sessions of its own. The part that counts
+/// the runtimes this process has made comes first, before any other part
+/// has made one.
+#[test]
+fn an_extensions_gates_hold_while_it_does_not_stand_approved() {
+    parts![
+        an_extensions_gates_are_held_while_it_does_not_stand_approved,
+        a_changed_extensions_gates_hold_and_the_way_out_stays_open,
+        an_extension_never_registered_holds_the_gates_its_manifest_lists,
+        a_removed_extensions_gates_hold_until_it_is_turned_off,
+        an_extension_that_cannot_be_loaded_holds_its_gates,
+        a_changed_extension_whose_registration_is_not_known_holds_both_gates,
+        a_session_whose_finding_failed_starts_no_turn,
+        under_trust_for_the_run_a_changed_projects_gate_names_no_question,
+    ];
+}
+
+/// While the pin store, the trust store or the registration cache cannot be
+/// read, the gates known of an extension hold, and no more: each part below
+/// is a rule, with a world of its own, so that no store one part breaks on
+/// purpose is another's.
+#[test]
+fn a_store_that_cannot_be_read_holds_the_gates_known_of_an_extension() {
+    parts![
+        an_unreadable_pin_store_holds_the_gates_of_the_users_extensions,
+        an_unreadable_pin_store_falls_back_to_the_manifest_where_the_cache_has_none,
+        a_same_named_cache_entry_does_not_lift_a_gate_under_an_unreadable_pin_store,
+        a_gate_held_from_the_cache_is_kept_when_the_pin_store_breaks,
+        an_extension_unpinned_gets_no_gate_back_when_the_pin_store_breaks,
+        an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions,
+        an_unreadable_trust_store_gates_nothing_of_a_project_the_session_never_loaded,
+        an_extension_approved_for_the_run_keeps_its_gates_while_the_store_is_unread,
+        an_extension_never_registered_keeps_its_gates_while_the_trust_store_is_unread,
+        a_gate_held_from_the_cache_is_kept_when_the_trust_store_breaks,
+        a_changed_extension_with_its_cache_set_aside_holds_both_gates,
+        a_changed_extension_the_session_saw_register_no_gate_holds_none,
+    ];
+}
+
 /// Hooks on `list` that answer as the call's path says, an observer of
 /// them, and a `tool.after` hook on `read`.
 const ANSWERS: &str = "cineris.on('tool.before', { tools: ['list'] }, (e) => {\n\
@@ -189,7 +291,6 @@ const ANSWERS: &str = "cineris.on('tool.before', { tools: ['list'] }, (e) => {\n
 ///   refuses nothing;
 /// - a `tool.after` hook's context is a note on the result, and an answer
 ///   larger than 64 KiB is a failure, shown to the user, that adds nothing.
-#[test]
 fn an_extensions_hook_is_on_its_event_and_its_answer_is_read() {
     let mut responses = Vec::new();
     for (id, path) in [
@@ -291,7 +392,6 @@ const QUEUED: &str = "cineris.on('tool.before', { tools: ['list'], timeout: 3000
 /// before it starts, and never runs; the first is stopped at its own time,
 /// and its runtime with it; each refuses the call. On the next call both
 /// run, the second heard, in a runtime made again.
-#[test]
 fn an_extensions_hook_waiting_for_its_runtime_spends_its_own_time() {
     let mut responses = Vec::new();
     responses.extend(one_call("c1", "list", json!({"path": "spin"})));
@@ -365,7 +465,6 @@ const TRIES: &str = "cineris.on('tool.before', { tools: ['list'] }, async () => 
 /// user, and a write, are refused; a read the engine allows runs. In the
 /// next session, a rule about the extension (`deny ext probe/*`) refuses
 /// its hook's read too: a hook's host calls are decided under its name.
-#[test]
 fn a_hooks_host_calls_put_no_question() {
     let mut responses = Vec::new();
     responses.extend(one_call("c1", "list", json!({"path": "."})));
@@ -439,7 +538,6 @@ const STOPPED: &str = "cineris.tool({ name: 'ci', run: async () => { \
 /// one that would only answer adds a note, and the user is told each was
 /// not started. Only the policy's stop of the turn says so: the call's
 /// result alone ends no hook.
-#[test]
 fn after_a_stop_of_the_turn_its_extensions_hooks_run_nothing() {
     let world = World::new(
         "ext_hooks_stopped",
@@ -503,7 +601,6 @@ const LET_GO: &str = "cineris.on('compaction.before', () => { cineris.notify('ra
 ///   function never runs ahead of the other in the runtime's queue;
 /// - a waited-for `turn.end` hook has at most four runs going at once, as a
 ///   hook command has, and a fifth is not started, and says so.
-#[test]
 fn an_extensions_hooks_runs_are_its_own_and_bounded() {
     let world = World::new("ext_hooks_let_go", Vec::<Response>::new());
     let extension = handed(
@@ -560,7 +657,6 @@ const NOTES: &str =
 /// as it was approved. Not approved, its hook adds nothing; approved during
 /// the session, it is loaded at the next turn's start, and its hook adds
 /// its note; changed then, it is withdrawn, and its hook with it.
-#[test]
 fn an_extensions_hooks_are_on_their_events_only_while_it_stands_approved() {
     let mut responses = Vec::new();
     for id in ["c1", "c2", "c3"] {
@@ -626,7 +722,6 @@ const SESSION: &str = "cineris.tool({ name: 'keep', run: async () => { \
 ///   the value its tool kept, and its `session.end` hook, run as the
 ///   session closes, keeps a value in the user's `probe`'s file of the
 ///   project's values.
-#[test]
 fn an_extensions_hooks_run_as_its_session_opens_and_closes() {
     let world = World::new(
         "ext_hooks_session",
@@ -715,7 +810,6 @@ fn an_extensions_hooks_run_as_its_session_opens_and_closes() {
 /// in it would end it): the first prompt, waiting for the registration, is
 /// refused with why, and so is the next, rather than either waiting for
 /// ever or starting a turn without a gate the extension may hold.
-#[test]
 fn a_session_whose_finding_failed_starts_no_turn() {
     let world = World::new("ext_hooks_finding_failed", Vec::<Response>::new());
     // Pinned and not cached: registered as the session opens.
@@ -768,7 +862,6 @@ const GATES: &str = "cineris.on('tool.before', { tools: ['list'] }, () => undefi
 /// - with its pin taken away, its approval goes, and its gate with it;
 /// - in another session, turned off by the user (`enabled = false`), it
 ///   holds nothing, unreadable and pinned as it is.
-#[test]
 fn an_extensions_gates_are_held_while_it_does_not_stand_approved() {
     let mut responses = Vec::new();
     responses.push(calls(&[
@@ -980,7 +1073,6 @@ const PROMPT_GATES: &str = "cineris.on('prompt.submit', () => undefined);\n\
 ///   extension off in the configuration, which the core reads again, while
 ///   the gates hold;
 /// - a session opened after that runs a tool call, the extension off.
-#[test]
 fn a_changed_extensions_gates_hold_and_the_way_out_stays_open() {
     let mut responses = Vec::new();
     responses.extend(one_call("c1", "list", json!({"path": "."})));
@@ -1043,7 +1135,6 @@ const BROKEN: &str = "throw new Error('broken on purpose');\n";
 ///   again;
 /// - the user turns it off in the configuration, which the core reads
 ///   again, and a session opened after that runs the call.
-#[test]
 fn an_extension_never_registered_holds_the_gates_its_manifest_lists() {
     let mut responses = Vec::new();
     for id in ["c1", "c2", "c3"] {
@@ -1101,7 +1192,6 @@ fn an_extension_never_registered_holds_the_gates_its_manifest_lists() {
 /// refuses, saying, to the model and to the user once, that its folder is
 /// gone and how to turn it off if it was removed on purpose; turned off so
 /// (`enabled = false`), a session opened after holds nothing.
-#[test]
 fn a_removed_extensions_gates_hold_until_it_is_turned_off() {
     let mut responses = Vec::new();
     for id in ["c1", "c2", "c3"] {
@@ -1150,7 +1240,6 @@ fn a_removed_extensions_gates_hold_until_it_is_turned_off() {
 /// compile for the workspace (a glob whose `{` is not closed) is not
 /// loaded, and its gates are held from what it registered, failing (the
 /// early review of the script hooks, M1).
-#[test]
 fn an_extension_that_cannot_be_loaded_holds_its_gates() {
     let world = World::new(
         "ext_hooks_unloaded",
@@ -1201,7 +1290,6 @@ const READS_LATE: &str = "cineris.tool({ name: 'ci', run: async () => { \
 /// about to call its extension while the extension's tool, the round's
 /// next call, has its write, which nobody can be asked about, stop the
 /// turn through the policy.
-#[test]
 fn a_hook_that_finds_its_turn_stopped_is_no_stop_of_its_own() {
     let world = World::new(
         "ext_hooks_found_stopped",
@@ -1279,7 +1367,6 @@ const SPINS: &str = "cineris.on('turn.end', { timeout: 1000 }, () => {\n\
 /// first, which computes; when their second is up, the first is stopped
 /// and the second, its time spent in the queue, is withdrawn: both fail as
 /// out of time, and neither waits for a second more.
-#[test]
 fn a_hooks_time_at_its_point_runs_from_when_it_was_asked() {
     let world = World::new("ext_hooks_asked", Vec::<Response>::new());
     let extension = handed(&world, "hooks = [\"turn.end\"]", SPINS);
@@ -1319,7 +1406,6 @@ const WAITS: &str = "cineris.on('turn.end', { observe: true, timeout: 20000 }, (
 /// hook, behind the first turn's, which computes, ends as let go when the
 /// extension, changed on disk, is withdrawn at the next turn's start, well
 /// inside its own time.
-#[test]
 fn a_withdrawn_extensions_runs_stop() {
     let world = World::new("ext_hooks_withdrawn_runs", [says("Done."), says("Done.")]);
     let capabilities = "hooks = [\"turn.end\"]";
@@ -1353,7 +1439,6 @@ const QUIET: &str = "cineris.on('turn.end', () => undefined);\n";
 /// hooks, L5): held as the runtime's main module registers its hook, the
 /// run let go no longer counts among the four a waited `turn.end` hook may
 /// have going, so four more start; once the start goes on, they answer.
-#[test]
 fn a_hooks_run_let_go_while_its_runtime_starts_ends_at_once() {
     let world = World::new("ext_hooks_starting", Vec::<Response>::new());
     let extension = handed(&world, "hooks = [\"turn.end\"]", QUIET);
@@ -1391,7 +1476,6 @@ const LIST_GATE: &str = "cineris.on('tool.before', { tools: ['list'] }, () => un
 /// hooks): changed to drop `capabilities.hooks`, it still refuses the
 /// prompt, which never reaches the model; turned off, a session opened
 /// after runs the call.
-#[test]
 fn a_changed_extension_whose_registration_is_not_known_holds_both_gates() {
     let world = World::new(
         "ext_hooks_changed_unknown",
@@ -1457,7 +1541,6 @@ fn a_changed_extension_whose_registration_is_not_known_holds_both_gates() {
 ///   so a `read` runs and a `list` is refused; changed to list no hook, and
 ///   then removed, it keeps them all the same (the re-check of the full
 ///   review, M1').
-#[test]
 fn an_unreadable_pin_store_holds_the_gates_of_the_users_extensions() {
     let mut responses = Vec::new();
     responses.extend(one_call("c1", "read", json!({"path": "notes.md"})));
@@ -1558,7 +1641,6 @@ fn an_unreadable_pin_store_holds_the_gates_of_the_users_extensions() {
 /// out, and the user is told once that the project's extensions are not
 /// loaded; changed to list no hook, then removed, it refuses all the same;
 /// the core's own operations go on; the store removed, nothing is held.
-#[test]
 fn an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions() {
     let mut responses = Vec::new();
     for id in ["c1", "c2", "c3", "c4", "c5"] {
@@ -1634,7 +1716,6 @@ const REFUSES_PROMPTS: &str =
 /// L-b): of a project not trusted, which nothing looks in, and of one
 /// trusted for the run (`--trust-project`), which approves no extension, and
 /// whose folder is looked in.
-#[test]
 fn an_unreadable_trust_store_gates_nothing_of_a_project_the_session_never_loaded() {
     for trusted_for_the_run in [false, true] {
         let world = World::new(
@@ -1699,7 +1780,6 @@ const STOPPED_BY_THE_LOOP: &str = "cineris.on('tool.before', { tools: ['list'], 
 /// still running when the round's write stops the turn, which then reads,
 /// is refused, and the turn's `turn.end` hook does not start; the next turn
 /// is not stopped, and its own hooks run.
-#[test]
 fn a_turn_the_loops_own_stop_ends_refuses_its_hooks() {
     let world = World::new(
         "ext_hooks_loop_stopped",
@@ -1761,7 +1841,6 @@ fn a_turn_the_loops_own_stop_ends_refuses_its_hooks() {
 /// aside: approved and cached, the cache made unreadable, then changed to
 /// drop `capabilities.hooks`, it holds both gates in the next session, as
 /// one never registered does (the full review of the script hooks, M1).
-#[test]
 fn a_changed_extension_with_its_cache_set_aside_holds_both_gates() {
     let world = World::new("ext_hooks_cache_aside", Vec::<Response>::new());
     approved(&world, "hooks = [\"tool.before\"]", LIST_GATE);
@@ -1788,7 +1867,6 @@ fn a_changed_extension_with_its_cache_set_aside_holds_both_gates() {
 /// project's extension's held gate names none in its way out: it names
 /// `cineris permissions trust`, which shows the extension to approve it
 /// (the full review of the script hooks).
-#[test]
 fn under_trust_for_the_run_a_changed_projects_gate_names_no_question() {
     let world = World::new(
         "ext_hooks_trust_for_the_run",
@@ -1827,7 +1905,6 @@ fn under_trust_for_the_run_a_changed_projects_gate_names_no_question() {
 /// cannot be read, changed to list no hook: what the session saw it
 /// register is what holds, the cache keeping nothing of a hash no pin names
 /// (the re-check of the full review, M1' and L-a).
-#[test]
 fn an_extension_approved_for_the_run_keeps_its_gates_while_the_store_is_unread() {
     let mut responses = Vec::new();
     for id in ["c1", "c2"] {
@@ -1866,7 +1943,6 @@ const ONLY_AFTER: &str =
 /// none: one that registered only a `tool.after` hook, changed when its
 /// registration cache is set aside, holds no gate, and the next prompt runs
 /// (the re-check of the full review, L-e).
-#[test]
 fn a_changed_extension_the_session_saw_register_no_gate_holds_none() {
     let mut responses = Vec::new();
     for id in ["c1", "c2"] {
@@ -1901,7 +1977,6 @@ const FAREWELL: &str = "cineris.on('session.end', async () => { \
 /// start is ended by the end of its own time there, not by the close's
 /// start (the re-check of the full review, L-d), so it runs and keeps its
 /// value.
-#[test]
 fn a_session_end_hook_starts_its_runtime_as_the_session_closes() {
     let world = World::new("ext_hooks_end_starts", Vec::<Response>::new());
     let extension = handed(&world, "hooks = [\"session.end\"]", FAREWELL);
@@ -1924,7 +1999,6 @@ fn a_session_end_hook_starts_its_runtime_as_the_session_closes() {
 /// that the registration cache keeps nothing of holds a gate on each gating
 /// event its manifest as found lists: the cache has no approved version to
 /// stand in for the store (the third re-check of the full review, L2).
-#[test]
 fn an_unreadable_pin_store_falls_back_to_the_manifest_where_the_cache_has_none() {
     let world = World::new(
         "ext_hooks_pins_no_cache",
@@ -1952,7 +2026,6 @@ fn an_unreadable_pin_store_falls_back_to_the_manifest_where_the_cache_has_none()
 /// the trust store cannot be read and it is changed to list no hook, its
 /// gate holds, as it did with the store read (the third re-check of the
 /// full review, L1).
-#[test]
 fn an_extension_never_registered_keeps_its_gates_while_the_trust_store_is_unread() {
     let mut responses = Vec::new();
     for id in ["c1", "c2"] {
@@ -1984,7 +2057,6 @@ fn an_extension_never_registered_keeps_its_gates_while_the_trust_store_is_unread
 /// What is known of an extension that left the session for good (its pin
 /// taken away) is forgotten: a store that cannot be read later gives it no
 /// gate back (the third re-check of the full review).
-#[test]
 fn an_extension_unpinned_gets_no_gate_back_when_the_pin_store_breaks() {
     let mut responses = Vec::new();
     for id in ["c1", "c2", "c3"] {
@@ -2258,7 +2330,6 @@ fn starts_let_go_count_toward_the_cap_and_a_gate_holds_meanwhile() {
 /// the same name, with no hook, cached, does not lift the user's `probe`'s
 /// gate, which its manifest lists (the fourth look at the script hooks,
 /// L1).
-#[test]
 fn a_same_named_cache_entry_does_not_lift_a_gate_under_an_unreadable_pin_store() {
     let world = World::new(
         "ext_hooks_cache_same_name",
@@ -2334,7 +2405,6 @@ fn the_count_of_starts_let_go_ends_at_zero_when_a_start_waits_behind_another() {
 /// from the registration the cache keeps at its pin; known by it, it keeps
 /// that gate once the trust store cannot be read, though the session never
 /// loaded it (the fifth look at the script hooks, L1).
-#[test]
 fn a_gate_held_from_the_cache_is_kept_when_the_trust_store_breaks() {
     let mut responses = Vec::new();
     for id in ["c1", "c2"] {
@@ -2371,7 +2441,6 @@ fn a_gate_held_from_the_cache_is_kept_when_the_trust_store_breaks() {
 /// registration the cache keeps at its pin; known by it, it keeps that gate
 /// once the pin store cannot be read, though the session never loaded it
 /// (the fifth look at the script hooks, L1).
-#[test]
 fn a_gate_held_from_the_cache_is_kept_when_the_pin_store_breaks() {
     let mut responses = Vec::new();
     for id in ["c1", "c2"] {
