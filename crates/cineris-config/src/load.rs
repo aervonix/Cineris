@@ -325,6 +325,10 @@ pub struct Loaded {
     /// one), by name, in order: what may be chosen for a session whatever
     /// the project's trust (since step 24).
     pub profiles: Vec<String>,
+    /// Each profile's table as each layer defines it, lowest layer first:
+    /// what [`profile_tables`](Self::profile_tables) gives. Never shown: a
+    /// provider's header may be in one.
+    profile_tables: Vec<(String, LayerKind, toml::Table)>,
     /// The directories the environment gives.
     pub dirs: Dirs,
     /// The files that were looked for, lowest layer first, and whether each
@@ -473,6 +477,17 @@ pub(crate) fn merge_layers(
         .collect();
     profiles.sort_unstable();
     profiles.dedup();
+    // Every profile's table as each layer defines it, for a judge of what
+    // one would set (a custom command's, since step 28).
+    let profile_tables: Vec<(String, LayerKind, toml::Table)> = layers
+        .iter()
+        .filter_map(|layer| Some((layer.kind, layer.document.table.get("profiles")?.as_table()?)))
+        .flat_map(|(kind, profiles)| {
+            profiles.iter().filter_map(move |(name, table)| {
+                Some((name.clone(), kind, table.as_table()?.clone()))
+            })
+        })
+        .collect();
     apply_environment(options, &mut merger, &mut diagnostics);
     for given in &options.overrides {
         apply_override(given, &mut merger, &mut diagnostics);
@@ -507,6 +522,7 @@ pub(crate) fn merge_layers(
         profile,
         project_profiles,
         profiles,
+        profile_tables,
         dirs: options.dirs.clone(),
         files,
         project_hooks,
@@ -965,6 +981,19 @@ fn apply_override(given: &Override, merger: &mut Merger, diagnostics: &mut Vec<D
 }
 
 impl Loaded {
+    /// The tables that define the profile `name`, each with its layer,
+    /// lowest first, as the files give them: what selecting it would set,
+    /// before the trust rules (since step 28, for a custom command's
+    /// profile, which is judged key by key).
+    #[must_use]
+    pub fn profile_tables(&self, name: &str) -> Vec<(LayerKind, &toml::Table)> {
+        self.profile_tables
+            .iter()
+            .filter(|(defined, _, _)| defined == name)
+            .map(|(_, kind, table)| (*kind, table))
+            .collect()
+    }
+
     /// Where the effective value of a key came from. A key that no layer
     /// set comes from the defaults.
     #[must_use]
@@ -1223,6 +1252,7 @@ impl Loaded {
             profile: newer.profile.clone(),
             project_profiles: newer.project_profiles.clone(),
             profiles: newer.profiles.clone(),
+            profile_tables: newer.profile_tables.clone(),
             dirs: self.dirs.clone(),
             files: newer.files.clone(),
             // A hook is read when a session opens: a reload leaves the

@@ -29,6 +29,8 @@ mod adversary;
 mod approvals;
 mod asking;
 mod closing;
+#[cfg(feature = "scripts")]
+mod commands;
 mod context;
 mod day;
 mod events;

@@ -56,6 +56,10 @@ pub(crate) async fn list(
     params: &CommandsListParams,
 ) -> Result<CommandsListResult, OpError> {
     let live = core.open_for(client, &params.session_id)?;
+    // An extension's commands are known once the session's extensions are
+    // found and registered, as a turn's start waits for them; a finding
+    // that failed lists the files' alone, and the turn says why.
+    let _ = live.extensions.wait().await;
     let found = find(core, &live).await?;
     let mut result = CommandsListResult {
         commands: Vec::new(),
@@ -356,12 +360,15 @@ fn judge_profile(loaded: &Loaded, trusted: bool, level: &Level, name: &str) -> R
             "no layer of the configuration defines".to_owned()
         });
     }
-    let path = KeyPath::new(["profiles", name]);
-    let Some(Value::Table(table)) = loaded.value(&path) else {
-        return Ok(());
-    };
-    for (key, value) in &table {
-        judge(loaded, level, &KeyPath::new([key.as_str()]), value)?;
+    // Every layer's table of it, a project's too: what it would set.
+    let tables = loaded.profile_tables(name);
+    if tables.is_empty() {
+        return Err("could not be read".to_owned());
+    }
+    for (_, table) in tables {
+        for (key, value) in table {
+            judge(loaded, level, &KeyPath::new([key.as_str()]), value)?;
+        }
     }
     Ok(())
 }
@@ -398,12 +405,17 @@ fn judge(loaded: &Loaded, level: &Level, key: &KeyPath, value: &Value) -> Result
         }
         _ => return Err(format!("sets `{}`, which cannot be judged", shown())),
     };
-    // The level is the session's own, which `session/set` may have moved.
-    let current = if key.to_string() == "permissions.mode" {
-        Some(Value::String(level.as_str().to_owned()))
-    } else {
-        loaded.value(key)
-    };
+    // The level is judged against the session's own, which `session/set`
+    // may have moved: at or below it narrows, above it widens, a level this
+    // build does not know included.
+    if key.to_string() == "permissions.mode" {
+        let rank = |name: &str| Level::KNOWN.iter().position(|known| *known == name);
+        return match (value.as_str().and_then(rank), rank(level.as_str())) {
+            (Some(wanted), Some(now)) if wanted <= now => Ok(()),
+            _ => Err(widens(&shown(), TrustClass::WidensAccess)),
+        };
+    }
+    let current = loaded.value(key);
     match trust.class(value, current.as_ref()) {
         TrustClass::Preference => Ok(()),
         // The model, a reasoning level, a provider: only the session's own.
@@ -462,4 +474,75 @@ fn lower(sentence: &str) -> String {
     let mut out: String = chars.next().map(|first| first.to_lowercase().collect()).unwrap_or_default();
     out.push_str(chars.as_str());
     out.trim_end_matches('.').to_owned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The user's configuration of `text`, loaded with no project.
+    fn loaded(text: &str) -> Loaded {
+        #![allow(
+            clippy::disallowed_methods,
+            reason = "a test writes its own configuration file"
+        )]
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "cineris-core-commands-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("config.toml");
+        std::fs::write(&file, text).unwrap();
+        let env = cineris_config::Env::empty(cineris_config::Platform::CURRENT)
+            .with("CINERIS_CONFIG", file.to_str().unwrap());
+        let mut options = cineris_config::LoadOptions::new(env);
+        options.dirs.managed_config = Some(dir.join("managed.toml"));
+        let loaded = cineris_config::load(&options).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        loaded
+    }
+
+    /// A command's profile may only narrow the session: each key is judged
+    /// against the value in force as a project's file would be, and only a
+    /// preference passes. What widens the level, the sandbox, its network
+    /// or write roots, adds an allow rule, runs code, changes the model or
+    /// is the user's alone is refused, naming the key; what narrows passes.
+    #[test]
+    fn a_commands_profile_may_only_narrow_the_session() {
+        let config = loaded(
+            "[model]\nmain = \"claude-opus-5-5\"\n\n\
+             [profiles.narrow]\npermissions.mode = \"read-only\"\nverify.mode = \"off\"\n\
+             model.main = \"claude-opus-5-5\"\n\
+             [[profiles.narrow.permissions.rules]]\neffect = \"exec\"\nmatch = \"git push\"\n\
+             action = \"deny\"\n\n\
+             [profiles.level]\npermissions.mode = \"autonomous\"\n\
+             [profiles.network]\nsandbox.network = \"full\"\n\
+             [profiles.roots]\nsandbox.write = [\"/tmp/elsewhere\"]\n\
+             [profiles.allow]\n[[profiles.allow.permissions.rules]]\neffect = \"exec\"\n\
+             match = \"rm\"\naction = \"allow\"\n\n\
+             [profiles.model]\nmodel.main = \"claude-haiku-5-5\"\n\
+             [profiles.sandbox]\nsandbox.enabled = false\n\
+             [profiles.checks]\nverify.commands = [\"make\"]\n",
+        );
+        let judged = |name: &str, level: Level| judge_profile(&config, false, &level, name);
+        assert_eq!(judged("narrow", Level::Supervised), Ok(()));
+        for (name, key) in [
+            ("level", "permissions.mode"),
+            ("network", "sandbox.network"),
+            ("roots", "sandbox.write"),
+            ("allow", "permissions.rules"),
+            ("model", "model.main"),
+            ("sandbox", "sandbox.enabled"),
+            ("checks", "verify.commands"),
+        ] {
+            let why = judged(name, Level::Supervised).unwrap_err();
+            assert!(why.contains(&format!("sets `{key}`")), "{name}: {why}");
+        }
+        // At or below the session's own level it narrows; above it, it does
+        // not, whatever the files say.
+        assert_eq!(judged("level", Level::Autonomous), Ok(()));
+        assert!(judged("absent", Level::Supervised).unwrap_err().contains("no layer"));
+    }
 }
