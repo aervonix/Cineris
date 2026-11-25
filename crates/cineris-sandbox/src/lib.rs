@@ -8,6 +8,7 @@
 //! | [`launch`] | [`Launcher`](launch::Launcher), the harness's side of the launcher, and [`run`](launch::run), the body of its hidden subcommand. |
 //! | [`explain`] | One line for the model about what the sandbox blocked. |
 //! | [`protect`] | The protected paths of a workspace, looked at before and after a sandboxed command. |
+//! | [`unfollowed`] | A folder read through handles that follow no link: what `cineris ext add` reads an extension with (since step 28). |
 //!
 //! The backends that confine, Landlock and seccomp on Linux, are behind the
 //! feature `backends`, off by default, so that `cineris-tools`, which needs
@@ -27,3 +28,4 @@ pub mod policy;
 pub mod protect;
 pub mod support;
 pub mod tree;
+pub mod unfollowed;

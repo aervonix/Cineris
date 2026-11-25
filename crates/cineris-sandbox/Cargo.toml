@@ -31,11 +31,17 @@ seccompiler = { workspace = true, optional = true }
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
 
-# Job Objects, console events, and letting a suspended process run.
+# Job Objects, console events, and letting a suspended process run; and,
+# since step 28, a folder read through handles that follow no link
+# (`unfollowed`: `NtCreateFile` relative to a folder's handle, and the
+# folder listed through it).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
+    "Wdk_Foundation",
+    "Wdk_Storage_FileSystem",
     "Win32_Foundation",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_IO",

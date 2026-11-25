@@ -652,7 +652,7 @@ impl Core {
         self.load_with(project, trust, strict)
     }
 
-    fn resolver(&self, directory: &Path) -> Result<PathResolver, OpError> {
+    pub(crate) fn resolver(&self, directory: &Path) -> Result<PathResolver, OpError> {
         let mut options = PathOptions::new();
         if let Some(home) = self
             .inner
@@ -673,7 +673,7 @@ impl Core {
         })
     }
 
-    fn state(&self) -> Result<StateDir, OpError> {
+    pub(crate) fn state(&self) -> Result<StateDir, OpError> {
         self.state_dir().ok_or_else(|| {
             error(
                 ErrorKind::Config,
@@ -683,7 +683,7 @@ impl Core {
         })
     }
 
-    fn trust_store(&self) -> Result<TrustStore, OpError> {
+    pub(crate) fn trust_store(&self) -> Result<TrustStore, OpError> {
         Ok(TrustStore::new(
             self.state()?.trust_file(),
             Arc::clone(&self.inner.options.clock),

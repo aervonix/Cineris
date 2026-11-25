@@ -32,6 +32,7 @@
 #[cfg(feature = "scripts")]
 mod exec;
 pub(crate) mod found;
+pub mod manage;
 #[cfg(feature = "scripts")]
 mod hook_command;
 #[cfg(feature = "scripts")]
