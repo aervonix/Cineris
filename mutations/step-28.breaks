@@ -8742,8 +8742,8 @@ rule: A start let go that is then left running is the one count of a thread left
 file: crates/cineris-ext/src/engine/mod.rs
 in: StartWatch::ended
 packages: cineris-ext,cineris-core
-find: if self.state.swap(START_ENDED, Ordering::SeqCst) == START_LET_GO {
-replace: if false && self.state.swap(START_ENDED, Ordering::SeqCst) == START_LET_GO {
+find: if self.state.swap(START_ENDED, Ordering::SeqCst) == START_RUNNING_LET_GO {
+replace: if false && self.state.swap(START_ENDED, Ordering::SeqCst) == START_RUNNING_LET_GO {
 caught-by:
     cineris-core::it extensions_hooks::a_runtime_start_the_close_lets_go_past_its_time_counts_once
 
@@ -8765,3 +8765,26 @@ replace: let manifest_too = false;
 caught-by:
     cineris-core::it extensions_hooks::a_same_named_cache_entry_does_not_lift_a_gate_under_an_unreadable_pin_store
     cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
+
+# The fifth look at the script hooks.
+
+[break] a-start-not-begun-counts
+rule: A start counts toward the cap only while it runs: let go before it begins, it counts nothing until it does, and nothing at all if it never does, so that the count cannot outlive a start on any path (the fifth look at the script hooks, M1).
+file: crates/cineris-ext/src/engine/mod.rs
+in: StartWatch::let_go
+packages: cineris-ext,cineris-core
+find: .compare_exchange(START_IDLE, START_IDLE_LET_GO, Ordering::SeqCst, Ordering::SeqCst)
+replace: .compare_exchange(START_IDLE, START_RUNNING_LET_GO, Ordering::SeqCst, Ordering::SeqCst).inspect(|_| { LET_GO.fetch_add(1, Ordering::SeqCst); })
+caught-by:
+    cineris-ext engine::tests::a_starts_count_is_held_only_while_it_runs
+    cineris-core::it extensions_hooks::the_count_of_starts_let_go_ends_at_zero_when_a_start_waits_behind_another
+
+[break] a-cache-gate-is-not-known
+rule: A gate held from the cache's registration at the hash approved is known by it, so that a store that cannot be read later keeps it, though the session never loaded the extension (the fifth look at the script hooks, L1).
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: ScriptHooks::hold
+find: if !gate.by_name && let Some(hooks) = &gate.hooks {
+replace: if false && let Some(hooks) = &gate.hooks {
+caught-by:
+    cineris-core::it extensions_hooks::a_gate_held_from_the_cache_is_kept_when_the_pin_store_breaks
+    cineris-core::it extensions_hooks::a_gate_held_from_the_cache_is_kept_when_the_trust_store_breaks

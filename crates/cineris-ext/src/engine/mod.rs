@@ -138,43 +138,101 @@ pub fn starts_let_go() -> usize {
     LET_GO.load(Ordering::SeqCst)
 }
 
-/// A start's state, as [`StartWatch`] keeps it.
-const START_RUNNING: u8 = 0;
-const START_LET_GO: u8 = 1;
-const START_ENDED: u8 = 2;
+/// A start's state, as [`StartWatch`] keeps it: not begun, let go before
+/// it began, running, running let go (the one state that counts), ended.
+const START_IDLE: u8 = 0;
+const START_IDLE_LET_GO: u8 = 1;
+const START_RUNNING: u8 = 2;
+const START_RUNNING_LET_GO: u8 = 3;
+const START_ENDED: u8 = 4;
 
 /// What its caller tells a runtime's start (the third re-check of the
-/// script hooks, (b)): let go ([`let_go`](Self::let_go)), the start, still
-/// evaluating, counts toward [`MAX_ABANDONED`] until it ends; ended within
-/// its time, it is released; left running, it is the one count of an
-/// abandoned thread, never two.
+/// script hooks, (b), and the fifth look, M1): let go
+/// ([`let_go`](Self::let_go)), the start counts toward [`MAX_ABANDONED`]
+/// while it runs, and only then: one that never begins (its caller found a
+/// runtime alive, or refused it before) counts nothing. The count is taken
+/// and given back only while [`ScriptRuntime::start_watched`] runs, by the
+/// guard every way out of it goes through: ended within its time, it is
+/// released; left running, it is the one count of an abandoned thread,
+/// never two.
 #[derive(Debug, Clone, Default)]
 pub struct StartWatch {
     state: Arc<AtomicU8>,
 }
 
 impl StartWatch {
-    /// Nobody waits for the start any more: it counts toward the cap until
-    /// it ends. Nothing when it has ended already.
+    /// Nobody waits for the start any more: while it runs it counts toward
+    /// the cap. Nothing when it has ended, and nothing counted yet when it
+    /// has not begun: it counts once it begins, if it does.
     pub fn let_go(&self) {
-        LET_GO.fetch_add(1, Ordering::SeqCst);
-        if self
-            .state
-            .compare_exchange(
-                START_RUNNING,
-                START_LET_GO,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            )
-            .is_err()
-        {
-            LET_GO.fetch_sub(1, Ordering::SeqCst);
+        loop {
+            match self.state.load(Ordering::SeqCst) {
+                START_IDLE => {
+                    if self
+                        .state
+                        .compare_exchange(
+                            START_IDLE,
+                            START_IDLE_LET_GO,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_ok()
+                    {
+                        return;
+                    }
+                }
+                START_RUNNING => {
+                    LET_GO.fetch_add(1, Ordering::SeqCst);
+                    if self
+                        .state
+                        .compare_exchange(
+                            START_RUNNING,
+                            START_RUNNING_LET_GO,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_ok()
+                    {
+                        return;
+                    }
+                    LET_GO.fetch_sub(1, Ordering::SeqCst);
+                }
+                _ => return,
+            }
+        }
+    }
+
+    /// The start begins: counted at once if it was let go before.
+    fn began(&self) {
+        loop {
+            match self.state.load(Ordering::SeqCst) {
+                START_IDLE => {
+                    if self
+                        .state
+                        .compare_exchange(
+                            START_IDLE,
+                            START_RUNNING,
+                            Ordering::SeqCst,
+                            Ordering::SeqCst,
+                        )
+                        .is_ok()
+                    {
+                        return;
+                    }
+                }
+                START_IDLE_LET_GO => {
+                    LET_GO.fetch_add(1, Ordering::SeqCst);
+                    self.state.store(START_RUNNING_LET_GO, Ordering::SeqCst);
+                    return;
+                }
+                _ => return,
+            }
         }
     }
 
     /// The start has ended, however it did: released from the cap.
     fn ended(&self) {
-        if self.state.swap(START_ENDED, Ordering::SeqCst) == START_LET_GO {
+        if self.state.swap(START_ENDED, Ordering::SeqCst) == START_RUNNING_LET_GO {
             LET_GO.fetch_sub(1, Ordering::SeqCst);
         }
     }
@@ -471,6 +529,9 @@ impl ScriptRuntime {
         if is_disabled(&hash) {
             return Err(LoadError::Disabled);
         }
+        // It begins: from here, let go, it counts toward the cap, and the
+        // guard above gives the count back on every way out.
+        watch.began();
         let stop = Arc::new(AtomicBool::new(false));
         let alive = Arc::new(AtomicBool::new(true));
         let (ready, readied) = oneshot::channel();
@@ -910,5 +971,48 @@ pub async fn register(
 impl From<HostError> for Failure {
     fn from(error: HostError) -> Self {
         Self::Thrown(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{StartWatch, starts_let_go};
+
+    /// A start's count is taken and given back by its own guard alone, on
+    /// every way: let go before it began, it counts nothing until it begins,
+    /// and nothing at all if it never does (its caller returned first: a
+    /// runtime alive, a link on the way, a look that failed); let go while
+    /// it runs, it counts until it ends; ended, a later let-go counts
+    /// nothing (the fifth look at the script hooks, M1).
+    #[test]
+    fn a_starts_count_is_held_only_while_it_runs() {
+        let before = starts_let_go();
+        // Never begun: nothing, whenever it is let go.
+        let never = StartWatch::default();
+        never.let_go();
+        never.let_go();
+        assert_eq!(starts_let_go(), before);
+        drop(never);
+        assert_eq!(starts_let_go(), before);
+        // Let go before it began: counted from its start to its end.
+        let early = StartWatch::default();
+        early.let_go();
+        assert_eq!(starts_let_go(), before);
+        early.began();
+        assert_eq!(starts_let_go(), before + 1);
+        early.ended();
+        assert_eq!(starts_let_go(), before);
+        // Let go while it runs: counted until it ends, once.
+        let running = StartWatch::default();
+        running.began();
+        assert_eq!(starts_let_go(), before);
+        running.let_go();
+        running.let_go();
+        assert_eq!(starts_let_go(), before + 1);
+        running.ended();
+        assert_eq!(starts_let_go(), before);
+        // Ended: a let-go counts nothing.
+        running.let_go();
+        assert_eq!(starts_let_go(), before);
     }
 }
