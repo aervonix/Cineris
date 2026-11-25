@@ -1457,7 +1457,7 @@ caught-by:
 [break] a-main-module-that-will-not-stop-is-not-counted
 rule: A main module that does not stop within its grace is said so, and counted.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::start
+in: ScriptRuntime::start_until
 find: None if grace.is_some() => {
 replace: None if grace.is_some() && false => {
 caught-by:
@@ -1466,7 +1466,7 @@ caught-by:
 [break] the-cap-of-threads-left-running-is-not-held
 rule: Past the cap of threads left running, no extension is started.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::start
+in: ScriptRuntime::start_until
 find: if abandoned >= MAX_ABANDONED {
 replace: if abandoned >= MAX_ABANDONED * 100 {
 caught-by:
@@ -1475,7 +1475,7 @@ caught-by:
 [break] an-extension-whose-thread-was-left-is-started-again
 rule: An extension whose thread was left running is not started again in the process.
 file: crates/cineris-ext/src/engine/mod.rs
-in: ScriptRuntime::start
+in: ScriptRuntime::start_until
 find: if is_disabled(&hash) {
 replace: if is_disabled(&hash) && name.is_empty() {
 packages: cineris-ext,cineris-core
@@ -3673,8 +3673,8 @@ caught-by:
 rule: What the trust question read of the project's folder is handed to the session, which does not read it again.
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: decide
-find: .then(|| match project_found {
-replace: .then(|| match project_found.filter(|_| false) {
+find: inputs.project.as_ref().map(|_| match project_found {
+replace: inputs.project.as_ref().map(|_| match project_found.filter(|_| false) {
 caught-by:
     extensions_trust::each_folder_is_read_once_when_a_session_opens
     extensions_review::after_a_yes_what_the_question_read_is_not_read_again
@@ -8316,8 +8316,8 @@ caught-by:
 rule: Where what an extension registers was never known (its first registration failed), each gating event its manifest lists holds a failing gate, on every call or prompt, naming the extension, why and the way out (the maintainers' call).
 file: crates/cineris-core/src/ext/script_hooks.rs
 in: ScriptHooks::hold
-find: if made.is_empty() && unknown {
-replace: if false && made.is_empty() && unknown {
+find: if made.is_empty() && definitions.is_none() {
+replace: if false && made.is_empty() && definitions.is_none() {
 caught-by:
     cineris-core::it extensions_hooks::an_extension_never_registered_holds_the_gates_its_manifest_lists
 
@@ -8519,9 +8519,11 @@ caught-by:
 rule: What an extension the session loaded registered at its approved hash is known, hooks or none, after it is withdrawn: a change of one that registered no gate holds none.
 file: crates/cineris-core/src/ext/script_hooks.rs
 in: ScriptHooks::hold
-find: && !known
-replace: && !Vec::<(String, cineris_base::ContentHash)>::new()
+find: let definitions = gate.hooks.as_ref().or(seen.map(|seen| &seen.hooks));
+replace: let definitions = gate.hooks.as_ref();
 caught-by:
+    cineris-core::it extensions_hooks::a_changed_extension_the_session_saw_register_no_gate_holds_none
+    cineris-core::it extensions_hooks::an_extension_approved_for_the_run_keeps_its_gates_while_the_store_is_unread
     cineris-core::it extensions_review::an_extension_approved_for_the_session_and_changed_since_is_said_to_have_changed
 
 [break] an-unreadable-pin-store-holds-no-gate
@@ -8542,23 +8544,12 @@ replace: drop(gate(Source::Project
 caught-by:
     cineris-core::it extensions_hooks::an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions
 
-[break] an-untrusted-projects-folder-is-not-looked-in-while-its-trust-is-unread
-rule: While the trust store cannot be read, the project's folder of extensions is looked in, whatever its trust, so that its extensions hold their gates.
-file: crates/cineris-core/src/ext/found/pipeline.rs
-in: decide
-find: || trust_unreadable.is_some()
-replace: || false
-caught-by:
-    cineris-core::it extensions_hooks::an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions
-
-# The full review of the script hooks.
-
 [break] a-loaded-extensions-gates-are-its-manifests
 rule: While a store of approvals cannot be read, an extension the session loaded keeps the gates of what it saw it register, not its manifest's list: one whose gate is on `list` alone still lets a `read` run (the full review, L1).
 file: crates/cineris-core/src/ext/script_hooks.rs
-in: ScriptHooks::hold
-find: && hook.extension.approved().hash == gate.hash
-replace: && false
+in: ScriptHooks::add
+find: known.push(Seen {
+replace: drop(Seen {
 caught-by:
     cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
 
@@ -8593,7 +8584,7 @@ caught-by:
 rule: A hook's runtime start, left to go on when its run is let go, is one of the session's runs, which its close waits for: no run outlives its session (the full review, L7).
 file: crates/cineris-core/src/ext/tools.rs
 in: LoadedExtension::call_hook
-find: keep({
+find: commands.keep({
 replace: std::mem::drop({
 caught-by:
     cineris-core::it extensions_hooks::a_runtime_start_a_hook_left_is_waited_for_by_the_close
@@ -8634,3 +8625,80 @@ find: _ => Stand::Unapproved { trust_project }
 replace: _ => Stand::Unapproved { trust_project: false }
 caught-by:
     cineris-core::it extensions_hooks::under_trust_for_the_run_a_changed_projects_gate_names_no_question
+
+# The re-check of the full review, and the owner's answer on L-b.
+
+[break] a-store-unread-gate-is-of-the-found-hash
+rule: While the store of its approval cannot be read, an extension the session loaded keeps the gates it registered whatever hash it is found at now: one changed to list no hook still refuses (the re-check of the full review, M1').
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: ScriptHooks::hold
+find: && (gate.by_name || seen.hash == gate.hash)
+replace: && seen.hash == gate.hash
+caught-by:
+    cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
+    cineris-core::it extensions_hooks::an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions
+
+[break] a-removed-extension-under-an-unread-store-holds-nothing
+rule: While the store of its approval cannot be read, an extension the session loaded and that is gone keeps the gates it registered: nothing else can say it was approved (the re-check of the full review, M1').
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: Held::settle
+find: for (source, file) in &unread {
+replace: for (source, file) in unread.iter().take(0) {
+caught-by:
+    cineris-core::it extensions_hooks::an_unreadable_pin_store_holds_the_gates_of_the_users_extensions
+    cineris-core::it extensions_hooks::an_unreadable_trust_store_holds_the_gates_of_a_projects_extensions
+
+[break] an-unreadable-trust-store-gates-what-was-never-loaded
+rule: While the trust store cannot be read, a project's extension the session never loaded holds nothing: no repository gates a session by itself (the owner's answer on the re-check of the full review, L-b).
+file: crates/cineris-core/src/ext/found/pipeline.rs
+in: decide
+find: &Unstood::TrustUnreadable(Vec::new(), file.clone())
+replace: &Unstood::TrustUnreadable(listed.manifest.capabilities.hooks.clone(), file.clone())
+caught-by:
+    cineris-core::it extensions_hooks::an_unreadable_trust_store_gates_nothing_of_a_project_the_session_never_loaded
+
+[break] a-disabled-start-says-approve-again
+rule: An extension the engine refuses for the rest of the process says, whole, that only a fix approved, turning it off or a new process helps, not the engine's sentence that approving it again starts it (the re-check of the full review, L-c).
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::runtime
+find: cineris_ext::engine::LoadError::Disabled | cineris_ext::engine::LoadError::Abandoned
+replace: cineris_ext::engine::LoadError::Abandoned
+caught-by:
+    cineris-core::it extensions_hooks::an_extension_whose_runtime_cannot_start_fails_its_gates
+
+[break] a-runtime-start-runs-past-the-close
+rule: A runtime start is ended once what it was started for is gone, as its time's end ends it, so that the session's close waits for it no longer than its grace (the re-check of the full review, L-d).
+file: crates/cineris-ext/src/engine/mod.rs
+in: ScriptRuntime::start_until
+packages: cineris-ext,cineris-core
+find: || ended.as_mut().poll(cx).is_ready()
+replace: || false
+caught-by:
+    cineris-core::it extensions_hooks::the_close_ends_a_runtime_start_within_its_grace
+
+[break] a-hooks-runtime-start-is-not-ended-by-the-close
+rule: A runtime start a hook's run leaves to go on is ended by the session's close (the re-check of the full review, L-d).
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: ScriptHook::start
+find: self.commands.runs_token()
+replace: CancelToken::new()
+caught-by:
+    cineris-core::it extensions_hooks::the_close_ends_a_runtime_start_within_its_grace
+
+[break] a-session-end-runs-start-is-ended-by-the-close
+rule: A `session.end` hook's runtime start is ended by the end of its own time at the close, not by the close's start, which has come before it runs.
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: ScriptHook::start
+find: let close = if self.event == Event::SessionEnd {
+replace: let close = if false {
+caught-by:
+    cineris-core::it extensions_hooks::a_session_end_hook_starts_its_runtime_as_the_session_closes
+
+[break] a-removed-extensions-way-out-names-no-table
+rule: A removed extension's way out names its table as TOML reads it, `[extensions.<name>] enabled = false`, quoted where the name is not a bare key (the re-check of the full review, L-f).
+file: crates/cineris-core/src/ext/script_hooks.rs
+in: way_out
+in-string: turn it off with {table} (or
+replace: turn it off with `enabled = false` (or
+caught-by:
+    cineris-core::it extensions_hooks::a_removed_extensions_gates_hold_until_it_is_turned_off

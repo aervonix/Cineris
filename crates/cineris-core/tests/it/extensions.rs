@@ -1138,7 +1138,8 @@ fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
         let results = front.results();
         assert!(results[0].2.contains("ran out of its time"), "{results:?}");
         assert!(
-            results[1].2.contains("is disabled") && results[1].2.contains("restarts"),
+            results[1].2.contains("is not started in this process")
+                && results[1].2.contains("start Cineris again"),
             "{results:?}"
         );
         assert_eq!(cineris_ext::engine::runtimes_made(), made);
@@ -1147,7 +1148,10 @@ fn an_extension_whose_thread_would_not_stop_is_not_started_again() {
         let other = Front::start(&world, &core).await;
         other.turn("spin once more").await;
         let results = other.results();
-        assert!(results[0].2.contains("is disabled"), "{results:?}");
+        assert!(
+            results[0].2.contains("is not started in this process"),
+            "{results:?}"
+        );
         assert_eq!(cineris_ext::engine::runtimes_made(), made);
         other.close().await;
     });
