@@ -5925,7 +5925,7 @@ rule: Each of the user's own skills found outside the workspace gives the sessio
 file: crates/cineris-core/src/ext/found/pipeline.rs
 in: Held::find_skills
 find: lock(&reads).follow(&policy, folders)
-replace: drop((reads, policy, folders))
+replace: { drop((reads, policy, folders)); None }
 caught-by:
     cineris-core::it skill_reads::a_users_skill_folder_is_read_unasked_and_its_rule_follows_the_skills_found
     cineris-core::it skill_reads::a_users_skill_that_is_not_found_has_no_rule
