@@ -467,7 +467,7 @@ impl ScriptHooks {
     /// events it holds.
     pub(crate) fn hold(&self, gates: Vec<Gate>) -> Vec<(usize, Vec<LoopEvent>)> {
         let mut held = lock(&self.held);
-        let known = lock(&self.known);
+        let mut known = lock(&self.known);
         let mut next: Vec<Arc<HeldHook>> = Vec::new();
         let mut holding: Vec<(usize, Vec<LoopEvent>)> = Vec::new();
         for (index, gate) in gates.into_iter().enumerate() {
@@ -548,6 +548,19 @@ impl ScriptHooks {
                     })
                     .collect();
                 made.extend(from_events);
+            }
+            // A gate held from the cache's registration at the hash approved
+            // is known by it, as one the session loaded is: a store that
+            // cannot be read later keeps it (the fifth look, L1).
+            if !gate.by_name
+                && let Some(hooks) = &gate.hooks
+            {
+                known.note(
+                    gate.source,
+                    &gate.name,
+                    gate.hash,
+                    SeenHooks::Registered(hooks.clone()),
+                );
             }
             if !made.is_empty() {
                 let mut events: Vec<LoopEvent> = made.iter().map(|hook| hook.event).collect();

@@ -2282,3 +2282,114 @@ fn a_same_named_cache_entry_does_not_lift_a_gate_under_an_unreadable_pin_store()
         front.close().await;
     });
 }
+
+/// The count of starts let go cannot outlive a start on any path (the fifth
+/// look at the script hooks, M1): two runs of one extension's `turn.end`
+/// hook at once, its runtime not started; the first's start held as its
+/// main module registers the hook, the second's waiting behind it for the
+/// runtime; both let go. Only the start that runs counts. Let go on, the
+/// first ends, the second finds the runtime alive and starts nothing, and
+/// once all has ended and the session closed, the count is 0 and nothing
+/// is left running.
+#[test]
+fn the_count_of_starts_let_go_ends_at_zero_when_a_start_waits_behind_another() {
+    let world = World::new("ext_hooks_count_ends", Vec::<Response>::new());
+    let extension = handed(&world, "hooks = [\"turn.end\"]", QUIET);
+    let core = world.core_with(|options| options.extensions = vec![extension]);
+    let abandoned = cineris_ext::engine::abandoned_threads();
+    world.run(async {
+        let front = start(&world, &core).await;
+        let registers = Hold::new(cineris_ext::engine::A_DEFINITION_IS_REGISTERED);
+        {
+            let mut runs = std::pin::pin!(core.hook_runs_at_its_point(
+                &front.session,
+                "probe/hook.turn.end",
+                2
+            ));
+            drive_until(runs.as_mut(), || registers.wait_reached(Duration::ZERO)).await;
+            // The second's start is waiting for the runtime meanwhile.
+            for _ in 0..4 {
+                let _ = poll_once(runs.as_mut()).await;
+                settle().await;
+            }
+        }
+        settle().await;
+        assert_eq!(
+            cineris_ext::engine::starts_let_go(),
+            1,
+            "only the start that runs counts"
+        );
+        registers.release();
+        drop(registers);
+        let mut idle = std::pin::pin!(std::future::pending::<()>());
+        drive_until(idle.as_mut(), || cineris_ext::engine::starts_let_go() == 0).await;
+        settle().await;
+        front.close().await;
+    });
+    assert_eq!(cineris_ext::engine::starts_let_go(), 0);
+    assert_eq!(cineris_ext::engine::abandoned_threads(), abandoned);
+}
+
+/// A trusted project's extension changed before the session holds its gate
+/// from the registration the cache keeps at its pin; known by it, it keeps
+/// that gate once the trust store cannot be read, though the session never
+/// loaded it (the fifth look at the script hooks, L1).
+#[test]
+fn a_gate_held_from_the_cache_is_kept_when_the_trust_store_breaks() {
+    let mut responses = Vec::new();
+    for id in ["c1", "c2"] {
+        responses.extend(one_call(id, "list", json!({"path": "."})));
+    }
+    let world = World::new("ext_hooks_cache_gate_trust", responses);
+    let folder = crate::extensions_found::projects(&world);
+    write_in(&folder, "hooks = [\"tool.before\"]", LIST_GATE);
+    crate::extensions_found::trust(
+        &world,
+        &[crate::extensions_trust::named_definition(&folder, "probe")],
+    );
+    cache(&world, &folder);
+    write_in(
+        &folder,
+        "hooks = [\"tool.before\"]",
+        &format!("// changed\n{LIST_GATE}"),
+    );
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("changed").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "denied", "{text}");
+        std::fs::write(state(&world).trust_file(), "version = 9\n").unwrap();
+        front.turn("store broken").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "denied", "the cache's gate lapsed: {text}");
+        front.close().await;
+    });
+}
+
+/// The user's extension removed before the session holds its gate from the
+/// registration the cache keeps at its pin; known by it, it keeps that gate
+/// once the pin store cannot be read, though the session never loaded it
+/// (the fifth look at the script hooks, L1).
+#[test]
+fn a_gate_held_from_the_cache_is_kept_when_the_pin_store_breaks() {
+    let mut responses = Vec::new();
+    for id in ["c1", "c2"] {
+        responses.extend(one_call(id, "list", json!({"path": "."})));
+    }
+    let world = World::new("ext_hooks_cache_gate_pins", responses);
+    let folder = approved(&world, "hooks = [\"tool.before\"]", LIST_GATE);
+    std::fs::remove_dir_all(&folder).unwrap();
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        front.turn("removed").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "denied", "{text}");
+        std::fs::write(state(&world).pins_file(), "version = 9\n").unwrap();
+        front.turn("store broken").await;
+        let (outcome, text) = last(&front);
+        assert_eq!(outcome, "denied", "the cache's gate lapsed: {text}");
+        front.close().await;
+    });
+}
