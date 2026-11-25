@@ -85,7 +85,7 @@ pub(crate) use prompt::PromptParts;
 #[cfg(feature = "scripts")]
 pub use script_hooks::{A_SCRIPT_HOOK_ENDS, A_SCRIPT_HOOK_STARTS};
 #[cfg(feature = "scripts")]
-pub(crate) use script_hooks::{Gate, ScriptHooks, SessionStart, Stand, way_out};
+pub(crate) use script_hooks::{Gate, ScriptHooks, SeenHooks, SessionStart, Stand, way_out};
 #[cfg(feature = "scripts")]
 pub(crate) use state::{ExtState, ProjectStore};
 #[cfg(feature = "scripts")]
