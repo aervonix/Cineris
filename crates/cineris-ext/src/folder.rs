@@ -21,11 +21,13 @@
 )]
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
 
 use cineris_base::{ContentHash, ContentHasher, OpenError, in_code, open_regular};
+use cineris_sandbox::unfollowed::{Folder, Kind, Refused};
 
 /// The most files an extension's folder may hold.
 pub const MAX_FILES: usize = 256;
@@ -146,6 +148,30 @@ impl Snapshot {
         Ok(Self::from_files(files))
     }
 
+    /// [`Snapshot::read_counted`] through handles that follow no link
+    /// (`cineris_sandbox::unfollowed`): the folder opened once, its last
+    /// name not followed, and every name in it reached from the handle of
+    /// the folder it is in, never by a path looked up again. A link at any
+    /// name, the folder's own included, refuses the extension; a folder
+    /// swapped for a link while it is read is refused where it is met, and
+    /// nothing outside the folder is read through one. The caps are
+    /// [`Snapshot::read`]'s. What `cineris ext add` reads an extension with,
+    /// since the snapshot it shows is the one it writes and pins (since step
+    /// 28's third pull request).
+    ///
+    /// It blocks: call it on the blocking pool.
+    pub fn read_unfollowed(folder: &Path) -> (Result<Self, FolderError>, u64) {
+        let mut total = 0_u64;
+        let read = (|| {
+            let mut root = Folder::open(folder).map_err(|refused| refusal(refused, ""))?;
+            let mut files = BTreeMap::new();
+            let mut entries = 0;
+            read_unfollowed_into(&mut root, "", 0, &mut files, &mut total, &mut entries)?;
+            Ok(Self::from_files(files))
+        })();
+        (read, total)
+    }
+
     /// A snapshot of files given in memory, by their paths relative to the
     /// folder with `/` between names. For tests, and for what is read some
     /// other way. The caps are not applied here.
@@ -264,6 +290,85 @@ fn read_into(
     Ok(())
 }
 
+/// What a refused open of `relative` is as a folder's error.
+fn refusal(refused: Refused, relative: &str) -> FolderError {
+    match refused {
+        Refused::Link => FolderError::Link(relative.to_owned()),
+        Refused::NotAFolder | Refused::NotAFile => FolderError::NotRegular(relative.to_owned()),
+        Refused::NotFound if relative.is_empty() => FolderError::Unreadable {
+            path: String::new(),
+            reason: "there is no folder there".to_owned(),
+        },
+        other => FolderError::Unreadable {
+            path: relative.to_owned(),
+            reason: other.to_string(),
+        },
+    }
+}
+
+/// [`read_into`] through the handle of `folder`: each name opened relative
+/// to it, none followed when it is a link.
+fn read_unfollowed_into(
+    folder: &mut Folder,
+    prefix: &str,
+    depth: usize,
+    files: &mut BTreeMap<String, Vec<u8>>,
+    total: &mut u64,
+    entries_seen: &mut usize,
+) -> Result<(), FolderError> {
+    let listed = folder.entries().map_err(|error| FolderError::Unreadable {
+        path: prefix.to_owned(),
+        reason: error.to_string(),
+    })?;
+    let mut names: Vec<(String, Kind)> = Vec::new();
+    for entry in listed {
+        *entries_seen += 1;
+        if *entries_seen > MAX_ENTRIES {
+            return Err(FolderError::TooManyEntries);
+        }
+        let name = entry
+            .name
+            .into_string()
+            .map_err(|_| FolderError::Name(prefix.to_owned()))?;
+        names.push((name, entry.kind));
+    }
+    names.sort();
+    for (name, kind) in names {
+        let relative = if prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        match kind {
+            Kind::Link => return Err(FolderError::Link(relative)),
+            Kind::Other => return Err(FolderError::NotRegular(relative)),
+            Kind::Folder => {
+                if depth + 1 >= MAX_DEPTH {
+                    return Err(FolderError::TooDeep(relative));
+                }
+                let mut inner = folder
+                    .folder(OsStr::new(&name))
+                    .map_err(|refused| refusal(refused, &relative))?;
+                read_unfollowed_into(&mut inner, &relative, depth + 1, files, total, entries_seen)?;
+            }
+            Kind::File => {
+                if files.len() >= MAX_FILES {
+                    return Err(FolderError::TooManyFiles);
+                }
+                let (file, metadata) = folder
+                    .file(OsStr::new(&name))
+                    .map_err(|refused| refusal(refused, &relative))?;
+                let content = read_open(file, &metadata, &relative, total)?;
+                if *total > MAX_TOTAL_BYTES {
+                    return Err(FolderError::TooLarge);
+                }
+                files.insert(relative, content);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// One file, opened without following a link, refused by its length before
 /// it is read when that is past its cap or the folder's, and otherwise read
 /// to at most one byte past its cap. Every byte read is added to `total`, a
@@ -279,6 +384,17 @@ fn read_file(path: &Path, relative: &str, total: &mut u64) -> Result<Vec<u8>, Fo
             reason: other.to_string(),
         },
     })?;
+    read_open(file, &metadata, relative, total)
+}
+
+/// An open regular file's content, as [`read_file`] reads it: refused by its
+/// length first, and every byte read counted.
+fn read_open(
+    file: fs::File,
+    metadata: &fs::Metadata,
+    relative: &str,
+    total: &mut u64,
+) -> Result<Vec<u8>, FolderError> {
     if metadata.len() > MAX_FILE_BYTES {
         return Err(FolderError::FileTooLarge(relative.to_owned()));
     }
@@ -335,6 +451,67 @@ mod tests {
         let (read, bytes) = Snapshot::read_counted(&dir.join("many"));
         assert_eq!(read, Err(FolderError::TooLarge));
         assert_eq!(bytes, MAX_TOTAL_BYTES);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// The read through handles takes what the plain read takes, with its
+    /// hash and its caps, and refuses a link at any name, the folder's own
+    /// included, where the plain read follows the folder's (step 28's `ext
+    /// add`).
+    #[test]
+    fn the_read_through_handles_is_the_plain_reads_and_follows_no_link() {
+        let dir = std::env::temp_dir().join(format!("cineris-ext-unfollowed-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let ext = dir.join("ext");
+        fs::create_dir_all(ext.join("lib/deep")).unwrap();
+        fs::create_dir_all(ext.join("empty")).unwrap();
+        fs::write(ext.join("extension.toml"), "x").unwrap();
+        fs::write(ext.join("lib/a.js"), "a").unwrap();
+        fs::write(ext.join("lib/deep/b.js"), "bb").unwrap();
+        let (plain, plain_bytes) = Snapshot::read_counted(&ext);
+        let (unfollowed, bytes) = Snapshot::read_unfollowed(&ext);
+        assert_eq!(unfollowed, plain);
+        assert_eq!(bytes, plain_bytes);
+        assert_eq!(
+            unfollowed.unwrap().paths().collect::<Vec<_>>(),
+            ["extension.toml", "lib/a.js", "lib/deep/b.js"]
+        );
+        fs::write(ext.join("lib/big.bin"), vec![b'x'; 2 * 1024 * 1024]).unwrap();
+        let (read, bytes) = Snapshot::read_unfollowed(&ext);
+        assert_eq!(read, Err(FolderError::FileTooLarge("lib/big.bin".to_owned())));
+        assert!(bytes < 1024, "refused by its length, unread: {bytes}");
+        fs::remove_file(ext.join("lib/big.bin")).unwrap();
+        assert_eq!(
+            Snapshot::read_unfollowed(&dir.join("none")).0,
+            Err(FolderError::Unreadable {
+                path: String::new(),
+                reason: "there is no folder there".to_owned()
+            })
+        );
+        #[cfg(unix)]
+        {
+            let outside = dir.join("outside");
+            fs::create_dir_all(&outside).unwrap();
+            fs::write(outside.join("secret"), "s").unwrap();
+            std::os::unix::fs::symlink(&outside, ext.join("lib/deep/out")).unwrap();
+            assert_eq!(
+                Snapshot::read_unfollowed(&ext).0,
+                Err(FolderError::Link("lib/deep/out".to_owned()))
+            );
+            fs::remove_file(ext.join("lib/deep/out")).unwrap();
+            std::os::unix::fs::symlink(outside.join("secret"), ext.join("secret.js")).unwrap();
+            assert_eq!(
+                Snapshot::read_unfollowed(&ext).0,
+                Err(FolderError::Link("secret.js".to_owned()))
+            );
+            fs::remove_file(ext.join("secret.js")).unwrap();
+            std::os::unix::fs::symlink(&ext, dir.join("named")).unwrap();
+            assert_eq!(
+                Snapshot::read_unfollowed(&dir.join("named")).0,
+                Err(FolderError::Link(String::new()))
+            );
+            assert!(Snapshot::read(&dir.join("named")).is_ok(), "the plain read follows it");
+        }
         let _ = fs::remove_dir_all(&dir);
     }
 

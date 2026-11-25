@@ -69,6 +69,11 @@ pub use crate::core::{
     BEFORE_A_SESSION_ENDS, BEFORE_THE_PUT_BACK_IS_ASKED, Client, Core, CoreOptions, OpError,
 };
 pub use crate::events::{EventQueue, Outgoing, QUEUE_CAPACITY};
+pub use crate::ext::manage::{
+    Added, DisableOutcome, ExtensionListed, ExtensionStanding, ExtensionsListing, Registered,
+    Removal, Removed, ToAdd,
+};
+pub use cineris_ext::source::Source as ExtensionSource;
 pub use crate::knowledge::AFTER_THE_RULES;
 pub use crate::manage::{
     Project, ProjectExtension, ProjectFiles, ProjectHookCommand, ProviderCredential, TrustState,
