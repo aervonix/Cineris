@@ -2457,8 +2457,8 @@ caught-by:
 rule: cineris auth login at a terminal reads the key there without echo.
 file: crates/cineris-cli/src/commands.rs
 in: auth
-find: if stdin.is_terminal() && io::stdout().is_terminal() {
-replace: if false {
+find: && io::stdout().is_terminal()
+replace: && false
 caught-by:
     cineris-cli::system first_run::sys_auth_login_at_a_terminal_reads_the_key_without_echo
 

@@ -1,0 +1,54 @@
+# The step 25 fixes: `cineris auth login` at a terminal (the review's
+# findings 1 and 17), the commands step's npm scripts (5) and the first
+# run's `autonomous` (6). Written with the code.
+
+# ------------------------------------------------ auth login at a terminal
+
+[break] auth-login-takes-the-terminal-after-something-slow
+rule: `cineris auth login` at a terminal takes the terminal, echo off, before anything slow is done (the core's start): a key typed ahead is never echoed.
+file: crates/cineris-cli/src/commands.rs
+in: login_at_terminal
+find: let terminal = cineris_tui::secret::KeyTerminal::enter(overrides);
+replace: let terminal = { cineris_base::hook::hold_core(); cineris_tui::secret::KeyTerminal::enter(overrides) };
+caught-by:
+    cineris-cli::system first_run::sys_auth_login_never_echoes_a_key_typed_before_its_row
+
+[break] auth-login-ignores-the-terminal-settings
+rule: `cineris auth login` at a terminal honours `[terminal]`, as the interface does.
+file: crates/cineris-cli/src/commands.rs
+in: login_at_terminal
+find: let overrides = crate::interactive::overrides(&loaded.settings.terminal);
+replace: let overrides = cineris_tui::app::Overrides::default();
+caught-by:
+    cineris-cli::system first_run::sys_auth_login_at_a_terminal_honours_the_terminal_settings
+
+# ------------------------------------------------ the commands step
+
+[break] npm-runs-a-script-without-its-pre-and-post
+rule: `npm run <name>` is offered with `pre<name>` and `post<name>` when the file has them: npm runs them with it.
+file: crates/cineris-knowledge/src/detect.rs
+in: npm_runs
+find: if before.is_none() && after.is_none() {
+replace: if true {
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_with_what_npm_runs_before_and_after_it
+
+[break] an-unreadable-pre-script-is-left-out
+rule: A `pre<name>` or `post<name>` that cannot be read whole, or is not text, keeps its script from being offered.
+file: crates/cineris-knowledge/src/detect.rs
+in: npm_runs
+find: shown.push(format!("pre{name} {}", quoted(&before?)));
+replace: if let Some(before) = before { shown.push(format!("pre{name} {}", quoted(&before))); }
+caught-by:
+    cineris-knowledge detect::tests::a_script_is_offered_with_what_npm_runs_before_and_after_it
+
+# ------------------------------------------------ the first run's mode
+
+[break] autonomous-is-offered-from-the-machine-alone
+rule: The first run offers `autonomous` only where a session started now would be confined: the configuration in force leaves the sandbox on.
+file: crates/cineris-core/src/manage.rs
+in: Core::sandbox_status
+find: let enabled = self.inner.user().settings.sandbox.enabled;
+replace: let enabled = true;
+caught-by:
+    cineris-core::it sandbox::the_first_runs_sandbox_status_is_the_configured_one

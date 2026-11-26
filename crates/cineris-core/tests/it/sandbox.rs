@@ -193,6 +193,44 @@ fn the_sandbox_turned_off_or_without_a_launcher_is_off() {
     });
 }
 
+/// What the first run offers `autonomous` on (`Core::sandbox_status`) is
+/// the sandbox as the configuration in force has it, not what the machine
+/// can do: a managed file that turns it off makes it off, as every session
+/// then starts and refuses `autonomous`; the same machine with the sandbox
+/// on enforces (the review of step 25, finding 6).
+#[test]
+fn the_first_runs_sandbox_status_is_the_configured_one() {
+    let world = World::new("first_run_sandbox_turned_off", []);
+    world.user_config("");
+    let managed = world.dirs().managed_config.unwrap();
+    std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+    std::fs::write(&managed, "[sandbox]\nenabled = false\n").unwrap();
+    let core = world.core_with(|options| {
+        options.launcher = Some(launcher());
+        options.sandbox = Some(Support::Landlock(8));
+    });
+    assert_eq!(core.sandbox_status(), SandboxStatus::Off);
+    world.run(async {
+        let refused = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .err()
+        .expect("autonomous is refused with the sandbox turned off");
+        assert_eq!(refused.code, "sandbox_required", "{}", refused.message);
+    });
+    let world = World::new("first_run_sandbox_on", []);
+    world.user_config("");
+    let core = world.core_with(|options| {
+        options.launcher = Some(launcher());
+        options.sandbox = Some(Support::Landlock(8));
+    });
+    assert_eq!(core.sandbox_status(), SandboxStatus::Enforcing);
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn a_landlock_with_a_gap_enforces_and_names_the_gap() {

@@ -512,8 +512,8 @@ mod tests {
     }
 
     /// A file found at the name is told apart from a write that failed:
-    /// the first run says it is in force from the next start (the review
-    /// of the fixes of the third pull request).
+    /// the first run says it is found, and reads it at once (the review of
+    /// the fixes of the third pull request; read at once since S-L4).
     #[test]
     fn a_file_found_at_the_name_is_not_a_failure() {
         let shown = "~/.config/cineris/config.toml";

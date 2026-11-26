@@ -409,9 +409,16 @@ fn find_all(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
 /// test build, under `#[cfg(test)]`, so no binary built from the workspace
 /// holds them: since step 28's third pull request, which had the first of
 /// them among these before.)
+/// And the name of the variable that holds a subcommand before its core
+/// starts (`cineris_base::hook::hold_core`), for the test of a key typed
+/// while `auth login`'s core starts (the step 25 fixes).
 /// A test holds them to the hook's own constants, which `xtask` reaches
 /// only in its tests.
-const TEST_HOOK_MARKS: [&str; 2] = ["CINERIS_TEST_READY_DIVISOR", "CINERIS_TEST_MARK_FAILS"];
+const TEST_HOOK_MARKS: [&str; 3] = [
+    "CINERIS_TEST_READY_DIVISOR",
+    "CINERIS_TEST_MARK_FAILS",
+    "CINERIS_TEST_HOLD_CORE",
+];
 
 /// The marks of [`TEST_HOOK_MARKS`] that `bytes` holds.
 pub(crate) fn test_hooks_in(bytes: &[u8]) -> Vec<&'static str> {
@@ -607,7 +614,11 @@ mod tests {
         // The hook's own name, which a test of the binary sets.
         assert_eq!(
             super::TEST_HOOK_MARKS,
-            [cineris_testkit::READY_DIVISOR, cineris_testkit::MARK_FAILS]
+            [
+                cineris_testkit::READY_DIVISOR,
+                cineris_testkit::MARK_FAILS,
+                cineris_testkit::HOLD_CORE,
+            ]
         );
     }
 

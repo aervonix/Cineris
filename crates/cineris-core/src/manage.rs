@@ -209,11 +209,18 @@ impl Core {
         (store.kind(), store.describe(&self.inner.options.env))
     }
 
-    /// Whether the sandbox enforces on this machine (since step 25: the
-    /// first run offers `autonomous` only then).
+    /// Whether a session started now with the user's configuration would be
+    /// confined (since step 25: the first run offers `autonomous` only
+    /// then): the sandbox enforces on this machine and the configuration in
+    /// force, managed files and `-c` included, leaves `sandbox.enabled` on.
+    /// Since the step 25 fixes; before them it was what the machine can do
+    /// alone, so a sandbox turned off by the configuration still offered
+    /// `autonomous`, which every session then refused. (`initialize`'s
+    /// `sandbox` stays what the machine can do.)
     #[must_use]
     pub fn sandbox_status(&self) -> cineris_protocol::session::SandboxStatus {
-        self.inner.sandbox.status()
+        let enabled = self.inner.user().settings.sandbox.enabled;
+        crate::sandbox::status_of(self.inner.sandbox.state(enabled).0)
     }
 
     /// Keeps `key` for `provider` in the credential store.

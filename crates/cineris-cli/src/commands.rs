@@ -10,7 +10,7 @@ use std::io::{self, IsTerminal, Read};
 use std::sync::Arc;
 
 use cineris_base::Secret;
-use cineris_config::{Diagnostic, Env, LayerKind, LoadOptions, Platform};
+use cineris_config::{Diagnostic, Env, LayerKind, LoadOptions, Loaded, Platform};
 use cineris_core::{ClientInfo, Core, CoreOptions, OpError, Project, TokioTimer, TrustState};
 use cineris_protocol::ErrorKind;
 use cineris_protocol::ProjectKey;
@@ -54,6 +54,13 @@ impl Context {
     }
 
     fn core(&self, common: &Common) -> Result<Core, Done> {
+        self.start_core(common, None)
+            .map_err(|error| self.fail(&error))
+    }
+
+    /// The core, given the configuration `loaded` when it is read already,
+    /// saying nothing when it does not start.
+    fn start_core(&self, common: &Common, loaded: Option<Loaded>) -> Result<Core, OpError> {
         let mut options = CoreOptions::new(self.env.clone(), Arc::new(TokioTimer));
         options.profile.clone_from(&common.profile);
         options.overrides = common
@@ -71,7 +78,9 @@ impl Context {
         options.launcher = std::env::current_exe()
             .ok()
             .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)]));
-        Core::start(options).map_err(|error| self.fail(&error))
+        options.loaded = loaded;
+        cineris_base::hook::hold_core();
+        Core::start(options)
     }
 
     /// The project of the workspace root, found from the working directory
@@ -927,6 +936,12 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
 /// `cineris auth …`
 pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
     let context = Context::new(name);
+    if let AuthCommand::Login { provider } = &command
+        && io::stdin().is_terminal()
+        && io::stdout().is_terminal()
+    {
+        return result(login_at_terminal(&context, provider));
+    }
     result((|| {
         let core = context.core(&Common::default())?;
         match command {
@@ -957,17 +972,8 @@ pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
             AuthCommand::Login { provider } => {
                 known_provider(&context, &core, &provider)?;
                 let stdin = io::stdin();
-                // At a terminal the key is read without echo, and never drawn
-                // (since step 25).
-                if stdin.is_terminal() && io::stdout().is_terminal() {
-                    let key = read_at_terminal(&context, &core, &provider)?;
-                    core.store_credential(&provider, &key).map_err(|error| {
-                        context.say(&error.message);
-                        exit::AUTH
-                    })?;
-                    out!("Stored the key of {provider}.\n");
-                    return Ok(exit::COMPLETED);
-                }
+                // With a terminal on standard output too, the key is read
+                // there without echo (`login_at_terminal`).
                 if stdin.is_terminal() {
                     context.say(&format!(
                         "give the key on standard input, so that it is not echoed or kept in \
@@ -1039,13 +1045,60 @@ fn named_not_shown(
     })
 }
 
-/// Reads a key for `provider` at the terminal, without echo
-/// (`cineris_tui::secret::read_key`): `Esc` or `Ctrl+C` stores nothing, and
-/// a signal ends the command with its code.
-fn read_at_terminal(context: &Context, core: &Core, provider: &str) -> Result<Secret, Done> {
+/// `cineris auth login` with a terminal on standard input and output: the
+/// key is read there without echo, and never drawn (since step 25).
+///
+/// **The terminal is taken before the core starts** (since the step 25
+/// fixes): until it is, the terminal is in its ordinary mode, echo on, and
+/// a key pasted straight after the command would be echoed by the terminal
+/// itself, onto the screen and into the scrollback, while the core starts
+/// and the credential store is asked where a key goes. What is typed then
+/// waits for the key's row. Only the configuration is read before it, for
+/// its `[terminal]` settings, which the key's input honours as the
+/// interface does (`backspace`, `keyboard`, the paste's), and which the
+/// core is then given rather than reading it again. Anything said before
+/// the key is read is said once the terminal is put back.
+fn login_at_terminal(context: &Context, provider: &str) -> Result<Done, Done> {
+    let loaded = cineris_config::load(&LoadOptions::new(context.env.clone())).map_err(|failure| {
+        context.say(&failure.render(&context.env));
+        exit::USAGE
+    })?;
+    let overrides = crate::interactive::overrides(&loaded.settings.terminal);
+    let terminal = cineris_tui::secret::KeyTerminal::enter(overrides);
+    let core = match context.start_core(&Common::default(), Some(loaded)) {
+        Ok(core) => core,
+        Err(error) => {
+            drop(terminal);
+            return Err(context.fail(&error));
+        }
+    };
+    if let Some(said) = unknown_provider(&core, provider) {
+        drop(terminal);
+        context.say(&said);
+        return Err(exit::USAGE);
+    }
+    let key = read_at_terminal(context, &core, provider, terminal)?;
+    core.store_credential(provider, &key).map_err(|error| {
+        context.say(&error.message);
+        exit::AUTH
+    })?;
+    out!("Stored the key of {provider}.\n");
+    Ok(exit::COMPLETED)
+}
+
+/// Reads a key for `provider` on the terminal taken for it, without echo
+/// (`cineris_tui::secret::KeyTerminal`): `Esc` or `Ctrl+C` stores nothing,
+/// and a signal ends the command with its code.
+fn read_at_terminal(
+    context: &Context,
+    core: &Core,
+    provider: &str,
+    terminal: io::Result<cineris_tui::secret::KeyTerminal>,
+) -> Result<Secret, Done> {
     let (kind, described) = core.credential_store();
     let store = crate::setup::key_store(kind, &described);
     if let cineris_tui::app::setup::KeyStore::Unavailable(why) = &store {
+        drop(terminal);
         context.say(&format!("no key can be stored here: {why}"));
         return Err(exit::AUTH);
     }
@@ -1054,7 +1107,7 @@ fn read_at_terminal(context: &Context, core: &Core, provider: &str) -> Result<Se
         kept: store.kept(),
         ascii_only: store.ascii_only(),
     };
-    let read = cineris_tui::secret::read_key(cineris_tui::app::Overrides::default(), &asking);
+    let read = terminal.and_then(|terminal| terminal.read(&asking));
     if let Some(code) = cineris_tui::app::signalled() {
         cineris_tui::app::signal_ended();
         return Err(code);
@@ -1079,19 +1132,29 @@ fn read_at_terminal(context: &Context, core: &Core, provider: &str) -> Result<Se
 /// Refuses a provider the core does not know: a key stored under a typo
 /// would be kept and never used.
 fn known_provider(context: &Context, core: &Core, provider: &str) -> Result<(), Done> {
+    match unknown_provider(core, provider) {
+        None => Ok(()),
+        Some(said) => {
+            context.say(&said);
+            Err(exit::USAGE)
+        }
+    }
+}
+
+/// What is said of a provider the core does not know; `None` for one it
+/// knows.
+fn unknown_provider(core: &Core, provider: &str) -> Option<String> {
     let known: Vec<String> = core
         .credentials()
         .into_iter()
         .map(|credential| credential.provider)
         .collect();
-    if known.iter().any(|name| name == provider) {
-        return Ok(());
-    }
-    context.say(&format!(
-        "there is no provider `{provider}`. The providers are: {}",
-        known.join(", ")
-    ));
-    Err(exit::USAGE)
+    (!known.iter().any(|name| name == provider)).then(|| {
+        format!(
+            "there is no provider `{provider}`. The providers are: {}",
+            known.join(", ")
+        )
+    })
 }
 
 #[cfg(test)]

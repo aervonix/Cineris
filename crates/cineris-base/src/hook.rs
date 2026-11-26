@@ -304,6 +304,39 @@ pub fn mark_fails() -> bool {
     std::env::var_os(MARK_FAILS).is_some_and(|value| !value.is_empty())
 }
 
+/// Holds a subcommand just before its core starts: never without the
+/// `test-hooks` feature, which no build that is shipped or released has
+/// (`cargo xtask size` fails a shipped binary that holds [`HOLD_CORE`]'s
+/// name). With it, when [`HOLD_CORE`] names a folder: the binary makes
+/// `held` in it and waits, for 60 s at most, until `go` is there. For the
+/// system test of what is typed while the core starts, which is otherwise
+/// too short to type into (`cineris auth login` at a terminal, since the
+/// step 25 fixes).
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+pub const fn hold_core() {}
+
+/// The variable that names the folder [`hold_core`] waits in. Read only
+/// with the `test-hooks` feature, so that only a build with it holds the
+/// name.
+pub const HOLD_CORE: &str = "CINERIS_TEST_HOLD_CORE";
+
+/// [`hold_core`] with the `test-hooks` feature.
+#[cfg(feature = "test-hooks")]
+pub fn hold_core() {
+    let Some(folder) = std::env::var_os(HOLD_CORE).filter(|folder| !folder.is_empty()) else {
+        return;
+    };
+    let folder = std::path::PathBuf::from(folder);
+    if std::fs::write(folder.join("held"), b"").is_err() {
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !folder.join("go").exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
 /// What a line of [`probed`] starts with, before the program's name.
 pub const PROBED: &str = "probe>";
 

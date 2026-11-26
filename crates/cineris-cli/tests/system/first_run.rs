@@ -263,3 +263,108 @@ fn sys_auth_login_at_a_terminal_reads_the_key_without_echo() {
     );
     let _ = session.wait_exit(Duration::from_secs(30));
 }
+
+/// A key typed ahead, while `cineris auth login` still starts its core and
+/// before its row is drawn, is never echoed: the terminal is taken, echo
+/// off, before the core starts (the review of step 25, finding 1). The
+/// binary is held just before its core starts
+/// (`cineris_base::hook::HOLD_CORE`), the key typed then, and the core let
+/// go. The key's row takes what was typed ahead, as it takes a paste.
+/// Unix only: Windows' console echoes nothing outside a read in line mode.
+#[cfg(unix)]
+#[test]
+fn sys_auth_login_never_echoes_a_key_typed_before_its_row() {
+    let phases =
+        cineris_testkit::Phases::new("sys_auth_login_never_echoes_a_key_typed_before_its_row");
+    let mut machine = Machine::new("auth_login_typed_ahead");
+    let hold = machine.home.join("hold");
+    std::fs::create_dir_all(&hold).unwrap();
+    machine.hold_the_core(&hold);
+    let mut session = machine.tui(&["auth", "login", "anthropic"]);
+    phases.mark("the core held");
+    let deadline = std::time::Instant::now() + LIMIT;
+    while !hold.join("held").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the binary was not held before its core; the screen:\n{}",
+            session.screen().dump()
+        );
+        session.step(Duration::from_millis(20));
+    }
+    assert!(
+        !session.screen().shows("Paste or type the key"),
+        "the row was drawn before the core started"
+    );
+    session.send(TYPED.as_bytes());
+    // Whatever the terminal echoes comes back at once: read it before the
+    // core goes on.
+    while session.step(Duration::from_millis(200)).is_some() {}
+    assert_eq!(
+        holds_any_of_the_key(&raw(&session)),
+        None,
+        "the key typed ahead was echoed while the core started:\n{}",
+        session.screen().dump()
+    );
+    std::fs::write(hold.join("go"), b"").unwrap();
+    phases.mark("the key");
+    let count = format!("{} characters, hidden", TYPED.len());
+    wait_all(
+        &mut session,
+        &["Paste or type the key for anthropic", &count],
+    );
+    session.send(b"\r");
+    session.wait_for(LIMIT, "the key stored", |t| {
+        shows_ever(t, "Stored the key of anthropic.")
+    });
+    phases.mark("the binary ends");
+    session.wait_for(LIMIT, "the shell's verdict", |t| {
+        t.shows(cineris_testkit::role::RESTORED) || t.shows(cineris_testkit::role::NOT_RESTORED)
+    });
+    assert!(
+        session.screen().shows(cineris_testkit::role::RESTORED),
+        "the terminal was not put back:\n{}",
+        session.screen().dump()
+    );
+    let stored = std::fs::read_to_string(machine.dirs().credentials_file().unwrap()).unwrap();
+    assert!(stored.contains(TYPED), "the key reached the store");
+    assert_eq!(
+        holds_any_of_the_key(&raw(&session)),
+        None,
+        "a piece of the key was written"
+    );
+    let _ = session.wait_exit(Duration::from_secs(30));
+}
+
+/// `cineris auth login` at a terminal honours `[terminal]`: with
+/// `terminal.keyboard = false` it never asks for the enhanced keyboard
+/// protocol, though the terminal answers that it has it (the review of
+/// step 25, finding 17).
+#[test]
+fn sys_auth_login_at_a_terminal_honours_the_terminal_settings() {
+    let phases = cineris_testkit::Phases::new(
+        "sys_auth_login_at_a_terminal_honours_the_terminal_settings",
+    );
+    let machine =
+        Machine::with_config("auth_login_terminal_settings", "terminal.keyboard = false\n");
+    let mut session = machine.tui(&["auth", "login", "anthropic"]);
+    phases.mark("the key");
+    wait_all(
+        &mut session,
+        &["Paste or type the key for anthropic", "enter stores it"],
+    );
+    session.send(TYPED.as_bytes());
+    let count = format!("{} characters, hidden", TYPED.len());
+    wait_all(&mut session, &[&count]);
+    session.send(b"\r");
+    session.wait_for(LIMIT, "the key stored", |t| {
+        shows_ever(t, "Stored the key of anthropic.")
+    });
+    phases.mark("the binary ends");
+    let _ = session.wait_exit(Duration::from_secs(30));
+    let written = raw(&session);
+    assert!(
+        !written.contains("\x1b[>"),
+        "the enhanced keyboard protocol was asked for: `CSI >` at byte {:?}",
+        written.find("\x1b[>")
+    );
+}

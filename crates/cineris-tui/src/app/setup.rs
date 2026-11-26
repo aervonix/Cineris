@@ -33,8 +33,9 @@ pub struct Providers {
     pub providers: Vec<Provider>,
     /// Where a key typed here is kept.
     pub store: KeyStore,
-    /// Whether the sandbox enforces on this machine: `autonomous` is
-    /// offered only then.
+    /// Whether a session started now would be confined: the sandbox
+    /// enforces on this machine and the configuration in force leaves it
+    /// on (since the step 25 fixes). `autonomous` is offered only then.
     pub sandbox: bool,
 }
 
