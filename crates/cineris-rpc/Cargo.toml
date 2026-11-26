@@ -12,6 +12,8 @@ doctest = false
 [dependencies]
 cineris-protocol.workspace = true
 cineris-base.workspace = true
+# With none of its features: which the server's core has is the binary's
+# choice.
 cineris-core.workspace = true
 
 serde.workspace = true
@@ -52,6 +54,9 @@ test-hooks = []
 [dev-dependencies]
 cineris-rpc = { path = ".", features = ["test-hooks"] }
 cineris-testkit.workspace = true
+# The tests' core has the features the binary ships with: a test of a hook
+# and an extension's program needs the script engine.
+cineris-core = { workspace = true, features = ["mcp", "sandbox", "scripts"] }
 # A core for the tests only, as the binary makes one: its configuration's
 # environment (`cineris-config`), and its shell and process runner on the
 # fake timer (`cineris-tools`).
