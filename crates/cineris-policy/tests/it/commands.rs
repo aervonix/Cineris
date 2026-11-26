@@ -626,3 +626,51 @@ fn the_command_table_for_cmd_and_for_a_shell_that_is_not_known() {
     assert_eq!(said(&shell(&unrestricted, "del x")), Deny);
     let _ = at;
 }
+
+/// Cineris's own approving commands are refused at every level,
+/// `unrestricted` included, in both shells' syntax, and an allow rule for
+/// them lifts nothing; one that only reads runs as any command does (since
+/// step 28's third pull request, the owner's answer).
+#[test]
+fn the_harnesss_approving_commands_are_refused_at_every_level_whatever_the_rules() {
+    for shell_syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell] {
+        for level in [
+            Level::ReadOnly,
+            Level::Supervised,
+            Level::Autonomous,
+            Level::Unrestricted,
+        ] {
+            let engine = engine_with(|parts| {
+                parts.shell = shell_syntax;
+                parts.level = level.clone();
+                parts.rules = vec![
+                    user(Effect::Exec, "cineris *", RuleAction::Allow),
+                    user(Effect::Exec, "cin *", RuleAction::Allow),
+                    user(Effect::Exec, "env *", RuleAction::Allow),
+                ];
+            });
+            for command in [
+                "cineris ext add ./tracker",
+                "cin permissions trust",
+                "env FOO=1 cineris serve --stdio",
+                "cineris ext list && cineris ext remove tracker",
+            ] {
+                let outcome = shell(&engine, command);
+                assert_eq!(
+                    said(&outcome),
+                    Deny,
+                    "{command:?} at {level:?} in {shell_syntax:?}: {}",
+                    reason(&outcome)
+                );
+                assert!(
+                    reason(&outcome).contains("run it in your own terminal"),
+                    "{}",
+                    reason(&outcome)
+                );
+            }
+            if level == Level::Unrestricted {
+                assert_ne!(said(&shell(&engine, "cineris ext list")), Deny);
+            }
+        }
+    }
+}

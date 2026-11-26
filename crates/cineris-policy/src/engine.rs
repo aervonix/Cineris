@@ -1523,6 +1523,18 @@ impl Engine {
     /// line is a command that only reads.
     fn judge_command(&self, rules: &RuleSet, command: &str, cwd: &AbsPath) -> (Vec<Finding>, bool) {
         WORK.with(|work| work.set(0));
+        // The harness's own approving commands: refused at every level, by
+        // a protection no rule lifts, before any rule is read (since step
+        // 28's third pull request, the owner's answer).
+        if let Some(what) = crate::approving::refused(command, self.shell) {
+            return (
+                vec![Finding::Deny {
+                    reason: crate::approving::reason(&what),
+                    built_in: true,
+                }],
+                false,
+            );
+        }
         let analysis = analyse(command, self.shell);
         let mut findings = Vec::new();
         match rules.exec_restriction(command, analysis.parts(), self.shell) {
