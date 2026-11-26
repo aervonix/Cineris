@@ -88,7 +88,7 @@ impl Started {
 
 /// The forms `shell-gate` refuses (`examples/shell-gate/README.md`, "What
 /// it refuses, in these forms"), each with what it shows.
-const REFUSED: [&str; 37] = [
+const REFUSED: [&str; 38] = [
     // `rm`, recursive and forced: short options, alone or together.
     "rm -rf build",
     "rm -fr build",
@@ -133,6 +133,9 @@ const REFUSED: [&str; 37] = [
     "git -C repo --attr-source HEAD push --force",
     // A forced refspec given as configuration.
     "git -c remote.origin.push=+refs/heads/main:refs/heads/main push origin",
+    // After `sudo`, read from each word that names `git`: here the first
+    // is sudo's user.
+    "sudo -u git git push --force",
     // And through a shell given the line.
     "bash -c 'git push --force'",
     // What only looks like one is refused too, as the README says.

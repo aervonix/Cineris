@@ -90,6 +90,15 @@ packages: cineris-ext
 caught-by:
     cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
 
+[break] shell-gate-reads-a-push-from-the-first-git-alone
+rule: The `shell-gate` example reads a forced push from each word that names `git`, so that `sudo -u git git push --force`, whose first is sudo's user, is refused.
+file: examples/shell-gate/main.js
+find: return words.some((word, at) => program(word) === "git" && pushesForcefullyAt(words, at));
+replace: return words.some((word, at) => program(word) === "git" && words.findIndex((first) => program(first) === "git") === at && pushesForcefullyAt(words, at));
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
+
 # `release`'s `git log`, the rule its README offers for it, and the revision
 # it refuses (the review of step 28's close, H1 and L6).
 
