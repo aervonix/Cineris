@@ -208,12 +208,19 @@ fn an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text() {
     )
     .unwrap();
     pin(&world, &folder);
-    cache(&world, &folder);
+    // Not in the registration cache: registered as the session opens,
+    // held there while the list is asked for, which waits for it.
     world.put(".cineris/commands/ship.md", "Ship the SECRET build.");
     let core = world.core();
     world.run(async {
+        let registering =
+            cineris_testkit::Hold::new(cineris_core::ext::BEFORE_AN_EXTENSION_IS_REGISTERED);
         let front = start(&world, &core).await;
-        let list = listed(&front).await;
+        let mut list = std::pin::pin!(listed(&front));
+        registering.drive_until_reached(list.as_mut()).await;
+        registering.release();
+        drop(registering);
+        let list = list.await;
         let deploy = list
             .commands
             .iter()
