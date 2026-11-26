@@ -466,7 +466,6 @@ pub(crate) struct Live {
     /// commands, L2).
     pub(crate) interrupts_sent: Mutex<Vec<(ClientId, u64)>>,
     /// The session's hook commands (step 28).
-    #[cfg(feature = "scripts")]
     pub(crate) command_hooks: Arc<crate::ext::SessionHooks>,
 }
 
@@ -952,7 +951,6 @@ impl Core {
             shell_live,
             repository,
             extensions,
-            #[cfg(feature = "scripts")]
             command_hooks,
         } = assembled;
         // The client is listening before the session can say anything.
@@ -1016,7 +1014,6 @@ impl Core {
             lease_count: AtomicU64::new(lease_count),
             knowledge,
             extensions,
-            #[cfg(feature = "scripts")]
             command_hooks,
             turn_start: tokio::sync::Mutex::new(()),
             running_commands: Mutex::new(Vec::new()),
@@ -1026,7 +1023,6 @@ impl Core {
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The session's `session.start` hooks, now that it is open: the
         // first turn waits for them (step 28).
-        #[cfg(feature = "scripts")]
         {
             let handle = live.handle.clone();
             live.command_hooks
@@ -1240,7 +1236,6 @@ impl Core {
         // What of its hooks still runs is stopped and waited for, then its
         // `session.end` hooks are given up to five seconds, before the
         // close's look at the protected paths (step 28).
-        #[cfg(feature = "scripts")]
         {
             live.command_hooks.close().await;
             live.command_hooks
@@ -1429,10 +1424,7 @@ impl Core {
                 // The run's own token, a child of the session's that the
                 // run holds: its close reaches it (the review of step 28's
                 // commands, M2).
-                #[cfg(feature = "scripts")]
                 let cancel = live.command_hooks.commands.runs_token();
-                #[cfg(not(feature = "scripts"))]
-                let cancel = self.inner.options.cancel.child();
                 crate::commands::sent(&live, client, call, cancel);
             }
             return;
@@ -1820,10 +1812,7 @@ impl Core {
                 // the step (the review of step 28's commands, L3). An
                 // interrupt from any client that may drive the session, sent
                 // while it waits or runs, stops it (step 28).
-                #[cfg(feature = "scripts")]
                 let cancel = || live.command_hooks.commands.runs_token();
-                #[cfg(not(feature = "scripts"))]
-                let cancel = || self.inner.options.cancel.child();
                 let run = params.command.as_ref().map(|call| {
                     (
                         crate::commands::Run::taken(&live, client, call, cancel()),
@@ -1886,7 +1875,6 @@ impl Core {
                     .map_err(|why| not_settled(&why))?;
                 // Nor before its `session.start` hooks that are waited for
                 // have answered, up to their time.
-                #[cfg(feature = "scripts")]
                 live.command_hooks.started().await;
                 // The start of a turn is one of the moments the files are
                 // looked at (08-configuration, "How changes are noticed"):
@@ -2179,33 +2167,19 @@ impl Core {
             Op::ExtensionsStatus(params) => {
                 // A session's, as its finding loaded them and with the gates
                 // it holds; with none, the user's own (since step 28).
-                #[cfg(feature = "scripts")]
                 let (view, gates) = match &params.session_id {
                     Some(session) => {
                         let live = self.open_for(client, session)?;
                         (
                             live.extensions.view().await,
-                            live.command_hooks.scripts.held_gates(),
+                            live.command_hooks.held_gates(),
                         )
                     }
                     None => (None, Vec::new()),
                 };
-                #[cfg(not(feature = "scripts"))]
-                let gates: Vec<(String, String, String, String)> = match &params.session_id {
-                    Some(session) => {
-                        self.open_for(client, session)?;
-                        Vec::new()
-                    }
-                    None => Vec::new(),
-                };
                 let core = self.clone();
                 let status = Self::blocking(move || {
-                    Ok(crate::ext::manage::status(
-                        &core,
-                        #[cfg(feature = "scripts")]
-                        view.as_ref(),
-                        &gates,
-                    ))
+                    Ok(crate::ext::manage::status(&core, view.as_ref(), &gates))
                 })
                 .await?;
                 Ok(OpResult::ExtensionsStatus(status))

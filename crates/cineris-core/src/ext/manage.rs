@@ -79,7 +79,14 @@ impl ExtensionStanding {
     #[must_use]
     pub fn words(&self) -> String {
         match self {
+            #[cfg(feature = "scripts")]
             Self::Approved => "approved: a session loads it".to_owned(),
+            // Nothing is loaded without the script engine.
+            #[cfg(not(feature = "scripts"))]
+            Self::Approved => format!(
+                "approved, and not loaded: {}",
+                super::without_engine::NO_SCRIPT_ENGINE
+            ),
             Self::Changed => "changed since you approved it: not loaded, and its gating \
                               hooks hold, failing, until you approve it again or turn it off"
                 .to_owned(),
@@ -1468,13 +1475,12 @@ impl Core {
 /// pull request). Blocks.
 pub(crate) fn status(
     core: &Core,
-    #[cfg(feature = "scripts")] view: Option<&super::found::SessionView>,
+    view: Option<&super::found::SessionView>,
     gates: &[(String, String, String, String)],
 ) -> cineris_protocol::methods::ExtensionsStatusResult {
     use cineris_protocol::methods::{ComponentStatus, ExtensionsStatusResult, HeldGate};
     let options = &core.inner.options;
     let home = options.env.home();
-    #[cfg(feature = "scripts")]
     let (resolver, config, state, project, for_the_run, disabled) = match view {
         Some(view) => (
             Some(Arc::clone(&view.resolver)),
@@ -1486,66 +1492,25 @@ pub(crate) fn status(
         ),
         None => none_of(core),
     };
-    #[cfg(not(feature = "scripts"))]
-    let (resolver, config, state, project, for_the_run, disabled) = none_of(core);
     let Some(resolver) = resolver else {
         return ExtensionsStatusResult {
             extensions: Vec::new(),
             problems: Vec::new(),
         };
     };
-    let mut problems = Vec::new();
-    let pins = match &state {
-        Some(state) => PinStore::new(state.pins_file(), Arc::clone(&options.clock))
-            .pins()
-            .map_err(|failure| {
-                super::found::with_paths_shown(
-                    &failure.to_string(),
-                    &[&state.pins_file()],
-                    home.as_deref(),
-                )
-            }),
-        None => Ok(UserPins::default()),
-    };
-    let trust = match (&state, &project) {
-        (Some(state), Some(key)) => {
-            cineris_policy::TrustStore::new(state.trust_file(), Arc::clone(&options.clock))
-                .project(key)
-                .map_err(|_| {
-                    format!(
-                        "the trust store `{}` could not be read",
-                        in_code(&shown_path(&state.trust_file(), home.as_deref()))
-                    )
-                })
-        }
-        _ => Ok(ProjectTrust::untrusted()),
-    };
-    for problem in [pins.as_ref().err(), trust.as_ref().err()]
-        .into_iter()
-        .flatten()
-    {
-        problems.push(problem.clone());
-    }
-    let user = config.map(|config| discover::discover(&[Root::user(&config)], &resolver));
-    let project_found = project
-        .as_ref()
-        .map(|_| super::found::in_project(&resolver, &options.clock).0);
-    let cache = state.as_ref().map(|state| {
-        RegistrationCache::new(state.registration_cache_file())
-            .with_clock(Arc::clone(&options.clock))
-            .load()
-    });
-    let listed = judged(&Judging {
-        user: user.as_ref(),
-        project: project_found.as_ref(),
-        project_trusted: project.is_some(),
-        pins: pins.as_ref().map_err(Clone::clone),
-        trust: trust.as_ref().map_err(Clone::clone),
-        for_the_run: &for_the_run,
-        disabled: &disabled,
-        cache: cache.as_ref().map(|loaded| &loaded.cache),
-        confined: false,
-    });
+    let (listed, problems) = judge(
+        &JudgedFrom {
+            resolver: &resolver,
+            config: config.as_deref(),
+            state: state.as_ref(),
+            project: project.as_ref(),
+            for_the_run: &for_the_run,
+            disabled: &disabled,
+            clock: &options.clock,
+            home: home.as_deref(),
+        },
+        judged,
+    );
     let extensions = listed
         .into_iter()
         .map(|one| {
@@ -1562,8 +1527,10 @@ pub(crate) fn status(
                 ),
                 None => (None, None),
             };
+            // Without the script engine nothing is loaded, and what stands
+            // approved says why.
             #[cfg(not(feature = "scripts"))]
-            let (loaded, unloaded): (Option<bool>, Option<String>) = (None, None);
+            let (loaded, unloaded) = (None, super::without_engine::not_loaded(&one.standing));
             let (state, error) = component_state(&one.standing, loaded, unloaded);
             let held: Vec<HeldGate> = gates
                 .iter()
@@ -1597,6 +1564,85 @@ pub(crate) fn status(
         extensions,
         problems,
     }
+}
+
+/// Where a session's extensions are judged from, as `extensions/status`
+/// and a build without the script engine judge them: the session's
+/// resolver, the configuration directory the user's are in, the state
+/// directory of the stores and the cache, the project's key while it is
+/// trusted, a yes the trust store could not keep, and the names turned off.
+pub(crate) struct JudgedFrom<'a> {
+    pub(crate) resolver: &'a cineris_base::PathResolver,
+    pub(crate) config: Option<&'a Path>,
+    pub(crate) state: Option<&'a cineris_config::StateDir>,
+    pub(crate) project: Option<&'a cineris_protocol::ProjectKey>,
+    pub(crate) for_the_run: &'a [Definition],
+    pub(crate) disabled: &'a [String],
+    pub(crate) clock: &'a cineris_base::SharedClock,
+    pub(crate) home: Option<&'a Path>,
+}
+
+/// What `with` makes of the extensions `from` names, judged as a session
+/// would judge them, the stores of approvals, the folders and the
+/// registration cache read first; and what could not be read, each a
+/// sentence. Blocks.
+pub(crate) fn judge<R>(
+    from: &JudgedFrom<'_>,
+    with: impl FnOnce(&Judging<'_>) -> R,
+) -> (R, Vec<String>) {
+    let clock = from.clock;
+    let home = from.home;
+    let mut problems = Vec::new();
+    let pins = match from.state {
+        Some(state) => PinStore::new(state.pins_file(), Arc::clone(clock))
+            .pins()
+            .map_err(|failure| {
+                super::found::with_paths_shown(&failure.to_string(), &[&state.pins_file()], home)
+            }),
+        None => Ok(UserPins::default()),
+    };
+    let trust = match (from.state, from.project) {
+        (Some(state), Some(key)) => {
+            cineris_policy::TrustStore::new(state.trust_file(), Arc::clone(clock))
+                .project(key)
+                .map_err(|_| {
+                    format!(
+                        "the trust store `{}` could not be read",
+                        in_code(&shown_path(&state.trust_file(), home))
+                    )
+                })
+        }
+        _ => Ok(ProjectTrust::untrusted()),
+    };
+    for problem in [pins.as_ref().err(), trust.as_ref().err()]
+        .into_iter()
+        .flatten()
+    {
+        problems.push(problem.clone());
+    }
+    let user = from
+        .config
+        .map(|config| discover::discover(&[Root::user(config)], from.resolver));
+    let project_found = from
+        .project
+        .map(|_| super::found::in_project(from.resolver, clock).0);
+    let cache = from.state.map(|state| {
+        RegistrationCache::new(state.registration_cache_file())
+            .with_clock(Arc::clone(clock))
+            .load()
+    });
+    let made = with(&Judging {
+        user: user.as_ref(),
+        project: project_found.as_ref(),
+        project_trusted: from.project.is_some(),
+        pins: pins.as_ref().map_err(Clone::clone),
+        trust: trust.as_ref().map_err(Clone::clone),
+        for_the_run: from.for_the_run,
+        disabled: from.disabled,
+        cache: cache.as_ref().map(|loaded| &loaded.cache),
+        confined: false,
+    });
+    (made, problems)
 }
 
 /// The state an extension is in, from its standing and, in a session,
@@ -1682,7 +1728,7 @@ fn wire_standing(standing: &ExtensionStanding) -> cineris_protocol::methods::Ext
 
 /// `name` as a key of a TOML table's header: bare when it can be, quoted
 /// otherwise (`acme.lint` is one key, `"acme.lint"`).
-fn toml_key(name: &str) -> String {
+pub(crate) fn toml_key(name: &str) -> String {
     let bare = !name.is_empty()
         && name
             .chars()

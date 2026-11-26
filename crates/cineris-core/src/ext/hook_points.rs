@@ -71,6 +71,7 @@ pub(crate) struct PointHooks {
     on: Vec<OnEvent>,
     /// The hooks of the extensions loaded now, beside the hook commands:
     /// each only while its extension is loaded as it was approved.
+    #[cfg(feature = "scripts")]
     scripts: Arc<super::ScriptHooks>,
     commands: Arc<HookCommands>,
     paths: Arc<cineris_base::PathResolver>,
@@ -112,12 +113,41 @@ impl PointHooks {
                 });
             }
         }
+        // Without the script engine, what an extension that stands approved
+        // would gate is held, failing.
+        #[cfg(not(feature = "scripts"))]
+        for held in &hooks.held {
+            on.push(OnEvent {
+                event: held.event,
+                filter: held.filter.clone(),
+                run: Arc::new(Failing {
+                    name: held.hook.clone(),
+                    observes: false,
+                    why: held.why.clone(),
+                }),
+            });
+        }
         Self {
             on,
+            #[cfg(feature = "scripts")]
             scripts: Arc::clone(&hooks.scripts),
             commands: Arc::clone(&hooks.commands),
             paths: Arc::clone(&hooks.paths),
         }
+    }
+}
+
+impl PointHooks {
+    /// Whether a hook of a loaded extension is on `event` for `target`.
+    #[cfg(feature = "scripts")]
+    fn scripts_want(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> bool {
+        self.scripts.wants(event, target)
+    }
+
+    /// Without the script engine no extension is loaded.
+    #[cfg(not(feature = "scripts"))]
+    fn scripts_want(&self, _event: LoopEvent, _target: Option<ToolTarget<'_>>) -> bool {
+        false
     }
 }
 
@@ -140,7 +170,7 @@ impl Hooks for PointHooks {
                 .on
                 .iter()
                 .any(|hook| hook.event == event && on_target(hook.filter.as_ref(), target))
-            || self.scripts.wants(event, target)
+            || self.scripts_want(event, target)
     }
 
     fn matching(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> Vec<Arc<dyn Hook>> {
@@ -150,6 +180,7 @@ impl Hooks for PointHooks {
             .filter(|hook| hook.event == event && on_target(hook.filter.as_ref(), target))
             .map(|hook| Arc::clone(&hook.run))
             .collect();
+        #[cfg(feature = "scripts")]
         matched.extend(self.scripts.matching(event, target));
         if event == LoopEvent::PromptSubmit && self.commands.stop_pending() {
             matched.push(Arc::new(Stopped {

@@ -8105,7 +8105,8 @@ caught-by:
 
 [break] two-hooks-on-an-event-share-a-name
 rule: An extension's hooks on one event are told apart by their names: the second on it is `<extension>/hook.<event>.2`.
-file: crates/cineris-core/src/ext/script_hooks.rs
+file: crates/cineris-core/src/ext/hooks.rs
+in: named
 find: let name = if *count == 1 {
 replace: let name = if *count >= 1 {
 caught-by:

@@ -25,28 +25,50 @@
 //! beside them, each a call of the extension's runtime whose host calls put
 //! no question.
 //!
-//! The script engine is behind the `scripts` feature: without it, no
-//! extension's tool is registered, and no hook command is started yet: its
-//! start is `cineris.exec`'s, which the feature builds.
+//! The script engine is behind the `scripts` feature. Without it no
+//! extension is loaded, so none of its tools, commands or hooks is in a
+//! session; the hook commands are, and start as they do with it, through
+//! `cineris.exec`'s path, which is built either way. An extension that
+//! stands approved holds its gating hooks there, failing, since nothing of
+//! it runs (`without_engine`).
 
-#[cfg(feature = "scripts")]
+// What only an extension's script reaches (a tool's or a command's call,
+// `cineris.http.fetch`, `cineris.state`, `cineris.ask`) is not reached
+// without the script engine, which runs scripts; a hook command's start goes
+// through the same path, and is built either way.
+#[cfg_attr(
+    not(feature = "scripts"),
+    allow(
+        dead_code,
+        reason = "without the script engine only a hook command's start runs a program"
+    )
+)]
 mod exec;
 pub(crate) mod found;
-#[cfg(feature = "scripts")]
 mod hook_command;
-#[cfg(feature = "scripts")]
 mod hook_points;
 pub(crate) mod hooks;
-#[cfg(feature = "scripts")]
+#[cfg_attr(
+    not(feature = "scripts"),
+    allow(
+        dead_code,
+        reason = "without the script engine only a hook command's start is served"
+    )
+)]
 mod host;
 pub mod manage;
 #[cfg(feature = "scripts")]
 mod prompt;
-#[cfg(feature = "scripts")]
 mod protected;
 #[cfg(feature = "scripts")]
 mod script_hooks;
-#[cfg(feature = "scripts")]
+#[cfg_attr(
+    not(feature = "scripts"),
+    allow(
+        dead_code,
+        reason = "without the script engine nothing keeps a value: only a script does"
+    )
+)]
 mod state;
 #[cfg(feature = "scripts")]
 pub(crate) mod tools;
@@ -58,6 +80,7 @@ pub(crate) mod tools;
     )
 )]
 pub(crate) mod watched;
+pub(crate) mod without_engine;
 
 use std::path::PathBuf;
 
@@ -70,29 +93,25 @@ pub use found::{
     NOT_CONFINED, THE_QUESTIONS_TRUST_IS_READ, WAIT_SAID_AFTER, WAITING, WAITING_FOR_HOOKS,
 };
 
-#[cfg(feature = "scripts")]
 pub(crate) use exec::{ExecParts, HarnessFiles};
 #[cfg(feature = "scripts")]
 pub(crate) use hook_command::turn_number;
-#[cfg(feature = "scripts")]
 pub use hook_command::{
     A_CLOSE_WAITS_FOR_A_RUN, A_FIRST_TURN_WAITS, A_HOOK_WRITES, A_SESSION_ENDS,
     A_SESSION_START_HOOK_IS_HEARD, HookOutcome, HookRun,
 };
-#[cfg(feature = "scripts")]
 pub(crate) use hook_command::{HookCommands, SessionHooks};
-#[cfg(feature = "scripts")]
 pub(crate) use hook_points::PointHooks;
+pub(crate) use host::HostParts;
 #[cfg(feature = "scripts")]
 pub(crate) use prompt::PromptParts;
 #[cfg(feature = "scripts")]
 pub use script_hooks::{A_SCRIPT_HOOK_ENDS, A_SCRIPT_HOOK_STARTS};
 #[cfg(feature = "scripts")]
 pub(crate) use script_hooks::{Gate, ScriptHooks, SeenHooks, SessionStart, Stand, way_out};
-#[cfg(feature = "scripts")]
 pub(crate) use state::{ExtState, ProjectStore};
 #[cfg(feature = "scripts")]
-pub(crate) use tools::{HostParts, register};
+pub(crate) use tools::register;
 
 /// An extension the user approved, as the session is given it: its folder,
 /// the hash it was approved at, and what it registered then.

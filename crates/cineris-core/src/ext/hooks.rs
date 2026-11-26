@@ -15,6 +15,8 @@
 //!   runs it only while the project is trusted and its pin is its hash
 //!   ([`in_session`]).
 
+use std::collections::HashMap;
+
 use cineris_base::{in_code, visible};
 use cineris_config::Loaded;
 use cineris_config::schema::HookSettings;
@@ -313,6 +315,34 @@ pub(crate) fn in_session(
         refused,
         told,
     }
+}
+
+/// Each hook of `definitions` on an event `allowed` lists (`None`: any), with
+/// its place among them and its name: the extension's, `hook.` and the
+/// event, and a number from the second on one event on.
+pub(crate) fn named<'a>(
+    extension: &str,
+    definitions: &'a [cineris_ext::registration::HookDef],
+    allowed: Option<&[Event]>,
+) -> Vec<(usize, String, Event, &'a cineris_ext::registration::HookDef)> {
+    let mut counts: HashMap<Event, usize> = HashMap::new();
+    let mut each = Vec::new();
+    for (index, definition) in definitions.iter().enumerate() {
+        let Some(event) = Event::parse(&definition.event)
+            .filter(|event| allowed.is_none_or(|allowed| allowed.contains(event)))
+        else {
+            continue;
+        };
+        let count = counts.entry(event).or_insert(0);
+        *count += 1;
+        let name = if *count == 1 {
+            format!("{extension}/hook.{}", event.as_str())
+        } else {
+            format!("{extension}/hook.{}.{count}", event.as_str())
+        };
+        each.push((index, name, event, definition));
+    }
+    each
 }
 
 #[cfg(test)]

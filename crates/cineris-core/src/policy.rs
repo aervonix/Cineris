@@ -1291,7 +1291,6 @@ impl EnginePolicy {
     /// waits for the answer within the approvals' time limit. `None` when
     /// nobody can be asked, nobody answered in time, or the user declined
     /// to answer. Dropped, it withdraws the question.
-    #[cfg(feature = "scripts")]
     pub(crate) async fn put_question(
         &self,
         session: &cineris_protocol::SessionId,

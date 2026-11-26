@@ -89,8 +89,7 @@ use cineris_tools::{BoxFuture, ContentStore, Effect, FileTable, Json, Plan, RunC
 use serde_json::json;
 
 use super::exec::{self, Decided, ToDecide};
-use super::host::CallHost;
-use super::tools::HostParts;
+use super::host::{CallHost, HostParts};
 use crate::policy::EnginePolicy;
 
 /// The longest part of a hook's standard error a failure quotes.
@@ -237,7 +236,13 @@ pub(crate) struct SessionHooks {
     pub(crate) starting: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// The hooks of the extensions the session has loaded, beside these
     /// (`super::script_hooks`).
+    #[cfg(feature = "scripts")]
     pub(crate) scripts: Arc<super::ScriptHooks>,
+    /// Without the script engine, the gating hooks of each extension that
+    /// stands approved, held on their events as hooks that fail, since
+    /// nothing of it runs (`super::without_engine`).
+    #[cfg(not(feature = "scripts"))]
+    pub(crate) held: Vec<super::without_engine::Held>,
 }
 
 /// The JSON a hook of the session's own events is given: the event, the
@@ -278,6 +283,7 @@ impl SessionHooks {
     /// project's changed since it was approved, or an extension's held gate.
     /// What a script command checks before it runs (since step 28's
     /// commands), since its text would be refused.
+    #[cfg(feature = "scripts")]
     pub(crate) fn prompt_gate_held(&self) -> Option<String> {
         if let Some(refused) = self
             .refused
@@ -290,6 +296,32 @@ impl SessionHooks {
             ));
         }
         self.scripts.held_on(cineris_agent::HookEvent::PromptSubmit)
+    }
+
+    /// Each gating hook held of an extension that does not stand as it was
+    /// approved, or, without the script engine, of each that stands
+    /// approved: its extension's name, the hook's name, its event and why
+    /// it refuses (`extensions/status`).
+    #[cfg(feature = "scripts")]
+    pub(crate) fn held_gates(&self) -> Vec<(String, String, String, String)> {
+        self.scripts.held_gates()
+    }
+
+    /// [`Self::held_gates`], without the script engine: those of each
+    /// extension that stands approved.
+    #[cfg(not(feature = "scripts"))]
+    pub(crate) fn held_gates(&self) -> Vec<(String, String, String, String)> {
+        self.held
+            .iter()
+            .map(|held| {
+                (
+                    held.extension.clone(),
+                    held.hook.clone(),
+                    held.event.as_str().to_owned(),
+                    held.why.clone(),
+                )
+            })
+            .collect()
     }
 
     /// The hooks on `event` of the session's own (`session.start`,
@@ -433,8 +465,14 @@ impl SessionHooks {
     /// waited for.
     pub(crate) async fn end(&self, session: &SessionId, timer: &cineris_base::SharedTimer) {
         let runs = self.runs_of(Event::SessionEnd, session);
+        #[cfg(feature = "scripts")]
         let scripts = self.scripts.session_ending(session);
-        if runs.is_empty() && scripts.is_empty() {
+        #[cfg(feature = "scripts")]
+        let nothing = runs.is_empty() && scripts.is_empty();
+        // Without the script engine no extension's hook is on the event.
+        #[cfg(not(feature = "scripts"))]
+        let nothing = runs.is_empty();
+        if nothing {
             return;
         }
         cineris_base::hook::await_point!(A_SESSION_ENDS);
@@ -444,6 +482,7 @@ impl SessionHooks {
         // others' graces in turn (the early review of the script hooks, L5).
         let mut stops: Vec<Box<dyn Fn() + Send + Sync>> = Vec::new();
         let mut ending: Vec<Ending<'_>> = Vec::new();
+        #[cfg(feature = "scripts")]
         for (name, running) in scripts {
             let stop = running.stopper();
             stops.push(Box::new(move || stop.stop()));
@@ -681,11 +720,13 @@ impl HookCommands {
     }
 
     /// The session's store of versions and artifacts.
+    #[cfg(feature = "scripts")]
     pub(crate) fn content(&self) -> &Arc<dyn ContentStore> {
         &self.content
     }
 
     /// What the session's extensions' calls are served with.
+    #[cfg(feature = "scripts")]
     pub(crate) fn parts(&self) -> &Arc<HostParts> {
         &self.parts
     }
@@ -796,6 +837,7 @@ impl HookCommands {
     }
 
     /// The turn running now, if one is.
+    #[cfg(feature = "scripts")]
     pub(crate) fn running_turn(&self) -> Option<TurnId> {
         (self.running)()
     }
@@ -804,6 +846,7 @@ impl HookCommands {
     /// stop of its own (since step 28's commands): the user is told at once,
     /// the turn running now, if one is, stops, and the next prompt is
     /// refused once, as for a hook of no turn.
+    #[cfg(feature = "scripts")]
     pub(crate) fn command_stopped(&self, shown: &str, note: &str) {
         (self.parts.tell)(format!(
             "The command `{}` was stopped: {note}",

@@ -13,8 +13,11 @@ doctest = false
 default = ["mcp", "sandbox", "scripts"]
 # Links the MCP client.
 mcp = ["dep:cineris-mcp"]
-# Links the script engine in `cineris-ext` (decision 0005). Without it,
-# extensions are custom commands and hook commands, and a session has no
+# Links the script engine in `cineris-ext` (decision 0005). Without it no
+# extension is loaded: none of its tools, commands or hooks is in a session,
+# and each one that stands approved holds its gating hooks on their events,
+# failing, so that its gates do not lapse. Custom command files and the
+# configuration's hook commands work as they do with it. A session has no
 # skills for now: they are found on the extensions' finding, which needs it.
 scripts = ["cineris-ext/scripts"]
 # Links the OS sandbox's backends (Landlock and seccomp on Linux). Without it
