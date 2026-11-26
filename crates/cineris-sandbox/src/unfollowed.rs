@@ -13,13 +13,14 @@
 //! | | How |
 //! |---|---|
 //! | Linux | The folder opened with `O_DIRECTORY` and `O_NOFOLLOW`; each name in it with `openat` relative to the folder's descriptor, `O_NOFOLLOW` always and `O_DIRECTORY` for a folder, a file also with `O_NONBLOCK` and `O_NOCTTY`, so that a FIFO or a terminal opens at once and is then refused as no file; the folder listed through a descriptor of its own (`fdopendir`). |
-//! | Windows | The folder opened with `FILE_FLAG_OPEN_REPARSE_POINT`; each name in it with `NtCreateFile` relative to the folder's handle and `FILE_OPEN_REPARSE_POINT`; the folder listed through its handle (`GetFileInformationByHandleEx`). Every handle is held without sharing deletion, so that nothing held can be renamed or removed while the tree is read. A reparse point that leads somewhere (a symbolic link, a junction, and every tag not known to be a placeholder, `cineris_base::nofollow::is_placeholder_tag`) is refused. A placeholder (a cloud file, a file the system compressed) is opened a second time in the ordinary way relative to the same folder, while the first handle, which shares no deletion, keeps the name from being swapped, and the two are checked to be one file. |
+//! | Windows | Each name in a folder opened with `NtCreateFile` relative to the folder's handle and `FILE_OPEN_REPARSE_POINT`; the folder listed through its handle (`GetFileInformationByHandleEx`). Every handle is held without sharing deletion, so that nothing held can be renamed or removed while the tree is read. A reparse point that leads somewhere (a symbolic link, a junction, and every tag not known to be a placeholder, `cineris_base::nofollow::is_placeholder_tag`) is refused. A placeholder (a cloud file, a file the system compressed) is opened a second time in the ordinary way relative to the same folder, while the first handle, which shares no deletion, keeps the name from being swapped, and the two are checked to be one file. |
 //! | Elsewhere | Not built: every open is refused. |
 //!
 //! **The folder named is opened as its path says:** the names before its
 //! last are followed as the system follows them (the person named the path),
-//! and its last name is not: a folder named through a link at its own name is
-//! refused, to be named where it leads.
+//! and its last name is opened relative to them and not followed, a trailing
+//! separator or `.` taken off first: a folder named through a link at its
+//! own name is refused, to be named where it leads.
 //!
 //! These functions block. Callers run them on the blocking pool.
 
@@ -101,17 +102,34 @@ impl Folder {
     ///
     /// [`Refused`]: nothing there, a link at its name, or no folder.
     pub fn open(path: &Path) -> Result<Self, Refused> {
-        sys::open(path).map(|inner| Self { inner })
+        let (parent, last) = split_last(path)?;
+        let parent = Self {
+            inner: sys::open_following(&parent)?,
+        };
+        parent.folder(&last)
+    }
+
+    /// Opens the folder at `path` as the system follows its whole path, its
+    /// last name included: for a folder whose own name may be a link the
+    /// person made, everything below it then read through handles.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: nothing there, or no folder.
+    pub fn open_following(path: &Path) -> Result<Self, Refused> {
+        sys::open_following(path).map(|inner| Self { inner })
     }
 
     /// Every name in the folder but `.` and `..`, in the order the system
-    /// lists them, through the folder's own handle.
+    /// lists them, through the folder's own handle: at most `most` and one
+    /// more, so that a folder of more than `most` is told without its whole
+    /// listing being taken.
     ///
     /// # Errors
     ///
     /// When the system cannot list it to its end.
-    pub fn entries(&mut self) -> io::Result<Vec<Entry>> {
-        self.inner.entries()
+    pub fn entries(&mut self, most: usize) -> io::Result<Vec<Entry>> {
+        self.inner.entries(most.saturating_add(1))
     }
 
     /// The folder `name` in this one, opened relative to it: a link at the
@@ -136,6 +154,39 @@ impl Folder {
         one_name(name)?;
         self.inner.file(name)
     }
+}
+
+/// `path` as its parent, as the system follows it, and its last name: a
+/// trailing separator or `.` taken off, so that the last name is opened
+/// relative to its parent and never followed (the early review of step 28's
+/// third pull request: `link/` and `link/.` opened what a link led to). A
+/// path that is `.` alone is the working directory's; one that ends in
+/// `..`, or is a root, names no folder of its own and is refused.
+fn split_last(path: &Path) -> Result<(std::path::PathBuf, OsString), Refused> {
+    use std::path::Component;
+    let only_here = path
+        .components()
+        .all(|component| component == Component::CurDir);
+    let whole = if only_here {
+        std::env::current_dir().map_err(Refused::Io)?
+    } else {
+        path.to_path_buf()
+    };
+    let mut components: Vec<Component<'_>> = whole.components().collect();
+    while components.last() == Some(&Component::CurDir) {
+        components.pop();
+    }
+    let Some(Component::Normal(last)) = components.pop() else {
+        return Err(Refused::NotAName);
+    };
+    let last = last.to_os_string();
+    let parent: std::path::PathBuf = components.iter().collect();
+    let parent = if parent.as_os_str().is_empty() {
+        std::path::PathBuf::from(".")
+    } else {
+        parent
+    };
+    Ok((parent, last))
 }
 
 /// Refuses what is not one name: empty, `.`, `..`, or holding a separator
@@ -192,22 +243,14 @@ mod sys {
         }
     }
 
-    pub(super) fn open(path: &Path) -> Result<Folder, Refused> {
+    /// The folder at `path` as the system follows it: the parent of the
+    /// folder named, whose last name is then opened relative to it.
+    pub(super) fn open_following(path: &Path) -> Result<Folder, Refused> {
         let file = OpenOptions::new()
             .read(true)
-            .custom_flags(UNFOLLOWED | libc::O_DIRECTORY)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOCTTY | libc::O_NONBLOCK)
             .open(path)
-            .map_err(refused)
-            // With `O_DIRECTORY`, a link at the name is "not a folder":
-            // told apart by a look at the name itself.
-            .map_err(|refused| match refused {
-                Refused::NotAFolder
-                    if std::fs::symlink_metadata(path).is_ok_and(|found| found.is_symlink()) =>
-                {
-                    Refused::Link
-                }
-                other => other,
-            })?;
+            .map_err(refused)?;
         folder_of(file)
     }
 
@@ -302,7 +345,7 @@ mod sys {
             })
         }
 
-        pub(super) fn entries(&mut self) -> io::Result<Vec<Entry>> {
+        pub(super) fn entries(&mut self, most: usize) -> io::Result<Vec<Entry>> {
             // A descriptor of the listing's own, since `closedir` closes the
             // one it is given; it shares the folder's offset, which is put
             // back to the start first.
@@ -320,7 +363,7 @@ mod sys {
             // SAFETY: a stream `fdopendir` made, not yet closed.
             unsafe { libc::rewinddir(stream.0) };
             let mut entries = Vec::new();
-            loop {
+            while entries.len() < most {
                 // SAFETY: errno is this thread's own; `readdir` sets it only
                 // on an error, so it is cleared first to tell an error from
                 // the end of the listing.
@@ -404,7 +447,7 @@ mod sys {
     };
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_FULL_DIR_INFO,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FULL_DIR_INFO,
         FILE_GENERIC_READ, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
         FILE_SHARE_WRITE, FILE_TRAVERSE, FileAttributeTagInfo, FileFullDirectoryInfo,
         FileFullDirectoryRestartInfo, GetFileInformationByHandleEx, SYNCHRONIZE,
@@ -472,26 +515,16 @@ mod sys {
         }
     }
 
-    pub(super) fn open(path: &Path) -> Result<Folder, Refused> {
-        let open = |reparse: u32| {
-            OpenOptions::new()
-                .read(true)
-                .share_mode(SHARED)
-                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | reparse)
-                .open(path)
-                .map(OwnedHandle::from)
-                .map_err(refused)
-        };
-        let first = open(FILE_FLAG_OPEN_REPARSE_POINT)?;
-        let handle = if placeholder(&first)? {
-            // A placeholder: opened again in the ordinary way, the first
-            // handle keeping the name from being swapped meanwhile.
-            let second = open(0)?;
-            same_file(&first, &second)?;
-            second
-        } else {
-            first
-        };
+    /// The folder at `path` as the system follows it: the parent of the
+    /// folder named, whose last name is then opened relative to it.
+    pub(super) fn open_following(path: &Path) -> Result<Folder, Refused> {
+        let handle = OpenOptions::new()
+            .read(true)
+            .share_mode(SHARED)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path)
+            .map(OwnedHandle::from)
+            .map_err(refused)?;
         folder_of(handle)
     }
 
@@ -620,13 +653,16 @@ mod sys {
             Ok((file, metadata))
         }
 
-        pub(super) fn entries(&mut self) -> io::Result<Vec<Entry>> {
+        pub(super) fn entries(&mut self, most: usize) -> io::Result<Vec<Entry>> {
             // 64 KiB, aligned for the entries, which are on 8-byte bounds.
             let mut buffer = vec![0_u64; 8 * 1024];
             let size = (buffer.len() * 8) as u32;
+            let bytes = buffer.len() * 8;
+            let header = std::mem::offset_of!(FILE_FULL_DIR_INFO, FileName);
+            let bad = || io::Error::new(io::ErrorKind::InvalidData, "a folder's listing ran past its buffer");
             let mut entries = Vec::new();
             let mut class = FileFullDirectoryRestartInfo;
-            loop {
+            while entries.len() < most {
                 // SAFETY: an open folder handle with the right to list it,
                 // the class whose buffer is a run of `FILE_FULL_DIR_INFO`, a
                 // buffer this function owns and its size.
@@ -649,13 +685,24 @@ mod sys {
                 let base = buffer.as_ptr().cast::<u8>();
                 let mut offset = 0_usize;
                 loop {
+                    // Each entry is checked to lie inside the buffer, its
+                    // name too, before it is read (the early review of step
+                    // 28's third pull request).
+                    if offset + header > bytes || offset % 8 != 0 {
+                        return Err(bad());
+                    }
                     // SAFETY: the system wrote whole entries into the buffer,
-                    // each at the offset the one before gives, 8-byte
-                    // aligned, its name `FileNameLength` bytes long and inside
-                    // the buffer.
+                    // each at the offset the one before gives; this one's
+                    // fixed part was just checked to lie inside it, 8-byte
+                    // aligned, and its name is checked below before it is
+                    // read.
                     let (next, attributes, tag, name) = unsafe {
                         let info = base.add(offset).cast::<FILE_FULL_DIR_INFO>();
-                        let length = (*info).FileNameLength as usize / 2;
+                        let length_bytes = (*info).FileNameLength as usize;
+                        if offset + header + length_bytes > bytes {
+                            return Err(bad());
+                        }
+                        let length = length_bytes / 2;
                         let name = std::slice::from_raw_parts(
                             std::ptr::addr_of!((*info).FileName).cast::<u16>(),
                             length,
@@ -680,7 +727,7 @@ mod sys {
                         };
                         entries.push(Entry { name, kind });
                     }
-                    if next == 0 {
+                    if next == 0 || entries.len() >= most {
                         break;
                     }
                     offset += next;
@@ -703,7 +750,7 @@ mod sys {
     #[derive(Debug)]
     pub(super) struct Folder;
 
-    pub(super) fn open(_path: &Path) -> Result<Folder, Refused> {
+    pub(super) fn open_following(_path: &Path) -> Result<Folder, Refused> {
         Err(Refused::Unsupported)
     }
 
@@ -716,7 +763,7 @@ mod sys {
             Err(Refused::Unsupported)
         }
 
-        pub(super) fn entries(&mut self) -> io::Result<Vec<Entry>> {
+        pub(super) fn entries(&mut self, _most: usize) -> io::Result<Vec<Entry>> {
             Err(io::Error::from(io::ErrorKind::Unsupported))
         }
     }
@@ -747,7 +794,7 @@ mod tests {
         std::fs::write(dir.join("lib/x.js"), "bc").unwrap();
         let mut root = Folder::open(&dir).unwrap();
         let mut names: Vec<(String, Kind)> = root
-            .entries()
+            .entries(16)
             .unwrap()
             .into_iter()
             .map(|entry| (entry.name.to_string_lossy().into_owned(), entry.kind))
@@ -761,7 +808,7 @@ mod tests {
             ]
         );
         // Listed twice, the same.
-        assert_eq!(root.entries().unwrap().len(), 2);
+        assert_eq!(root.entries(16).unwrap().len(), 2);
         let lib = root.folder(OsStr::new("lib")).unwrap();
         let (_, metadata) = lib.file(OsStr::new("x.js")).unwrap();
         assert_eq!(metadata.len(), 2);
@@ -831,7 +878,7 @@ mod tests {
         }
         let mut root = Folder::open(&tree).unwrap();
         let kinds: Vec<Kind> = root
-            .entries()
+            .entries(16)
             .unwrap()
             .into_iter()
             .map(|entry| entry.kind)
@@ -842,6 +889,128 @@ mod tests {
             Err(Refused::Link)
         ));
         assert!(matches!(root.file(OsStr::new("file")), Err(Refused::Link)));
+        // Named through the link, with a trailing separator or `.` too
+        // (the early review of step 28's third pull request).
+        let named = dir.join("named");
+        let trailing = std::path::PathBuf::from(format!(
+            "{}{}",
+            named.display(),
+            std::path::MAIN_SEPARATOR
+        ));
+        for path in [named.clone(), trailing, named.join(".")] {
+            assert!(
+                matches!(Folder::open(&path), Err(Refused::Link)),
+                "{}",
+                path.display()
+            );
+        }
+        assert!(matches!(
+            Folder::open(&named.join("..")),
+            Err(Refused::NotAName)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A listing stops one past its bound: a folder of a great many names is
+    /// told without the whole of it being taken (the early review of step
+    /// 28's third pull request).
+    #[test]
+    fn a_listing_stops_one_past_its_bound() {
+        let dir = scratch("bound");
+        for name in 0..10 {
+            std::fs::write(dir.join(format!("{name}")), "").unwrap();
+        }
+        let mut root = Folder::open(&dir).unwrap();
+        assert_eq!(root.entries(3).unwrap().len(), 4);
+        assert_eq!(root.entries(100).unwrap().len(), 10);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A FIFO in the folder is refused as no file, at once: the open does
+    /// not wait for a writer (`O_NONBLOCK`).
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[allow(
+        unsafe_code,
+        reason = "a test makes a FIFO, which only a system call does without a process"
+    )]
+    fn a_fifo_is_refused_without_waiting() {
+        let dir = scratch("fifo");
+        let path = std::ffi::CString::new(
+            std::os::unix::ffi::OsStrExt::as_bytes(dir.join("pipe").as_os_str()),
+        )
+        .unwrap();
+        // SAFETY: a NUL-terminated path and a mode.
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        let (said, heard) = std::sync::mpsc::channel();
+        let folder = dir.clone();
+        std::thread::spawn(move || {
+            let root = Folder::open(&folder).unwrap();
+            let _ = said.send(matches!(
+                root.file(OsStr::new("pipe")),
+                Err(Refused::NotAFile)
+            ));
+        });
+        assert_eq!(
+            heard.recv_timeout(std::time::Duration::from_secs(10)),
+            Ok(true),
+            "the open waited on a FIFO, or took it for a file"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// On Windows a folder held is held without sharing deletion: it cannot
+    /// be renamed, nor the names on the way to what is in it, while the tree
+    /// is read.
+    #[cfg(windows)]
+    #[test]
+    fn a_folder_held_cannot_be_renamed() {
+        let dir = scratch("held");
+        std::fs::create_dir(dir.join("tree")).unwrap();
+        let held = Folder::open(&dir.join("tree")).unwrap();
+        assert!(
+            std::fs::rename(dir.join("tree"), dir.join("moved")).is_err(),
+            "a folder held was renamed"
+        );
+        drop(held);
+        std::fs::rename(dir.join("tree"), dir.join("moved")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A junction, the link an ordinary account makes on Windows, is refused
+    /// at a folder's name and at the folder named, never followed. It is
+    /// made with `mklink /J`, which is a command of `cmd.exe`: hence the
+    /// `sys_` name.
+    #[cfg(windows)]
+    #[test]
+    fn sys_a_junction_is_refused_and_never_followed() {
+        let dir = scratch("junction");
+        std::fs::create_dir_all(dir.join("outside")).unwrap();
+        std::fs::write(dir.join("outside").join("secret"), "x").unwrap();
+        std::fs::create_dir(dir.join("tree")).unwrap();
+        for (link, target) in [
+            (dir.join("tree").join("in"), dir.join("outside")),
+            (dir.join("named"), dir.join("tree")),
+        ] {
+            let made = std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(&link)
+                .arg(&target)
+                .output()
+                .expect("run mklink");
+            assert!(made.status.success(), "mklink failed: {made:?}");
+        }
+        let mut root = Folder::open(&dir.join("tree")).unwrap();
+        let kinds: Vec<Kind> = root
+            .entries(16)
+            .unwrap()
+            .into_iter()
+            .map(|entry| entry.kind)
+            .collect();
+        assert_eq!(kinds, [Kind::Link]);
+        assert!(matches!(root.folder(OsStr::new("in")), Err(Refused::Link)));
         assert!(matches!(
             Folder::open(&dir.join("named")),
             Err(Refused::Link)
