@@ -50,13 +50,29 @@ fn join(job: &OwnedHandle) {
 /// what this file is: the rule tells a test module's file by its path, and
 /// this one's `mod tests;` is inside `sys`, which it does not follow.)
 #[cfg(test)]
+fn again(test: &str, arguments: &[&str], variables: &[(&str, &str)]) -> (u32, Option<i32>, String) {
+    again_as(
+        &std::env::current_exe().unwrap(),
+        test,
+        arguments,
+        variables,
+    )
+}
+
+/// As [`again`], from `program`, a copy of this test binary.
+#[cfg(test)]
 #[allow(
     clippy::disallowed_types,
     reason = "a test runs itself again, in a process of its own"
 )]
-fn again(test: &str, arguments: &[&str], variables: &[(&str, &str)]) -> (u32, Option<i32>, String) {
+fn again_as(
+    program: &Path,
+    test: &str,
+    arguments: &[&str],
+    variables: &[(&str, &str)],
+) -> (u32, Option<i32>, String) {
     use std::process::Stdio;
-    let child = std::process::Command::new(std::env::current_exe().unwrap())
+    let child = std::process::Command::new(program)
         .args(["--exact", test, "--nocapture"])
         .args(arguments)
         .envs(variables.iter().copied())
@@ -190,8 +206,16 @@ const DENIED_TEST: &str =
 /// part), when the process it is named for is Cineris: here this test's own
 /// process, run again with the test switch that makes this test binary
 /// count as Cineris's (`CINERIS_TEST_SESSION_OWN_BINARY`), in that process
-/// alone, so that no other test's check takes the job for a harness's.
+/// alone, so that no other test's check takes the job for a harness's. It
+/// runs from a copy of this test binary, another file under another name,
+/// so that the test that starts it, which runs this binary, is no harness
+/// on its line of parents (a process of Cineris that runs sessions, which
+/// would decide first).
 #[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test lays out the copy it runs"
+)]
 fn sys_a_harnesss_job_that_cannot_be_opened_is_not_known() {
     if switches::own_binary() {
         let (pid, made) = own_instance();
@@ -211,7 +235,13 @@ fn sys_a_harnesss_job_that_cannot_be_opened_is_not_known() {
         println!("checked as Cineris's: {under:?}");
         return;
     }
-    let (_, code, said) = again(DENIED_TEST, &[], &[(OWN_BINARY, "1")]);
+    let scratch = cineris_testkit::scratch::Scratch::outside(
+        "cineris-sandbox-session",
+        "sys_a_harnesss_job_that_cannot_be_opened_is_not_known",
+    );
+    let copy = scratch.dir("copy").join("judged.exe");
+    std::fs::copy(std::env::current_exe().unwrap(), &copy).unwrap();
+    let (_, code, said) = again_as(&copy, DENIED_TEST, &[], &[(OWN_BINARY, "1")]);
     assert_eq!(code, Some(0), "{said}");
     assert!(said.contains("checked as Cineris's: Unknown("), "{said}");
 }
