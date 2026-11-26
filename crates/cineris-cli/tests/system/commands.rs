@@ -793,3 +793,56 @@ fn sys_a_nested_headless_run_is_held_to_read_only_and_says_so() {
     assert!(record.get("capped").is_none(), "{record}");
     assert!(machine.workspace.join("nested.txt").exists(), "{record}");
 }
+
+/// A headless run a session's command starts with a variable that moves
+/// where Cineris's configuration and approvals are read from is refused,
+/// and reads nothing from there (the re-look at the early review, B).
+#[test]
+fn sys_a_nested_headless_run_with_its_stores_moved_is_refused() {
+    let machine = Machine::new("sys_nested_moved");
+    let binary = std::path::Path::new(crate::CINERIS);
+    let (script, line) = if cfg!(windows) {
+        (
+            "moved.cmd",
+            format!(
+                "@echo off\r\nset CINERIS_CONFIG=evil.toml\r\n\"{}\" -p hi > moved.out 2> moved.err\r\n",
+                binary.display()
+            ),
+        )
+    } else {
+        (
+            "moved.sh",
+            format!(
+                "CINERIS_CONFIG=evil.toml '{}' -p hi > moved.out 2> moved.err\n",
+                binary.display()
+            ),
+        )
+    };
+    std::fs::write(machine.workspace.join(script), line).unwrap();
+    let command = if cfg!(windows) {
+        "cmd /c .\\moved.cmd"
+    } else {
+        "sh moved.sh"
+    };
+    machine.reply_tool(
+        "toolu_1",
+        "shell",
+        &serde_json::json!({"command": command, "timeout_ms": 60_000}),
+    );
+    machine.reply_text("Done.");
+    machine
+        .run(&[
+            "-p",
+            "nest",
+            "--permission-mode",
+            "unrestricted",
+            "--output",
+            "json",
+        ])
+        .expect_code(0);
+    let said = std::fs::read_to_string(machine.workspace.join("moved.err")).unwrap_or_default();
+    assert!(
+        said.contains("CINERIS_CONFIG is set otherwise") && said.contains("was refused"),
+        "{said}"
+    );
+}

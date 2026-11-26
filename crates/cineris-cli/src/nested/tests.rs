@@ -1,4 +1,4 @@
-use cineris_core::approving::{CASES, ShellSyntax, refused as engine_refuses};
+use cineris_core::approving::{CASES, Invocation, ShellSyntax, refused as engine_refuses};
 
 use super::*;
 use crate::args::{SUBCOMMANDS, Topic};
@@ -127,7 +127,11 @@ fn each_command_is_refused_by_the_engine_exactly_when_its_standing_says() {
     for internal in [SANDBOX, GUARD] {
         assert!(
             matches!(
-                grammar(&words(&[internal, "--", "ls"]), false),
+                grammar(&Invocation {
+                    words: &words(&[internal, "--", "ls"]),
+                    open: false,
+                    exact: true
+                }),
                 Standing::Refused(Refusal {
                     kind: Kind::Internal,
                     ..
@@ -252,7 +256,11 @@ fn what_only_the_shell_knows_is_safe_only_after_a_reading_action() {
         (&[], false),
     ] {
         assert_eq!(
-            grammar(&words(written), true) == Standing::Safe,
+            grammar(&Invocation {
+                words: &words(written),
+                open: true,
+                exact: true
+            }) == Standing::Safe,
             safe,
             "{written:?}"
         );
@@ -264,16 +272,21 @@ fn what_only_the_shell_knows_is_safe_only_after_a_reading_action() {
 #[test]
 fn the_engines_table_reads_the_same_with_this_grammar() {
     let own = own_commands();
+    let mut wrong = Vec::new();
     for (line, shells, refused_too) in CASES {
         for shell in *shells {
             let refusal = engine_refuses(line, *shell, Some(&own));
-            assert_eq!(
-                refusal.is_some(),
-                *refused_too,
-                "{line:?} in {shell:?}: {refusal:?}"
-            );
+            if refusal.is_some() != *refused_too {
+                wrong.push(format!("{line:?} in {shell:?}: {refusal:?}"));
+            }
         }
     }
+    assert!(
+        wrong.is_empty(),
+        "{} line(s):\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
 }
 
 /// Every subcommand the help names is in the table [`parse`] reads.
@@ -314,4 +327,95 @@ fn every_subcommand_is_in_the_table_the_parser_reads() {
             | Topic::Attach => {}
         }
     }
+}
+
+/// Where its words may not be the program's own, the grammar takes neither
+/// the help, the version nor words it cannot read as safe (the re-look at
+/// the early review, H2).
+#[test]
+fn the_help_and_unread_words_are_safe_only_as_the_programs_own() {
+    for line in [
+        &["--help"][..],
+        &["ext", "add", "--help"],
+        &["--version"],
+        &["ext", "add"],
+    ] {
+        let words = words(line);
+        let exact = grammar(&Invocation {
+            words: &words,
+            open: false,
+            exact: true,
+        });
+        let inexact = grammar(&Invocation {
+            words: &words,
+            open: false,
+            exact: false,
+        });
+        assert!(
+            matches!(inexact, Standing::Refused(_)),
+            "{line:?}: {inexact:?}"
+        );
+        if line != ["ext", "add"] {
+            assert_eq!(exact, Standing::Safe, "{line:?}");
+        }
+    }
+}
+
+/// The grammar reads any words without a panic: odd ones, long ones, ones
+/// that are no flag it knows (the re-look's L5).
+#[test]
+fn the_grammar_reads_odd_words_without_a_panic() {
+    let odd: Vec<Vec<String>> = vec![
+        vec!["-".into()],
+        vec!["--".into(), "--".into()],
+        vec!["-p".into(), "-c".into()],
+        vec!["ext".into(), "add".into(), "--hash".into()],
+        vec![
+            "permissions".into(),
+            "trust".into(),
+            "--extension".into(),
+            "=".into(),
+        ],
+        vec!["-".repeat(10_000)],
+        vec!["\u{0}".into(), "\u{202e}".into()],
+        (0..500).map(|at| format!("--x{at}")).collect(),
+        vec!["serve".into(), "--socket".into()],
+        vec!["usage".into(), "--since".into()],
+    ];
+    for words in &odd {
+        for (open, exact) in [(false, true), (true, true), (false, false), (true, false)] {
+            let invocation = Invocation { words, open, exact };
+            let ran = std::panic::catch_unwind(|| grammar(&invocation));
+            assert!(ran.is_ok(), "{words:?}");
+        }
+    }
+}
+
+/// Each front end that starts sessions gives the engine this grammar:
+/// headless runs and the application by their core's options, and `serve`
+/// by the application's, so that the fallback never takes over unsaid.
+#[test]
+fn each_front_end_that_starts_sessions_gives_the_grammar() {
+    for (file, text) in [
+        ("headless.rs", include_str!("../headless.rs")),
+        ("interactive.rs", include_str!("../interactive.rs")),
+    ] {
+        let made = text.matches("CoreOptions::new(").count();
+        let given = text
+            .matches("options.own_commands = Some(crate::nested::own_commands());")
+            .count();
+        assert!(
+            made >= 1 && given == made,
+            "{file}: {made} cores made, {given} given the grammar"
+        );
+    }
+    let serve = include_str!("../serve.rs");
+    assert!(
+        serve.contains("crate::interactive::core_options("),
+        "serve makes its core otherwise"
+    );
+    assert!(
+        !serve.contains("CoreOptions::new("),
+        "serve makes its core otherwise"
+    );
 }

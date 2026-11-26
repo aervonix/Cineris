@@ -192,6 +192,16 @@ pub(crate) fn nested_run(name: &str, run: &crate::args::Run) -> Result<bool, u8>
         );
         return Err(exit::USAGE);
     }
+    // Its configuration and its approvals are read where the session's
+    // are, or it does not run (the re-look at the early review, B).
+    if let Some(moved) = cineris_sandbox::session::moved_stores() {
+        eprintln!(
+            "{name}: `{name} -p` was refused under a session's command: {moved} is set otherwise \
+             than for the session that started it, and moves where its configuration and its \
+             approvals are read from. If you mean it, run it in your own terminal."
+        );
+        return Err(exit::USAGE);
+    }
     Ok(true)
 }
 

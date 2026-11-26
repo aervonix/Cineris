@@ -80,7 +80,22 @@ pub use cases::CASES;
 /// How a command line of the harness's own stands, as the front end reads
 /// it: given the words after the program's name, and whether more words
 /// may follow that are not known (an expansion the shell makes).
-pub type Grammar = Arc<dyn Fn(&[String], bool) -> Standing + Send + Sync>;
+pub type Grammar = Arc<dyn Fn(&Invocation<'_>) -> Standing + Send + Sync>;
+
+/// One run of Cineris a line holds, as a front end's grammar is asked of it.
+#[derive(Debug, Clone, Copy)]
+pub struct Invocation<'a> {
+    /// The words after the program's name, up to the first that the shell
+    /// expands.
+    pub words: &'a [String],
+    /// More words follow that only the shell knows.
+    pub open: bool,
+    /// The words are the program's own arguments: the line was modelled and
+    /// none of them is a pattern. Where they may not be, a request for the
+    /// help or the version, or words the grammar cannot read, are not taken
+    /// as safe (the re-look at the early review, H2).
+    pub exact: bool,
+}
 
 /// How one run of Cineris stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -200,12 +215,17 @@ impl OwnCommands {
     }
 
     /// How a run of Cineris with these words stands, by the grammar given,
-    /// or the fallback's.
+    /// or the fallback's. A grammar that panics refuses: it is not trusted
+    /// past it.
     #[must_use]
-    pub fn standing(&self, rest: &[String], open: bool) -> Standing {
+    pub fn standing(&self, words: &[String], open: bool, exact: bool) -> Standing {
         match &self.grammar {
-            Some(grammar) => grammar(rest, open),
-            None => fallback(rest, open),
+            Some(grammar) => {
+                let invocation = Invocation { words, open, exact };
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| grammar(&invocation)))
+                    .unwrap_or_else(|_| Standing::Refused(Refusal::new("cineris", Kind::Hidden)))
+            }
+            None => fallback(words, open, exact),
         }
     }
 }
@@ -297,13 +317,41 @@ const WIDENING: [&str; 8] = [
 
 /// The fallback's grammar: the CLI's, as this crate reads it where the
 /// front end gives none.
-fn fallback(rest: &[String], open: bool) -> Standing {
+fn fallback(rest: &[String], open: bool, exact: bool) -> Standing {
     let refused = |what: String, kind| Standing::Refused(Refusal::new(what, kind));
+    // The help or the version, asked for in words that may not be the
+    // program's own, is not taken as asked.
+    let help_or = || {
+        if exact {
+            Standing::Safe
+        } else {
+            Standing::Refused(Refusal::new("cineris", Kind::Hidden))
+        }
+    };
     let help = |words: &[String]| {
-        words
-            .iter()
-            .take_while(|word| *word != "--")
-            .any(|word| word == "-h" || word == "--help")
+        let words: Vec<&String> = words.iter().take_while(|word| *word != "--").collect();
+        words.iter().enumerate().any(|(at, word)| {
+            let value = at.checked_sub(1).is_some_and(|before| {
+                matches!(
+                    words[before].as_str(),
+                    "--hash"
+                        | "--extension"
+                        | "--hook"
+                        | "--purpose"
+                        | "--command"
+                        | "--cwd"
+                        | "--kind"
+                        | "--layer"
+                        | "--limit"
+                        | "--since"
+                        | "--socket"
+                        | "--resume"
+                        | "--log-level"
+                        | "--profile"
+                )
+            });
+            !value && (*word == "-h" || *word == "--help")
+        })
     };
     if let Some(first) = rest.first().map(String::as_str) {
         if first == "__sandbox" || first == "__tree-guard" {
@@ -311,7 +359,7 @@ fn fallback(rest: &[String], open: bool) -> Standing {
         }
         if let Some(topic) = TOPICS.iter().find(|topic| **topic == first) {
             if help(&rest[1..]) {
-                return Standing::Safe;
+                return help_or();
             }
             let action = rest[1..].iter().find(|word| !word.starts_with('-'));
             match APPROVING.iter().find(|(name, _)| name == topic) {
@@ -347,7 +395,7 @@ fn fallback(rest: &[String], open: bool) -> Standing {
             _ => (word.as_str(), false),
         };
         match flag {
-            "-h" | "--help" | "-V" | "--version" => return Standing::Safe,
+            "-h" | "--help" | "-V" | "--version" => return help_or(),
             "-p" | "--print" => print = true,
             "-q" | "--quiet" | "-v" | "--verbose" => {}
             long if long.starts_with("--") => {
@@ -370,8 +418,12 @@ fn fallback(rest: &[String], open: bool) -> Standing {
             short => {
                 for (index, letter) in short.char_indices().skip(1) {
                     match letter {
-                        'p' => print = true,
-                        'h' | 'V' => return Standing::Safe,
+                        // What follows `p` in its cluster is the prompt.
+                        'p' => {
+                            print = true;
+                            break;
+                        }
+                        'h' | 'V' => return help_or(),
                         'c' => {
                             widens = Some("-c".to_owned());
                             if index + 1 == short.len() {
@@ -403,8 +455,11 @@ fn fallback(rest: &[String], open: bool) -> Standing {
 /// `.cmd`, `.bat`, `.com` or `.ps1`).
 fn name_of(word: &str) -> String {
     let last = word.rsplit(['/', '\\']).next().unwrap_or(word);
+    // A call's `&`, and a block's or a group's brace or parenthesis, glued
+    // to the name.
     let mut name: String = last
-        .trim_start_matches('&')
+        .trim_start_matches(['&', '{', '('])
+        .trim_end_matches(['}', ')'])
         .chars()
         .filter(|c| !matches!(c, '`' | '^' | '"' | '\''))
         .collect::<String>()
@@ -426,11 +481,25 @@ fn short_name(name: &str) -> bool {
         .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
-/// Whether the shell expands something in `word`: `$`, a backtick, `%…%`,
-/// `!…!`, or PowerShell's `@name`.
+/// Whether the shell, or the program, puts something else in `word`'s
+/// place: `$`, a backtick, `%…%`, `!…!`, PowerShell's `@name`, a brace's
+/// `{a,b}`, `find`'s `{}` or `parallel`'s `:::`.
 fn expands(word: &str) -> bool {
     let between = |mark: char| word.matches(mark).count() >= 2;
-    word.contains('$')
+    let braces = word
+        .find('{')
+        .and_then(|open| {
+            word[open..]
+                .find('}')
+                .map(|close| &word[open..open + close])
+        })
+        .is_some_and(|inside| inside.contains(',') || inside.contains(".."));
+    // `find`'s `{}`, `parallel`'s `:::`, a brace's words.
+    braces
+        || word == "{}"
+        || word == ":::"
+        || word == "::::"
+        || word.contains('$')
         || word.contains('`')
         || between('%')
         || between('!')
@@ -459,6 +528,11 @@ fn moves_stores(name: &str) -> bool {
 /// stores: `NAME=value`, `$env:NAME`, `--unset=NAME`, or `NAME` after
 /// `-u`, `--unset` or `unset`.
 fn moved(word: &str, before: Option<&str>) -> Option<String> {
+    if let Some(name) = word.strip_prefix("-u").filter(|name| !name.is_empty())
+        && moves_stores(name)
+    {
+        return Some(name.to_ascii_uppercase());
+    }
     let unsets = before.is_some_and(|before| matches!(before, "-u" | "--unset" | "unset"));
     // Most words set nothing: passed over before anything is made of them.
     if !unsets && !word.contains(['=', ':']) {
@@ -492,7 +566,7 @@ fn moved(word: &str, before: Option<&str>) -> Option<String> {
 /// Programs that run the simple command after their options: each with
 /// the options that take a value apart from them, and how many words of
 /// their own come before the command (`timeout`'s duration).
-const WRAPPERS: [(&str, &[&str], usize); 33] = [
+const WRAPPERS: &[(&str, &[&str], usize)] = &[
     (
         "sudo",
         &[
@@ -618,6 +692,37 @@ const WRAPPERS: [(&str, &[&str], usize); 33] = [
     ("wsl", &["-d", "--distribution", "-u", "--user", "--cd"], 0),
     ("call", &[], 0),
     ("spawn", &[], 0),
+    ("fakeroot", &[], 0),
+    ("poetry", &[], 1),
+    ("uv", &[], 1),
+    ("npm", &[], 1),
+    ("pnpm", &[], 1),
+    ("bundle", &[], 1),
+    ("direnv", &[], 2),
+    ("mise", &[], 1),
+    ("faketime", &[], 1),
+    (
+        "numactl",
+        &[
+            "-N",
+            "-C",
+            "-m",
+            "-p",
+            "-i",
+            "-P",
+            "--cpunodebind",
+            "--membind",
+            "--physcpubind",
+        ],
+        0,
+    ),
+    ("proxychains4", &["-f"], 0),
+    ("proxychains", &["-f"], 0),
+    ("dbus-run-session", &["--config-file", "--dbus-daemon"], 0),
+    ("wine", &[], 0),
+    ("gsudo", &["-u", "--user"], 0),
+    ("rlwrap", &["-f", "-H", "-p", "-s", "-S"], 0),
+    ("winpty", &[], 0),
 ];
 
 /// Programs that run what their words say in ways not told apart here, the
@@ -660,6 +765,14 @@ const TERMINALS: [&str; 29] = [
 /// is a wrapper.
 fn wrapped(name: &str, words: &[String], program: usize) -> Option<usize> {
     let (_, values, positional) = WRAPPERS.iter().find(|(wrapper, _, _)| *wrapper == name)?;
+    // `command -v` and `-V` say what a name is, and run nothing.
+    if name == "command"
+        && words[program + 1..]
+            .iter()
+            .any(|word| word == "-v" || word == "-V")
+    {
+        return None;
+    }
     let mut at = program + 1;
     while let Some(word) = words.get(at) {
         if word == "--" {
@@ -669,13 +782,20 @@ fn wrapped(name: &str, words: &[String], program: usize) -> Option<usize> {
         if !word.starts_with('-') || word == "-" {
             break;
         }
-        at += if values.contains(&word.as_str()) {
-            2
-        } else {
-            1
-        };
+        // A cluster of short options whose last takes a value: `-Eu root`.
+        let last = word
+            .chars()
+            .last()
+            .filter(|_| word.len() > 2 && !word.starts_with("--"))
+            .map(|letter| format!("-{letter}"));
+        let takes = values.contains(&word.as_str())
+            || last.is_some_and(|last| values.contains(&last.as_str()));
+        at += if takes { 2 } else { 1 };
     }
     at += positional;
+    if words.get(at).is_some_and(|word| word == "--") {
+        at += 1;
+    }
     (at < words.len()).then_some(at)
 }
 
@@ -705,7 +825,8 @@ const INTERPRETERS: [(&str, &[&str]); 16] = [
     ("tclsh", &["-c"]),
 ];
 
-/// The `awk`s, whose program is their first word that is not an option.
+/// The `awk`s, whose program is their first word that is not an option
+/// ([`awk_program`]).
 const AWKS: [&str; 4] = ["awk", "gawk", "mawk", "nawk"];
 
 /// How a word that names a line is to be read.
@@ -717,24 +838,21 @@ enum Line {
     Code,
 }
 
-/// Whether the word at `at` is a line a program of the simple command
-/// `words` (whose program is at `program`) is told to run, and how: after
-/// the flag that names it, for the program that flag belongs to (the last
-/// word before the flag that is not an option).
+/// Whether the word at `at` is a line the program of the simple command
+/// `words` (at `program`) is told to run, and how.
 fn line_at(words: &[String], program: usize, at: usize) -> Option<Line> {
-    if at == 0 || at <= program {
+    if at <= program {
         return None;
+    }
+    let owner = name_of(&words[program]);
+    if SHELLS.contains(&owner.as_str()) || owner == "sg" {
+        return (shell_line(words, program) == Some(at)).then_some(Line::Shell);
     }
     let flag = words[at - 1].as_str();
     // Every flag that gives a line begins with `-`, or with `/` for `cmd`.
     if !flag.starts_with(['-', '/']) {
         return None;
     }
-    let owner = words[program..at - 1]
-        .iter()
-        .rev()
-        .find(|word| !word.starts_with('-'))
-        .map(|word| name_of(word))?;
     let lower = flag.to_ascii_lowercase();
     if matches!(owner.as_str(), "pwsh" | "powershell")
         && matches!(lower.as_str(), "-c" | "-command" | "-cmd" | "--command")
@@ -744,20 +862,72 @@ fn line_at(words: &[String], program: usize, at: usize) -> Option<Line> {
     if owner == "env" && matches!(flag, "-S" | "--split-string") {
         return Some(Line::Shell);
     }
-    if SHELLS.contains(&owner.as_str()) {
-        let clustered = flag.len() > 1
-            && flag.starts_with('-')
-            && !flag.starts_with("--")
-            && flag[1..].bytes().all(|b| b.is_ascii_alphabetic())
-            && flag.ends_with('c');
-        if clustered || flag == "--command" {
-            return Some(Line::Shell);
-        }
+    if matches!(owner.as_str(), "nix-shell" | "nix") && matches!(flag, "--run" | "--command") {
+        return Some(Line::Shell);
     }
     if let Some((_, flags)) = INTERPRETERS.iter().find(|(name, _)| **name == owner)
         && flags.contains(&flag)
     {
         return Some(Line::Code);
+    }
+    None
+}
+
+/// Where a shell's line is: the first word that is not an option after its
+/// `-c` (alone, or in a cluster), past `--` and the options after it; the
+/// values of `-o`, `-O`, `--rcfile` and `--init-file` are passed over, and
+/// so is the first word of `su`, `runuser` and `sg` (a user, a group).
+fn shell_line(words: &[String], program: usize) -> Option<usize> {
+    let owner = name_of(&words[program]);
+    let mut named = !matches!(owner.as_str(), "su" | "runuser" | "sg");
+    let mut lined = false;
+    let mut at = program + 1;
+    while let Some(word) = words.get(at) {
+        let option = word.starts_with(['-', '+']) && word.len() > 1;
+        if lined {
+            if option {
+                at += 1;
+                continue;
+            }
+            return Some(at);
+        }
+        if matches!(
+            word.as_str(),
+            "-o" | "-O" | "+o" | "+O" | "--rcfile" | "--init-file"
+        ) {
+            at += 2;
+            continue;
+        }
+        let cluster = word.starts_with('-')
+            && !word.starts_with("--")
+            && word.len() > 1
+            && word[1..].bytes().all(|byte| byte.is_ascii_alphabetic());
+        if word == "--command" || (cluster && word.contains('c')) {
+            lined = true;
+        } else if !option {
+            if named {
+                // A script's name: what it runs is in a file.
+                return None;
+            }
+            named = true;
+        }
+        at += 1;
+    }
+    None
+}
+
+/// Where an `awk`'s program is: its first word that is not an option, past
+/// the values of `-v`, `-F` and `-W`; none with `-f`.
+fn awk_program(words: &[String], program: usize) -> Option<usize> {
+    let mut at = program + 1;
+    while let Some(word) = words.get(at) {
+        match word.as_str() {
+            "-f" | "--file" => return None,
+            "-v" | "-F" | "-W" | "--assign" | "--field-separator" => at += 2,
+            "--" => return words.get(at + 1).map(|_| at + 1),
+            option if option.starts_with('-') && option.len() > 1 => at += 1,
+            _ => return Some(at),
+        }
     }
     None
 }
@@ -805,7 +975,8 @@ fn program_at(words: &[String]) -> usize {
     };
     let mut at = 0;
     while let Some(word) = words.get(at) {
-        if assignment(word) {
+        // A group's brace, or a pipeline's `!`, before the program.
+        if matches!(word.as_str(), "{" | "}" | "!") || assignment(word) {
             at += 1;
         } else if name_of(word) == "env" {
             at += 1;
@@ -831,11 +1002,76 @@ fn program_at(words: &[String]) -> usize {
     at
 }
 
+/// Programs whose words are only printed, searched or looked at: a name of
+/// Cineris among them is no run of it.
+const PRINTERS: [&str; 36] = [
+    "echo",
+    "printf",
+    "grep",
+    "egrep",
+    "fgrep",
+    "rg",
+    "ag",
+    "ack",
+    "cat",
+    "bat",
+    "less",
+    "more",
+    "head",
+    "tail",
+    "wc",
+    "ls",
+    "tree",
+    "file",
+    "stat",
+    "du",
+    "git",
+    "sed",
+    "jq",
+    "diff",
+    "sort",
+    "uniq",
+    "cut",
+    "man",
+    "select-string",
+    "sls",
+    "write-output",
+    "write-host",
+    "get-content",
+    "gc",
+    "findstr",
+    "get-childitem",
+];
+
+/// Programs that change the directory what follows runs in.
+const CHANGES_DIRECTORY: [&str; 6] = [
+    "cd",
+    "pushd",
+    "chdir",
+    "set-location",
+    "sl",
+    "push-location",
+];
+
+/// Programs that run a file's lines in this shell, or a line they make.
+const SOURCES: [&str; 3] = ["source", ".", "eval"];
+
+/// Whether `words` (a run's) start a session: `-p`, before `--`.
+fn headless(words: &[String]) -> bool {
+    words.iter().take_while(|word| *word != "--").any(|word| {
+        matches!(word.as_str(), "-p" | "--print")
+            || word.starts_with("--print=")
+            || (word.starts_with('-')
+                && !word.starts_with("--")
+                && word[1..].starts_with(|c: char| c.is_ascii_alphabetic())
+                && word[1..].contains('p'))
+    })
+}
+
 /// One check of one command line.
 struct Reader<'a> {
     own: &'a OwnCommands,
-    /// The names, as they may be found in a line once its quotes and
-    /// escapes are out.
+    /// How many lines were read.
     work: Cell<usize>,
     /// A variable that moves the stores, set or unset in the line.
     moved: RefCell<Option<String>>,
@@ -844,26 +1080,45 @@ struct Reader<'a> {
     /// Whether the next run found takes more words than are written: what
     /// `xargs` and `parallel` add from their input.
     adds: Cell<bool>,
+    /// The words the analysis said are patterns the shell expands.
+    globs: RefCell<Vec<String>>,
+    /// Whether the line being read was modelled: its words are the
+    /// program's own arguments, as the shell gives them.
+    exact: Cell<bool>,
+    /// Whether the line sources a file or `eval`s, before or after.
+    sources: Cell<bool>,
+    /// Whether the line has changed the directory by now.
+    moved_dir: Cell<bool>,
 }
 
-impl Reader<'_> {
+impl<'a> Reader<'a> {
+    fn new(own: &'a OwnCommands) -> Self {
+        Self {
+            own,
+            work: Cell::new(0),
+            moved: RefCell::new(None),
+            runs: Cell::new(false),
+            adds: Cell::new(false),
+            globs: RefCell::new(Vec::new()),
+            exact: Cell::new(false),
+            sources: Cell::new(false),
+            moved_dir: Cell::new(false),
+        }
+    }
+
     fn is_own(&self, word: &str) -> bool {
         let name = name_of(word);
         !name.is_empty() && (self.own.names.contains(&name) || short_name(&name))
     }
 
     /// Whether `word`, at a program's place, is a pattern that could match
-    /// one of Cineris's names.
+    /// one of Cineris's names: one with a letter written out, and not
+    /// PowerShell's `[Type]::`.
     fn could_be_own(&self, word: &str) -> bool {
-        // Its first letter written out, as a name of Cineris begins: a
-        // pattern that begins with a wildcard or a set could match anything.
         let name = name_of(word);
         if !word.contains(['?', '*', '['])
-            || !self
-                .own
-                .names
-                .iter()
-                .any(|own| own.chars().next() == name.chars().next())
+            || !name.chars().any(char::is_alphabetic)
+            || (name.starts_with('[') && name.contains("]::"))
         {
             return false;
         }
@@ -877,7 +1132,7 @@ impl Reader<'_> {
     /// Whether `text` could name Cineris at all: one of its names in it once
     /// quotes and escapes are out, or a pattern.
     fn mentioned(&self, text: &str) -> bool {
-        let plain: String = text
+        let plain: String = unquoted(text)
             .chars()
             .filter(|c| !matches!(c, '\\' | '\'' | '"' | '`' | '^'))
             .flat_map(char::to_lowercase)
@@ -896,25 +1151,53 @@ impl Reader<'_> {
         work > WORK
     }
 
+    /// Whether the shell expands `word`, or the analysis said it does.
+    fn expanded(&self, word: &str) -> bool {
+        expands(word) || self.globs.borrow().iter().any(|glob| glob == word)
+    }
+
     /// A run of Cineris with the words `rest`, `open` when more may follow
-    /// that are not known.
-    fn run(&self, rest: &[String], open: bool) -> Option<Refusal> {
+    /// that are not known; `placed` when it stands at a program's place.
+    /// One that does not is refused only where it approves, widens or is
+    /// internal: `grep cineris file` runs nothing of Cineris.
+    fn run(&self, rest: &[String], open: bool, placed: bool) -> Option<Refusal> {
         self.runs.set(true);
         let open = open || self.adds.replace(false);
         // PowerShell's `--%` passes what follows as it is, and is not
         // itself an argument.
         let rest: Vec<String> = rest.iter().filter(|word| *word != "--%").cloned().collect();
+        let exact = self.exact.get() && !rest.iter().any(|word| self.expanded(word));
         // Up to the first word the shell expands: what follows it is not
-        // known.
-        let known = rest.iter().position(|word| expands(word));
-        let (rest, open) = match known {
-            Some(at) => (&rest[..at], true),
-            None => (&rest[..], open),
+        // known. After a `--`, every word is the prompt's.
+        let known = rest.iter().position(|word| self.expanded(word));
+        let dashes = rest.iter().position(|word| word == "--");
+        let (words, open) = match (known, dashes) {
+            (Some(at), Some(dash)) if dash < at => {
+                let mut words = rest[..=dash].to_vec();
+                words.push("x".to_owned());
+                (words, false)
+            }
+            (_, Some(dash)) if open => {
+                let mut words = rest[..=dash].to_vec();
+                words.push("x".to_owned());
+                (words, false)
+            }
+            (Some(at), _) => (rest[..at].to_vec(), true),
+            (None, _) => (rest, open),
         };
-        match self.own.standing(rest, open) {
-            Standing::Safe => None,
-            Standing::Refused(refusal) => Some(refusal),
-        }
+        let refusal = if self.moved_dir.get() && headless(&words) {
+            Some(Refusal::new(
+                "cineris -p, in another directory",
+                Kind::Widens,
+            ))
+        } else {
+            match self.own.standing(&words, open, exact) {
+                Standing::Safe => None,
+                Standing::Refused(refusal) => Some(refusal),
+            }
+        };
+        refusal
+            .filter(|refusal| placed || !matches!(refusal.kind, Kind::Application | Kind::Hidden))
     }
 
     fn note_moved(&self, words: &[String]) {
@@ -926,11 +1209,42 @@ impl Reader<'_> {
         }
     }
 
+    /// What a simple command's program says of the line around it: that it
+    /// sources a file, or changes the directory.
+    fn note_program(&self, words: &[String], program: usize) {
+        let Some(first) = words.get(program) else {
+            return;
+        };
+        let name = name_of(first);
+        if SOURCES.contains(&name.as_str()) || first == "." {
+            self.sources.set(true);
+        }
+        let env_moves = words[..program]
+            .iter()
+            .any(|word| matches!(word.as_str(), "-C" | "--chdir") || word.starts_with("--chdir="));
+        if CHANGES_DIRECTORY.contains(&name.as_str()) || env_moves {
+            self.moved_dir.set(true);
+        }
+    }
+
     fn in_parts(&self, parts: &[Part], depth: usize) -> Option<Refusal> {
-        parts.iter().find_map(|part| {
-            let words: Vec<String> = part.words.iter().map(|word| word.text.clone()).collect();
+        let was = self.exact.replace(true);
+        let found = parts.iter().find_map(|part| {
+            let mut words = Vec::new();
+            for word in &part.words {
+                // A comment the analysis left as a word.
+                if !word.quoted && word.text.starts_with('#') {
+                    break;
+                }
+                if word.glob {
+                    self.globs.borrow_mut().push(word.text.clone());
+                }
+                words.push(word.text.clone());
+            }
             self.in_words(&words, depth)
-        })
+        });
+        self.exact.set(was);
+        found
     }
 
     /// `env -S`'s lines, attached or not, and `--split-string`'s.
@@ -972,10 +1286,11 @@ impl Reader<'_> {
             return Some(refusal);
         }
         let program = program_at(words);
+        self.note_program(words, program);
         let first = words.get(program)?;
         let name = name_of(first);
         if self.is_own(first) || self.could_be_own(first) {
-            return self.run(&words[program + 1..], false);
+            return self.run(&words[program + 1..], false, true);
         }
         // A wrapper's command is a simple command of its own; `xargs`
         // adds words to it from its input.
@@ -987,9 +1302,12 @@ impl Reader<'_> {
             self.adds.set(false);
             return found;
         }
-        if name == "find" {
+        if matches!(name.as_str(), "find" | "gdb") {
             for (at, word) in words.iter().enumerate() {
-                if matches!(word.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir") {
+                if matches!(
+                    word.as_str(),
+                    "-exec" | "-execdir" | "-ok" | "-okdir" | "--args"
+                ) {
                     let end = words[at + 1..]
                         .iter()
                         .position(|word| matches!(word.as_str(), ";" | "+" | "\\;"))
@@ -1000,10 +1318,8 @@ impl Reader<'_> {
                 }
             }
         }
-        if name == "cargo"
-            && words[program + 1..].iter().any(|word| word == "run")
-            && let Some(refusal) = self.cargo_run(&words[program + 1..])
-        {
+        let runs_cargo = name == "cargo" && words[program + 1..].iter().any(|word| word == "run");
+        if runs_cargo && let Some(refusal) = self.cargo_run(&words[program + 1..]) {
             return Some(refusal);
         }
         // PowerShell's `Start-Process` names its program and its arguments
@@ -1012,19 +1328,29 @@ impl Reader<'_> {
             return self.start_process(&words[program + 1..], depth);
         }
         let terminal = TERMINALS.contains(&name.as_str());
-        let mut awk_program = AWKS.contains(&name.as_str());
+        let prints = PRINTERS.contains(&name.as_str()) || (name == "cargo" && !runs_cargo);
+        if name == "parallel" {
+            self.adds.set(true);
+        }
+        let awk = AWKS
+            .contains(&name.as_str())
+            .then(|| awk_program(words, program))
+            .flatten();
         for at in program + 1..words.len() {
             let word = &words[at];
-            if terminal && self.is_own(word) {
-                return self.run(&words[at + 1..], false);
+            // A name of Cineris at any other word: what its program may run.
+            if !prints
+                && self.is_own(word)
+                && let Some(refusal) = self.run(&words[at + 1..], false, terminal)
+            {
+                return Some(refusal);
             }
             let line = line_at(words, program, at).or_else(|| {
                 let positional = !word.starts_with('-');
                 let powershell = matches!(name.as_str(), "pwsh" | "powershell");
                 if (terminal && word.contains(char::is_whitespace)) || (powershell && positional) {
                     Some(Line::Shell)
-                } else if awk_program && positional {
-                    awk_program = false;
+                } else if awk == Some(at) {
                     Some(Line::Code)
                 } else {
                     None
@@ -1052,7 +1378,9 @@ impl Reader<'_> {
                         } else {
                             &[]
                         };
-                        return self.run(rest, false);
+                        if let Some(refusal) = self.run(rest, false, terminal) {
+                            return Some(refusal);
+                        }
                     }
                 }
                 for (mark, _) in word.match_indices(['=', '!']) {
@@ -1065,6 +1393,7 @@ impl Reader<'_> {
                 }
             }
         }
+        self.adds.set(false);
         if name == "cmd"
             && let Some(flag) = words
                 .iter()
@@ -1098,7 +1427,7 @@ impl Reader<'_> {
             .iter()
             .position(|word| word == "--")
             .map_or(&[][..], |dash| &words[dash + 1..]);
-        self.run(rest, false)
+        self.run(rest, false, true)
     }
 
     /// PowerShell's `Start-Process`: its program, by `-FilePath` or its
@@ -1132,6 +1461,9 @@ impl Reader<'_> {
             at += 1;
         }
         let program = program?;
+        // Its argument list is one string the program reads as it will:
+        // the words here are not taken as the program's own.
+        let was = self.exact.replace(false);
         let mut line = vec![program];
         for argument in &arguments {
             line.extend(
@@ -1141,7 +1473,9 @@ impl Reader<'_> {
                     .map(str::to_owned),
             );
         }
-        self.in_words(&line, depth + 1)
+        let found = self.in_words(&line, depth + 1);
+        self.exact.set(was);
+        found
     }
 
     /// A line a word gives.
@@ -1172,81 +1506,103 @@ impl Reader<'_> {
 
     /// A line the analysis cannot model, read as text, failing closed.
     fn in_text(&self, text: &str, syntax: ShellSyntax) -> Option<Refusal> {
-        match syntax {
-            ShellSyntax::Posix => self.in_plain(&plain(text, "\\'\"`")),
-            ShellSyntax::PowerShell => self.in_plain(&plain(text, "'\"`")),
-            ShellSyntax::Cmd => self.in_plain(&plain(text, "\"^")),
+        let was = self.exact.replace(false);
+        let text = braced(&unquoted(text));
+        let found = match syntax {
+            ShellSyntax::Posix => self.in_plain(&plain(&text, "\\'\"`")),
+            ShellSyntax::PowerShell => self.in_plain(&plain(&text, "'\"`")),
+            ShellSyntax::Cmd => self.in_plain(&plain(&text, "\"^")),
             ShellSyntax::Unknown => self
-                .in_plain(&plain(text, "\\'\"`^"))
-                .or_else(|| self.in_plain(&plain(text, "'\"`^"))),
-        }
+                .in_plain(&plain(&text, "\\'\"`^"))
+                .or_else(|| self.in_plain(&plain(&text, "'\"`^"))),
+        };
+        self.exact.set(was);
+        found
     }
 
     /// Text with its quotes and escapes out.
     fn in_plain(&self, text: &str) -> Option<Refusal> {
-        let segments: Vec<Vec<String>> = text
-            .split(['\n', ';', '&', '|', '(', ')', '{', '}'])
-            .map(|segment| {
-                segment
-                    .split(|c: char| c.is_whitespace() || matches!(c, '<' | '>'))
-                    .filter(|word| !word.is_empty())
-                    .map(str::to_owned)
-                    .collect()
-            })
-            .collect();
+        let segments = segments(text);
         let mut named = false;
         for words in &segments {
             self.note_moved(words);
-            // A whole word names Cineris at the program's place, or anywhere
-            // after a wrapper or a runner's name; `Start-Process` by its
-            // parameters.
             let program = program_at(words);
+            self.note_program(words, program);
+            // `Start-Process` by its parameters.
             if words.get(program).is_some_and(|first| {
                 matches!(name_of(first).as_str(), "start-process" | "saps" | "start")
             }) && let Some(refusal) = self.start_process(&words[program + 1..], DEPTH - 1)
             {
                 return Some(refusal);
             }
-            let runs_words = words.get(program).is_some_and(|first| {
-                let name = name_of(first);
-                TERMINALS.contains(&name.as_str())
-                    || SHELLS.contains(&name.as_str())
-                    || AWKS.contains(&name.as_str())
-                    || matches!(name.as_str(), "cmd" | "pwsh" | "powershell" | "env")
-                    || INTERPRETERS
-                        .iter()
-                        .any(|(interpreter, _)| *interpreter == name)
-                    || WRAPPERS.iter().any(|(wrapper, _, _)| *wrapper == name)
-            });
+            let first = words.get(program).map(|first| name_of(first));
+            let first = first.as_deref().unwrap_or("");
+            // At the program's place, or anywhere after a program that runs
+            // what its words say, a run counts whatever it is; anywhere
+            // else, where it approves, widens or is internal.
+            let runs_words = TERMINALS.contains(&first)
+                || SHELLS.contains(&first)
+                || AWKS.contains(&first)
+                || matches!(first, "cmd" | "pwsh" | "powershell" | "env")
+                || INTERPRETERS
+                    .iter()
+                    .any(|(interpreter, _)| *interpreter == first)
+                || WRAPPERS.iter().any(|(wrapper, _, _)| *wrapper == first);
+            let prints = PRINTERS.contains(&first);
+            if matches!(first, "xargs" | "parallel") {
+                self.adds.set(true);
+            }
             for (at, word) in words.iter().enumerate() {
-                let placed = at == program || (runs_words && at > program);
-                let own = ((placed && self.is_own(word))
-                    || (at == program && self.could_be_own(word)))
-                .then_some(at + 1)
-                .or_else(|| {
-                    if !word.contains(['=', '!', ',', ':']) {
-                        return None;
-                    }
-                    let split = pieces(word);
-                    split
-                        .iter()
-                        .position(|piece| self.is_own(piece))
-                        .map(|index| {
-                            if index + 1 == split.len() {
-                                at + 1
-                            } else {
-                                words.len()
-                            }
-                        })
+                let executes = at.checked_sub(1).is_some_and(|before| {
+                    matches!(
+                        words[before].as_str(),
+                        "-exec" | "-execdir" | "-ok" | "-okdir" | "--args"
+                    )
                 });
+                let placed = at == program || executes || (runs_words && at > program);
+                if word.contains(['=', '!']) {
+                    for (mark, _) in word.match_indices(['=', '!']) {
+                        let text = &word[mark + 1..];
+                        if self.mentioned(text)
+                            && let Some(refusal) = self.read(text, Line::Shell, DEPTH - 2)
+                        {
+                            return Some(refusal);
+                        }
+                    }
+                }
+                let own = (self.is_own(word) || (at == program && self.could_be_own(word)))
+                    .then_some(at + 1)
+                    .or_else(|| {
+                        if !word.contains(['=', '!', ',', ':']) {
+                            return None;
+                        }
+                        let split = pieces(word);
+                        split
+                            .iter()
+                            .position(|piece| self.is_own(piece))
+                            .map(|index| {
+                                if index + 1 == split.len() {
+                                    at + 1
+                                } else {
+                                    words.len()
+                                }
+                            })
+                    });
                 if let Some(from) = own {
+                    if prints && at != program {
+                        continue;
+                    }
                     named = true;
-                    let open = expands(word);
-                    if let Some(refusal) = self.run(&words[from.min(words.len())..], open) {
+                    let rest = &words[from.min(words.len())..];
+                    if let Some(refusal) = self.run(rest, expands(word), placed) {
+                        return Some(refusal);
+                    }
+                    if let Some(refusal) = after_a_name(rest) {
                         return Some(refusal);
                     }
                 }
             }
+            self.adds.set(false);
         }
         // An approving pair anywhere, where Cineris is named.
         if named {
@@ -1265,9 +1621,162 @@ impl Reader<'_> {
                     ));
                 }
             }
+            if let Some(topic) = all.iter().find(|word| {
+                matches!(
+                    word.to_ascii_lowercase().as_str(),
+                    "setup" | "serve" | "attach"
+                )
+            }) {
+                return Some(Refusal::new(
+                    format!("cineris {}", topic.to_ascii_lowercase()),
+                    Kind::Approves,
+                ));
+            }
+            let widening = all.iter().find(|word| {
+                let flag = word.split('=').next().unwrap_or_default();
+                matches!(
+                    flag,
+                    "--trust-project"
+                        | "--allow"
+                        | "--profile"
+                        | "--continue"
+                        | "--resume"
+                        | "--fork"
+                )
+            });
+            if let Some(flag) = widening
+                && headless(&all)
+            {
+                return Some(Refusal::new(format!("cineris -p {flag}"), Kind::Widens));
+            }
         }
         None
     }
+}
+
+/// What the words after a name of Cineris, in a line read as text, hold
+/// beyond what the shell expands: `setup`, `serve` or `attach` past a word
+/// it expands, or a flag that widens a headless run anywhere.
+fn after_a_name(rest: &[String]) -> Option<Refusal> {
+    let expanded = rest.iter().position(|word| expands(word));
+    for (at, word) in rest.iter().enumerate() {
+        let lower = word.to_ascii_lowercase();
+        if expanded.is_some_and(|expanded| expanded < at)
+            && matches!(lower.as_str(), "setup" | "serve" | "attach")
+        {
+            return Some(Refusal::new(format!("cineris {lower}"), Kind::Approves));
+        }
+        let flag = lower.split('=').next().unwrap_or_default();
+        let widens = matches!(
+            flag,
+            "--trust-project" | "--allow" | "--profile" | "--continue" | "--resume" | "--fork"
+        ) || (flag == "--permission-mode"
+            && !lower.ends_with("=read-only")
+            && !lower.ends_with("=supervised")
+            && !rest
+                .get(at + 1)
+                .is_some_and(|mode| matches!(mode.as_str(), "read-only" | "supervised")));
+        if widens && headless(rest) {
+            return Some(Refusal::new(format!("cineris -p {flag}"), Kind::Widens));
+        }
+    }
+    None
+}
+
+/// Text split into simple commands, each into its words: at `;`, `&`,
+/// `|`, a line break or a parenthesis; a comment (`#` at a word's start, to
+/// the end of its line, and PowerShell's `<#…#>`) and the target of an
+/// output's redirection are left out.
+fn segments(text: &str) -> Vec<Vec<String>> {
+    let mut text = text.to_owned();
+    while let Some(start) = text.find("<#") {
+        let end = text[start..]
+            .find("#>")
+            .map_or(text.len(), |end| start + end + 2);
+        text.replace_range(start..end, " ");
+    }
+    let mut segments = Vec::new();
+    let mut words: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut target = false;
+    let mut comment = false;
+    let finish = |word: &mut String, words: &mut Vec<String>, target: &mut bool| {
+        if !word.is_empty() {
+            if *target {
+                *target = false;
+            } else {
+                words.push(std::mem::take(word));
+            }
+            word.clear();
+        }
+    };
+    for character in text.chars() {
+        if comment {
+            if character == '\n' {
+                comment = false;
+                finish(&mut word, &mut words, &mut target);
+                segments.push(std::mem::take(&mut words));
+            }
+            continue;
+        }
+        match character {
+            '#' if word.is_empty() => comment = true,
+            '\n' | ';' | '&' | '|' | '(' | ')' => {
+                finish(&mut word, &mut words, &mut target);
+                segments.push(std::mem::take(&mut words));
+            }
+            '>' => {
+                // A descriptor's number before it is no word.
+                if word.bytes().all(|byte| byte.is_ascii_digit()) {
+                    word.clear();
+                }
+                finish(&mut word, &mut words, &mut target);
+                target = true;
+            }
+            '<' => finish(&mut word, &mut words, &mut target),
+            blank if blank.is_whitespace() => finish(&mut word, &mut words, &mut target),
+            other => word.push(other),
+        }
+    }
+    finish(&mut word, &mut words, &mut target);
+    segments.push(words);
+    segments
+}
+
+/// `text` with each brace expansion (`{add,}`, `{a..b}`) written as a word
+/// the shell expands, so that it is not split at its braces.
+fn braced(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let close = after.find('}');
+        let inside = close.map(|close| &after[..close]);
+        out.push_str(&rest[..open]);
+        match (close, inside) {
+            (Some(close), Some(inside))
+                if !inside.contains(char::is_whitespace)
+                    && (inside.contains(',') || inside.contains("..")) =>
+            {
+                out.push_str("$brace");
+                rest = &after[close + 1..];
+            }
+            _ => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `text` with the quoting that builds nothing taken out: `$'…'` and
+/// `$"…"` read as quotes, and an empty `$()` as nothing.
+fn unquoted(text: &str) -> String {
+    text.replace("$()", "")
+        .replace("$'", "'")
+        .replace("$\"", "\"")
 }
 
 /// `text` with the characters in `out` taken out.
@@ -1287,26 +1796,32 @@ pub fn refused(command: &str, shell: ShellSyntax, own: Option<&OwnCommands>) -> 
             &fallback
         }
     };
-    let reader = Reader {
-        own,
-        work: Cell::new(0),
-        moved: RefCell::new(None),
-        runs: Cell::new(false),
-        adds: Cell::new(false),
-    };
+    let reader = Reader::new(own);
     if !reader.mentioned(command) {
         return None;
     }
-    let refusal = match analyse(command, shell) {
+    // A carriage return ends a line in PowerShell and `cmd`, and the
+    // analysis is not trusted to say so: it ends one here everywhere.
+    let command = command.replace('\r', "\n");
+    let refusal = match analyse(&command, shell) {
         Analysis::Parts(parts) => reader.in_parts(&parts, 0),
-        Analysis::NotModelled { .. } => reader.in_text(command, shell),
+        Analysis::NotModelled { .. } => reader.in_text(&command, shell),
     };
     refusal.or_else(|| {
+        if !reader.runs.get() {
+            return None;
+        }
+        if reader.sources.get() {
+            return Some(Refusal::new(
+                "cineris, in a line that sources a file or evaluates one",
+                Kind::Widens,
+            ));
+        }
         let moved = reader.moved.borrow().clone()?;
-        reader
-            .runs
-            .get()
-            .then(|| Refusal::new(format!("cineris with {moved} set"), Kind::Widens))
+        Some(Refusal::new(
+            format!("cineris with {moved} set"),
+            Kind::Widens,
+        ))
     })
 }
 
