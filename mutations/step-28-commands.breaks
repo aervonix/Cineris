@@ -22,13 +22,13 @@ caught-by:
 
 [break] a-commands-programs-may-write
 rule: A command's programs have no write root, whatever its manifest's `write` says, at `supervised` and at `read-only`.
-os: linux
 file: crates/cineris-ext/src/host.rs
 in: serve
 find: write_roots: if matches!(phase, Phase::Hook | Phase::Command) {
 replace: write_roots: if matches!(phase, Phase::Hook) {
 packages: cineris-ext, cineris-core
 caught-by:
+    cineris-ext::it engine::a_hooks_program_has_no_write_root_and_a_tools_has_the_manifests
     cineris-core::it commands::sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them
 
 [break] a-second-interrupt-does-not-kill-a-commands-programs
