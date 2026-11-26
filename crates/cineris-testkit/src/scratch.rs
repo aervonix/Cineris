@@ -52,7 +52,13 @@ pub const BASE: &str = "CINERIS_TEST_TMPDIR";
 /// directory leaves it too.
 #[must_use]
 pub fn disk_thrown_away() -> bool {
-    std::env::var_os("RUNNER_ENVIRONMENT").is_some_and(|value| value == "github-hosted")
+    says_thrown_away(std::env::var_os("RUNNER_ENVIRONMENT").as_deref())
+}
+
+/// Whether a runner that says `RUNNER_ENVIRONMENT` is `value` throws its
+/// disk away with the job.
+fn says_thrown_away(value: Option<&std::ffi::OsStr>) -> bool {
+    value.is_some_and(|value| value == "github-hosted")
 }
 
 /// A directory that belongs to one test. See the module's description.
@@ -411,6 +417,15 @@ mod tests {
     /// As a GitHub-hosted runner, whose disk is thrown away, has it.
     fn on_a_hosted_runner(test: &str) -> Scratch {
         Scratch::outside_on("cineris-testkit-scratch", test, true)
+    }
+
+    #[test]
+    fn only_a_github_hosted_runner_throws_its_disk_away() {
+        use std::ffi::OsStr;
+        assert!(super::says_thrown_away(Some(OsStr::new("github-hosted"))));
+        for kept in [None, Some(OsStr::new("self-hosted")), Some(OsStr::new(""))] {
+            assert!(!super::says_thrown_away(kept), "{kept:?}");
+        }
     }
 
     #[test]
