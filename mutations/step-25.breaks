@@ -217,9 +217,9 @@ caught-by:
     cineris-tui app::tests::screen::the_viewer_scrolls_with_the_wheel_and_a_click_opens_a_box
 
 [break] the-full-screen-asks-for-no-mouse
-rule: The loop asks the terminal for the mouse the application wants, on every terminal it is given.
+rule: The loop asks the terminal for the mouse the application wants, on every terminal it is given: each frame drawn on the alternate screen asks for it before the screen is taken. (The same call at the top of `run_with` is not broken: a new terminal starts on the main screen, where the mouse is never reported, and the first frame asks again before anything is read, so breaking that call alone changes nothing.)
 file: crates/cineris-tui/src/app.rs
-in: run_with
+in: draw
 find: terminal.set_mouse(app.mouse())?;
 replace: terminal.set_mouse(false)?;
 caught-by:

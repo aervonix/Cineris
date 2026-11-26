@@ -380,7 +380,7 @@ rule: The job's build forgets the report an earlier run set aside.
 file: xtask/src/checks.rs
 in: forget_reports
 find: workspace::forget_report(&aside_path(root))
-replace: Ok(())
+replace: Ok::<(), String>(())
 caught-by:
     checks::tests::the_first_runs_report_is_set_aside_and_merged_with_the_last
 
