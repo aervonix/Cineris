@@ -35,7 +35,8 @@ in: Front::say
 find: eprintln!("{}: {}", self.plan.name, crate::visible(text));
 replace: println!("{}: {}", self.plan.name, crate::visible(text));
 caught-by:
-    cineris-cli::system runs::sys_exit_0_in_each_format_with_only_the_result_on_standard_output
+    cineris-cli::system runs::sys_exit_1_when_the_harness_itself_fails
+    cineris-cli::system runs::sys_exit_2_for_mistakes_and_invalid_configuration_before_anything_is_sent
 
 [break] jsonl-event-without-its-envelope
 rule: Each event line of jsonl is the parameters of a session/event notification, which the generated schema describes.

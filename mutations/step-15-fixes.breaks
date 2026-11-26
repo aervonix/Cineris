@@ -18,7 +18,6 @@ find: self.budget_for_mut(&summarized.role) .overflowed(summarized.bytes, summar
 replace:
 caught-by:
     cineris-agent::it summaries::a_second_refusal_ends_the_turn_and_the_next_turns_summary_is_cut
-    cineris-agent::it summaries::a_background_summary_refused_as_too_long_teaches_the_fast_roles_budget_alone
     cineris-agent::it summaries::a_summary_request_refused_as_too_long_is_cut_and_tried_again
 
 [break] summary-refusal-teaches-a-wrong-ratio
@@ -336,7 +335,7 @@ caught-by:
 rule: Each notice of a change from outside at a session's close has an id of its own.
 file: crates/cineris-core/src/core.rs
 find: let id = disk.session.next_item_id();
-replace: let id = ItemId::new("outside-change");
+replace: let id = cineris_protocol::ids::ItemId::new("outside-change");
 caught-by:
     cineris-core::it sandbox::sys_two_closes_that_find_changes_from_outside_and_a_compaction_read_back_as_built
 

@@ -404,7 +404,9 @@ in: narrow_expiry
 find: min_by_key(|(time, _)| *time)
 replace: min_by_key(|(_, text)| text.as_str().to_owned())
 caught-by:
-    lease::tests::narrow_is_always_within_both_inputs
+    lease::tests::a_narrowed_lease_never_has_a_higher_level_a_later_expiry_or_a_larger_budget
+    lease::tests::a_time_nobody_can_read_has_already_passed
+    lease::tests::no_sequence_of_narrowing_widens_a_lease
 
 # The glob hole: a pattern names every path it could match.
 

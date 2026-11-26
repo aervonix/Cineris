@@ -117,7 +117,7 @@ find: let reserve = max_output.min(OUTPUT_RESERVE_CAP).min(window / 4);
 replace: let reserve = 0 * max_output;
 caught-by:
     cineris-agent context::budget::tests::the_limit_keeps_room_for_the_answer_and_a_margin
-    cineris-agent::it transitions::a_context_over_budget_is_compacted_before_the_request
+    cineris-agent::it context::a_summary_prepared_in_the_background_is_used_and_the_newer_turns_follow_it_without_reasoning
 
 [break] overflow-fallback-retried-again
 rule: When the provider says a request does not fit, the loop compacts and tries once more, and no more.
