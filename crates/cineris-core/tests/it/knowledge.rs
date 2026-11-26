@@ -1421,7 +1421,18 @@ fn sys_a_learned_command_turned_off_while_an_earlier_call_waits_is_asked_about()
         let front = Front::start(&world, &core).await;
         // The store is read at the first turn: the command is learned.
         front.turn("hello").await;
+        // Both calls are decided before the command is turned off: a
+        // command decided only after it is asked about whether or not the
+        // narrowing is seen.
+        let deciding = cineris_testkit::Hold::new(cineris_agent::A_CALL_IS_DECIDED);
         front.prompt("test it").await;
+        assert!(
+            deciding
+                .wait_reached_times_async(2, std::time::Duration::from_secs(5))
+                .await,
+            "the read and the command were not both decided"
+        );
+        deciding.release();
         let (question, request) = front.approval().await;
         assert_eq!(request.tool, "read", "the command was allowed: {request:?}");
         // While the read's question is open, the user turns the command off.
