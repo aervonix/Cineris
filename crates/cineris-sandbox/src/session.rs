@@ -1431,21 +1431,10 @@ mod sys {
         let list = Taken::new();
         // SAFETY: plain call.
         let own = unsafe { GetCurrentProcessId() };
-        // Each process of the line of parents is opened once in a check,
-        // and what it told kept for the line a service's start is read on.
-        let told = std::cell::RefCell::new(Vec::<(u32, super::Described)>::new());
-        let describe = |pid: u32| {
-            if let Some((_, known)) = told.borrow().iter().find(|(at, _)| *at == pid) {
-                return known.clone();
-            }
-            let known = described(pid);
-            told.borrow_mut().push((pid, known.clone()));
-            known
-        };
         // The harnesses on its line of parents first, each by its job's
         // name: a session's command's own harness is there unless it
         // detached, and no listing's race can hide it.
-        for parent in super::parents(own, describe) {
+        for parent in super::parents(own, lineage) {
             if let Job::Holds(under) = in_the_job_of(parent.pid, parent.made) {
                 return under;
             }
@@ -1468,7 +1457,7 @@ mod sys {
         // The line of parents, each process on it opened, or the list where
         // one cannot be; the service manager is asked only where the line
         // reaches a service host.
-        let line = super::line_of(own, describe);
+        let line = super::line_of(own, described);
         let read: &[Listed] = match &line {
             Some(line) => line,
             None => match listed_in(&list) {
@@ -1665,6 +1654,20 @@ mod sys {
     /// The process `pid`, opened to ask its parent, its program's name and
     /// when it was made, as the system's list gives them.
     fn described(pid: u32) -> super::Described {
+        described_as(pid, true)
+    }
+
+    /// The process `pid`, opened to ask its parent and when it was made, and
+    /// not its program's name, which the line of parents whose jobs are
+    /// asked first does not need: the name is a path the system makes from
+    /// the device's, the dearest of the reads.
+    fn lineage(pid: u32) -> super::Described {
+        described_as(pid, false)
+    }
+
+    /// The process `pid` described by opening it, with its program's name
+    /// when `named`, and an empty one otherwise.
+    fn described_as(pid: u32, named: bool) -> super::Described {
         use super::Described;
         // SAFETY: plain values.
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
@@ -1697,6 +1700,15 @@ mod sys {
         if status < 0 {
             return Described::Closed;
         }
+        let parent = u32::try_from(basic.parent).unwrap_or(u32::MAX);
+        if !named {
+            return Described::Is(Listed {
+                pid,
+                parent,
+                name: String::new(),
+                made,
+            });
+        }
         let mut path = [0_u16; 1024];
         let mut length = u32::try_from(path.len()).unwrap_or(0);
         // SAFETY: `process` is open with the limited right to ask, and the
@@ -1719,7 +1731,7 @@ mod sys {
         let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
         Described::Is(Listed {
             pid,
-            parent: u32::try_from(basic.parent).unwrap_or(u32::MAX),
+            parent,
             name,
             made,
         })

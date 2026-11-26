@@ -1659,7 +1659,7 @@ caught-by:
 rule: On Windows a process opened to read its line of parents is named as the system's list names it, in lower case, so that the interpreters and the services' hosts are told as before.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-in: described
+in: described_as
 find: let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
 replace: let name = path.rsplit('\\').next().unwrap_or(&path).to_owned();
 caught-by:
@@ -1718,8 +1718,8 @@ caught-by:
 rule: On Windows the jobs of the processes of the line of parents are asked first, each by its name, before anything is listed: a session's command's own harness is found there whatever a listing misses.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: for parent in super::parents(own, describe) {
-replace: for parent in super::parents(own, describe).into_iter().take(0) {
+find: for parent in super::parents(own, lineage) {
+replace: for parent in super::parents(own, lineage).into_iter().take(0) {
 caught-by:
     cineris-sandbox::it session::sys_a_harness_on_the_line_of_parents_is_found_with_nothing_listed
 
