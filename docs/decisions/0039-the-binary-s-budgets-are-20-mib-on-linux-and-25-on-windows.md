@@ -1,6 +1,6 @@
 # 0039: The binary's budgets are 20 MiB on Linux and 25 on Windows
 
-- **Status:** Accepted by the owner on 2026-11-19: option A of the size step, with the owner's order of the reserves. It replaces decision 0036's "`panic = "abort"` is the reserve"; the rest of 0036 stands. Revisited on 2026-11-26, when step 28 merged: its measured size, above its range in the outlook, and the outlook to step 34 again, pending the owner's review; the budgets and the reserves stand unchanged ("Revisited when step 28 merged", below).
+- **Status:** Accepted by the owner on 2026-11-19: option A of the size step, with the owner's order of the reserves. It replaces decision 0036's "`panic = "abort"` is the reserve"; the rest of 0036 stands. Revisited on 2026-11-26, when step 28 merged: its measured size, above its range in the outlook, and the outlook to step 34 again. The owner's decision of 2026-11-26: the budgets and the reserves stand unchanged, and step 30's choice of its MCP client is the next point to decide ("Revisited when step 28 merged", below).
 - **Date:** 2026-11-19
 
 ## Context
@@ -42,9 +42,9 @@ The three the size step put to the owner, with what each leaves at step 34 at th
 - Step 30's design chooses its MCP client.
 - A step lands outside its range in the outlook.
 
-## Revisited when step 28 merged (2026-11-26), pending the owner's review
+## Revisited when step 28 merged (2026-11-26), and the owner's decision
 
-Written by the maintainers from the measurements, at the revisit this decision names. It changes neither a budget nor a reserve: those are the owner's to change.
+Written by the maintainers from the measurements, at the revisit this decision names, and decided by the owner on 2026-11-26.
 
 **Measured.** The shipped `dist` binary, built on hosted runners by `cargo xtask size`:
 
@@ -70,4 +70,4 @@ Step 28's own, by pull request (Linux, then Windows): #117, the engine and its h
 
 Step 30's range is mostly a library's recorded cost (`rmcp`), which the ratio for our own code does not fit; the third row leaves it as written, and is the one the maintainers take as likely. On it, the reserves in their order cover the high end: an MCP client of our own at step 30, then `opt-level = "z"` for the whole profile (1.1 MB on Linux, 1.7 MB on Windows), then `panic = "abort"` (2.0 MB, 6.4 MB).
 
-**What stands.** The budgets, 20 MiB and 25 MiB, and the reserves in their order, unchanged; **step 30's design, choosing its MCP client, is the next point to decide whether a reserve is spent.** Pending the owner's review.
+**The owner's decision (2026-11-26).** The budgets, 20 MiB and 25 MiB, and the reserves in their order, stand unchanged, and **step 30's design, as it chooses its MCP client, is the next point to decide whether a reserve is spent.**
