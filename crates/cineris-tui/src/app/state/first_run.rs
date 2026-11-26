@@ -2,8 +2,10 @@
 //! `docs/architecture/08-configuration.md`, "First run";
 //! `docs/architecture/09-tui.md`, "The first run").
 //!
-//! **The order:** the provider and its key, what other tools left, the
-//! mode; then the configuration file is written ([`Setup::write_config`]),
+//! **The order:** the provider and its key, what other tools left,
+//! whether the user's own skill folders are read without asking (since step
+//! 28's third pull request, the owner's answer: no is the default, and a
+//! skip is no), the mode; then the configuration file is written ([`Setup::write_config`]),
 //! the core reads it again (`config/reload`), and the session opens, made
 //! with what was chosen; its trust question is its own (screen 2c); then
 //! the commands the project's files name (`project/detect`), which join
@@ -123,6 +125,9 @@ enum Step {
     },
     /// What other tools left.
     Imports(Imports),
+    /// Whether the user's own skill folders are read without asking
+    /// (`permissions.read_skill_folders`): `0` no, the default, `1` yes.
+    SkillFolders { selected: usize },
     /// The mode.
     Mode { selected: usize },
     /// The file being written, the configuration read again, the session
@@ -311,7 +316,11 @@ impl FirstRun {
     fn card(&self) -> bool {
         matches!(
             self.step,
-            Step::Provider { .. } | Step::Key { .. } | Step::Imports(_) | Step::Mode { .. }
+            Step::Provider { .. }
+                | Step::Key { .. }
+                | Step::Imports(_)
+                | Step::SkillFolders { .. }
+                | Step::Mode { .. }
         )
     }
 
@@ -1372,8 +1381,28 @@ impl App {
                     });
                     let said = imports_said(imported.as_ref());
                     run.chosen.imports = imported;
-                    run.to(Step::Mode { selected: 1 });
+                    run.to(Step::SkillFolders { selected: 0 });
                     self.say(&said);
+                }
+            }
+            // No is the default, and a skip is no (the owner's answer).
+            Step::SkillFolders { selected } => {
+                if up {
+                    *selected = 0;
+                } else if down {
+                    *selected = 1;
+                } else if (enter && whole) || letter == Some('s') {
+                    run.taken = Some(at);
+                    let yes = enter && *selected == 1;
+                    run.chosen.read_skill_folders = yes;
+                    run.to(Step::Mode { selected: 1 });
+                    self.say(if yes {
+                        "Skill folders: your own are read without asking, and what is read is \
+                         sent to the model's provider."
+                    } else {
+                        "Skill folders: a read of your own is asked about. `cineris setup \
+                         skill-folders` changes it."
+                    });
                 }
             }
             Step::Mode { selected } => {
@@ -1838,12 +1867,32 @@ impl App {
                 all.extend(skip);
                 (view, all)
             }
+            Step::SkillFolders { selected } => (
+                StepView {
+                    title: "Skill folders".to_owned(),
+                    number: 3,
+                    sentence: crate::app::setup::SKILL_FOLDERS_QUESTION.to_owned(),
+                    rows: crate::app::setup::SKILL_FOLDERS_ANSWERS
+                        .iter()
+                        .map(|(answer, means)| {
+                            Row::new(0, Mark::None, *answer, vec![(*means).to_owned()])
+                        })
+                        .collect(),
+                    selected: Some(*selected),
+                    note: None,
+                },
+                vec![
+                    "enter chooses".to_owned(),
+                    "s keeps it off".to_owned(),
+                    "x skips the set-up".to_owned(),
+                ],
+            ),
             Step::Mode { selected } => {
                 let levels = run.levels();
                 (
                     StepView {
                         title: "Mode".to_owned(),
-                        number: 3,
+                        number: 4,
                         sentence: "How much the agent does before it asks you. /mode changes it \
                                    at any time."
                             .to_owned(),
@@ -1919,7 +1968,7 @@ impl App {
                 (
                     StepView {
                         title: "Commands".to_owned(),
-                        number: 4,
+                        number: 5,
                         sentence,
                         rows,
                         selected: Some(commands.selected),
@@ -1976,9 +2025,15 @@ fn chosen_config(chosen: &Chosen, over_found: bool) -> serde_json::Map<String, s
         "compat".to_owned(),
         json!({ "instructions": imports.instructions, "skills": imports.skills }),
     );
+    let mut permissions = serde_json::Map::new();
     if let Some(mode) = &chosen.mode {
-        config.insert("permissions".to_owned(), json!({ "mode": mode }));
+        permissions.insert("mode".to_owned(), Value::String(mode.clone()));
     }
+    permissions.insert(
+        "read_skill_folders".to_owned(),
+        Value::Bool(chosen.read_skill_folders),
+    );
+    config.insert("permissions".to_owned(), Value::Object(permissions));
     if let Some(main) = &chosen.model {
         let mut model = serde_json::Map::new();
         model.insert("main".to_owned(), Value::String(main.clone()));

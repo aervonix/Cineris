@@ -1,7 +1,9 @@
 [0;90m·[0m [0;90mProvider: anthropic, its key from ANTHROPIC_API_KEY.[0m
 [0;90m·[0m [0;90mImports: AGENTS.md and CLAUDE.md read; the MCP server docs.[0m
+[0;90m·[0m [0;90mSkill folders: a read of your own is asked about. `cineris setup[0m
+[0m  [0;90mskill-folders` changes it.[0m
 [0;90m·[0m [0;90mMode: supervised. Written to ~/.config/cineris/config.toml.[0m
-
+[0m
 [0;90m╭──────────────────────────────────────────────────────────────╮[0m
 [0;90m│[0m [0;1;38;2;122;60;251m◆[0m [0;1mCineris[0;90m 0.1.0[0m                                              [0;90m│[0m
 [0;90m│[0m                                                              [0;90m│[0m
@@ -9,11 +11,11 @@
 [0;90m╰──────────────────────────────────────────────────────────────╯[0m
 
 [0;90m·[0m [0;90mProject: ~/src/parser trusted.[0m
-
-[0;38;2;122;60;251m◇[0m [0;1mCommands[0;90m  4 of 4[0m
+[0m
+[0;38;2;122;60;251m◇[0m [0;1mCommands[0;90m  5 of 5[0m
 [0m  Found in Cargo.toml. Each one picked joins the project's profile as an entry[0m
 [0m  you wrote: it runs without asking, and the checks at a turn's end use it.[0m
-
+[0m
 [0m  [0;38;2;122;60;251m◆[0m [0;90m☐[0m [0;1;38;2;141;87;252mbuild[0m   [0;90mcargo build --workspace[0m
 [0m    [0;90m☐[0m test    [0;90mcargo test --workspace[0m
 [0m    [0;90m☐[0m check   [0;90mcargo clippy --workspace --all-targets -- -D warnings[0m

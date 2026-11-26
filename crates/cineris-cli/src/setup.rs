@@ -52,6 +52,91 @@ pub(crate) fn first_run_due(env: &Env) -> Option<PathBuf> {
     }
 }
 
+/// `cineris setup …`: a choice the first run asks, made again in the user's
+/// own configuration (since step 28's third pull request, the owner's
+/// answer: the first run asks whether the user's own skill folders are read
+/// without asking, and `cineris setup` changes it later).
+pub(crate) fn command(command: crate::args::SetupCommand, name: &'static str) -> u8 {
+    use std::io::IsTerminal as _;
+    let crate::args::SetupCommand::SkillFolders { value } = command;
+    let env = Env::from_process();
+    let Some(file) = cineris_config::Dirs::from_env(&env).user_config else {
+        eprintln!(
+            "{name}: your configuration file could not be worked out: the home directory is not known"
+        );
+        return crate::exit::USAGE;
+    };
+    let value = match value {
+        Some(value) => value,
+        None if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() => {
+            let mut asked = format!("{}\n", cineris_tui::app::setup::SKILL_FOLDERS_QUESTION);
+            for (answer, means) in cineris_tui::app::setup::SKILL_FOLDERS_ANSWERS {
+                asked.push_str(&format!("  {answer}: {means}\n"));
+            }
+            asked.push_str("Read them without asking? [y/N] ");
+            crate::print_out(&asked);
+            let mut line = String::new();
+            let _ = std::io::stdin().read_line(&mut line);
+            skill_folders_answer(&line)
+        }
+        None => {
+            eprintln!(
+                "{name}: there is no terminal to ask at: `{name} setup skill-folders on` or `off`"
+            );
+            return crate::exit::USAGE;
+        }
+    };
+    match set_skill_folders(&file, value, &env) {
+        Ok(said) => {
+            crate::print_out(&crate::visible(&said));
+            crate::exit::COMPLETED
+        }
+        Err(said) => {
+            eprintln!("{name}: {}", crate::visible(&said));
+            crate::exit::USAGE
+        }
+    }
+}
+
+/// Whether an answer to the skill folders' question is a yes: `y` or `yes`,
+/// and anything else, an empty line included, no.
+fn skill_folders_answer(line: &str) -> bool {
+    matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+/// Sets `permissions.read_skill_folders` to `value` in the user's file at
+/// `file`, and says what it did.
+fn set_skill_folders(file: &Path, value: bool, env: &Env) -> Result<String, String> {
+    let shown = env.display_path(file);
+    let done = cineris_config::write::set_switch(file, "permissions", "read_skill_folders", value)
+        .map_err(|error| format!("{shown} was not changed: {error}"))?;
+    let what = if value {
+        "Your own skill folders are read without asking, and what is read, secrets included, \
+         goes to the model's provider"
+    } else {
+        "A read of your own skill folders is asked about"
+    };
+    let mut said = match done {
+        cineris_config::write::Disabled::Written { .. } => format!(
+            "{what}: `permissions.read_skill_folders = {value}` in {shown}. It takes effect in \
+             the next session; sessions running now keep what they had.\n"
+        ),
+        cineris_config::write::Disabled::Already => {
+            format!("{what} already ({shown}): nothing was written.\n")
+        }
+    };
+    if matches!(
+        done,
+        cineris_config::write::Disabled::Written { made: true }
+    ) {
+        said.push_str(&format!(
+            "{shown} was not there, and was made with this alone, so the first run, which starts \
+             only while that file is not there, does not start.\n"
+        ));
+    }
+    Ok(said)
+}
+
 /// The first run's program.
 pub(crate) struct ProgramSetup {
     core: Core,
@@ -271,6 +356,7 @@ fn choices(chosen: &Chosen, read: &BTreeMap<String, Vec<ImportedServer>>) -> Fir
                 .collect(),
         }),
         mode: chosen.mode.clone(),
+        read_skill_folders: chosen.read_skill_folders,
     }
 }
 
@@ -290,6 +376,44 @@ mod tests {
         env.set("XDG_CONFIG_HOME", format!("{home}/.config"));
         env.set("APPDATA", format!("{home}/AppData/Roaming"));
         env
+    }
+
+    /// `cineris setup skill-folders` changes what the first run wrote, in
+    /// place: on, then off, then off again writes nothing; and only `y` or
+    /// `yes` is a yes to its question.
+    #[test]
+    fn setup_changes_the_skill_folders_switch_in_place() {
+        let scratch = cineris_testkit::Scratch::outside("cineris-cli-unit", "setup_skills");
+        let env = env_at(scratch.path());
+        let file = scratch.join("config.toml");
+        cineris_config::write::write_user_config(&file, &FirstRunChoices::default()).unwrap();
+        let first = std::fs::read_to_string(&file).unwrap();
+        let switch = |value: bool| {
+            std::fs::read_to_string(&file)
+                .unwrap()
+                .contains(&format!("read_skill_folders = {value}"))
+        };
+        assert!(switch(false), "the first run's default");
+        let said = set_skill_folders(&file, true, &env).unwrap();
+        assert!(
+            said.contains("read without asking") && said.contains("next session"),
+            "{said}"
+        );
+        assert!(switch(true) && !switch(false));
+        set_skill_folders(&file, false, &env).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&file).unwrap(),
+            first,
+            "one word, back"
+        );
+        let said = set_skill_folders(&file, false, &env).unwrap();
+        assert!(said.contains("nothing was written"), "{said}");
+        for yes in ["y\n", "Yes\n"] {
+            assert!(skill_folders_answer(yes));
+        }
+        for no in ["", "\n", "n\n", "ok\n"] {
+            assert!(!skill_folders_answer(no));
+        }
     }
 
     #[test]
@@ -360,8 +484,10 @@ mod tests {
                 ],
             }),
             mode: Some("read-only".to_owned()),
+            read_skill_folders: true,
         };
         let written = choices(&chosen, &read);
+        assert!(written.read_skill_folders, "a yes is written");
         assert_eq!(written.provider.as_deref(), Some("anthropic"));
         assert_eq!(
             written.model.as_deref(),

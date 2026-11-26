@@ -981,9 +981,7 @@ fn sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands(
     };
     let listener = bind(&place).unwrap();
     let (stop, done) = serve(&core, listener, world.serve_options());
-    world
-        .server
-        .push(conformance::anthropic::text(&["Hello."]));
+    world.server.push(conformance::anthropic::text(&["Hello."]));
     let mut lines = client(open(&place).expect("the server's own thread opens the pipe"));
     lines.initialize(conformance::initialize()).unwrap();
     let cineris_protocol::methods::OpResult::SessionNew(opened) = lines

@@ -5,7 +5,7 @@
 [0;90m│[0m   and x skips them all.                                      [0;90m│[0m
 [0;90m╰──────────────────────────────────────────────────────────────╯[0m
 
-[0;38;2;122;60;251m◇[0m [0;1mProvider[0;90m  1 of 4[0m
+[0;38;2;122;60;251m◇[0m [0;1mProvider[0;90m  1 of 5[0m
 [0m  Paste or type the key for anthropic. Nothing of it is shown. It is stored in[0m
 [0m  Windows Credential Manager, for this machine only, and is never written to a[0m
 [0m  file of settings, the log or the prompt history.[0m

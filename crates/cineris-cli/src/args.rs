@@ -184,6 +184,9 @@ pub(crate) enum Command {
     /// `cineris ext …`: the user's extensions and the project's (since step
     /// 28).
     Ext(ExtCommand),
+    /// `cineris setup …`: a choice of the first run's, made again (since
+    /// step 28's third pull request).
+    Setup(SetupCommand),
     /// `cineris serve …`: the RPC server (step 27).
     Serve(Box<Serve>),
     /// `cineris attach …`: the interactive application on a running server
@@ -323,6 +326,16 @@ pub(crate) enum ExtCommand {
     Add { path: String, yes: bool },
 }
 
+/// `cineris setup …`: a choice the first run asks, made again in the
+/// user's own configuration (since step 28's third pull request).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SetupCommand {
+    /// `skill-folders [on|off]`: whether the user's own skill folders are
+    /// read without asking (`permissions.read_skill_folders`); asked at a
+    /// terminal when no value is given.
+    SkillFolders { value: Option<bool> },
+}
+
 /// `cineris usage [--range R] [--by G]… [--project KEY] [--json] [--refresh]`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UsageCommand {
@@ -361,6 +374,7 @@ pub(crate) enum Topic {
     Stats,
     Project,
     Ext,
+    Setup,
     Serve,
     Attach,
 }
@@ -535,6 +549,7 @@ pub(crate) fn parse(arguments: Vec<OsString>) -> Result<Command, UsageError> {
             "stats" => Some(Topic::Stats),
             "project" => Some(Topic::Project),
             "ext" => Some(Topic::Ext),
+            "setup" => Some(Topic::Setup),
             "serve" => Some(Topic::Serve),
             "attach" => Some(Topic::Attach),
             _ => None,
@@ -836,6 +851,9 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
     if topic == Topic::Ext {
         return ext(parser);
     }
+    if topic == Topic::Setup {
+        return setup(parser);
+    }
     let Some(first) = parser.next()? else {
         return Ok(Command::Help(topic));
     };
@@ -857,6 +875,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 Topic::Stats => "stats",
                 Topic::Project => "project",
                 Topic::Ext => "ext",
+                Topic::Setup => "setup",
                 Topic::Serve => "serve",
                 Topic::Attach => "attach",
                 Topic::Main => "",
@@ -979,6 +998,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
         | Topic::Stats
         | Topic::Project
         | Topic::Ext
+        | Topic::Setup
         | Topic::Serve
         | Topic::Attach => Err(wrong(&action)),
     }
@@ -1162,6 +1182,42 @@ fn ext(parser: &mut Parser) -> Result<Command, UsageError> {
         }
     };
     Ok(Command::Ext(parsed))
+}
+
+/// `cineris setup …`
+fn setup(parser: &mut Parser) -> Result<Command, UsageError> {
+    let help = Ok(Command::Help(Topic::Setup));
+    let action = match parser.next()? {
+        None | Some(Arg::Short('h') | Arg::Long("help")) => return help,
+        Some(Arg::Value(action)) => action.string()?,
+        Some(other) => return Err(unexpected(&other)),
+    };
+    let mut words: Vec<String> = Vec::new();
+    while let Some(argument) = parser.next()? {
+        match argument {
+            Arg::Short('h') | Arg::Long("help") => return help,
+            Arg::Value(word) => words.push(word.string()?),
+            other => return Err(unexpected(&other)),
+        }
+    }
+    match action.as_str() {
+        "skill-folders" => {
+            let value = match words.as_slice() {
+                [] => None,
+                [word] if word == "on" => Some(true),
+                [word] if word == "off" => Some(false),
+                _ => {
+                    return Err(UsageError(
+                        "'setup skill-folders' takes on, off, or nothing to be asked".to_owned(),
+                    ));
+                }
+            };
+            Ok(Command::Setup(SetupCommand::SkillFolders { value }))
+        }
+        other => Err(UsageError(format!(
+            "'{other}' is not a subcommand of 'setup'"
+        ))),
+    }
 }
 
 /// `cineris usage …`
@@ -1490,6 +1546,29 @@ mod tests {
                 panic!("{words:?} was read");
             };
             assert!(message.contains(says), "{words:?}: {message}");
+        }
+    }
+
+    /// `setup skill-folders` takes `on`, `off` or nothing.
+    #[test]
+    fn setup_reads_the_skill_folders_switch() {
+        let of = |value| Ok(Command::Setup(SetupCommand::SkillFolders { value }));
+        assert_eq!(parse_words(&["setup", "skill-folders"]), of(None));
+        assert_eq!(
+            parse_words(&["setup", "skill-folders", "on"]),
+            of(Some(true))
+        );
+        assert_eq!(
+            parse_words(&["setup", "skill-folders", "off"]),
+            of(Some(false))
+        );
+        assert_eq!(parse_words(&["setup"]), Ok(Command::Help(Topic::Setup)));
+        for words in [
+            &["setup", "skill-folders", "yes"][..],
+            &["setup", "skill-folders", "on", "off"],
+            &["setup", "mode"],
+        ] {
+            assert!(parse_words(words).is_err(), "{words:?}");
         }
     }
 

@@ -62,8 +62,8 @@ const COMPARED: [(&str, usize); 25] = [
     ("f1b", 16),
     ("f2a", 28),
     ("f2b", 34),
-    ("f3", 22),
-    ("f4", 22),
+    ("f3", 24),
+    ("f4", 24),
 ];
 
 fn reference_dir() -> PathBuf {

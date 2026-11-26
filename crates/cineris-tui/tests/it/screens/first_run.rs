@@ -266,6 +266,10 @@ pub(super) fn compose(spec: Spec, background: Rgb, opened: SessionState) -> Scre
         return drive.screen(live);
     }
     drive.key(KeyCode::Enter);
+    // The skill folders' question, answered with its default, no (since
+    // step 28's third pull request).
+    let _ = drive.ready();
+    drive.key(KeyCode::Enter);
     let live = drive.ready();
     if spec.id == "f3" {
         return drive.screen(live);

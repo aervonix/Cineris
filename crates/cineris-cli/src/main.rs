@@ -118,6 +118,7 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
         Command::Stats(command) => commands::stats(command, name),
         Command::Project(command) => commands::project(command, name),
         Command::Ext(command) => ext::ext(command, name),
+        Command::Setup(command) => setup::command(command, name),
         Command::Serve(serve) => serve::run(*serve, name),
         Command::Attach(attach) => attach::run(*attach, name),
     }
