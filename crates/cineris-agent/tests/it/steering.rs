@@ -4,9 +4,9 @@
 use cineris_agent::{Ledger, TurnState};
 use cineris_protocol::error::code;
 use cineris_protocol::event::{Event, TurnOutcome};
-use cineris_protocol::item::{Delivery, NoticeSource};
+use cineris_protocol::item::{CommandSource, Delivery, NoticeSource, PromptCommand};
 use cineris_protocol::lease::Budget;
-use cineris_protocol::methods::Disposition;
+use cineris_protocol::methods::{Disposition, TurnStartResult};
 use cineris_protocol::{ErrorKind, Item, Part, Role, StopReason};
 use cineris_testkit::{Gate, Response};
 use serde_json::json;
@@ -34,6 +34,37 @@ fn prompts(rig: &Rig) -> Vec<String> {
         .collect()
 }
 
+/// The command each user message in the log came from, in order.
+fn commands(rig: &Rig) -> Vec<Option<PromptCommand>> {
+    rig.store
+        .items()
+        .iter()
+        .filter_map(|item| match item {
+            Item::UserMessage(user) => Some(user.command.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The user's command `/review now`, as the core names it beside its text.
+fn review() -> PromptCommand {
+    PromptCommand {
+        name: "review".to_owned(),
+        source: CommandSource::User,
+        extension: None,
+        args: "now".to_owned(),
+    }
+}
+
+/// Sends `text` as the expanded text of `/review now`, delivered as
+/// `delivery` says, while a turn runs.
+fn command_prompt(rig: &Rig, text: &str, delivery: Delivery) -> TurnStartResult {
+    rig.handle
+        .prompt_from(vec![Part::text(text)], Some(delivery), None, Some(review()))
+        .map_err(|error| *error)
+        .expect("a turn is running")
+}
+
 fn queue_lengths(rig: &Rig) -> Vec<u32> {
     rig.events
         .all()
@@ -58,6 +89,9 @@ fn a_steering_message_is_delivered_after_the_round_and_before_the_next_request()
             steered.turn_id, started.turn_id,
             "it belongs to the running turn"
         );
+        // A command's steering message, delivered at the same boundary.
+        let command = command_prompt(&rig, "Review it now.", Delivery::Steer);
+        assert_eq!(command.disposition, Disposition::Steering);
         world.gates.open("tool");
         rig.events.turns(1).await;
     });
@@ -71,14 +105,26 @@ fn a_steering_message_is_delivered_after_the_round_and_before_the_next_request()
         .collect();
     assert_eq!(
         roles,
-        [&Role::User, &Role::Assistant, &Role::Tool, &Role::User]
+        [
+            &Role::User,
+            &Role::Assistant,
+            &Role::Tool,
+            &Role::User,
+            &Role::User
+        ]
     );
     assert_eq!(text_of(&request.messages[3]), "use b instead");
+    assert_eq!(text_of(&request.messages[4]), "Review it now.");
     assert_valid_history(&request.messages);
-    let Item::UserMessage(steer) = &rig.store.items()[3] else {
-        panic!("the steering message is an item");
-    };
-    assert_eq!(steer.delivery, Some(Delivery::Steer));
+    for index in [3, 4] {
+        let Item::UserMessage(steer) = &rig.store.items()[index] else {
+            panic!("the steering message is an item");
+        };
+        assert_eq!(steer.delivery, Some(Delivery::Steer));
+    }
+    // The command's message says which command it came from; the other
+    // came from none.
+    assert_eq!(commands(&rig), [None, None, Some(review())]);
 }
 
 #[test]
@@ -93,7 +139,8 @@ fn a_steering_message_that_finds_no_boundary_becomes_the_next_turn() {
         rig.prompt("go");
         rig.events.seen("delta:text", 1).await;
         // The model is writing its last answer: there is no round to wait
-        // for.
+        // for. The first, a command's, is the next turn's prompt.
+        command_prompt(&rig, "Review it now.", Delivery::Steer);
         rig.steer("also this");
         rig.steer("and this");
         more.open();
@@ -114,8 +161,13 @@ fn a_steering_message_that_finds_no_boundary_becomes_the_next_turn() {
         .map(|event| event.turn_id.clone().unwrap().to_string())
         .collect();
     assert_eq!(turns, ["t_1", "t_2"]);
-    // Both went into the one request of that turn, each as its own message.
-    assert_eq!(prompts(&rig), ["go", "also this", "and this"]);
+    // All went into the one request of that turn, each as its own message,
+    // and the command's says which command it came from.
+    assert_eq!(
+        prompts(&rig),
+        ["go", "Review it now.", "also this", "and this"]
+    );
+    assert_eq!(commands(&rig), [None, Some(review()), None, None]);
     assert_eq!(world.provider.requests().len(), 2);
     assert_valid_history(&last_request(&world.provider).messages);
 }
@@ -132,8 +184,10 @@ fn queued_prompts_run_one_at_a_time_after_a_turn_that_completed() {
         rig.prompt("first");
         rig.events.seen("delta:text", 1).await;
         let second = rig.queue("second");
-        let third = rig.queue("third");
+        // The third is a command's text.
+        let third = command_prompt(&rig, "third", Delivery::Queue);
         assert_eq!(second.disposition, Disposition::Queued);
+        assert_eq!(third.disposition, Disposition::Queued);
         assert_eq!(
             (second.turn_id.as_str(), third.turn_id.as_str()),
             ("t_2", "t_3"),
@@ -177,6 +231,8 @@ fn queued_prompts_run_one_at_a_time_after_a_turn_that_completed() {
         panic!("a user message");
     };
     assert_eq!(queued.delivery, Some(Delivery::Queue));
+    // The queued command's message says which command it came from.
+    assert_eq!(commands(&rig), [None, None, Some(review())]);
 }
 
 /// What a session looks like when two prompts are held behind a turn that
@@ -243,20 +299,7 @@ fn after_an_interrupt_queued_prompts_are_held_and_follow_the_next_prompt() {
         rig.events.seen("delta:text", 1).await;
         rig.steer("a nudge");
         // A command's steering message goes back with its command.
-        let command = cineris_protocol::item::PromptCommand {
-            name: "review".to_owned(),
-            source: cineris_protocol::item::CommandSource::User,
-            extension: None,
-            args: "now".to_owned(),
-        };
-        rig.handle
-            .prompt_from(
-                vec![Part::text("Review it now.")],
-                Some(cineris_protocol::item::Delivery::Steer),
-                None,
-                Some(command.clone()),
-            )
-            .unwrap();
+        command_prompt(&rig, "Review it now.", Delivery::Steer);
         rig.queue("second");
         rig.queue("third");
         let interrupted = rig.handle.interrupt();
@@ -269,7 +312,7 @@ fn after_an_interrupt_queued_prompts_are_held_and_follow_the_next_prompt() {
                 vec![Part::text("Review it now.")]
             ]
         );
-        assert_eq!(interrupted.undelivered_commands, [None, Some(command)]);
+        assert_eq!(interrupted.undelivered_commands, [None, Some(review())]);
         rig.events.turns(1).await;
     });
     assert_eq!(rig.events.ends()[0].outcome, TurnOutcome::Interrupted);
@@ -337,7 +380,9 @@ fn a_steering_message_left_behind_by_a_failed_turn_is_held_with_the_queue() {
     world.run(async {
         rig.prompt("first");
         rig.events.seen("delta:text", 1).await;
-        rig.steer("a nudge");
+        // A command's steering message: it is held, and delivered as its
+        // own turn, with its command.
+        command_prompt(&rig, "a nudge", Delivery::Steer);
         more.open();
         rig.events.turns(1).await;
         assert_eq!(
@@ -349,6 +394,7 @@ fn a_steering_message_left_behind_by_a_failed_turn_is_held_with_the_queue() {
         rig.events.seen("idle", 1).await;
     });
     assert_eq!(prompts(&rig), ["first", "now this", "a nudge"]);
+    assert_eq!(commands(&rig), [None, None, Some(review())]);
 }
 
 #[test]
