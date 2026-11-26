@@ -1756,17 +1756,21 @@ fn perf_idle_memory_in_a_workspace_of_real_code() {
 /// The memory of a 200-turn session in each presenter (step 25's "Done
 /// when"; `docs/performance-budgets.md`, "Memory": 40 MB inline, 80 MB full
 /// screen): a workspace of 20,000 files of the real-code corpus, and 200
-/// turns each of a read, an edit with a diff and a command that prints 200
-/// lines, then an answer of about 40 lines with a code block; in the full
-/// screen, the transcript then scrolled to its top and back, resized twice
-/// and searched once. The binary's resident memory and its peak are read
-/// once it has settled. Ignored; on the shipped musl `dist` build:
+/// turns each of the design's mix (`docs/steps/25/answered.md`, point 2):
+/// reasoning of 16 KiB, streamed, then a read, an edit with a diff and a
+/// command that prints 200 lines, then an answer of about 40 lines with a
+/// code block; in the full screen, the transcript then scrolled to its top
+/// and back, resized twice and searched once. The binary's resident memory
+/// and its peak are read once it has settled. Ignored; on the shipped musl
+/// `dist` build:
 ///
 /// ```text
 /// cargo test --profile dist --target x86_64-unknown-linux-musl -p cineris-cli --test system perf_two_hundred_turns -- --ignored --nocapture
 /// ```
 ///
-/// `CINERIS_PERF_TURNS` sets the turns, `CINERIS_PERF_FILES` the files.
+/// `CINERIS_PERF_TURNS` sets the turns, `CINERIS_PERF_FILES` the files and
+/// `CINERIS_PERF_REASONING` the bytes of each turn's reasoning (since the
+/// fixes of the review of step 25, which found the test played none).
 #[test]
 #[ignore = "a measurement, in a release build"]
 fn perf_two_hundred_turns_in_each_presenter() {
@@ -1778,6 +1782,41 @@ fn perf_two_hundred_turns_in_each_presenter() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(20_000);
+    // About 4,000 tokens of reasoning a turn, as a model that sends its
+    // reasoning whole gives at a high effort: paragraphs, streamed in
+    // pieces of about a kilobyte.
+    let reasoning_bytes: usize = std::env::var("CINERIS_PERF_REASONING")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(16 * 1024);
+    let reasoning = |turn: usize| -> Vec<String> {
+        let mut text = String::new();
+        let mut n = 0;
+        while text.len() < reasoning_bytes {
+            n += 1;
+            text.push_str(&format!(
+                "Step {n} of turn {turn}: the scanner reads each digit, and an underscore \
+                 between two digits is a separator; anything else ends the number, so \
+                 the test should cover a trailing underscore and a leading one.\n\n"
+            ));
+        }
+        let mut end = reasoning_bytes.min(text.len());
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        let mut pieces = Vec::new();
+        let mut rest = text.as_str();
+        while !rest.is_empty() {
+            let mut cut = rest.len().min(1024);
+            while !rest.is_char_boundary(cut) {
+                cut -= 1;
+            }
+            pieces.push(rest[..cut].to_owned());
+            rest = &rest[cut..];
+        }
+        pieces
+    };
     let answer: String = {
         let mut text = String::from("Here is what changed, and why.\n\n");
         for n in 1..=12 {
@@ -1818,7 +1857,21 @@ fn perf_two_hundred_turns_in_each_presenter() {
                 ("shell", json!({"command": print})),
             ];
             let mut events = vec![super::message_start()];
+            let pieces = reasoning(n);
+            if !pieces.is_empty() {
+                events.push(json!({"type": "content_block_start", "index": 0,
+                    "content_block": {"type": "thinking", "thinking": "", "signature": ""}}));
+                for piece in &pieces {
+                    events.push(json!({"type": "content_block_delta", "index": 0,
+                        "delta": {"type": "thinking_delta", "thinking": piece}}));
+                }
+                events.push(json!({"type": "content_block_delta", "index": 0,
+                    "delta": {"type": "signature_delta", "signature": format!("sig_{n}")}}));
+                events.push(json!({"type": "content_block_stop", "index": 0}));
+            }
+            let first = usize::from(!pieces.is_empty());
             for (index, (tool, input)) in calls.iter().enumerate() {
+                let index = first + index;
                 events.push(json!({"type": "content_block_start", "index": index,
                     "content_block": {"type": "tool_use", "id": format!("toolu_{n}_{index}"),
                         "name": tool, "input": {}}}));
@@ -1855,6 +1908,15 @@ fn perf_two_hundred_turns_in_each_presenter() {
                 shows_ever(t, &done)
             });
             turn_ended(&mut session);
+            // The reasoning reached the transcript: what the scrollback shows
+            // of the first turn, inline.
+            if n == 1 && reasoning_bytes > 0 && presenter == "inline" {
+                assert!(
+                    shows_ever(session.screen(), "Reasoned for"),
+                    "no reasoning was drawn:\n{}",
+                    session.screen().dump()
+                );
+            }
         }
         report(&format!(
             "{presenter}: {turns} turns in {:.1} s",
@@ -1866,12 +1928,15 @@ fn perf_two_hundred_turns_in_each_presenter() {
             memory(&session)
         ));
         if presenter == "fullscreen" {
-            // To the top and back, two resizes, and a search.
-            for _ in 0..(turns * 4) {
+            // To the top and back, two resizes, and a search: four pages a
+            // turn, and one more for each KiB of its reasoning, which is
+            // about 16 rows of it.
+            let pages = turns * (4 + reasoning_bytes / 1024);
+            for _ in 0..pages {
                 session.send_key("pageup");
             }
             session.wait_for(LIMIT, "the top", |t| t.shows(HEADER));
-            for _ in 0..(turns * 4) {
+            for _ in 0..pages {
                 session.send_key("pagedown");
             }
             session.resize(70, 30);
