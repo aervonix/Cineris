@@ -51,6 +51,7 @@
     reason = "finding commands reads folders and files; callers run it on the blocking pool"
 )]
 
+use std::collections::BTreeMap;
 use std::io::Read as _;
 use std::path::Path;
 
@@ -530,22 +531,11 @@ fn look_in(
         }
     }
     // Names that differ only in case: none of them is used.
-    let folded: Vec<String> = out
-        .names
-        .iter()
-        .map(|name| name.to_ascii_lowercase())
-        .collect();
-    let clashes = |name: &str| {
-        let fold = name.to_ascii_lowercase();
-        folded.iter().filter(|other| **other == fold).count() > 1
-    };
+    let clashes = case_clashes(&out.names);
     for command in read {
-        if clashes(&command.name) {
-            let fold = command.name.to_ascii_lowercase();
-            let all: Vec<String> = out
-                .names
+        if let Some(all) = clashes.get(&command.name.to_ascii_lowercase()) {
+            let all: Vec<String> = all
                 .iter()
-                .filter(|other| other.to_ascii_lowercase() == fold)
                 .map(|other| format!("`{}`", visible(other)))
                 .collect();
             left(
@@ -559,6 +549,22 @@ fn look_in(
         }
     }
     out
+}
+
+/// Of a folder's command names, as its listing gives them, those that
+/// differ only in the case of their ASCII letters (`Deploy` and `deploy`),
+/// by that name in lowercase, each with every name of it in the order
+/// given. A name that no other differs from only in case is not among them.
+fn case_clashes(names: &[String]) -> BTreeMap<String, Vec<&str>> {
+    let mut by_fold: BTreeMap<String, Vec<&str>> = BTreeMap::new();
+    for name in names {
+        by_fold
+            .entry(name.to_ascii_lowercase())
+            .or_default()
+            .push(name);
+    }
+    by_fold.retain(|_, same| same.len() > 1);
+    by_fold
 }
 
 /// The command's name of a file's name: its stem, when it ends in `.md`

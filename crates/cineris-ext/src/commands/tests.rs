@@ -358,9 +358,36 @@ fn no_projects_command_is_used_when_the_users_folder_was_not_read_whole() {
     );
 }
 
+/// Names that differ only in case clash as a folder's listing gives them,
+/// whatever the disk can hold: on a disk that keeps one name for both
+/// (Windows'), the rule is tested here. Each is given with every name of
+/// it, in the listing's order; a name that stands alone is not.
+#[test]
+fn names_that_differ_only_in_case_clash() {
+    let listed = [
+        "Deploy",
+        "LINT",
+        "Lint",
+        "deploy",
+        "lint",
+        "review",
+        "two words",
+    ]
+    .map(str::to_owned);
+    assert_eq!(
+        case_clashes(&listed).into_iter().collect::<Vec<_>>(),
+        [
+            ("deploy".to_owned(), vec!["Deploy", "deploy"]),
+            ("lint".to_owned(), vec!["LINT", "Lint", "lint"]),
+        ]
+    );
+    assert!(case_clashes(&["deploy".to_owned(), "review".to_owned()]).is_empty());
+}
+
 /// Bounds as the skills' have them: a file over its cap by its length,
-/// names that differ only in case, a name the registry refuses, and the
-/// entries of a root past its cap, each left out with its reason.
+/// names that differ only in case (where the disk holds both), a name the
+/// registry refuses, and the entries of a root past its cap, each left out
+/// with its reason.
 #[test]
 fn a_folder_of_commands_is_read_within_its_bounds() {
     let scratch = Scratch::outside(
@@ -375,13 +402,20 @@ fn a_folder_of_commands_is_read_within_its_bounds() {
     );
     scratch.file(format!("{USER}/Deploy.md"), "One.");
     scratch.file(format!("{USER}/deploy.md"), "Two.");
+    // Windows' disk keeps one name for both: the second write went to the
+    // first's file.
+    let deploys: Vec<String> = scratch
+        .listing(USER)
+        .into_iter()
+        .filter(|name| name.eq_ignore_ascii_case("deploy.md"))
+        .collect();
     scratch.file(format!("{USER}/two words.md"), "Bad name.");
     scratch.file(format!("{USER}/bytes.md"), [0xff_u8, 0xfe]);
     for index in 0..MAX_ENTRIES {
         scratch.file(format!("{PROJECT}/c{index:03}.md"), "Fine.");
     }
     let found = found(&scratch);
-    assert!(found.get("big").is_none() && found.get("deploy").is_none());
+    assert!(found.get("big").is_none());
     let lefts = left(&found);
     let reason = |path: &str| {
         lefts
@@ -391,9 +425,28 @@ fn a_folder_of_commands_is_read_within_its_bounds() {
             .collect::<Vec<_>>()
     };
     assert_eq!(reason("big.md"), ["it is larger than 64 KiB"]);
-    assert!(
-        reason("deploy.md")[0].contains("`Deploy`, `deploy` have names that differ only in case")
-    );
+    if deploys.len() == 2 {
+        assert!(found.get("Deploy").is_none() && found.get("deploy").is_none());
+        assert!(
+            reason("deploy.md")[0]
+                .contains("`Deploy`, `deploy` have names that differ only in case")
+        );
+    } else {
+        // Only the clash is skipped: `names_that_differ_only_in_case_clash`
+        // tests it on names, and the one file there is read.
+        assert!(
+            cfg!(windows) || std::env::var_os("GITHUB_ACTIONS").is_none(),
+            "the CI runner's disk keeps one name for `Deploy.md` and `deploy.md`: {deploys:?}"
+        );
+        println!(
+            "skipped: this disk keeps one name for `Deploy.md` and `deploy.md` ({deploys:?}), so \
+             their clash is not looked for in a folder"
+        );
+        assert_eq!(deploys.len(), 1, "{deploys:?}");
+        let name = command_name(&deploys[0]).unwrap();
+        assert_eq!(found.get(name).unwrap().expand("").unwrap(), "Two.");
+        assert!(reason(&deploys[0]).is_empty(), "{lefts:?}");
+    }
     assert!(reason("two words.md")[0].contains("cannot be a name"));
     assert_eq!(reason("bytes.md"), ["it is not UTF-8 text"]);
     // The project's root: 100 entries looked at, the rest not, and said.
