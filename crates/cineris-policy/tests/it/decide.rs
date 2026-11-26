@@ -176,6 +176,54 @@ fn probe() {
     }
 }
 
+/// The rule `examples/release/README.md` offers for its extension's
+/// `git log`, read from the README as a user would copy it: it allows the
+/// extension's line in a project not trusted, in a POSIX shell's syntax and
+/// in PowerShell's, and no line with another option, the README's
+/// `--output` (which writes a file) and `-p` (which runs the diff programs
+/// a repository's configuration names) among them, nor the line without
+/// `--end-of-options`, after which git reads no word as an option. An
+/// `exec` rule is the model's shell's too: these are the shell's calls.
+#[test]
+fn the_release_examples_rule_allows_its_line_and_no_other_option() {
+    let readme = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/release/README.md"),
+    )
+    .unwrap();
+    let pattern = readme
+        .lines()
+        .find_map(|line| line.strip_prefix("match = \"")?.strip_suffix('"'))
+        .expect("the README offers a rule");
+    let rule = parse_rule(&format!("user allow exec {pattern}")).unwrap();
+    let decided = |command: &str, shell: ShellSyntax| {
+        let mut case = Case::of(command);
+        case.trusted = false;
+        case.shell = shell;
+        case.rules = vec![rule.clone()];
+        decide(&case).unwrap()
+    };
+    let line = "git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options \
+                v0.1.0..HEAD";
+    for shell in [ShellSyntax::Posix, ShellSyntax::PowerShell] {
+        let text = decided(line, shell);
+        assert!(text.contains("decision  ALLOW"), "{shell:?}: {text}");
+        for wider in [
+            "git log --output=build.rs -p HEAD",
+            "git log -1 --format=%B --output=build.rs main",
+            "git log -p HEAD",
+            "git log --no-merges --max-count=200 --oneline --no-decorate --output=x \
+             --end-of-options HEAD",
+            "git log --no-merges --max-count=200 --oneline --no-decorate v0.1.0..HEAD",
+        ] {
+            let text = decided(wider, shell);
+            assert!(
+                !text.contains("decision  ALLOW"),
+                "{shell:?}: `{wider}`: {text}"
+            );
+        }
+    }
+}
+
 #[test]
 fn the_probe_says_what_the_command_table_says() {
     // Rows of `commands::the_command_table_at_the_default_level`.

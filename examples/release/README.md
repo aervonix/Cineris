@@ -43,15 +43,23 @@ The command file is copied, not approved: put `commands/release-notes.md` in you
 /release-notes 2.1.0
 ```
 
-At the `supervised` level Cineris asks before `git log` runs, unless your rules allow it, in two cases: in a project you have not trusted, since a repository's own configuration can name programs that git starts; and on Windows, or wherever the session's shell is PowerShell or `cmd`, since a line that only reads may there start another program than the one it names. Answer allow once, or allow it with a rule:
+With no revision, `/changelog:draft` drafts from the last 200 commits. A revision that begins with `-` is refused before git is started, since git would read it as an option.
+
+### When Cineris asks before `git log` runs
+
+At the `supervised` level Cineris asks before the extension's `git log` runs, in two cases: in a project you have not trusted, since a repository's own configuration can name programs that git starts; and on Windows, or wherever the session's shell is PowerShell or `cmd`, since a line that only reads may there start another program than the one it names.
+
+**Answer allow once.** It lets that one run go and nothing else, and it is the narrower choice.
+
+A rule takes the question away, and it reaches further than the extension. **An `exec` rule is not the extension's own: the model's shell tool may then run the same line without asking too, in every project, those you have not trusted included.** So if you add one, have it name the extension's line word for word, and no more:
 
 ```toml
 [[permissions.rules]]
 effect = "exec"
-match = "git log *"
+match = "git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options *"
 action = "allow"
 ```
 
-With no revision, `/changelog:draft` drafts from the last 200 commits. A revision that begins with `-` is refused, so that git cannot read it as an option.
+The `*` stands for the words after the options: the revision. It comes after `--end-of-options`, after which git reads no word as an option and refuses one that looks like one. So this rule allows no other option, such as `--output`, which writes the log to a file, or `-p`, which runs the diff programs a repository's configuration can name. A rule of `git log *` would allow both, to the model as well as to the extension. And even this line lets git start a program that the repository's own configuration names (the program that checks a signed commit's signature, for one): in a project you have not trusted, answer the question each time, and allow it only for a repository you know.
 
-This example is run as a test on Linux and Windows: `crates/cineris-cli/tests/system/examples.rs`.
+This example is run as a test on Linux and Windows, with the rule above in the user's configuration: `crates/cineris-cli/tests/system/examples.rs`. The command's script is run on its own in `crates/cineris-ext/tests/it/examples.rs`, and the rule is asked about lines it must not allow in `crates/cineris-policy/tests/it/decide.rs`.
