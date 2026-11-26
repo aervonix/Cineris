@@ -485,9 +485,13 @@ impl LoadedExtension {
     /// arguments}`), outside any round, and gives what its script returned
     /// (since step 28's commands). Its host calls are a command's
     /// ([`Phase::Command`]): decided under `<extension>/command.<name>`, a
-    /// question put where the engine asks, `cineris.fs.write` refused, and
-    /// its programs given the manifest's write roots, as on `main`. Its
-    /// time is the manifest's, from when it starts.
+    /// question put where the engine asks, `cineris.fs.write` refused, its
+    /// programs given no write root whatever the manifest's `write` says,
+    /// and each refused with the stop of the turn running as it runs, once
+    /// that turn is stopped. Its time is `time` (30 s, whatever the manifest
+    /// gives its tools: `crate::commands::COMMAND_TIME`), at most
+    /// `crate::commands::MAX_COMMAND_TIME`, from when it is asked: its wait
+    /// for its runtime and the runtime's start count.
     ///
     /// # Errors
     ///
@@ -552,6 +556,16 @@ impl LoadedExtension {
             Ok(value) => Ok(value),
             Err(CallError::Cancelled) => {
                 Err(CommandFailed::Other(format!("`{shown}` was interrupted")))
+            }
+            // A stop its host call found made, the running turn's: it ended
+            // the script there, and is no stop of its own, as a hook's is
+            // not: nothing says the command was stopped, and no prompt is
+            // held back for it.
+            Err(CallError::Stopped(reason)) if host.found_stopped() => {
+                Err(CommandFailed::Other(format!(
+                    "`{shown}` was ended by the running turn's stop, so nothing more of it ran: \
+                     {reason}"
+                )))
             }
             Err(CallError::Stopped(reason)) => Err(CommandFailed::Stopped(reason)),
             Err(CallError::TimedOut) => Err(CommandFailed::Other(format!(

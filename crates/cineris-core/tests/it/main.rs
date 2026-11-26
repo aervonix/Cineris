@@ -31,6 +31,8 @@ mod asking;
 mod closing;
 #[cfg(feature = "scripts")]
 mod commands;
+#[cfg(feature = "scripts")]
+mod commands_lane;
 mod context;
 mod day;
 mod events;

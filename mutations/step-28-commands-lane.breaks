@@ -1,0 +1,58 @@
+# Step 28, its third pull request's first part: custom commands, the
+# review's fixes on the lane's side (a command interrupted while its
+# `turn/start` waits in a lane, a running turn's stop while a command's
+# script runs, a stop that comes with an interrupt) and headless mode's,
+# broken one at a time, with the tests that must fail.
+
+[break] a-queued-command-has-no-run-until-its-step
+rule: A command's `turn/start` is on the session from when it is sent through a lane, so that an interrupt sent behind it while it waits there stops it before its script runs.
+file: crates/cineris-core/src/core.rs
+in: Core::early
+find: crate::commands::sent(&live, client, call, &parent);
+replace: let _ = (&live, client, call, &parent);
+caught-by:
+    cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
+
+[break] a-commands-step-makes-a-run-of-its-own
+rule: A command's step takes the run it was given as it was sent, interrupted already if an interrupt came behind it, rather than making a new one.
+file: crates/cineris-core/src/commands.rs
+in: Run::taken
+find: .position(|one| one.client == client && one.call == *call)
+replace: .position(|one| one.client != client && one.call == *call)
+caught-by:
+    cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
+
+[break] a-commands-host-call-runs-in-a-stopped-turn
+rule: A command's host call is refused with the stop of the turn running as it runs, made while its script runs, before the call is made: a program, a fetch, a read.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::decide
+find: (self.phase == Phase::Command && self.cx.turn != 0)
+replace: (self.phase == Phase::Command && self.cx.turn == 0)
+caught-by:
+    cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
+
+[break] a-stop-a-command-finds-is-its-own
+rule: A command whose host call finds the running turn stopped fails, and is no stop of its own: nothing says the command was stopped, and the next prompt is not held back.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::call_command
+find: Err(CallError::Stopped(reason)) if host.found_stopped() => {
+replace: Err(CallError::Stopped(reason)) if false && host.found_stopped() => {
+caught-by:
+    cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
+
+[break] a-commands-stop-with-an-interrupt-is-an-interruption
+rule: A command's own stop that comes with an interrupt is a stop: it is told, and the next prompt is refused once. It survives: in this build a command's own stop never comes with an interrupt. Its programs have no write root, so no look after one stops it (`exec::look_after` runs only for a program with one); its question's stop (nobody to ask, with `fail_on_denial`) is made before any wait, and the engine takes a cancel over a host call's answer, as a program's decision ends at one; and a stop its host call finds is not its own (`a-stop-a-command-finds-is-its-own`). The order keeps a stop a stop should a later change make one that can.
+file: crates/cineris-core/src/commands.rs
+in: run_script
+find: hooks.commands.command_stopped(&shown, &note);
+replace: if run.cancel.is_cancelled() { return Err(interrupted(&format!("{}:{}", extension.name(), definition.name))); } hooks.commands.command_stopped(&shown, &note);
+expect: survives
+
+[break] headless-sends-an-unlisted-extensions-command-as-text
+rule: Headless mode sends a `/extension:command` that neither of the session's lists has as a command, for the core to refuse with its reason (its extension may not be loaded), rather than as text for the model.
+file: crates/cineris-cli/src/headless.rs
+in: sending
+find: name.contains(':').then(|| {
+replace: false.then(|| {
+caught-by:
+    cineris-cli::bin/cineris headless::tests::an_extensions_command_no_list_has_is_sent_as_a_command_and_any_other_is_text

@@ -215,8 +215,9 @@ fn spinning_command(machine: &Machine) -> PathBuf {
 /// A signal while an extension's command runs, inside `turn/start`, stops
 /// the command through its own token: the run ends interrupted at once,
 /// with the signal's code, and nothing was sent to the model. The command
-/// would run for its whole time otherwise (two minutes, the manifest's
-/// default), and the wait for the exit is far shorter than that.
+/// would run for its whole time otherwise (30 s from when it is asked,
+/// whatever its manifest gives its tools), and the wait for the exit is far
+/// shorter than that.
 fn command_stopped_by(signal: impl FnOnce(&Tree), code: i32, test: &str) {
     let machine = Machine::new(test);
     let values = spinning_command(&machine);

@@ -349,7 +349,9 @@ async fn run_script(
     .with_cancel(run.cancel.clone())
     .with_kill(run.kill.clone())
     // The turn running as it runs, if one is: a stop of its programs stops
-    // that turn, and never turn 0.
+    // that turn, and never turn 0; and that turn's stop, made while the
+    // script runs, refuses its host calls from then on, as a hook's
+    // (`CallHost::decide`).
     .with_turn(running_number)
     .with_gate(cineris_agent::Policy::read_gate(policy.as_ref()))
     .with_call(CallRef {
@@ -364,19 +366,21 @@ async fn run_script(
         .await;
     let value = match ran {
         Ok(value) => value,
+        // A stop of its own (a program's look at the protected paths, a
+        // question answered with a stop): told, and the next prompt refused
+        // once, as a hook's stop is; the running turn stops with it. Before
+        // the interrupt: a stop that comes with one is a stop all the same,
+        // or nothing would say it, and the next prompt would go.
+        Err(crate::ext::tools::CommandFailed::Stopped(note)) => {
+            hooks.commands.command_stopped(&shown, &note);
+            return Err(failed(format!("`{shown}` was stopped: {note}")));
+        }
         Err(_) if run.cancel.is_cancelled() => {
             return Err(interrupted(&format!(
                 "{}:{}",
                 extension.name(),
                 definition.name
             )));
-        }
-        // A stop of its own (a program's look at the protected paths, a
-        // question answered with a stop): told, and the next prompt refused
-        // once, as a hook's stop is; the running turn stops with it.
-        Err(crate::ext::tools::CommandFailed::Stopped(note)) => {
-            hooks.commands.command_stopped(&shown, &note);
-            return Err(failed(format!("`{shown}` was stopped: {note}")));
         }
         Err(crate::ext::tools::CommandFailed::Other(why)) => return Err(failed(why)),
     };
@@ -429,6 +433,39 @@ fn run_ids() -> (
     )
 }
 
+/// The number of each run of a command, in the process.
+static RUN_IDS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A command's `turn/start` that was sent and that its step has not taken
+/// yet: who sent it, what it calls, and its run's number among the
+/// session's running commands, whose tokens it has from when it was sent.
+pub(crate) struct Sent {
+    client: ClientId,
+    call: CommandCall,
+    id: u64,
+}
+
+/// A command's `turn/start` from `client`, as it is sent, before it waits
+/// for its turn in the client's lane (`Core::early`): its run's tokens are
+/// put on the session now, so that an interrupt sent behind it, while it
+/// waits there, stops it before its step begins (the review of step 28's
+/// commands). Its step takes them ([`Run::taken`]).
+pub(crate) fn sent(
+    live: &Live,
+    client: ClientId,
+    call: &CommandCall,
+    parent: &cineris_base::CancelToken,
+) {
+    let id = RUN_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tokens = (id, parent.child(), cineris_base::CancelToken::new());
+    crate::core::lock(&live.running_commands).push(tokens);
+    crate::core::lock(&live.sent_commands).push(Sent {
+        client,
+        call: call.clone(),
+        id,
+    });
+}
+
 /// One command sent in a `turn/start`, from the top of its step to its
 /// end: its tokens are on the session, so that an interrupt from any client
 /// that may drive the session cancels it at once, whatever it waits for
@@ -446,8 +483,7 @@ pub(crate) struct Run<'a> {
 impl<'a> Run<'a> {
     /// A run of a command in `live`, its tokens put on the session now.
     pub(crate) fn start(live: &'a Live, parent: &cineris_base::CancelToken) -> Self {
-        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = RUN_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (cancel, kill) = (parent.child(), cineris_base::CancelToken::new());
         crate::core::lock(&live.running_commands).push((id, cancel.clone(), kill.clone()));
         Self {
@@ -455,6 +491,41 @@ impl<'a> Run<'a> {
             id,
             cancel,
             kill,
+        }
+    }
+
+    /// The run of `call`, sent by `client` in a `turn/start`, as its step
+    /// takes it: the one put on the session when it was sent ([`sent`]),
+    /// interrupted already if an interrupt came behind it; the first of
+    /// that client's that calls the same, since a lane runs a client's
+    /// operations in the order sent. A new one when none was put there: the
+    /// operation came to the core without a lane (headless mode, a test).
+    pub(crate) fn taken(
+        live: &'a Live,
+        client: ClientId,
+        call: &CommandCall,
+        parent: &cineris_base::CancelToken,
+    ) -> Self {
+        let sent = {
+            let mut sent = crate::core::lock(&live.sent_commands);
+            sent.iter()
+                .position(|one| one.client == client && one.call == *call)
+                .map(|at| sent.remove(at).id)
+        };
+        let tokens = sent.and_then(|id| {
+            crate::core::lock(&live.running_commands)
+                .iter()
+                .find(|(run, _, _)| *run == id)
+                .map(|(_, cancel, kill)| (id, cancel.clone(), kill.clone()))
+        });
+        match tokens {
+            Some((id, cancel, kill)) => Self {
+                live,
+                id,
+                cancel,
+                kill,
+            },
+            None => Self::start(live, parent),
         }
     }
 
@@ -476,8 +547,9 @@ impl Drop for Run<'_> {
     }
 }
 
-/// Interrupts every command running in `live`'s `turn/start` steps, and
-/// with `now` kills their programs at once.
+/// Interrupts every command sent in a `turn/start` of `live` whose step has
+/// not ended: running in its step, or sent and waiting in a lane for its
+/// step to begin ([`sent`]). With `now` it kills their programs at once.
 pub(crate) fn interrupt(live: &Live, now: bool) {
     for (_, cancel, kill) in crate::core::lock(&live.running_commands).iter() {
         cancel.cancel();

@@ -437,19 +437,33 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
     ));
     // An extension's command runs in the start itself: a signal meanwhile
     // interrupts it, through the core, and the run ends interrupted, with
-    // nothing sent (step 28).
+    // nothing sent (step 28). Signals are still taken while the start ends:
+    // a second one kills the command's programs at once (`now`), as it
+    // would a turn's.
     let started = if running_command {
         match first_or_signal(start.as_mut(), &mut front.interrupted).await {
             Ok(started) => started,
             Err(interrupt) => {
                 front.signal.get_or_insert(interrupt.signal);
-                let _ = core
-                    .handle(
-                        client.id,
-                        Op::TurnInterrupt(TurnInterruptParams::new(session.clone())),
-                    )
-                    .await;
-                let _ = start.await;
+                let mut now = interrupt.now;
+                loop {
+                    let _ = core
+                        .handle(
+                            client.id,
+                            Op::TurnInterrupt(TurnInterruptParams {
+                                session_id: session.clone(),
+                                now,
+                            }),
+                        )
+                        .await;
+                    if first_or_signal(start.as_mut(), &mut front.interrupted)
+                        .await
+                        .is_ok()
+                    {
+                        break;
+                    }
+                    now = true;
+                }
                 let error = interrupted_error();
                 return finish(
                     core,
@@ -508,15 +522,14 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
     code
 }
 
-/// Writes the result in the run's format, says what went wrong on standard
-/// error, and returns the exit code that agrees with the outcome.
 /// The custom command `prompt` names, when it is `/name …` and `name` is
-/// one of the session's (`commands/list`), used or not, so that the core
-/// refuses one it does not use with its reason: what follows the name is
-/// its arguments. With it, the line that says on standard error whose it
-/// is and its file. When the list cannot be had, a `/name …` is sent as a
-/// command all the same, for the core to judge, rather than as text.
-/// `None` for any other prompt, which is sent as text.
+/// one of the session's (`commands/list`), used or not, or an extension's
+/// (`extension:command`) that neither list has, so that the core refuses one
+/// it does not use, or does not have, with its reason: what follows the name
+/// is its arguments. With it, the line that says on standard error whose it
+/// is and its file ([`sending`]). When the list cannot be had, a `/name …`
+/// is sent as a command all the same, for the core to judge, rather than as
+/// text. `None` for any other prompt, which is sent as text.
 async fn command_in(
     core: &Core,
     client: cineris_core::ClientId,
@@ -536,15 +549,33 @@ async fn command_in(
             }),
         )
         .await;
+    let listed = match listed {
+        Ok(OpResult::CommandsList(listed)) => Some(listed),
+        _ => None,
+    };
+    let said = sending(name, listed.as_ref())?;
     let call = cineris_protocol::methods::CommandCall {
         name: name.to_owned(),
         args: args.trim().to_owned(),
     };
+    Some((call, said))
+}
+
+/// What headless mode says on standard error as it sends `/name` as a
+/// command, given the session's `commands/list` (`None` when it could not be
+/// had): whose the command is and its file; that it is one not used; or, for
+/// an extension's (a name with a `:`) that neither list has, that the session
+/// does not list it: its extension may not be loaded, and the core says why,
+/// rather than the name going to the model as text. `None` when `/name` is
+/// none of these: the prompt is sent as text.
+fn sending(
+    name: &str,
+    listed: Option<&cineris_protocol::methods::CommandsListResult>,
+) -> Option<String> {
     let shown = cineris_base::in_code(&format!("/{name}")).into_owned();
-    let Ok(OpResult::CommandsList(listed)) = listed else {
-        return Some((
-            call,
-            format!("Sending `{shown}` as a command: the session's commands could not be listed."),
+    let Some(listed) = listed else {
+        return Some(format!(
+            "Sending `{shown}` as a command: the session's commands could not be listed."
         ));
     };
     let whose = |source: &cineris_protocol::item::CommandSource, extension: Option<&String>| {
@@ -567,24 +598,28 @@ async fn command_in(
             .as_deref()
             .map(|path| format!(" ({})", cineris_base::in_code(path)))
             .unwrap_or_default();
-        let said = format!(
+        return Some(format!(
             "Sending `{shown}`, {}{file}.",
             whose(&command.source, command.extension.as_ref())
-        );
-        return Some((call, said));
+        ));
     }
-    listed
+    if listed
         .not_used
         .iter()
         .any(|command| !command.name.is_empty() && command.name == name)
-        .then(|| {
-            (
-                call,
-                format!("Sending `{shown}`, a command that is not used."),
-            )
-        })
+    {
+        return Some(format!("Sending `{shown}`, a command that is not used."));
+    }
+    name.contains(':').then(|| {
+        format!(
+            "Sending `{shown}` as an extension's command, which this session does not list: its \
+             extension may not be loaded."
+        )
+    })
 }
 
+/// Writes the result in the run's format, says what went wrong on standard
+/// error, and returns the exit code that agrees with the outcome.
 async fn finish(
     core: &Core,
     front: &mut Front<'_>,
@@ -981,4 +1016,37 @@ fn interrupted_error() -> ErrorData {
 
 fn elapsed(started: Instant) -> u64 {
     u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use cineris_protocol::item::CommandSource;
+    use cineris_protocol::methods::{CommandInfo, CommandsListResult};
+
+    use super::*;
+
+    /// A `/name` is sent as a command when the session lists it, or when it
+    /// is an extension's (`extension:command`) that neither list has: an
+    /// extension that is not loaded is in neither, and the core says why.
+    /// Any other `/name` the session does not have is text.
+    #[test]
+    fn an_extensions_command_no_list_has_is_sent_as_a_command_and_any_other_is_text() {
+        let listed = CommandsListResult {
+            commands: vec![CommandInfo {
+                name: "review".to_owned(),
+                source: CommandSource::User,
+                extension: None,
+                description: String::new(),
+                arguments: Vec::new(),
+                path: Some("~/.config/cineris/commands/review.md".to_owned()),
+            }],
+            not_used: Vec::new(),
+        };
+        let said = sending("review", Some(&listed)).unwrap_or_default();
+        assert!(said.contains("your command"), "{said}");
+        let said = sending("tracker:deploy", Some(&listed)).unwrap_or_default();
+        assert!(said.contains("does not list"), "{said}");
+        assert_eq!(sending("deploy", Some(&listed)), None);
+        assert!(sending("deploy", None).is_some());
+    }
 }

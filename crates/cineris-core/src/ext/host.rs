@@ -120,13 +120,20 @@ impl CallHost<'_> {
         // A hook decides by its answer: its call is decided once and never
         // put (`docs/steps/28/answered.md`, point 2): its turn's stop, then
         // the engine's outcome, a question refused, saying what would allow
-        // it.
-        if self.phase == Phase::Hook {
+        // it. A command's call is refused with the stop of the turn running
+        // as it runs (its context's turn), made while its script runs, as a
+        // hook's is with its turn's: its own ids are of no turn, which the
+        // policy's look at the call's turn reads as none (the review of step
+        // 28's commands). With no turn running as it runs (its context's
+        // turn is 0), there is no stop to look at.
+        if self.phase == Phase::Hook || (self.phase == Phase::Command && self.cx.turn != 0) {
             if let Some(reason) = self.parts.policy.stopped_for_hooks(self.cx.turn) {
                 self.found_stopped.store(true, Ordering::SeqCst);
                 return Err(HostError::Stopped(reason));
             }
-            return for_a_hook(self.parts.policy.outcome(&planned), how.read_only_asks);
+            if self.phase == Phase::Hook {
+                return for_a_hook(self.parts.policy.outcome(&planned), how.read_only_asks);
+            }
         }
         match self.parts.policy.decide(&planned) {
             // What the session's shell calls read-only may not be the
