@@ -1846,6 +1846,15 @@ pub(crate) fn programs_confined(
         )
 }
 
+/// What the opening notice of a session whose commands are not confined
+/// says beside the level's words (the owner's answer to the early review of
+/// step 28's third pull request): what else runs with the user's rights.
+pub const SANDBOX_OFF_TOO: &str = "Where nothing confines commands, anything that runs with your \
+                                   rights can approve extensions and trust projects, and the \
+                                   commands that verify a turn's work and your configured hooks \
+                                   run code the model may have written, with your rights and no \
+                                   question.";
+
 /// A profile's configuration loaded with no trust and with trust, for
 /// [`harness_write_warnings`].
 pub(crate) type ProfileLoads<'a, E> = dyn Fn(&str) -> Result<(Loaded, Loaded), E> + 'a;
@@ -3422,7 +3431,7 @@ pub(crate) fn assemble(
     let mut notices: Vec<Event> = Vec::new();
     if let Some(message) = sandbox_notice {
         notices.push(Event::Notice(Notice::Sandbox(SandboxNotice {
-            message,
+            message: format!("{message} {SANDBOX_OFF_TOO}"),
             status: status_of(state),
         })));
     }

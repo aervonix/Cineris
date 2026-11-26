@@ -8,7 +8,7 @@ use std::process::Stdio;
 
 use serde_json::Value;
 
-use crate::{MODEL, Machine, OTHER_MODEL, Run, jsonl, shown};
+use crate::{MODEL, Machine, OTHER_MODEL, Run, jsonl, shown, shown_hash};
 
 /// The model a headless run's session started on, and its standard error.
 fn model_of_a_run(machine: &Machine) -> (String, String) {
@@ -437,13 +437,27 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
         shown(&plain)
     );
     assert!(
-        plain.stderr.contains("left unapproved") && plain.stderr.contains("--with-extensions"),
+        plain.stderr.contains("left unapproved")
+            && plain.stderr.contains("`--extension NAME=HASH`"),
         "{}",
         shown(&plain)
     );
     assert!(!pinned().contains("kind = \"extension\""), "{}", pinned());
 
-    let flagged = machine.run(&["permissions", "trust", "--with-extensions"]);
+    // Named with another hash, nothing is trusted or pinned; named with the
+    // hash shown, it is approved (the owner's answer to the early review
+    // of step 28's third pull request).
+    let hash = shown_hash(&plain.stdout, "`probe` in");
+    let wrong = machine.run(&["permissions", "trust", "--extension", "probe=0000"]);
+    wrong.expect_code(2);
+    assert!(
+        wrong.stderr.contains("not the hash it is shown with"),
+        "{}",
+        shown(&wrong)
+    );
+    assert!(!pinned().contains("kind = \"extension\""), "{}", pinned());
+    let named = format!("probe={hash}");
+    let flagged = machine.run(&["permissions", "trust", "--extension", &named]);
     flagged.expect_code(0);
     assert!(
         flagged.stdout.contains("Approved its extensions: `probe`."),
@@ -462,5 +476,109 @@ fn sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where
         !again.stdout.contains("Its extensions"),
         "{}",
         shown(&again)
+    );
+}
+
+/// The subcommands that approve, run by a session's command that the
+/// permission engine cannot see them in (a script file), refuse, and write
+/// nothing; run from the user's own terminal, as the test runs them, they
+/// do not refuse (the owner's answer to the early review of step 28's
+/// third pull request, B). On Linux the line of parents reaches the
+/// session's process; on Windows the command is in the sessions' job.
+#[test]
+fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
+    let machine = Machine::new("sys_approving_under_a_session");
+    let folder = machine.home.join("src").join("tracker");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("extension.toml"),
+        "api = 1\nname = \"tracker\"\nversion = \"1\"\ndescription = \"A test extension\"\nmain \
+         = \"main.js\"\n",
+    )
+    .unwrap();
+    std::fs::write(folder.join("main.js"), "// nothing\n").unwrap();
+    let binary = std::path::Path::new(crate::CINERIS);
+    let said = machine.workspace.join("said.txt");
+    // Each subcommand, one after another, its standard error kept.
+    let subcommands: [&[&str]; 4] = [
+        &["ext", "add", &folder.to_string_lossy(), "--hash", "00"],
+        &["ext", "remove", "tracker", "--hash", "00"],
+        &["permissions", "trust"],
+        &["setup", "skill-folders", "on"],
+    ];
+    let (script, line) = if cfg!(windows) {
+        let mut text = String::from("@echo off\r\n");
+        for words in subcommands {
+            text.push_str(&format!(
+                "\"{}\" {} >> said.txt 2>&1\r\n",
+                binary.display(),
+                words
+                    .iter()
+                    .map(|word| format!("\"{word}\""))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+        }
+        ("approve.cmd", (text, "cmd /c approve.cmd"))
+    } else {
+        let mut text = String::new();
+        for words in subcommands {
+            text.push_str(&format!(
+                "'{}' {} >> said.txt 2>&1\n",
+                binary.display(),
+                words
+                    .iter()
+                    .map(|word| format!("'{word}'"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+        }
+        ("approve.sh", (text, "sh approve.sh"))
+    };
+    let (text, command) = line;
+    std::fs::write(machine.workspace.join(script), text).unwrap();
+    machine.reply_tool(
+        "toolu_1",
+        "shell",
+        &serde_json::json!({"command": command, "timeout_ms": 60_000}),
+    );
+    machine.reply_text("Done.");
+    let run = machine.run(&[
+        "-p",
+        "approve it",
+        "--permission-mode",
+        "unrestricted",
+        "--output",
+        "json",
+    ]);
+    run.expect_code(0);
+    let said = std::fs::read_to_string(&said).unwrap_or_default();
+    for what in [
+        "`cineris ext add` was refused",
+        "`cineris ext remove` was refused",
+        "`cineris permissions trust` was refused",
+        "`cineris setup skill-folders` was refused",
+    ] {
+        assert!(said.contains(what), "{what}: {said}\n{}", shown(&run));
+    }
+    assert!(said.contains("run it in your own terminal"), "{said}");
+    let state = machine.dirs().state.unwrap();
+    assert!(!state.join("pins.toml").exists(), "{said}");
+    assert!(!state.join("trust.toml").exists(), "{said}");
+    let config = machine.dirs().config.unwrap();
+    assert!(
+        !config.join("extensions").join("tracker").exists(),
+        "{said}"
+    );
+
+    // From the test's own process, which no session started, it is not
+    // refused: the hash given is checked, and is not the one shown.
+    let own = machine.run(&["ext", "add", &folder.to_string_lossy(), "--hash", "00"]);
+    own.expect_code(2);
+    assert!(!own.stderr.contains("was refused"), "{}", shown(&own));
+    assert!(
+        own.stderr.contains("is not the hash of what is shown"),
+        "{}",
+        shown(&own)
     );
 }

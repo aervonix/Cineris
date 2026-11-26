@@ -461,6 +461,23 @@ pub fn jsonl(stdout: &str) -> Vec<Value> {
     lines
 }
 
+/// The hash `permissions trust` shows with the first entry after `after`
+/// (`Its hash is H.`): what `--extension NAME=HASH` names it by.
+pub fn shown_hash(stdout: &str, after: &str) -> String {
+    let from = stdout
+        .find(after)
+        .unwrap_or_else(|| panic!("{after}: {stdout}"));
+    let rest = &stdout[from..];
+    let at = rest
+        .find("Its hash is ")
+        .unwrap_or_else(|| panic!("no hash: {stdout}"));
+    rest[at + "Its hash is ".len()..]
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// Prints a run's streams when a test that started it fails later.
 pub fn shown(run: &Run) -> String {
     format!("stdout:\n{}\nstderr:\n{}", run.stdout, run.stderr)

@@ -9,6 +9,7 @@
 //! | [`explain`] | One line for the model about what the sandbox blocked. |
 //! | [`protect`] | The protected paths of a workspace, looked at before and after a sandboxed command. |
 //! | [`unfollowed`] | A folder read through handles that follow no link: what `cineris ext add` reads an extension with (since step 28). |
+//! | [`session`] | Whether this process runs under a session's command: what the subcommands that approve look at, and refuse under (since step 28). |
 //!
 //! The backends that confine, Landlock and seccomp on Linux, are behind the
 //! feature `backends`, off by default, so that `cineris-tools`, which needs
@@ -26,6 +27,7 @@ pub mod explain;
 pub mod launch;
 pub mod policy;
 pub mod protect;
+pub mod session;
 pub mod support;
 pub mod tree;
 pub mod unfollowed;

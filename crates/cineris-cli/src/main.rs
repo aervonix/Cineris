@@ -124,6 +124,38 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
     }
 }
 
+/// Marks this process as one that runs sessions, before it starts any
+/// process (`cineris_sandbox::session`): on Windows it joins the job of
+/// sessions' commands, which the approving subcommands look for. Where it
+/// cannot, the log says so and the run goes on unmarked.
+pub(crate) fn mark_sessions() {
+    if let Err(error) = cineris_sandbox::session::mark() {
+        tracing::warn!(
+            %error,
+            "this process could not join the job of sessions' commands: the subcommands that \
+             approve will not see its commands as a session's"
+        );
+    }
+}
+
+/// `Err` with the exit code when `what`, a subcommand that approves,
+/// trusts or answers for the person, runs under a session's command, or
+/// where that cannot be told: it is refused before anything is read
+/// (since step 28's third pull request, the owner's answer).
+pub(crate) fn not_under_a_session(name: &str, what: &str) -> Result<(), u8> {
+    match cineris_sandbox::session::under_a_session().refusal() {
+        None => Ok(()),
+        Some(why) => {
+            eprintln!(
+                "{name}: `{name} {what}` was refused, and nothing was read or written: {why}. It \
+                 approves extensions, trusts projects or answers for you, so a session's command \
+                 may not run it: run it in your own terminal."
+            );
+            Err(exit::USAGE)
+        }
+    }
+}
+
 /// Writes `text` to standard output. A reader that has gone (`| head`)
 /// ends the output quietly, where `print!` would panic.
 pub(crate) fn print_out(text: &str) {

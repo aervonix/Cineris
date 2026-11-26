@@ -126,6 +126,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     // report masks too.
     let secrets = Arc::new(SecretFilter::new());
     let log = start_log(&run, &env, &loaded, &secrets);
+    crate::mark_sessions();
     let logs = StateDir::from_dirs(&Dirs::from_env(&env)).map(|state| state.logs_dir());
     install_panic_hook(logs.clone(), secrets);
 

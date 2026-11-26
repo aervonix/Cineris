@@ -61,6 +61,7 @@ mod store;
 mod usage;
 mod verify;
 
+pub use crate::assemble::SANDBOX_OFF_TOO;
 pub use crate::checkpoints::{
     AFTER_THE_TURN_IS_STOPPED, BEFORE_THE_COMMAND_STARTS, BEFORE_THE_LOOK_AFTER,
 };
@@ -70,8 +71,8 @@ pub use crate::core::{
 };
 pub use crate::events::{EventQueue, Outgoing, QUEUE_CAPACITY};
 pub use crate::ext::manage::{
-    Added, DisableOutcome, ExtensionListed, ExtensionStanding, ExtensionsListing, Registered,
-    Removal, Removed, ToAdd,
+    Added, DisableOutcome, ExtensionListed, ExtensionStanding, ExtensionsListing, Gates,
+    Registered, Removal, Removed, ToAdd,
 };
 pub use crate::knowledge::AFTER_THE_RULES;
 pub use crate::manage::{

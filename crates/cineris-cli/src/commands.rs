@@ -650,6 +650,21 @@ pub(crate) fn project(command: ProjectCommand, name: &'static str) -> Done {
 pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Done {
     let context = Context::new(name);
     result((|| {
+        match &command {
+            PermissionsCommand::List => {}
+            PermissionsCommand::Revoke { .. } => {
+                crate::not_under_a_session(name, "permissions revoke")?;
+            }
+            PermissionsCommand::Trust { .. } => {
+                crate::not_under_a_session(name, "permissions trust")?;
+            }
+            PermissionsCommand::Untrust => {
+                crate::not_under_a_session(name, "permissions untrust")?;
+            }
+            PermissionsCommand::Forget => {
+                crate::not_under_a_session(name, "permissions forget")?;
+            }
+        }
         let core = context.core(&Common::default())?;
         let project = context.project(&core)?;
         let fail = |error: OpError| context.fail(&error);
@@ -703,10 +718,15 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                 out!("Removed {removed} of {}.\n", ids.len());
                 Ok(exit::COMPLETED)
             }
-            PermissionsCommand::Trust { with_extensions } => {
+            PermissionsCommand::Trust {
+                extensions: named_extensions,
+                hooks: named_hooks,
+            } => {
                 // Its extensions are shown as the trust question shows
-                // them, and approved only on a yes at a terminal or, with
-                // none to ask at, by the flag (since step 28).
+                // them, each with its hash, and approved only on a yes at a
+                // terminal or, with none to ask at, each one named with that
+                // hash (since step 28; by hash since the owner's answer to
+                // the early review of its third pull request).
                 // What trusting it would turn the sandbox off with, said
                 // first, in the trust question's words.
                 for warning in core.project_sandbox_warnings(&project).map_err(fail)? {
@@ -729,6 +749,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         // The author's words on a line of their own.
                         listing
                             .push_str(&format!("  {}\n", extension.detail.replace('\n', "\n    ")));
+                        listing.push_str(&format!("    Its hash is {}.\n", extension.hash()));
                     }
                     if !hooks.is_empty() {
                         listing.push_str(
@@ -737,6 +758,7 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                     }
                     for hook in &hooks {
                         listing.push_str(&format!("  {}\n", hook.detail.replace('\n', "\n    ")));
+                        listing.push_str(&format!("    Its hash is {}.\n", hook.hash()));
                     }
                     out!("{listing}");
                     let what = match (extensions.is_empty(), hooks.is_empty()) {
@@ -744,22 +766,62 @@ pub(crate) fn permissions(command: PermissionsCommand, name: &'static str) -> Do
                         (true, false) => "hooks",
                         _ => "extensions and hooks",
                     };
+                    // Each one named must be one shown, at the hash shown,
+                    // wherever it is named: otherwise nothing is trusted.
+                    let shown_extensions: Vec<(String, String)> = extensions
+                        .iter()
+                        .map(|one| (one.name.clone(), one.hash().to_string()))
+                        .collect();
+                    let shown_hooks: Vec<(String, String)> = hooks
+                        .iter()
+                        .map(|one| (one.name.clone(), one.hash().to_string()))
+                        .collect();
+                    for (flag, named, shown) in [
+                        ("--extension", &named_extensions, &shown_extensions),
+                        ("--hook", &named_hooks, &shown_hooks),
+                    ] {
+                        if let Some(why) = named_not_shown(flag, named, shown) {
+                            context.say(&format!("the project was not trusted: {why}"));
+                            return Err(exit::USAGE);
+                        }
+                    }
                     let at_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
-                    if approves_extensions(at_terminal, with_extensions, || {
+                    if at_terminal {
                         out!("Approve these {what} too? [y/N] ");
                         let mut line = String::new();
-                        io::stdin().read_line(&mut line).map(|_| line)
-                    }) {
-                        approved = (extensions, hooks);
+                        let yes = io::stdin().read_line(&mut line).is_ok()
+                            && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes");
+                        if yes {
+                            approved = (extensions, hooks);
+                        }
                     } else {
+                        let is_named = |named: &[(String, String)], name: &str| {
+                            named.iter().any(|(one, _)| one == name)
+                        };
+                        approved = (
+                            extensions
+                                .into_iter()
+                                .filter(|one| is_named(&named_extensions, &one.name))
+                                .collect(),
+                            hooks
+                                .into_iter()
+                                .filter(|one| is_named(&named_hooks, &one.name))
+                                .collect(),
+                        );
+                    }
+                    let left = shown_extensions.len() + shown_hooks.len()
+                        - approved.0.len()
+                        - approved.1.len();
+                    if left > 0 {
                         context.say(&format!(
-                            "the project's {what} were left unapproved: `{} permissions trust` \
-                             asks again{}",
+                            "{left} of the project's {what} were left unapproved: `{} \
+                             permissions trust` asks again{}",
                             context.name,
                             if at_terminal {
                                 ""
                             } else {
-                                ", or approves them with --with-extensions"
+                                ", or approves each with `--extension NAME=HASH` or `--hook \
+                                 NAME=HASH`, naming it with the hash it is shown with"
                             }
                         ));
                     }
@@ -957,20 +1019,24 @@ pub(crate) fn auth(command: AuthCommand, name: &'static str) -> Done {
     })())
 }
 
-/// Whether `permissions trust` approves the project's extensions it showed:
-/// at a terminal, only on a yes to its question (anything else, an empty
-/// line or none at all, is no); with no terminal to ask at, only with
-/// `--with-extensions` (since step 28).
-fn approves_extensions(
-    at_terminal: bool,
-    with_extensions: bool,
-    answer: impl FnOnce() -> io::Result<String>,
-) -> bool {
-    if at_terminal {
-        answer().is_ok_and(|line| matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
-    } else {
-        with_extensions
-    }
+/// Why a `NAME=HASH` named for `flag` is refused: a name not shown, or
+/// one shown at another hash. `None` when each is one shown.
+fn named_not_shown(
+    flag: &str,
+    named: &[(String, String)],
+    shown: &[(String, String)],
+) -> Option<String> {
+    named.iter().find_map(|(name, hash)| {
+        let code = cineris_base::in_code(name);
+        match shown.iter().find(|(one, _)| one == name) {
+            None => Some(format!("{flag} names `{code}`, which is not one shown")),
+            Some((_, shown)) if !hash.trim().eq_ignore_ascii_case(shown) => Some(format!(
+                "{flag} names `{code}` with {}, which is not the hash it is shown with ({shown})",
+                crate::visible(hash)
+            )),
+            Some(_) => None,
+        }
+    })
 }
 
 /// Reads a key for `provider` at the terminal, without echo
@@ -1038,29 +1104,38 @@ mod tests {
     use super::*;
     use crate::json::tests::parsed;
 
-    /// `permissions trust` approves a project's extensions only on a yes at
-    /// a terminal, no being the default, and with no terminal only with the
-    /// flag, which a terminal's question outranks.
+    /// With no terminal, `permissions trust` approves each extension and
+    /// hook named with the hash it is shown with, and nothing named that
+    /// is not shown, or is named with another hash: those refuse the trust
+    /// whole (the owner's answer to the early review of step 28's third
+    /// pull request).
     #[test]
-    fn a_projects_extensions_are_approved_only_on_a_yes_or_the_flag() {
-        let said = |line: &str| {
-            let line = line.to_owned();
-            move || Ok(line)
+    fn a_projects_extensions_are_named_by_the_hashes_shown() {
+        let shown = vec![
+            ("probe".to_owned(), "ab12".to_owned()),
+            ("lint".to_owned(), "cd34".to_owned()),
+        ];
+        let named = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs
+                .iter()
+                .map(|(name, hash)| ((*name).to_owned(), (*hash).to_owned()))
+                .collect()
         };
-        for yes in ["y\n", "Y\n", "yes\n", " Yes \n"] {
-            assert!(approves_extensions(true, false, said(yes)), "{yes:?}");
-        }
-        for no in ["\n", "n\n", "no\n", "", "yess\n", "ok\n"] {
-            assert!(!approves_extensions(true, false, said(no)), "{no:?}");
-            assert!(!approves_extensions(true, true, said(no)), "{no:?}");
-        }
-        assert!(!approves_extensions(true, true, || Err(io::Error::other(
-            "no input"
-        ))));
-        // With no terminal, the flag alone decides, and nothing is read.
-        let unread = || -> io::Result<String> { panic!("nothing is asked without a terminal") };
-        assert!(!approves_extensions(false, false, unread));
-        assert!(approves_extensions(false, true, unread));
+        assert_eq!(named_not_shown("--extension", &[], &shown), None);
+        assert_eq!(
+            named_not_shown("--extension", &named(&[("probe", " AB12 ")]), &shown),
+            None
+        );
+        let why = named_not_shown("--extension", &named(&[("probe", "ab13")]), &shown).unwrap();
+        assert!(
+            why.contains("not the hash it is shown with (ab12)"),
+            "{why}"
+        );
+        let why = named_not_shown("--hook", &named(&[("other", "ab12")]), &shown).unwrap();
+        assert!(
+            why.contains("--hook names `other`, which is not one shown"),
+            "{why}"
+        );
     }
 
     /// Every hostile name, inside a text that is otherwise plain.

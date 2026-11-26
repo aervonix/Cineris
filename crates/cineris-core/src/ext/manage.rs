@@ -41,7 +41,7 @@ use cineris_policy::{Definition, PinStore, ProjectTrust, UserPins};
 use cineris_protocol::ErrorKind;
 use cineris_protocol::methods::TrustResourceKind;
 
-use super::found::{UserNames, definition, in_words, shown_path};
+use super::found::{UserNames, definition, in_words_where, quoted_shown, shown_path};
 use crate::core::{Core, OpError, error};
 use crate::manage::Project;
 
@@ -278,7 +278,11 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                 source,
                 registered: registered(Some(hash), &name)
                     .or_else(|| registered(pin.as_ref().map(|pin| pin.0), &name)),
-                words: Some(in_words(&found.manifest, judging.confined)),
+                words: Some(in_words_where(
+                    &found.manifest,
+                    judging.confined,
+                    source == Source::Project,
+                )),
                 folder: Some(found.shown.clone()),
                 hash: Some(hash),
                 standing,
@@ -424,8 +428,22 @@ pub struct ToAdd {
     pub pinned_before: Option<(ContentHash, String)>,
     /// What else the person should know before the yes, each a sentence.
     pub notes: Vec<String>,
+    /// The whole text of the file it adds to the system prompt, quoted and
+    /// escaped as its author's description is, when it adds one (the early
+    /// review of step 28's third pull request, M2).
+    pub prompt: Option<String>,
+    /// Its tools, each its name as code and its description quoted and
+    /// escaped: known once it is evaluated
+    /// ([`Core::evaluate_extension`]), empty before.
+    pub tools: Vec<(String, String)>,
+    /// Its commands, as its tools are.
+    pub commands: Vec<(String, String)>,
+    /// Whether it was evaluated: what it registers is known.
+    pub evaluated: bool,
     snapshot: Arc<Snapshot>,
     manifest: Manifest,
+    #[cfg(feature = "scripts")]
+    registration: Option<cineris_ext::registration::Registration>,
     root: PathBuf,
     target: PathBuf,
 }
@@ -444,6 +462,22 @@ pub struct Added {
     /// Why its registration was not kept in the cache, when it was not: a
     /// session then registers it again.
     pub not_cached: Option<String>,
+    /// What was at its place before, set aside and not removed: where it is,
+    /// under `~`, and why (the new folder is in place all the same).
+    pub left_aside: Option<String>,
+}
+
+/// The gates an extension of the user's holds, which turning it off lets
+/// go (`cineris ext disable`, the early review's M1): its hooks on a gating
+/// event as the registration cache keeps them at its pin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Gates {
+    /// Each gating hook, in words: its event, and the tools it is on.
+    pub held: Vec<String>,
+    /// It is pinned and what it registered is not known: it may hold some.
+    pub unknown: bool,
+    /// The hash of its pinned version, which `--hash` names.
+    pub hash: Option<ContentHash>,
 }
 
 /// What [`Core::disable_extension`] did.
@@ -477,6 +511,10 @@ pub struct Removal {
     /// Its folder, under `~`, when something is at its name, and whether
     /// that is a link (which is unlinked, never walked).
     pub folder: Option<(String, bool)>,
+    /// What `--hash` names it by: its pin's hash, or, when it is not
+    /// pinned, the hash of its folder as it was read (`None` when it could
+    /// not be).
+    pub hash: Option<ContentHash>,
     /// Only a project's has the name: it is not removed.
     pub project_only: bool,
     target: PathBuf,
@@ -549,13 +587,68 @@ fn beside(target: &Path, what: &str) -> PathBuf {
     target.with_file_name(format!(".{name}.{pid}.{what}"))
 }
 
+/// Makes the folder `path`, open to the user alone where the system has
+/// modes, and refuses one that is there already (the early review's L4: a
+/// folder made by another between the look and the make is not written
+/// into).
+fn create_dir_new(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        std::fs::DirBuilder::new().mode(0o700).create(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::create_dir(path)
+    }
+}
+
+/// Removes what an earlier write of `target` left beside it, a process
+/// stopped between making its folder and putting it in place (the early
+/// review's L4): each `.<name>.<pid>-<n>.new` and `.old` that [`beside`]
+/// names, never through a link. Another process's write of the same name
+/// at the same moment then fails, whole, and says so.
+fn clear_leftovers(target: &Path) {
+    let (Some(folder), Some(name)) = (target.parent(), target.file_name()) else {
+        return;
+    };
+    let prefix = format!(".{}.", name.to_string_lossy());
+    let Ok(entries) = std::fs::read_dir(folder) else {
+        return;
+    };
+    let digits = |text: &str| !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit());
+    for entry in entries.flatten() {
+        let found = entry.file_name().to_string_lossy().into_owned();
+        let Some(stem) = found.strip_prefix(&prefix).and_then(|rest| {
+            rest.strip_suffix(".new")
+                .or_else(|| rest.strip_suffix(".old"))
+        }) else {
+            continue;
+        };
+        let named = digits(stem)
+            || stem
+                .split_once('-')
+                .is_some_and(|(pid, attempt)| digits(pid) && digits(attempt));
+        if named {
+            let _ = delete_unfollowed(&entry.path());
+        }
+    }
+}
+
 /// Writes `snapshot` as the folder `target`, whole or not at all: into a
-/// folder of its own beside it, then put in its place, what was there set
-/// aside first and removed after, never through a link.
-fn write_folder(target: &Path, snapshot: &Snapshot) -> std::io::Result<()> {
+/// folder of its own beside it, made new, then put in its place, what was
+/// there set aside first and removed after, never through a link. What an
+/// earlier write left beside it is removed first. Once the new folder is
+/// in place it is written, whatever happens after: what was set aside and
+/// could not be removed is given back, with why, and is not an error.
+fn write_folder(
+    target: &Path,
+    snapshot: &Snapshot,
+) -> std::io::Result<Option<(PathBuf, std::io::Error)>> {
+    clear_leftovers(target);
     let new = beside(target, "new");
     let written = (|| {
-        cineris_base::private::create_dir_all(&new)?;
+        create_dir_new(&new)?;
         for path in snapshot.paths() {
             let at = path
                 .split('/')
@@ -592,10 +685,10 @@ fn write_folder(target: &Path, snapshot: &Snapshot) -> std::io::Result<()> {
         let _ = delete_unfollowed(&new);
         return Err(error);
     }
-    if set_aside {
-        delete_unfollowed(&aside)?;
+    if set_aside && let Err(error) = delete_unfollowed(&aside) {
+        return Ok(Some((aside, error)));
     }
-    Ok(())
+    Ok(None)
 }
 
 impl Core {
@@ -915,8 +1008,21 @@ impl Core {
             resolver.root(),
             self.state_dir().as_ref(),
         );
+        let prompt = manifest
+            .prompt
+            .as_deref()
+            .and_then(|file| snapshot.file(file))
+            .map(|bytes| quoted_shown(&String::from_utf8_lossy(bytes)));
         Ok(ToAdd {
-            words: in_words(&manifest, confined),
+            // A user's extension is loaded in every workspace: where its
+            // programs are confined is said, not only here (M3).
+            words: in_words_where(&manifest, confined, false),
+            prompt,
+            tools: Vec::new(),
+            commands: Vec::new(),
+            evaluated: false,
+            #[cfg(feature = "scripts")]
+            registration: None,
             files: snapshot
                 .paths()
                 .map(|path| {
@@ -943,22 +1049,21 @@ impl Core {
         })
     }
 
-    /// Approves `to_add` as it was shown, on the person's yes: its snapshot
-    /// evaluated once (what it registers), written into the user's folder of
-    /// extensions in place of what was there, pinned in `pins.toml`, and its
-    /// registration kept in the cache. Nothing is read again from where it
-    /// came from.
+    /// Evaluates `to_add`'s snapshot once, before the question (the early
+    /// review of step 28's third pull request, M2): what it registers is
+    /// shown with the rest, its tools' and commands' descriptions among it,
+    /// and a yes keeps what was evaluated. Nothing is written or pinned.
     ///
     /// # Errors
     ///
-    /// When its evaluation fails (nothing is written or pinned then), its
-    /// folder cannot be written, or the pin cannot be kept.
+    /// When its script cannot be evaluated, or what was evaluated is not
+    /// what was read.
     #[cfg(feature = "scripts")]
-    pub async fn add_extension(&self, to_add: ToAdd) -> Result<Added, OpError> {
-        let failed = |message: String| error(ErrorKind::Internal, "extension_not_added", message);
+    pub async fn evaluate_extension(&self, to_add: &mut ToAdd) -> Result<(), OpError> {
         let code = in_code(&to_add.name).into_owned();
         // A process that left a thread of this hash running refuses to
-        // start it again until it is approved anew: this is that approval.
+        // start it again until it is approved anew: this is that approval,
+        // asked for.
         cineris_ext::engine::forget_abandoned(&to_add.hash);
         let (manifest, registration) = cineris_ext::engine::register(
             Arc::clone(&to_add.snapshot),
@@ -977,11 +1082,71 @@ impl Core {
             )
         })?;
         if manifest != to_add.manifest {
-            return Err(failed(format!(
-                "The extension `{code}` was not added: what was evaluated is not what was shown."
-            )));
+            return Err(error(
+                ErrorKind::Internal,
+                "extension_not_added",
+                format!(
+                    "The extension `{code}` was not added: what was evaluated is not what was \
+                     shown."
+                ),
+            ));
         }
-        let written = !to_add.unchanged;
+        to_add.tools = registration
+            .tools
+            .iter()
+            .map(|tool| {
+                (
+                    in_code(&tool.name).into_owned(),
+                    quoted_shown(&tool.description),
+                )
+            })
+            .collect();
+        to_add.commands = registration
+            .commands
+            .iter()
+            .map(|command| {
+                (
+                    in_code(&command.name).into_owned(),
+                    quoted_shown(&command.description),
+                )
+            })
+            .collect();
+        to_add.evaluated = true;
+        to_add.registration = Some(registration);
+        Ok(())
+    }
+
+    /// Approves `to_add` as it was shown, on the person's yes: evaluated
+    /// once, before the question ([`evaluate_extension`](Self::evaluate_extension),
+    /// here when it was not), written into the user's folder of extensions
+    /// in place of what was there, pinned in `pins.toml`, and its
+    /// registration kept in the cache. Nothing is read again from where it
+    /// came from. What its place holds is looked at again now: a folder that
+    /// holds it as shown is left, anything else is put back as shown (the
+    /// early review's L3).
+    ///
+    /// # Errors
+    ///
+    /// When its evaluation fails (nothing is written or pinned then), its
+    /// folder cannot be written, or the pin cannot be kept.
+    #[cfg(feature = "scripts")]
+    pub async fn add_extension(&self, mut to_add: ToAdd) -> Result<Added, OpError> {
+        let failed = |message: String| error(ErrorKind::Internal, "extension_not_added", message);
+        let code = in_code(&to_add.name).into_owned();
+        if to_add.registration.is_none() {
+            self.evaluate_extension(&mut to_add).await?;
+        }
+        let Some(registration) = to_add.registration.take() else {
+            return Err(failed(format!(
+                "The extension `{code}` was not added: it was not evaluated."
+            )));
+        };
+        let manifest = to_add.manifest.clone();
+        let holds_it = Snapshot::read_unfollowed(&to_add.target)
+            .0
+            .is_ok_and(|there| there.hash() == to_add.hash);
+        let written = !holds_it;
+        let mut left_aside = None;
         if written {
             cineris_base::private::create_dir_all(&to_add.root).map_err(|failure| {
                 failed(format!(
@@ -989,12 +1154,18 @@ impl Core {
                     self.shown(&to_add.root)
                 ))
             })?;
-            write_folder(&to_add.target, &to_add.snapshot).map_err(|failure| {
+            let aside = write_folder(&to_add.target, &to_add.snapshot).map_err(|failure| {
                 failed(format!(
                     "The extension `{code}` was not added: `{}` could not be written: {failure}",
                     to_add.destination
                 ))
             })?;
+            left_aside = aside.map(|(path, why)| {
+                format!(
+                    "what was there before was set aside at `{}` and could not be removed: {why}",
+                    self.shown(&path)
+                )
+            });
         }
         self.pin_store()?
             .pin(&Definition {
@@ -1029,6 +1200,48 @@ impl Core {
             written,
             registered,
             not_cached,
+            left_aside,
+        })
+    }
+
+    /// The gates the user's extension `name` holds, which turning it off
+    /// lets go (`cineris ext disable` asks first where there are any, the
+    /// early review's M1): its hooks on a gating event, as the registration
+    /// cache keeps them at its pin. One not pinned holds none.
+    ///
+    /// # Errors
+    ///
+    /// When the listing cannot be made.
+    pub fn extension_gates(&self, project: &Project, name: &str) -> Result<Gates, OpError> {
+        let listing = self.extensions(project)?;
+        let mine = listing
+            .extensions
+            .iter()
+            .find(|one| one.source == Source::User && one.name == name);
+        let Some((one, (hash, _))) = mine.and_then(|one| one.pin.as_ref().map(|pin| (one, pin)))
+        else {
+            return Ok(Gates {
+                held: Vec::new(),
+                unknown: false,
+                hash: None,
+            });
+        };
+        let held: Vec<String> = one
+            .registered
+            .iter()
+            .flat_map(|registered| registered.hooks.iter())
+            .filter(|hook| {
+                hook.split(' ')
+                    .next()
+                    .and_then(cineris_ext::event::Event::parse)
+                    .is_some_and(cineris_ext::event::Event::gates)
+            })
+            .map(|hook| format!("`{}`", in_code(hook)))
+            .collect();
+        Ok(Gates {
+            held,
+            unknown: one.registered.is_none(),
+            hash: Some(*hash),
         })
     }
 
@@ -1156,10 +1369,18 @@ impl Core {
                  and none is pinned."
             )));
         }
+        let hash = pin.as_ref().map(|(hash, _)| *hash).or_else(|| {
+            folder
+                .as_ref()
+                .filter(|(_, link)| !link)
+                .and_then(|_| Snapshot::read_unfollowed(&target).0.ok())
+                .map(|snapshot| snapshot.hash())
+        });
         Ok(Removal {
             name: name.to_owned(),
             pin,
             folder,
+            hash,
             project_only,
             target,
             root,

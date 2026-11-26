@@ -58,10 +58,14 @@ Commands:
                trust it: the next session there asks again
 
 Options:
-  --with-extensions  With trust, where there is no terminal to ask at:
-                     approve the project's extensions and hooks it shows.
-                     At a terminal the question decides, and this flag is
-                     ignored
+  --extension NAME=HASH  With trust, where there is no terminal to ask at:
+                         approve the extension NAME as it is shown, with
+                         the hash it is shown with. Again for each one
+  --hook NAME=HASH       The same, for one of the project's hooks
+  At a terminal the question decides; a name or hash given that is not
+  one shown refuses the trust, there too.
+
+None of these runs under a session's command: run it in your own terminal.
 
 Trusting a project lets its configuration choose a model, allow what its
 rules allow, and run what it defines. A change to its permission rules sets
@@ -185,16 +189,21 @@ Commands:
   disable NAME    Turn one of yours off in your configuration
                   ([extensions.NAME] enabled = false), from the next
                   session
-  remove NAME     Take away the approval of one of yours, and delete its
-                  folder after a yes that names it
-  add PATH        Show the extension in a folder, every file and what it
-                  may do, and on a yes copy it into your folder of
-                  extensions and approve it
+  remove NAME     Take away the approval of one of yours and delete its
+                  folder, on one yes that names both
+  add PATH        Show the extension in a folder, every file, what it
+                  may do and what it registers, and on a yes copy it into
+                  your folder of extensions and approve it
 
 Options:
-  --yes           With add or remove, where there is no terminal to ask
-                  at: approve it, or delete its folder. At a terminal the
-                  question decides, and --yes is ignored
+  --hash HASH     With add, remove or disable, where there is no
+                  terminal to ask at: do it, for what has the hash shown
+                  (disable asks only of one that holds gates). At a
+                  terminal the question decides; a hash given that is not
+                  the one shown refuses, there too
+
+add, remove and disable do not run under a session's command: run them
+in your own terminal.
 
 A project's extensions are approved with the project:
 `{name} permissions trust`.
