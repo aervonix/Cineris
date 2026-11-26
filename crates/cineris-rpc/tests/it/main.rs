@@ -476,7 +476,11 @@ pub fn probing(test: &str, connect: &str) -> Option<(World, CoreThread)> {
             std::env::var_os("CI").is_none(),
             "{python} is not on this runner's PATH"
         );
-        eprintln!("not run: {python} is not on the PATH here");
+        // Away from CI, with no Python, the test says why it did not run.
+        #[allow(clippy::print_stderr, reason = "a test that cannot run here says why")]
+        {
+            eprintln!("not run: {python} is not on the PATH here");
+        }
         return None;
     }
     let script = format!(

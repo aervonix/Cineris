@@ -693,7 +693,7 @@ mod sys {
                     // Each entry is checked to lie inside the buffer, its
                     // name too, before it is read (the early review of step
                     // 28's third pull request).
-                    if offset + header > bytes || offset % 8 != 0 {
+                    if offset + header > bytes || !offset.is_multiple_of(8) {
                         return Err(bad());
                     }
                     // SAFETY: the system wrote whole entries into the buffer,
