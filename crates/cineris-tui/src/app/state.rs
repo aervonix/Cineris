@@ -23,13 +23,17 @@
 //!   the interrupt, so that the core holds them in order, as it holds any
 //!   queued prompt at an interrupt; the one on its way, refused or handed
 //!   back undelivered, comes into the editor, and sent again it runs
-//!   first, with them behind it. None overtakes another.
+//!   first, with them behind it. None overtakes another. A custom command
+//!   among them is not sent but comes back into the editor as it was typed
+//!   (since the review of step 28's commands): its script would run after
+//!   the person stopped.
 //! - **A prompt refused `turn_running` is sent again once, queued:** sent
 //!   with no delivery in the moment between one turn's `turn.completed` and
 //!   the `turn.started` of the next the core takes from its queue, or onto a
 //!   turn another client began, it runs after the turn that took the gap.
 //!   Nothing is said. A second refusal, or one after an interrupt, gives it
-//!   back with why, as any refusal does.
+//!   back with why, as any refusal does, and so does the first of a custom
+//!   command, whose script ran and would run again.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -62,6 +66,11 @@ pub(super) mod screen;
 mod viewer;
 
 pub use restyle::{Restyle, Restyled};
+
+/// How long a prompt that may be a custom command waits for the session's
+/// first list: the tests move the clock by it.
+#[cfg(test)]
+pub(super) use custom::COMMANDS_WAIT;
 
 use commands::{Picker, Shown};
 
@@ -921,19 +930,27 @@ impl App {
 
     /// When the application must draw again whatever else happens: the end
     /// of an open dialog's grace, when its answers appear, until a frame
-    /// with them has been drawn. The time may have passed, and a frame is
-    /// then due at once. `None` while nothing is due, so that an idle
-    /// interface sleeps.
+    /// with them has been drawn; and the bound of a wait for the custom
+    /// commands' list, when the prompts that waited go
+    /// ([`drain`](Self::drain) sends them). The time may have passed, and a
+    /// frame is then due at once. `None` while nothing is due, so that an
+    /// idle interface sleeps.
     #[must_use]
     pub fn deadline(&self) -> Option<Instant> {
+        // The wait's bound is due under the viewer too (since the review of
+        // step 28's commands).
+        let wait = self.commands_wait_ends();
         // Under the viewer no dialog is drawn, so none of its times is due.
         if self.viewing() {
-            return None;
+            return wait;
         }
-        if let Some(due) = self.first_run_deadline() {
-            return Some(due);
+        let drawn = self
+            .first_run_deadline()
+            .or_else(|| self.dialogs.front().and_then(Dialog::deadline));
+        match (drawn, wait) {
+            (Some(drawn), Some(wait)) => Some(drawn.min(wait)),
+            (drawn, wait) => drawn.or(wait),
         }
-        self.dialogs.front().and_then(Dialog::deadline)
     }
 
     /// What to do before the next frame, taken.
@@ -1435,6 +1452,14 @@ impl App {
             // The next prompt: the last turn's review goes.
             self.panels_see(&Seen::Prompt);
         }
+        // One that may be a custom command, typed before the session's
+        // first list answered, waits for it, as a held one does, and for no
+        // longer than its bound (since the review of step 28's commands):
+        // what the list says decides whether it is the command or text.
+        if self.typed_waits_for_commands(&text, delivery, at) {
+            self.held_prompts.push_back(text);
+            return;
+        }
         let sent = Sent {
             session,
             command: self.custom_call(&text),
@@ -1554,9 +1579,17 @@ impl App {
         // The one on its way is answered from here on as any prompt is.
         if self.held_sent.take().is_some() {
             while let Some(text) = self.held_prompts.pop_front() {
+                let command = self.custom_call(&text);
+                // A custom command comes back as it was typed (since the
+                // review of step 28's commands): sent, its script would run
+                // after the person stopped.
+                if command.is_some() {
+                    self.give_back(&text);
+                    continue;
+                }
                 let sent = Sent {
                     session: session.clone(),
-                    command: self.custom_call(&text),
+                    command,
                     text,
                     started: false,
                     stopped: false,
@@ -1649,8 +1682,10 @@ impl App {
         self.pending.insert(ticket, Pending::Models);
     }
 
-    /// Takes what has arrived, at most `most` events of it. Says whether
-    /// anything changed, and whether more is waiting.
+    /// Takes what has arrived, at most `most` events of it, and then, with
+    /// nothing more waiting, ends a wait for the custom commands' list that
+    /// has reached its bound at `now`, so that a list already answered wins
+    /// over it. Says whether anything changed, and whether more is waiting.
     pub fn drain(&mut self, now: Instant, most: usize) -> Drained {
         let mut drained = Drained::default();
         if self.take_file_rows() {
@@ -1672,6 +1707,11 @@ impl App {
         let mut taken = 0;
         while taken < most {
             let Some(inbound) = self.link.next() else {
+                // The prompts that waited for the list go at its bound
+                // (since the review of step 28's commands).
+                if self.commands_wait_over(now) {
+                    drained.changed = true;
+                }
                 return drained;
             };
             taken += 1;
@@ -2019,10 +2059,11 @@ impl App {
     }
 
     /// A prompt's answer. One refused `turn_running` is sent again once,
-    /// queued behind the turn the core started meanwhile (step 27). Any
-    /// other refusal, that one's second, or one after an interrupt brings it
-    /// back into the editor with why, and the held prompts that wait for it
-    /// after it, in order; an accepted held one lets the next go.
+    /// queued behind the turn the core started meanwhile (step 27), unless
+    /// it is a custom command. Any other refusal, that one's second, or one
+    /// after an interrupt brings it back into the editor with why, and the
+    /// held prompts that wait for it after it, in order; an accepted held
+    /// one lets the next go.
     fn prompt_answered(
         &mut self,
         ticket: Ticket,
@@ -2037,11 +2078,14 @@ impl App {
         let refused = match result {
             // Sent with no delivery as one turn ended and the next the core
             // took from its queue began, or onto a turn another client
-            // began: it runs after that turn.
+            // began: it runs after that turn. Not a custom command (since
+            // the review of step 28's commands): its script ran, and sent
+            // again it would run twice, so it comes back with why.
             Err(error)
                 if error.code == code::TURN_RUNNING
                     && !sent.again
                     && !sent.stopped
+                    && sent.command.is_none()
                     && self.is_open(&sent.session) =>
             {
                 let again = Sent {
@@ -2221,8 +2265,8 @@ impl App {
                 continue;
             }
             // One that may be a custom command waits for the session's
-            // list (since step 28).
-            if self.held_waits_for_commands(&text, first) {
+            // list (since step 28), for no longer than its bound.
+            if self.held_waits_for_commands(&text, first, now) {
                 self.held_prompts.push_front(text);
                 return;
             }
