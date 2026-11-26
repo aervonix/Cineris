@@ -41,7 +41,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 ### cineris-cli
 
 - [a-nested-run-under-a-session-is-capped-at-read-only](a-nested-run-under-a-session-is-capped-at-read-only.md): A headless run of Cineris started by one of a session's commands runs at `read-only`, whatever it asks for, because it cannot know its parent session's level; a nested sub-task that needs to write cannot run until the parent's level reaches it in a form the model cannot raise. Owner: step 50 (sub-agents and delegated sub-tasks, which run a child session under a narrowed lease: [build-plan.md](../build-plan.md), "Step 50").
-- [an-interrupted-turns-screen-not-seen-in-time-on-a-busy-windows-runner](an-interrupted-turns-screen-not-seen-in-time-on-a-busy-windows-runner.md): A terminal test of a turn interrupted mid-stream and mid-tool timed out waiting for a screen once, on a busy Windows runner, on `main`'s side of an A/B. Owner: the maintainers.
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
 - [rewind-and-fork-have-no-test-of-the-real-binary](rewind-and-fork-have-no-test-of-the-real-binary.md): `/rewind` and fork are tested through the application's scripted link and the core's own tests, not by the real binary under a pseudo-terminal, in process or under `cineris attach`. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
@@ -147,7 +146,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-term
 
-- [a-terminals-reply-typed-into-the-input-box-on-a-busy-windows-machine](a-terminals-reply-typed-into-the-input-box-on-a-busy-windows-machine.md): On a busy Windows machine a reply from the terminal can come slower than the 500 ms the decoder waits for it, and then `[?0u` is typed into the input box as if the user had typed it; one CI flake, and a product bug. Owner: step 32.
 - [function-keys-through-conpty](function-keys-through-conpty.md): A function key sent to the application through the test kit's pseudo-console on a hosted Windows runner never reached it as that key; whether a real Windows Terminal is affected is not known. Owner: step 25.
 - [input-decoder-corners](input-decoder-corners.md): `sys::unix::wait` and `sys::windows::wait` restart their timeout after an interrupted call, stale wake or key release. Owner: step 32.
 - [mouse-reports-in-flight-when-the-mouse-goes-off](mouse-reports-in-flight-when-the-mouse-goes-off.md): A mouse report the terminal sent just before the mouse was turned off can arrive afterwards and be read as text. Owner: step 33.
