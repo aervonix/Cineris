@@ -771,7 +771,11 @@ fn a_level_change_past_the_cores_cap_is_refused() {
         .await
         .unwrap_err();
         assert_eq!(raised.code, "unrestricted_not_allowed");
-        assert!(raised.message.contains("`supervised` at most"), "{}", raised.message);
+        assert!(
+            raised.message.contains("`supervised` at most"),
+            "{}",
+            raised.message
+        );
         set(
             &front,
             SessionSettings {

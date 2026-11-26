@@ -558,14 +558,13 @@ mod sys {
         TH32CS_SNAPPROCESS,
     };
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob,
-        JOB_OBJECT_LIMIT_BREAKAWAY_OK, JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK,
-        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation, OpenJobObjectW,
-        QueryInformationJobObject,
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
+        JOB_OBJECT_LIMIT_SILENT_BREAKAWAY_OK, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        JobObjectExtendedLimitInformation, OpenJobObjectW, QueryInformationJobObject,
     };
     use windows_sys::Win32::System::Services::{
-        CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx,
-        SC_MANAGER_CONNECT, SC_STATUS_PROCESS_INFO, SERVICE_QUERY_STATUS, SERVICE_STATUS_PROCESS,
+        CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatusEx, SC_MANAGER_CONNECT,
+        SC_STATUS_PROCESS_INFO, SERVICE_QUERY_STATUS, SERVICE_STATUS_PROCESS,
     };
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, GetCurrentProcessId, GetProcessTimes, OpenProcess, OpenProcessToken,
@@ -741,7 +740,9 @@ mod sys {
             return Err(io::Error::last_os_error());
         }
         // SAFETY: `text` is a nul-terminated wide string the call made.
-        let length = (0..).take_while(|at| unsafe { *text.add(*at) } != 0).count();
+        let length = (0..)
+            .take_while(|at| unsafe { *text.add(*at) } != 0)
+            .count();
         // SAFETY: as above, `length` characters before the nul.
         let said = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
         // SAFETY: allocated by the call, to be freed with `LocalFree`, once.
@@ -990,7 +991,6 @@ mod sys {
     mod tests;
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1123,21 +1123,63 @@ mod tests {
             _ => Opened::Made(u64::from(pid)),
         };
         let under = |own, scheduler| started_by_a_service(&processes, own, opened, scheduler);
-        assert!(matches!(under(100, Some(600)), Under::Session(_)), "WMI, through cmd");
-        assert!(matches!(under(200, Some(190)), Under::Session(_)), "the scheduler's host");
-        assert_eq!(under(300, Some(190)), Under::Nothing, "another service's host");
-        assert!(matches!(under(300, None), Under::Session(_)), "not asked: any host");
-        assert!(matches!(under(300, Some(0)), Under::Nothing), "no scheduler running");
-        assert_eq!(under(400, None), Under::Nothing, "the desktop ends the line");
-        assert_eq!(under(540, None), Under::Nothing, "a runner a service started");
-        assert!(matches!(under(500, Some(600)), Under::Session(_)), "the task host");
-        assert_eq!(under(510, Some(600)), Under::Nothing, "made after its child");
-        assert_eq!(under(520, Some(600)), Under::Nothing, "another user's process");
-        assert_eq!(under(550, Some(600)), Under::Nothing, "a parent that has gone");
+        assert!(
+            matches!(under(100, Some(600)), Under::Session(_)),
+            "WMI, through cmd"
+        );
+        assert!(
+            matches!(under(200, Some(190)), Under::Session(_)),
+            "the scheduler's host"
+        );
+        assert_eq!(
+            under(300, Some(190)),
+            Under::Nothing,
+            "another service's host"
+        );
+        assert!(
+            matches!(under(300, None), Under::Session(_)),
+            "not asked: any host"
+        );
+        assert!(
+            matches!(under(300, Some(0)), Under::Nothing),
+            "no scheduler running"
+        );
+        assert_eq!(
+            under(400, None),
+            Under::Nothing,
+            "the desktop ends the line"
+        );
+        assert_eq!(
+            under(540, None),
+            Under::Nothing,
+            "a runner a service started"
+        );
+        assert!(
+            matches!(under(500, Some(600)), Under::Session(_)),
+            "the task host"
+        );
+        assert_eq!(
+            under(510, Some(600)),
+            Under::Nothing,
+            "made after its child"
+        );
+        assert_eq!(
+            under(520, Some(600)),
+            Under::Nothing,
+            "another user's process"
+        );
+        assert_eq!(
+            under(550, Some(600)),
+            Under::Nothing,
+            "a parent that has gone"
+        );
         let Under::Session(how) = under(100, Some(600)) else {
             unreachable!()
         };
-        assert!(how.contains("process 80") && how.contains("wmiprvse.exe"), "{how}");
+        assert!(
+            how.contains("process 80") && how.contains("wmiprvse.exe"),
+            "{how}"
+        );
     }
 
     /// A harness's job is named for its process's instance: the same id
