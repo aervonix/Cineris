@@ -5,7 +5,8 @@
 //! And its views: the reference screens drawn again with them through the
 //! inline presenter into the test kit's virtual terminal (`screens`), and
 //! their share of a frame (`frames`). And the application through its
-//! public test kit, with keys at a person's pace (`app`).
+//! public test kit, with keys at a person's pace (`app`), and what it holds
+//! of a turn's reasoning, counted by the binary's allocator (`memory`).
 
 #![allow(
     clippy::disallowed_methods,
@@ -30,6 +31,7 @@ mod editing;
 mod external;
 mod frames;
 mod input;
+mod memory;
 mod perf;
 mod screens;
 #[cfg(unix)]

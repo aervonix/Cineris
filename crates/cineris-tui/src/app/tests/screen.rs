@@ -713,13 +713,14 @@ fn reasoned_and_compacted(app: &mut super::App, link: &Scripted, now: Instant) {
     );
 }
 
-/// A turn that reasons `reasoning`, then answers; then a compaction.
+/// A turn that reasons `reasoning`, then answers; then a compaction. Gives
+/// the rows the frames committed.
 fn reasoned_and_compacted_with(
     app: &mut super::App,
     link: &Scripted,
     reasoning: &str,
     now: Instant,
-) {
+) -> Vec<String> {
     let answer = ItemId::from("a1");
     let steps = [
         event(Event::TurnStarted(TurnStarted {})),
@@ -773,10 +774,190 @@ fn reasoned_and_compacted_with(
             duration_ms: Some(900),
         })),
     ];
+    let mut committed = Vec::new();
     for inbound in steps {
         link.give(inbound);
         drain(app, now);
-        let _ = app.frame(now);
+        let (commit, _, _) = app.frame(now);
+        committed.extend(text(&commit));
+    }
+    committed
+}
+
+/// A reasoning of `lines` lines, each naming its number, the last
+/// `The last line of a long reasoning.`
+fn long_reasoning(lines: usize) -> String {
+    let mut text = String::new();
+    for n in 1..lines {
+        text.push_str(&format!(
+            "Line {n}: the scanner reads each digit, and an underscore between two.\n"
+        ));
+    }
+    text.push_str("The last line of a long reasoning.");
+    text
+}
+
+/// A reasoning longer than a kept block holds (since the fixes of the
+/// review of step 25, which found every reasoning kept twice and without a
+/// bound): the inline presenter commits it whole, as before; the viewer
+/// draws it to its bound, with a row that says it was cut; and `Enter` reads
+/// it whole from its item, of the session it is of, by `session/read`, and
+/// shows it.
+#[test]
+fn a_reasoning_kept_only_in_part_is_read_whole_from_its_item() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 30, now);
+    let reasoning = long_reasoning(400);
+    assert!(reasoning.len() > 3 * crate::transcript::kept::REASONING_KEPT);
+    let committed = reasoned_and_compacted_with(&mut app, &link, &reasoning, now);
+    // Inline, what is drawn is not changed: all of it.
+    for line in [
+        "Line 1: the scanner",
+        "Line 399: the scanner",
+        "The last line of a long reasoning.",
+    ] {
+        assert!(
+            committed.iter().any(|row| row.contains(line)),
+            "{line:?} not committed: {committed:#?}"
+        );
+    }
+    assert!(!committed.iter().any(|row| row.contains("cut here")));
+    link.take_sent();
+    key(&mut app, "ctrl+o", now);
+    key(&mut app, "up", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(rows[29].trim_end().ends_with("reasoning"), "{rows:#?}");
+    key(&mut app, "home", now);
+    // The transcript's view from its top, a page at a time: the kept start,
+    // then the row that says it was cut, and none of what was not kept.
+    let mut seen = Vec::new();
+    for _ in 0..12 {
+        seen.extend(text(&app.viewer_frame(30, 99, now))[2..27].to_vec());
+        key(&mut app, "pagedown", now);
+    }
+    assert!(
+        seen.iter().any(|row| row.contains("Line 1: the scanner")),
+        "{seen:#?}"
+    );
+    assert!(
+        seen.iter()
+            .any(|row| row.contains("cut here: enter on it in the viewer shows it whole")),
+        "{seen:#?}"
+    );
+    assert!(
+        !seen
+            .iter()
+            .any(|row| row.contains("The last line of a long reasoning.")),
+        "{seen:#?}"
+    );
+    key(&mut app, "enter", now);
+    let read = link
+        .take_sent()
+        .into_iter()
+        .find_map(|(ticket, op)| match op {
+            cineris_protocol::methods::Op::SessionRead(params) => Some((ticket, params)),
+            _ => None,
+        })
+        .expect("the reasoning read");
+    assert_eq!(read.1.item_id, Some(ItemId::from("a1")));
+    assert_eq!(read.1.session_id.as_str(), crate::testkit::SESSION);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(rows[29].contains("reading the reasoning"), "{rows:#?}");
+    link.give(Inbound::Done(
+        read.0,
+        Ok(cineris_protocol::methods::OpResult::SessionRead(
+            cineris_protocol::methods::SessionReadResult {
+                items: vec![Item::AssistantMessage(AssistantMessageItem {
+                    id: ItemId::from("a1"),
+                    parts: vec![
+                        Part::Reasoning(cineris_protocol::message::ReasoningPart {
+                            text: reasoning.clone(),
+                            raw: None,
+                        }),
+                        Part::text("Done.\n"),
+                    ],
+                    stop_reason: Some(StopReason::End),
+                    raw_stop: None,
+                    stop_detail: None,
+                    truncated: false,
+                    origin: None,
+                    usage: None,
+                    error: None,
+                    created_at: None,
+                })],
+                incomplete: Vec::new(),
+                next_cursor: None,
+                seq: 9,
+                masked: 0,
+                redacted: false,
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows.iter().any(|row| row.contains("The reasoning, whole")),
+        "{rows:#?}"
+    );
+    key(&mut app, "end", now);
+    let rows = text(&app.viewer_frame(30, 99, now));
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("The last line of a long reasoning.")),
+        "{rows:#?}"
+    );
+}
+
+/// A compaction's summary, and a reasoning kept only in part, are read
+/// from the session their block is of, not from whichever is open (the
+/// review of step 25, finding 18: item ids repeat across sessions, so after
+/// `/new` the read named the new session's item of the same id and showed
+/// it). A session left is not open on this connection, where `session/read`
+/// refuses: nothing is asked, and the keys row says it could not be read.
+#[test]
+fn a_summary_is_read_from_the_session_its_block_is_of() {
+    let now = Instant::now();
+    let (mut app, link) = opened_app(Presenter::Inline, 99, 30, now);
+    reasoned_and_compacted_with(&mut app, &link, &long_reasoning(400), now);
+    link.take_sent();
+    super::type_text(&mut app, "/new", now);
+    key(&mut app, "esc", now);
+    key(&mut app, "enter", now);
+    let (ticket, _) = link
+        .take_sent()
+        .into_iter()
+        .find(|(_, op)| matches!(op, cineris_protocol::methods::Op::SessionNew(_)))
+        .expect("/new opens a session");
+    link.give(Inbound::Done(
+        ticket,
+        Ok(cineris_protocol::methods::OpResult::SessionNew(
+            cineris_protocol::methods::SessionResult {
+                session: crate::testkit::session().id("s_other").build(),
+            },
+        )),
+    ));
+    drain(&mut app, now);
+    let _ = app.frame(now);
+    link.take_sent();
+    key(&mut app, "ctrl+o", now);
+    // The compaction, then the reasoning: neither is read from `s_other`.
+    for (stop, label) in [
+        ("summary", "the summary could not be read"),
+        ("reasoning", "the reasoning could not be read"),
+    ] {
+        let rows = text(&app.viewer_frame(30, 99, now));
+        assert!(rows[29].trim_end().ends_with(stop), "{rows:#?}");
+        key(&mut app, "enter", now);
+        let sent = link.take_sent();
+        assert!(
+            !sent
+                .iter()
+                .any(|(_, op)| matches!(op, cineris_protocol::methods::Op::SessionRead(_))),
+            "{stop}: {sent:#?}"
+        );
+        let rows = text(&app.viewer_frame(30, 99, now));
+        assert!(rows[29].contains(label), "{rows:#?}");
+        key(&mut app, "up", now);
     }
 }
 

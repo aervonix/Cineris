@@ -172,6 +172,26 @@ pub fn reasoning(summary: &str, took: Duration, width: usize, look: &Look) -> Ve
     lines
 }
 
+/// The row under a finished reasoning that the viewer or the full screen
+/// kept only the start of (since the fixes of the review of step 25), dim,
+/// two columns in: what follows its words is not drawn there, and the
+/// viewer's `Enter` reads it whole. None where the words are not drawn
+/// either ([`reasoning`]).
+#[must_use]
+pub fn reasoning_cut(width: usize, look: &Look) -> Option<Line> {
+    if look.reasoning != Reasoning::Summary || look.density != Density::Comfortable {
+        return None;
+    }
+    let line = Line::plain("  ").with(Span::new(
+        format!(
+            "{} cut here: enter on it in the viewer shows it whole",
+            look.glyphs.ellipsis
+        ),
+        look.theme.style(Token::Muted),
+    ));
+    Some(cut(&line, width, look.glyphs.ellipsis))
+}
+
 /// What a turn cost: its duration, its tokens and its cost, dim, two
 /// columns in. Shown only with `tui.turn_summary`.
 #[must_use]

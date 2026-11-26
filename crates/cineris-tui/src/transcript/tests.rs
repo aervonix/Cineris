@@ -112,6 +112,7 @@ fn reasoning_that_ends_without_a_summary_commits_and_lets_what_follows() {
         elapsed: Duration::from_secs(2),
         summary: None,
         finished: false,
+        ..Reasoning::default()
     }));
     transcript.push(Block::Notice("A notice after it.".to_owned()));
     assert!(transcript.commit(99, &look).is_empty());
@@ -133,6 +134,7 @@ fn an_answer_commits_as_it_streams_and_reasoning_when_it_ends() {
         elapsed: Duration::from_secs(3),
         summary: None,
         finished: false,
+        ..Reasoning::default()
     }));
     assert!(transcript.commit(99, &look).is_empty());
     assert_eq!(
@@ -211,6 +213,7 @@ fn session(transcript: &mut Transcript) {
         elapsed: Duration::from_secs(6),
         summary: Some("The loop breaks on any non-digit.".to_owned()),
         finished: true,
+        ..Reasoning::default()
     }));
     let mut answer = Markdown::answer().keeping();
     answer.push(
@@ -314,6 +317,102 @@ fn a_kept_round_holds_the_end_of_a_long_output() {
     assert!(output.len() <= kept::OUTPUT_KEPT, "{}", output.len());
     assert!(output.starts_with("line ") && long.ends_with(&output));
     assert!(kept.bytes() < kept::OUTPUT_KEPT + 1_024);
+}
+
+/// A kept reasoning holds its words once, to their first
+/// [`kept::REASONING_KEPT`] bytes, at a line's end, marked cut; what a
+/// search is given of it is that much; it draws what it kept and a row that
+/// says so; and `Enter` reads it whole from where it came, until its
+/// response was thrown away (since the fixes of the review of step 25).
+#[test]
+fn a_kept_reasoning_holds_its_words_once_to_their_bound() {
+    let look = look();
+    let long: String = (0..2_000).map(|n| format!("thought {n}\n")).collect();
+    let origin = super::Origin {
+        session: cineris_protocol::SessionId::from("s_a"),
+        item: cineris_protocol::ItemId::from("i_3"),
+        run: 1,
+    };
+    let reasoning = |words: &str| Reasoning {
+        elapsed: Duration::from_secs(6),
+        summary: Some(words.to_owned()),
+        finished: true,
+        origin: Some(origin.clone()),
+        ..Reasoning::default()
+    };
+    let mut kept = kept::Kept::new();
+    kept.extend([
+        kept::Finished {
+            block: Block::Reasoning(reasoning(&long)),
+            gap: false,
+            after: false,
+        },
+        kept::Finished {
+            block: Block::Reasoning(reasoning("A short one.")),
+            gap: true,
+            after: false,
+        },
+    ]);
+    let Some(kept::Piece::Block(Block::Reasoning(held))) = kept.get(0).map(|block| &block.piece)
+    else {
+        panic!("no reasoning kept");
+    };
+    let words = held.summary.clone().unwrap_or_default();
+    assert!(held.text.is_empty() && held.cut);
+    assert!(words.len() <= kept::REASONING_KEPT, "{}", words.len());
+    assert!(words.len() > kept::REASONING_KEPT / 2, "{}", words.len());
+    assert!(
+        long.starts_with(&words) && words.ends_with(char::is_numeric),
+        "{words:?}"
+    );
+    assert!(
+        kept.bytes() < kept::REASONING_KEPT + 1_024,
+        "{}",
+        kept.bytes()
+    );
+    assert!(
+        kept.get(0)
+            .map(kept::KeptBlock::text)
+            .unwrap_or_default()
+            .len()
+            <= kept::REASONING_KEPT
+    );
+    let rows = texts(
+        &kept
+            .get(0)
+            .map(|block| block.rows(Placement::Committed, 99, &look))
+            .unwrap_or_default(),
+    );
+    assert_eq!(
+        rows.last().map(String::as_str),
+        Some("  … cut here: enter on it in the viewer shows it whole")
+    );
+    assert_eq!(
+        kept.summary(0),
+        Some(kept::Summary::ReadReasoning(origin.clone()))
+    );
+    // A short one is whole, and shows what it holds.
+    assert_eq!(
+        kept.summary(1),
+        Some(kept::Summary::Reasoning {
+            text: "A short one.".to_owned(),
+            cut: false
+        })
+    );
+    // Its response tried again: the start, said to be only that.
+    kept.forget_origins(&origin.session, &cineris_protocol::ItemId::from("i_4"));
+    assert_eq!(
+        kept.summary(0),
+        Some(kept::Summary::ReadReasoning(origin.clone()))
+    );
+    kept.forget_origins(&origin.session, &origin.item);
+    assert_eq!(
+        kept.summary(0),
+        Some(kept::Summary::Reasoning {
+            text: words.clone(),
+            cut: true
+        })
+    );
 }
 
 /// What the full-screen presenter draws of a transcript: its kept blocks,

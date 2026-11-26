@@ -549,6 +549,7 @@ impl App {
             rereading.mapper.event(
                 &mut rereading.transcript,
                 &Event::ItemCompleted(ItemCompleted { item }),
+                session,
                 now,
             );
         }

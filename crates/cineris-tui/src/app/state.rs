@@ -167,8 +167,10 @@ enum Pending {
     Restyle { keys: bool, theme: bool },
     /// A page of this session, read for `/export` (since step 25).
     Export(SessionId),
-    /// A compaction's summary, read for the viewer (since step 25).
-    Summary(SessionId),
+    /// A compaction's summary, or a reasoning kept only in part, read for
+    /// the viewer (since step 25; a reasoning since the fixes of its
+    /// review).
+    Summary(viewer::SummaryOf),
     /// A page of this session's prompts, for the `/rewind` picker (since
     /// step 25).
     Points(SessionId),
@@ -1985,8 +1987,11 @@ impl App {
             (Pending::History(id), Ok(OpResult::SessionRead(page))) => {
                 self.history_read(id, page, now);
             }
-            (Pending::Summary(id), Ok(OpResult::SessionRead(page))) if self.is_open(&id) => {
-                self.summary_read(ticket, &page);
+            // Read from the session its block is of, which may have been
+            // left since: the answer is the view's that asked, by its ticket
+            // (since the fixes of the review of step 25).
+            (Pending::Summary(of), Ok(OpResult::SessionRead(page))) => {
+                self.summary_read(ticket, &of, &page);
             }
             // Said where it was asked for, and as any failure is.
             (Pending::Summary(_), Err(error)) => {
@@ -2365,11 +2370,13 @@ impl App {
                 self.note_turn(number);
             }
             if incomplete {
-                self.mapper.in_progress(&mut self.transcript, &item, now);
+                self.mapper
+                    .in_progress(&mut self.transcript, &item, &session, now);
             } else {
                 self.mapper.event(
                     &mut self.transcript,
                     &Event::ItemCompleted(cineris_protocol::event::ItemCompleted { item }),
+                    &session,
                     now,
                 );
             }
@@ -2598,7 +2605,17 @@ impl App {
                     self.closed_from_outside(vec![dialog], now);
                 }
             }
-            _ => self.mapper.event(&mut self.transcript, &event.event, now),
+            // A response thrown away to be tried again: the reasoning it
+            // drew, kept already too, is not its item's any more (since the
+            // fixes of the review of step 25).
+            Event::ItemReset(reset) => {
+                self.mapper
+                    .event(&mut self.transcript, &event.event, &event.session_id, now);
+                self.kept.forget_origins(&event.session_id, &reset.item_id);
+            }
+            _ => self
+                .mapper
+                .event(&mut self.transcript, &event.event, &event.session_id, now),
         }
         // The notices of a session not open (one that failed to open, one
         // closed) are said, and are nothing of a panel's.
