@@ -1,0 +1,119 @@
+# Step 28, its third pull request's first part: custom commands, the fixes
+# of the early review in `cineris_ext::commands` (L1, a user's broken file,
+# L4). No project's command is used when the user's folder of commands was
+# not read whole; a user's file that cannot be used still holds its name;
+# and a project's command holds nothing that acts unseen. Broken one at a
+# time, with the tests that must fail.
+
+[break] a-projects-command-is-used-when-the-users-folder-was-not-read-whole
+rule: When a folder of the user's commands could not be read whole, no project's command is used.
+file: crates/cineris-ext/src/commands.rs
+in: find
+find: let reason = if users_whole {
+replace: let reason = if users_whole || true {
+caught-by:
+    cineris-ext commands::tests::no_projects_command_is_used_when_the_users_folder_was_not_read_whole
+
+[break] a-users-root-that-is-no-folder-is-read-whole
+rule: A user's root of commands that is not a folder is not read whole: no project's command is used.
+file: crates/cineris-ext/src/commands.rs
+in: open_root
+find:
+    left(left_out, show(root.owner, &real), Reason::NotAFolder);
+    Opened::Refused
+replace:
+    left(left_out, show(root.owner, &real), Reason::NotAFolder);
+    Opened::Absent
+caught-by:
+    cineris-ext commands::tests::no_projects_command_is_used_when_the_users_folder_was_not_read_whole
+
+[break] a-users-root-that-cannot-be-resolved-is-read-whole
+rule: A user's root of commands that could not be read is not read whole: no project's command is used.
+file: crates/cineris-ext/src/commands.rs
+in: open_root
+find:
+    Reason::Unreadable(error.to_string()),
+    );
+    return Opened::Refused;
+replace:
+    Reason::Unreadable(error.to_string()),
+    );
+    return Opened::Absent;
+caught-by:
+    cineris-ext commands::tests::no_projects_command_is_used_when_the_users_folder_was_not_read_whole
+
+[break] a-users-folder-past-its-entries-is-read-whole
+rule: A user's folder of commands with more than 100 entries is not read whole: no project's command is used.
+file: crates/cineris-ext/src/commands.rs
+in: look_in
+find:
+    left(left_out, "", show(owner, &folder), Reason::TooManyEntries);
+    out.whole = false;
+replace:
+    left(left_out, "", show(owner, &folder), Reason::TooManyEntries);
+caught-by:
+    cineris-ext commands::tests::no_projects_command_is_used_when_the_users_folder_was_not_read_whole
+
+[break] a-users-path-that-is-not-unicode-is-not-marked
+rule: The user's root of commands is marked when its path is not Unicode, which as text names another place.
+file: crates/cineris-ext/src/commands.rs
+in: Root::user
+find: lossy: path.to_str().is_none()
+replace: lossy: false
+caught-by:
+    cineris-ext commands::tests::no_projects_command_is_used_when_the_users_folder_was_not_read_whole
+
+[break] a-root-whose-path-is-not-unicode-is-looked-in
+rule: A root whose path is not Unicode is not looked in, and for the user's no project's command is used.
+file: crates/cineris-ext/src/commands.rs
+in: open_root
+find: if root.lossy {
+replace: if root.lossy && root.path.is_empty() {
+caught-by:
+    cineris-ext commands::tests::no_projects_command_is_used_when_the_users_folder_was_not_read_whole
+
+[break] a-users-file-left-out-gives-up-its-name
+rule: A file of the user's that is left out (a link, one that is not UTF-8) still holds its name from a project's command.
+file: crates/cineris-ext/src/commands.rs
+in: look_in
+find: out.names.push(name.to_owned());
+replace: if read_file(&path).is_ok() { out.names.push(name.to_owned()); }
+caught-by:
+    cineris-ext commands::tests::the_users_command_wins_over_a_projects_of_the_same_name
+    cineris-ext commands::tests::no_link_is_followed_in_a_folder_of_commands
+
+[break] a-projects-body-may-hold-what-acts-unseen
+rule: A project's command whose body holds a character that acts unseen is left out, the character named.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: if let Some(unseen) = first_unseen(body) {
+replace: if let Some(unseen) = first_unseen("") {
+caught-by:
+    cineris-ext commands::tests::a_projects_command_holds_nothing_that_acts_unseen
+
+[break] a-projects-default-may-hold-what-acts-unseen
+rule: A project's command whose arguments' default holds a character that acts unseen is left out, the character named.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: first_unseen(argument.default.as_deref()?)
+replace: first_unseen("")
+caught-by:
+    cineris-ext commands::tests::a_projects_command_holds_nothing_that_acts_unseen
+
+[break] a-crlf-line-break-acts-unseen
+rule: A `\r\n` line break in a project's body is seen, as a checkout on Windows may end its lines.
+file: crates/cineris-ext/src/commands.rs
+in: first_unseen
+find: for line in text.split("\r\n") {
+replace: for line in [text] {
+caught-by:
+    cineris-ext commands::tests::a_projects_command_holds_nothing_that_acts_unseen
+
+[break] the-users-own-body-is-judged-for-what-acts-unseen
+rule: The user's own commands are sent as they wrote them: only a project's is refused for what acts unseen.
+file: crates/cineris-ext/src/commands.rs
+in: parse
+find: if owner == Owner::Project {
+replace: if owner == Owner::Project || owner == Owner::User {
+caught-by:
+    cineris-ext commands::tests::a_projects_command_holds_nothing_that_acts_unseen
