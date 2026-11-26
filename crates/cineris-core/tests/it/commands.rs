@@ -305,6 +305,90 @@ async fn sent_answering(front: &Front, name: &str) -> Result<(), String> {
     .await
 }
 
+/// A command's programs have no write root, whatever its manifest's `write`
+/// says (the maintainers, after the early review of the commands): one that
+/// writes the workspace fails to, at `supervised` and at `read-only`. And a
+/// second interrupt stops a command whose program runs, at once.
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them() {
+    if !crate::sandbox::enforcing_here() {
+        return;
+    }
+    let world = World::new("commands_programs", [says("One."), says("Two.")]);
+    let probe = crate::ext_exec::extension_running(
+        &world,
+        "probe",
+        "exec = [\"sh\"]\nwrite = [\"**\"]",
+        "cineris.command({ name: 'write', description: 'Writes', async run() {\n\
+           const ran = await cineris.exec('sh', ['-c', 'echo x > out.txt']);\n\
+           return 'wrote with ' + ran.code;\n\
+         } });\n\
+         cineris.command({ name: 'wait', description: 'Waits', async run() {\n\
+           await cineris.exec('sh', ['-c', 'sleep 30']);\n\
+           return 'waited';\n\
+         } });\n",
+    );
+    let core = world.core_with(|options| {
+        options.launcher = Some(crate::sandbox::launcher());
+        options.extensions = vec![probe];
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let mut turns = 0;
+        for level in [
+            cineris_protocol::lease::Level::Supervised,
+            cineris_protocol::lease::Level::ReadOnly,
+        ] {
+            front
+                .op(Op::SessionSet(cineris_protocol::methods::SessionSetParams {
+                    session_id: front.session.clone(),
+                    settings: cineris_protocol::session::SessionSettings {
+                        level: Some(level.clone()),
+                        ..Default::default()
+                    },
+                }))
+                .await
+                .unwrap();
+            // Refused, or run and failing to write: either way nothing is
+            // written.
+            if sent_answering(&front, "probe:write").await.is_ok() {
+                turns += 1;
+                front.turns(turns).await;
+                let (text, _) = last_prompt(&front);
+                assert!(!text.ends_with("wrote with 0"), "{level:?}: {text}");
+            }
+            assert_eq!(world.read("out.txt"), None, "a command's program wrote at {level:?}");
+        }
+        let interrupt = Op::TurnInterrupt(cineris_protocol::methods::TurnInterruptParams {
+            session_id: front.session.clone(),
+            now: true,
+        });
+        front
+            .op(Op::SessionSet(cineris_protocol::methods::SessionSetParams {
+                session_id: front.session.clone(),
+                settings: cineris_protocol::session::SessionSettings {
+                    level: Some(cineris_protocol::lease::Level::Supervised),
+                    ..Default::default()
+                },
+            }))
+            .await
+            .unwrap();
+        let mut sent = std::pin::pin!(sent_answering(&front, "probe:wait"));
+        let mut asked = std::pin::pin!(front.approval());
+        std::future::poll_fn(|context| {
+            assert!(sent.as_mut().poll(context).is_pending(), "it ended before it was asked");
+            asked.as_mut().poll(context).map(|_| ())
+        })
+        .await;
+        crate::settle().await;
+        front.core.early(front.client.id, &interrupt);
+        let error = sent.await.unwrap_err();
+        assert!(error.contains("was interrupted"), "{error}");
+        front.close().await;
+    });
+}
+
 /// An extension that keeps a command running until it is stopped, and one
 /// that reads a file that looks like a secret, which is asked about.
 const RUNS: &str = "cineris.command({ name: 'spin', description: 'Never ends', run() { for (;;) {} } });\n\
