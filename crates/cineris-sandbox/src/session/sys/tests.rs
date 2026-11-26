@@ -162,46 +162,115 @@ fn sys_a_harnesss_job_that_cannot_be_opened_is_not_known() {
 fn sys_the_task_schedulers_host_is_found_and_a_tests_line_is_no_services() {
     let scheduler = scheduler().expect("the task scheduler's service could be asked");
     assert_ne!(scheduler, 0, "the task scheduler runs");
-    // SAFETY: as in `under_a_session`.
-    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-    assert_ne!(snapshot, INVALID_HANDLE_VALUE);
-    // SAFETY: just made, owned by nothing else.
-    let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
-    // SAFETY: plain data.
-    let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
-    entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap();
-    let mut line = Vec::new();
-    // SAFETY: as in `under_a_session`.
-    let mut more = unsafe { Process32FirstW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
-    while more {
-        let end = entry.szExeFile.iter().position(|unit| *unit == 0).unwrap();
-        line.push((
-            entry.th32ProcessID,
-            entry.th32ParentProcessID,
-            String::from_utf16_lossy(&entry.szExeFile[..end]).to_lowercase(),
-        ));
-        // SAFETY: as above.
-        more = unsafe { Process32NextW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
-    }
+    let line = processes().unwrap();
     let named = |pid: u32| {
         line.iter()
-            .find(|(at, _, _)| *at == pid)
-            .map(|(_, _, name)| name)
+            .find(|process| process.pid == pid)
+            .map(|process| process.name.as_str())
     };
-    assert_eq!(
-        named(scheduler).map(String::as_str),
-        Some("svchost.exe"),
-        "{scheduler}"
-    );
+    assert_eq!(named(scheduler), Some("svchost.exe"), "{scheduler}");
     // The line from this test up, said when it fails.
     let mut parents = Vec::new();
     let mut at = std::process::id();
-    while let Some((_, parent, name)) = line.iter().find(|(pid, _, _)| *pid == at) {
-        parents.push(format!("{at} {name}"));
-        if *parent == at || parents.len() > 16 {
+    while let Some(process) = line.iter().find(|process| process.pid == at) {
+        parents.push(format!("{at} {}", process.name));
+        if process.parent == at || parents.len() > 16 {
             break;
         }
-        at = *parent;
+        at = process.parent;
     }
     assert_eq!(under_a_session(), Under::Nothing, "{parents:?}");
+}
+
+/// The system's list of processes, read in one call, gives each process
+/// when it was made as opening it and asking does: the count a harness
+/// names its job by, so that a job is found by the list's count alone. And
+/// it gives this process under its own name, with the test runner above
+/// it, and the system's first processes.
+#[test]
+fn sys_the_list_of_processes_gives_each_when_it_was_made() {
+    let listed = processes().unwrap();
+    assert!(listed.len() > 2, "{}", listed.len());
+    let own = listed
+        .iter()
+        .find(|process| process.pid == std::process::id())
+        .expect("this process is listed");
+    // SAFETY: the pseudo-handle is always valid.
+    let made = made_at(unsafe { GetCurrentProcess() }).unwrap();
+    assert_eq!(own.made, made);
+    let exe = std::env::current_exe().unwrap();
+    let exe = exe.file_name().unwrap().to_string_lossy().to_lowercase();
+    assert_eq!(own.name, exe);
+    assert!(
+        listed.iter().any(|process| process.pid == own.parent),
+        "its parent, {}, is listed",
+        own.parent
+    );
+    let mut compared = 0;
+    for process in &listed {
+        if let Opened::Made(made) = opened(process.pid) {
+            assert_eq!(process.made, made, "{} {}", process.pid, process.name);
+            compared += 1;
+        }
+    }
+    assert!(compared > 1, "{compared}");
+}
+
+/// A nul-terminated wide text a call allocated, read and freed.
+fn taken(text: *mut u16) -> String {
+    // SAFETY: a nul-terminated text a call made.
+    let length = (0..)
+        .take_while(|at| unsafe { *text.add(*at) } != 0)
+        .count();
+    // SAFETY: as above, `length` characters before the nul.
+    let said = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
+    // SAFETY: allocated by the call, to be freed with `LocalFree`, once.
+    unsafe { LocalFree(text.cast()) };
+    said
+}
+
+/// A descriptor's list of who may do what, as text.
+fn rendered(security: &OwnerOnly) -> String {
+    use windows_sys::Win32::Security::Authorization::{
+        ConvertSecurityDescriptorToStringSecurityDescriptorW, SDDL_REVISION_1,
+    };
+    use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+    let mut text = ptr::null_mut();
+    // SAFETY: a live descriptor, and a live pointer for the text, which the
+    // call allocates.
+    let said = unsafe {
+        ConvertSecurityDescriptorToStringSecurityDescriptorW(
+            security.descriptor,
+            SDDL_REVISION_1,
+            DACL_SECURITY_INFORMATION,
+            &raw mut text,
+            ptr::null_mut(),
+        )
+    };
+    assert_ne!(said, 0, "{}", io::Error::last_os_error());
+    taken(text)
+}
+
+/// The harness's job's security, built from its parts, is the one its text
+/// makes, `D:P(A;;BY_NAME;;;<user>)(A;;BY_NAME;;;OW)`: its user and its
+/// owner may ask, nobody else may do anything, and nothing is inherited.
+#[test]
+fn sys_the_jobs_security_is_its_text() {
+    use windows_sys::Win32::Security::Authorization::ConvertSidToStringSidW;
+    let mut user = [0_u64; 32];
+    user_into(&mut user).unwrap();
+    // SAFETY: a `TOKEN_USER` at the buffer's start, its SID within it.
+    let sid = unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+    let mut text = ptr::null_mut();
+    // SAFETY: a valid SID, and a live pointer for the text the call makes.
+    assert_ne!(unsafe { ConvertSidToStringSidW(sid, &raw mut text) }, 0);
+    let sid = taken(text);
+    let from_text = OwnerOnly::from_sddl(&format!(
+        "D:P(A;;0x{BY_NAME:x};;;{sid})(A;;0x{BY_NAME:x};;;OW)"
+    ))
+    .unwrap();
+    let built = OwnerOnly::new().unwrap();
+    let said = rendered(&built);
+    assert_eq!(said, rendered(&from_text));
+    assert!(said.starts_with("D:P("), "{said}");
 }

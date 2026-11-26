@@ -228,14 +228,40 @@ mod sys {
     }
 
     pub(super) fn under_a_session() -> Under {
-        line(std::os::unix::process::parent_id(), seen)
+        let own = Own::read();
+        line(std::os::unix::process::parent_id(), |pid| seen(&own, pid))
+    }
+
+    /// This process's own file, read once a check and not once a process of
+    /// the line: its identity, by which the very file another process runs is
+    /// told, and its name. A headless run asks before its first request, so
+    /// each process of the line costs four calls (its `stat` opened, read and
+    /// closed, and its file's identity), not twelve.
+    pub(super) struct Own {
+        file: Option<(u64, u64)>,
+        name: Option<String>,
+    }
+
+    impl Own {
+        pub(super) fn read() -> Self {
+            Self {
+                file: std::fs::metadata("/proc/self/exe")
+                    .ok()
+                    .map(|file| (file.dev(), file.ino())),
+                name: std::env::current_exe().ok().and_then(|exe| {
+                    exe.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                }),
+            }
+        }
     }
 
     /// The process of the line that runs sessions.
     fn harness() -> Option<u32> {
+        let own = Own::read();
         let mut at = std::os::unix::process::parent_id();
         for _ in 0..4096 {
-            match seen(at) {
+            match seen(&own, at) {
                 Seen::Of { harness: true, .. } => return Some(at),
                 Seen::Of { parent, .. } if parent > 1 && parent != at => at = parent,
                 _ => return None,
@@ -282,13 +308,11 @@ mod sys {
     /// The names a process of Cineris has in `/proc/<pid>/stat`: its own
     /// two, and this binary's, each cut as the kernel cuts a name (to 15
     /// bytes).
-    fn named(name: &str) -> bool {
+    fn named(own: &Own, name: &str) -> bool {
         let cut = |text: &str| -> String { text.bytes().take(15).map(char::from).collect() };
-        let own = std::env::current_exe().ok().and_then(|exe| {
-            exe.file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-        });
-        name == "cineris" || name == "cin" || own.is_some_and(|own| cut(&own) == name)
+        name == "cineris"
+            || name == "cin"
+            || own.name.as_deref().is_some_and(|own| cut(own) == name)
     }
 
     /// Whether the file `pid` runs is named as Cineris is (`cineris`, `cin`
@@ -298,7 +322,7 @@ mod sys {
     /// Cineris (the full review of the third part). A file that cannot be
     /// read (another user's process) is taken as Cineris's: what it is is
     /// not known.
-    fn file_named(pid: u32) -> bool {
+    fn file_named(own: &Own, pid: u32) -> bool {
         match std::fs::read_link(format!("/proc/{pid}/exe")) {
             Ok(file) => {
                 let name = file
@@ -307,29 +331,45 @@ mod sys {
                     .unwrap_or_default();
                 // A file replaced or removed since it was started.
                 let name = name.strip_suffix(" (deleted)").unwrap_or(&name);
-                let own = std::env::current_exe().ok().and_then(|exe| {
-                    exe.file_name()
-                        .map(|name| name.to_string_lossy().into_owned())
-                });
-                name == "cineris" || name == "cin" || own.is_some_and(|own| own == name)
+                name == "cineris" || name == "cin" || own.name.as_deref() == Some(name)
             }
             Err(_) => true,
         }
     }
 
     /// Whether `pid` runs the very file this process runs.
-    fn same_binary(pid: u32) -> bool {
-        let (Ok(own), Ok(theirs)) = (
-            std::fs::metadata("/proc/self/exe"),
-            std::fs::metadata(format!("/proc/{pid}/exe")),
-        ) else {
+    fn same_binary(own: &Own, pid: u32) -> bool {
+        let (Some(own), Ok(theirs)) = (own.file, std::fs::metadata(format!("/proc/{pid}/exe")))
+        else {
             return false;
         };
-        own.dev() == theirs.dev() && own.ino() == theirs.ino()
+        own == (theirs.dev(), theirs.ino())
     }
 
-    fn seen(pid: u32) -> Seen {
-        let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+    /// `/proc/<pid>/stat`, read whole in one call: the kernel writes the
+    /// record at the first read, and `/proc` gives no size to read by, so
+    /// `read_to_string` asks for one and then grows its buffer from 32 bytes
+    /// (eight calls a process where this makes three). Text that is not
+    /// UTF-8 (a name of any bytes) is an error, as `read_to_string` made it:
+    /// the line is then not known, which refuses.
+    fn stat_of(pid: u32) -> io::Result<String> {
+        use std::io::Read as _;
+        let mut file = std::fs::File::open(format!("/proc/{pid}/stat"))?;
+        let mut buffer = [0_u8; 1024];
+        let mut text = Vec::new();
+        loop {
+            let read = file.read(&mut buffer)?;
+            text.extend_from_slice(&buffer[..read]);
+            // The record ends in a line feed: read to it, and no further.
+            if read == 0 || text.last() == Some(&b'\n') {
+                break;
+            }
+        }
+        String::from_utf8(text).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    }
+
+    fn seen(own: &Own, pid: u32) -> Seen {
+        let stat = match stat_of(pid) {
             Ok(stat) => stat,
             Err(error)
                 if matches!(
@@ -354,7 +394,7 @@ mod sys {
             return Seen::Failed;
         };
         let name = stat.get(open + 1..close).unwrap_or("");
-        let cineris = same_binary(pid) || (named(name) && file_named(pid));
+        let cineris = same_binary(own, pid) || (named(own, name) && file_named(own, pid));
         // Its arguments, when it is Cineris: one that cannot be read is
         // taken as running sessions.
         let harness = cineris
@@ -374,17 +414,61 @@ mod sys {
         /// binary's, as the kernel cuts a name; any other name is not.
         #[test]
         fn cineris_is_told_by_its_names() {
-            assert!(super::named("cineris") && super::named("cin"));
+            let read = super::Own::read();
+            assert!(super::named(&read, "cineris") && super::named(&read, "cin"));
             for other in ["bash", "cineris-x", "Cineris", "ci", ""] {
-                assert!(!super::named(other), "{other}");
+                assert!(!super::named(&read, other), "{other}");
             }
             let own = std::env::current_exe().unwrap();
             let own = own.file_name().unwrap().to_string_lossy();
             let cut: String = own.bytes().take(15).map(char::from).collect();
-            assert!(super::named(&cut), "{cut}");
-            assert!(super::same_binary(std::process::id()));
-            assert!(!super::same_binary(1));
-            assert!(super::file_named(std::process::id()));
+            assert!(super::named(&read, &cut), "{cut}");
+            assert!(super::same_binary(&read, std::process::id()));
+            assert!(!super::same_binary(&read, 1));
+            assert!(super::file_named(&read, std::process::id()));
+        }
+
+        /// A process's `stat` is read whole in one go, to its line feed: its
+        /// own id and its parent's are in it, as the kernel wrote them.
+        #[test]
+        fn a_processs_stat_is_read_whole() {
+            let pid = std::process::id();
+            let stat = super::stat_of(pid).unwrap();
+            assert!(stat.starts_with(&format!("{pid} (")), "{stat}");
+            assert!(stat.ends_with('\n'), "{stat}");
+            let seen = super::seen(&super::Own::read(), pid);
+            assert!(
+                matches!(seen, super::Seen::Of { parent, .. } if parent == std::os::unix::process::parent_id()),
+                "{seen:?}"
+            );
+        }
+
+        /// A process of the line whose name is not UTF-8 is not read as no
+        /// harness: the line is not known, which refuses, as it was before
+        /// `stat` was read in one call (a copy of the harness under such a
+        /// name would otherwise pass for another program).
+        #[test]
+        fn sys_a_name_that_is_not_utf8_leaves_the_line_not_known() {
+            use std::os::unix::ffi::OsStrExt as _;
+            use std::os::unix::fs::PermissionsExt as _;
+            let scratch = cineris_testkit::scratch::Scratch::outside(
+                "cineris-sandbox-session",
+                "sys_a_name_that_is_not_utf8_leaves_the_line_not_known",
+            );
+            let script = scratch.join(std::ffi::OsStr::from_bytes(b"cin\xff"));
+            std::fs::write(&script, "#!/bin/sh\nread -r line\n").unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut child = std::process::Command::new(&script)
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            let comm = std::fs::read(format!("/proc/{pid}/comm")).unwrap();
+            let seen = super::seen(&super::Own::read(), pid);
+            drop(child.stdin.take());
+            child.wait().unwrap();
+            assert_eq!(comm, b"cin\xff\n");
+            assert_eq!(seen, super::Seen::Failed);
         }
 
         /// A process named as Cineris is whose file is another program's
@@ -407,7 +491,7 @@ mod sys {
                 .unwrap();
             let pid = child.id();
             let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap();
-            let seen = super::seen(pid);
+            let seen = super::seen(&super::Own::read(), pid);
             drop(child.stdin.take());
             child.wait().unwrap();
             assert_eq!(comm.trim_end(), "cin");
@@ -436,6 +520,9 @@ struct Listed {
     parent: u32,
     /// Its program's file name, in lower case.
     name: String,
+    /// When it was made, as a `FILETIME`'s count: what its job of
+    /// sessions' commands is named for, if it is a harness.
+    made: u64,
 }
 
 /// What opening a listed process tells.
@@ -503,8 +590,9 @@ const LINE_OF_PARENTS: usize = 64;
 
 /// Whether this process, `own`, was started by a service that starts what
 /// a command asks of it, outside any job (WMI's provider host, the task
-/// host, the service host that runs the task scheduler, `scheduler`: `None`
-/// where it could not be asked, when any service host counts), directly or
+/// host, the service host that runs the task scheduler, which `scheduler`
+/// asks for, only once the line reaches a service host: `None` where it
+/// could not be asked, when any service host counts), directly or
 /// through command interpreters and runtimes ([`passes_through`]: `cmd /c
 /// cin …`, `python -c …`): the full review of the third part, H1, and its
 /// narrow re-check, M2'. The line is followed up through those alone, each
@@ -527,7 +615,7 @@ fn started_by_a_service(
     listed: &[Listed],
     own: u32,
     opened: impl Fn(u32) -> Opened,
-    scheduler: Option<u32>,
+    scheduler: impl Fn() -> Option<u32>,
     began: Option<u64>,
 ) -> Under {
     let find = |pid: u32| listed.iter().find(|process| process.pid == pid);
@@ -554,14 +642,19 @@ fn started_by_a_service(
             return Under::Nothing;
         }
         let name = above.name.as_str();
+        // The service manager is asked which host runs the scheduler only
+        // here, where the line reached a service host: a line that never
+        // does (a terminal's, a runner's) asks it nothing. The line ends at
+        // the first service host, so it is asked once at most.
+        let asked = (name == "svchost.exe").then(&scheduler);
         let schedules =
-            name == "svchost.exe" && scheduler.is_none_or(|scheduler| scheduler == parent);
+            asked.is_some_and(|scheduler| scheduler.is_none_or(|scheduler| scheduler == parent));
         if SERVICE_STARTERS.contains(&name) || schedules {
             // `made` is when the process the service started, `at`, was.
             if began.is_none_or(|began| made <= began) {
                 return Under::Nothing;
             }
-            let which = if schedules && scheduler.is_none() {
+            let which = if schedules && asked == Some(None) {
                 "a service host, and which service it runs could not be asked"
             } else if schedules {
                 "the task scheduler's service host"
@@ -593,27 +686,24 @@ fn started_by_a_service(
               cineris-sandbox is where such calls live"
 )]
 mod sys {
-    use std::collections::HashMap;
     use std::io;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
     use std::ptr;
     use std::sync::OnceLock;
 
     use super::{Listed, Opened, Under, job_name, started_by_a_service};
-    use windows_sys::Win32::Foundation::{
-        ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, FALSE, FILETIME, HANDLE, INVALID_HANDLE_VALUE,
-        LocalFree, SetLastError,
+    use windows_sys::Wdk::System::SystemInformation::{
+        NtQuerySystemInformation, SystemProcessInformation,
     };
-    use windows_sys::Win32::Security::Authorization::{
-        ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
-        SDDL_REVISION_1,
+    use windows_sys::Win32::Foundation::{
+        ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, FALSE, FILETIME, HANDLE, LocalFree,
+        STATUS_INFO_LENGTH_MISMATCH, SetLastError,
     };
     use windows_sys::Win32::Security::{
-        GetTokenInformation, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
-    };
-    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
-        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
-        TH32CS_SNAPPROCESS,
+        ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, CreateWellKnownSid,
+        GetLengthSid, GetTokenInformation, InitializeAcl, InitializeSecurityDescriptor, PSID,
+        SE_DACL_PROTECTED, SECURITY_ATTRIBUTES, SECURITY_DESCRIPTOR, SetSecurityDescriptorControl,
+        SetSecurityDescriptorDacl, TOKEN_QUERY, TOKEN_USER, TokenUser, WinCreatorOwnerRightsSid,
     };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_LIMIT_BREAKAWAY_OK,
@@ -628,6 +718,7 @@ mod sys {
         GetCurrentProcess, GetCurrentProcessId, GetProcessTimes, OpenProcess, OpenProcessToken,
         PROCESS_QUERY_LIMITED_INFORMATION,
     };
+    use windows_sys::Win32::System::WindowsProgramming::SYSTEM_PROCESS_INFORMATION;
 
     /// The variables that place Cineris's configuration and stores on
     /// Windows.
@@ -711,29 +802,124 @@ mod sys {
             .then(|| (u64::from(times[0].dwHighDateTime) << 32) | u64::from(times[0].dwLowDateTime))
     }
 
+    /// `winnt.h`'s `SECURITY_DESCRIPTOR_REVISION`.
+    const SECURITY_DESCRIPTOR_REVISION: u32 = 1;
+
     /// The job's security: open by its name to its user and its owner only,
-    /// and only to ask ([`BY_NAME`]); `P`, so that nothing is inherited.
-    pub(super) struct OwnerOnly(*mut core::ffi::c_void);
+    /// and only to ask ([`BY_NAME`]); protected, so that nothing is
+    /// inherited. The same as the text `D:P(A;;BY_NAME;;;<user>)(A;;
+    /// BY_NAME;;;OW)`, built from its parts: the text's first conversion in
+    /// a process (with the user's SID written out for it) cost a headless
+    /// run's start 0.5 ms on a hosted runner (step 28's third pull request).
+    pub(super) struct OwnerOnly {
+        /// What `lpSecurityDescriptor` is given.
+        descriptor: *mut core::ffi::c_void,
+        /// A descriptor built here and the list it points at, which live
+        /// as long as it; `None` for one from text, which `LocalFree`
+        /// frees.
+        built: Option<(Box<SECURITY_DESCRIPTOR>, Vec<u32>)>,
+    }
 
     impl Drop for OwnerOnly {
         fn drop(&mut self) {
-            // SAFETY: the descriptor was given by
-            // `ConvertStringSecurityDescriptorToSecurityDescriptorW`, to be
-            // freed with `LocalFree`, once.
-            unsafe { LocalFree(self.0) };
+            if self.built.is_none() {
+                // SAFETY: the descriptor was given by
+                // `ConvertStringSecurityDescriptorToSecurityDescriptorW`, to
+                // be freed with `LocalFree`, once.
+                unsafe { LocalFree(self.descriptor) };
+            }
         }
     }
 
     impl OwnerOnly {
         pub(super) fn new() -> io::Result<Self> {
-            Self::from_sddl(&format!(
-                "D:P(A;;0x{BY_NAME:x};;;{})(A;;0x{BY_NAME:x};;;OW)",
-                user_sid()?
-            ))
+            let failed = |asked: i32| {
+                if asked == 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            };
+            // Room for the user's SID, aligned for the structure's pointer;
+            // filled in place, as the SID's pointer points into it.
+            let mut user = [0_u64; 32];
+            user_into(&mut user)?;
+            // SAFETY: the call wrote a `TOKEN_USER` at the buffer's start,
+            // whose SID points into the same buffer, which has not moved and
+            // lives through every use below (each entry copies the SID).
+            let user_sid = unsafe { (*user.as_ptr().cast::<TOKEN_USER>()).User.Sid };
+            // `OW`, OWNER RIGHTS (S-1-3-4): room for the largest SID.
+            let mut owner = [0_u32; 17];
+            let mut owner_size = u32::try_from(std::mem::size_of_val(&owner)).unwrap_or(0);
+            // SAFETY: a buffer as large as said, for a SID that needs no
+            // domain.
+            failed(unsafe {
+                CreateWellKnownSid(
+                    WinCreatorOwnerRightsSid,
+                    ptr::null_mut(),
+                    owner.as_mut_ptr().cast(),
+                    &raw mut owner_size,
+                )
+            })?;
+            let owner_sid: PSID = owner.as_mut_ptr().cast();
+            // The list: its header, and each entry's header with its SID in
+            // place of the entry's last field.
+            let entry = |sid: PSID| {
+                // SAFETY: a valid SID, made or given above.
+                let sid = usize::try_from(unsafe { GetLengthSid(sid) }).unwrap_or(0);
+                std::mem::size_of::<ACCESS_ALLOWED_ACE>() - std::mem::size_of::<u32>() + sid
+            };
+            let length = std::mem::size_of::<ACL>() + entry(user_sid) + entry(owner_sid);
+            let mut list = vec![0_u32; length.div_ceil(4)];
+            let length = u32::try_from(list.len() * 4).unwrap_or(0);
+            let list_pointer: *mut ACL = list.as_mut_ptr().cast();
+            // SAFETY: the list's memory is as large as said, aligned for an
+            // `ACL`, and lives as long as the descriptor; each SID is valid.
+            unsafe {
+                failed(InitializeAcl(list_pointer, length, ACL_REVISION))?;
+                failed(AddAccessAllowedAce(
+                    list_pointer,
+                    ACL_REVISION,
+                    BY_NAME,
+                    user_sid,
+                ))?;
+                failed(AddAccessAllowedAce(
+                    list_pointer,
+                    ACL_REVISION,
+                    BY_NAME,
+                    owner_sid,
+                ))?;
+            }
+            // SAFETY: the structure is plain data, for which all zeroes is
+            // valid.
+            let mut descriptor: Box<SECURITY_DESCRIPTOR> = Box::new(unsafe { std::mem::zeroed() });
+            let pointer: *mut core::ffi::c_void = (&raw mut *descriptor).cast();
+            // SAFETY: `pointer` is a live descriptor, which points at the
+            // list; both are kept in what is returned.
+            unsafe {
+                failed(InitializeSecurityDescriptor(
+                    pointer,
+                    SECURITY_DESCRIPTOR_REVISION,
+                ))?;
+                failed(SetSecurityDescriptorDacl(pointer, 1, list_pointer, 0))?;
+                failed(SetSecurityDescriptorControl(
+                    pointer,
+                    SE_DACL_PROTECTED,
+                    SE_DACL_PROTECTED,
+                ))?;
+            }
+            Ok(Self {
+                descriptor: pointer,
+                built: Some((descriptor, list)),
+            })
         }
 
-        /// A descriptor from its text.
+        /// A descriptor from its text (a test's: one nobody may open).
+        #[cfg(test)]
         pub(super) fn from_sddl(text: &str) -> io::Result<Self> {
+            use windows_sys::Win32::Security::Authorization::{
+                ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+            };
             let text = wide(text);
             let mut descriptor = ptr::null_mut();
             // SAFETY: a text that ends in a nul, and a live pointer for the
@@ -749,21 +935,26 @@ mod sys {
             if made == 0 {
                 return Err(io::Error::last_os_error());
             }
-            Ok(Self(descriptor))
+            Ok(Self {
+                descriptor,
+                built: None,
+            })
         }
 
         pub(super) fn attributes(&self) -> SECURITY_ATTRIBUTES {
             SECURITY_ATTRIBUTES {
                 nLength: u32::try_from(std::mem::size_of::<SECURITY_ATTRIBUTES>())
                     .unwrap_or(u32::MAX),
-                lpSecurityDescriptor: self.0,
+                lpSecurityDescriptor: self.descriptor,
                 bInheritHandle: FALSE,
             }
         }
     }
 
-    /// This process's user, as a SID's text (`S-1-5-21-…`).
-    fn user_sid() -> io::Result<String> {
+    /// This process's user, as the token gives it, written into `buffer`: a
+    /// `TOKEN_USER` at its start, whose SID points within it (so the buffer
+    /// is filled where it stays, and not returned by value).
+    fn user_into(buffer: &mut [u64; 32]) -> io::Result<()> {
         let mut token: HANDLE = ptr::null_mut();
         // SAFETY: the pseudo-handle is always valid, and `token` is a live
         // handle's place.
@@ -772,8 +963,6 @@ mod sys {
         }
         // SAFETY: `token` was just opened and nothing else owns it.
         let token = unsafe { OwnedHandle::from_raw_handle(token) };
-        // Room for the user's SID, aligned for the structure's pointer.
-        let mut buffer = [0u64; 32];
         let mut needed = 0u32;
         // SAFETY: `token` is open to query, and the buffer is as large as
         // said and aligned for `TOKEN_USER`.
@@ -782,30 +971,14 @@ mod sys {
                 token.as_raw_handle(),
                 TokenUser,
                 buffer.as_mut_ptr().cast(),
-                u32::try_from(std::mem::size_of_val(&buffer)).unwrap_or(0),
+                u32::try_from(std::mem::size_of_val(buffer)).unwrap_or(0),
                 &raw mut needed,
             )
         };
         if asked == 0 {
             return Err(io::Error::last_os_error());
         }
-        // SAFETY: the call wrote a `TOKEN_USER` at the buffer's start.
-        let sid = unsafe { (*buffer.as_ptr().cast::<TOKEN_USER>()).User.Sid };
-        let mut text = ptr::null_mut();
-        // SAFETY: `sid` points into the buffer, which lives through the
-        // call; the text is allocated by it.
-        if unsafe { ConvertSidToStringSidW(sid, &raw mut text) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
-        // SAFETY: `text` is a nul-terminated wide string the call made.
-        let length = (0..)
-            .take_while(|at| unsafe { *text.add(*at) } != 0)
-            .count();
-        // SAFETY: as above, `length` characters before the nul.
-        let said = String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(text, length) });
-        // SAFETY: allocated by the call, to be freed with `LocalFree`, once.
-        unsafe { LocalFree(text.cast()) };
-        Ok(said)
+        Ok(())
     }
 
     /// Whether the job lets the processes in it leave (`BREAKAWAY_OK` or
@@ -948,64 +1121,128 @@ mod sys {
         found.flatten()
     }
 
-    pub(super) fn under_a_session() -> Under {
-        // SAFETY: the call takes two integers; for a list of processes the
-        // second is not used.
-        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
-        if snapshot == INVALID_HANDLE_VALUE {
-            return Under::Unknown(format!(
-                "the system's processes could not be listed: {}",
-                io::Error::last_os_error()
-            ));
+    /// Every process of the system, with its parent, its program's file
+    /// name and when it was made, in one call (`SystemProcessInformation`).
+    /// The toolhelp snapshot this replaced mapped its copy again for each
+    /// process it listed, and each process was then opened to ask when it
+    /// was made: 1.9 ms and 0.35 ms of a headless run's start on a hosted
+    /// runner with 144 processes (step 28's third pull request).
+    pub(super) fn processes() -> io::Result<Vec<Listed>> {
+        // Room for several hundred processes and their threads, grown to
+        // what the call says it needs when the system has more. It is not
+        // zeroed: the call writes what it fills, and only that is read.
+        let mut size: u32 = 1024 * 1024;
+        for _ in 0..8 {
+            let mut buffer: Vec<u64> = Vec::with_capacity((size as usize).div_ceil(8));
+            let mut filled = 0u32;
+            // SAFETY: the buffer's room is as large as said, aligned for
+            // the records, and lives through the call; `filled` is a live
+            // `u32`.
+            let status = unsafe {
+                NtQuerySystemInformation(
+                    SystemProcessInformation,
+                    buffer.as_mut_ptr().cast(),
+                    size,
+                    &raw mut filled,
+                )
+            };
+            if status == STATUS_INFO_LENGTH_MISMATCH {
+                size = filled.max(size).saturating_mul(2);
+                continue;
+            }
+            if status < 0 {
+                return Err(io::Error::other(format!(
+                    "the system's processes could not be asked (status {status:#010x})"
+                )));
+            }
+            let filled = usize::try_from(filled)
+                .unwrap_or(usize::MAX)
+                .min(buffer.capacity() * 8);
+            // SAFETY: the call wrote the first `filled` bytes of the room,
+            // which is at least that large.
+            let written =
+                unsafe { std::slice::from_raw_parts(buffer.as_ptr().cast::<u8>(), filled) };
+            return Ok(records(written));
         }
-        // SAFETY: `snapshot` was just made and nothing else owns it.
-        let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
-        // SAFETY: the structure is plain data, for which all zeroes is valid.
-        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
-        entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(u32::MAX);
+        Err(io::Error::other(
+            "the system's processes outgrew every buffer they were asked into",
+        ))
+    }
+
+    /// The records the call wrote, `written`: each read where it lies, and
+    /// only from within what was written.
+    fn records(written: &[u8]) -> Vec<Listed> {
+        let bytes = written.len();
+        let base = written.as_ptr();
+        let record = std::mem::size_of::<SYSTEM_PROCESS_INFORMATION>();
         let mut listed = Vec::new();
-        let mut times = HashMap::new();
+        let mut at = 0_usize;
+        while at.checked_add(record).is_some_and(|end| end <= bytes) {
+            // SAFETY: the record lies within what the call wrote (checked
+            // above), and is read whatever its alignment.
+            let entry: SYSTEM_PROCESS_INFORMATION =
+                unsafe { ptr::read_unaligned(base.add(at).cast()) };
+            // `CreateTime`, in the reserved bytes after the two counts at
+            // its start (`winternl.h` leaves it unnamed): the same count
+            // `GetProcessTimes` gives, which a harness names its job by.
+            let mut made = [0_u8; 8];
+            made.copy_from_slice(&entry.Reserved1[24..32]);
+            // The name points into the same buffer; one that does not, or
+            // runs past what was written, is left empty.
+            let length = usize::from(entry.ImageName.Length);
+            let name = (entry.ImageName.Buffer as usize)
+                .checked_sub(base as usize)
+                .and_then(|offset| written.get(offset..offset.checked_add(length)?))
+                .map_or_else(String::new, |raw| {
+                    let units: Vec<u16> = raw
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|unit| u16::from_le_bytes(*unit))
+                        .collect();
+                    String::from_utf16_lossy(&units).to_lowercase()
+                });
+            listed.push(Listed {
+                pid: u32::try_from(entry.UniqueProcessId as usize).unwrap_or(u32::MAX),
+                // `InheritedFromUniqueProcessId`, unnamed in `winternl.h`.
+                parent: u32::try_from(entry.Reserved2 as usize).unwrap_or(u32::MAX),
+                name,
+                made: u64::from_le_bytes(made),
+            });
+            if entry.NextEntryOffset == 0 {
+                break;
+            }
+            at += entry.NextEntryOffset as usize;
+        }
+        listed
+    }
+
+    pub(super) fn under_a_session() -> Under {
+        let listed = match processes() {
+            Ok(listed) => listed,
+            Err(error) => {
+                return Under::Unknown(format!(
+                    "the system's processes could not be listed: {error}"
+                ));
+            }
+        };
         // When the earliest harness of this user that runs now was made.
         let mut began: Option<u64> = None;
-        // SAFETY: `snapshot` is open, and `entry` is a writable entry whose
-        // `dwSize` says how large it is.
-        let mut more = unsafe { Process32FirstW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
-        while more {
-            let pid = entry.th32ProcessID;
-            let length = entry
-                .szExeFile
-                .iter()
-                .position(|unit| *unit == 0)
-                .unwrap_or(entry.szExeFile.len());
-            listed.push(Listed {
-                pid,
-                parent: entry.th32ParentProcessID,
-                name: String::from_utf16_lossy(&entry.szExeFile[..length]).to_lowercase(),
-            });
-            let seen = opened(pid);
-            times.insert(pid, seen);
-            // A harness's job is named for its process's instance: one this
-            // user may not open (another user's, the system's) is no
-            // harness of this process's, whose commands run as its user.
-            if let Opened::Made(made) = seen {
-                match in_the_job_of(pid, made) {
-                    Job::None => {}
-                    Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made))),
-                    Job::Holds(under) => return under,
+        for process in &listed {
+            match in_the_job_of(process.pid, process.made) {
+                Job::None => {}
+                Job::Elsewhere => {
+                    began = Some(began.map_or(process.made, |began| began.min(process.made)));
                 }
+                Job::Holds(under) => return under,
             }
-            // SAFETY: as for `Process32FirstW`.
-            more = unsafe { Process32NextW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
         }
         // SAFETY: plain call.
         let own = unsafe { GetCurrentProcessId() };
-        started_by_a_service(
-            &listed,
-            own,
-            |pid| times.get(&pid).copied().unwrap_or(Opened::Closed),
-            scheduler(),
-            began,
-        )
+        // Only the processes on its line are opened, to ask when each was
+        // made and whether this user may; the service manager is asked only
+        // where the line reaches a service host.
+        started_by_a_service(&listed, own, opened, scheduler, began)
     }
 
     /// Where this process stands to the job of sessions' commands of the
@@ -1024,14 +1261,25 @@ mod sys {
     /// opened or asked, for any reason but there being none, is not known,
     /// which refuses (the full review of the third part: a job made to deny
     /// its opening must not read as no job).
+    ///
+    /// **Only a process this user may open is a harness of this one's**
+    /// (another user's, the system's, are not: its commands run as its
+    /// user). The job's name is tried first, with when the process was made
+    /// as the list of processes gives it, and the process is opened only
+    /// where there is a job of that name, or one that could not be told
+    /// from none: most processes run no sessions, and opening each cost a
+    /// headless run's start 0.35 ms on a hosted runner.
     fn in_the_job_of(pid: u32, made: u64) -> Job {
+        // The process, this user's and the same instance (a process that
+        // has gone, whose id is another's now, is not).
+        let harness = || opened(pid) == Opened::Made(made);
         let name = wide(&job_name(pid, made));
         // SAFETY: plain values, and a name that ends in a nul and lives
         // through the call.
         let handle = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, FALSE, name.as_ptr()) };
         if handle.is_null() {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() {
+            if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() || !harness() {
                 return Job::None;
             }
             return Job::Holds(Under::Unknown(format!(
@@ -1040,6 +1288,9 @@ mod sys {
         }
         // SAFETY: `handle` was just opened and nothing else owns it.
         let job = unsafe { OwnedHandle::from_raw_handle(handle) };
+        if !harness() {
+            return Job::None;
+        }
         let mut inside = FALSE;
         // SAFETY: the pseudo-handle has every right, `job` is open with
         // `JOB_OBJECT_QUERY`, both live through the call, and `inside` is a
@@ -1149,6 +1400,7 @@ mod tests {
                 pid: *pid,
                 parent: *parent,
                 name: (*name).to_owned(),
+                made: u64::from(*pid),
             })
             .collect()
     }
@@ -1196,8 +1448,9 @@ mod tests {
             505 => Opened::Made(2_000),
             _ => Opened::Made(u64::from(pid)),
         };
-        let under =
-            |own, scheduler| started_by_a_service(&processes, own, opened, scheduler, Some(0));
+        let under = |own, scheduler: Option<u32>| {
+            started_by_a_service(&processes, own, opened, move || scheduler, Some(0))
+        };
         assert!(
             matches!(under(100, Some(600)), Under::Session(_)),
             "WMI, through cmd"
@@ -1304,7 +1557,7 @@ mod tests {
             _ => Opened::Made(u64::from(pid)),
         };
         // Process 104 runs the task scheduler.
-        let under = |own| started_by_a_service(&processes, own, opened, Some(104), Some(0));
+        let under = |own| started_by_a_service(&processes, own, opened, || Some(104), Some(0));
         for (own, through) in [
             (100, "python"),
             (110, "a versioned python"),
@@ -1362,9 +1615,9 @@ mod tests {
             4 | 40 | 45 | 46 => Opened::Closed,
             _ => Opened::Made(u64::from(pid)),
         };
-        let under = |own, scheduler, began| {
+        let under = |own, scheduler: Option<u32>, began| {
             matches!(
-                started_by_a_service(&processes, own, opened, scheduler, began),
+                started_by_a_service(&processes, own, opened, move || scheduler, began),
                 Under::Session(_)
             )
         };
@@ -1376,6 +1629,49 @@ mod tests {
         assert!(under(320, Some(45), Some(100)), "WMI's, after");
         assert!(!under(320, Some(45), Some(320)), "WMI's, not after");
         assert!(!under(320, Some(45), None), "WMI's, no harness running");
+    }
+
+    /// The service manager is asked which host runs the task scheduler only
+    /// when the line reaches a service host, and once: a headless run's
+    /// line from a terminal or a runner's step, which never does, pays
+    /// nothing for it (its start-up, since step 28's third pull request).
+    #[test]
+    fn the_scheduler_is_asked_only_where_the_line_reaches_a_service_host() {
+        let processes = listed(&[
+            (100, 90, "cin.exe"),
+            (90, 80, "pwsh.exe"),
+            (80, 70, "windowsterminal.exe"),
+            (200, 190, "cin.exe"),
+            (190, 180, "cmd.exe"),
+            (180, 4, "wmiprvse.exe"),
+            (300, 290, "cin.exe"),
+            (290, 280, "cmd.exe"),
+            (280, 600, "svchost.exe"),
+            (600, 4, "services.exe"),
+        ]);
+        let opened = |pid: u32| match pid {
+            4 | 180 | 280 | 600 => Opened::Closed,
+            _ => Opened::Made(u64::from(pid)),
+        };
+        let asked = std::cell::Cell::new(0);
+        let scheduler = || {
+            asked.set(asked.get() + 1);
+            Some(280)
+        };
+        assert_eq!(
+            started_by_a_service(&processes, 100, opened, scheduler, Some(0)),
+            Under::Nothing
+        );
+        assert!(matches!(
+            started_by_a_service(&processes, 200, opened, scheduler, Some(0)),
+            Under::Session(_)
+        ));
+        assert_eq!(asked.get(), 0, "no service host on either line");
+        assert!(matches!(
+            started_by_a_service(&processes, 300, opened, scheduler, Some(0)),
+            Under::Session(_)
+        ));
+        assert_eq!(asked.get(), 1, "asked once, at the service host");
     }
 
     /// A harness's job is named for its process's instance: the same id
