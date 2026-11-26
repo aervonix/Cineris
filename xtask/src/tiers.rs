@@ -341,6 +341,37 @@ pub(crate) fn start_warning(os: Os, start: f64, sample: usize) -> Option<String>
     ))
 }
 
+/// A usual runner's start of a test's process: the speed the tier budgets
+/// are held at. A run whose start is above it is judged as if on a usual
+/// runner ([`slower`]). Read from `main`'s runs: 6 ms on Windows, where
+/// runners start a test in 5 to 12 ms, and 4 ms on Linux, 3 to 5 ms
+/// (docs/steps/ci-budgets-2/answered.md, "Judging a tier against the
+/// runner's speed").
+pub(crate) fn usual_start(os: Os) -> f64 {
+    match os {
+        Os::Linux => 0.004,
+        Os::Windows => 0.006,
+    }
+}
+
+/// The most a tier is taken to be slowed by its runner: a run on a runner
+/// slower than this is judged as one this slow.
+const MOST_SLOWER: f64 = 2.0;
+
+/// How many times slower than a usual runner this run's was, read from the
+/// start of its tests' processes: 1 on a usual runner or a faster one, and
+/// on a run of too few tests to measure its start, at most [`MOST_SLOWER`].
+/// A slow runner is slower at the tests' work as well as at starting them:
+/// one tree read Windows' integration tier at 44.6 s on a 6 ms runner and
+/// 55.2 s on an 8 ms one, 1.24 times, where the start was 1.33 times. A
+/// tier is held to its budget at its time above the start divided by this.
+pub(crate) fn slower(os: Os, start: f64, sample: usize) -> f64 {
+    if sample < SMALL_SAMPLE || !start.is_finite() {
+        return 1.0;
+    }
+    (start / usual_start(os)).clamp(1.0, MOST_SLOWER)
+}
+
 /// A tier fails the job only when it is this many times over its budget.
 /// Hosted runners vary by tens of percent from one run to the next, more on
 /// Windows, so a failure at exactly the budget would turn a tier that is
@@ -428,10 +459,12 @@ fn summarise_marked(
     marked: impl Fn(Tier) -> bool,
 ) -> (String, Vec<(Tier, Verdict)>) {
     let (start, sample) = start_of(cases);
-    let mut table = format!(
-        "  {}\n  tier             tests   time    above start  budget  used\n",
-        start_line(start, sample)
-    );
+    let slower = slower(os, start, sample);
+    let mut table = format!("  {}\n", start_line(start, sample));
+    if slower > 1.0 {
+        let _ = writeln!(table, "  {}", speed_line(os, start, slower));
+    }
+    table.push_str("  tier             tests   time    above start  budget  used\n");
     let mut over = Vec::new();
     for tier in Tier::ALL {
         let Totals {
@@ -440,16 +473,22 @@ fn summarise_marked(
             above_start,
         } = total(cases, tier, start);
         let budget = tier.budget(os);
-        let used = 100.0 * above_start / budget;
-        let verdict = verdict(above_start, budget).filter(|_| marked(tier));
+        let judged = above_start / slower;
+        let used = 100.0 * judged / budget;
+        let verdict = verdict(judged, budget).filter(|_| marked(tier));
         let mark = match verdict {
             None => "",
             Some(Verdict::OverBudget) => "  over budget (warning)",
             Some(Verdict::Failing) => "  FAR OVER BUDGET",
         };
+        let at_usual = if slower > 1.0 {
+            format!("  (judged at {judged:.1} s)")
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             table,
-            "  {:<15}  {count:>5}  {seconds:>5.1} s  {above_start:>9.1} s  {budget:>4.0} s  {used:>3.0}%{mark}",
+            "  {:<15}  {count:>5}  {seconds:>5.1} s  {above_start:>9.1} s  {budget:>4.0} s  {used:>3.0}%{at_usual}{mark}",
             tier.name(),
         );
         if let Some(verdict) = verdict {
@@ -461,8 +500,17 @@ fn summarise_marked(
 
 fn markdown(cases: &[TestCase], os: Os) -> String {
     let (start, sample) = start_of(cases);
+    let slower = slower(os, start, sample);
+    let speed = if slower > 1.0 {
+        format!(
+            " {}.",
+            speed_line(os, start, slower).replacen("runner speed: ", "The runner's speed: ", 1)
+        )
+    } else {
+        String::new()
+    };
     let mut table = format!(
-        "The {}.\n\n| Tier | Tests | Time | Above start | Budget | Used |\n\
+        "The {}.{speed}\n\n| Tier | Tests | Time | Above start | Budget | Used |\n\
          |---|---:|---:|---:|---:|---:|\n",
         start_line(start, sample).replacen("process start: ", "start of a test's process: ", 1)
     );
@@ -473,14 +521,31 @@ fn markdown(cases: &[TestCase], os: Os) -> String {
             above_start,
         } = total(cases, tier, start);
         let budget = tier.budget(os);
+        let judged = above_start / slower;
+        let at_usual = if slower > 1.0 {
+            format!(" (judged at {judged:.1} s)")
+        } else {
+            String::new()
+        };
         let _ = writeln!(
             table,
-            "| {} | {count} | {seconds:.1} s | {above_start:.1} s | {budget:.0} s | {:.0}% |",
+            "| {} | {count} | {seconds:.1} s | {above_start:.1} s | {budget:.0} s | {:.0}%{at_usual} |",
             tier.name(),
-            100.0 * above_start / budget,
+            100.0 * judged / budget,
         );
     }
     table
+}
+
+/// What the report says of a run on a runner slower than a usual one.
+fn speed_line(os: Os, start: f64, slower: f64) -> String {
+    format!(
+        "runner speed: {:.0} ms a test against a usual runner's {:.0} ms, so each tier is held to \
+         its budget at its time above the start divided by {slower:.2}, its time on a usual \
+         runner (at most {MOST_SLOWER:.0} times)",
+        1000.0 * start,
+        1000.0 * usual_start(os),
+    )
 }
 
 /// How many crates the terminal report lists by name; the rest are one
@@ -682,8 +747,8 @@ mod tests {
 
     use super::{
         Os, SMALL_SAMPLE, Tier, Totals, Verdict, by_crate, crate_of, crates_markdown, crates_text,
-        markdown, slowest_markdown, slowest_tests, start_cost, start_warning, summarise, total,
-        verdict,
+        markdown, slower, slowest_markdown, slowest_tests, start_cost, start_warning, summarise,
+        total, verdict,
     };
     use crate::junit::tests::case;
     use crate::junit::{self, TestCase};
@@ -917,6 +982,47 @@ mod tests {
     }
 
     #[test]
+    fn a_tier_is_judged_at_a_usual_runners_speed() {
+        // A usual runner, a faster one, and a run too small to tell.
+        assert_eq!(slower(Os::Windows, 0.006, 2000), 1.0);
+        assert_eq!(slower(Os::Windows, 0.005, 2000), 1.0);
+        assert_eq!(slower(Os::Windows, 0.012, 100), 1.0);
+        assert_eq!(slower(Os::Linux, 0.004, 2000), 1.0);
+        // An 8 ms Windows runner is a third slower; no runner counts as more
+        // than twice.
+        assert!((slower(Os::Windows, 0.008, 2000) - 4.0 / 3.0).abs() < 1e-9);
+        assert!((slower(Os::Linux, 0.006, 2000) - 1.5).abs() < 1e-9);
+        assert_eq!(slower(Os::Windows, 0.030, 2000), 2.0);
+    }
+
+    #[test]
+    fn a_slow_runners_tier_is_held_to_its_budget_at_a_usual_runners_speed() {
+        // 600 quick tests that start at 8 ms, and integration tests of 48 s
+        // above that: over the budget of 40 s as they are, and 36 s at a
+        // usual 6 ms runner's speed.
+        let mut cases: Vec<TestCase> = (0..600)
+            .map(|i| case("cineris-base", &format!("tests::quick_{i}"), 0.008))
+            .collect();
+        cases.extend((0..8).map(|i| case("cineris-core::it", &format!("slow_{i}"), 6.008)));
+        let (table, over) = summarise(&cases, Os::Windows);
+        assert_eq!(over, [], "{table}");
+        assert!(
+            table.contains("runner speed: 8 ms a test against a usual runner's 6 ms"),
+            "{table}"
+        );
+        assert!(table.contains("(judged at 36.0 s)"), "{table}");
+
+        // The same tests on a usual runner are over the budget.
+        let usual: Vec<TestCase> = cases
+            .iter()
+            .map(|test| case(&test.binary, &test.name, test.seconds - 0.002))
+            .collect();
+        let (table, over) = summarise(&usual, Os::Windows);
+        assert_eq!(over, [(Tier::Integration, Verdict::OverBudget)], "{table}");
+        assert!(!table.contains("judged at"), "{table}");
+    }
+
+    #[test]
     fn the_system_tier_has_more_room_on_windows() {
         // 75 s of system tests: over 60 s, inside 90 s.
         let cases: Vec<TestCase> = (0..5)
@@ -986,9 +1092,13 @@ mod tests {
         assert!(table.contains("24.0 s        0.0 s"), "{table}");
         // Two thousand tests are enough to measure the start on.
         assert!(!table.contains("fewer than"), "{table}");
-        // One test that takes 26 s puts it over, as it should.
+        // One test that takes 30 s is 15 s at a usual runner's speed, this
+        // runner being twice as slow (held to the raw total, the tier would
+        // be 27 s, over); two that take 51 s put it over.
         let mut slow = cases;
-        slow.push(case("cineris-base", "tests::slow", 26.0));
+        slow.push(case("cineris-base", "tests::slow", 30.0));
+        assert_eq!(summarise(&slow, Os::Windows).1, []);
+        slow.push(case("cineris-base", "tests::slower", 21.0));
         assert_eq!(
             summarise(&slow, Os::Windows).1,
             [(Tier::Unit, Verdict::OverBudget)]

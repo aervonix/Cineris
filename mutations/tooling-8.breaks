@@ -1358,8 +1358,8 @@ caught-by:
 rule: A run that is not judged has no mark on a tier, over budget or far over it.
 file: xtask/src/tiers.rs
 in: summarise_marked
-find: verdict(above_start, budget).filter(|_| marked(tier))
-replace: verdict(above_start, budget)
+find: verdict(judged, budget).filter(|_| marked(tier))
+replace: verdict(judged, budget)
 caught-by:
     tiers::tests::a_run_that_is_not_judged_has_no_mark_on_any_tier
 

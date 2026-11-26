@@ -6,8 +6,8 @@
 rule: A tier is held to its budget by its total above the start of its tests' processes, not by its raw total.
 file: xtask/src/tiers.rs
 in: summarise_marked
-find: let verdict = verdict(above_start, budget)
-replace: let verdict = verdict(seconds, budget)
+find: let judged = above_start / slower;
+replace: let judged = seconds / slower;
 caught-by:
     tiers::tests::a_slow_runner_alone_does_not_put_a_tier_over_its_budget
 
