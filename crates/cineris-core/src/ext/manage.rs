@@ -247,13 +247,17 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                 (Source::User, Ok(pins), _) => pins
                     .get(&TrustResourceKind::Extension, &name)
                     .map(|pin| (pin.hash, pin.at.as_str().to_owned())),
-                (Source::Project, _, Ok(trust)) => judging
+                // The session's approval first, whether or not the trust
+                // store can be read, as the session's finding looks.
+                (Source::Project, _, trust) => judging
                     .for_the_run
                     .iter()
                     .find(|run| run.kind == TrustResourceKind::Extension && run.name == name)
                     .map(|run| (run.hash, "for this session".to_owned()))
                     .or_else(|| {
                         trust
+                            .as_ref()
+                            .ok()?
                             .pinned_of(&TrustResourceKind::Extension)
                             .into_iter()
                             .find(|(pinned, _)| *pinned == name)
@@ -272,11 +276,14 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                         .to_owned(),
                 ),
                 Source::Project if !judging.project_trusted => ExtensionStanding::ProjectNotTrusted,
+                // Approved for this session by a yes the store could not
+                // keep: so whether or not the store can be read now, as the
+                // session's finding judges it, which loads it.
+                Source::Project if judging.for_the_run.contains(&definition) => {
+                    ExtensionStanding::Approved
+                }
                 Source::Project => match &judging.trust {
                     Err(why) => ExtensionStanding::Unjudged(why.clone()),
-                    Ok(_) if judging.for_the_run.contains(&definition) => {
-                        ExtensionStanding::Approved
-                    }
                     Ok(trust) => of_policy(trust.standing(&definition)),
                 },
             };
@@ -447,11 +454,30 @@ pub struct ToAdd {
     pub commands: Vec<(String, String)>,
     /// Whether it was evaluated: what it registers is known.
     pub evaluated: bool,
+    // What a yes writes and pins. Without the script engine `cineris ext
+    // add` refuses before any yes (`cineris-cli`'s `no_script_engine`), so
+    // nothing reads them.
+    #[cfg_attr(
+        not(feature = "scripts"),
+        expect(dead_code, reason = "without the script engine no extension is added")
+    )]
     snapshot: Arc<Snapshot>,
+    #[cfg_attr(
+        not(feature = "scripts"),
+        expect(dead_code, reason = "without the script engine no extension is added")
+    )]
     manifest: Manifest,
     #[cfg(feature = "scripts")]
     registration: Option<cineris_ext::registration::Registration>,
+    #[cfg_attr(
+        not(feature = "scripts"),
+        expect(dead_code, reason = "without the script engine no extension is added")
+    )]
     root: PathBuf,
+    #[cfg_attr(
+        not(feature = "scripts"),
+        expect(dead_code, reason = "without the script engine no extension is added")
+    )]
     target: PathBuf,
 }
 
@@ -579,6 +605,13 @@ fn delete_unfollowed(target: &Path) -> std::io::Result<bool> {
 
 /// A name beside `target` in its folder, free, for a folder written or set
 /// aside: it begins with `.`, so that no session looks in it.
+#[cfg_attr(
+    not(feature = "scripts"),
+    expect(
+        dead_code,
+        reason = "without the script engine no extension's folder is written"
+    )
+)]
 fn beside(target: &Path, what: &str) -> PathBuf {
     let name = target
         .file_name()
@@ -598,6 +631,13 @@ fn beside(target: &Path, what: &str) -> PathBuf {
 /// modes, and refuses one that is there already (the early review's L4: a
 /// folder made by another between the look and the make is not written
 /// into).
+#[cfg_attr(
+    not(feature = "scripts"),
+    expect(
+        dead_code,
+        reason = "without the script engine no extension's folder is written"
+    )
+)]
 fn create_dir_new(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
@@ -615,6 +655,13 @@ fn create_dir_new(path: &Path) -> std::io::Result<()> {
 /// review's L4): each `.<name>.<pid>-<n>.new` and `.old` that [`beside`]
 /// names, never through a link. Another process's write of the same name
 /// at the same moment then fails, whole, and says so.
+#[cfg_attr(
+    not(feature = "scripts"),
+    expect(
+        dead_code,
+        reason = "without the script engine no extension's folder is written"
+    )
+)]
 fn clear_leftovers(target: &Path) {
     let (Some(folder), Some(name)) = (target.parent(), target.file_name()) else {
         return;
@@ -648,6 +695,13 @@ fn clear_leftovers(target: &Path) {
 /// earlier write left beside it is removed first. Once the new folder is
 /// in place it is written, whatever happens after: what was set aside and
 /// could not be removed is given back, with why, and is not an error.
+#[cfg_attr(
+    not(feature = "scripts"),
+    expect(
+        dead_code,
+        reason = "without the script engine no extension's folder is written"
+    )
+)]
 fn write_folder(
     target: &Path,
     snapshot: &Snapshot,
