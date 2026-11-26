@@ -37,7 +37,7 @@ caught-by:
     cineris-base path::resolve::tests::on_windows_the_walks_look_at_a_name_is_the_standard_librarys
 
 [break] walk-takes-every-reparse-point-for-a-link
-rule: A reparse point that is no link (the overlay filter's, a cloud placeholder's, deduplication's) is a plain name to the walk, as the standard library reads its tag: only its attributes' bit is not enough.
+rule: A reparse point that is no link (a Unix domain socket's file, a cloud placeholder, a deduplicated file) is a plain name to the walk, as the standard library reads its tag: only its attributes' bit is not enough.
 file: crates/cineris-base/src/path/resolve.rs
 in: is_link
 find: Ok(attributes) if !attributes.is_reparse_point() => return Ok(false),

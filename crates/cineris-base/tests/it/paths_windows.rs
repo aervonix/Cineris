@@ -391,74 +391,72 @@ fn a_directory_link_that_leaves_the_workspace_resolves_outside() {
     );
 }
 
-/// A reparse point that is no link is a plain name to the walk: a file the
-/// system's own `compact /exe` compresses is a reparse point of the
-/// Windows Overlay Filter, as a placeholder of a cloud folder or a file
-/// deduplication left is one of theirs. Its attributes show the reparse
-/// point, the walk asks the standard library, whose answer is that it is no
-/// link (the tag is no name surrogate), and the file resolves as any other
-/// (the early review of CI budgets II). `compact` is a process: hence the
-/// `sys_` name.
+/// A reparse point that is no link is a plain name to the walk: the file a
+/// Unix domain socket is bound to is a reparse point of its own kind
+/// (`IO_REPARSE_TAG_AF_UNIX`), whose tag is no name surrogate, as a
+/// placeholder of a cloud folder or a file deduplication left is one of
+/// theirs. Its attributes show the reparse point, the walk asks the
+/// standard library, whose answer is that it is no link, and the file
+/// resolves as any other (the early review of CI budgets II). A file the
+/// overlay filter compresses (`compact /exe`) would not do: the filter
+/// hides its own reparse point from both. PowerShell 7 binds the socket,
+/// a process: hence the `sys_` name.
 #[test]
 fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
     use std::os::windows::fs::MetadataExt;
     /// `FILE_ATTRIBUTE_REPARSE_POINT`.
     const REPARSE_POINT: u32 = 0x400;
 
-    // The overlay filter is a per-volume matter, so try the build's
-    // volume, then the temporary directory's, then the system disk's own:
-    // a hosted runner's workspace disk does not compress, and its system
-    // disk does.
-    let mut volumes = vec![
-        Path::new(env!("CARGO_TARGET_TMPDIR")).to_path_buf(),
-        std::env::temp_dir(),
-    ];
-    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-        volumes.push(Path::new(&local).join("Temp"));
-    }
-    let mut said = Vec::new();
-    for volume in &volumes {
-        let scratch = Scratch::under(volume, "win_reparse_not_a_link");
-        // Compressible, and larger than a cluster: the overlay filter
-        // leaves a file it cannot shrink as it is.
-        let file = scratch.file("ws/compressed.bin", &"cineris ".repeat(65_536));
-        let made = std::process::Command::new("compact")
-            .args(["/C", "/EXE:XPRESS4K"])
-            .arg(&file)
-            .output()
-            .expect("run compact");
-        let reparse = fs::symlink_metadata(&file)
-            .is_ok_and(|found| found.file_attributes() & REPARSE_POINT != 0);
-        if !reparse {
-            said.push(format!(
-                "{}: {}",
-                volume.display(),
-                String::from_utf8_lossy(&made.stdout).trim()
-            ));
-            continue;
-        }
-        assert!(
-            !fs::symlink_metadata(&file)
-                .unwrap()
-                .file_type()
-                .is_symlink(),
-            "the standard library takes no overlay file for a link"
+    let scratch = Scratch::new("win_af_unix");
+    scratch.dir("ws");
+    let socket = scratch.join("ws").join("socket");
+    let bind = format!(
+        "$s = [System.Net.Sockets.Socket]::new('Unix', 'Stream', 'Unspecified'); \
+         $s.Bind([System.Net.Sockets.UnixDomainSocketEndPoint]::new('{}')); $s.Dispose()",
+        socket.display().to_string().replace('\'', "''")
+    );
+    let made = std::process::Command::new("pwsh")
+        .args([
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &bind,
+        ])
+        .output();
+    let reparse = fs::symlink_metadata(&socket)
+        .is_ok_and(|found| found.file_attributes() & REPARSE_POINT != 0);
+    if !reparse {
+        let said = made.map_or_else(
+            |error| error.to_string(),
+            |made| String::from_utf8_lossy(&made.stderr).into_owned(),
         );
-        assert!(!cineris_base::path::is_link(&file).unwrap());
-
-        let resolver = scratch.resolver("ws");
-        let resolved = resolver.resolve("compressed.bin").unwrap();
-        assert!(resolved.exists());
-        assert!(resolved.is_inside_workspace());
-        assert_eq!(resolved.abs(), &scratch.real("ws/compressed.bin"));
-        assert_eq!(fs::read(resolved.to_fs_path()).unwrap().len(), 8 * 65_536);
+        assert!(
+            !in_ci(),
+            "no socket's file was made on the CI runner: {said}"
+        );
+        println!("skipped: no Unix domain socket's file could be made here: {said}");
         return;
     }
     assert!(
-        !in_ci(),
-        "no volume of the CI runner compressed the file: {said:?}"
+        !fs::symlink_metadata(&socket)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the standard library takes no socket's file for a link"
     );
-    println!("skipped: no volume here compresses with the overlay filter: {said:?}");
+    assert!(!cineris_base::path::is_link(&socket).unwrap());
+
+    let resolver = scratch.resolver("ws");
+    let resolved = resolver.resolve("socket").unwrap();
+    assert!(resolved.exists());
+    assert!(resolved.is_inside_workspace());
+    assert_eq!(resolved.abs(), &scratch.real("ws/socket"));
+    let below = resolver.resolve("socket/below.txt");
+    assert!(
+        below.is_err(),
+        "nothing is below a socket's file: {below:?}"
+    );
 }
 
 /// A junction is the kind of directory link any account can make, so it is
