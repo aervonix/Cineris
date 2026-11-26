@@ -38,8 +38,16 @@
 //!   several calls, which could skip one), and otherwise the job's name of
 //!   every process of the system's list, which one call gives whole. A job
 //!   of that name that cannot be opened or asked, for any reason but there
-//!   being none, is not known, which refuses. Being in any other job (a terminal's, an
-//!   editor's, a CI runner's) is nothing. One job each, and not one shared:
+//!   being none, is not known, which refuses, when the process it is named
+//!   for is Cineris (the very file this process runs, or a program whose
+//!   file is named `cineris.exe`, `cin.exe` or as this binary is) or what
+//!   that process is cannot be read: one named for any other program (a job
+//!   made to deny its opening, for a process that runs no sessions) is
+//!   passed over, and so is one named for another user's process. Being in a
+//!   harness's job wins over a job that cannot be told, met first: both
+//!   refuse, and only the reason changes. Being in any other job (a
+//!   terminal's, an editor's, a CI runner's) is nothing. One job each, and
+//!   not one shared:
 //!   a process already in a job can join a job only where that job can nest
 //!   in its own, so a job shared by harnesses started under different jobs
 //!   could be joined by the first alone. **The mark fails closed:** a job of
@@ -697,11 +705,59 @@ enum Called {
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
 const ROOMS: (usize, usize) = (64 * 1024, 1024 * 1024);
 
-/// The rooms of the test hooks' listing in parts
-/// (`cineris_base::hook::SessionListing::InParts`): too small for any
-/// logon session's namespace, so that every call leaves entries out.
-#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+/// The rooms of this crate's tests' listing in parts
+/// ([`switches::LISTING`]`=in-parts`): too small for any logon session's
+/// namespace, so that every call leaves entries out.
+#[cfg(test)]
 const IN_PARTS: (usize, usize) = (64, 512);
+
+/// The switches of this crate's own tests of the Windows check, read only
+/// in its own test build (`#[cfg(test)]`): no binary that is built, a
+/// build of the whole workspace with the test hooks included, honours
+/// them or holds their names (since step 28's third pull request, which
+/// had them among `cineris-base`'s test hooks before, where a session's
+/// command could have set one on a `cineris` built with the workspace).
+#[cfg(test)]
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's check"))]
+mod switches {
+    /// How the harnesses' jobs are listed: `in-parts`, each call that
+    /// lists the namespace given a room too small to hold it, up to a
+    /// bound as small ([`super::IN_PARTS`]), so that the system's list of
+    /// processes is taken in its place; `empty`, nothing listed and no
+    /// list of processes, so that only a harness on the line of parents is
+    /// found. Any other value, or none: as the system gives them.
+    pub(super) const LISTING: &str = "CINERIS_TEST_SESSION_LISTING";
+
+    /// Set and not empty: this test binary counts as Cineris's when the
+    /// process a job that cannot be opened is named for is judged, as the
+    /// real binary counts. Without it a test binary is any other program,
+    /// so that a job one test makes to deny its opening, named for its own
+    /// process, is passed over by every other test's check.
+    pub(super) const OWN_BINARY: &str = "CINERIS_TEST_SESSION_OWN_BINARY";
+
+    /// What [`LISTING`] chooses.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Listing {
+        /// Each call in a room too small: the listing is never whole.
+        InParts,
+        /// Nothing listed.
+        Empty,
+    }
+
+    /// The listing [`LISTING`] chooses, if it chooses one.
+    pub(super) fn listing() -> Option<Listing> {
+        match std::env::var(LISTING).as_deref() {
+            Ok("in-parts") => Some(Listing::InParts),
+            Ok("empty") => Some(Listing::Empty),
+            _ => None,
+        }
+    }
+
+    /// Whether [`OWN_BINARY`] is set, and not empty.
+    pub(super) fn own_binary() -> bool {
+        std::env::var_os(OWN_BINARY).is_some_and(|value| !value.is_empty())
+    }
+}
 
 /// A listing taken whole by one call. `list(room, from, found)` is one
 /// call, in a room of `room` bytes, from the listing's place `from` (0: its
@@ -743,6 +799,75 @@ fn harness_named(name: &str) -> Option<(u32, u64)> {
     let (pid, made) = name.strip_prefix(prefix)?.split_once('.')?;
     let (pid, made) = (pid.parse().ok()?, made.parse().ok()?);
     (job_name(pid, made).strip_prefix(r"Local\") == Some(name)).then_some((pid, made))
+}
+
+/// Where this process stands to the job of sessions' commands of one
+/// harness: the process `pid`, made at `made`.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Job {
+    /// There is no such job, or none of a harness of this user's.
+    None,
+    /// `pid` runs sessions, and this process is not in its job.
+    Elsewhere,
+    /// This process is in it: how that was told, in words.
+    Holds(String),
+    /// Whether it is cannot be told: what could not be read.
+    Unknown(String),
+}
+
+/// The Windows check's verdict, from the jobs it asks in turn: those of the
+/// processes of its line of parents (`parents`, each by its process's
+/// instance), then those of every running harness `listed` gives, and
+/// last, given when the earliest of those harnesses began, whether a
+/// service started this process for a command (`service`). A job that
+/// holds this process decides at once, and so does a service's start.
+///
+/// **A job that cannot be told is kept while the rest are asked,** and
+/// decides only where nothing holds this process: being in a harness's
+/// job wins over another job that cannot be told, met first (step 28's
+/// third pull request: a job made to deny its opening, named for another
+/// running process, made a check of a process in its own harness's job say
+/// "not known"). Both refuse; only the reason given changes. Of several
+/// that cannot be told, the first met is said.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+fn judged(
+    parents: impl IntoIterator<Item = (u32, u64)>,
+    listed: impl FnOnce() -> Result<Vec<(u32, u64)>, String>,
+    job: impl Fn(u32, u64) -> Job,
+    service: impl FnOnce(Option<u64>) -> Under,
+) -> Under {
+    let mut unknown: Option<String> = None;
+    for (pid, made) in parents {
+        match job(pid, made) {
+            Job::Holds(how) => return Under::Session(how),
+            Job::Unknown(what) => {
+                unknown.get_or_insert(what);
+            }
+            Job::None | Job::Elsewhere => {}
+        }
+    }
+    let harnesses = match listed() {
+        Ok(harnesses) => harnesses,
+        Err(error) => return Under::Unknown(unknown.unwrap_or(error)),
+    };
+    // When the earliest harness of this user that runs now was made.
+    let mut began: Option<u64> = None;
+    for (pid, made) in harnesses {
+        match job(pid, made) {
+            Job::None => {}
+            Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made))),
+            Job::Holds(how) => return Under::Session(how),
+            Job::Unknown(what) => {
+                unknown.get_or_insert(what);
+            }
+        }
+    }
+    match service(began) {
+        Under::Session(how) => Under::Session(how),
+        Under::Unknown(what) => Under::Unknown(unknown.unwrap_or(what)),
+        Under::Nothing => unknown.map_or(Under::Nothing, Under::Unknown),
+    }
 }
 
 /// Whether this process, `own`, was started by a service that starts what
@@ -843,12 +968,16 @@ fn started_by_a_service(
               cineris-sandbox is where such calls live"
 )]
 mod sys {
+    use std::cell::OnceCell;
     use std::io;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
+    use std::path::Path;
     use std::ptr;
     use std::sync::OnceLock;
 
-    use super::{Called, Listed, Opened, Under, job_name, started_by_a_service};
+    use cineris_base::FileIdentity;
+
+    use super::{Called, Job, Listed, Opened, Under, job_name, started_by_a_service};
     use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
     use windows_sys::Wdk::Storage::FileSystem::{NtOpenDirectoryObject, NtQueryDirectoryObject};
     use windows_sys::Wdk::System::SystemInformation::{
@@ -856,8 +985,8 @@ mod sys {
     };
     use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
     use windows_sys::Win32::Foundation::{
-        ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, FALSE, FILETIME,
-        HANDLE, LocalFree, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL,
+        ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER,
+        FALSE, FILETIME, HANDLE, LocalFree, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL,
         STATUS_INFO_LENGTH_MISMATCH, STATUS_MORE_ENTRIES, STATUS_NO_MORE_ENTRIES, SetLastError,
         UNICODE_STRING,
     };
@@ -940,7 +1069,11 @@ mod sys {
 
     /// What the job's own user, and its owner, may do with it by its name:
     /// ask it about its processes, and nothing else. The harness's own
-    /// handle has every right, given when it is made; no other process may
+    /// handle has every right of a job, given when it is made, but those to
+    /// change who may open it and who owns it (`WRITE_DAC`, `WRITE_OWNER`),
+    /// which the owner's entry keeps from its maker too (`0x13003F` on a
+    /// hosted runner, step 28's third pull request): a command that takes
+    /// that handle cannot make the job unopenable. No other process may
     /// change its limits, join a process to it or end it by its name.
     const BY_NAME: u32 = JOB_OBJECT_QUERY | SYNCHRONIZE;
 
@@ -1411,12 +1544,16 @@ mod sys {
     /// every one there is, for a process whose harness is not on its line of
     /// parents, and for when the earliest of them began.
     pub(super) fn harnesses(list: &Taken) -> Result<(Vec<(u32, u64)>, Source), String> {
-        use cineris_base::hook::SessionListing;
-        let named = match cineris_base::hook::session_listing() {
-            SessionListing::Real => named_jobs(super::ROOMS),
-            SessionListing::InParts => named_jobs(super::IN_PARTS),
-            SessionListing::Empty => return Ok((Vec::new(), Source::Namespace)),
+        // This crate's own tests may choose how the namespace is listed
+        // (`super::switches::LISTING`); nothing else can.
+        #[cfg(test)]
+        let named = match super::switches::listing() {
+            Some(super::switches::Listing::InParts) => named_jobs(super::IN_PARTS),
+            Some(super::switches::Listing::Empty) => return Ok((Vec::new(), Source::Namespace)),
+            None => named_jobs(super::ROOMS),
         };
+        #[cfg(not(test))]
+        let named = named_jobs(super::ROOMS);
         match named {
             Ok(Some(named)) => Ok((named, Source::Namespace)),
             Ok(None) | Err(_) => {
@@ -1429,43 +1566,37 @@ mod sys {
 
     pub(super) fn under_a_session() -> Under {
         let list = Taken::new();
+        // This binary, read only where a job of a harness's name cannot be
+        // opened.
+        let binary = OnceCell::new();
         // SAFETY: plain call.
         let own = unsafe { GetCurrentProcessId() };
         // The harnesses on its line of parents first, each by its job's
         // name: a session's command's own harness is there unless it
         // detached, and no listing's race can hide it.
-        for parent in super::parents(own, lineage) {
-            if let Job::Holds(under) = in_the_job_of(parent.pid, parent.made) {
-                return under;
-            }
-        }
-        // Then every running harness, from a listing made whole by one call:
-        // a process whose parents exited stays in its harness's job.
-        let harnesses = match harnesses(&list) {
-            Ok((harnesses, _)) => harnesses,
-            Err(error) => return Under::Unknown(error),
-        };
-        // When the earliest harness of this user that runs now was made.
-        let mut began: Option<u64> = None;
-        for (pid, made) in harnesses {
-            match in_the_job_of(pid, made) {
-                Job::None => {}
-                Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made))),
-                Job::Holds(under) => return under,
-            }
-        }
-        // The line of parents, each process on it opened, or the list where
-        // one cannot be; the service manager is asked only where the line
-        // reaches a service host.
-        let line = super::line_of(own, described);
-        let read: &[Listed] = match &line {
-            Some(line) => line,
-            None => match listed_in(&list) {
-                Ok(listed) => listed,
-                Err(error) => return Under::Unknown(error),
+        let parents = super::parents(own, lineage);
+        super::judged(
+            parents.iter().map(|parent| (parent.pid, parent.made)),
+            // Then every running harness, from a listing made whole by one
+            // call: a process whose parents exited stays in its harness's
+            // job.
+            || harnesses(&list).map(|(harnesses, _)| harnesses),
+            |pid, made| in_the_job_of(pid, made, &binary),
+            // The line of parents, each process on it opened, or the list
+            // where one cannot be; the service manager is asked only where
+            // the line reaches a service host.
+            |began| {
+                let line = super::line_of(own, described);
+                let read: &[Listed] = match &line {
+                    Some(line) => line,
+                    None => match listed_in(&list) {
+                        Ok(listed) => listed,
+                        Err(error) => return Under::Unknown(error),
+                    },
+                };
+                started_by_a_service(read, own, opened, scheduler, began)
             },
-        };
-        started_by_a_service(read, own, opened, scheduler, began)
+        )
     }
 
     /// `winnt.h`'s `DIRECTORY_QUERY`: the right to list a directory of
@@ -1722,25 +1853,9 @@ mod sys {
                 made,
             });
         }
-        let mut path = [0_u16; 1024];
-        let mut length = u32::try_from(path.len()).unwrap_or(0);
-        // SAFETY: `process` is open with the limited right to ask, and the
-        // buffer holds `length` characters.
-        let asked = unsafe {
-            QueryFullProcessImageNameW(
-                process.as_raw_handle(),
-                PROCESS_NAME_WIN32,
-                path.as_mut_ptr(),
-                &raw mut length,
-            )
-        };
-        if asked == 0 {
-            return Described::Closed;
-        }
-        let Some(path) = path.get(..usize::try_from(length).unwrap_or(usize::MAX)) else {
+        let Ok(path) = image_of(process.as_raw_handle()) else {
             return Described::Closed;
         };
-        let path = String::from_utf16_lossy(path);
         let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
         Described::Is(Listed {
             pid,
@@ -1750,22 +1865,161 @@ mod sys {
         })
     }
 
-    /// Where this process stands to the job of sessions' commands of the
-    /// process `pid`, made at `made`.
-    enum Job {
-        /// There is no such job: `pid` runs no sessions.
-        None,
-        /// `pid` runs sessions, and this process is not in its job.
-        Elsewhere,
-        /// This process is in it, or that cannot be told.
-        Holds(Under),
+    /// The path of the program the process `handle` names runs, as Windows
+    /// writes it (`C:\…\cin.exe`).
+    fn image_of(handle: HANDLE) -> io::Result<String> {
+        let mut path = [0_u16; 1024];
+        let mut length = u32::try_from(path.len()).unwrap_or(0);
+        // SAFETY: `handle` is open with the limited right to ask, and the
+        // buffer holds `length` characters.
+        let asked = unsafe {
+            QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_WIN32,
+                path.as_mut_ptr(),
+                &raw mut length,
+            )
+        };
+        if asked == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        path.get(..usize::try_from(length).unwrap_or(usize::MAX))
+            .map(String::from_utf16_lossy)
+            .ok_or_else(|| io::Error::other("the path was longer than its room"))
+    }
+
+    /// This binary, as the program of a process a job is named for is
+    /// compared with ([`cineris`]): its file, by its volume and its index
+    /// on it, and its file's name, in lower case.
+    #[derive(Debug, Default)]
+    pub(super) struct Own {
+        file: Option<FileIdentity>,
+        name: Option<String>,
+    }
+
+    impl Own {
+        /// The binary at `path`.
+        pub(super) fn of(path: &Path) -> Self {
+            Self {
+                file: FileIdentity::at(path).ok(),
+                name: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_lowercase()),
+            }
+        }
+
+        /// This process's own binary. In this crate's own tests, none,
+        /// unless the test switch says the test binary counts
+        /// (`super::switches::OWN_BINARY`): a test binary is no harness.
+        pub(super) fn read() -> Self {
+            #[cfg(test)]
+            if !super::switches::own_binary() {
+                return Self::default();
+            }
+            std::env::current_exe().map_or_else(|_| Self::default(), |exe| Self::of(&exe))
+        }
+    }
+
+    /// Whether a program whose file is at `image` is Cineris, as Linux
+    /// tells it by `/proc` (where a process's name is its own and its
+    /// file's another; on Windows a process's name is its file's): **the
+    /// very file this binary is** (`own`: the same volume and index, so a
+    /// hard link of it under any name too), **or a file named as Cineris's
+    /// are,** `cineris.exe`, `cin.exe` or as this binary is, in any case, as
+    /// NTFS folds names. A renamed copy is another file, under another
+    /// name, and is not; a copy under one of those names, wherever it is
+    /// installed, is; and so is any other program given one of them, taken
+    /// for Cineris, which fails closed (a job of its name that cannot be
+    /// opened refuses). A file whose identity cannot be read is told by its
+    /// name alone.
+    pub(super) fn cineris(own: &Own, image: &Path) -> bool {
+        let named = image.file_name().is_some_and(|name| {
+            let name = name.to_string_lossy().to_lowercase();
+            name == "cineris.exe" || name == "cin.exe" || own.name.as_deref() == Some(name.as_str())
+        });
+        named
+            || own
+                .file
+                .is_some_and(|own| FileIdentity::at(image).ok() == Some(own))
+    }
+
+    /// What the process a job of a harness's name that cannot be opened is
+    /// named for is.
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub(super) enum NamedFor {
+        /// Cineris ([`cineris`]).
+        Cineris,
+        /// No harness of this user's: gone, another process with its id,
+        /// another user's or the system's, or another program.
+        Other,
+        /// What it is could not be read: as Cineris, failing closed.
+        Unread(String),
+    }
+
+    /// What the process `pid`, made at `made`, is, a job of whose name
+    /// cannot be opened: opened to ask when it was made and the path of
+    /// its program, which is judged against this binary (`own`, read the
+    /// first time it is needed). **A process this user may not open is
+    /// another user's, or the system's,** as the check holds everywhere
+    /// (its commands run as its user), and is not Cineris of this one's;
+    /// one that is gone, or that has another instance, is not the one the
+    /// job is named for.
+    pub(super) fn named_for(pid: u32, made: u64, own: &OnceCell<Own>) -> NamedFor {
+        // SAFETY: plain values.
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
+        if handle.is_null() {
+            let error = io::Error::last_os_error();
+            let other = [ERROR_INVALID_PARAMETER, ERROR_ACCESS_DENIED]
+                .into_iter()
+                .any(|code| error.raw_os_error() == i32::try_from(code).ok());
+            return if other {
+                NamedFor::Other
+            } else {
+                NamedFor::Unread(format!("process {pid} could not be opened: {error}"))
+            };
+        }
+        // SAFETY: `handle` was just opened and nothing else owns it.
+        let process = unsafe { OwnedHandle::from_raw_handle(handle) };
+        match made_at(process.as_raw_handle()) {
+            Some(then) if then == made => {}
+            Some(_) => return NamedFor::Other,
+            None => {
+                return NamedFor::Unread(format!(
+                    "when process {pid} was made could not be asked: {}",
+                    io::Error::last_os_error()
+                ));
+            }
+        }
+        match image_of(process.as_raw_handle()) {
+            Ok(image) if cineris(own.get_or_init(Own::read), Path::new(&image)) => {
+                NamedFor::Cineris
+            }
+            Ok(_) => NamedFor::Other,
+            Err(error) => NamedFor::Unread(format!(
+                "process {pid}'s program could not be read: {error}"
+            )),
+        }
     }
 
     /// Whether this process is in the job of sessions' commands of the
-    /// harness `pid`, made at `made`. A job of that name that cannot be
-    /// opened or asked, for any reason but there being none, is not known,
-    /// which refuses (the full review of the third part: a job made to deny
-    /// its opening must not read as no job).
+    /// harness `pid`, made at `made`.
+    ///
+    /// **A job of that name that cannot be opened,** for any reason but
+    /// there being none, is not known, which refuses (the full review of
+    /// the third part: a job made to deny its opening must not read as no
+    /// job), **when the process it is named for is Cineris,** or what that
+    /// process is cannot be read ([`named_for`], with `own`, this binary,
+    /// read the first time it is needed). A job made so for any other
+    /// program is no harness's, and is passed over: a harness's own job is
+    /// open to its user and its owner to ask, and cannot be made otherwise
+    /// after its mark (not even through the harness's own handle of it,
+    /// which has no right to change who may open it, [`BY_NAME`]), so one
+    /// that is not was made by another process (step 28's third pull
+    /// request: one made for a test's own process made other tests' checks
+    /// refuse, and such a job made for any running process would make the
+    /// user's own approvals refuse). One made for a process of Cineris, a
+    /// harness whose name was taken before its mark among them, is still not
+    /// known.
     ///
     /// **Only a process this user may open is a harness of this one's**
     /// (another user's, the system's, are not: its commands run as its
@@ -1774,7 +2028,7 @@ mod sys {
     /// where there is a job of that name, or one that could not be told
     /// from none: most processes run no sessions, and opening each cost a
     /// headless run's start 0.35 ms on a hosted runner.
-    fn in_the_job_of(pid: u32, made: u64) -> Job {
+    fn in_the_job_of(pid: u32, made: u64, own: &OnceCell<Own>) -> Job {
         // The process, this user's and the same instance (a process that
         // has gone, whose id is another's now, is not).
         let harness = || opened(pid) == Opened::Made(made);
@@ -1784,12 +2038,19 @@ mod sys {
         let handle = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, FALSE, name.as_ptr()) };
         if handle.is_null() {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() || !harness() {
+            if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() {
                 return Job::None;
             }
-            return Job::Holds(Under::Unknown(format!(
+            let cannot = format!(
                 "the job of process {pid}'s sessions' commands could not be opened: {error}"
-            )));
+            );
+            return match named_for(pid, made, own) {
+                NamedFor::Cineris => Job::Unknown(cannot),
+                NamedFor::Other => Job::None,
+                NamedFor::Unread(what) => Job::Unknown(format!(
+                    "{cannot}, and what that process is was not told: {what}"
+                )),
+            };
         }
         // SAFETY: `handle` was just opened and nothing else owns it.
         let job = unsafe { OwnedHandle::from_raw_handle(handle) };
@@ -1803,18 +2064,18 @@ mod sys {
         let asked =
             unsafe { IsProcessInJob(GetCurrentProcess(), job.as_raw_handle(), &raw mut inside) };
         if asked == 0 {
-            return Job::Holds(Under::Unknown(format!(
+            return Job::Unknown(format!(
                 "whether it is in the job of process {pid}'s sessions' commands could not be \
                  asked: {}",
                 io::Error::last_os_error()
-            )));
+            ));
         }
         if inside == 0 {
             return Job::Elsewhere;
         }
-        Job::Holds(Under::Session(format!(
+        Job::Holds(format!(
             "it is in the job of process {pid}'s sessions' commands"
-        )))
+        ))
     }
 
     #[cfg(test)]
@@ -2339,7 +2600,7 @@ mod tests {
             *asked.borrow(),
             [64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024]
         );
-        // The test hooks' rooms, which no logon session's namespace fits.
+        // The tests' rooms, which no logon session's namespace fits.
         let asked = std::cell::RefCell::new(Vec::new());
         let list = directory((0..100).collect(), &asked, |_, _| {});
         assert_eq!(in_one_call(IN_PARTS, list), None);
@@ -2405,6 +2666,125 @@ mod tests {
             })
         };
         assert_eq!(parents(1, endless).len(), LINE_OF_PARENTS);
+    }
+
+    /// The Windows check's verdict, from jobs that each say a fixed thing:
+    /// `jobs` gives each harness's (by its process id), and a harness not in
+    /// it has none.
+    fn verdict(
+        parents: &[u32],
+        listed: Result<Vec<u32>, &str>,
+        jobs: &[(u32, Job)],
+        service: Under,
+    ) -> (Under, Option<Option<u64>>) {
+        let asked = std::cell::Cell::new(None);
+        let job = |pid: u32, _made: u64| {
+            jobs.iter()
+                .find(|(at, _)| *at == pid)
+                .map_or(Job::None, |(_, job)| job.clone())
+        };
+        let under = judged(
+            parents.iter().map(|pid| (*pid, u64::from(*pid) * 10)),
+            || {
+                listed
+                    .map(|pids| {
+                        pids.iter()
+                            .map(|pid| (*pid, u64::from(*pid) * 10))
+                            .collect()
+                    })
+                    .map_err(str::to_owned)
+            },
+            job,
+            |began| {
+                asked.set(Some(began));
+                service
+            },
+        );
+        (under, asked.get())
+    }
+
+    /// Being in a harness's job wins over another harness's job that cannot
+    /// be told, whichever is met first, on the line of parents or among the
+    /// harnesses listed, and so does a service's start (step 28's third pull
+    /// request: a job made to deny its opening, named for another test's
+    /// process, made the check of a process in its own harness's job say
+    /// "not known"); with nothing that holds the process, the first job that
+    /// cannot be told decides, over a listing that fails and a service's
+    /// check that says nothing or cannot tell. A job that holds it decides
+    /// at once, and the harnesses' jobs are weighed for when the earliest
+    /// began.
+    #[test]
+    fn being_in_a_harnesss_job_wins_over_another_job_that_cannot_be_told() {
+        let unknown = |what: &str| Job::Unknown(what.to_owned());
+        let held = |how: &str| Job::Holds(how.to_owned());
+        let session = |how: &str| Under::Session(how.to_owned());
+        let not_known = |what: &str| Under::Unknown(what.to_owned());
+        let jobs = [
+            (1, unknown("planted")),
+            (2, held("its own")),
+            (3, unknown("another")),
+            (4, Job::Elsewhere),
+            (5, Job::Elsewhere),
+        ];
+        let jobs = &jobs[..];
+        // Its own met after one that cannot be told, among those listed.
+        assert_eq!(
+            verdict(&[], Ok(vec![1, 2]), jobs, Under::Nothing).0,
+            session("its own")
+        );
+        assert_eq!(
+            verdict(&[], Ok(vec![2, 1]), jobs, Under::Nothing).0,
+            session("its own")
+        );
+        // One that cannot be told on the line of parents, its own listed.
+        assert_eq!(
+            verdict(&[1], Ok(vec![1, 4, 2]), jobs, Under::Nothing).0,
+            session("its own")
+        );
+        // A service's start, after one that cannot be told.
+        assert_eq!(
+            verdict(&[1], Ok(vec![3]), jobs, session("a service")).0,
+            session("a service")
+        );
+        // Nothing holds it: the first that cannot be told.
+        assert_eq!(
+            verdict(&[3], Ok(vec![1, 4]), jobs, Under::Nothing).0,
+            not_known("another")
+        );
+        assert_eq!(
+            verdict(&[], Ok(vec![1, 3]), jobs, not_known("the line")).0,
+            not_known("planted")
+        );
+        assert_eq!(
+            verdict(&[1], Err("not listed"), jobs, Under::Nothing).0,
+            not_known("planted")
+        );
+        assert_eq!(
+            verdict(&[], Err("not listed"), jobs, Under::Nothing),
+            (not_known("not listed"), None)
+        );
+        assert_eq!(
+            verdict(&[], Ok(vec![4]), jobs, not_known("the line")).0,
+            not_known("the line")
+        );
+        // Nothing at all.
+        assert_eq!(
+            verdict(&[6], Ok(vec![4, 6]), jobs, Under::Nothing).0,
+            Under::Nothing
+        );
+        // A job that holds it on the line of parents: nothing is listed,
+        // and no service asked.
+        let (under, asked) = verdict(&[2], Err("not listed"), jobs, session("a service"));
+        assert_eq!((under, asked), (session("its own"), None));
+        // When the earliest running harness began: the least of theirs.
+        assert_eq!(
+            verdict(&[], Ok(vec![5, 1, 4]), jobs, Under::Nothing).1,
+            Some(Some(40))
+        );
+        assert_eq!(
+            verdict(&[], Ok(vec![1, 6]), jobs, Under::Nothing).1,
+            Some(None)
+        );
     }
 
     /// A harness's job is named for its process's instance: the same id
