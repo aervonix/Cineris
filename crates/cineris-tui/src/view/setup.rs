@@ -5,7 +5,7 @@
 //! ╭──────────────────────────────────────────────────────────────╮
 //! │ ◆ Cineris 0.1.0                                       │
 //! │                                                              │
-//! │   Setting up, in four short steps. Each one can be skipped,  │
+//! │   Setting up, in five short steps. Each one can be skipped,  │
 //! │   and x skips them all.                                      │
 //! ╰──────────────────────────────────────────────────────────────╯
 //!
@@ -71,7 +71,7 @@ pub fn card(version: &str, width: usize, look: &Look) -> Vec<Line> {
             theme.style(Token::Muted),
         ));
     let mut rows = vec![(title, Style::PLAIN), (Line::new(), Style::PLAIN)];
-    let about = "Setting up, in four short steps. Each one can be skipped, and x skips them all.";
+    let about = "Setting up, in five short steps. Each one can be skipped, and x skips them all.";
     for line in wrap(
         &[Span::plain(about)],
         frame.inner().saturating_sub(2).max(1),
@@ -655,7 +655,7 @@ mod tests {
         assert_eq!(rows.len(), 6);
         assert!(rows[1].contains("◆ Cineris 0.1.0"));
         assert!(
-            rows[3].contains("Setting up, in four short steps."),
+            rows[3].contains("Setting up, in five short steps."),
             "{rows:#?}"
         );
         assert!(rows[4].contains("x skips them all."), "{rows:#?}");
