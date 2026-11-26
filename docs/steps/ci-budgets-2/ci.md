@@ -53,3 +53,47 @@ The test job of both trees on one Windows runner, at 8 ms a process start in eve
 By crate, tier 2, the medians of the two warm rounds: `cineris-core` 29.69 to 25.00 s (−4.69), `cineris-config` −0.51, `cineris-agent` −0.41, `cineris-rpc` −0.28, the rest within 0.2 s; in all 59.3 to 52.8 s. The cold rounds read the same: tier 2 63.2 s on `main` and 52.0 s on the branch.
 
 **The job's time on this runner:** the runner's own steps before the tests (the checkout, the toolchain, the build cache, nextest) took about 31 s in `main`'s own CI (run 45721643017), so such a pull request's test job is about 270 s here, on either tree: under the five minutes by about 30 s. What the branch saves in the tests' runs (about 3 s of wall time; the tiers are summed over two tests at a time) the build does not change. This runner is as slow as the one that cut step 28's fourth pull request's job at 5 min 5 s (run 44911679902, its build 131 s and tiers 1 and 2 60.8 s), whose system tests had not ended when the job was cut; here they took 48 s on either tree, so what made that job run long was not the tests' work as this A/B measures it, and one run does not say what it was. The build is about half the job, and it is the next lever: [testing-and-ci.md](../../testing-and-ci.md), "Where the five minutes go".
+
+## `try --final`: the final tree against `main`
+
+`try` 45737786764, at `a5a6c78`: the branch's final code, with the runner-speed commit then at its tip, which changed only how the tier report judges a tier and was taken off afterwards by the owner's decision (the A/B's sums are of the tests' times and do not read it). The commits since change records, one Windows unit test of the snapshots' look, and labels.
+
+**Windows, both trees on one runner at 8 ms a process start**, the median of 3 runs each:
+
+| Tier | The branch | Main | Change | Budget |
+|---|---|---|---|---|
+| 1, unit | 23.5 s (3,435 tests) | 24.3 s (3,425) | −0.8 s | 25 s |
+| 2, integration | **51.9 s** (1,826 tests) | 59.6 s (1,826) | **−7.7 s** | 40 s |
+| 3, system | **87.8 s** (234 tests) | 92.8 s (233) | **−5.0 s** | 90 s |
+
+Round by round, tier 2 on the branch read 53.2, 54.2 and 50.9 s against `main`'s 63.7, 59.7 and 59.0 s, and tier 3 88.5, 89.8 and 86.3 s against 98.0, 93.3 and 93.3 s. By crate, tier 2: `cineris-core` 29.57 to 24.72 s (−4.85), `cineris-agent` −0.72, `cineris-config` −0.46, `cineris-rpc` −0.33. On this 8 ms runner tier 2 is 8.1 s from its failure at 60 s, and tier 3 is under its budget.
+
+**Linux 22.04** (Landlock ABI 4): tiers 8.9, 20.0 and 26.1 s of 20, 40 and 60 s. One test failed, `harness_git::sys_a_hooks_folder_made_a_link_to_a_planted_hook_is_taken_away`, the known flake of the item `a-put-back-test-that-sees-a-file-first-watched-during-the-command`, at its known line; it also failed once in this pull request's first `test-linux` run, on 24.04, where the item had not seen it. Thirty runs of its module on a 24.04 runner passed on the branch and on `main` alike (`try` 45738358608, 45738366589). Its item says whether the look counts the planted file as changed depends on the file's change time against the look's stamp: this branch's quicker turns may make that more likely, which those runs neither show nor rule out.
+
+**The binary's size** (`size --check --against-main`, Linux, musl): 16,915,480 bytes, +0 against `main`'s last record, of a budget of 20 MB; none of the test hooks, and no home path.
+
+## The pull request's own run: a job that touches `cineris-base` and `xtask`, cut at five minutes
+
+Run 45739516508, at `5f66861`. `test-windows` was cut by its time limit at 307 s, in the system tests, with 226 of 234 run: the one test it names as failed is the one the cut stopped (`shell::pwsh::sys_the_command_reaches_the_shell_as_written`, `0xc000013a`, the interrupt), and no JUnit report was kept. Its own log: the runner's steps before the tests 35 s; the tests' build 146 s, every crate of the workspace and `xtask` (which this pull request changes, and a change to `cineris-base` alone does not rebuild); tiers 1 and 2's run 67 s; the system tests' run 50 s, about 3 s from its end. Tiers 1 and 2's run took 60.0 to 61.5 s on the branch in the 8 ms runner's job A/B, so this runner was slower than that one (its start is not known: no report was kept).
+
+<!-- written by cargo xtask ci-times, section "the-pull-request": it replaces this up to the end mark -->
+Pull request 128, on `main` at `42c90dc`. "Main" is main's own run at `42c90dc` (run 45721643017).
+The PR's run is 45739516508, at `5f66861`.
+
+| Job | Main, `42c90dc` | The PR at `5f66861` |
+|---|---|---|
+| `lint-linux` | 88 s | 92 s |
+| `test-linux` | 148 s | 175 s |
+| `lint-windows` | 111 s | 127 s |
+| `test-windows` | 265 s | 307 s |
+| `ts-client` (blocks nothing) | 0 s | — |
+
+| Time above process start, against the budget | Linux, main (4 ms) | Linux, `5f66861` (4 ms) | Windows, main (6 ms) |
+|---|---|---|---|
+| Tier 1, unit (20 s on Linux, 25 s on Windows) | 11.5 s | 17.9 s | 18.8 s |
+| Tier 2, integration (40 s) | 26.0 s | 29.3 s | 43.8 s |
+| Tier 3, system (60 s on Linux, 90 s on Windows) | 39.4 s | 47.8 s | 82.3 s |
+
+<!-- end of what cargo xtask ci-times wrote, section "the-pull-request" -->
+
+**Where a base-touching job's five minutes go, and a proposal** (the maintainers', not this step's: the jobs and the required checks are not this step's to change). On the 8 ms runner of the job A/B the job was about 270 s; on this one, slower and with `xtask` to build too, it was over by about 10 s. Half of it is the build of every crate (126 to 146 s), then the two runs of the tests (about 110 to 120 s), then the runner's own steps (about 35 s). The tests' work is what this step made cheaper (the tests' runs 3 s shorter on the 8 ms runner); the build is not. **Proposed:** split `test-windows` into a build job, which makes a `cargo nextest archive` of the tests, and two jobs that run its tiers 1 and 2 and its system tests from the archive, each under five minutes of its own (a build job of about 35 + 146 s and an archive's upload; test jobs of about 35 s, the archive's download and 67 or 53 s). It changes the required checks, so it is the owner's. Until then, a base-touching pull request on a slow runner is run again, as the maintainers already do for a job cut after its tests passed.
