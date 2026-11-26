@@ -301,6 +301,20 @@ pub struct Decoder {
     replies: bool,
 }
 
+/// What becomes of a kept ESC when input comes a while after the last byte
+/// kept ([`Decoder::after_a_while`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Escaped {
+    /// What came may go on from it: it is held on.
+    GoesOn,
+    /// It is the Escape key, given now; what was kept after it is decoded
+    /// on its own.
+    Released,
+    /// What is kept is decoded as it stands, as it would have been once
+    /// its short wait had passed.
+    Decoded,
+}
+
 /// What some bytes are to the replies the capability queries ask for
 /// ([`Capabilities::QUERIES`](crate::Capabilities::QUERIES)), read as what
 /// follows a reply's ESC: `CSI ? … $ y`, `CSI ? … u`, `CSI ? … c`, and
@@ -462,30 +476,75 @@ impl Decoder {
         self.replies = due;
     }
 
-    /// Whether what is kept begins with an ESC that `next`, input that came
-    /// a while after the last byte kept (the reader says how long), may
-    /// still go on from: `None` when what is kept does not begin with an
-    /// ESC. After a lone ESC, only a byte that may begin a sequence (an
-    /// introducer: `[`, `]`, `O`, `P`, `_`, `^`, `X`) goes on, so that a
-    /// focus report, a key's sequence or a paste's mark split after its ESC
-    /// is still what it is; a character, a control byte or a second ESC
-    /// does not. After more than the ESC, only the rest of a reply to the
-    /// capability queries goes on ([`reply_shape`]): a reply comes a key at
-    /// a time through a pseudo-console, and a person's keys a while apart
-    /// are keys (the reviews of small fixes II).
-    pub(crate) fn kept_escape_goes_on(&self, next: &[u8]) -> Option<bool> {
+    /// Whether what is kept is an ESC and nothing after it.
+    pub(crate) fn kept_lone_escape(&self) -> bool {
+        self.paste.is_none() && self.skipping.is_none() && self.buffer == [0x1b]
+    }
+
+    /// What becomes of what is kept, when it begins with an ESC and `next`
+    /// came a while after its last byte (the reader says how long): `None`
+    /// when what is kept does not begin with an ESC. `split` says that the
+    /// kept ESC came alone, a while before what follows it (the reviews of
+    /// small fixes II):
+    ///
+    /// - After a lone ESC, a byte that may begin a sequence (an introducer:
+    ///   `[`, `]`, `O`, `P`, `_`, `^`, `X`) goes on, so that a focus
+    ///   report, a key's sequence or a paste's mark split after its ESC is
+    ///   still what it is; anything else ends its claim.
+    /// - After more than the ESC, the rest of a reply to the capability
+    ///   queries goes on ([`reply_shape`]): a reply comes a key at a time
+    ///   through a pseudo-console. Anything else ends the claim: the ESC is
+    ///   [`Escaped::Released`] when it came alone (`split`) or when it is
+    ///   an Escape before the start of a reply (ESC, then a reply's ESC);
+    ///   otherwise what is kept came together and is
+    ///   [`Escaped::Decoded`] as it stands, as it would have been once its
+    ///   short wait had passed after the replies: `ESC P` is `Alt+P`, two
+    ///   ESCs together `Alt+Esc`.
+    pub(crate) fn after_a_while(&self, next: &[u8], split: bool) -> Option<Escaped> {
         if self.paste.is_some() || self.skipping.is_some() || self.buffer.first() != Some(&0x1b) {
             return None;
         }
         if self.buffer.len() == 1 {
-            return Some(matches!(
+            let goes_on = matches!(
                 next.first(),
                 None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X')
-            ));
+            );
+            return Some(if goes_on {
+                Escaped::GoesOn
+            } else {
+                Escaped::Released
+            });
         }
-        let mut after = self.buffer[1..].to_vec();
-        after.extend_from_slice(next);
-        Some(reply_shape(&after) != ReplyShape::Not)
+        let joined = |from: usize| {
+            let mut after = self.buffer[from..].to_vec();
+            after.extend_from_slice(next);
+            reply_shape(&after) != ReplyShape::Not
+        };
+        Some(if joined(1) {
+            Escaped::GoesOn
+        } else if split || (self.buffer[1] == 0x1b && joined(2)) {
+            Escaped::Released
+        } else {
+            Escaped::Decoded
+        })
+    }
+
+    /// Whether what is kept begins with an ESC that `next` would join to,
+    /// as `Alt` with a key, or with which it would make a sequence that
+    /// stands for nothing and is dropped (`ESC [ x`, `ESC O x`). An ESC that
+    /// came alone, a while before what follows it, is the Escape key
+    /// instead (the reviews of small fixes II).
+    pub(crate) fn kept_escape_would_join(&self, next: &[u8]) -> bool {
+        if self.paste.is_some() || self.skipping.is_some() || self.buffer.first() != Some(&0x1b) {
+            return false;
+        }
+        let mut bytes = self.buffer.clone();
+        bytes.extend_from_slice(next);
+        match escape(&bytes, false) {
+            Step::Done(used, None) => used > 1,
+            Step::Done(_, Some(Event::Key(key))) => key.mods.contains(Mods::ALT),
+            _ => false,
+        }
     }
 
     /// The kept ESC is the Escape key, given now; what was kept after it is
@@ -901,6 +960,14 @@ fn escape(bytes: &[u8], flushing: bool) -> Step {
                     1 + used,
                     Some(Event::Key(Key::with(key.code, key.mods | Mods::ALT))),
                 ),
+                // Before what is no key (a reply, a focus report, the
+                // mouse, a paste's start) it is the Escape key, and what
+                // follows is decoded on its own: nothing takes a person's
+                // Escape with it (the second review of small fixes II).
+                Step::Done(
+                    _,
+                    Some(Event::Reply(_) | Event::Focus(_) | Event::Mouse(_) | Event::Paste(_)),
+                ) => Step::Done(1, Some(key(KeyCode::Esc))),
                 Step::Done(used, other) => Step::Done(1 + used, other),
                 Step::Record(used, record) => Step::Record(1 + used, record),
                 Step::Incomplete => Step::Incomplete,
@@ -1368,33 +1435,69 @@ mod tests {
         assert_eq!(events, keys(&chars("[?0u")));
     }
 
-    /// What may go on from a kept ESC after a while: after a lone ESC, a
-    /// sequence's introducer; after more, only the rest of a reply. A kept
-    /// ESC released is the Escape key, and what was kept after it is
-    /// decoded on its own.
+    /// What becomes of a kept ESC after a while: after a lone ESC, a
+    /// sequence's introducer goes on and anything else releases it; after
+    /// more, the rest of a reply goes on, and anything else releases it when
+    /// it came alone or before a reply's ESC, and otherwise decodes what was
+    /// kept as it stands. A kept ESC released is the Escape key, and what
+    /// was kept after it is decoded on its own.
     #[test]
-    fn what_goes_on_from_a_kept_escape_after_a_while() {
-        let mut decoder = Decoder::new();
-        decoder.set_replies_due(true);
-        let mut events = Vec::new();
-        assert_eq!(decoder.kept_escape_goes_on(b"w"), None, "nothing kept");
-        decoder.feed(b"\x1b", &mut events);
+    fn what_becomes_of_a_kept_escape_after_a_while() {
+        use Escaped::{Decoded, GoesOn, Released};
+        let kept = |bytes: &[u8]| {
+            let mut decoder = Decoder::new();
+            decoder.set_replies_due(true);
+            decoder.feed(bytes, &mut Vec::new());
+            decoder
+        };
+        assert_eq!(kept(b"").after_a_while(b"w", false), None, "nothing kept");
+        assert_eq!(kept(b"[").after_a_while(b"w", true), None, "no ESC");
+        let lone = kept(b"\x1b");
+        assert!(lone.kept_lone_escape());
         let goes_on: [&[u8]; 9] = [
             b"", b"[", b"[?0", b"[A", b"[I", b"[200~", b"]11;", b"]2", b"OP",
         ];
         for bytes in goes_on {
-            assert_eq!(decoder.kept_escape_goes_on(bytes), Some(true), "{bytes:?}");
+            assert_eq!(lone.after_a_while(bytes, false), Some(GoesOn), "{bytes:?}");
         }
         for bytes in [&b"w"[..], b"\r", b"\x1b", b"\x1b[A", b"\x1b[?62c"] {
-            assert_eq!(decoder.kept_escape_goes_on(bytes), Some(false), "{bytes:?}");
+            assert_eq!(
+                lone.after_a_while(bytes, false),
+                Some(Released),
+                "{bytes:?}"
+            );
         }
-        decoder.feed(b"[", &mut events);
+        let bracket = kept(b"\x1b[");
+        assert!(!bracket.kept_lone_escape());
         for bytes in [&b"?"[..], b"?0", b"?0u", b"?62;1c", b"?2026;2$y"] {
-            assert_eq!(decoder.kept_escape_goes_on(bytes), Some(true), "{bytes:?}");
+            for split in [false, true] {
+                let after = bracket.after_a_while(bytes, split);
+                assert_eq!(after, Some(GoesOn), "{bytes:?} {split}");
+            }
         }
         for bytes in [&b"x"[..], b"A", b"I", b"\x1b", b"\x1b[?62c"] {
-            assert_eq!(decoder.kept_escape_goes_on(bytes), Some(false), "{bytes:?}");
+            assert_eq!(
+                bracket.after_a_while(bytes, true),
+                Some(Released),
+                "{bytes:?}"
+            );
+            assert_eq!(
+                bracket.after_a_while(bytes, false),
+                Some(Decoded),
+                "{bytes:?}"
+            );
         }
+        // Two ESCs together: `Alt+Esc`, unless the second begins a reply.
+        let two = kept(b"\x1b\x1b");
+        for bytes in [&b"x"[..], b"\x1b[?62c"] {
+            assert_eq!(two.after_a_while(bytes, false), Some(Decoded), "{bytes:?}");
+        }
+        assert_eq!(two.after_a_while(b"[", false), Some(Released));
+        assert_eq!(two.after_a_while(b"[?0u", false), Some(Released));
+        assert_eq!(kept(b"\x1bP").after_a_while(b"x", false), Some(Decoded));
+
+        let mut decoder = kept(b"\x1b[");
+        let mut events = Vec::new();
         decoder.release_escape(&mut events);
         assert_eq!(events, keys(&[(KeyCode::Esc, N)]));
         assert!(decoder.pending(), "the `[` after it may begin a reply");
@@ -1408,10 +1511,52 @@ mod tests {
             ])
         );
         // Nothing kept, or no ESC: nothing to release.
-        assert_eq!(decoder.kept_escape_goes_on(b"w"), None);
         let mut none = Vec::new();
         decoder.release_escape(&mut none);
         assert_eq!(none, []);
+    }
+
+    /// An ESC that came alone is joined to what follows it as `Alt` with a
+    /// key, or dropped with it as a sequence that stands for nothing, only
+    /// where the reader then releases it instead: the decoder says which.
+    #[test]
+    fn what_a_kept_escape_would_be_joined_or_dropped_with() {
+        let mut decoder = Decoder::new();
+        decoder.set_replies_due(true);
+        decoder.feed(b"\x1b", &mut Vec::new());
+        for bytes in [&b"x"[..], b"[x", b"Ox", b"\x01"] {
+            assert!(decoder.kept_escape_would_join(bytes), "{bytes:?}");
+        }
+        for bytes in [
+            &b"["[..],
+            b"[A",
+            b"[I",
+            b"[?0u",
+            b"OA",
+            b"[200~",
+            b"\x1b[?62c",
+        ] {
+            assert!(!decoder.kept_escape_would_join(bytes), "{bytes:?}");
+        }
+        assert!(!Decoder::new().kept_escape_would_join(b"x"), "nothing kept");
+    }
+
+    /// An ESC before what is no key (a reply, a focus report, a paste) is
+    /// the Escape key, then that: nothing takes a person's Escape with it.
+    /// Before a key's sequence it is still `Alt` with the key.
+    #[test]
+    fn an_escape_before_what_is_no_key_is_the_escape_key() {
+        let esc = Event::Key(Key::plain(KeyCode::Esc));
+        assert_eq!(
+            decode(b"\x1b\x1b[?62c"),
+            [esc.clone(), Event::Reply(Reply::DeviceAttributes)]
+        );
+        assert_eq!(decode(b"\x1b\x1b[I"), [esc.clone(), Event::Focus(true)]);
+        assert_eq!(
+            decode(b"\x1b\x1b[200~x\x1b[201~"),
+            [esc, Event::Paste("x".to_owned())]
+        );
+        assert_eq!(decode(b"\x1b\x1b[A"), keys(&[(KeyCode::Up, Mods::ALT)]));
     }
 
     fn keys(list: &[(KeyCode, Mods)]) -> Vec<Event> {

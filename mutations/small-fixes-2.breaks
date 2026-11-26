@@ -27,13 +27,11 @@ caught-by:
 rule: A byte that comes a while after the last byte kept behind a held ESC, and cannot go on from it, ends the ESC's claim: the ESC is the Escape key at once, before what came.
 file: crates/cineris-term/src/terminal.rs
 in: Terminal::next
-find: Some(false) => self.decoder.release_escape(&mut found),
-replace: Some(false) => {},
+find: Some(Escaped::Released) => { self.decoder.release_escape(&mut found);
+replace: Some(Escaped::Released) => {
 caught-by:
-    terminal::tests::keys_typed_while_the_replies_are_due_come_in_order
+    terminal::tests::an_escape_that_waited_alone_is_the_escape_key_at_the_holds_end
     terminal::tests::keys_typed_a_while_apart_while_the_replies_are_due_are_those_keys
-    terminal::tests::a_reply_that_lost_its_escape_while_the_replies_are_due_types_nothing
-    terminal::tests::only_input_behind_a_key_counts_as_queued
 
 [break] a-held-escape-is-released-within-its-own-wait
 rule: Within `ESCAPE_WAIT` of the last byte kept, what follows a held ESC is read with it, as always (`ESC x` is `Alt+x`).
@@ -44,55 +42,101 @@ replace: .is_some_and(|at| now >= at)
 caught-by:
     terminal::tests::an_escape_that_waited_alone_is_the_escape_key_at_the_holds_end
 
+[break] a-while-is-counted-from-the-escape
+rule: A while is counted from the last byte kept, not from the held ESC: a key's sequence split after its ESC, whose last byte comes just after its introducer, is the key.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::next
+find: self.kept_at.is_some_and(
+replace: Some(since).is_some_and(
+caught-by:
+    terminal::tests::what_was_kept_and_what_comes_a_while_after_it_are_never_joined
+
 [break] a-split-sequence-is-cut-at-its-escape
 rule: A lone held ESC followed a while later by what may begin a sequence (a focus report, a key's, a paste's mark, a reply) is not released: the sequence is read whole.
 file: crates/cineris-term/src/input.rs
-in: Decoder::kept_escape_goes_on
+in: Decoder::after_a_while
 find: None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X')
 replace: None
 caught-by:
     terminal::tests::a_sequence_split_after_its_escape_while_the_replies_are_due_is_the_sequence
     terminal::tests::a_reply_that_comes_a_key_at_a_time_is_the_reply
-    input::tests::what_goes_on_from_a_kept_escape_after_a_while
+    input::tests::what_becomes_of_a_kept_escape_after_a_while
 
 [break] an-escape-before-a-reply-is-swallowed
-rule: A second ESC a while after a held lone ESC is a fresh one: the first is the Escape key, and a reply or a key's sequence after the second never swallows it.
+rule: A second ESC a while after a held lone ESC is a fresh one: the first is the Escape key at once, and a reply or a key's sequence after the second never swallows it.
 file: crates/cineris-term/src/input.rs
-in: Decoder::kept_escape_goes_on
+in: Decoder::after_a_while
 find: None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X')
 replace: None | Some(b'[' | b']' | b'O' | b'P' | b'_' | b'^' | b'X' | 0x1b)
 caught-by:
-    terminal::tests::keys_typed_while_the_replies_are_due_come_in_order
-    terminal::tests::keys_typed_a_while_apart_while_the_replies_are_due_are_those_keys
-    terminal::tests::only_input_behind_a_key_counts_as_queued
-    input::tests::what_goes_on_from_a_kept_escape_after_a_while
+    terminal::tests::an_escape_that_waited_alone_is_the_escape_key_at_the_holds_end
+    input::tests::what_becomes_of_a_kept_escape_after_a_while
 
 [break] a-key-a-while-after-a-held-sequence-joins-it
-rule: After more than a held ESC, only the rest of a reply goes on from it a while later: a person's key is that key, and the ESC and what was kept after it are keys too.
+rule: After more than a held ESC, only the rest of a reply goes on from it a while later: a person's key is that key, never joined to what was kept.
 file: crates/cineris-term/src/input.rs
-in: Decoder::kept_escape_goes_on
-find: Some(reply_shape(&after) != ReplyShape::Not)
-replace: Some(true)
+in: Decoder::after_a_while
+find: Some(if joined(1) {
+replace: Some(if true {
 caught-by:
-    terminal::tests::keys_typed_a_while_apart_while_the_replies_are_due_are_those_keys
-    input::tests::what_goes_on_from_a_kept_escape_after_a_while
+    terminal::tests::what_was_kept_and_what_comes_a_while_after_it_are_never_joined
+    input::tests::what_becomes_of_a_kept_escape_after_a_while
 
 [break] a-reply-that-comes-a-key-at-a-time-is-cut
 rule: The rest of a reply goes on from its held ESC however late each key of it comes, while the replies are due.
 file: crates/cineris-term/src/input.rs
-in: Decoder::kept_escape_goes_on
-find: Some(reply_shape(&after) != ReplyShape::Not)
-replace: Some(false)
+in: Decoder::after_a_while
+find: Some(if joined(1) {
+replace: Some(if false {
 caught-by:
     terminal::tests::a_reply_that_comes_a_key_at_a_time_is_the_reply
-    input::tests::what_goes_on_from_a_kept_escape_after_a_while
+    input::tests::what_becomes_of_a_kept_escape_after_a_while
+
+[break] what-was-kept-together-is-released-by-its-first-escape
+rule: What was kept together behind an ESC that did not come alone (two ESCs, `ESC P`, `ESC [`) is decoded as it stands when a key comes a while after it, as once the replies have come: `Alt+Esc`, `Alt+P`, never the first ESC alone with the rest left to take the key.
+file: crates/cineris-term/src/input.rs
+in: Decoder::after_a_while
+find: } else { Escaped::Decoded })
+replace: } else { Escaped::Released })
+caught-by:
+    terminal::tests::what_was_kept_and_what_comes_a_while_after_it_are_never_joined
+    input::tests::what_becomes_of_a_kept_escape_after_a_while
+
+[break] keys-read-together-are-taken-for-a-split
+rule: Only an ESC that came alone is released before the key after what was kept: `Alt+P` read whole is `Alt+P`.
+file: crates/cineris-term/src/input.rs
+in: Decoder::after_a_while
+find: } else if split || (self.buffer[1] == 0x1b && joined(2)) {
+replace: } else if true || (self.buffer[1] == 0x1b && joined(2)) {
+caught-by:
+    terminal::tests::what_was_kept_and_what_comes_a_while_after_it_are_never_joined
+    input::tests::what_becomes_of_a_kept_escape_after_a_while
+
+[break] an-escape-before-a-replys-escape-is-alt
+rule: An ESC kept with the ESC of a reply that comes after it is the Escape key, then the reply: never `Alt+Esc`.
+file: crates/cineris-term/src/input.rs
+in: Decoder::after_a_while
+find: self.buffer[1] == 0x1b && joined(2)
+replace: false
+caught-by:
+    terminal::tests::what_was_kept_and_what_comes_a_while_after_it_are_never_joined
+    input::tests::what_becomes_of_a_kept_escape_after_a_while
+
+[break] an-escape-that-came-alone-is-joined-or-dropped
+rule: An ESC that came alone is never joined to what comes after it as `Alt`, nor dropped with it as a sequence that stands for nothing (`ESC [ x`): it is the Escape key.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::next
+find: if self.split && self.decoder.kept_escape_would_join(&self.bytes) {
+replace: if false {
+caught-by:
+    terminal::tests::what_was_kept_and_what_comes_a_while_after_it_are_never_joined
 
 [break] an-escape-that-waited-alone-becomes-alt
 rule: A held ESC that a byte came a while after, whose sequence never ended, is the Escape key at the hold's end, and what came after it is decoded on its own.
 file: crates/cineris-term/src/terminal.rs
 in: Terminal::next
-find: Some(true) => self.split = true,
-replace: Some(true) => {},
+find: Some(Escaped::GoesOn) => self.split |= lone,
+replace: Some(Escaped::GoesOn) => {},
 caught-by:
     terminal::tests::an_escape_that_waited_alone_is_the_escape_key_at_the_holds_end
 
@@ -103,8 +147,19 @@ in: Decoder::release_escape
 find: events.push(key(KeyCode::Esc));
 replace:
 caught-by:
-    input::tests::what_goes_on_from_a_kept_escape_after_a_while
+    input::tests::what_becomes_of_a_kept_escape_after_a_while
     terminal::tests::keys_typed_while_the_replies_are_due_come_in_order
+
+[break] an-escape-before-what-is-no-key-is-swallowed
+rule: An ESC before what is no key (a reply, a focus report, a paste's start) is the Escape key, then that: nothing takes a person's Escape with it.
+file: crates/cineris-term/src/input.rs
+in: escape
+find: Some(Event::Reply(_) | Event::Focus(_) | Event::Mouse(_) | Event::Paste(_))
+replace: Some(Event::Mouse(_))
+caught-by:
+    input::tests::an_escape_before_what_is_no_key_is_the_escape_key
+    terminal::tests::what_was_kept_and_what_comes_a_while_after_it_are_never_joined
+    terminal::tests::the_last_reply_ends_the_longer_wait_of_the_next_escape
 
 # ------------------------------------------- a reply that lost its ESC
 
