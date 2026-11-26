@@ -78,7 +78,7 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
     }
     let env = Env::from_process();
     let log = crate::headless::start_log(&serve.run, &env, name);
-    crate::mark_sessions();
+    let unmarked = crate::mark_sessions();
     let mut load = LoadOptions::new(env.clone());
     load.profile.clone_from(&serve.run.common.profile);
     load.overrides = crate::headless::overrides(&serve.run);
@@ -109,6 +109,12 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
         loaded.settings.permissions.mode,
         cineris_protocol::lease::Level::Unrestricted
     );
+    if let Some(unmarked) = &unmarked {
+        options.level_at_most = Some(crate::UNMARKED_LEVEL);
+        if !serve.run.quiet {
+            eprintln!("{name}: {unmarked}");
+        }
+    }
     let stalled_client = rpc.stalled_client;
     let over = match serve.socket.clone() {
         None => Over::Stdio,

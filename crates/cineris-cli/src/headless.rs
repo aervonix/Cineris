@@ -68,6 +68,9 @@ struct Plan {
     env: Env,
     /// Run under a session's command: its level is at most `read-only`.
     capped: bool,
+    /// Could not mark its commands as a session's: what it says of that,
+    /// and its level is at most `supervised`.
+    unmarked: Option<String>,
 }
 
 /// Runs a headless prompt. Returns the exit code.
@@ -78,7 +81,7 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
         Ok(capped) => capped,
         Err(code) => return code,
     };
-    crate::mark_sessions();
+    let unmarked = crate::mark_sessions();
     let format = run.format;
     let fail = |kind: ErrorKind, code: &str, message: String| {
         let error = ErrorData::new(kind, code, message);
@@ -151,6 +154,7 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
     let quiet = run.quiet;
     let plan = Plan {
         capped,
+        unmarked,
         run,
         prompt,
         name,
@@ -662,6 +666,13 @@ async fn write_result(front: &mut Front<'_>, mut result: HeadlessResult) {
             reason: crate::CAPPED.to_owned(),
             item: Some(crate::CAPPED_ITEM.to_owned()),
         });
+    } else if let Some(unmarked) = front.plan.unmarked.clone() {
+        front.say(&unmarked);
+        result.capped = Some(cineris_protocol::headless::HeadlessCap {
+            level: crate::UNMARKED_LEVEL,
+            reason: unmarked,
+            item: None,
+        });
     }
     if let Some(error) = &result.error {
         front.say(&format!(
@@ -807,6 +818,8 @@ fn start_core(plan: &Plan) -> Result<Core, OpError> {
     options.own_commands = Some(crate::nested::own_commands());
     if plan.capped {
         options.level_at_most = Some(cineris_protocol::lease::Level::ReadOnly);
+    } else if plan.unmarked.is_some() {
+        options.level_at_most = Some(crate::UNMARKED_LEVEL);
     }
     options.profile.clone_from(&run.common.profile);
     options.overrides = overrides(run);
