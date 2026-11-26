@@ -78,7 +78,6 @@ rule: A hook cannot put a question: it decides by its answer.
 file: crates/cineris-ext/src/host.rs
 in: serve
 find: if phase == Phase::Hook {
-occurrence: 2
 replace: if phase == Phase::Evaluation {
 caught-by:
     cineris-ext::it serve::a_hook_cannot_put_a_question_and_only_a_tool_call_writes
@@ -793,7 +792,7 @@ rule: A protected path a program changed stops the turn through the policy, so t
 os: linux
 file: crates/cineris-core/src/ext/exec.rs
 in: look_after
-find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Stopped(note));
+find: if let Some(turn) = turn_to_stop(host, cx) { host.parts.policy.stop_turn(turn, note.clone()); } return Err(HostError::Stopped(note));
 replace: return Err(HostError::Stopped(note));
 caught-by:
     cineris-core::it hook_commands::confined::sys_a_hooks_writes_are_confined_and_looked_at
@@ -802,8 +801,8 @@ caught-by:
 rule: A protected path a program changed ends its call, naming the change.
 file: crates/cineris-core/src/ext/exec.rs
 in: look_after
-find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Stopped(note));
-replace: host.parts.policy.stop_turn(cx.turn, note.clone()); return Ok(());
+find: if let Some(turn) = turn_to_stop(host, cx) { host.parts.policy.stop_turn(turn, note.clone()); } return Err(HostError::Stopped(note));
+replace: if let Some(turn) = turn_to_stop(host, cx) { host.parts.policy.stop_turn(turn, note.clone()); } return Ok(());
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
 
@@ -1676,8 +1675,8 @@ caught-by:
 rule: A protected path a program changed stops the script's call, not only the turn: a script that catches the error does not go on.
 file: crates/cineris-core/src/ext/exec.rs
 in: look_after
-find: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Stopped(note));
-replace: host.parts.policy.stop_turn(cx.turn, note.clone()); return Err(HostError::Failed(note));
+find: if let Some(turn) = turn_to_stop(host, cx) { host.parts.policy.stop_turn(turn, note.clone()); } return Err(HostError::Stopped(note));
+replace: if let Some(turn) = turn_to_stop(host, cx) { host.parts.policy.stop_turn(turn, note.clone()); } return Err(HostError::Failed(note));
 caught-by:
     cineris-core::it ext_exec::confined::sys_a_script_that_catches_a_protected_change_does_not_go_on
     cineris-core::it ext_exec::confined::sys_a_program_that_writes_a_protected_path_fails_and_stops_the_turn
