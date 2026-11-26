@@ -61,7 +61,9 @@ pub mod session;
 pub mod snapshot;
 pub mod store;
 
-pub use base::{BaseCapture, BaseLimits, BaseState, Git, KeepGate, SystemGit};
+pub use base::{
+    BASE_STATE_HANDED_OVER, BaseCapture, BaseLimits, BaseState, Git, KeepGate, SystemGit,
+};
 pub use entry::{Before, Body, Entry, EntryId, FORMAT_VERSION, Kind};
 pub use error::{Result, SessionError};
 pub use file::Durability;

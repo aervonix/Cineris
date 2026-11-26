@@ -376,12 +376,15 @@ fn sys_the_base_state_is_taken_by_a_git_inside_the_sandbox() {
                 options.sandbox = Some(Support::NoLandlock);
             }
         });
+        let capture = crate::BaseCapture::watch();
         world.run(async {
             let front = Front::start_as(&world, &core, cineris_core::ClientInfo::user(), at(level))
                 .await
                 .expect("the session starts");
             front.turn("hello").await;
-            // Closing waits for the base state.
+            // Closing waits for the base state only so long: it is waited
+            // for here.
+            capture.taken().await;
             front.close().await;
             let lines = front.log(&world);
             let base = lines

@@ -1340,6 +1340,49 @@ pub async fn poll_once<F: Future>(future: std::pin::Pin<&mut F>) -> std::task::P
     std::future::poll_fn(|cx| std::task::Poll::Ready(future.as_mut().poll(cx))).await
 }
 
+/// The session's capture of the workspace's starting state, watched from
+/// before the session starts, so that a test can wait for it to be over
+/// (`cineris_session::BASE_STATE_HANDED_OVER`). A test that reads the
+/// `base` record waits for it before the session's close, which waits for
+/// the capture for only two seconds and lets a slower one go with the
+/// session (by design); and one whose turn runs git waits before the turn,
+/// since the turn's git can hold the index's lock while the capture's git
+/// lists the untracked files, which then records itself incomplete. Both
+/// failed under load when the tests leaned on the timing.
+pub struct BaseCapture(cineris_testkit::Hold);
+
+impl BaseCapture {
+    /// How long [`taken`](Self::taken) waits at most: a bound only, above
+    /// every tier's time limit, so that the test's own limit is what stops
+    /// a capture that never ends, with the wait named in its report.
+    const BOUND: Duration = Duration::from_secs(60);
+
+    /// Watches the capture of the next session to start. Made before it
+    /// starts: a capture already over is not seen.
+    #[track_caller]
+    pub fn watch() -> Self {
+        Self(cineris_testkit::Hold::new(
+            cineris_session::BASE_STATE_HANDED_OVER,
+        ))
+    }
+
+    /// Waits until the capture has handed its state to the session, and
+    /// lets its thread go on.
+    pub async fn taken(&self) {
+        let _waiting = cineris_testkit::watch::doing(format!(
+            "waits for the base state to be taken: {}",
+            self.0.name()
+        ));
+        let taken = self.0.wait_reached_times_async(1, Self::BOUND).await;
+        self.0.release();
+        assert!(
+            taken,
+            "the base state was not taken within {:?}",
+            Self::BOUND
+        );
+    }
+}
+
 /// Lets every task that can run without the test's help run.
 pub async fn settle() {
     for _ in 0..32 {

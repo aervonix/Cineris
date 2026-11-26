@@ -211,6 +211,7 @@ fn sys_the_base_state_keeps_only_what_the_agent_could_read_unasked() {
         options.base_capture = true;
         options.trust_project = true;
     });
+    let capture = crate::BaseCapture::watch();
     world.run(async {
         let front = Front::start_as(
             &world,
@@ -221,6 +222,9 @@ fn sys_the_base_state_keeps_only_what_the_agent_could_read_unasked() {
         .await
         .unwrap();
         front.turn("hello").await;
+        // The close waits for the capture only so long: it is waited for
+        // here.
+        capture.taken().await;
         front.close().await;
         let log = front.log(&world);
         let base = log
