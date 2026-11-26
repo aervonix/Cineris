@@ -140,8 +140,9 @@ fn a_change_that_puts_the_modification_time_back_is_still_found() {
     let scratch = workspace("time_put_back");
     let ws = scratch.join("ws");
     let config = ws.join(".git/config");
-    // Content too large to keep: only what the system sets, the change
-    // time and the inode, can tell.
+    // Content too large to keep, and small enough to hash: the hash tells,
+    // whatever the change time does. A file past the hash cap is left to
+    // what the system sets, in the two tests after this one.
     let watch = unhurried_watch(&ws).with_limits(Limits {
         file_bytes: 0,
         ..unhurried()
@@ -159,6 +160,107 @@ fn a_change_that_puts_the_modification_time_back_is_still_found() {
     let (changed, _) = watch.changes_since(&before);
     assert_eq!(changed.len(), 1, "{changed:?}");
     assert_eq!(changed[0].change, Change::Modified);
+}
+
+/// Where neither look kept or hashed the content (a file past the hash
+/// cap), and for what is neither a file, a folder nor a link (a FIFO, a
+/// socket), what only the system sets decides: a change time or an inode
+/// that moved is a change, with the size and the modification time as they
+/// were.
+#[test]
+fn the_stamp_decides_where_neither_content_nor_hash_is_known() {
+    let old = Entry {
+        kind: Kind::File,
+        bytes: 4096,
+        modified: Some(SystemTime::UNIX_EPOCH),
+        stamp: Stamp {
+            changed: (1, 0),
+            inode: 7,
+            mode: 0o100_644,
+        },
+        content: None,
+        hash: None,
+        link: None,
+        followed: false,
+    };
+    assert_eq!(old.change_from(&old), None);
+    let changed_later = Entry {
+        stamp: Stamp {
+            changed: (1, 1),
+            ..old.stamp
+        },
+        ..old.clone()
+    };
+    assert_eq!(changed_later.change_from(&old), Some(Before::Unknown));
+    let replaced = Entry {
+        stamp: Stamp {
+            inode: 8,
+            ..old.stamp
+        },
+        ..old.clone()
+    };
+    assert_eq!(replaced.change_from(&old), Some(Before::Unknown));
+    let other = Entry {
+        kind: Kind::Other,
+        bytes: 0,
+        ..old.clone()
+    };
+    assert_eq!(other.change_from(&other), None);
+    let other_replaced = Entry {
+        stamp: Stamp {
+            inode: 8,
+            ..other.stamp
+        },
+        ..other.clone()
+    };
+    assert_eq!(other_replaced.change_from(&other), Some(Before::Unknown));
+}
+
+/// A file too large to keep or to hash, replaced by one of the same size
+/// with its modification time put back: only what the system sets shows
+/// it, here its inode. (Its change time moves too, but on a file system
+/// whose clock is coarse it may not between two writes close together, so
+/// the test does not lean on it.) Unix only: elsewhere the stamp holds no
+/// inode, and the sandbox enforces on Linux.
+#[cfg(unix)]
+#[test]
+fn a_file_too_large_to_hash_replaced_with_its_size_and_time_put_back_is_found() {
+    let scratch = workspace("too_large_replaced");
+    let ws = scratch.join("ws");
+    let config = ws.join(".git/config");
+    fs::write(&config, vec![b'a'; 4096]).unwrap();
+    let watch = unhurried_watch(&ws).with_limits(Limits {
+        file_bytes: 0,
+        hash_bytes: 1024,
+        ..unhurried()
+    });
+    let before = watch.take();
+    assert!(!before.is_complete(), "the file was hashed");
+    let time = fs::metadata(&config).unwrap().modified().unwrap();
+    let new = ws.join("src/config.new");
+    fs::write(&new, vec![b'b'; 4096]).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&new)
+        .unwrap()
+        .set_modified(time)
+        .unwrap();
+    fs::rename(&new, &config).unwrap();
+    let (changed, _) = watch.changes_since(&before);
+    let found: Vec<(&Path, Change, &Before)> = changed
+        .iter()
+        .map(|changed| {
+            (
+                changed.path.strip_prefix(&ws).unwrap(),
+                changed.change,
+                &changed.before,
+            )
+        })
+        .collect();
+    assert_eq!(
+        found,
+        vec![(Path::new(".git/config"), Change::Modified, &Before::Unknown)]
+    );
 }
 
 /// A file too large to keep or to hash is compared by its size and times
