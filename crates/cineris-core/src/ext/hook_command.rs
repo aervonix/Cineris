@@ -273,6 +273,25 @@ pub(crate) fn session_notice(hook: &str, context: &str) -> String {
 }
 
 impl SessionHooks {
+    /// Why a prompt would be refused by a gate that cannot run, if one is
+    /// held on `prompt.submit`: a refused entry of the user's, a trusted
+    /// project's changed since it was approved, or an extension's held gate.
+    /// What a script command checks before it runs (since step 28's
+    /// commands), since its text would be refused.
+    pub(crate) fn prompt_gate_held(&self) -> Option<String> {
+        if let Some(refused) = self
+            .refused
+            .iter()
+            .find(|refused| refused.event == Some(Event::PromptSubmit) && !refused.observe)
+        {
+            return Some(format!(
+                "the hook `{}` on `prompt.submit` cannot run",
+                in_code(&refused.name)
+            ));
+        }
+        self.scripts.held_on(cineris_agent::HookEvent::PromptSubmit)
+    }
+
     /// The hooks on `event` of the session's own (`session.start`,
     /// `session.end`), each run on a task of its own, together, with its
     /// cancellation: the runs, and whether each is waited for.
@@ -773,6 +792,35 @@ impl HookCommands {
             "The hook `{}` stopped a turn: {note} The prompt was not sent, so that you can look \
              first. Send it again to go on.",
             in_code(hook)
+        ));
+    }
+
+    /// The turn running now, if one is.
+    pub(crate) fn running_turn(&self) -> Option<TurnId> {
+        (self.running)()
+    }
+
+    /// An extension's command `shown` (`/tracker:deploy`) was stopped by a
+    /// stop of its own (since step 28's commands): the user is told at once,
+    /// the turn running now, if one is, stops, and the next prompt is
+    /// refused once, as for a hook of no turn.
+    pub(crate) fn command_stopped(&self, shown: &str, note: &str) {
+        (self.parts.tell)(format!(
+            "The command `{}` was stopped: {note}",
+            in_code(shown)
+        ));
+        if let Some(running) = (self.running)() {
+            self.parts
+                .policy
+                .stop_turn(turn_number(&running), note.to_owned());
+        }
+        *self
+            .stop
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(format!(
+            "The command `{}` was stopped: {note} The prompt was not sent, so that you can look \
+             first. Send it again to go on.",
+            in_code(shown)
         ));
     }
 

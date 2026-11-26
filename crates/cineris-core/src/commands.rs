@@ -37,6 +37,22 @@ use toml::Value;
 use crate::clients::ClientId;
 use crate::core::{Core, Live, OpError, error};
 
+/// A point of a `turn/start` that names a command, as its run is put on
+/// the session, before the step's waits (a point a test can stop at:
+/// [`cineris_base::hook`]).
+pub const A_COMMAND_IS_TAKEN: &str = "core: a command's run is taken";
+
+/// The time an extension's command has, from when it is asked, whatever its
+/// manifest gives its tools: it runs while the user waits at the prompt,
+/// inside `turn/start`'s step (the maintainers, after the early review of
+/// the commands). At most [`MAX_COMMAND_TIME`].
+#[cfg(feature = "scripts")]
+pub(crate) const COMMAND_TIME: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The most time an extension's command may be given.
+#[cfg(feature = "scripts")]
+pub(crate) const MAX_COMMAND_TIME: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// A point of a `turn/start` that names an extension's command: its token
 /// is on the session, and its script is about to be called (a point a test
 /// can stop at: [`cineris_base::hook`]).
@@ -151,6 +167,11 @@ pub(crate) async fn expand(
     core: &Core,
     live: &Arc<Live>,
     call: CommandCall,
+    #[cfg_attr(
+        not(feature = "scripts"),
+        allow(unused_variables, reason = "a file's command runs nothing")
+    )]
+    run: &Run<'_>,
 ) -> Result<(Vec<Part>, PromptCommand), OpError> {
     let found = find(core, live).await?;
     let shown = cineris_base::in_code(&format!("/{}", call.name)).into_owned();
@@ -191,7 +212,7 @@ pub(crate) async fn expand(
             .iter()
             .find(|definition| definition.name == command)
     {
-        let text = run_script(live, loaded, definition, &call.args).await?;
+        let text = run_script(live, run, loaded, definition, &call.args).await?;
         return Ok((
             vec![Part::text(text)],
             PromptCommand {
@@ -266,6 +287,7 @@ async fn find(core: &Core, live: &Arc<Live>) -> Result<Found, OpError> {
 #[cfg(feature = "scripts")]
 async fn run_script(
     live: &Arc<Live>,
+    run: &Run<'_>,
     extension: &Arc<crate::ext::tools::LoadedExtension>,
     definition: &cineris_ext::registration::CommandDef,
     typed: &str,
@@ -288,17 +310,47 @@ async fn run_script(
     // a question it puts names this run of the command in the turn's place,
     // by ids of its own ([`run_ids`]).
     let (turn, call_id, item) = run_ids();
-    // Its own token, which an interrupt cancels without waiting behind the
-    // `turn/start` it runs in ([`crate::Core::early`]).
-    let cancel = hooks.commands.runs_token().child();
-    let _running = Running::start(live, cancel.clone());
+    // Nothing runs where its prompt would be refused: a stop left for the
+    // next prompt (taken, as the prompt would have taken it), a gate held on
+    // `prompt.submit`, or the running turn stopped.
+    if let Some(stop) = hooks.commands.take_stop() {
+        return Err(error(ErrorKind::Permission, code::COMMAND_REFUSED, stop));
+    }
+    if let Some(why) = hooks.prompt_gate_held() {
+        return Err(error(
+            ErrorKind::Permission,
+            code::COMMAND_REFUSED,
+            format!(
+                "`{}` was not run: {why}, which would refuse what it sends.",
+                cineris_base::in_code(&shown)
+            ),
+        ));
+    }
+    let running = hooks.commands.running_turn();
+    let running_number = running.as_ref().map_or(0, crate::ext::turn_number);
+    if running_number != 0
+        && let Some(stop) = policy.stopped_for_hooks(running_number)
+    {
+        return Err(error(
+            ErrorKind::Permission,
+            code::COMMAND_REFUSED,
+            format!(
+                "`{}` was not run: the running turn was stopped. {stop}",
+                cineris_base::in_code(&shown)
+            ),
+        ));
+    }
     cineris_base::hook::await_point!(A_SCRIPT_COMMAND_RUNS);
     let cx = RunCx::new(
         Arc::clone(&hooks.paths),
         Arc::clone(hooks.commands.content()),
         Arc::new(FileTable::new()),
     )
-    .with_cancel(cancel.clone())
+    .with_cancel(run.cancel.clone())
+    .with_kill(run.kill.clone())
+    // The turn running as it runs, if one is: a stop of its programs stops
+    // that turn, and never turn 0.
+    .with_turn(running_number)
     .with_gate(cineris_agent::Policy::read_gate(policy.as_ref()))
     .with_call(CallRef {
         session,
@@ -307,19 +359,26 @@ async fn run_script(
         item,
     });
     let failed = |why: String| error(ErrorKind::Tool, code::COMMAND_FAILED, sentence(&why));
-    let value = match extension.call_command(&definition.name, input, &cx).await {
+    let ran = extension
+        .call_command(&definition.name, input, &cx, COMMAND_TIME)
+        .await;
+    let value = match ran {
         Ok(value) => value,
-        Err(_) if cancel.is_cancelled() => {
-            return Err(error(
-                ErrorKind::Interrupted,
-                code::COMMAND_FAILED,
-                format!(
-                    "`{}` was interrupted, so nothing was sent and no turn started.",
-                    cineris_base::in_code(&shown)
-                ),
-            ));
+        Err(_) if run.cancel.is_cancelled() => {
+            return Err(interrupted(&format!(
+                "{}:{}",
+                extension.name(),
+                definition.name
+            )));
         }
-        Err(why) => return Err(failed(why)),
+        // A stop of its own (a program's look at the protected paths, a
+        // question answered with a stop): told, and the next prompt refused
+        // once, as a hook's stop is; the running turn stops with it.
+        Err(crate::ext::tools::CommandFailed::Stopped(note)) => {
+            hooks.commands.command_stopped(&shown, &note);
+            return Err(failed(format!("`{shown}` was stopped: {note}")));
+        }
+        Err(crate::ext::tools::CommandFailed::Other(why)) => return Err(failed(why)),
     };
     let text = match value {
         serde_json::Value::String(text) if !text.trim().is_empty() => text,
@@ -370,24 +429,74 @@ fn run_ids() -> (
     )
 }
 
-/// A command running in a session's `turn/start` step, its token on the
-/// session for an interrupt to cancel, until it ends.
-#[cfg(feature = "scripts")]
-struct Running<'a>(&'a Live);
+/// One command sent in a `turn/start`, from the top of its step to its
+/// end: its tokens are on the session, so that an interrupt from any client
+/// that may drive the session cancels it at once, whatever it waits for
+/// (another start, the extensions, `session.start`'s hooks, its script,
+/// a question, a program). Each run has tokens of its own: a fresh child
+/// of `parent` (the session's, so that its close stops it), and one that
+/// kills its programs at once, for a second interrupt.
+pub(crate) struct Run<'a> {
+    live: &'a Live,
+    id: u64,
+    pub(crate) cancel: cineris_base::CancelToken,
+    pub(crate) kill: cineris_base::CancelToken,
+}
 
-#[cfg(feature = "scripts")]
-impl<'a> Running<'a> {
-    fn start(live: &'a Live, cancel: cineris_base::CancelToken) -> Self {
-        *crate::core::lock(&live.running_command) = Some(cancel);
-        Self(live)
+impl<'a> Run<'a> {
+    /// A run of a command in `live`, its tokens put on the session now.
+    pub(crate) fn start(live: &'a Live, parent: &cineris_base::CancelToken) -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let (cancel, kill) = (parent.child(), cineris_base::CancelToken::new());
+        crate::core::lock(&live.running_commands).push((id, cancel.clone(), kill.clone()));
+        Self {
+            live,
+            id,
+            cancel,
+            kill,
+        }
+    }
+
+    /// `Err` when the run was interrupted: nothing is sent and no turn
+    /// starts, said with the kind `interrupted`, which a front end does not
+    /// show as a failure.
+    pub(crate) fn go_on(&self, name: &str) -> Result<(), OpError> {
+        if self.cancel.is_cancelled() {
+            Err(interrupted(name))
+        } else {
+            Ok(())
+        }
     }
 }
 
-#[cfg(feature = "scripts")]
-impl Drop for Running<'_> {
+impl Drop for Run<'_> {
     fn drop(&mut self) {
-        *crate::core::lock(&self.0.running_command) = None;
+        crate::core::lock(&self.live.running_commands).retain(|(id, _, _)| *id != self.id);
     }
+}
+
+/// Interrupts every command running in `live`'s `turn/start` steps, and
+/// with `now` kills their programs at once.
+pub(crate) fn interrupt(live: &Live, now: bool) {
+    for (_, cancel, kill) in crate::core::lock(&live.running_commands).iter() {
+        cancel.cancel();
+        if now {
+            kill.cancel();
+        }
+    }
+}
+
+/// The refusal of a command that was interrupted.
+fn interrupted(name: &str) -> Box<cineris_protocol::ErrorData> {
+    error(
+        ErrorKind::Interrupted,
+        code::COMMAND_FAILED,
+        format!(
+            "`{}` was interrupted, so nothing was sent and no turn started.",
+            cineris_base::in_code(&format!("/{name}"))
+        ),
+    )
 }
 
 /// Why a command that names `profile` is not sent: what the profile would

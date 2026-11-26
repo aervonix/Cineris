@@ -35,6 +35,7 @@ pub mod core;
 mod day;
 pub mod events;
 pub mod ext;
+pub use commands::A_COMMAND_IS_TAKEN;
 #[cfg(feature = "scripts")]
 pub use commands::A_SCRIPT_COMMAND_RUNS;
 mod instructions;

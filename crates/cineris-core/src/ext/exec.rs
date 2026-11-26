@@ -474,7 +474,7 @@ pub(crate) async fn run(
             parts.rounds.as_ref(),
             &host.parts.policy,
             before,
-            cx.turn,
+            turn_to_stop(host, cx),
             &cx.paths.root().to_fs_path(),
         )
         .await
@@ -615,6 +615,15 @@ async fn record_changes(
 /// changed or the look stopped short where the one before did not. A
 /// program that left a process the kill could not clear stops the turn
 /// too: it may still write one.
+/// The turn a program's stop stops: its call's. A command's runs outside
+/// any turn, and stops the turn running as it runs, if one is (its
+/// context's turn), and never turn 0, the number of what is of no turn:
+/// the command's own stop is told and refuses the next prompt
+/// (`crate::commands`).
+fn turn_to_stop(host: &CallHost<'_>, cx: &cineris_tools::RunCx) -> Option<u32> {
+    (host.phase != cineris_ext::host::Phase::Command || cx.turn != 0).then_some(cx.turn)
+}
+
 async fn look_after(
     parts: &ExecParts,
     host: &CallHost<'_>,
@@ -657,7 +666,9 @@ async fn look_after(
         if found.stops_the_turn() {
             // The turn stops, and the script's call with it: a script that
             // caught a refusal would go on as if nothing had changed.
-            host.parts.policy.stop_turn(cx.turn, note.clone());
+            if let Some(turn) = turn_to_stop(host, cx) {
+                host.parts.policy.stop_turn(turn, note.clone());
+            }
             return Err(HostError::Stopped(note));
         }
         // A workspace already past the bound before the program: told,
@@ -677,7 +688,9 @@ async fn look_after(
                     paths are looked at again before the next command and at the session's \
                     close.]"
         };
-        host.parts.policy.stop_turn(cx.turn, note.to_owned());
+        if let Some(turn) = turn_to_stop(host, cx) {
+            host.parts.policy.stop_turn(turn, note.to_owned());
+        }
         return Err(HostError::Stopped(note.to_owned()));
     }
     Ok(())

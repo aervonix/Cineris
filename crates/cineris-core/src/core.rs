@@ -418,10 +418,11 @@ pub(crate) struct Live {
     /// One turn's start at a time: the looks at its start and the prompt's
     /// handing to the loop are one step (step 28).
     pub(crate) turn_start: tokio::sync::Mutex<()>,
-    /// The token of the extension's command running in a `turn/start`'s
-    /// step, if one is: an interrupt cancels it without waiting behind it
-    /// (step 28).
-    pub(crate) running_command: Mutex<Option<CancelToken>>,
+    /// The tokens of each command sent in a `turn/start` whose step has
+    /// not ended, by its run: an interrupt cancels them without waiting
+    /// behind the step, and a second one kills their programs
+    /// (`crate::commands::Run`; step 28).
+    pub(crate) running_commands: Mutex<Vec<(u64, CancelToken, CancelToken)>>,
     /// The session's hook commands (step 28).
     #[cfg(feature = "scripts")]
     pub(crate) command_hooks: Arc<crate::ext::SessionHooks>,
@@ -955,7 +956,7 @@ impl Core {
             #[cfg(feature = "scripts")]
             command_hooks,
             turn_start: tokio::sync::Mutex::new(()),
-            running_command: Mutex::new(None),
+            running_commands: Mutex::new(Vec::new()),
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The session's `session.start` hooks, now that it is open: the
@@ -1359,9 +1360,7 @@ impl Core {
         if self.may_drive(client).is_err() {
             return;
         }
-        if let Some(command) = lock(&live.running_command).as_ref() {
-            command.cancel();
-        }
+        crate::commands::interrupt(&live, params.now);
     }
 
     /// The body of [`Core::handle`].
@@ -1756,6 +1755,20 @@ impl Core {
                         "A prompt that names a command holds nothing else: its `input` is empty.",
                     ));
                 }
+                // A command's run is on the session from here, before any
+                // wait: an interrupt from any client that may drive it, sent
+                // while it waits or runs, stops it (step 28).
+                #[cfg(feature = "scripts")]
+                let parent = live.command_hooks.commands.runs_token();
+                #[cfg(not(feature = "scripts"))]
+                let parent = self.inner.options.cancel.clone();
+                let run = params.command.as_ref().map(|call| {
+                    (
+                        crate::commands::Run::start(&live, &parent),
+                        call.name.clone(),
+                    )
+                });
+                cineris_base::hook::await_point!(crate::commands::A_COMMAND_IS_TAKEN);
                 // One start at a time: no other client's prompt starts a
                 // turn between the look below and this prompt's handing to
                 // the loop, so the look at what the extensions were found
@@ -1801,7 +1814,10 @@ impl Core {
                 // a gate they hold refuses it (step 28).
                 let (input, command) = match params.command {
                     Some(call) => {
-                        let (input, command) = crate::commands::expand(self, &live, call).await?;
+                        let (run, name) = run.as_ref().expect("a command has its run");
+                        run.go_on(name)?;
+                        let (input, command) =
+                            crate::commands::expand(self, &live, call, run).await?;
                         (input, Some(command))
                     }
                     None => (params.input, None),
@@ -1813,6 +1829,11 @@ impl Core {
                 // give it back. Every prompt takes one, a few kept at most;
                 // let go when the loop refuses it (the review of step 28's
                 // second pull request, M5, and its re-check).
+                // Interrupted as it expanded, after its script ended: nothing is
+                // sent.
+                if let Some((run, name)) = &run {
+                    run.go_on(name)?;
+                }
                 let ticket = live.sink.sent_by(client.0);
                 let result = live
                     .handle
@@ -1827,9 +1848,7 @@ impl Core {
                 self.may_drive(client)?;
                 // An extension's command still running in a `turn/start`'s
                 // step is stopped too: it started no turn yet.
-                if let Some(command) = lock(&live.running_command).as_ref() {
-                    command.cancel();
-                }
+                crate::commands::interrupt(&live, params.now);
                 let result = if params.now {
                     live.handle.interrupt_now()
                 } else {

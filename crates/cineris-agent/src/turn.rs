@@ -925,6 +925,10 @@ impl Session {
 
     /// Gives a prompt that was not sent back to the front end, for its
     /// editor, with the server's ticket for it.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a prompt given back is its parts and everything it was sent with, each carried as it came"
+    )]
     fn give_back(
         &self,
         turn: &Turn,
