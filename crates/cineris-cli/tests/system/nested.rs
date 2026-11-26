@@ -125,7 +125,7 @@ impl Nested {
 #[test]
 fn sys_cineris_run_by_a_sessions_command_is_held_or_refused() {
     let world = Nested::run();
-    let rules: [(&str, fn(&Nested)); 3] = [
+    let rules: [crate::Rule<Nested>; 3] = [
         (
             "a_nested_headless_run_is_held_to_read_only_and_says_so",
             a_nested_headless_run_is_held_to_read_only_and_says_so,
