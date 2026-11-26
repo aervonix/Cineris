@@ -1739,6 +1739,222 @@ fn sys_a_change_between_two_commands_is_found_and_stops_the_turn() {
     });
 }
 
+/// The text of call `call`'s result among what a client was sent, once it
+/// has one.
+#[cfg(target_os = "linux")]
+fn result_in(seen: &[Outgoing], call: &str) -> Option<String> {
+    seen.iter().find_map(|outgoing| match outgoing {
+        Outgoing::Event(SessionEvent {
+            event: Event::ItemCompleted(completed),
+            ..
+        }) => match &completed.item {
+            cineris_protocol::Item::ToolResult(result) if result.call_id.as_str() == call => Some(
+                result
+                    .content
+                    .iter()
+                    .filter_map(|part| match part {
+                        cineris_protocol::Part::Text(text) => Some(text.text.as_str()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+/// What a call of a stopped turn is told when the policy decides it again:
+/// the round's own words for a call the policy stopped.
+#[cfg(target_os = "linux")]
+const DECIDED_AS_THE_STOP: &str = "This call was not allowed to run, and the turn was stopped.";
+
+/// What `StopsWithTurn` tells a call of a stopped turn that had started.
+#[cfg(target_os = "linux")]
+const REFUSED_AS_STARTED: &str = "The call was not run: the turn was stopped.";
+
+/// A command found to only read runs beside the round's other calls, and
+/// its look after it can stop the turn while a later call that was allowed
+/// before the stop has not started: the policy's own guards are all that
+/// keep that call from starting in the window before the round takes the
+/// command's result. Here the command is held at the point after its stop
+/// (`AFTER_THE_TURN_IS_STOPPED`), and a `write` to a protected path is
+/// answered "allow" just before the stop and its answer recorded just after
+/// (held at `CHANGING_APPROVALS`, past the answer's own look for a stop), so
+/// that the call is ready to start in the window; a command written after it
+/// that only reads waited behind its question. The stop counts as a
+/// narrowing, so both are decided again, and decided as the stop: neither
+/// starts. Without the narrowing, or with a stopped turn's calls decided as
+/// anything else, both start, and only `StopsWithTurn` refuses them, with
+/// its own words (the breaks `a-stop-of-the-turn-moves-no-count` and
+/// `a-stopped-turn-goes-on`; `docs/architecture/03-agent-loop.md`, "A stop
+/// from a call's run").
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_call_ready_when_a_command_stops_the_turn_is_decided_again_as_the_stop() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("ready_in_the_stop", []);
+    world.put(".git/config", "[core]\n");
+    world.put(".github/workflows/ci.yml", "on: push\n");
+    world.put("a.txt", "a\n");
+    world.put("b.txt", "b\n");
+    world.provider.push(calls(&[
+        ("c1", "shell", json!({"command": "cat a.txt"})),
+        (
+            "c2",
+            "write",
+            json!({"path": ".github/workflows/new.yml", "content": "on: push\n"}),
+        ),
+        ("c3", "shell", json!({"command": "cat b.txt"})),
+    ]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    let looks = cineris_testkit::Hold::new(cineris_core::BEFORE_THE_LOOK_AFTER);
+    let stopped = cineris_testkit::Hold::new(cineris_core::AFTER_THE_TURN_IS_STOPPED);
+    let recording = cineris_testkit::Hold::new(cineris_core::CHANGING_APPROVALS);
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        front.prompt("go").await;
+        let mut waiting = std::pin::pin!(std::future::pending::<()>());
+        // The command has run, its look after not taken; the write is asked
+        // about beside it.
+        let (id, request) = front.approval().await;
+        assert_eq!(request.call_id.as_str(), "c2", "{request:?}");
+        looks.drive_until_reached(waiting.as_mut()).await;
+        // Allowed before the stop: the answer passes its look for a stop,
+        // and waits to be recorded.
+        front
+            .answer(&id, cineris_protocol::methods::ApprovalChoice::AllowOnce)
+            .expect("the write is allowed");
+        recording.drive_until_reached(waiting.as_mut()).await;
+        // A protected path changes while the command runs: its look after
+        // finds it, and it stops the turn.
+        world.put(".github/workflows/ci.yml", "on: [push, pull_request]\n");
+        looks.release();
+        stopped.drive_until_reached(waiting.as_mut()).await;
+        // The answer reaches the round in the window: the write is ready,
+        // and the read behind its question free to go.
+        recording.release();
+        front
+            .until(|seen| result_in(seen, "c2").is_some() && result_in(seen, "c3").is_some())
+            .await;
+        assert_eq!(stopped.stopped(), 1, "the command's result was taken first");
+        stopped.release();
+        front.turns(1).await;
+        let seen = front.seen.borrow().clone();
+        let write = result_in(&seen, "c2").unwrap_or_default();
+        assert!(
+            write.starts_with(DECIDED_AS_THE_STOP) && write.contains("ci.yml"),
+            "the write was not decided again as the stop: {write}"
+        );
+        let read = result_in(&seen, "c3").unwrap_or_default();
+        assert!(
+            !read.contains(REFUSED_AS_STARTED)
+                && (read.starts_with(DECIDED_AS_THE_STOP)
+                    || read.starts_with("This call did not run: the turn was stopped")),
+            "the read started after the stop: {read}"
+        );
+        assert!(
+            result_in(&seen, "c1").is_some_and(|shown| shown.contains("They were put back")),
+            "{:?}",
+            front.results()
+        );
+        assert!(world.read(".github/workflows/new.yml").is_none());
+        assert_eq!(world.provider.remaining(), 1, "the model was asked again");
+        front.close().await;
+    });
+    for hold in [&looks, &stopped, &recording] {
+        assert_eq!(hold.timed_out(), 0, "{}", hold.name());
+    }
+}
+
+/// `StopsWithTurn` is the only guard of a call that has started when
+/// another call's run stops the turn. Two commands found to only read run
+/// side by side, held as they are about to run until both have started; a
+/// hook was written by hand between the turns. The first let go is refused
+/// by its look's continuity check, which stops the turn; the second, let go
+/// after, is refused by `StopsWithTurn` before it reaches the shell. Without
+/// that refusal the shell's own continuity check refuses it, with its own
+/// words (the break `a-stopped-turn-runs-another-command`).
+#[cfg(target_os = "linux")]
+#[test]
+fn sys_a_call_started_beside_a_command_that_stops_the_turn_is_refused_when_it_runs() {
+    if !enforcing_here() {
+        return;
+    }
+    let world = World::new("started_beside_a_stop", []);
+    world.put(".git/config", "[core]\n");
+    world.put(".git/hooks/pre-commit.sample", "#!/bin/sh\n");
+    world.put("a.txt", "a\n");
+    world.put("b.txt", "b\n");
+    world
+        .provider
+        .push(calls(&[("c1", "shell", json!({"command": "cat a.txt"}))]));
+    world.provider.push(says("First done."));
+    world.provider.push(calls(&[
+        ("c2", "shell", json!({"command": "cat a.txt"})),
+        ("c3", "shell", json!({"command": "cat b.txt"})),
+    ]));
+    world.provider.push(says("Done."));
+    let core = world.core_with(|options| options.launcher = Some(launcher()));
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::user(),
+            at(Level::Autonomous),
+        )
+        .await
+        .expect("the session starts");
+        // The first command is looked at after it: the look the next one's
+        // is compared with.
+        front.turn("first").await;
+        world.put(".git/hooks/pre-commit", "evil\n");
+        let started = cineris_testkit::Hold::new(cineris_agent::BEFORE_A_CALL_RUNS);
+        front.prompt("second").await;
+        let mut waiting = std::pin::pin!(std::future::pending::<()>());
+        started.drive_until_reached_times(2, waiting.as_mut()).await;
+        started.let_one_go();
+        front
+            .until(|seen| result_in(seen, "c2").is_some() || result_in(seen, "c3").is_some())
+            .await;
+        started.release();
+        front.turns(2).await;
+        assert_eq!(started.timed_out(), 0);
+        let seen = front.seen.borrow().clone();
+        let (first, second) = if result_in(&seen, "c2")
+            .is_some_and(|shown| shown.starts_with("The command was not run."))
+        {
+            ("c2", "c3")
+        } else {
+            ("c3", "c2")
+        };
+        let first = result_in(&seen, first).unwrap_or_default();
+        assert!(
+            first.starts_with("The command was not run.")
+                && first.contains("changed since the last command"),
+            "{first}"
+        );
+        let second = result_in(&seen, second).unwrap_or_default();
+        assert!(
+            second.starts_with(REFUSED_AS_STARTED)
+                && second.contains("changed since the last command"),
+            "the call that had started was not refused by the stop: {second}"
+        );
+        assert_eq!(world.provider.remaining(), 1, "the model was asked again");
+        front.close().await;
+    });
+}
+
 /// A protected path the harness's own tools changed between two confined
 /// commands — an `edit` or `write` in one turn, a confined command in the
 /// next — is not reported by the continuity check: it is the harness's, and

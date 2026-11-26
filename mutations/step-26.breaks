@@ -264,12 +264,14 @@ caught-by:
     cineris-core::it verify::sys_a_check_that_changes_a_protected_path_stops_the_turn_and_undo_puts_it_back
 
 [break] a-stopped-turn-goes-on
-rule: Once a turn is stopped, no later call of it is decided as anything but a stop. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result: a command found to only read runs beside other calls that only read. `StopsWithTurn` holds that window too, and a project's check reads the stop itself.
+rule: Once a turn is stopped, no later call of it is decided as anything but a stop. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own: this guard is a second line for a call that would start between the stop and the round's taking of the call's result (a command found to only read runs beside other calls), and the only one for a call after a stop an extension's command made. `StopsWithTurn` holds the window too, and a project's check reads the stop itself.
 file: crates/cineris-core/src/policy.rs
 in: Policy::decide
 find: if let Some(reason) = self.stopped(call) {
 replace: if let Some(reason) = self.stopped(call).filter(|_| false) {
-expect: survives
+caught-by:
+    cineris-core::it sandbox::sys_a_call_ready_when_a_command_stops_the_turn_is_decided_again_as_the_stop
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
 
 [break] an-incomplete-look-is-not-said
 rule: When the look at protected paths stops at its bound, the result says so.
@@ -372,12 +374,13 @@ caught-by:
     cineris-session snapshot::tests::a_path_reached_through_a_link_is_not_put_back
 
 [break] a-stopped-turn-runs-another-command
-rule: Once a command stopped the turn, no call of the turn that changes anything runs, even one decided before the stop. This is the only guard of a call the round has already started (its task spawned, its tool not yet called) when another call's run stops the turn: neither the round's stop nor the policy's decision again reaches a running call. Only a command found to only read can be running then, beside another. No test reaches it, and none did before the stop-ends-turn step either: the test this break named passed with it made (found by that step's review). A test can be written with `cineris_agent::BEFORE_A_CALL_RUNS`: `docs/outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md`.
+rule: Once a command stopped the turn, no call of the turn that changes anything runs, even one decided before the stop. This is the only guard of a call the round has already started (its task spawned, its tool not yet called) when another call's run stops the turn: neither the round's stop nor the policy's decision again reaches a running call. Only a command found to only read can be running then, beside another. The test holds two such commands at `cineris_agent::BEFORE_A_CALL_RUNS` until both have started, and lets one go first.
 file: crates/cineris-core/src/checkpoints.rs
 in: StopsWithTurn::run
 find: && let Some(reason) = self.policy.stopped_turn(cx.turn)
 replace: && let Some(reason) = self.policy.stopped_turn(cx.turn).filter(|_| false)
-expect: survives
+caught-by:
+    cineris-core::it sandbox::sys_a_call_started_beside_a_command_that_stops_the_turn_is_refused_when_it_runs
 
 [break] the-harness-files-inside-a-write-root
 rule: A write root that holds the harness's own files cannot be confined: the session reports the sandbox off.
