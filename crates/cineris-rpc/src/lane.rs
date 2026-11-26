@@ -35,9 +35,11 @@ pub type Outcome = Result<OpResult, Box<ErrorData>>;
 pub type Run = Arc<dyn Fn(Op) -> Pin<Box<dyn Future<Output = Outcome> + Send>> + Send + Sync>;
 
 /// What an operation does the moment it is sent, before it is routed: the
-/// core's `early`, for one client (since step 28: a `turn/interrupt` stops
-/// an extension's command running in the lane's `turn/start`, which it
-/// would otherwise wait behind). It must not wait.
+/// core's `early`, for one client (since step 28: a `turn/start` that names
+/// a command is put on its session as it is sent, and a `turn/interrupt`
+/// stops every one sent before it, the one running in the lane and those
+/// still queued in it, which it would otherwise wait behind). It must not
+/// wait.
 pub type Early = Arc<dyn Fn(&Op) + Send + Sync>;
 
 /// Where an operation runs.

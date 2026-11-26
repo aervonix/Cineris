@@ -421,8 +421,14 @@ pub(crate) struct Live {
     /// The tokens of each command sent in a `turn/start` whose step has
     /// not ended, by its run: an interrupt cancels them without waiting
     /// behind the step, and a second one kills their programs
-    /// (`crate::commands::Run`; step 28).
+    /// (`crate::commands::Run`; step 28). From when it is sent, for one
+    /// that came through a lane (`Core::early`).
     pub(crate) running_commands: Mutex<Vec<(u64, CancelToken, CancelToken)>>,
+    /// Each command's `turn/start` sent through a lane and not yet taken by
+    /// its step, by who sent it and what it calls, with its run's number in
+    /// `running_commands` (`crate::commands::sent`; the review of step 28's
+    /// commands).
+    pub(crate) sent_commands: Mutex<Vec<crate::commands::Sent>>,
     /// The session's hook commands (step 28).
     #[cfg(feature = "scripts")]
     pub(crate) command_hooks: Arc<crate::ext::SessionHooks>,
@@ -957,6 +963,7 @@ impl Core {
             command_hooks,
             turn_start: tokio::sync::Mutex::new(()),
             running_commands: Mutex::new(Vec::new()),
+            sent_commands: Mutex::new(Vec::new()),
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The session's `session.start` hooks, now that it is open: the
@@ -1344,13 +1351,30 @@ impl Core {
 
     /// What an operation does the moment it is sent, before it waits for
     /// its turn in the client's lane (`cineris_rpc::lane`): a
-    /// `turn/interrupt` stops the extension's command running in the
-    /// session's `turn/start` step, which the interrupt would otherwise
-    /// wait behind (since step 28). The interrupt itself then runs in its
-    /// order, as before. Anything else does nothing here, nor does an
-    /// interrupt from a client that may not drive the session, or has not
-    /// opened it. Never waits.
+    /// `turn/interrupt` stops every command sent in the session's
+    /// `turn/start`s whose step has not ended, the one running there, which
+    /// the interrupt would otherwise wait behind, and those sent and still
+    /// waiting in a lane for their step (since step 28). The interrupt
+    /// itself then runs in its order, as before. For that, a `turn/start`
+    /// that names a command is given its run here, as it is sent, and its
+    /// step takes it; it changes nothing else. Anything else does nothing
+    /// here, nor does an operation from a client that may not drive the
+    /// session, or has not opened it. Never waits, and only an interrupt
+    /// cancels anything.
     pub fn early(&self, client: ClientId, op: &Op) {
+        if let Op::TurnStart(params) = op {
+            if let Some(call) = &params.command
+                && let Ok(live) = self.open_for(client, &params.session_id)
+                && self.may_drive(client).is_ok()
+            {
+                #[cfg(feature = "scripts")]
+                let parent = live.command_hooks.commands.runs_token();
+                #[cfg(not(feature = "scripts"))]
+                let parent = self.inner.options.cancel.clone();
+                crate::commands::sent(&live, client, call, &parent);
+            }
+            return;
+        }
         let Op::TurnInterrupt(params) = op else {
             return;
         };
@@ -1726,6 +1750,22 @@ impl Core {
             }
             Op::TurnStart(params) => {
                 let live = self.open_for(client, &params.session_id)?;
+                // A command's run is on the session from here, before any
+                // wait or refusal: the one put there as it was sent through
+                // a lane (`Core::early`), interrupted already if an
+                // interrupt was sent behind it, or a new one. An interrupt
+                // from any client that may drive the session, sent while it
+                // waits or runs, stops it (step 28).
+                #[cfg(feature = "scripts")]
+                let parent = live.command_hooks.commands.runs_token();
+                #[cfg(not(feature = "scripts"))]
+                let parent = self.inner.options.cancel.clone();
+                let run = params.command.as_ref().map(|call| {
+                    (
+                        crate::commands::Run::taken(&live, client, call, &parent),
+                        call.name.clone(),
+                    )
+                });
                 self.may_drive(client)?;
                 // A prompt is text and images: what else a part may be is
                 // the model's or a tool's, never a person's, and a hook is
@@ -1755,19 +1795,6 @@ impl Core {
                         "A prompt that names a command holds nothing else: its `input` is empty.",
                     ));
                 }
-                // A command's run is on the session from here, before any
-                // wait: an interrupt from any client that may drive it, sent
-                // while it waits or runs, stops it (step 28).
-                #[cfg(feature = "scripts")]
-                let parent = live.command_hooks.commands.runs_token();
-                #[cfg(not(feature = "scripts"))]
-                let parent = self.inner.options.cancel.clone();
-                let run = params.command.as_ref().map(|call| {
-                    (
-                        crate::commands::Run::start(&live, &parent),
-                        call.name.clone(),
-                    )
-                });
                 cineris_base::hook::await_point!(crate::commands::A_COMMAND_IS_TAKEN);
                 // One start at a time: no other client's prompt starts a
                 // turn between the look below and this prompt's handing to
