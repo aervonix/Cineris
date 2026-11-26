@@ -225,9 +225,64 @@ fn sys_a_harnesss_job_is_found_among_the_sessions_named_objects() {
     // SAFETY: the pseudo-handle is always valid.
     let made = made_at(unsafe { GetCurrentProcess() }).unwrap();
     let own = (std::process::id(), made);
-    let named = named_jobs().expect("the runner's tests run in a session of their own");
+    let named = named_jobs(crate::session::ROOMS)
+        .expect("the runner's tests run in a session of their own")
+        .expect("one call lists the session's named objects whole");
     assert!(named.contains(&own), "{own:?} in {named:?}");
+    let (found, source) = harnesses(&Taken::new()).unwrap();
+    assert_eq!(source, Source::Namespace);
+    assert!(found.contains(&own), "{own:?} in {found:?}");
     assert!(matches!(under_a_session(), Under::Session(_)));
+}
+
+/// This test's own name, by which it runs itself again.
+const IN_PARTS_TEST: &str =
+    "session::sys::tests::sys_a_listing_that_needs_more_than_one_call_takes_the_list_of_processes";
+
+/// A listing of the logon session's named objects that needs more than one
+/// call is never trusted, nor joined from its calls: the system's list of
+/// processes, which one call gives whole, is taken in its place, and a
+/// running harness is not missed: its job is among those found, and its
+/// process is under a session's command (the review of the start-up's fix:
+/// objects removed between two calls of a listing shift the rest, and the
+/// next call skips some no call gave). The test hooks' switch
+/// (`CINERIS_TEST_SESSION_LISTING=in-parts`) gives every call a room too
+/// small for the namespace, up to a bound as small; the test runs itself
+/// again with it, in a process of its own that marks itself as a harness.
+#[test]
+#[allow(
+    clippy::disallowed_types,
+    reason = "the test runs itself again, with the switch, in a process of its own"
+)]
+fn sys_a_listing_that_needs_more_than_one_call_takes_the_list_of_processes() {
+    use cineris_base::hook::{SESSION_LISTING, SessionListing, session_listing};
+    if session_listing() == SessionListing::InParts {
+        mark().unwrap();
+        // SAFETY: the pseudo-handle is always valid.
+        let made = made_at(unsafe { GetCurrentProcess() }).unwrap();
+        let own = (std::process::id(), made);
+        let named = named_jobs(crate::session::IN_PARTS);
+        assert!(matches!(named, Ok(None)), "{named:?}");
+        let (found, source) = harnesses(&Taken::new()).unwrap();
+        assert_eq!(source, Source::Processes);
+        assert!(found.contains(&own), "{own:?} in {} found", found.len());
+        let under = under_a_session();
+        assert!(matches!(under, Under::Session(_)), "{under:?}");
+        println!("checked in parts: {under:?}");
+        return;
+    }
+    let ran = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", IN_PARTS_TEST, "--nocapture"])
+        .env(SESSION_LISTING, "in-parts")
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    assert!(ran.status.success(), "{said}");
+    assert!(said.contains("checked in parts"), "{said}");
 }
 
 /// A process described by opening it, as the line of parents is read, is

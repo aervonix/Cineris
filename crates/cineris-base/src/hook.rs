@@ -304,6 +304,55 @@ pub fn mark_fails() -> bool {
     std::env::var_os(MARK_FAILS).is_some_and(|value| !value.is_empty())
 }
 
+/// How the approving subcommands' check on Windows lists the running
+/// harnesses' jobs (`cineris_sandbox::session`): as the system gives them,
+/// always, without the `test-hooks` feature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionListing {
+    /// As the system gives it: the logon session's namespace of objects in
+    /// one call, or the system's list of processes.
+    Real,
+    /// Each call that lists the namespace given a room too small to hold
+    /// it, up to a bound as small: the listing needs more than one call,
+    /// and the system's list of processes is taken in its place.
+    InParts,
+    /// Nothing listed, and no list of processes: only a harness on the line
+    /// of parents is found.
+    Empty,
+}
+
+/// How the harnesses' jobs are listed ([`SessionListing`]): as the system
+/// gives them, without the `test-hooks` feature, which no build that is
+/// shipped or released has (`cargo xtask size` fails a shipped binary that
+/// holds [`SESSION_LISTING`]'s name). With it, as [`SESSION_LISTING`] says:
+/// for the tests of the check's two routes on Windows, which a runner
+/// cannot otherwise bring about (a namespace too large for a call, a
+/// harness found by no listing).
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+#[must_use]
+pub const fn session_listing() -> SessionListing {
+    SessionListing::Real
+}
+
+/// The variable a test sets on a process to choose how its check lists
+/// the harnesses' jobs ([`session_listing`]): `in-parts` or `empty`.
+/// Read only with the `test-hooks` feature, so that only a build with it
+/// holds the name.
+pub const SESSION_LISTING: &str = "CINERIS_TEST_SESSION_LISTING";
+
+/// [`session_listing`] with the `test-hooks` feature: the variable's
+/// value, and [`SessionListing::Real`] for any other.
+#[cfg(feature = "test-hooks")]
+#[must_use]
+pub fn session_listing() -> SessionListing {
+    match std::env::var(SESSION_LISTING).as_deref() {
+        Ok("in-parts") => SessionListing::InParts,
+        Ok("empty") => SessionListing::Empty,
+        _ => SessionListing::Real,
+    }
+}
+
 /// What a line of [`probed`] starts with, before the program's name.
 pub const PROBED: &str = "probe>";
 
