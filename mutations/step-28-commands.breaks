@@ -205,6 +205,43 @@ replace: gave this prompt
 caught-by:
     cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text
 
+[break] the-interface-sends-a-command-as-text
+rule: The interface sends `/name …` as a command when `name` is one of the session's.
+file: crates/cineris-tui/src/app/state/custom.rs
+in: App::custom_call
+find: (!built_in(name) && self.custom.list.iter().any(|command| command.name == name))
+replace: (!built_in(name) && self.custom.list.iter().any(|command| command.name == name) && name.is_empty())
+caught-by:
+    cineris-tui app::tests::custom::custom_commands_join_the_menu_and_go_as_commands
+    cineris-tui app::tests::custom::a_held_command_waits_for_the_list_and_its_prompt_says_whose
+
+[break] a-custom-command-takes-a-built-ins-name
+rule: A built-in command's name wins over a custom command's, in the menu and when typed.
+file: crates/cineris-tui/src/app/state/custom.rs
+in: App::commands_listed
+find: .filter(|command| !built_in(&command.name))
+replace: .filter(|command| !command.name.is_empty())
+caught-by:
+    cineris-tui app::tests::custom::custom_commands_join_the_menu_and_go_as_commands
+
+[break] a-projects-command-is-not-labelled-in-the-menu
+rule: Every project command is labelled as the project's wherever commands are listed.
+file: crates/cineris-tui/src/app/items.rs
+in: owner_note
+find: CommandSource::Project => Some("project's".to_owned())
+replace: CommandSource::Project => None
+caught-by:
+    cineris-tui app::tests::custom::custom_commands_join_the_menu_and_go_as_commands
+
+[break] the-transcript-forgets-whose-command
+rule: The transcript says which command a prompt came from, and whose it is.
+file: crates/cineris-tui/src/app/items.rs
+in: whose
+find: CommandSource::Project => "the project's".to_owned()
+replace: CommandSource::Project => "your".to_owned()
+caught-by:
+    cineris-tui app::tests::custom::a_held_command_waits_for_the_list_and_its_prompt_says_whose
+
 [break] the-list-does-not-wait-for-the-extensions
 rule: `commands/list` gives an extension's commands once the session's extensions are found and registered.
 file: crates/cineris-core/src/commands.rs
