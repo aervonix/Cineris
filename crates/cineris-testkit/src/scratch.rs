@@ -630,8 +630,10 @@ mod tests {
 
     #[test]
     fn a_directory_outside_leaves_no_parent_behind_once_the_last_is_gone() {
-        let first = Scratch::outside("cineris-testkit-own-parent", "first");
-        let second = Scratch::outside("cineris-testkit-own-parent", "second");
+        // As a desk has it: a GitHub-hosted runner leaves both, and their
+        // parent.
+        let first = Scratch::outside_on("cineris-testkit-own-parent", "first", false);
+        let second = Scratch::outside_on("cineris-testkit-own-parent", "second", false);
         let parent = first.path().parent().unwrap().to_path_buf();
 
         drop(first);
