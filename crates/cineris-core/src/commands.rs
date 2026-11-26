@@ -117,7 +117,9 @@ pub(crate) async fn list(
             });
         }
     }
-    result.commands.sort_by(|one, other| one.name.cmp(&other.name));
+    result
+        .commands
+        .sort_by(|one, other| one.name.cmp(&other.name));
     for left in &found.files.left_out {
         result.not_used.push(CommandNotUsed {
             name: left.name.clone(),
@@ -151,7 +153,10 @@ pub(crate) async fn expand(
             return Err(error(
                 ErrorKind::Permission,
                 code::COMMAND_REFUSED,
-                format!("`{shown}` is not sent: {}", lower(&profile_refusal(&found, profile))),
+                format!(
+                    "`{shown}` is not sent: {}",
+                    lower(&profile_refusal(&found, profile))
+                ),
             ));
         }
         let text = command
@@ -230,7 +235,9 @@ async fn find(core: &Core, live: &Arc<Live>) -> Result<Found, OpError> {
     let options = crate::assemble::path_options(&core.inner);
     let files = Core::blocking(move || {
         let resolver = cineris_base::PathResolver::new(std::path::Path::new(&workspace), options)
-            .map_err(|failure| error(ErrorKind::Usage, "invalid_workspace", failure.to_string()))?;
+            .map_err(|failure| {
+            error(ErrorKind::Usage, "invalid_workspace", failure.to_string())
+        })?;
         let mut roots = vec![Root::project()];
         if let Some(config) = &config_dir {
             roots.push(Root::user(config));
@@ -350,15 +357,16 @@ fn profile_refusal(found: &Found, profile: &str) -> String {
 /// Whether the profile `name` widens nothing of the session's: `Err` with
 /// what it does, in a clause.
 fn judge_profile(loaded: &Loaded, trusted: bool, level: &Level, name: &str) -> Result<(), String> {
-    let usable =
-        loaded.profiles.iter().any(|known| known == name)
-            || (trusted && loaded.project_profiles.iter().any(|known| known == name));
+    let usable = loaded.profiles.iter().any(|known| known == name)
+        || (trusted && loaded.project_profiles.iter().any(|known| known == name));
     if !usable {
-        return Err(if loaded.project_profiles.iter().any(|known| known == name) {
-            "is this project's, and the project is not trusted".to_owned()
-        } else {
-            "no layer of the configuration defines".to_owned()
-        });
+        return Err(
+            if loaded.project_profiles.iter().any(|known| known == name) {
+                "is this project's, and the project is not trusted".to_owned()
+            } else {
+                "no layer of the configuration defines".to_owned()
+            },
+        );
     }
     // Every layer's table of it, a project's too: what it would set.
     let tables = loaded.profile_tables(name);
@@ -427,7 +435,9 @@ fn judge(loaded: &Loaded, level: &Level, key: &KeyPath, value: &Value) -> Result
 /// What a key of a class other than a preference does, in a clause.
 fn widens(key: &str, class: TrustClass) -> String {
     let what = match class {
-        TrustClass::RaisesCost => "it could change the provider or the model, or raise what you spend",
+        TrustClass::RaisesCost => {
+            "it could change the provider or the model, or raise what you spend"
+        }
         TrustClass::WidensAccess => "it widens what the session may do",
         TrustClass::RunsCode => "it can run code",
         TrustClass::FirstLimit => "it sets a first limit, where the session has none",
@@ -459,7 +469,10 @@ fn script_source(source: cineris_ext::source::Source) -> CommandSource {
 /// A clause as a sentence: its first letter in capitals, a full stop after.
 fn sentence(clause: &str) -> String {
     let mut chars = clause.chars();
-    let mut out: String = chars.next().map(|first| first.to_uppercase().collect()).unwrap_or_default();
+    let mut out: String = chars
+        .next()
+        .map(|first| first.to_uppercase().collect())
+        .unwrap_or_default();
     out.push_str(chars.as_str());
     if !out.ends_with('.') {
         out.push('.');
@@ -471,7 +484,10 @@ fn sentence(clause: &str) -> String {
 /// taken off.
 fn lower(sentence: &str) -> String {
     let mut chars = sentence.chars();
-    let mut out: String = chars.next().map(|first| first.to_lowercase().collect()).unwrap_or_default();
+    let mut out: String = chars
+        .next()
+        .map(|first| first.to_lowercase().collect())
+        .unwrap_or_default();
     out.push_str(chars.as_str());
     out.trim_end_matches('.').to_owned()
 }
@@ -543,6 +559,10 @@ mod tests {
         // At or below the session's own level it narrows; above it, it does
         // not, whatever the files say.
         assert_eq!(judged("level", Level::Autonomous), Ok(()));
-        assert!(judged("absent", Level::Supervised).unwrap_err().contains("no layer"));
+        assert!(
+            judged("absent", Level::Supervised)
+                .unwrap_err()
+                .contains("no layer")
+        );
     }
 }

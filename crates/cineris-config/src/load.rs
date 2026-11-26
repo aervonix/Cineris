@@ -481,7 +481,12 @@ pub(crate) fn merge_layers(
     // one would set (a custom command's, since step 28).
     let profile_tables: Vec<(String, LayerKind, toml::Table)> = layers
         .iter()
-        .filter_map(|layer| Some((layer.kind, layer.document.table.get("profiles")?.as_table()?)))
+        .filter_map(|layer| {
+            Some((
+                layer.kind,
+                layer.document.table.get("profiles")?.as_table()?,
+            ))
+        })
         .flat_map(|(kind, profiles)| {
             profiles.iter().filter_map(move |(name, table)| {
                 Some((name.clone(), kind, table.as_table()?.clone()))

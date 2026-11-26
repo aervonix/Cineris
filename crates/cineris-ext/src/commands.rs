@@ -124,7 +124,10 @@ enum Piece {
     /// Text, sent as it is.
     Text(String),
     /// A placeholder: an argument's name, or [`ARGS`], and its default here.
-    Put { name: String, default: Option<String> },
+    Put {
+        name: String,
+        default: Option<String>,
+    },
 }
 
 /// A command read from a file.
@@ -194,13 +197,17 @@ pub enum Reason {
     #[error("{0}")]
     BadName(String),
     /// Files of this folder whose names differ from its only in case.
-    #[error("the commands {0} have names that differ only in case, which on Windows are one name, so none of them is used")]
+    #[error(
+        "the commands {0} have names that differ only in case, which on Windows are one name, so none of them is used"
+    )]
     CaseClash(String),
     /// What is wrong with what it holds.
     #[error("{0}")]
     Content(String),
     /// A project's command whose name one of the user's takes.
-    #[error("the user has a command of this name (`{0}`), which is used: a command's text is sent as your own prompt, so a project's command never takes the name of one of yours")]
+    #[error(
+        "the user has a command of this name (`{0}`), which is used: a command's text is sent as your own prompt, so a project's command never takes the name of one of yours"
+    )]
     TakenByUser(String),
 }
 
@@ -445,9 +452,9 @@ fn look_in(
             left(left_out, name, shown_path, Reason::BadName(why));
             continue;
         }
-        match read_file(&path).and_then(|text| {
-            parse(name, owner, shown_path.clone(), &text).map_err(Reason::Content)
-        }) {
+        match read_file(&path)
+            .and_then(|text| parse(name, owner, shown_path.clone(), &text).map_err(Reason::Content))
+        {
             Ok(command) => read.push(command),
             Err(reason) => left(left_out, name, shown_path, reason),
         }
@@ -526,7 +533,9 @@ fn split(text: &str) -> Result<(Option<&str>, &str), String> {
     }
     let mut at = first_end;
     while at < text.len() {
-        let end = text[at..].find('\n').map_or(text.len(), |found| at + found + 1);
+        let end = text[at..]
+            .find('\n')
+            .map_or(text.len(), |found| at + found + 1);
         if matches!(text[at..end].trim_end(), "---" | "...") {
             return Ok((Some(&text[..end]), &text[end..]));
         }
@@ -549,10 +558,7 @@ fn parse(name: &str, owner: Owner, path: String, text: &str) -> Result<CommandFi
         let front = FrontMatter::read(front)
             .ok_or_else(|| "its front matter could not be read".to_owned())?;
         if let Some(key) = front.repeated().first() {
-            return Err(format!(
-                "its front matter gives `{}` twice",
-                visible(key)
-            ));
+            return Err(format!("its front matter gives `{}` twice", visible(key)));
         }
         if let Some(line) = front.unread().first() {
             return Err(format!(
@@ -563,8 +569,7 @@ fn parse(name: &str, owner: Owner, path: String, text: &str) -> Result<CommandFi
         for (key, value) in front.fields() {
             match key {
                 "description" => {
-                    check_description(value)
-                        .map_err(|why| format!("its `description`: {why}"))?;
+                    check_description(value).map_err(|why| format!("its `description`: {why}"))?;
                     value.clone_into(&mut description);
                 }
                 "arguments" => arguments = read_arguments(value)?,
@@ -583,7 +588,9 @@ fn parse(name: &str, owner: Owner, path: String, text: &str) -> Result<CommandFi
     for piece in &body {
         if let Piece::Put { name: used, .. } = piece
             && used != ARGS
-            && !arguments.iter().any(|argument: &Argument| argument.name == *used)
+            && !arguments
+                .iter()
+                .any(|argument: &Argument| argument.name == *used)
         {
             return Err(format!(
                 "its body puts in `{{{{{used}}}}}`, which its front matter's `arguments` do not \
@@ -644,9 +651,7 @@ fn read_arguments(value: &str) -> Result<Vec<Argument>, String> {
         });
     }
     if arguments.len() > MAX_ARGUMENTS {
-        return Err(format!(
-            "its `arguments` name more than {MAX_ARGUMENTS}"
-        ));
+        return Err(format!("its `arguments` name more than {MAX_ARGUMENTS}"));
     }
     Ok(arguments)
 }
@@ -711,9 +716,9 @@ fn read_profile(value: &str) -> Result<String, String> {
     let name = value.trim();
     let fine = !name.is_empty()
         && name.len() <= MAX_PROFILE_NAME
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.'));
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '.')
+        });
     if fine {
         Ok(name.to_owned())
     } else {
@@ -743,7 +748,11 @@ fn template(body: &str) -> Result<Vec<Piece>, String> {
         let after = &rest[at + 2..];
         let (put, used) = placeholder(after).ok_or_else(|| {
             let line = body[..body.len() - rest.len() + at].matches('\n').count() + 1;
-            let shown: String = rest[at..].chars().take(40).take_while(|c| *c != '\n').collect();
+            let shown: String = rest[at..]
+                .chars()
+                .take(40)
+                .take_while(|c| *c != '\n')
+                .collect();
             format!(
                 "its body has `{}` on line {line}, which is no placeholder: write \
                  `{{{{name}}}}`, `{{{{name | \"default\"}}}}` or `{{{{args}}}}`, or `\\{{{{` for \
@@ -839,7 +848,8 @@ pub fn assign(arguments: &[&str], typed: &str) -> Result<Assigned, ArgumentError
                     "the argument `{name}` is given twice"
                 )));
             }
-            out.values.push((name.to_owned(), word[at + 1..].to_owned()));
+            out.values
+                .push((name.to_owned(), word[at + 1..].to_owned()));
         } else {
             positional.push(word);
         }
@@ -865,7 +875,10 @@ fn words(typed: &str) -> Result<Vec<(String, Option<usize>)>, ArgumentError> {
     let mut words = Vec::new();
     let mut chars = typed.chars().peekable();
     loop {
-        while chars.next_if(|character| character.is_whitespace()).is_some() {}
+        while chars
+            .next_if(|character| character.is_whitespace())
+            .is_some()
+        {}
         if chars.peek().is_none() {
             return Ok(words);
         }

@@ -1112,15 +1112,13 @@ impl Session {
                     input,
                     ticket,
                     command,
-                } => {
-                    match self.deliver_steer(turn, input, ticket, command).await {
-                        Some(recorded) => recorded,
-                        None => {
-                            self.return_pending(turn, pending);
-                            return Phase::Interrupted(None);
-                        }
+                } => match self.deliver_steer(turn, input, ticket, command).await {
+                    Some(recorded) => recorded,
+                    None => {
+                        self.return_pending(turn, pending);
+                        return Phase::Interrupted(None);
                     }
-                }
+                },
                 Pending::Notice { source, text } => self.record_notice(turn, source, text).await,
                 Pending::Compact(focus) => {
                     self.manual = true;

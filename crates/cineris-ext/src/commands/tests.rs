@@ -71,17 +71,35 @@ fn a_commands_file_is_read_strictly() {
     );
     assert_eq!(command.profile.as_deref(), Some("review"));
     // No front matter: the whole file is the body.
-    assert_eq!(parsed("Just do it: {{args}}").unwrap().expand("now").unwrap(), "Just do it: now");
+    assert_eq!(
+        parsed("Just do it: {{args}}")
+            .unwrap()
+            .expand("now")
+            .unwrap(),
+        "Just do it: now"
+    );
     for (text, why) in [
-        ("---\nmodel: x\n---\nhi", "the key `model`, which a command does not take"),
-        ("---\ndescription: a\ndescription: b\n---\nhi", "gives `description` twice"),
+        (
+            "---\nmodel: x\n---\nhi",
+            "the key `model`, which a command does not take",
+        ),
+        (
+            "---\ndescription: a\ndescription: b\n---\nhi",
+            "gives `description` twice",
+        ),
         ("---\njunk\n---\nhi", "no `key: value` field: `junk`"),
         ("---\ndescription: a\nhi", "never closed"),
-        ("---\narguments: [x]\n---\n{{y}}", "puts in `{{y}}`, which its front matter's"),
+        (
+            "---\narguments: [x]\n---\n{{y}}",
+            "puts in `{{y}}`, which its front matter's",
+        ),
         ("hi {{ not one }}", "which is no placeholder"),
         ("---\narguments: [args]\n---\n{{args}}", "name `args`"),
         ("---\narguments: [a, a]\n---\n{{a}}", "name `a` twice"),
-        ("---\narguments: [a = x]\n---\n{{a}}", "not in double quotes"),
+        (
+            "---\narguments: [a = x]\n---\n{{a}}",
+            "not in double quotes",
+        ),
         ("---\nprofile: two words\n---\nhi", "no profile's name"),
         ("---\ndescription: a\u{202e}b\n---\nhi", "acts unseen"),
         ("---\ndescription: a\n---\n  \n", "its body is empty"),
@@ -110,9 +128,18 @@ fn arguments_are_put_in_and_what_does_not_fit_is_refused() {
     )
     .unwrap();
     let expand = |typed: &str| command.expand(typed);
-    assert_eq!(expand("").unwrap(), "focus=correctness depth=shallow all=[]");
-    assert_eq!(expand("security deep").unwrap(), "focus=security depth=deep all=[security deep]");
-    assert_eq!(expand("depth=deep").unwrap(), "focus=correctness depth=deep all=[depth=deep]");
+    assert_eq!(
+        expand("").unwrap(),
+        "focus=correctness depth=shallow all=[]"
+    );
+    assert_eq!(
+        expand("security deep").unwrap(),
+        "focus=security depth=deep all=[security deep]"
+    );
+    assert_eq!(
+        expand("depth=deep").unwrap(),
+        "focus=correctness depth=deep all=[depth=deep]"
+    );
     assert_eq!(
         expand("\"two words\" focus2=x").unwrap(),
         "focus=two words depth=focus2=x all=[\"two words\" focus2=x]"
@@ -133,7 +160,10 @@ fn arguments_are_put_in_and_what_does_not_fit_is_refused() {
     // A body without `{{args}}` takes no more words than it has arguments.
     let one = parsed("---\narguments: [focus]\n---\nOn {{focus}}.").unwrap();
     let error = one.expand("a b").unwrap_err().0;
-    assert!(error.contains("takes one argument, `focus`, and was given 1 more: `b`"), "{error}");
+    assert!(
+        error.contains("takes one argument, `focus`, and was given 1 more: `b`"),
+        "{error}"
+    );
     // An argument put in with no default anywhere is needed.
     let error = one.expand("").unwrap_err().0;
     assert!(error.contains("needs the argument `focus`"), "{error}");
@@ -160,7 +190,10 @@ fn arguments_are_put_in_and_what_does_not_fit_is_refused() {
 /// and the project's is said not used, naming the user's.
 #[test]
 fn the_users_command_wins_over_a_projects_of_the_same_name() {
-    let scratch = Scratch::outside("cineris-ext-unit", "commands-the_users_command_wins_over_a_projects_of_the_same_name");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "commands-the_users_command_wins_over_a_projects_of_the_same_name",
+    );
     scratch.file(format!("{USER}/review.md"), "The user's review: {{args}}");
     scratch.file(format!("{PROJECT}/Review.md"), "The project's review.");
     scratch.file(format!("{PROJECT}/lint.md"), "Lint.");
@@ -176,12 +209,18 @@ fn the_users_command_wins_over_a_projects_of_the_same_name() {
         found.get("review").unwrap().expand("now").unwrap(),
         "The user's review: now"
     );
-    assert_eq!(found.get("review").unwrap().path, "~/.config/cineris/commands/review.md");
+    assert_eq!(
+        found.get("review").unwrap().path,
+        "~/.config/cineris/commands/review.md"
+    );
     assert_eq!(found.get("lint").unwrap().path, ".cineris/commands/lint.md");
     let left = left(&found);
     assert_eq!(left.len(), 1, "{left:?}");
     assert_eq!(left[0].0, ".cineris/commands/Review.md");
-    assert!(left[0].1.contains("a command of this name (`review`)"), "{left:?}");
+    assert!(
+        left[0].1.contains("a command of this name (`review`)"),
+        "{left:?}"
+    );
 }
 
 /// Bounds as the skills' have them: a file over its cap by its length,
@@ -189,7 +228,10 @@ fn the_users_command_wins_over_a_projects_of_the_same_name() {
 /// entries of a root past its cap, each left out with its reason.
 #[test]
 fn a_folder_of_commands_is_read_within_its_bounds() {
-    let scratch = Scratch::outside("cineris-ext-unit", "commands-a_folder_of_commands_is_read_within_its_bounds");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "commands-a_folder_of_commands_is_read_within_its_bounds",
+    );
     scratch.file(
         format!("{USER}/big.md"),
         "x".repeat(usize::try_from(MAX_FILE_BYTES).unwrap() + 1),
@@ -212,7 +254,9 @@ fn a_folder_of_commands_is_read_within_its_bounds() {
             .collect::<Vec<_>>()
     };
     assert_eq!(reason("big.md"), ["it is larger than 64 KiB"]);
-    assert!(reason("deploy.md")[0].contains("`Deploy`, `deploy` have names that differ only in case"));
+    assert!(
+        reason("deploy.md")[0].contains("`Deploy`, `deploy` have names that differ only in case")
+    );
     assert!(reason("two words.md")[0].contains("cannot be a name"));
     assert_eq!(reason("bytes.md"), ["it is not UTF-8 text"]);
     // The project's root: 100 entries looked at, the rest not, and said.
@@ -237,7 +281,10 @@ fn a_folder_of_commands_is_read_within_its_bounds() {
 /// that is a link out of the workspace is not read.
 #[test]
 fn no_link_is_followed_in_a_folder_of_commands() {
-    let scratch = Scratch::outside("cineris-ext-unit", "commands-no_link_is_followed_in_a_folder_of_commands");
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "commands-no_link_is_followed_in_a_folder_of_commands",
+    );
     scratch.file("home/elsewhere/secret.md", "Text from outside.");
     scratch.dir(PROJECT);
     let linked = |target: &str, link: &str| {
