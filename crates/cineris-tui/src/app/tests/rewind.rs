@@ -151,14 +151,20 @@ fn rows(app: &App) -> Vec<String> {
 /// read and its plan answered with `files`; the question drawn until it is
 /// ready. Returns the time it takes keys.
 fn asked(app: &mut App, link: &Scripted, files: Vec<RewindFile>, at: Instant) -> Instant {
+    asked_with(app, link, files, history()[2].clone(), at)
+}
+
+/// [`asked`], turn 2's prompt read as `prompt`.
+fn asked_with(
+    app: &mut App,
+    link: &Scripted,
+    files: Vec<RewindFile>,
+    prompt: Item,
+    at: Instant,
+) -> Instant {
     key(app, "down", at);
     key(app, "enter", at);
     let sent = link.take_sent();
-    let prompt = sent
-        .iter()
-        .find(|(_, op)| matches!(op, Op::SessionRead(read) if read.item_id.is_some()))
-        .map(|(ticket, _)| *ticket)
-        .expect("the prompt read whole");
     let (planned, point) = sent
         .iter()
         .find_map(|(ticket, op)| match op {
@@ -173,7 +179,12 @@ fn asked(app: &mut App, link: &Scripted, files: Vec<RewindFile>, at: Instant) ->
         (None, Some(ItemId::from("i_3"))),
         "just before turn 2's prompt"
     );
-    give(link, prompt, Ok(page(vec![history()[2].clone()], None)));
+    let read = sent
+        .iter()
+        .find(|(_, op)| matches!(op, Op::SessionRead(read) if read.item_id.is_some()))
+        .map(|(ticket, _)| *ticket)
+        .expect("the prompt read whole");
+    give(link, read, Ok(page(vec![prompt], None)));
     give(link, planned, Ok(OpResult::SessionRewindPlan(plan(files))));
     drain(app, at);
     let _ = app.frame(at);
@@ -315,16 +326,36 @@ fn one_rewinds_and_puts_the_files_back_by_the_plan_shown() {
     assert_eq!(params.plan.as_deref(), Some("aaaa-bbbb"));
 }
 
+/// Its prompt, a command's (since step 28), comes back as it was typed,
+/// not as the command's text.
 #[test]
 fn two_rewinds_the_conversation_only() {
     let now = Instant::now();
     let (mut app, link) = with_history(now);
     rewind_picker(&mut app, &link, history(), now);
-    let ready = asked(&mut app, &link, two_files(), now);
+    let Item::UserMessage(mut prompt) = history()[2].clone() else {
+        unreachable!("turn 2's prompt");
+    };
+    prompt.command = Some(cineris_protocol::item::PromptCommand {
+        name: "review".to_owned(),
+        source: cineris_protocol::item::CommandSource::User,
+        extension: None,
+        args: "security".to_owned(),
+    });
+    let ready = asked_with(&mut app, &link, two_files(), Item::UserMessage(prompt), now);
     key(&mut app, "2", ready);
-    let (_, params) = rewind_sent(&link).expect("the rewind");
+    let (ticket, params) = rewind_sent(&link).expect("the rewind");
     assert!(!params.restore_files);
     assert_eq!(params.plan.as_deref(), Some("aaaa-bbbb"));
+    give(
+        &link,
+        ticket,
+        Ok(OpResult::SessionRewind(SessionResult {
+            session: session().build(),
+        })),
+    );
+    drain(&mut app, ready);
+    assert_eq!(app.input().editor().expanded(), "/review security");
 }
 
 #[test]

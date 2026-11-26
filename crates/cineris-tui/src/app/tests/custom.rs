@@ -6,7 +6,9 @@
 
 use cineris_protocol::error::code;
 use cineris_protocol::item::{CommandSource, Delivery as ItemDelivery, PromptCommand};
-use cineris_protocol::methods::{CommandCall, CommandInfo, CommandsListResult, TurnStartParams};
+use cineris_protocol::methods::{
+    CommandCall, CommandInfo, CommandNotUsed, CommandsListResult, TurnStartParams,
+};
 
 use super::*;
 
@@ -22,8 +24,8 @@ fn command(name: &str, source: CommandSource, extension: Option<&str>, about: &s
 }
 
 /// The user's `review`, the project's `deploy`, a project extension's
-/// `tracker:sync` with no description, and a project's `help`, which the
-/// built-in keeps.
+/// `tracker:sync` with no description, and a project's `help` and the
+/// user's `Help`, which the built-in keeps.
 fn listed() -> OpResult {
     OpResult::CommandsList(CommandsListResult {
         commands: vec![
@@ -36,6 +38,7 @@ fn listed() -> OpResult {
                 "Review for one concern",
             ),
             command("tracker:sync", CommandSource::Project, Some("tracker"), ""),
+            command("Help", CommandSource::User, None, "Not the built-in either"),
         ],
         not_used: Vec::new(),
     })
@@ -122,6 +125,7 @@ fn custom_commands_join_the_menu_and_go_as_commands() {
         ["The commands and the keys"],
         "the built-in's"
     );
+    assert!(detail("Help").is_empty(), "the built-in's, in any case");
 
     type_text(&mut app, "review x", now);
     key(&mut app, "enter", now);
@@ -151,7 +155,7 @@ fn custom_commands_join_the_menu_and_go_as_commands() {
     assert_eq!(sent.command, call("review", "x"));
     assert_eq!(sent.delivery, Some(ItemDelivery::Steer));
 
-    run_command(&mut app, "/help", now);
+    run_command(&mut app, "/Help", now);
     assert!(turn_start(&link.take_sent()).is_empty(), "the built-in ran");
     let all = notices(&mut app, now);
     assert!(
@@ -245,4 +249,191 @@ fn a_held_command_waits_for_the_list_and_its_prompt_says_whose() {
     link.give(Inbound::Done(asked.expect("asked"), Ok(listed())));
     drain(&mut app, now);
     assert!(link.take_sent().is_empty(), "nothing is sent of it");
+}
+
+/// A command's prompt the core hands back comes back as it was typed:
+/// refused by a hook (`prompt_returned`), or undelivered at an interrupt,
+/// beside a plain one and in order. The interrupt key while a command's
+/// start is on its way (an extension's command still running) interrupts,
+/// once; the start's refusal (`command_failed`, `interrupted`) gives `/name
+/// args` back with nothing said, and the spinner stops. A command that
+/// failed of itself is said.
+#[test]
+fn a_commands_prompt_comes_back_as_it_was_typed() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let (asked, _) = list_asked(&link);
+    link.give(Inbound::Done(
+        asked.expect("asked at the open"),
+        Ok(listed()),
+    ));
+    drain(&mut app, now);
+    let review = PromptCommand {
+        name: "review".to_owned(),
+        source: CommandSource::User,
+        extension: None,
+        args: "security".to_owned(),
+    };
+    link.give(event(Event::Notice(
+        cineris_protocol::event::Notice::PromptReturned(
+            cineris_protocol::event::PromptReturnedNotice {
+                message: "A hook refused the prompt.".to_owned(),
+                parts: vec![Part::text("Review the change for security.")],
+                delivery: None,
+                hooks: Vec::new(),
+                command: Some(review.clone()),
+                ticket: None,
+            },
+        ),
+    )));
+    drain(&mut app, now);
+    assert_eq!(app.input().editor().text(), "/review security");
+
+    key(&mut app, "enter", now);
+    let (ticket, sent) = started(&link);
+    assert_eq!(sent.command, call("review", "security"));
+    assert!(app.running());
+    key(&mut app, "esc", now);
+    let interrupts = link
+        .take_sent()
+        .into_iter()
+        .filter(|(_, op)| matches!(op, Op::TurnInterrupt(_)))
+        .count();
+    assert_eq!(interrupts, 1, "one key, one interrupt");
+    link.give(Inbound::Done(
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Interrupted,
+            code::COMMAND_FAILED,
+            "`/review` was interrupted, so nothing was sent and no turn started.",
+        )),
+    ));
+    drain(&mut app, now);
+    assert_eq!(app.input().editor().text(), "/review security");
+    assert!(!app.running(), "the spinner stops");
+    let all = notices(&mut app, now);
+    assert!(!all.contains("was interrupted"), "nothing said: {all}");
+    key(&mut app, "enter", now);
+    let (ticket, _) = started(&link);
+    link.give(Inbound::Done(
+        ticket,
+        Err(ErrorData::new(
+            ErrorKind::Tool,
+            code::COMMAND_FAILED,
+            "`/review` failed: its script exited 1.",
+        )),
+    ));
+    drain(&mut app, now);
+    assert_eq!(app.input().editor().text(), "/review security");
+    let all = notices(&mut app, now);
+    assert!(
+        all.contains("`/review` failed: its script exited 1."),
+        "{all}"
+    );
+
+    key(&mut app, "enter", now);
+    let _ = started(&link);
+    link.give(event(Event::TurnStarted(TurnStarted {})));
+    drain(&mut app, now);
+    key(&mut app, "esc", now);
+    let (ticket, _) = link.take_sent().pop().expect("the interrupt");
+    let deploy = PromptCommand {
+        name: "deploy".to_owned(),
+        source: CommandSource::Project,
+        extension: None,
+        args: String::new(),
+    };
+    link.give(Inbound::Done(
+        ticket,
+        Ok(OpResult::TurnInterrupt(TurnInterruptResult {
+            interrupted: true,
+            undelivered: vec![
+                vec![Part::text("Review the change for security.")],
+                vec![Part::text("and the docs")],
+                vec![Part::text("Deploy to staging.")],
+            ],
+            undelivered_commands: vec![Some(review), None, Some(deploy)],
+        })),
+    ));
+    drain(&mut app, now);
+    assert_eq!(
+        app.input().editor().text(),
+        "/review security\nand the docs\n/deploy"
+    );
+}
+
+/// The commands the list says are not used are said once a session, one
+/// line each, whose and why, and `/help` lists them, marked. One typed goes
+/// as the command, for the core to refuse with why, never to the model as
+/// `/name args`.
+#[test]
+fn commands_not_used_are_said_once_and_typed_go_as_commands() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let with_not_used = || {
+        let OpResult::CommandsList(mut list) = listed() else {
+            unreachable!("a list");
+        };
+        list.not_used = vec![
+            CommandNotUsed {
+                name: "broken".to_owned(),
+                source: CommandSource::Project,
+                extension: None,
+                path: Some(".cineris/commands/broken.md".to_owned()),
+                reason: "Its front matter is not TOML.".to_owned(),
+            },
+            CommandNotUsed {
+                name: String::new(),
+                source: CommandSource::User,
+                extension: None,
+                path: Some("~/.cineris/commands/.md".to_owned()),
+                reason: "It has no name.".to_owned(),
+            },
+        ];
+        OpResult::CommandsList(list)
+    };
+    let words = |all: &str| all.split_whitespace().collect::<Vec<_>>().join(" ");
+    let (asked, _) = list_asked(&link);
+    link.give(Inbound::Done(
+        asked.expect("asked at the open"),
+        Ok(with_not_used()),
+    ));
+    drain(&mut app, now);
+    let all = words(&notices(&mut app, now));
+    assert!(
+        all.contains("/broken (the project's command) is not used: Its front matter is not TOML."),
+        "{all}"
+    );
+    assert!(
+        all.contains("~/.cineris/commands/.md (your command) is not used: It has no name."),
+        "{all}"
+    );
+    type_text(&mut app, "/", now);
+    let _ = app.frame(now);
+    let (again, _) = list_asked(&link);
+    link.give(Inbound::Done(
+        again.expect("asked again as the menu opens"),
+        Ok(with_not_used()),
+    ));
+    drain(&mut app, now);
+    let all = notices(&mut app, now);
+    assert!(!all.contains("is not used"), "said once: {all}");
+    key(&mut app, "backspace", now);
+
+    run_command(&mut app, "/help", now);
+    let all = notices(&mut app, now);
+    assert!(
+        all.contains("/broken       (project's) not used: Its front matter is not TOML."),
+        "{all}"
+    );
+    assert!(
+        all.contains("~/.cineris/commands/.md not used: It has no name."),
+        "{all}"
+    );
+    run_command(&mut app, "/broken now", now);
+    let (_, sent) = started(&link);
+    assert!(sent.input.is_empty(), "{sent:#?}");
+    assert_eq!(sent.command, call("broken", "now"));
 }
