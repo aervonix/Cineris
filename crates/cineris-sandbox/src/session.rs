@@ -91,6 +91,7 @@ pub fn under_a_session() -> Under {
 /// The first words of Cineris's subcommands that run no session: a
 /// process of Cineris whose first argument is one of these starts no
 /// session's command.
+#[cfg_attr(windows, allow(dead_code, reason = "Linux's line of parents"))]
 const NO_SESSION: [&str; 11] = [
     "sessions",
     "config",
@@ -108,6 +109,7 @@ const NO_SESSION: [&str; 11] = [
 /// Whether a process of Cineris with these arguments (its program's word
 /// first) runs sessions: the application, a headless run, `serve`, and
 /// anything not told apart (fails closed).
+#[cfg_attr(windows, allow(dead_code, reason = "Linux's line of parents"))]
 fn runs_sessions(arguments: &[String]) -> bool {
     arguments
         .get(1)
@@ -274,12 +276,16 @@ mod sys {
 
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, FALSE};
     use windows_sys::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, JOB_OBJECT_QUERY,
-        OpenJobObjectW,
+        AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, OpenJobObjectW,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
 
     use super::{JOB_NAME, Under};
+
+    /// The right to ask a job about itself and its processes (`winnt.h`'s
+    /// `JOB_OBJECT_QUERY`), which `windows-sys` keeps under a feature of
+    /// its own that this crate does not take for one number.
+    const JOB_OBJECT_QUERY: u32 = 0x0004;
 
     /// The job, held for the process's life, so that its name stays.
     static JOB: OnceLock<OwnedHandle> = OnceLock::new();

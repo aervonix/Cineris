@@ -420,7 +420,7 @@ fn a_yes_is_the_persons_at_a_terminal_and_the_shown_hash_without_one() {
 /// PowerShell and `cmd` leave it; anything else is as it is.
 #[test]
 fn a_leading_tilde_is_the_home_directory() {
-    let home = std::path::Path::new("/home/someone");
+    let home = std::path::Path::new("/srv/u");
     assert_eq!(expanded("~", Some(home)), home);
     assert_eq!(expanded("~/src/x", Some(home)), home.join("src/x"));
     assert_eq!(

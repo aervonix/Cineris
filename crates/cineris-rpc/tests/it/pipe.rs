@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 use cineris_base::CancelToken;
 use cineris_rpc::{Accepted, ListenOptions, Listener, Place, ServeOptions};
-use cineris_testkit::conformance::{self, Lines};
+use cineris_testkit::conformance::{self, Carrier, Lines};
 use cineris_testkit::rerun::{self, Rerun};
 use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, ERROR_INVALID_OWNER, HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
