@@ -215,6 +215,8 @@ impl App {
         // and nor is an export still being read.
         self.forget_rewind();
         self.forget_export();
+        // Its custom commands are not the next one's (since step 28).
+        self.forget_commands();
         if self.item_edit.take().is_some() {
             self.input.cancel_item_edit();
         }

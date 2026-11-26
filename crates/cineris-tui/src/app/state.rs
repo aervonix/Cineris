@@ -40,8 +40,9 @@ use cineris_protocol::item::Delivery as ItemDelivery;
 use cineris_protocol::jsonrpc::RequestId;
 use cineris_protocol::message::Part;
 use cineris_protocol::methods::{
-    Disposition, ModelsListResult, Op, OpResult, ServerRequest, ServerResponse, SessionForkParams,
-    SessionListParams, SessionNewParams, SessionRef, TurnInterruptParams, TurnStartParams,
+    CommandCall, Disposition, ModelsListResult, Op, OpResult, ServerRequest, ServerResponse,
+    SessionForkParams, SessionListParams, SessionNewParams, SessionRef, TurnInterruptParams,
+    TurnStartParams,
 };
 use cineris_protocol::model::{ModelInfo, ModelRole};
 use cineris_protocol::session::{SandboxStatus, SessionSettings, SessionState};
@@ -50,6 +51,7 @@ use cineris_protocol::{ErrorData, SessionEvent, SessionId, Speed};
 use cineris_term::{Capabilities, Cursor, Event as TermEvent, Key, Line};
 
 mod commands;
+mod custom;
 mod export;
 mod first_run;
 mod panel;
@@ -68,7 +70,6 @@ use super::items::Mapper;
 use super::link::{Inbound, Link, Ticket};
 use super::panels::{ItemEditFor, Panels, Seen};
 use super::{Exit, Open, Settings, Start};
-use crate::complete::Command;
 use crate::focus::Target;
 use crate::input::{Delivery, Input, Outcome, SendMode};
 use crate::transcript::kept::Kept;
@@ -175,6 +176,9 @@ enum Pending {
     Fork(Box<rewind::Forking>),
     /// What the first run sent (since step 25).
     FirstRun(first_run::Sent),
+    /// This session's custom commands (since step 28), for the `/` menu and
+    /// for what is typed.
+    Commands(SessionId),
 }
 
 /// A prompt on its way to the core, for its answer.
@@ -193,6 +197,9 @@ struct Sent {
     /// It was refused `turn_running` once and sent again queued: a refusal
     /// now gives it back.
     again: bool,
+    /// The custom command it names (since step 28): sent as the command,
+    /// with no text of its own; `text` is what was typed.
+    command: Option<CommandCall>,
 }
 
 /// The last key read, for the dialogs' rules (`super::dialog`).
@@ -409,8 +416,11 @@ pub struct App {
     /// before it was answered, so that their order holds (step 27).
     held_prompts: VecDeque<String>,
     /// The held prompt on its way, by its ticket: the next waits for its
-    /// answer.
+    /// answer. Or the custom commands' list the next waits for (since step
+    /// 28; [`custom`]).
     held_sent: Option<Ticket>,
+    /// The session's custom commands (since step 28).
+    custom: custom::Custom,
     pending: HashMap<Ticket, Pending>,
     session: Option<SessionState>,
     models: Vec<ModelInfo>,
@@ -555,15 +565,6 @@ impl App {
             std::sync::Arc::new(cineris_base::SystemClock::new());
         let mut input = Input::new(start.keymap, start.history);
         input.set_width(view::input::text_width(width));
-        input.set_commands(
-            COMMANDS
-                .iter()
-                .map(|(name, description)| Command {
-                    name: (*name).to_owned(),
-                    description: (*description).to_owned(),
-                })
-                .collect(),
-        );
         let mut transcript = Transcript::new();
         // Every finished block is kept, for the viewer and the full-screen
         // presenter (step 25).
@@ -628,6 +629,7 @@ impl App {
             held: Vec::new(),
             held_prompts: VecDeque::new(),
             held_sent: None,
+            custom: custom::Custom::default(),
             pending: HashMap::new(),
             session: None,
             models: Vec::new(),
@@ -682,6 +684,8 @@ impl App {
         if let Some(error) = unstarted {
             app.first_run_unstarted(&error);
         }
+        let commands = app.menu_commands();
+        app.input.set_commands(commands);
         app
     }
 
@@ -1433,6 +1437,7 @@ impl App {
         }
         let sent = Sent {
             session,
+            command: self.custom_call(&text),
             text,
             started,
             stopped: false,
@@ -1441,13 +1446,18 @@ impl App {
         self.send_prompt(sent, wire(delivery));
     }
 
-    /// Sends a prompt with `delivery`, its answer awaited.
+    /// Sends a prompt with `delivery`, its answer awaited: a custom
+    /// command's as the command, with no text of its own (since step 28).
     fn send_prompt(&mut self, sent: Sent, delivery: Option<ItemDelivery>) -> Ticket {
+        let input = match sent.command {
+            Some(_) => Vec::new(),
+            None => vec![Part::text(sent.text.clone())],
+        };
         let ticket = self.link.send(Op::TurnStart(TurnStartParams {
             session_id: sent.session.clone(),
-            input: vec![Part::text(sent.text.clone())],
+            input,
             delivery,
-            command: None,
+            command: sent.command.clone(),
         }));
         self.pending.insert(ticket, Pending::Prompt(sent));
         ticket
@@ -1523,6 +1533,13 @@ impl App {
                 return;
             }
         }
+        // Held prompts that wait for the custom commands' list (since step
+        // 28) were not sent: they come back, as those held before the
+        // session opened do.
+        if self.held_for_commands_back() && !self.turn_runs {
+            self.stop_running();
+            return;
+        }
         // The held prompts not sent yet go now, queued behind the one on
         // its way and ahead of the interrupt: the core holds them with it,
         // in order, as it holds any queued prompt at an interrupt, and they
@@ -1534,6 +1551,7 @@ impl App {
             while let Some(text) = self.held_prompts.pop_front() {
                 let sent = Sent {
                     session: session.clone(),
+                    command: self.custom_call(&text),
                     text,
                     started: false,
                     stopped: false,
@@ -1716,6 +1734,9 @@ impl App {
         };
         match (pending, result) {
             (Pending::FirstRun(sent), result) => self.first_run_done(sent, result),
+            (Pending::Commands(session), result) => {
+                self.commands_listed(ticket, &session, result, now);
+            }
             (Pending::Open, Ok(OpResult::SessionNew(result))) => {
                 self.opened(result.session, false, now);
             }
@@ -2160,7 +2181,9 @@ impl App {
         // and of its project (the entries that wait).
         self.panels_ask(stored);
         // The workspace's files for `@` are listed on the first `@` typed
-        // (`ask_files`), not here.
+        // (`ask_files`), not here. Its custom commands are asked for now
+        // (since step 28): a held prompt that may be one waits for them.
+        self.ask_commands();
         if stored {
             self.reading = true;
             self.read_mark = None;
@@ -2183,12 +2206,21 @@ impl App {
     /// it answered (step 27): the `first` as a new turn, or steering the
     /// turn the open says is running, as `Enter` would; each after it
     /// queued behind it. The command line's prompt is a command when it is
-    /// one, as a typed one is: it was never through `submit`.
+    /// one, as a typed one is: it was never through `submit`. One that may
+    /// be a custom command waits for the session's first list (since step
+    /// 28).
     fn send_held(&mut self, first: bool, now: Instant) {
         while let Some(text) = self.held_prompts.pop_front() {
             if self.slash_command(&text, now) {
                 continue;
             }
+            // One that may be a custom command waits for the session's
+            // list (since step 28).
+            if self.held_waits_for_commands(&text, first) {
+                self.held_prompts.push_front(text);
+                return;
+            }
+            let command = self.custom_call(&text);
             let Some(session) = self.session.as_ref() else {
                 self.held_prompts.push_front(text);
                 self.give_back_held();
@@ -2207,6 +2239,7 @@ impl App {
                 started,
                 stopped: false,
                 again: false,
+                command,
             };
             self.held_sent = Some(self.send_prompt(sent, delivery));
             return;
@@ -2606,6 +2639,9 @@ impl App {
         // What the text asks of `@` goes to the worker before the frame:
         // the frame shows the rows it has, and the worker's come after.
         self.ask_files();
+        // A `/` menu that has just opened asks for the custom commands again
+        // (since step 28).
+        self.ask_commands_for_menu();
         // An export's writer that has answered.
         self.take_export();
         // What the first run's worker answered, and what follows (step 25).

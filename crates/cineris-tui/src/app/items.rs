@@ -21,7 +21,8 @@ use cineris_protocol::event::{
     ToolCallDelta,
 };
 use cineris_protocol::item::{
-    AssistantMessageItem, NoticeSource, StopReason, ToolResultItem, UserMessageItem,
+    AssistantMessageItem, CommandSource, NoticeSource, PromptCommand, StopReason, ToolResultItem,
+    UserMessageItem,
 };
 use cineris_protocol::message::Part;
 use cineris_protocol::{CallId, Item, ItemId};
@@ -550,9 +551,20 @@ impl Mapper {
 
     fn completed(&mut self, transcript: &mut Transcript, item: &Item, now: Instant) {
         match item {
-            Item::UserMessage(message) => {
-                transcript.push(Block::User(user_text(message)));
-            }
+            // A command's prompt says which command it came from, and whose
+            // (since step 28): its parts are the command's text, expanded.
+            Item::UserMessage(message) => match &message.command {
+                Some(command) => {
+                    transcript.push(Block::UserCommand {
+                        typed: typed(command),
+                        whose: whose(command),
+                        text: user_text(message),
+                    });
+                }
+                None => {
+                    transcript.push(Block::User(user_text(message)));
+                }
+            },
             Item::AssistantMessage(message) => self.response_completed(transcript, message, now),
             Item::ToolResult(result) => self.result(transcript, result),
             Item::Notice(notice) if notice.source == NoticeSource::Map => {
@@ -793,6 +805,40 @@ fn user_text(message: &UserMessageItem) -> String {
         }
     }
     text
+}
+
+/// A command as it was typed: `/review security`.
+fn typed(command: &PromptCommand) -> String {
+    if command.args.is_empty() {
+        format!("/{}", command.name)
+    } else {
+        format!("/{} {}", command.name, command.args)
+    }
+}
+
+/// Whose a command is, as its prompt says it: `your command`, `the
+/// project's command`, `your extension tracker's command`.
+fn whose(command: &PromptCommand) -> String {
+    let owner = match &command.source {
+        CommandSource::User => "your".to_owned(),
+        CommandSource::Project => "the project's".to_owned(),
+        other => format!("{}'s", other.as_str()),
+    };
+    match &command.extension {
+        Some(extension) => format!("{owner} extension {extension}'s command"),
+        None => format!("{owner} command"),
+    }
+}
+
+/// Whose a command is, as a menu row notes it (since step 28): nothing for
+/// the user's own, `project's` for a project's, whatever its source says
+/// for one this build does not know.
+pub(crate) fn owner_note(source: &CommandSource) -> Option<String> {
+    match source {
+        CommandSource::User => None,
+        CommandSource::Project => Some("project's".to_owned()),
+        other => Some(format!("{}'s", other.as_str())),
+    }
 }
 
 /// Keeps the last [`OUTPUT_TAIL`] bytes, from a line's start where one is

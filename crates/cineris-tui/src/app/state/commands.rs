@@ -242,12 +242,14 @@ impl App {
         }
     }
 
-    /// The commands, then every key bound, from the key map.
+    /// The commands, the custom ones after the built-ins (since step 28),
+    /// then every key bound, from the key map.
     fn help(&self) -> Vec<String> {
         let mut lines: Vec<String> = COMMANDS
             .iter()
             .map(|(name, what)| format!("/{name:<12} {what}"))
             .collect();
+        lines.extend(self.custom_help());
         let keymap = self.input.keymap();
         lines.extend(ACTIONS.iter().filter_map(|entry| {
             let bound: Vec<String> = keymap.keys_of(entry.action).into_iter().map(name).collect();

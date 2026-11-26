@@ -57,6 +57,26 @@ pub fn user(text: &str, width: usize, look: &Look) -> Vec<Line> {
     )
 }
 
+/// Your message that a custom command made (since step 28): `◆` in the
+/// accent, the command as typed in bold and whose it is dimmed
+/// (`/review security · your command`), then the text it expanded to.
+/// Both come from the core, and are sanitised here.
+#[must_use]
+pub fn user_command(typed: &str, whose: &str, text: &str, width: usize, look: &Look) -> Vec<Line> {
+    let theme = &look.theme;
+    led(
+        Span::new(look.glyphs.user, theme.style(Token::User)),
+        &[
+            Span::new(one_line(typed), theme.style(Token::Title)),
+            Span::new(format!(" · {}", one_line(whose)), theme.style(Token::Muted)),
+            Span::plain("\n"),
+            Span::new(clean(text), theme.style(Token::Text)),
+        ],
+        width,
+        look,
+    )
+}
+
 /// A notice: `·`, then one dim sentence.
 #[must_use]
 pub fn notice(text: &str, width: usize, look: &Look) -> Vec<Line> {

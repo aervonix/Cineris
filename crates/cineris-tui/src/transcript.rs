@@ -40,6 +40,16 @@ pub enum Block {
     Header(Header),
     /// Your message.
     User(String),
+    /// Your message that a custom command made (since step 28): drawn as
+    /// the command as typed and whose it is, then the text it expanded to.
+    UserCommand {
+        /// The command as typed: `/review security`.
+        typed: String,
+        /// Whose it is: `your command`, `the project's command`.
+        whose: String,
+        /// The text it expanded to, which the model was given.
+        text: String,
+    },
     /// Reasoning: streaming until it has finished.
     Reasoning(Reasoning),
     /// An answer, streaming until it is finished.
@@ -116,7 +126,7 @@ impl Block {
     fn kind(&self) -> Kind {
         match self {
             Self::Header(_) => Kind::Header,
-            Self::User(_) => Kind::User,
+            Self::User(_) | Self::UserCommand { .. } => Kind::User,
             Self::Notice(_) | Self::Listing { .. } => Kind::Notice,
             _ => Kind::Other,
         }
@@ -389,6 +399,9 @@ fn draw(block: &Block, placement: Placement, tick: usize, width: usize, look: &L
     match block {
         Block::Header(header) => view::header(header, width, look),
         Block::User(text) => view::user(text, width, look),
+        Block::UserCommand { typed, whose, text } => {
+            view::user_command(typed, whose, text, width, look)
+        }
         Block::Reasoning(reasoning) if reasoning.finished => view::reasoning(
             reasoning.summary.as_deref().unwrap_or_default(),
             reasoning.elapsed,

@@ -46,7 +46,9 @@ pub mod usage;
 // Step 25: the first run.
 pub mod setup;
 
-pub use blocks::{error, listing, notice, reasoning, reasoning_live, turn_summary, user};
+pub use blocks::{
+    error, listing, notice, reasoning, reasoning_live, turn_summary, user, user_command,
+};
 pub use header::{Header, header};
 pub use hint::{Hint, HintRow, RunningKeys, Speed, hint_row};
 pub use round::{
