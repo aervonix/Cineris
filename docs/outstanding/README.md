@@ -44,6 +44,7 @@ One line an item: what it covers and who settles it. It is the place to look fir
 - [headless-details-left-open](headless-details-left-open.md): Six small gaps in headless mode: dropped early notices, error records, `files_changed` matching, Windows close, untested signals. Owner: step 27 or step 32.
 - [rewind-and-fork-have-no-test-of-the-real-binary](rewind-and-fork-have-no-test-of-the-real-binary.md): `/rewind` and fork are tested through the application's scripted link and the core's own tests, not by the real binary under a pseudo-terminal, in process or under `cineris attach`. Owner: step 25.
 - [shell-completions](shell-completions.md): Completions should come from an `xtask` command over the `FLAGS` table; the table exists, the command does not. Owner: step 34.
+- [the-applications-first-frame-waits-for-the-approving-check](the-applications-first-frame-waits-for-the-approving-check.md): The application asks whether it runs under a session's command, and marks its own commands, before its first frame, which costs that frame about 0.15 ms on Linux. Owner: step 33.
 - [the-binary-near-its-size-budget](the-binary-near-its-size-budget.md): After the size step (2026-11-19) the budgets are 25 MiB on Windows and 20 MiB on Linux (decision 0039): the binary has 8.31 MiB left on Windows (16.69 of 25) and 6.15 MiB on Linux (13.85 of 20), for steps 28 to 34's projected 3.8 to 7.3 MB and 2.95 to 5.6 MB. Open until a step-34 build passes on both. Owner: step 34.
 
 ### cineris-config
