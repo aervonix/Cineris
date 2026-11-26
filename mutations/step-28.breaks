@@ -1856,13 +1856,13 @@ caught-by:
     cineris-ext::it engine::a_call_out_of_time_follows_its_program_to_the_end
 
 [break] a-call-the-thread-took-is-withdrawn-anyway
-rule: A call the thread took before its cancel is stopped as a started call is, its grace and the count of threads left running applying.
+rule: A call the thread took before its cancel runs nothing of its script, and is not counted among the threads left running.
 file: crates/cineris-ext/src/engine/mod.rs
 in: ScriptRuntime::call_to_its_end
 find: .is_ok() =>
 replace: .is_ok() || true =>
 caught-by:
-    cineris-ext::it engine::a_call_the_thread_took_before_its_cancel_is_stopped_and_counted
+    cineris-ext::it engine::a_call_the_thread_took_before_its_cancel_runs_nothing_of_its_script
 
 [break] a-host-the-client-reads-differently-is-checked
 rule: A URL whose host has a character the fetch client reads differently (a percent sign, a letter outside ASCII) is refused before the manifest and the host are asked.
@@ -3540,7 +3540,7 @@ caught-by:
 [break] pinned-words-not-escaped
 rule: Every text of the manifest that the trust question shows has what acts unseen written as an escape.
 file: crates/cineris-core/src/ext/found.rs
-in: in_words
+in: in_words_where
 find: visible(&quoted(description))
 replace: quoted(description)
 caught-by:
@@ -3549,7 +3549,7 @@ caught-by:
 [break] pinned-words-say-the-network-wrong
 rule: Where an extension's programs are confined, the trust question says whether they may reach the network, as its manifest says. (Where they are not, it claims no limit: the full review of step 28.)
 file: crates/cineris-core/src/ext/found.rs
-in: in_words
+in: in_words_where
 find: if declared.exec_network {
 replace: if !declared.exec_network {
 caught-by:
@@ -3558,7 +3558,7 @@ caught-by:
 [break] pinned-words-hide-what-a-hook-sees
 rule: The trust question says in words what each event an extension may hook lets it see.
 file: crates/cineris-core/src/ext/found.rs
-in: in_words
+in: in_words_where
 find: event.sees()
 replace: event.as_str()
 caught-by:
@@ -3578,7 +3578,7 @@ caught-by:
 [break] pinned-description-first
 rule: The author's description comes after what the manifest lets the extension do, so that it cannot pose as the harness's sentences.
 file: crates/cineris-core/src/ext/found.rs
-in: in_words
+in: in_words_where
 find: words.push(format!(
 occurrence: 2
 replace: words.insert(0, format!(
@@ -3598,7 +3598,7 @@ caught-by:
 [break] pinned-entries-not-escaped
 rule: The programs, globs and hosts the question shows are written as code they cannot end, with what acts unseen escaped.
 file: crates/cineris-core/src/ext/found.rs
-in: in_words
+in: in_words_where
 find: .map(|item| format!("`{}`", in_code(item)))
 replace: .map(|item| format!("`{}`", item))
 caught-by:
@@ -3607,7 +3607,7 @@ caught-by:
 [break] pinned-version-not-escaped
 rule: The version the question shows is written with what acts unseen escaped.
 file: crates/cineris-core/src/ext/found.rs
-in: in_words
+in: in_words_where
 find: in_code(&manifest.version)
 replace: manifest.version.as_str()
 caught-by:
@@ -3844,13 +3844,14 @@ caught-by:
     cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
 
 [break] pinned-permissions-trust-asks-nobody
-rule: `cineris permissions trust` approves a project's extensions only on a yes at a terminal, and with no terminal only with `--with-extensions`.
+rule: `cineris permissions trust` approves a project's extensions on a yes at a terminal, and with no terminal only those named with the hash they are shown with (by hash since the owner's answer to the early review of the third pull request).
 file: crates/cineris-cli/src/commands.rs
-in: approves_extensions
+in: permissions
+occurrence: 1
 find: if at_terminal {
 replace: if !at_terminal {
 caught-by:
-    commands::tests::a_projects_extensions_are_approved_only_on_a_yes_or_the_flag
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
 
 [break] pinned-closed-session-goes-on
 rule: A session's end ends its extensions' finding: a closed session's registration does not go on.
@@ -4049,7 +4050,7 @@ caught-by:
 [break] pinned-unconfined-said-confined
 rule: Where an extension's programs are not confined on the system, the approval says so before anything else, and claims no limit they do not have.
 file: crates/cineris-core/src/ext/found.rs
-in: in_words
+in: in_words_where
 find: } else if confined {
 replace: } else if confined || !confined {
 caught-by:
@@ -4070,7 +4071,7 @@ caught-by:
 [break] pinned-any-host-said-as-a-star
 rule: `net = ["*"]` is said as what it is: any host on the internet, including addresses on the user's own network that have public addresses.
 file: crates/cineris-core/src/ext/found.rs
-in: in_words
+in: in_words_where
 find: HostPattern::Any => ANY_HOST.to_owned(),
 replace: HostPattern::Any => "`*`".to_owned(),
 caught-by:

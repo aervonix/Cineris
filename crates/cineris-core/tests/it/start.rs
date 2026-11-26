@@ -343,6 +343,13 @@ fn a_session_is_refused_at_a_level_that_cannot_be_held_and_told_when_there_is_no
             .collect();
         assert_eq!(sandbox.len(), 1, "{sandbox:?}");
         assert!(sandbox[0].starts_with("sandbox: off."), "{}", sandbox[0]);
+        // And what else runs with the user's rights (the owner's answer to
+        // the early review of step 28's third pull request).
+        assert!(
+            sandbox[0].ends_with(cineris_core::SANDBOX_OFF_TOO),
+            "{}",
+            sandbox[0]
+        );
         front.close().await;
     });
 }

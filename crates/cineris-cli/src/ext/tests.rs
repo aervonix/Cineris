@@ -539,3 +539,100 @@ fn ext_add_shows_what_it_registers_and_its_prompt_before_the_question() {
     );
     assert!(!world.users().join("tracker").exists());
 }
+
+/// What its place holds is looked at again at the yes (the early review's
+/// L3): a folder that held the snapshot when it was shown and was changed
+/// before the yes is put back as shown. And a write clears what an earlier
+/// one left beside it (L4).
+#[test]
+fn the_place_is_looked_at_again_at_the_yes_and_leftovers_are_cleared() {
+    let world = World::new("ext_add_again");
+    let source = world.dir.join("src/tracker");
+    World::extension(&source, "tracker", "find");
+    let to_add = world
+        .core
+        .extension_to_add(&world.project, &source)
+        .unwrap();
+    let hash = to_add.hash;
+    world
+        .runtime
+        .block_on(world.core.add_extension(to_add))
+        .unwrap();
+    let kept = world.users().join("tracker");
+    let again = world.core.extension_to_add(&world.project, &kept).unwrap();
+    assert!(again.unchanged);
+    // Changed between the question and the yes.
+    std::fs::write(kept.join("main.js"), "throw new Error('changed');").unwrap();
+    // Leftovers of a write that stopped half way.
+    let leftovers = [
+        world.users().join(".tracker.4242-0.new"),
+        world.users().join(".tracker.4242-1.old"),
+    ];
+    for leftover in &leftovers {
+        std::fs::create_dir_all(leftover).unwrap();
+    }
+    let other = world.users().join(".tracker.notes");
+    std::fs::create_dir_all(&other).unwrap();
+    let added = world
+        .runtime
+        .block_on(world.core.add_extension(again))
+        .unwrap();
+    assert!(added.written, "what was changed is put back");
+    let there = world.core.extension_to_add(&world.project, &kept).unwrap();
+    assert_eq!(there.hash, hash);
+    for leftover in &leftovers {
+        assert!(!leftover.exists(), "{}", leftover.display());
+    }
+    assert!(other.exists(), "a name that is not a leftover is left");
+}
+
+/// Once the new folder is in place, the write is done: what was set aside
+/// and cannot be removed is said, and is not an error (the early review's
+/// L4).
+#[cfg(unix)]
+#[test]
+fn a_folder_set_aside_that_cannot_be_removed_does_not_fail_the_write() {
+    use std::os::unix::fs::PermissionsExt;
+    let world = World::new("ext_add_aside");
+    let kept = world.users().join("tracker");
+    // What is there: something else, holding a folder nothing can be
+    // removed from.
+    let locked = kept.join("locked");
+    std::fs::create_dir_all(&locked).unwrap();
+    std::fs::write(locked.join("file.txt"), "x").unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o500)).unwrap();
+    let source = world.dir.join("src/tracker");
+    World::extension(&source, "tracker", "find");
+    let to_add = world
+        .core
+        .extension_to_add(&world.project, &source)
+        .unwrap();
+    let hash = to_add.hash;
+    let added = world.runtime.block_on(world.core.add_extension(to_add));
+    // Whatever happened, the folder can be removed afterwards.
+    let aside: Vec<PathBuf> = std::fs::read_dir(world.users())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.to_string_lossy().ends_with(".old"))
+        .collect();
+    for folder in &aside {
+        let _ = std::fs::set_permissions(
+            folder.join("locked"),
+            std::fs::Permissions::from_mode(0o700),
+        );
+    }
+    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700));
+    let added = added.unwrap();
+    assert!(added.written);
+    let why = added.left_aside.as_deref().unwrap_or_default();
+    assert!(why.contains("could not be removed"), "{added:?}");
+    assert!(
+        added_text(&added).contains("It is in place;"),
+        "{}",
+        added_text(&added)
+    );
+    let there = world.core.extension_to_add(&world.project, &kept).unwrap();
+    assert_eq!(there.hash, hash);
+    assert_eq!(aside.len(), 1, "{aside:?}");
+}
