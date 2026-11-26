@@ -7872,7 +7872,7 @@ caught-by:
 rule: A steering message taken at a boundary where the turn was interrupted is given back.
 file: crates/cineris-agent/src/turn.rs
 in: Session::return_pending
-find: Pending::Steer { input, ticket, .. } => self.give_back(turn, input, Some(Delivery::Steer), ticket, Vec::new(), hooks::RETURNED_UNASKED.to_owned())
+find: Pending::Steer { input, ticket, command } => self.give_back(turn, input, Some(Delivery::Steer), ticket, command, Vec::new(), hooks::RETURNED_UNASKED.to_owned())
 replace: Pending::Steer { .. } => {}
 caught-by:
     cineris-agent::it hooks::a_steering_message_a_hook_refuses_or_an_interrupt_stops_is_given_back
@@ -7972,8 +7972,8 @@ caught-by:
 rule: A prompt given back carries the server's ticket for it (the review of the hook seam, M5).
 file: crates/cineris-agent/src/turn.rs
 in: Session::give_back
-find: hooks: refused, ticket, })
-replace: hooks: refused, ticket: None, })
+find: hooks: refused, command, ticket, })
+replace: hooks: refused, command, ticket: None, })
 caught-by:
     cineris-agent::it hooks::a_prompt_a_hook_refuses_ends_its_turn_denied_unrecorded_and_is_given_back
     cineris-agent::it hooks::a_steering_message_a_hook_refuses_or_an_interrupt_stops_is_given_back
