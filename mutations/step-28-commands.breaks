@@ -123,10 +123,11 @@ caught-by:
 [break] names-that-differ-only-in-case-are-both-used
 rule: Within one folder, commands whose names differ only in case are all left out.
 file: crates/cineris-ext/src/commands.rs
-in: look_in
-find: folded.iter().filter(|other| **other == fold).count() > 1
-replace: folded.iter().filter(|other| **other == fold).count() > 2
+in: case_clashes
+find: by_fold.retain(|_, same| same.len() > 1);
+replace: by_fold.retain(|_, same| same.len() > 2);
 caught-by:
+    cineris-ext commands::tests::names_that_differ_only_in_case_clash
     cineris-ext commands::tests::a_folder_of_commands_is_read_within_its_bounds
 
 [break] a-projects-folder-may-lead-out-of-the-workspace
