@@ -96,18 +96,27 @@ impl Watched {
     }
 
     /// Waits up to [`LIMIT`] for `done`, and no longer once the binary has
-    /// exited. Whether `done` came.
+    /// exited. Whether `done` came. Nothing announces `done` (a file that
+    /// appears), so it is asked again every [`LOOK_AGAIN`], the thread
+    /// waiting on the exit in between rather than spinning: an exit ends
+    /// the wait at once.
     fn until(&self, what: &str, done: impl Fn() -> bool) -> bool {
+        /// How long the thread waits on the exit before it asks again.
+        const LOOK_AGAIN: Duration = Duration::from_millis(5);
         let _doing = cineris_testkit::watch::doing(format!("waits for {what}, up to {LIMIT:?}"));
         let began = Instant::now();
         loop {
             if done() {
                 return true;
             }
-            if self.exited.is_open() || began.elapsed() >= LIMIT {
+            let left = LIMIT.saturating_sub(began.elapsed());
+            if left.is_zero() {
                 return false;
             }
-            std::thread::yield_now();
+            if self.exited.wait(left.min(LOOK_AGAIN)) {
+                // What the binary did before it exited is all there is.
+                return done();
+            }
         }
     }
 

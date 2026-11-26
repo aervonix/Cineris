@@ -592,9 +592,12 @@ pub struct TurnStartParams {
     pub delivery: Option<Delivery>,
     /// A command to send in place of a prompt written out (since step 28):
     /// the core expands it, and the expanded text is the prompt, before
-    /// any `prompt.submit` hook sees it. `input` is then empty. A server
-    /// that answers `commands/list` reads it; one that does not would
-    /// take the empty `input` alone.
+    /// any `prompt.submit` hook sees it. `input` then holds text parts
+    /// only, or none: their text follows the expanded text, after a blank
+    /// line, in the one prompt the hooks see (headless mode's standard
+    /// input); an image or any other part is refused (`invalid_prompt`). A
+    /// server that answers `commands/list` reads it; one that does not
+    /// would take `input` alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<CommandCall>,
 }

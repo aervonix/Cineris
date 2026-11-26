@@ -8189,7 +8189,7 @@
               "type": "null"
             }
           ],
-          "description": "A command to send in place of a prompt written out (since step 28):\nthe core expands it, and the expanded text is the prompt, before\nany `prompt.submit` hook sees it. `input` is then empty. A server\nthat answers `commands/list` reads it; one that does not would\ntake the empty `input` alone."
+          "description": "A command to send in place of a prompt written out (since step 28):\nthe core expands it, and the expanded text is the prompt, before\nany `prompt.submit` hook sees it. `input` then holds text parts\nonly, or none: their text follows the expanded text, after a blank\nline, in the one prompt the hooks see (headless mode's standard\ninput); an image or any other part is refused (`invalid_prompt`). A\nserver that answers `commands/list` reads it; one that does not\nwould take `input` alone."
         },
         "delivery": {
           "anyOf": [

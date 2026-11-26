@@ -72,14 +72,15 @@ fn last_prompt(front: &Front) -> (String, Option<PromptCommand>) {
 
 /// Commands from files, from an untrusted project: listed with whose each
 /// is, the user's taking a name over the project's; expanded and recorded
-/// with where they came from; and refused with a reason when unknown, given
-/// what they do not take, sent with a prompt beside them, or naming a
-/// settings profile, which is judged and never applied (it would widen the
-/// level; it is the untrusted project's own; it would widen nothing, and is
-/// still not applied in this build).
+/// with where they came from, text sent beside one after its expanded text;
+/// and refused with a reason when unknown, given what they do not take,
+/// sent with an image beside them, or naming a settings profile, which is
+/// judged and never applied (it would widen the level; it is the untrusted
+/// project's own; it would widen nothing, and is still not applied in this
+/// build).
 #[test]
 fn file_commands_are_listed_expanded_and_refused_with_reasons() {
-    let world = World::new("commands_files", [says("Done.")]);
+    let world = World::new("commands_files", [says("Done."), says("Done.")]);
     world.user_config(
         "[profiles.loose]\npermissions.mode = \"autonomous\"\n\n[profiles.narrow]\n\
          permissions.mode = \"read-only\"\n",
@@ -166,16 +167,24 @@ fn file_commands_are_listed_expanded_and_refused_with_reasons() {
             let error = send(&front, name, args).await.unwrap_err();
             assert!(error.starts_with(why), "/{name}: {error}");
         }
-        let error = front
-            .op(Op::TurnStart(TurnStartParams {
+        let with = |input: Vec<Part>| {
+            Op::TurnStart(TurnStartParams {
                 session_id: front.session.clone(),
-                input: vec![Part::text("and this")],
+                input,
                 delivery: None,
                 command: Some(CommandCall {
                     name: "fix".to_owned(),
                     args: String::new(),
                 }),
-            }))
+            })
+        };
+        let image = Part::Image(cineris_protocol::message::ImagePart {
+            media_type: "image/png".to_owned(),
+            data: Some("iVBORw0KGgo=".to_owned()),
+            artifact: None,
+        });
+        let error = front
+            .op(with(vec![Part::text("and this"), image]))
             .await
             .unwrap_err();
         assert_eq!(error.code, code::INVALID_PROMPT);
@@ -183,6 +192,16 @@ fn file_commands_are_listed_expanded_and_refused_with_reasons() {
             front.ends().len(),
             before + 1,
             "a refused command started a turn"
+        );
+        // Text sent with a command follows its expanded text, after a blank
+        // line, in the one prompt recorded: headless mode's standard input.
+        front.op(with(vec![Part::text("and this")])).await.unwrap();
+        front.turns(before + 2).await;
+        let (text, command) = last_prompt(&front);
+        assert_eq!(text, "Fix the build.\n\nand this");
+        assert_eq!(
+            command.map(|command| (command.name, command.source)),
+            Some(("fix".to_owned(), CommandSource::Project))
         );
         front.close().await;
     });
