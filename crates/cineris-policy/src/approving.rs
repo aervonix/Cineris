@@ -103,6 +103,7 @@
 //! command: that is the backstop (`cineris_sandbox::session`).
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 pub use crate::command::ShellSyntax;
@@ -287,6 +288,22 @@ const LONGEST: usize = 32 * 1024;
 /// How many of a word's `=` and `!` begin a line read again: past them, the
 /// word is refused (reading each was quadratic in the word).
 const MARKS: usize = 16;
+
+/// The most words after a name of Cineris that one run of it is read with:
+/// a run with more is refused, wherever it stands. Each name found reads
+/// the words after it, so that without this a line of many names, as
+/// separate words, read the rest of the line once for each and was
+/// quadratic (the narrow re-check of the managing part: `x cin cin …` of
+/// 8,000 names took more than 10 s); with it, each name reads at most this
+/// many, and the pass is linear in the line.
+const RUN_WORDS: usize = 128;
+
+/// The most runs of Cineris one check reads, every reading of the line
+/// counted (its continuations joined, its text read in each shell's way):
+/// past them, the line is refused. The cap behind [`RUN_WORDS`]: a line of
+/// many short runs reads each one's words once, and is still refused
+/// soon.
+const MENTIONS: usize = 64;
 
 /// The subcommands, by their first word.
 const TOPICS: [&str; 12] = [
@@ -1607,6 +1624,13 @@ fn headless(words: &[String]) -> bool {
     })
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The words the runs of Cineris read on this thread, all checks
+    /// together: what a test of the pass's cost counts.
+    static LOOKED: Cell<usize> = const { Cell::new(0) };
+}
+
 /// One check of one command line.
 struct Reader<'a> {
     own: &'a OwnCommands,
@@ -1619,8 +1643,10 @@ struct Reader<'a> {
     /// Whether the next run found takes more words than are written: what
     /// `xargs` and `parallel` add from their input.
     adds: Cell<bool>,
-    /// The words the analysis said are patterns the shell expands.
-    globs: RefCell<Vec<String>>,
+    /// The words the analysis said are patterns the shell expands: an
+    /// ordered set, so that a run's word is looked up in it, not compared
+    /// with each, and an empty one costs nothing to ask.
+    globs: RefCell<BTreeSet<String>>,
     /// Whether the line being read was modelled: its words are the
     /// program's own arguments, as the shell gives them.
     exact: Cell<bool>,
@@ -1633,6 +1659,8 @@ struct Reader<'a> {
     /// Whether the line being read runs what another program of it prints
     /// ([`reads_a_line`]): printers are then no printers.
     fed: Cell<bool>,
+    /// How many runs of Cineris were read ([`MENTIONS`]).
+    mentions: Cell<usize>,
 }
 
 impl<'a> Reader<'a> {
@@ -1643,12 +1671,13 @@ impl<'a> Reader<'a> {
             moved: RefCell::new(None),
             runs: Cell::new(false),
             adds: Cell::new(false),
-            globs: RefCell::new(Vec::new()),
+            globs: RefCell::new(BTreeSet::new()),
             exact: Cell::new(false),
             sources: Cell::new(false),
             moved_dir: Cell::new(false),
             steps: Cell::new(0),
             fed: Cell::new(false),
+            mentions: Cell::new(0),
         }
     }
 
@@ -1700,7 +1729,7 @@ impl<'a> Reader<'a> {
 
     /// Whether the shell expands `word`, or the analysis said it does.
     fn expanded(&self, word: &str) -> bool {
-        expands(word) || self.globs.borrow().iter().any(|glob| glob == word)
+        expands(word) || self.globs.borrow().contains(word)
     }
 
     /// A run of Cineris with the words `rest`, `open` when more may follow
@@ -1708,6 +1737,22 @@ impl<'a> Reader<'a> {
     /// One that does not is refused only where it approves, widens or is
     /// internal: `grep cineris file` runs nothing of Cineris.
     fn run(&self, rest: &[String], open: bool, placed: bool) -> Option<Refusal> {
+        // Each run read looks at the words after its name, once: past
+        // [`MENTIONS`] runs in one check, or past [`RUN_WORDS`] words in
+        // this one, the line is refused, wherever the name stands, before
+        // anything is made of them (the narrow re-check of the managing
+        // part: a line of many names read the rest of the line again for
+        // each).
+        let mentions = self.mentions.get() + 1;
+        self.mentions.set(mentions);
+        if mentions > MENTIONS {
+            return Some(Refusal::new("cineris", Kind::Hidden));
+        }
+        if rest.len() > RUN_WORDS {
+            return Some(Refusal::new("cineris", Kind::Hidden));
+        }
+        #[cfg(test)]
+        LOOKED.with(|looked| looked.set(looked.get() + rest.len()));
         let open = open || self.adds.replace(false);
         // PowerShell's `--%` passes what follows as it is, and is not
         // itself an argument; a group's closing brace after the words
@@ -1811,7 +1856,7 @@ impl<'a> Reader<'a> {
                         break;
                     }
                     if word.glob {
-                        self.globs.borrow_mut().push(word.text.clone());
+                        self.globs.borrow_mut().insert(word.text.clone());
                     }
                     words.push(word.text.clone());
                 }
@@ -2423,6 +2468,8 @@ impl<'a> Reader<'a> {
 /// it expands, or a flag that widens a headless run anywhere.
 fn after_a_name(rest: &[String]) -> Option<Refusal> {
     let expanded = rest.iter().position(|word| expands(word));
+    // Asked once, not again for each flag that widens.
+    let headless = headless(rest);
     for (at, word) in rest.iter().enumerate() {
         let lower = word.to_ascii_lowercase();
         if expanded.is_some_and(|expanded| expanded < at)
@@ -2440,7 +2487,7 @@ fn after_a_name(rest: &[String]) -> Option<Refusal> {
             && !rest
                 .get(at + 1)
                 .is_some_and(|mode| matches!(mode.as_str(), "read-only" | "supervised")));
-        if widens && headless(rest) {
+        if widens && headless {
             return Some(Refusal::new(format!("cineris -p {flag}"), Kind::Widens));
         }
     }

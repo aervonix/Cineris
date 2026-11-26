@@ -261,6 +261,23 @@ fn a_line_that_nests_or_repeats_without_end_is_refused_soon() {
         (format!("cin {}}}", "{".repeat(32_000)), Posix, true),
         (format!("cin {}}}", "{".repeat(32_000)), Unknown, true),
         (format!("cin {}}}", "{".repeat(32_000)), PowerShell, true),
+        // Names of Cineris as separate words, each reading no more than a
+        // run's words after it (the narrow re-check of the managing part:
+        // each read the rest of the line again).
+        (format!("x {}", "cin ".repeat(3_000)), Posix, true),
+        (format!("x {}", "cin ".repeat(8_000)), Posix, true),
+        (format!("x {}", "cin ".repeat(8_000)), PowerShell, true),
+        (format!("x {} $((", "cin ".repeat(8_000)), Unknown, true),
+        (format!("echo {}| sh", "cin ".repeat(8_000)), Posix, true),
+        (format!("x {}", "cin -x ".repeat(4_500)), Posix, true),
+        (
+            format!("x {}", "\\\"cin\\\",".repeat(3_000)),
+            PowerShell,
+            true,
+        ),
+        // Many short runs, each read once: refused at the cap.
+        (many_short_runs(), Posix, true),
+        ("cin ext list; ".repeat(100), Posix, true),
     ];
     let checked = std::thread::Builder::new()
         .stack_size(2 * 1024 * 1024)
@@ -283,6 +300,45 @@ fn a_line_that_nests_or_repeats_without_end_is_refused_soon() {
         assert!(
             took < std::time::Duration::from_secs(2),
             "{name} took {took:?}"
+        );
+    }
+}
+
+/// A line of segments that each hold more names of Cineris than the cap on
+/// runs, each with fewer words after it than a run is read with: what only
+/// [`MENTIONS`] bounds.
+fn many_short_runs() -> String {
+    format!("x {}; ", "cin ".repeat(RUN_WORDS - 8)).repeat(60)
+}
+
+/// The runs of Cineris a line holds read, all together, no more words than
+/// the cap on runs times the words one is read with, however many names it
+/// holds and wherever they stand: the pass is linear in the line (the
+/// narrow re-check of the managing part). Counted, not timed, so that it
+/// says the same on any machine.
+#[test]
+fn the_words_the_runs_of_a_line_read_are_bounded() {
+    use ShellSyntax::{PowerShell, Unknown};
+    let lines = [
+        (format!("x {}", "cin ".repeat(8_000)), Posix),
+        (format!("x {}", "cin ".repeat(8_000)), PowerShell),
+        (format!("x {} $((", "cin ".repeat(8_000)), Unknown),
+        (format!("echo {}| sh", "cin ".repeat(8_000)), Posix),
+        (format!("x {}", "cin -x ".repeat(4_500)), Posix),
+        (format!("x {}", "\\\"cin\\\",".repeat(3_000)), PowerShell),
+        (format!("x {}", "cin ".repeat(RUN_WORDS)), Posix),
+        (many_short_runs(), Posix),
+        ("cin ext list; ".repeat(100), Posix),
+    ];
+    for (line, shell) in lines {
+        LOOKED.with(|looked| looked.set(0));
+        let refusal = refused(&line, shell, None);
+        let looked = LOOKED.with(Cell::get);
+        assert!(refusal.is_some(), "{} bytes in {shell:?}", line.len());
+        assert!(
+            looked <= MENTIONS * RUN_WORDS,
+            "{} bytes in {shell:?} read {looked} words",
+            line.len()
         );
     }
 }
