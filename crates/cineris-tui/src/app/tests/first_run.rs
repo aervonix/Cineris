@@ -736,6 +736,59 @@ fn a_key_typed_is_never_drawn_and_goes_only_to_the_store() {
     );
 }
 
+/// A reply of the terminal's split after its ESC, as a pseudo-console
+/// splits one on a busy machine, comes from the terminal layer as the
+/// reply while the replies are due: none of it goes into the key, and its
+/// ESC does not leave the step (a review of step 25; small fixes II).
+#[test]
+fn a_reply_split_after_its_escape_never_goes_into_the_key() {
+    use cineris_term::Ready;
+    let mut setup = fake();
+    setup.providers.providers[0].variable = None;
+    let mut run = Run::new(setup);
+    let _ = run.ready();
+    run.key("enter");
+    let _ = run.ready();
+    // The reply's ESC, then nothing for 600 ms, then its rest.
+    let device = super::Played {
+        steps: [
+            (Ready::Input, b"\x1b".to_vec()),
+            (Ready::Timeout, Vec::new()),
+            (Ready::Input, b"[?0u".to_vec()),
+        ]
+        .into_iter()
+        .collect(),
+        written: Arc::new(std::sync::Mutex::new(Vec::new())),
+        waits: Arc::new(std::sync::Mutex::new(Vec::new())),
+        base: run.now,
+        elapsed: Duration::ZERO,
+    };
+    let mut terminal =
+        cineris_term::Terminal::with_device(device, crate::testkit::caps()).expect("the terminal");
+    let mut events = Vec::new();
+    for _ in 0..2 {
+        let read = terminal.next(Some(Duration::from_millis(600)));
+        events.extend(read.expect("a read"));
+    }
+    for event in &events {
+        run.app.terminal(event, run.now);
+    }
+    assert_eq!(
+        events,
+        [cineris_term::Event::Reply(cineris_term::Reply::Keyboard(0))]
+    );
+    let live = run.frame();
+    assert!(
+        live.iter()
+            .any(|row| row.contains("Paste or type the key for anthropic")),
+        "{live:#?}"
+    );
+    assert!(
+        live.iter().any(|row| row.contains("0 characters, hidden")),
+        "{live:#?}"
+    );
+}
+
 /// A store that refuses says why and keeps the step; `Esc` goes back to
 /// the providers with nothing kept.
 #[test]

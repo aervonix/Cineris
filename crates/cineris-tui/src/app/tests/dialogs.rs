@@ -1061,3 +1061,97 @@ fn ctrl_o_then_esc_then_one_key_answers() {
     press(&mut app, "y", ms(now, 6500));
     assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
 }
+
+/// An Escape the terminal held, pressed at `pressed` and read at `read`
+/// (an ESC held while the terminal's replies to its queries are due), with
+/// the loop's wakes before it and its frame after.
+fn held_escape(app: &mut App, pressed: Instant, read: Instant) {
+    wake_until(app, read);
+    app.terminal_pressed(&TermEvent::Key(parse("esc").expect("a key")), pressed, read);
+    let _ = app.frame(read);
+    app.drawn(read);
+}
+
+/// An Escape pressed in the dialog's grace and read long after it was
+/// ready (the terminal held it for its replies) does not answer it: it is
+/// judged when it was pressed (small fixes II).
+#[test]
+fn a_held_escape_pressed_before_the_dialog_was_ready_does_not_answer_it() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    let ready = wake(&mut app).expect("a frame at the grace's end");
+    assert!(answers_shown(&mut app, ready));
+    held_escape(&mut app, ms(now, 100), ms(now, 2000));
+    assert!(answers(&link).is_empty(), "the held Escape denied");
+}
+
+/// A held Escape pressed once the dialog was ready answers it when it is
+/// read, and the dialog after it waits the repeat window from then, not
+/// from the press: the key could still be down (small fixes II).
+#[test]
+fn a_held_escape_that_answers_holds_the_next_dialog_from_when_it_was_read() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    let _ = wake(&mut app).expect("a frame at the grace's end");
+    let read = ms(now, 2000);
+    held_escape(&mut app, ms(now, 500), read);
+    assert_eq!(answers(&link), [ApprovalChoice::Deny]);
+    ask(&mut app, &link, 8, approval("c_8"), ms(now, 2100));
+    assert_eq!(app.deadline(), Some(read + REPEAT));
+}
+
+/// The held Escape is input the dialog did not take, counted when it was
+/// read, not when it was pressed: a key just after it is inside the quiet
+/// second and does not answer; a key once that second has passed does.
+#[test]
+fn a_key_just_after_a_held_escape_is_read_does_not_answer() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    let _ = wake(&mut app).expect("a frame at the grace's end");
+    let read = ms(now, 2000);
+    held_escape(&mut app, ms(now, 100), read);
+    let next = read + Duration::from_millis(10);
+    press(&mut app, "y", next);
+    assert!(answers(&link).is_empty(), "a key in the quiet answered");
+    let again = wake(&mut app).expect("the answers again");
+    assert_eq!(again, next + QUIET);
+    press(&mut app, "y", again + GRACE);
+    assert_eq!(answers(&link), [ApprovalChoice::AllowOnce]);
+}
+
+/// A paste whose first bytes came before the dialog was ready and whose
+/// end came after is input when its end was read: the quiet second counts
+/// from then, and a key just after it does not answer.
+#[test]
+fn a_paste_split_across_reads_holds_the_dialog_from_its_end() {
+    let now = Instant::now();
+    let (mut app, link) = approval_up(now);
+    let _ = wake(&mut app).expect("a frame at the grace's end");
+    let read = ms(now, 2000);
+    wake_until(&mut app, read);
+    app.terminal_pressed(&TermEvent::Paste("pasted".to_owned()), ms(now, 100), read);
+    let _ = app.frame(read);
+    app.drawn(read);
+    press(&mut app, "y", read + Duration::from_millis(10));
+    assert!(answers(&link).is_empty(), "a key in the quiet answered");
+    assert_eq!(app.input().editor().expanded(), "pastedy");
+}
+
+/// Keys read as they are pressed are taken as before: typing goes to the
+/// prompt, and a dialog that comes after it waits a quiet second from the
+/// last key.
+#[test]
+fn keys_read_when_they_are_pressed_are_taken_as_before() {
+    let now = Instant::now();
+    let (mut app, link) = app(now);
+    opened(&mut app, &link, now);
+    let mut last = now;
+    for (n, c) in (0..).zip("hello".chars()) {
+        last = ms(now, 100 * n);
+        let key = TermEvent::Key(cineris_term::Key::plain(cineris_term::KeyCode::Char(c)));
+        app.terminal_pressed(&key, last, last);
+    }
+    assert_eq!(app.input().editor().expanded(), "hello");
+    ask(&mut app, &link, 9, approval("c_9"), ms(now, 500));
+    assert_eq!(app.deadline(), Some(last + QUIET));
+}

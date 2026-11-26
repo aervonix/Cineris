@@ -503,6 +503,9 @@ pub struct App {
     /// When a dialog last took a key: the next dialog is ready no sooner
     /// than the repeat window after it.
     taken: Option<Instant>,
+    /// While [`App::terminal_pressed`] handles an event: when its first
+    /// byte came, at which readiness is judged.
+    pressed: Option<Instant>,
     /// The panels (step 24): the plan's, the review's, the project's and
     /// the usage's. Each that says a time (an entry's age, a limit's reset)
     /// holds the clock it reads it from.
@@ -666,6 +669,7 @@ impl App {
             note_cut: None,
             untaken: None,
             taken: None,
+            pressed: None,
             panels: panel::registered(&clock, None),
             panel_drawn: None,
             panel_untaken: None,
@@ -1002,6 +1006,29 @@ impl App {
         self.not_taken(at);
     }
 
+    /// A terminal event read at `at` whose first byte came at `pressed`,
+    /// which may be earlier: a key the terminal held for what might follow
+    /// it (an ESC while the terminal's replies to its queries are due), a
+    /// paste split across reads. Whether a dialog, a panel or a step of the
+    /// first run was ready for it is judged at `pressed`, so that a key
+    /// pressed before one was ready never answers it however late it is
+    /// read; the input it is, which holds them a quiet second, counts from
+    /// `at`, the later (since small fixes II). Otherwise as
+    /// [`terminal`](Self::terminal).
+    pub fn terminal_pressed(&mut self, event: &TermEvent, pressed: Instant, at: Instant) -> bool {
+        self.pressed = Some(pressed.min(at));
+        let input = self.terminal(event, at);
+        self.pressed = None;
+        input
+    }
+
+    /// When to judge whether something that takes keys was ready for the
+    /// event being handled, read at `at`: when it was pressed
+    /// ([`terminal_pressed`](Self::terminal_pressed)), or `at`.
+    pub(super) fn judged(&self, at: Instant) -> Instant {
+        self.pressed.map_or(at, |pressed| pressed.min(at))
+    }
+
     /// A terminal event, read at `at`. Says whether it was input (a key or a
     /// paste), whose frame is drawn at once.
     pub fn terminal(&mut self, event: &TermEvent, at: Instant) -> bool {
@@ -1077,7 +1104,7 @@ impl App {
             && let Some(dialog) = self.dialogs.front()
         {
             let id = dialog.id.clone();
-            let ready = dialog.takes_keys(at);
+            let ready = dialog.takes_keys(self.judged(at));
             let note = dialog.writing_note();
             let unreadable = dialog.unreadable();
             let reading = self.reading_transcript.as_ref() == Some(&id);
@@ -1148,6 +1175,7 @@ impl App {
                 let before = self.last_key.take();
                 // The key before this one was one a dialog took.
                 let after_taken = before.is_some_and(|before| !before.typing);
+                let pressed = self.judged(at);
                 let Some(dialog) = self.dialogs.front_mut() else {
                     // A key held down after a panel took it goes where its
                     // press went, nowhere, though the panel it acted on has
@@ -1170,8 +1198,10 @@ impl App {
                     self.panel_held = None;
                     return self.edit_with(*key, at);
                 };
-                let ready = dialog.takes_keys(at);
-                let keyed = dialog.key(*key, at, repeat, after_taken, self.input.keymap());
+                // Whether it was ready for the key is judged when the key
+                // was pressed; what the key holds counts from `at`.
+                let ready = dialog.takes_keys(pressed);
+                let keyed = dialog.key(*key, pressed, repeat, after_taken, self.input.keymap());
                 // What the key was: typing, which holds the dialog a quiet
                 // second; a key the dialog took, which holds the next one
                 // (and a key held down after it, still the dialog's); or
@@ -1258,7 +1288,7 @@ impl App {
                 if self
                     .dialogs
                     .front()
-                    .is_some_and(|dialog| dialog.swallows(at)) =>
+                    .is_some_and(|dialog| dialog.swallows(self.judged(at))) =>
             {
                 self.not_taken(at);
                 true

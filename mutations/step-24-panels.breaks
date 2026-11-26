@@ -12,7 +12,7 @@
 rule: A panel's key that changes something is taken only when the panel is ready; until then one that types goes to the editor.
 file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_key
-find: let ready = action == Action::FocusClose || self.panels.ready(id, at);
+find: let ready = action == Action::FocusClose || self.panels.ready(id, self.judged(at));
 replace: let ready = true;
 caught-by:
     app::tests::panels::typing_that_runs_on_past_slash_plans_enter_never_skips_an_item
@@ -22,8 +22,8 @@ caught-by:
 rule: `focus.close` changes nothing the person cannot see again, and acts at once, like moving.
 file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_key
-find: let ready = action == Action::FocusClose || self.panels.ready(id, at);
-replace: let ready = self.panels.ready(id, at);
+find: let ready = action == Action::FocusClose || self.panels.ready(id, self.judged(at));
+replace: let ready = self.panels.ready(id, self.judged(at));
 caught-by:
     app::tests::panels::x_closes_the_review_and_enter_opens_the_viewer_at_the_files_box
 

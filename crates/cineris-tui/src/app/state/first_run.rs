@@ -995,6 +995,9 @@ impl App {
     /// for what comes after it as a dialog's keys do (the full review of
     /// the third pull request).
     pub(super) fn first_run_event(&mut self, event: &TermEvent, at: Instant) -> Option<bool> {
+        // Whether the step was ready for a key is judged when it was
+        // pressed (`App::terminal_pressed`); what it holds counts from `at`.
+        let pressed = self.judged(at);
         if !self.first_run_shown() {
             self.first_run_edit_cut(at);
             return None;
@@ -1069,7 +1072,7 @@ impl App {
                     self.first_run_untaken(at);
                     return Some(true);
                 }
-                if !run.takes_keys(at) {
+                if !run.takes_keys(pressed) {
                     run.typed(at);
                     // The last step's, before it takes keys, goes to the
                     // input box, as a dialog's typing does: what it types
