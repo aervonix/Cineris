@@ -43,7 +43,7 @@ The `.txt` file beside each one is the same screen without colour, to read here.
 | f1b | The first run, step 1: a key pasted, 108 characters and none of them drawn (Windows' wording: Credential Manager) | 16, 16 | [text](f1b.txt), [dark](f1b-dark.ans), [light](f1b-light.ans) |
 | f2a | The first run, step 2: what other tools left, nothing read or picked | 28, 27 | [text](f2a.txt), [dark](f2a-dark.ans), [light](f2a-light.ans) |
 | f2b | The first run, step 2: one MCP file read, each command whole, one server picked and one refused for a credential | 34, 33 | [text](f2b.txt), [dark](f2b-dark.ans), [light](f2b-light.ans) |
-| f3 | The first run, step 3: the mode, before the session opens, `unrestricted` not offered | 22, 20 | [text](f3.txt), [dark](f3-dark.ans), [light](f3-light.ans) |
-| f4 | The first run, step 4: the project's commands, after the session opened and was trusted | 22, 11 | [text](f4.txt), [dark](f4-dark.ans), [light](f4-light.ans) |
+| f3 | The first run, step 4: the mode, before the session opens, `unrestricted` not offered (step 3 until step 28's third pull request added the skill folders' step before it, whose committed line the screen shows) | 24, 20 | [text](f3.txt), [dark](f3-dark.ans), [light](f3-light.ans) |
+| f4 | The first run, step 5: the project's commands, after the session opened and was trusted | 24, 11 | [text](f4.txt), [dark](f4-dark.ans), [light](f4-light.ans) |
 
 The colours in the dark files assume a dark terminal scheme and those in the light files a light one. The accent's tint for text differs between them, as 09-tui describes.
