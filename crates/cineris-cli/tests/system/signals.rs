@@ -12,7 +12,7 @@
 use std::fs::File;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cineris_sandbox::tree::{Exit, Tree};
 use cineris_testkit::children::{ChildSpec, Roll};
@@ -50,6 +50,11 @@ impl Running {
     /// Waits for the binary to exit, and reads what it wrote.
     fn finish(self) -> Run {
         let exit = self.tree.wait().unwrap();
+        self.read(exit)
+    }
+
+    /// Reads what the binary wrote, once it has exited as `exit` says.
+    fn read(self, exit: Exit) -> Run {
         self.tree.end();
         Run {
             code: match exit {
@@ -59,6 +64,62 @@ impl Running {
             stdout: std::fs::read_to_string(&self.stdout).unwrap(),
             stderr: std::fs::read_to_string(&self.stderr).unwrap(),
         }
+    }
+}
+
+/// [`Running`], with a thread that waits for the binary to exit and opens
+/// `exited` when it has: a test bounds its wait for the exit, and sees an
+/// exit that comes while it waits for something else.
+struct Watched {
+    running: Running,
+    exited: Gate,
+    waiter: std::thread::JoinHandle<Exit>,
+}
+
+impl Watched {
+    fn start(machine: &Machine, arguments: &[&str]) -> Self {
+        let running = Running::start(machine, arguments);
+        let exited = Gate::new();
+        let waiter = {
+            let (tree, exited) = (running.tree.clone(), exited.clone());
+            std::thread::spawn(move || {
+                let exit = tree.wait().unwrap();
+                exited.open();
+                exit
+            })
+        };
+        Self {
+            running,
+            exited,
+            waiter,
+        }
+    }
+
+    /// Waits up to [`LIMIT`] for `done`, and no longer once the binary has
+    /// exited. Whether `done` came.
+    fn until(&self, what: &str, done: impl Fn() -> bool) -> bool {
+        let _doing = cineris_testkit::watch::doing(format!("waits for {what}, up to {LIMIT:?}"));
+        let began = Instant::now();
+        loop {
+            if done() {
+                return true;
+            }
+            if self.exited.is_open() || began.elapsed() >= LIMIT {
+                return false;
+            }
+            std::thread::yield_now();
+        }
+    }
+
+    /// What the binary left, and whether it exited by itself within
+    /// `limit`: when it had not, it was killed.
+    fn end_within(self, limit: Duration) -> (Run, bool) {
+        let by_itself = self.exited.wait(limit);
+        if !by_itself {
+            let _ = self.running.tree.kill();
+        }
+        let exit = self.waiter.join().unwrap();
+        (self.running.read(exit), by_itself)
     }
 }
 
@@ -111,6 +172,100 @@ fn sys_sigterm_interrupts_the_turn_and_exits_143() {
 #[test]
 fn sys_ctrl_break_interrupts_the_turn_and_exits_143() {
     interrupted_by(|tree| tree.interrupt().unwrap(), 143, "sys_ctrl_break");
+}
+
+/// The project's extension `probe`, approved with the project as
+/// `permissions trust --with-extensions` approves it: its command `spin`
+/// notes in the project's values that it runs, then runs until it is
+/// stopped. The file the note is kept in, which is there once it runs.
+fn spinning_command(machine: &Machine) -> PathBuf {
+    let folder = machine.workspace.join(".cineris/extensions/probe");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("extension.toml"),
+        "api = 1\nname = \"probe\"\nversion = \"1\"\ndescription = \"A test extension\"\nmain = \
+         \"main.js\"\n[capabilities]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("main.js"),
+        "cineris.command({ name: 'spin', description: 'Runs until it is stopped', async run() {\n\
+         \x20 await cineris.state.set('started', true, { scope: 'project' });\n\
+         \x20 for (;;) {}\n\
+         } });\n",
+    )
+    .unwrap();
+    machine
+        .run(&["permissions", "trust", "--with-extensions"])
+        .expect_code(0);
+    // `projects/<project key>/extensions/project-probe.json` in the state
+    // directory (`cineris_core::ext::state`).
+    let key = cineris_base::PathResolver::new(&machine.workspace, cineris_base::PathOptions::new())
+        .unwrap()
+        .root()
+        .project_key();
+    cineris_config::StateDir::from_dirs(&machine.dirs())
+        .unwrap()
+        .project_dir(&key)
+        .unwrap()
+        .join("extensions")
+        .join("project-probe.json")
+}
+
+/// A signal while an extension's command runs, inside `turn/start`, stops
+/// the command through its own token: the run ends interrupted at once,
+/// with the signal's code, and nothing was sent to the model. The command
+/// would run for its whole time otherwise (two minutes, the manifest's
+/// default), and the wait for the exit is far shorter than that.
+fn command_stopped_by(signal: impl FnOnce(&Tree), code: i32, test: &str) {
+    let machine = Machine::new(test);
+    let values = spinning_command(&machine);
+    let running = Watched::start(&machine, &["-p", "/probe:spin", "--output", "json"]);
+    if !running.until("the command to run", || values.exists()) {
+        let (run, by_itself) = running.end_within(Duration::ZERO);
+        panic!(
+            "the command did not run (the binary {}):\n{}",
+            if by_itself {
+                "exited first"
+            } else {
+                "was killed"
+            },
+            crate::shown(&run)
+        );
+    }
+    let kept: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&values).unwrap()).unwrap();
+    assert_eq!(kept["values"]["started"], true, "{kept}");
+
+    signal(&running.running.tree);
+    let (run, by_itself) = running.end_within(LIMIT);
+    assert!(
+        by_itself,
+        "the binary was still running {LIMIT:?} after the signal, and was killed:\n{}",
+        crate::shown(&run)
+    );
+    let record = run.expect_code(code).json();
+    assert_eq!(record["outcome"], "interrupted", "{record}");
+    assert!(
+        machine.server.requests().is_empty(),
+        "the model was asked: {record}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn sys_ctrl_c_stops_a_running_extension_command() {
+    command_stopped_by(|tree| tree.interrupt().unwrap(), 130, "sys_sigint_command");
+}
+
+#[cfg(windows)]
+#[test]
+fn sys_ctrl_break_stops_a_running_extension_command() {
+    command_stopped_by(
+        |tree| tree.interrupt().unwrap(),
+        143,
+        "sys_ctrl_break_command",
+    );
 }
 
 /// The command a shell runs to start `spec`: the test binary, quoted for
