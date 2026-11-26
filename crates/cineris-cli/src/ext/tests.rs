@@ -325,6 +325,24 @@ fn what_cannot_be_added_or_removed_is_refused_first() {
         );
     }
     assert!(users.join("Tracker").exists());
+    // Stores of approvals that cannot be read: the listing says so, and
+    // still lists what it can.
+    let state = world.dirs.state.clone().unwrap();
+    std::fs::create_dir_all(&state).unwrap();
+    std::fs::write(state.join("pins.toml"), "not toml [").unwrap();
+    std::fs::write(state.join("trust.toml"), "not toml [").unwrap();
+    let listing = world.core.extensions(&world.project).unwrap();
+    assert_eq!(listing.problems.len(), 2, "{listing:#?}");
+    assert!(listing.problems[0].contains("pin store"), "{listing:#?}");
+    assert!(listing.problems[1].contains("trust store"), "{listing:#?}");
+    let text = listing_text(&listing, &world.project.shown);
+    assert!(text.contains("Could not be read:"), "{text}");
+    assert!(
+        listing.extensions.iter().any(
+            |one| one.name == "other" && matches!(one.standing, ExtensionStanding::Unjudged(_))
+        ),
+        "{listing:#?}"
+    );
 }
 
 /// A yes is `y` or `yes` at a terminal, `--yes` ignored there; with no

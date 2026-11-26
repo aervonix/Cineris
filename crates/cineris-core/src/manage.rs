@@ -704,7 +704,7 @@ impl Core {
         ))
     }
 
-    fn load(&self, project: &Project, trust: ConfigTrust) -> Result<Loaded, OpError> {
+    pub(crate) fn load(&self, project: &Project, trust: ConfigTrust) -> Result<Loaded, OpError> {
         self.load_with(project, trust, false)
     }
 
