@@ -2042,6 +2042,54 @@ fn keys_read_together_never_answer_a_dialog() {
     assert_eq!(app.input().editor().expanded(), "sp");
 }
 
+/// Through the loop: an `Esc` pressed in the dialog's grace, while the
+/// terminal's replies to its queries are due (none comes here), is held by
+/// the terminal until they are no longer due, long after the dialog drew
+/// its answers. It is judged by when it was pressed, and denies nothing
+/// (small fixes II).
+#[test]
+fn an_escape_the_terminal_held_does_not_answer_a_dialog_it_was_pressed_before() {
+    use cineris_term::Ready;
+    let base = Instant::now();
+    let (mut app, link) = app(base);
+    link.give(Inbound::Done(
+        Ticket(1),
+        Ok(OpResult::SessionNew(SessionResult {
+            session: session().build(),
+        })),
+    ));
+    link.give(Inbound::Request(RequestId::Number(7), approval("c_1")));
+    let waits = Arc::new(Mutex::new(Vec::new()));
+    let device = Played {
+        steps: [
+            // The core's waker: the dialog's first frame.
+            (Ready::Woken, Vec::new()),
+            // An `Esc` in its grace, held; the grace's end.
+            (Ready::Input, b"\x1b".to_vec()),
+            (Ready::Timeout, Vec::new()),
+            // The hold's end, when the replies are no longer due.
+            (Ready::Timeout, Vec::new()),
+        ]
+        .into_iter()
+        .collect(),
+        written: Arc::new(Mutex::new(Vec::new())),
+        waits: Arc::clone(&waits),
+        base,
+        elapsed: Duration::ZERO,
+    };
+    let mut terminal = cineris_term::Terminal::with_device(device, caps()).expect("the terminal");
+    let ended = run(&mut terminal, &mut app);
+    assert!(
+        matches!(&ended, Err(error) if error.to_string() == "the script has ended"),
+        "{ended:?}"
+    );
+    assert!(
+        terminal.now() >= base + cineris_term::terminal::REPLIES_DUE,
+        "the Escape was read when the hold ended"
+    );
+    assert_eq!(answers(&link), []);
+}
+
 fn resource(
     kind: cineris_protocol::methods::TrustResourceKind,
     name: &str,

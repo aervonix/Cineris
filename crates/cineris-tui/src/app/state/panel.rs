@@ -466,7 +466,7 @@ impl App {
             self.outcome(outcome, at);
             return true;
         };
-        let ready = action == Action::FocusClose || self.panels.ready(id, at);
+        let ready = action == Action::FocusClose || self.panels.ready(id, self.judged(at));
         if repeat || !ready {
             return self.panel_passed(key, at);
         }

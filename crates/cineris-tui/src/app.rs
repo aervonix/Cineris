@@ -575,7 +575,11 @@ fn take<D: Device>(
     if matches!(event, Event::Key(_)) && terminal.queued() {
         app.burst(terminal.now());
     }
-    let input = app.terminal(event, terminal.now());
+    // Judged for readiness when its first byte came, which a key the
+    // terminal held for what might follow it (an ESC while the replies to
+    // the queries are due) did well before it was read; counted as input
+    // when it was read.
+    let input = app.terminal_pressed(event, terminal.came(), terminal.now());
     for effect in app.take_effects() {
         match effect {
             Effect::Redraw => {

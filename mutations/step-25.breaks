@@ -1996,7 +1996,7 @@ caught-by:
 [break] an-early-paste-reaches-the-editor-under-the-question
 rule: A paste before the rewind's question first takes keys reaches nothing.
 file: crates/cineris-tui/src/app/state.rs
-find: .is_some_and(|dialog| dialog.swallows(at))
+find: .is_some_and(|dialog| dialog.swallows(self.judged(at)))
 replace: .is_some_and(|_| false)
 caught-by:
     cineris-tui app::tests::rewind::what_is_typed_before_the_question_is_ready_reaches_nothing
@@ -2317,7 +2317,7 @@ caught-by:
 rule: A step of the first run takes no key before its grace, nor until a quiet second after input it did not take.
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: App::first_run_event
-find: if !run.takes_keys(at) {
+find: if !run.takes_keys(pressed) {
 replace: if false {
 caught-by:
     cineris-tui app::tests::first_run::a_prompt_typed_at_the_first_frame_chooses_nothing

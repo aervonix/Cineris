@@ -688,6 +688,27 @@ mod tests {
         }
     }
 
+    /// A reply of the terminal's split after its ESC (its rest 600 ms
+    /// later, as a pseudo-console splits one on a busy machine) neither
+    /// cancels the login nor goes into the key: while the replies are due
+    /// the terminal layer holds the ESC and gives the reply (a review of
+    /// step 25; small fixes II).
+    #[test]
+    fn auth_login_is_neither_cancelled_nor_typed_into_by_a_split_reply() {
+        let mut steps: Vec<Step> = vec![ESC];
+        // The loop's wakes, a millisecond each: 600 of them.
+        steps.extend(std::iter::repeat_n((Ready::Woken, &b""[..]), 600));
+        steps.extend([
+            (Ready::Input, &b"[?0u"[..]),
+            (Ready::Input, b"sk-12345"),
+            (Ready::Input, b"\r"),
+        ]);
+        let (read, written, waits) = login(&steps);
+        assert!(matches!(read, Ok(Some(_))), "{read:?}");
+        let typed = shown(&written[..waits[waits.len() - 1]]);
+        assert!(typed.shows("8 characters, hidden"), "{}", typed.dump());
+    }
+
     /// `Ctrl+U` empties the key; a paste refused keeps nothing of it and
     /// says why under the row; `Enter` with nothing typed says so and goes
     /// on; a line pasted with its end is kept without it.
