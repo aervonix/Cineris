@@ -16,7 +16,15 @@ use crate::workspace;
 use crate::{compare, tiers};
 
 /// The tier 0 steps, in the order they run: cheapest first.
-const CHECK_STEPS: [&str; 6] = ["fmt", "rules", "breaks", "generated", "clippy", "deny"];
+const CHECK_STEPS: [&str; 7] = [
+    "fmt",
+    "rules",
+    "breaks",
+    "generated",
+    "clippy",
+    "no-scripts",
+    "deny",
+];
 
 fn check_step(name: &str) -> Option<Step> {
     Some(match name {
@@ -41,11 +49,107 @@ fn check_step(name: &str) -> Option<Step> {
                 "warnings",
             ],
         ),
+        // A build of the binary without the script engine stays possible
+        // (decision 0005). The lints above see only the workspace's build,
+        // which has the engine.
+        "no-scripts" => Step::function("no-scripts", without_scripts),
         // Advisories are not here: a new advisory against an unchanged
         // lockfile must not block unrelated pull requests. They run nightly.
         "deny" => Step::cargo("deny", &["deny", "check", "licenses", "bans", "sources"]),
         _ => return None,
     })
+}
+
+/// The binary's package.
+const CLI: &str = "cineris-cli";
+
+/// The binary's feature that links the script engine, through the core.
+const SCRIPTS: &str = "scripts";
+
+/// The script engine's crate (decision 0005), which a build without
+/// [`SCRIPTS`] must not reach.
+const ENGINE: &str = "rquickjs";
+
+/// `cargo xtask check no-scripts`: the binary with [`SCRIPTS`] off and the
+/// rest of its default features on, checked and not built. First its
+/// dependency graph is asked whether the engine is in it all the same: a
+/// crate between the binary and the core that turned the core's `scripts`
+/// on would turn it on for the binary too, and the check would then pass
+/// on a build with the engine.
+fn without_scripts() -> Result<()> {
+    let root = workspace::root();
+    let selected = without_scripts_selection(&workspace::metadata(&root)?.packages)?;
+    let mut tree: Vec<String> = [
+        "tree",
+        "--locked",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}",
+    ]
+    .map(str::to_owned)
+    .into();
+    tree.extend(selected.iter().cloned());
+    let output = Command::new(workspace::cargo())
+        .args(&tree)
+        .current_dir(&root)
+        .stderr(Stdio::inherit())
+        .output()
+        .map_err(|error| format!("could not run cargo {}: {error}", tree.join(" ")))?;
+    if !output.status.success() {
+        return Err(format!("`cargo {}` failed", tree.join(" ")));
+    }
+    if reaches_engine(&String::from_utf8_lossy(&output.stdout)) {
+        return Err(format!(
+            "{CLI} without `{SCRIPTS}` still reaches the script engine, `{ENGINE}`: a crate \
+             between it and the core turns the core's `{SCRIPTS}` on, where only {CLI}'s own \
+             `{SCRIPTS}` feature may (decision 0005). `cargo tree -i {ENGINE} -e normal,build {}` \
+             shows which",
+            selected.join(" ")
+        ));
+    }
+    let mut check: Vec<String> = ["check", "--locked"].map(str::to_owned).into();
+    check.extend(selected);
+    steps::cargo(&check)
+}
+
+/// Whether a listing of `cargo tree --prefix none --format {p}`, a package
+/// a line (`rquickjs v0.14.0`, with ` (*)` after one met before), holds the
+/// script engine.
+fn reaches_engine(tree: &str) -> bool {
+    tree.lines()
+        .any(|line| line.split_whitespace().next() == Some(ENGINE))
+}
+
+/// The arguments of `cargo` that select the binary's package with
+/// [`SCRIPTS`] off and its other default features on, read from its
+/// manifest.
+fn without_scripts_selection(packages: &[workspace::Package]) -> Result<Vec<String>> {
+    let defaults: &[String] = packages
+        .iter()
+        .find(|package| package.name == CLI)
+        .and_then(|package| package.features.iter().find(|(name, _)| name == "default"))
+        .map_or(&[], |(_, on)| on.as_slice());
+    if !defaults.iter().any(|feature| feature == SCRIPTS) {
+        return Err(format!(
+            "{CLI}'s default features do not name `{SCRIPTS}`, which links the script engine \
+             through the core and is how a build without it is made (decision 0005)"
+        ));
+    }
+    let rest: Vec<&str> = defaults
+        .iter()
+        .map(String::as_str)
+        .filter(|feature| *feature != SCRIPTS)
+        .collect();
+    let mut selected: Vec<String> = ["-p", CLI, "--no-default-features"]
+        .map(str::to_owned)
+        .into();
+    if !rest.is_empty() {
+        selected.extend(["--features".to_owned(), rest.join(",")]);
+    }
+    Ok(selected)
 }
 
 /// `cargo xtask check [STEP...]`
@@ -954,11 +1058,12 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        CHECK_STEPS, TiersRequest, check, check_step, ci, ci_run, join_comparisons,
-        selects_packages, test_command,
+        CHECK_STEPS, TiersRequest, check, check_step, ci, ci_run, join_comparisons, reaches_engine,
+        selects_packages, test_command, without_scripts_selection,
     };
     use crate::runs::Source;
     use crate::tiers::Os;
+    use crate::workspace::Package;
 
     fn strings(arguments: &[&str]) -> Vec<String> {
         arguments
@@ -972,6 +1077,60 @@ mod tests {
         for name in CHECK_STEPS {
             assert!(check_step(name).is_some(), "{name}");
         }
+    }
+
+    /// The binary's package with these default features.
+    fn cli(defaults: &[&str]) -> Package {
+        Package {
+            name: "cineris-cli".to_owned(),
+            manifest: "crates/cineris-cli/Cargo.toml".to_owned(),
+            publish_disabled: true,
+            dependencies: Vec::new(),
+            targets: Vec::new(),
+            features: vec![
+                ("default".to_owned(), strings(defaults)),
+                ("scripts".to_owned(), strings(&["cineris-core/scripts"])),
+            ],
+        }
+    }
+
+    /// `check` holds a build of the binary without the script engine
+    /// (decision 0005): the binary alone, `scripts` off, and each of its
+    /// other defaults named again; a manifest whose defaults do not name
+    /// `scripts` is refused, since the build without it would then be the
+    /// shipped one.
+    #[test]
+    fn check_holds_a_build_of_the_binary_without_the_script_engine() {
+        assert!(CHECK_STEPS.contains(&"no-scripts"));
+        assert_eq!(
+            without_scripts_selection(&[cli(&["scripts"])]).unwrap(),
+            strings(&["-p", "cineris-cli", "--no-default-features"])
+        );
+        assert_eq!(
+            without_scripts_selection(&[cli(&["highlight", "scripts", "voice"])]).unwrap(),
+            strings(&[
+                "-p",
+                "cineris-cli",
+                "--no-default-features",
+                "--features",
+                "highlight,voice"
+            ])
+        );
+        let refused = without_scripts_selection(&[cli(&["highlight"])]).unwrap_err();
+        assert!(refused.contains("do not name `scripts`"), "{refused}");
+        assert!(without_scripts_selection(&[]).is_err());
+    }
+
+    /// The engine is told in the graph's listing by its package's name,
+    /// wherever it is met, and not by a name that only starts with it.
+    #[test]
+    fn the_engine_is_found_in_the_listing_by_its_name() {
+        let without = "cineris-cli v0.0.0 (/w/crates/cineris-cli)\ncineris-ext v0.0.0 \
+                       (/w/crates/cineris-ext)\nrquickjs-like v1.0.0\nserde v1.0.229 (*)\n";
+        assert!(!reaches_engine(without));
+        assert!(reaches_engine(&format!("{without}rquickjs v0.14.0\n")));
+        assert!(reaches_engine(&format!("{without}rquickjs v0.14.0 (*)\n")));
+        assert!(!reaches_engine(""));
     }
 
     #[test]

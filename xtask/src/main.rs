@@ -90,7 +90,8 @@ in, which differs when checkouts share a target folder.
 
 Checks and tests
   check [STEP...]   Static checks (tier 0): fmt, rules, breaks, generated, clippy,
-                    deny. With step names, only those steps.
+                    no-scripts (the binary without the script engine), deny.
+                    With step names, only those steps.
   clippy -p CRATE... [-- CLIPPY ARGS]
                     The crates' lints as `check` lints the workspace: with
                     the features the workspace's build turns on for what

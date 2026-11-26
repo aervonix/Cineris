@@ -464,6 +464,19 @@ fn disable_names_the_gates_it_lets_go() {
     assert!(gates_text("guard", &unknown).contains("may hold gates"));
 }
 
+/// What `ext add` says in a build without the script engine, by the name
+/// it was run as. Only that build says it: `cargo xtask check` builds it
+/// (`check`'s `no-scripts` step), and the words are held here.
+#[test]
+fn ext_add_without_the_script_engine_says_the_build_has_none() {
+    assert_eq!(
+        no_script_engine("cineris"),
+        "This build of Cineris has no script engine, so `cineris ext add` cannot evaluate or \
+         approve an extension."
+    );
+    assert!(no_script_engine("cin").contains("`cin ext add`"));
+}
+
 /// The way `disable` names the table is TOML's: a name that is not a bare
 /// key is quoted.
 #[test]

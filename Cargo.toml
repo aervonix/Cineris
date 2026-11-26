@@ -18,7 +18,11 @@ repository = "https://github.com/aervonix/Cineris"
 cineris-agent = { path = "crates/cineris-agent" }
 cineris-base = { path = "crates/cineris-base" }
 cineris-config = { path = "crates/cineris-config" }
-cineris-core = { path = "crates/cineris-core" }
+# Default features are off here so that the binary says which of the core's
+# it is built with, and a build without the script engine stays possible
+# (decision 0005): a crate built on the core that turned them on would turn
+# them on for the binary too.
+cineris-core = { path = "crates/cineris-core", default-features = false }
 cineris-ext = { path = "crates/cineris-ext" }
 cineris-index = { path = "crates/cineris-index" }
 cineris-knowledge = { path = "crates/cineris-knowledge" }

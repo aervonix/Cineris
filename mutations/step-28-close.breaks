@@ -69,3 +69,62 @@ find: Ok(loaded) => Arc::new(loaded),
 replace: Ok(loaded) => { let loaded = Arc::new(loaded); let eager = Arc::clone(&loaded); tokio::spawn(async move { let _ = eager.runtime(&cineris_ext::engine::StartWatch::default()).await; }); loaded }
 caught-by:
     cineris-core::it extensions_reload::with_the_examples_approved_no_engine_starts_until_one_is_used
+
+# A build of the binary without the script engine (decision 0005). The
+# refusal itself is compiled only in that build, which `check`'s
+# `no-scripts` step builds and no test runs: its words are held by a test
+# of the build with the engine.
+
+[break] check-leaves-out-the-build-without-the-engine
+rule: `cargo xtask check` holds a build of the binary without the script engine (decision 0005).
+file: xtask/src/checks.rs
+in: CHECK_STEPS
+find: "no-scripts"
+replace: "clippy"
+caught-by:
+    checks::tests::check_holds_a_build_of_the_binary_without_the_script_engine
+
+[break] the-build-without-the-engine-keeps-the-default-features
+rule: The check of a build without the script engine turns the binary's default features off.
+file: xtask/src/checks.rs
+in: without_scripts_selection
+find: ["-p", CLI, "--no-default-features"]
+replace: ["-p", CLI]
+caught-by:
+    checks::tests::check_holds_a_build_of_the_binary_without_the_script_engine
+
+[break] the-build-without-the-engine-loses-the-other-defaults
+rule: The check of a build without the script engine keeps the binary's other default features on.
+file: xtask/src/checks.rs
+in: without_scripts_selection
+find: .filter(|feature| *feature != SCRIPTS)
+replace: .filter(|_| false)
+caught-by:
+    checks::tests::check_holds_a_build_of_the_binary_without_the_script_engine
+
+[break] defaults-without-the-engines-feature-are-taken
+rule: The check refuses a binary whose default features do not name `scripts`, since its build without it would be the shipped one.
+file: xtask/src/checks.rs
+in: without_scripts_selection
+find: if !defaults.iter().any(|feature| feature == SCRIPTS) {
+replace: if false {
+caught-by:
+    checks::tests::check_holds_a_build_of_the_binary_without_the_script_engine
+
+[break] the-engine-is-told-by-a-prefix
+rule: The script engine is told in the dependency graph by its package's whole name.
+file: xtask/src/checks.rs
+in: reaches_engine
+find: line.split_whitespace().next() == Some(ENGINE)
+replace: line.starts_with(ENGINE)
+caught-by:
+    checks::tests::the_engine_is_found_in_the_listing_by_its_name
+
+[break] ext-add-without-the-engine-says-something-else
+rule: In a build without the script engine, `cineris ext add` says the build has no script engine.
+file: crates/cineris-cli/src/ext.rs
+in: no_script_engine
+in-string: has no script engine
+replace: has a script engine
+caught-by:
+    cineris-cli::bin/cineris ext::tests::ext_add_without_the_script_engine_says_the_build_has_none

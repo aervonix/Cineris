@@ -13,16 +13,24 @@
 //!
 //! **Under a session's command** each of `add`, `remove` and `disable` is
 //! refused before anything is read (`cineris_sandbox::session`).
+//!
+//! **In a build without the script engine** (this crate's `scripts`
+//! feature off; decision 0005), `add` says so and changes nothing: an
+//! extension is approved only as it was evaluated, and there is nothing to
+//! evaluate it with.
 
 use std::io::{self, IsTerminal};
+#[cfg(feature = "scripts")]
 use std::path::Path;
 use std::sync::Arc;
 
 use cineris_base::in_code;
 use cineris_config::Env;
+#[cfg(feature = "scripts")]
+use cineris_core::{Added, ToAdd};
 use cineris_core::{
-    Added, Core, CoreOptions, DisableOutcome, ExtensionListed, ExtensionSource, ExtensionsListing,
-    Gates, OpError, Project, Removal, Removed, ToAdd, TokioTimer,
+    Core, CoreOptions, DisableOutcome, ExtensionListed, ExtensionSource, ExtensionsListing, Gates,
+    OpError, Project, Removal, Removed, TokioTimer,
 };
 use cineris_protocol::ErrorKind;
 
@@ -154,6 +162,7 @@ fn not_done(
 }
 
 /// A current-thread runtime, for what the core evaluates and writes.
+#[cfg(feature = "scripts")]
 fn runtime(name: &str) -> Result<tokio::runtime::Runtime, Done> {
     tokio::runtime::Builder::new_current_thread()
         .enable_time()
@@ -168,6 +177,7 @@ fn runtime(name: &str) -> Result<tokio::runtime::Runtime, Done> {
 /// as the home directory: a shell expands it, PowerShell and `cmd` do not
 /// for a program's argument (the early review of step 28's third pull
 /// request).
+#[cfg(feature = "scripts")]
 fn expanded(path: &str, home: Option<&Path>) -> std::path::PathBuf {
     let rest = path.strip_prefix('~').filter(|rest| {
         rest.is_empty() || rest.starts_with('/') || (cfg!(windows) && rest.starts_with('\\'))
@@ -294,6 +304,15 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                 out(&removed_text(&removal, removed));
                 Ok(exit::COMPLETED)
             }
+            // Without the script engine nothing can be evaluated, and an
+            // extension is approved only as it was: nothing is read from
+            // where it is, written or pinned.
+            #[cfg(not(feature = "scripts"))]
+            ExtCommand::Add { .. } => {
+                say(name, &no_script_engine(name));
+                Err(exit::USAGE)
+            }
+            #[cfg(feature = "scripts")]
             ExtCommand::Add { path, hash } => {
                 let home = Env::from_process().home();
                 let mut to_add = core
@@ -342,6 +361,16 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
     match run() {
         Ok(code) | Err(code) => code,
     }
+}
+
+/// What `ext add` says in a build without the script engine (decision
+/// 0005), run as `name`.
+#[cfg(any(test, not(feature = "scripts")))]
+fn no_script_engine(name: &str) -> String {
+    format!(
+        "This build of Cineris has no script engine, so `{name} ext add` cannot evaluate or \
+         approve an extension."
+    )
 }
 
 fn whose(source: ExtensionSource) -> &'static str {
@@ -475,6 +504,7 @@ fn inspected_text(one: &ExtensionListed) -> String {
 
 /// What `ext add` shows before its question: the snapshot's manifest in
 /// words, and every file with its size.
+#[cfg(feature = "scripts")]
 fn to_add_text(to_add: &ToAdd) -> String {
     let mut text = format!(
         "The extension `{}`, read from `{}` (its hash is {}):\n",
@@ -549,6 +579,7 @@ fn to_add_text(to_add: &ToAdd) -> String {
 }
 
 /// `ext add`'s question, naming what a yes replaces.
+#[cfg(feature = "scripts")]
 fn add_question(to_add: &ToAdd) -> String {
     let code = in_code(&to_add.name);
     match &to_add.replaces {
@@ -564,6 +595,7 @@ fn add_question(to_add: &ToAdd) -> String {
 }
 
 /// What `ext add` says once it is approved.
+#[cfg(feature = "scripts")]
 fn added_text(added: &Added) -> String {
     let mut text = format!(
         "Approved `{}`{}, and pinned it: sessions opened from now on load it, and a session \
