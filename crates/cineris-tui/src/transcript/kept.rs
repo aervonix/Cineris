@@ -121,6 +121,9 @@ impl KeptBlock {
                 text
             }
             Piece::Block(Block::User(text) | Block::Notice(text)) => text.clone(),
+            Piece::Block(Block::UserCommand { typed, whose, text }) => {
+                format!("{typed} · {whose}\n{text}")
+            }
             Piece::Block(Block::Compaction { .. }) => crate::transcript::COMPACTED.to_owned(),
             Piece::Block(Block::Reasoning(reasoning)) => reasoning
                 .summary
@@ -377,6 +380,7 @@ fn block_bytes(block: &Block) -> usize {
     match block {
         Block::Header(_) | Block::Summary { .. } => 256,
         Block::User(text) | Block::Notice(text) => text.len(),
+        Block::UserCommand { typed, whose, text } => typed.len() + whose.len() + text.len(),
         Block::Compaction { item } => item.len(),
         Block::Reasoning(reasoning) => {
             reasoning.text.len() + reasoning.summary.as_ref().map_or(0, String::len)

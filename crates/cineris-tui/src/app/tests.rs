@@ -35,6 +35,7 @@ use crate::testkit::{
 };
 
 mod commands;
+mod custom;
 mod dialogs;
 mod export;
 mod files;
