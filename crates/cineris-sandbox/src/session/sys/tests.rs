@@ -216,6 +216,51 @@ fn sys_the_list_of_processes_gives_each_when_it_was_made() {
     assert!(compared > 1, "{compared}");
 }
 
+/// A harness's job is found among its logon session's named objects, by
+/// its name, which gives its process's instance; and the check finds it
+/// there (the session's own job holds it, once it is marked).
+#[test]
+fn sys_a_harnesss_job_is_found_among_the_sessions_named_objects() {
+    mark().unwrap();
+    // SAFETY: the pseudo-handle is always valid.
+    let made = made_at(unsafe { GetCurrentProcess() }).unwrap();
+    let own = (std::process::id(), made);
+    let named = named_jobs().expect("the runner's tests run in a session of their own");
+    assert!(named.contains(&own), "{own:?} in {named:?}");
+    assert!(matches!(under_a_session(), Under::Session(_)));
+}
+
+/// A process described by opening it, as the line of parents is read, is
+/// what the system's list says of it: its parent, its program's name and
+/// when it was made; and a process id nothing has is gone.
+#[test]
+fn sys_a_process_opened_is_described_as_the_list_says() {
+    let listed = processes().unwrap();
+    let mut compared = 0;
+    for pid in [std::process::id()]
+        .into_iter()
+        .chain(listed.iter().map(|p| p.pid))
+    {
+        let super::super::Described::Is(described) = described(pid) else {
+            continue;
+        };
+        let Some(entry) = listed.iter().find(|process| process.pid == pid) else {
+            continue;
+        };
+        assert_eq!(
+            (described.parent, described.name.as_str(), described.made),
+            (entry.parent, entry.name.as_str(), entry.made),
+            "{pid}"
+        );
+        compared += 1;
+    }
+    assert!(compared > 1, "{compared}");
+    assert!(matches!(
+        described(u32::MAX - 3),
+        super::super::Described::Gone
+    ));
+}
+
 /// A nul-terminated wide text a call allocated, read and freed.
 fn taken(text: *mut u16) -> String {
     // SAFETY: a nul-terminated text a call made.

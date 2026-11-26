@@ -34,13 +34,16 @@ libc.workspace = true
 # Job Objects, console events, and letting a suspended process run; and,
 # since step 28, a folder read through handles that follow no link
 # (`unfollowed`: `NtCreateFile` relative to a folder's handle, and the
-# folder listed through it); and the system's processes, each with when it
-# was made, in one call (`session`: `NtQuerySystemInformation`).
+# folder listed through it); and, for `session`, the harnesses' jobs among a
+# logon session's named objects (`NtQueryDirectoryObject`), a process's
+# parent (`NtQueryInformationProcess`), and the system's processes, each
+# with when it was made, in one call (`NtQuerySystemInformation`).
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [
     "Wdk_Foundation",
     "Wdk_Storage_FileSystem",
     "Wdk_System_SystemInformation",
+    "Wdk_System_Threading",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_Security_Authorization",
