@@ -173,6 +173,33 @@ in the workspace it runs. An entry of the repository's file,
 a change to it is a proposal again.
 "
         ),
+        Topic::Ext => format!(
+            "\
+Usage: {name} ext <COMMAND>
+
+Commands:
+  list            Your extensions and this project's, each with how it
+                  stands, what it registered, and the skills found
+  inspect NAME    One extension: its folder, hash, pin, what it may do
+                  and what it registered, or why it is left out
+  disable NAME    Turn one of yours off in your configuration
+                  ([extensions.NAME] enabled = false), from the next
+                  session
+  remove NAME     Take away the approval of one of yours, and delete its
+                  folder after a yes that names it
+  add PATH        Show the extension in a folder, every file and what it
+                  may do, and on a yes copy it into your folder of
+                  extensions and approve it
+
+Options:
+  --yes           With add or remove, where there is no terminal to ask
+                  at: approve it, or delete its folder. At a terminal the
+                  question decides, and --yes is ignored
+
+A project's extensions are approved with the project:
+`{name} permissions trust`.
+"
+        ),
         Topic::Usage => format!(
             "\
 Usage: {name} usage [--range R] [--by G] [--project KEY] [--json] [--refresh]
@@ -254,6 +281,7 @@ Commands:
   usage         What was used, what it cost, and where the time went
   stats         The local statistics: show or reset
   project       What is known about this project: review, accept, turn off
+  ext           Extensions: list, inspect, disable, remove, add
   serve         Serve the RPC protocol to another program
   attach        Run the interactive application on a running server
 
@@ -299,6 +327,7 @@ mod tests {
             Topic::Usage,
             Topic::Stats,
             Topic::Project,
+            Topic::Ext,
             Topic::Serve,
             Topic::Attach,
         ] {
