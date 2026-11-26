@@ -93,6 +93,7 @@ verify.mode = "off"
 - `cineris --profile review` selects one for a run. `/profile <name>` switches in a session; settings that affect the prompt or the tool list take effect at the next context epoch, and the UI says so. A profile that does not exist is an error that lists the ones that do. It is judged by a load that reads the project's files: a load with no workspace (the binary's own, for the user's settings) cannot see a profile only the project defines, and leaves the name to each session's load (since the review of step 23). A project's profile is held to the trust rules below, and the trust question lists its settings that wait for trust.
 - **A project may define a profile and may not select one.** `profile = "<name>"` is the user's key. A profile the user wrote is applied with the user's rights, so a repository that could select it could switch on whatever the user's loosest profile allows.
 - "Modes" are the permission and behaviour presets in [06-permissions-and-sandbox.md](06-permissions-and-sandbox.md). A profile can select a mode along with anything else.
+- **A custom command may name a profile** (since step 28): it is judged key by key, as a project's file is, against the session's values, and in the first release it is never applied, so such a command is not sent ([12-extensions.md](12-extensions.md), "As built in step 28: custom commands").
 
 ## Reloading without a restart
 
