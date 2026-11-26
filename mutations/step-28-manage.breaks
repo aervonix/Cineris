@@ -285,8 +285,8 @@ caught-by:
 rule: Cineris's name is matched in any case, as Windows finds a program.
 file: crates/cineris-policy/src/approving.rs
 in: folded
-find: .flat_map(char::to_lowercase)
-replace: .map(|c| c)
+find: return text.to_ascii_lowercase();
+replace: return text.to_owned();
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
