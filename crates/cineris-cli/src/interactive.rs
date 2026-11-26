@@ -146,6 +146,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     };
     if unmarked.is_some() {
         options.level_at_most = Some(crate::UNMARKED_LEVEL);
+        options.level_at_most_why = Some(crate::UNMARKED_WHY.to_owned());
     }
     // The core, on its thread, waited for.
     let core = match CoreThread::start(options) {

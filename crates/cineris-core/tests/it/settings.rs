@@ -750,14 +750,15 @@ fn a_level_the_new_model_does_not_have_is_left_behind_and_said() {
 
 /// A core that holds its sessions at a level at most (a harness that could
 /// not mark its commands, since step 28's third pull request) refuses a
-/// raise of a session's level past it by `session/set`, and says why; a
-/// change within it is made.
+/// raise of a session's level past it by `session/set`, and says why, in
+/// the words its front end gave for that cap; a change within it is made.
 #[test]
 fn a_level_change_past_the_cores_cap_is_refused() {
     let world = World::new("level_cap", [says("Hi.")]);
     let core = world.core_with(|options| {
         options.allow_unrestricted = true;
         options.level_at_most = Some(Level::Supervised);
+        options.level_at_most_why = Some("the test holds it there".to_owned());
     });
     world.run(async {
         let front = Front::start(&world, &core).await;
@@ -772,7 +773,9 @@ fn a_level_change_past_the_cores_cap_is_refused() {
         .unwrap_err();
         assert_eq!(raised.code, "unrestricted_not_allowed");
         assert!(
-            raised.message.contains("`supervised` at most"),
+            raised.message.contains("`supervised` at most")
+                && raised.message.contains("the test holds it there")
+                && !raised.message.contains("could not mark"),
             "{}",
             raised.message
         );

@@ -818,8 +818,10 @@ fn start_core(plan: &Plan) -> Result<Core, OpError> {
     options.own_commands = Some(crate::nested::own_commands());
     if plan.capped {
         options.level_at_most = Some(cineris_protocol::lease::Level::ReadOnly);
+        options.level_at_most_why = Some(crate::CAPPED_WHY.to_owned());
     } else if plan.unmarked.is_some() {
         options.level_at_most = Some(crate::UNMARKED_LEVEL);
+        options.level_at_most_why = Some(crate::UNMARKED_WHY.to_owned());
     }
     options.profile.clone_from(&run.common.profile);
     options.overrides = overrides(run);

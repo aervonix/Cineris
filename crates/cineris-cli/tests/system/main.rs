@@ -54,6 +54,26 @@ pub fn part(name: &str, rule: fn()) {
     rule();
 }
 
+/// Judges every rule of a folded test that shares one world, `world`, each
+/// by its name: a rule that fails is named, and does not keep the rules
+/// after it from being judged; the test fails at the end, naming each rule
+/// that failed.
+pub fn judge<W>(world: &W, rules: &[(&str, fn(&W))]) {
+    let failed: Vec<&str> = rules
+        .iter()
+        .filter(|(name, rule)| {
+            let judged =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule(world))).is_err();
+            if judged {
+                eprintln!("the rule that failed: `{name}`");
+            }
+            judged
+        })
+        .map(|(name, _)| *name)
+        .collect();
+    assert!(failed.is_empty(), "the rules that failed: {failed:?}");
+}
+
 /// Runs each rule named, a function of this binary, as a [`part`] of one
 /// test, in order.
 macro_rules! parts {
@@ -66,6 +86,7 @@ mod commands;
 mod first_run;
 mod live;
 mod names;
+mod nested;
 mod runs;
 #[cfg(target_os = "linux")]
 mod sandbox;

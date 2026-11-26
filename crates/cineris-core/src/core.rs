@@ -199,6 +199,10 @@ pub struct CoreOptions {
     /// `supervised` (since step 28's third pull request). `None`: the
     /// configuration's.
     pub level_at_most: Option<cineris_protocol::lease::Level>,
+    /// Why [`level_at_most`](Self::level_at_most) holds the sessions, as
+    /// the end of a sentence, which a refused raise past it says: each cap
+    /// worded for its own cause. `None`: a plain sentence.
+    pub level_at_most_why: Option<String>,
     /// What the system offers the sandbox, in place of asking it
     /// (`cineris_sandbox::support::detect`): a test's, which says the kernel
     /// has no Landlock, or an old one.
@@ -365,6 +369,7 @@ impl CoreOptions {
             launcher: None,
             own_commands: None,
             level_at_most: None,
+            level_at_most_why: None,
             sandbox: None,
             protect_limits: None,
             api_keys: BTreeMap::new(),
@@ -496,10 +501,12 @@ impl Inner {
                 ErrorKind::Permission,
                 code::UNRESTRICTED_NOT_ALLOWED,
                 format!(
-                    "This harness holds its sessions at `{}` at most, whatever is asked: it \
-                     could not mark its commands as a session's, so the subcommands that \
-                     approve could not see them.",
-                    most.as_str()
+                    "This harness holds its sessions at `{}` at most, whatever is asked: {}.",
+                    most.as_str(),
+                    self.options
+                        .level_at_most_why
+                        .as_deref()
+                        .unwrap_or("it was started so")
                 ),
             )),
             _ => Ok(()),

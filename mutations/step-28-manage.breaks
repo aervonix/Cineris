@@ -491,7 +491,7 @@ replace: Seen::Of { harness: true, .. } if false => {
 packages: cineris-sandbox,cineris-cli
 caught-by:
     cineris-sandbox session::tests::a_line_of_parents_reaches_a_harness_ends_elsewhere_or_is_not_known
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] session-unread-line-is-nothing
 rule: A line of parents that cannot be read is taken as under a session's command.
@@ -530,7 +530,7 @@ replace: if inside != 0 {
 packages: cineris-sandbox,cineris-cli
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] session-windows-harness-unmarked
 rule: On Windows a headless run joins the job of sessions' commands before it starts any process.
@@ -539,7 +539,7 @@ file: crates/cineris-cli/src/headless.rs
 find: let unmarked = crate::mark_sessions();
 replace: let unmarked: Option<String> = None;
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] ext-add-runs-under-a-session
 rule: `cineris ext add` refuses under a session's command, before anything is read.
@@ -547,7 +547,7 @@ file: crates/cineris-cli/src/ext.rs
 find: ExtCommand::Add { .. } => crate::not_under_a_session(name, "ext add")?,
 replace: ExtCommand::Add { .. } => {}
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] ext-remove-runs-under-a-session
 rule: `cineris ext remove` refuses under a session's command, before anything is read.
@@ -555,7 +555,7 @@ file: crates/cineris-cli/src/ext.rs
 find: ExtCommand::Remove { .. } => crate::not_under_a_session(name, "ext remove")?,
 replace: ExtCommand::Remove { .. } => {}
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] ext-disable-runs-under-a-session
 rule: `cineris ext disable` refuses under a session's command, before anything is read.
@@ -563,7 +563,7 @@ file: crates/cineris-cli/src/ext.rs
 find: ExtCommand::Disable { .. } => crate::not_under_a_session(name, "ext disable")?,
 replace: ExtCommand::Disable { .. } => {}
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] permissions-revoke-runs-under-a-session
 rule: `cineris permissions revoke` refuses under a session's command, before anything is read.
@@ -571,7 +571,7 @@ file: crates/cineris-cli/src/commands.rs
 find: crate::not_under_a_session(name, "permissions revoke")?;
 replace: let _ = name;
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] permissions-trust-runs-under-a-session
 rule: `cineris permissions trust` refuses under a session's command, before anything is read.
@@ -579,7 +579,7 @@ file: crates/cineris-cli/src/commands.rs
 find: crate::not_under_a_session(name, "permissions trust")?;
 replace: let _ = name;
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] permissions-untrust-runs-under-a-session
 rule: `cineris permissions untrust` refuses under a session's command, before anything is read.
@@ -587,7 +587,7 @@ file: crates/cineris-cli/src/commands.rs
 find: crate::not_under_a_session(name, "permissions untrust")?;
 replace: let _ = name;
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] permissions-forget-runs-under-a-session
 rule: `cineris permissions forget` refuses under a session's command, before anything is read.
@@ -595,7 +595,7 @@ file: crates/cineris-cli/src/commands.rs
 find: crate::not_under_a_session(name, "permissions forget")?;
 replace: let _ = name;
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] setup-runs-under-a-session
 rule: `cineris setup skill-folders` refuses under a session's command, before anything is read.
@@ -603,7 +603,7 @@ file: crates/cineris-cli/src/setup.rs
 find: if let Err(code) = crate::not_under_a_session(name, "setup skill-folders") {
 replace: if let Err(code) = Ok::<(), u8>(()) {
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] hash-given-not-compared
 rule: A `--hash` given that is not the hash of what was shown refuses, at a terminal too.
@@ -766,7 +766,7 @@ file: crates/cineris-cli/src/interactive.rs
 find: if let Err(code) = crate::not_under_a_session(name, "") {
 replace: if let Err(code) = Ok::<(), u8>(()) {
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] serve-starts-under-a-session
 rule: `cineris serve` does not start under a session's command: it answers a project's trust question and the approvals.
@@ -774,7 +774,7 @@ file: crates/cineris-cli/src/serve.rs
 find: if let Err(code) = crate::not_under_a_session(name, "serve") {
 replace: if let Err(code) = Ok::<(), u8>(()) {
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] attach-starts-under-a-session
 rule: `cineris attach` does not start under a session's command: it answers a project's trust question and the approvals.
@@ -782,7 +782,7 @@ file: crates/cineris-cli/src/attach.rs
 find: if let Err(code) = crate::not_under_a_session(name, "attach") {
 replace: if let Err(code) = Ok::<(), u8>(()) {
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] nested-run-takes-refused-flags
 rule: A headless run under a session's command takes no flag the CLI's grammar refuses there.
@@ -791,7 +791,7 @@ in: nested_run
 find: crate::nested::standing(&command)
 replace: cineris_core::approving::Standing::Safe
 caught-by:
-    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] nested-run-not-held
 rule: A headless run under a session's command is held to `read-only`.
@@ -799,7 +799,7 @@ file: crates/cineris-cli/src/headless.rs
 find: options.level_at_most = Some(cineris_protocol::lease::Level::ReadOnly);
 replace: let _ = &options;
 caught-by:
-    cineris-cli::system commands::sys_a_nested_headless_run_is_held_to_read_only_and_says_so
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] nested-run-not-said-held
 rule: A headless run held to `read-only` says so on standard error and in its result.
@@ -807,7 +807,7 @@ file: crates/cineris-cli/src/headless.rs
 find: if front.plan.capped {
 replace: if false {
 caught-by:
-    cineris-cli::system commands::sys_a_nested_headless_run_is_held_to_read_only_and_says_so
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] level-cap-not-applied
 rule: A session's level is no wider than the core's cap.
@@ -818,7 +818,7 @@ replace: Some(most) if false => most.clone()
 packages: cineris-core,cineris-cli
 caught-by:
     cineris-core assemble::level_tests::a_level_is_capped_at_the_most_given
-    cineris-cli::system commands::sys_a_nested_headless_run_is_held_to_read_only_and_says_so
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 # The second round: the socket's refusal of the hooks' and extensions'
 # programs, the first run's question, and the engine's calls stopped as they
@@ -1080,7 +1080,7 @@ in: nested_run
 find: if let Some(moved) = cineris_sandbox::session::moved_stores() {
 replace: if let Some(moved) = None::<String> {
 caught-by:
-    cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] session-linux-moved-store-same
 rule: On Linux, a store's variable set otherwise than in the session's own environment is moved.
@@ -1091,7 +1091,7 @@ find: mine != theirs(name)
 replace: false
 packages: cineris-cli
 caught-by:
-    cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] session-windows-moved-store-same
 rule: On Windows, a store's variable set otherwise than the session told what it starts moves the stores.
@@ -1102,7 +1102,7 @@ find: mine != theirs(name)
 replace: false
 packages: cineris-cli
 caught-by:
-    cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] remove-takes-the-name-as-typed
 rule: A removal goes by the name its folder holds, or its pin's, whatever its case: its pin and its folder are one extension's.
@@ -1619,6 +1619,16 @@ find: notices.extend(unmarked);
 replace: notices.extend(None::<String>);
 caught-by:
     cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] core-cap-worded-for-another-cause
+rule: A refused raise past the level a core holds its sessions at says that cap's own cause, as its front end gave it: a harness that could not mark its commands, or a headless run under a session's command.
+file: crates/cineris-core/src/core.rs
+in: Inner::within_the_cap
+find: self.options.level_at_most_why.as_deref().unwrap_or("it was started so")
+replace: "it could not mark its commands as a session's"
+packages: cineris-core, cineris-cli
+caught-by:
+    cineris-core::it settings::a_level_change_past_the_cores_cap_is_refused
 
 [break] credentials-lock-waits-without-end
 rule: A change of the credentials file (`cineris auth login`, an approving subcommand) waits for another hold of its lock no longer than the other stores' locks, and is then refused naming the file: a hold that does not end cannot hang it.

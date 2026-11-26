@@ -180,6 +180,17 @@ pub(crate) const CAPPED: &str = "this run is held to `read-only`, whatever its c
                                  says, because it runs under a session's command, whose own \
                                  level is not known to it";
 
+/// Why a harness that could not mark its commands refuses a raise of a
+/// session past [`UNMARKED_LEVEL`] (`CoreOptions::level_at_most_why`).
+pub(crate) const UNMARKED_WHY: &str = "it could not mark its commands as a session's, so the \
+                                       subcommands that approve extensions and trust projects \
+                                       could not see them";
+
+/// Why a headless run held to `read-only` under a session's command
+/// refuses a raise past it.
+pub(crate) const CAPPED_WHY: &str = "it runs under a session's command, whose own level is not \
+                                     known to it";
+
 /// The open item that names the precise cap, by its file's name.
 pub(crate) const CAPPED_ITEM: &str = "a-nested-run-under-a-session-is-capped-at-read-only";
 
