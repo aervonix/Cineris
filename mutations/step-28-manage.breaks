@@ -284,9 +284,9 @@ caught-by:
 [break] approving-case-kept
 rule: Cineris's name is matched in any case, as Windows finds a program.
 file: crates/cineris-policy/src/approving.rs
-in: name_of
-find: .to_ascii_lowercase();
-replace: ;
+in: folded
+find: .flat_map(char::to_lowercase)
+replace: .map(|c| c)
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
@@ -329,6 +329,7 @@ caught-by:
 [break] approving-stores-moved-passed
 rule: A run of Cineris in a line that sets or unsets a variable that moves its stores is refused.
 file: crates/cineris-policy/src/approving.rs
+in: Reader::note_moved
 find: *self.moved.borrow_mut() = Some(name);
 replace: let _ = name;
 caught-by:
@@ -524,8 +525,8 @@ caught-by:
 rule: On Windows a process in the job of a running harness's own sessions' commands is under a session's command; in any other job it is not.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: if inside != 0 {
-replace: if inside == 0 {
+find: (inside != 0).then(
+replace: (inside == 0).then(
 packages: cineris-sandbox,cineris-cli
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
@@ -535,8 +536,8 @@ caught-by:
 rule: On Windows a headless run joins the job of sessions' commands before it starts any process.
 os: windows
 file: crates/cineris-cli/src/headless.rs
-find: crate::mark_sessions();
-replace: let _ = 0;
+find: let unmarked = crate::mark_sessions();
+replace: let unmarked: Option<String> = None;
 caught-by:
     cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
 
@@ -1116,8 +1117,8 @@ caught-by:
 rule: On Windows each harness makes a job of its own, named for its process id: a job shared by harnesses started under different jobs could be joined by the first alone.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: let name = wide(&format!("{JOB_PREFIX}{}", std::process::id()));
-replace: let name = wide(JOB_PREFIX);
+find: let name = wide(&job_name(std::process::id(), made));
+replace: let name = wide(super::JOB_PREFIX);
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
 
@@ -1158,3 +1159,294 @@ find: if depth > NESTING || steps > STEPS {
 replace: if false {
 caught-by:
     cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+# The full review of the third part's fixes: B on Windows (a service's start
+# of a command, the job's own name and security, a mark that fails closed),
+# B's names on Linux, the bounded store lock, and A's general rules.
+
+[break] session-windows-service-start-not-seen
+rule: On Windows a process that WMI's provider host, the task host or the task scheduler's service host started for a command, directly or through command interpreters, is under a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: if SERVICE_STARTERS.contains(&name) || schedules {
+replace: if false {
+caught-by:
+    cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
+
+[break] session-windows-any-host-not-counted
+rule: Where which service host runs the task scheduler cannot be asked, any service host counts as it.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: scheduler.is_none_or(|scheduler| scheduler == parent)
+replace: scheduler.is_some_and(|scheduler| scheduler == parent)
+caught-by:
+    cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
+
+[break] session-windows-line-past-other-programs
+rule: The line of parents is followed up through command interpreters alone: any other program (the desktop, a CI runner's test runner) ends it, so that what a service started long before is not taken for a service's start of a command.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: Opened::Made(then) if INTERPRETERS.contains(&name) => {
+replace: Opened::Made(then) => {
+caught-by:
+    cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
+
+[break] session-windows-later-parent-taken
+rule: A parent made after its child has the id of a parent that has gone, and ends the line.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: && then > made
+replace: && then > made && false
+caught-by:
+    cineris-sandbox session::tests::a_process_a_service_started_for_a_command_is_under_a_session
+
+[break] session-windows-job-named-by-id-alone
+rule: A harness's job is named for its process's instance, its id and when it was made, so that a gone harness's job is not taken for the one with its id now.
+file: crates/cineris-sandbox/src/session.rs
+in: job_name
+find: format!("{JOB_PREFIX}{pid}.{made}")
+replace: format!("{JOB_PREFIX}{pid}")
+caught-by:
+    cineris-sandbox session::tests::a_harnesss_job_is_named_for_its_processs_instance
+
+[break] session-windows-squatted-job-joined
+rule: On Windows a job of the harness's own name that was there already is not joined: the mark fails.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: if said.raw_os_error() == i32::try_from(ERROR_ALREADY_EXISTS).ok() {
+replace: if false {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_made_ahead_of_the_harness_is_not_joined
+
+[break] session-windows-job-open-to-all-rights
+rule: On Windows the harness's job may be opened by its name, by its user and its owner, only to ask about it.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: "D:P(A;;0x{BY_NAME:x};;;{})(A;;0x{BY_NAME:x};;;OW)"
+replace: "D:P(A;;GA;;;{})(A;;GA;;;OW)"
+caught-by:
+    cineris-sandbox session::sys::tests::sys_the_harnesss_job_is_open_by_its_name_only_to_ask
+
+[break] session-windows-leaving-not-told
+rule: On Windows a job that lets the processes in it leave is told, and the mark refuses it.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: Ok(limits.BasicLimitInformation.LimitFlags & leave != 0)
+replace: Ok(false)
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_that_lets_its_processes_leave_is_told
+    cineris-sandbox session::sys::tests::sys_the_harnesss_job_is_open_by_its_name_only_to_ask
+
+[break] session-windows-denied-job-taken-for-none
+rule: On Windows a harness's job that cannot be opened, for any reason but there being none, is not known, which refuses.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() {
+replace: if true {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_harnesss_job_that_cannot_be_opened_is_not_known
+
+[break] session-linux-name-alone
+rule: On Linux a process is Cineris by this very file, or by its name and its file's name together, never by its name alone.
+os: linux
+file: crates/cineris-sandbox/src/session.rs
+find: let cineris = same_binary(pid) || (named(name) && file_named(pid));
+replace: let cineris = same_binary(pid) || named(name);
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_program_named_cin_that_is_another_is_not_cineris
+
+[break] core-level-raised-past-the-cap
+rule: A core that holds its sessions at a level at most refuses a change of a session's level past it.
+file: crates/cineris-core/src/core.rs
+find: inner.within_the_cap(&level)?;
+replace: let _ = &level;
+caught-by:
+    cineris-core::it settings::a_level_change_past_the_cores_cap_is_refused
+
+[break] store-lock-waited-for-without-end
+rule: A store's lock held by another process is waited for no longer than asked, then refused, naming the file.
+file: crates/cineris-base/src/private/mod.rs
+find: Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+replace: Err(TryLockError::WouldBlock) if Instant::now() < deadline + Duration::from_secs(3600) => {
+caught-by:
+    cineris-base private::tests::a_held_lock_is_waited_for_no_longer_than_asked
+
+[break] store-lock-file-not-named
+rule: A lock held too long names its store's file, under `~` where it is in the home directory.
+file: crates/cineris-base/src/private/mod.rs
+in: under_home
+find: Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+replace: Some(_) => file.display().to_string(),
+caught-by:
+    cineris-base private::tests::a_file_in_the_home_directory_is_shown_under_the_tilde
+
+[break] approving-fed-line-unread
+rule: What a line feeds a program that runs it (a pipe into a shell, a substitution `eval`s) is read as a line: the line's printers are no printers.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_parts
+find: .replace(lines.iter().any(|words| reads_a_line(words)));
+replace: .replace(false);
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-fed-text-unread
+rule: In a line read as text, what is fed to a program that runs it is read as a line.
+file: crates/cineris-policy/src/approving.rs
+find: let fed = self.fed.get() || segments.iter().any(|words| reads_a_line(words));
+replace: let fed = self.fed.get();
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-daemon-runners-not-runners
+rule: The runners of a line that reach a daemon or a service (`at`, `crontab`, `schtasks`, `wmic`, `Invoke-WmiMethod`…) run what their words say.
+file: crates/cineris-policy/src/approving.rs
+find: "schtasks"
+replace: "schtasks-not"
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-typed-keys-unread
+rule: The keys `tmux`, `screen`, `xdotool`, `ydotool` and `wtype` are told to type are read as a line, joined.
+file: crates/cineris-policy/src/approving.rs
+find: let keys = typed(&name, &words[program + 1..]);
+replace: let keys = String::new();
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-version-suffix-kept
+rule: A shell or an interpreter with a version after its name (`python3.12`, `lua5.4`, `bash5`) is the shell or the interpreter.
+file: crates/cineris-policy/src/approving.rs
+in: kind_of
+find: let bare = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+replace: let bare = name;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-code-cluster-unread
+rule: An interpreter's code flag last in a cluster of short flags (`-Ic`, `-we`) gives its code.
+file: crates/cineris-policy/src/approving.rs
+in: gives_code
+find: let cluster = flag.len() > 2
+replace: let cluster = false && flag.len() > 2
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-missing-shells-unread
+rule: `nu`, `xonsh`, `elvish`, `yash`, `oksh`, `osh`, `rc` and `hush` are shells, whose `-c` line is read.
+file: crates/cineris-policy/src/approving.rs
+find: "su", "runuser", "nu", "xonsh", "elvish", "yash", "oksh", "osh", "rc", "hush"
+replace: "su", "runuser"
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-line-flags-unread
+rule: A line one word of a program's flag gives (`flock -c`, `rsync -e`, `tar -I`, `zip -TT`, `man -P`…) is read as a line.
+file: crates/cineris-policy/src/approving.rs
+find: if let Some((_, flags, line)) = LINE_FLAGS.iter().find(|(name, _, _)| *name == owner)
+replace: if let Some((_, flags, line)) = LINE_FLAGS.iter().find(|_| false)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-git-lines-unread
+rule: `git`'s configuration values that are lines (`core.pager`, `core.fsmonitor`, an `alias.*` with `!`) are read as lines; `git` otherwise only prints.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::git_lines
+find: if !alias && !GIT_LINES.contains(&key.as_str()) {
+replace: if true {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-sed-edit-read-as-a-line
+rule: A `sed` script that runs no line (no `e`) is no line: its words are not read as one (a false refusal of the review).
+file: crates/cineris-policy/src/approving.rs
+find: && (name != "sed" || self.fed.get() || sed_runs(word));
+replace: ;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-braced-name-passed
+rule: A brace expansion one of whose words is a name of Cineris (`{cin,} ext add`) is refused as hidden.
+file: crates/cineris-policy/src/approving.rs
+find: if posix && braced_name(&plain(text, "\\'\"`"), |word| self.is_own(word)) {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-expanded-name-passed
+rule: A word the shell completes that names Cineris at a program's place (`cin${IFS}ext`) is refused as hidden.
+file: crates/cineris-policy/src/approving.rs
+find: if placed && names_through_expansion(word, |piece| self.is_own(piece)) {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-continuations-kept
+rule: A line's continuations are taken out before it is read (`ci\\⏎neris`).
+file: crates/cineris-policy/src/approving.rs
+in: refused
+find: if joined != command
+replace: if false
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-powershell-arrays-unread
+rule: PowerShell's arrays, groups and casts are a native program's words (`cin ext @('add','C:\\x')`).
+file: crates/cineris-policy/src/approving.rs
+find: found = self.in_plain(&arrays);
+replace: let _ = arrays;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-look-alikes-kept
+rule: Look-alike letters in a name are read as the Latin ones of Cineris's names (`ｃｉｎ`, `cın`, `cinerıſ`).
+file: crates/cineris-policy/src/approving.rs
+in: folded
+find: 'ſ' | 'ѕ' | 'ꜱ' | 'ś' | 'š' | 'ş' | 'ș' => Some('s'),
+replace: 'ѕ' | 'ꜱ' | 'ś' | 'š' | 'ş' | 'ș' => Some('s'),
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-cmd-glued-switch-unread
+rule: `cmd`'s `/c` with its line glued to it (`/ccin`) is read as `/c` and the line.
+file: crates/cineris-policy/src/approving.rs
+in: cmd_switches
+find: if (lower.starts_with("/c") || lower.starts_with("/k")) && word.len() > 2 {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-lone-version-refused
+rule: The help or the version alone, with nothing after it, runs nothing that is refused, however the line was read (the review's false refusals).
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: && matches!(only.as_str(), "-h" | "--help" | "-V" | "--version")
+replace: && false
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+[break] approving-printed-escapes-unread
+rule: What `printf` prints of a line fed to a program, `\\n` and `\\t` read as a break and a tab, is read as a line.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::read
+find: if text.contains("\\n") || text.contains("\\t") {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
