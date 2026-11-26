@@ -24,3 +24,14 @@ os: windows
 caught-by:
     cineris-base::it paths::the_workspace_must_be_an_existing_directory
     cineris-base::it paths::a_trailing_separator_names_a_directory
+
+[break] attributes-never-a-reparse-point
+rule: A name's attributes say it is a reparse point when Windows sets the bit: a link's own attributes, read without following it.
+file: crates/cineris-base/src/private/windows.rs
+in: is_reparse_point
+find: self.0 & FILE_ATTRIBUTE_REPARSE_POINT != 0
+replace: false
+os: windows
+caught-by:
+    cineris-base private::windows::tests::a_names_attributes_say_whether_it_is_a_directory_or_a_reparse_point
+    cineris-base::it paths_windows::sys_a_junction_that_leaves_the_workspace_resolves_outside

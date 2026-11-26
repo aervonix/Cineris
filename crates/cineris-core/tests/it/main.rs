@@ -476,7 +476,7 @@ impl World {
             .get_or_init(|| {
                 let search = cineris_tools::ShellSearch::from_env();
                 let cheap = cfg!(windows)
-                    .then(|| search.find(Some("powershell"), None))
+                    .then(|| windows_powershell(&search))
                     .and_then(|found| match found {
                         Ok(shell) => Some(shell),
                         // Quietly going back to PowerShell 7 would lose the
@@ -484,7 +484,7 @@ impl World {
                         Err(error) => {
                             assert!(
                                 std::env::var_os("CI").is_none(),
-                                "Windows PowerShell is not on PATH on this runner: {error}"
+                                "Windows PowerShell is not on this runner: {error}"
                             );
                             None
                         }
@@ -593,7 +593,12 @@ impl World {
 impl Drop for World {
     fn drop(&mut self) {
         cineris_testkit::profile::tear_down();
-        let _ = std::fs::remove_dir_all(&self.dir);
+        // Not on a runner whose disk is thrown away with the job, where
+        // removing the world's directories took 2.7 ms of each test on
+        // Windows (`docs/steps/ci-budgets-2/answered.md`).
+        if !cineris_testkit::scratch::disk_thrown_away() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -682,6 +687,29 @@ pub fn protect_limits() -> cineris_sandbox::protect::Limits {
         time: Duration::from_secs(3600),
         ..cineris_sandbox::protect::Limits::default()
     }
+}
+
+/// Windows PowerShell, for the rig's cores: first where Windows keeps it,
+/// one look, and only then on `PATH`. A search of `PATH` looks in each of
+/// its folders, and a hosted runner's has dozens: 1.9 ms of every core
+/// test's process on a Windows runner, where the look takes a few
+/// microseconds (`docs/steps/ci-budgets-2/answered.md`). On a runner both
+/// find the same program.
+pub fn windows_powershell(
+    search: &cineris_tools::ShellSearch,
+) -> Result<cineris_tools::Shell, cineris_tools::shell::ShellError> {
+    let kept = search.system_root.as_ref().map(|root| {
+        root.join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe")
+    });
+    if let Some(kept) = kept.as_deref().and_then(Path::to_str)
+        && let Ok(shell) = search.find(Some(kept), None)
+    {
+        return Ok(shell);
+    }
+    search.find(Some("powershell"), None)
 }
 
 /// The shell the harness picks on this machine when nothing is

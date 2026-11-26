@@ -15,6 +15,13 @@
 //!   is removed first, read-only files included.
 //! - **It is removed when the test ends,** unless the test failed: then it
 //!   is left for whoever looks at the failure, and the next run removes it.
+//!   **On a GitHub-hosted runner it is left** ([`disk_thrown_away`]): the
+//!   runner's disk goes with the job, and removing a core test's
+//!   directories took 2.7 ms of each test on a Windows runner
+//!   (`docs/steps/ci-budgets-2/answered.md`). What an earlier run there
+//!   left under the same name is moved aside in one rename, so that a
+//!   later run of the same tests on the runner (an A/B's next round) pays
+//!   no more than the first.
 //! - **It is inside the build directory,** so on a developer's machine it is
 //!   inside the repository's checkout. A test that needs "no repository
 //!   above this directory" asks for [`Scratch::outside`], which is in the
@@ -38,12 +45,25 @@ use std::process::Command;
 /// to another parent: for running the tests on a particular disk.
 pub const BASE: &str = "CINERIS_TEST_TMPDIR";
 
+/// Whether this run is on a GitHub-hosted runner, whose disk is thrown
+/// away with the job: the runner says `RUNNER_ENVIRONMENT=github-hosted`,
+/// and a self-hosted one, which keeps its disk, says `self-hosted`. There a
+/// [`Scratch`] is left when its test ends, and a rig that removes its own
+/// directory leaves it too.
+#[must_use]
+pub fn disk_thrown_away() -> bool {
+    std::env::var_os("RUNNER_ENVIRONMENT").is_some_and(|value| value == "github-hosted")
+}
+
 /// A directory that belongs to one test. See the module's description.
 #[derive(Debug)]
 pub struct Scratch {
     dir: PathBuf,
     /// A parent that was made for this directory alone, and goes with it.
     own_parent: Option<PathBuf>,
+    /// Whether the directory is removed when the test ends: not on a
+    /// runner whose disk is thrown away ([`disk_thrown_away`]).
+    removed_at_end: bool,
     /// The test's time profile, written when the directory goes, when
     /// `CINERIS_TESTKIT_PROFILE` is on.
     _profile: crate::profile::Report,
@@ -85,6 +105,11 @@ impl Scratch {
     /// test's at all.
     #[must_use]
     pub fn under(parent: &Path, group: &str, test: &str) -> Self {
+        Self::under_on(parent, group, test, disk_thrown_away())
+    }
+
+    /// [`Scratch::under`], on a runner whose disk is thrown away or not.
+    fn under_on(parent: &Path, group: &str, test: &str, thrown_away: bool) -> Self {
         for name in [group, test] {
             assert!(
                 is_one_name(name),
@@ -93,13 +118,14 @@ impl Scratch {
             );
         }
         let dir = parent.join(group).join(test);
-        if dir.exists() {
+        if dir.exists() && !(thrown_away && move_aside(&dir)) {
             remove_all(&dir);
         }
         fs::create_dir_all(&dir).expect("create the test's directory");
         Self {
             dir,
             own_parent: None,
+            removed_at_end: !thrown_away,
             _profile: crate::profile::report(test),
         }
     }
@@ -109,8 +135,13 @@ impl Scratch {
     /// is in its name, so two runs at once do not share it.
     #[must_use]
     pub fn outside(group: &str, test: &str) -> Self {
+        Self::outside_on(group, test, disk_thrown_away())
+    }
+
+    /// [`Scratch::outside`], on a runner whose disk is thrown away or not.
+    fn outside_on(group: &str, test: &str, thrown_away: bool) -> Self {
         let group = format!("{group}-{}", std::process::id());
-        let mut scratch = Self::under(&std::env::temp_dir(), &group, test);
+        let mut scratch = Self::under_on(&std::env::temp_dir(), &group, test, thrown_away);
         scratch.own_parent = Some(std::env::temp_dir().join(group));
         scratch
     }
@@ -225,8 +256,8 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         // What a failed test left is the evidence. The next run of the test
-        // removes it.
-        if !std::thread::panicking() {
+        // removes it. A runner whose disk is thrown away removes nothing.
+        if !std::thread::panicking() && self.removed_at_end {
             remove_all(&self.dir);
             // The parent too, once the last test that shares it is done:
             // removing a directory that is not empty fails, and is left.
@@ -318,6 +349,21 @@ fn git_command(directory: &Path, arguments: &[&str]) -> Command {
     command
 }
 
+/// Moves what an earlier run left at `dir` aside, beside it under a name
+/// of its own, in one rename: on a runner whose disk is thrown away, where
+/// nothing is removed. False when it could not be moved, for the caller to
+/// remove it.
+fn move_aside(dir: &Path) -> bool {
+    static MOVED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let Some(name) = dir.file_name() else {
+        return false;
+    };
+    let count = MOVED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let mut aside = name.to_os_string();
+    aside.push(format!(".left-{}-{count}", std::process::id()));
+    fs::rename(dir, dir.with_file_name(aside)).is_ok()
+}
+
 /// Removes a directory tree, read-only files included. A failure is
 /// ignored: the next run of the test starts by removing it again.
 pub fn remove_all(dir: &Path) {
@@ -356,8 +402,52 @@ mod tests {
 
     use super::Scratch;
 
+    /// A scratch directory as a desk has it, wherever these tests run:
+    /// removed when its test ends.
     fn scratch(test: &str) -> Scratch {
-        Scratch::outside("cineris-testkit-scratch", test)
+        Scratch::outside_on("cineris-testkit-scratch", test, false)
+    }
+
+    /// As a GitHub-hosted runner, whose disk is thrown away, has it.
+    fn on_a_hosted_runner(test: &str) -> Scratch {
+        Scratch::outside_on("cineris-testkit-scratch", test, true)
+    }
+
+    #[test]
+    fn on_a_runner_whose_disk_is_thrown_away_it_is_left_and_an_earlier_one_moved_aside() {
+        let first = on_a_hosted_runner("thrown_away");
+        first.file("left/behind.txt", "old");
+        let path = first.path().to_path_buf();
+        drop(first);
+        // Left when its test ended.
+        assert!(path.join("left/behind.txt").is_file());
+
+        // The next run of the test starts empty, and what the first left is
+        // beside it, moved and not removed.
+        let second = on_a_hosted_runner("thrown_away");
+        assert_eq!(second.path(), path);
+        assert_eq!(second.listing(""), [] as [&str; 0]);
+        let parent = path.parent().unwrap();
+        let aside: Vec<PathBuf> = fs::read_dir(parent)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name.starts_with("thrown_away.left-"))
+            })
+            .collect();
+        assert_eq!(aside.len(), 1, "{aside:?}");
+        assert!(aside[0].join("left/behind.txt").is_file());
+        drop(second);
+        // Nothing of this test's is left for the others of this binary.
+        for entry in fs::read_dir(parent).unwrap().flatten() {
+            if entry.file_name().to_string_lossy().starts_with("thrown_away") {
+                super::remove_all(&entry.path());
+            }
+        }
     }
 
     #[test]
