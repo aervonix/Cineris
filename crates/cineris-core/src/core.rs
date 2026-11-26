@@ -192,6 +192,11 @@ pub struct CoreOptions {
     /// its approving subcommands are refused at every level (since step
     /// 28's third pull request). `None`: the engine's fallback reads them.
     pub own_commands: Option<Arc<cineris_policy::approving::OwnCommands>>,
+    /// The widest level a session of this core holds, whatever its
+    /// configuration says: a headless run under a session's command is at
+    /// most `read-only` (since step 28's third pull request). `None`: the
+    /// configuration's.
+    pub level_at_most: Option<cineris_protocol::lease::Level>,
     /// What the system offers the sandbox, in place of asking it
     /// (`cineris_sandbox::support::detect`): a test's, which says the kernel
     /// has no Landlock, or an old one.
@@ -357,6 +362,7 @@ impl CoreOptions {
             guard: None,
             launcher: None,
             own_commands: None,
+            level_at_most: None,
             sandbox: None,
             protect_limits: None,
             api_keys: BTreeMap::new(),

@@ -500,7 +500,11 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
     let binary = std::path::Path::new(crate::CINERIS);
     let said = machine.workspace.join("said.txt");
     // Each subcommand, one after another, its standard error kept.
-    let subcommands: [&[&str]; 8] = [
+    let subcommands: [&[&str]; 12] = [
+        &[],
+        &["serve", "--stdio"],
+        &["attach"],
+        &["-p", "--trust-project", "hi"],
         &["ext", "add", &folder.to_string_lossy(), "--hash", "00"],
         &["ext", "remove", "tracker", "--hash", "00"],
         &["ext", "disable", "tracker"],
@@ -558,6 +562,10 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
     run.expect_code(0);
     let said = std::fs::read_to_string(&said).unwrap_or_default();
     for what in [
+        "`cineris` was refused",
+        "`cineris serve` was refused",
+        "`cineris attach` was refused",
+        "`cineris -p --trust-project` was refused under a session's command",
         "`cineris ext add` was refused",
         "`cineris ext remove` was refused",
         "`cineris ext disable` was refused",
@@ -698,4 +706,90 @@ fn sys_ext_add_disable_and_remove_act_only_on_the_hash_shown() {
     removed.expect_code(0);
     assert!(!kept.exists(), "{}", shown(&removed));
     assert!(!pinned().contains("guard"), "{}", pinned());
+}
+
+/// A headless run a session's command starts is held to `read-only`,
+/// whatever its configuration says, and says so on standard error and in
+/// its result (the maintainers' condition on B). The nested run's own
+/// model calls are the scripted server's second and third answers; it is
+/// given the key, which a session's commands are not.
+#[test]
+fn sys_a_nested_headless_run_is_held_to_read_only_and_says_so() {
+    let machine = Machine::with_config(
+        "sys_nested_read_only",
+        "[permissions]\nmode = \"unrestricted\"\n",
+    );
+    let binary = std::path::Path::new(crate::CINERIS);
+    let (script, command) = if cfg!(windows) {
+        (
+            "nested.cmd",
+            format!(
+                "@echo off\r\nset ANTHROPIC_API_KEY={}\r\n\"{}\" -p hi --output json > \
+                 nested.json 2> nested.err\r\n",
+                crate::KEY,
+                binary.display()
+            ),
+        )
+    } else {
+        (
+            "nested.sh",
+            format!(
+                "ANTHROPIC_API_KEY='{}' '{}' -p hi --output json > nested.json 2> nested.err\n",
+                crate::KEY,
+                binary.display()
+            ),
+        )
+    };
+    std::fs::write(machine.workspace.join(script), command).unwrap();
+    let line = if cfg!(windows) {
+        "cmd /c nested.cmd"
+    } else {
+        "sh nested.sh"
+    };
+    machine.reply_tool(
+        "toolu_1",
+        "shell",
+        &serde_json::json!({"command": line, "timeout_ms": 60_000}),
+    );
+    // The nested run's: a write, which `read-only` refuses where its
+    // configuration's `unrestricted` would let it, then its answer; then
+    // the outer run's last.
+    machine.reply_tool(
+        "toolu_2",
+        "write",
+        &serde_json::json!({"path": "nested.txt", "content": "x\n"}),
+    );
+    machine.reply_text("Nested.");
+    machine.reply_text("Done.");
+    let run = machine.run(&["-p", "nest", "--output", "json"]);
+    run.expect_code(0);
+    let said = std::fs::read_to_string(machine.workspace.join("nested.err")).unwrap_or_default();
+    assert!(
+        said.contains("held to `read-only`") && said.contains("a-nested-run-under-a-session"),
+        "{said}\n{}",
+        shown(&run)
+    );
+    let result: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(machine.workspace.join("nested.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(result["capped"]["level"], "read-only", "{result}");
+    assert_eq!(result["files_changed"], serde_json::json!([]), "{result}");
+    assert!(!machine.workspace.join("nested.txt").exists(), "{result}");
+    assert_eq!(
+        result["capped"]["item"], "a-nested-run-under-a-session-is-capped-at-read-only",
+        "{result}"
+    );
+    // Run from the user's own terminal, it is not held: the same write is
+    // made.
+    machine.reply_tool(
+        "toolu_3",
+        "write",
+        &serde_json::json!({"path": "nested.txt", "content": "x\n"}),
+    );
+    machine.reply_text("Plain.");
+    let own = machine.run(&["-p", "hi", "--output", "json"]);
+    let record = own.expect_code(0).json();
+    assert!(record.get("capped").is_none(), "{record}");
+    assert!(machine.workspace.join("nested.txt").exists(), "{record}");
 }

@@ -781,3 +781,67 @@ find: message: format!("{message} {SANDBOX_OFF_TOO}")
 replace: message
 caught-by:
     cineris-core::it start::a_session_is_refused_at_a_level_that_cannot_be_held_and_told_when_there_is_no_sandbox
+
+# Under a session's command: the application, `serve` and `attach` refuse to
+# start, and a headless run is held to `read-only` and says so (B, the
+# maintainers' conditions).
+
+[break] interactive-starts-under-a-session
+rule: The application does not start under a session's command: it answers a project's trust question and the approvals.
+file: crates/cineris-cli/src/interactive.rs
+find: if let Err(code) = crate::not_under_a_session(name, "") {
+replace: if let Err(code) = Ok::<(), u8>(()) {
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] serve-starts-under-a-session
+rule: `cineris serve` does not start under a session's command: it answers a project's trust question and the approvals.
+file: crates/cineris-cli/src/serve.rs
+find: if let Err(code) = crate::not_under_a_session(name, "serve") {
+replace: if let Err(code) = Ok::<(), u8>(()) {
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] attach-starts-under-a-session
+rule: `cineris attach` does not start under a session's command: it answers a project's trust question and the approvals.
+file: crates/cineris-cli/src/attach.rs
+find: if let Err(code) = crate::not_under_a_session(name, "attach") {
+replace: if let Err(code) = Ok::<(), u8>(()) {
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] nested-run-takes-refused-flags
+rule: A headless run under a session's command takes no flag the CLI's grammar refuses there.
+file: crates/cineris-cli/src/main.rs
+in: nested_run
+find: crate::nested::standing(&command)
+replace: cineris_core::approving::Standing::Safe
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] nested-run-not-held
+rule: A headless run under a session's command is held to `read-only`.
+file: crates/cineris-cli/src/headless.rs
+find: options.level_at_most = Some(cineris_protocol::lease::Level::ReadOnly);
+replace: let _ = &options;
+caught-by:
+    cineris-cli::system commands::sys_a_nested_headless_run_is_held_to_read_only_and_says_so
+
+[break] nested-run-not-said-held
+rule: A headless run held to `read-only` says so on standard error and in its result.
+file: crates/cineris-cli/src/headless.rs
+find: if front.plan.capped {
+replace: if false {
+caught-by:
+    cineris-cli::system commands::sys_a_nested_headless_run_is_held_to_read_only_and_says_so
+
+[break] level-cap-not-applied
+rule: A session's level is no wider than the core's cap.
+file: crates/cineris-core/src/assemble.rs
+in: at_most
+find: Some(most) if rank(most) < rank(level) => most.clone()
+replace: Some(most) if false => most.clone()
+packages: cineris-core,cineris-cli
+caught-by:
+    cineris-core assemble::level_tests::a_level_is_capped_at_the_most_given
+    cineris-cli::system commands::sys_a_nested_headless_run_is_held_to_read_only_and_says_so

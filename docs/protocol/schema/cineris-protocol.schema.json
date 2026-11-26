@@ -2764,6 +2764,31 @@
       },
       "type": "object"
     },
+    "HeadlessCap": {
+      "description": "The level a headless run was held to, and why.",
+      "properties": {
+        "item": {
+          "description": "The open item that names what is left of it, by its file's name in\n`docs/outstanding/`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "level": {
+          "$ref": "#/$defs/Level",
+          "description": "The level it ran at."
+        },
+        "reason": {
+          "description": "Why, in words.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "level",
+        "reason"
+      ],
+      "type": "object"
+    },
     "HeadlessRecord": {
       "anyOf": [
         {
@@ -2829,6 +2854,17 @@
     "HeadlessResult": {
       "description": "How a headless run ended: the whole of `--output json`, and the last\nline of `jsonl`. It is written on success and on failure alike, and its\n`outcome` and the process's exit code always agree.",
       "properties": {
+        "capped": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HeadlessCap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The run was held to a narrower level than its configuration's, and\nwhy (since step 28's third pull request: a headless run under a\nsession's command is held to `read-only`). Absent when it was not."
+        },
         "costs": {
           "description": "What the run cost, one amount per basis, in whole nano-dollars:\n`usd_nanos / 1e9` is US dollars. Empty when no price is known.",
           "items": {

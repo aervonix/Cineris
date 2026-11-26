@@ -121,6 +121,7 @@ impl Collector {
             files_changed: self.files.iter().cloned().collect(),
             permission_denials: denials,
             verification: None,
+            capped: None,
         };
         if let Some(end) = &self.end {
             result.outcome = end.outcome.clone();

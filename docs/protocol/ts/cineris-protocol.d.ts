@@ -763,6 +763,16 @@ export interface HardLimits {
   team_size?: number | null;
 }
 
+/** The level a headless run was held to, and why. */
+export interface HeadlessCap {
+  /** The open item that names what is left of it, by its file's name in `docs/outstanding/`. */
+  item?: string | null;
+  /** The level it ran at. */
+  level: Level;
+  /** Why, in words. */
+  reason: string;
+}
+
 /** A record of headless mode's own, told apart by `type`. */
 export type HeadlessRecord = ({
     type: "session";
@@ -772,6 +782,8 @@ export type HeadlessRecord = ({
 
 /** How a headless run ended: the whole of `--output json`, and the last line of `jsonl`. It is written on success and on failure alike, and its `outcome` and the process's exit code always agree. */
 export interface HeadlessResult {
+  /** The run was held to a narrower level than its configuration's, and why (since step 28's third pull request: a headless run under a session's command is held to `read-only`). Absent when it was not. */
+  capped?: HeadlessCap | null;
   /** What the run cost, one amount per basis, in whole nano-dollars: `usd_nanos / 1e9` is US dollars. Empty when no price is known. */
   costs?: Array<Cost>;
   /** Milliseconds from the start of the process to this record. */

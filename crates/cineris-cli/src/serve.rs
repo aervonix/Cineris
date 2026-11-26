@@ -68,6 +68,10 @@ enum Over {
 
 /// Runs the server. Returns the exit code.
 pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
+    // Its client answers its sessions' trust questions and approvals.
+    if let Err(code) = crate::not_under_a_session(name, "serve") {
+        return code;
+    }
     if let Some(flag) = serve.run_only() {
         eprintln!("{name}: {flag} is for a run; `serve` does not take it.");
         return exit::USAGE;
