@@ -28,11 +28,20 @@
 //!   by its name to its user and its owner only to ask about it, with no
 //!   limits and no breakaway, and joins it. Every process it starts from then
 //!   on (a command's tree, a hook, an extension's runtime, an MCP server) is
-//!   in that job and cannot leave it. A process is under a session's command
-//!   when it is in the job of that name of a process that is running and
-//!   this user may open: first the jobs of the processes of its line of
-//!   parents, each by its own instance, opened by name (its harness is
-//!   there unless it detached); then the jobs of that prefix in the logon
+//!   in that job and cannot leave it. **A process is under a session's
+//!   command when a process of its line of parents is a harness,** told as
+//!   on Linux, by its program (Cineris: the very file this process runs, or
+//!   a program whose file is named `cineris.exe`, `cin.exe` or as this
+//!   binary is) and its command line (not a subcommand that runs no session;
+//!   one that cannot be read counts), **whatever its job:** a command that
+//!   lets its harness's jobs let it leave, through the handles it can copy
+//!   from its harness, or that closes the harness's own handle, which leaves
+//!   the job with no name, is still refused while its line reaches its
+//!   harness, and so is a command of a harness whose mark failed. It is also
+//!   under one when it is in the job of that name of a process that is
+//!   running and this user may open: first the jobs of the processes of its
+//!   line of parents, each by its own instance, opened by name (its harness
+//!   is there unless it detached); then the jobs of that prefix in the logon
 //!   session's namespace of objects, each by the instance its name gives,
 //!   where one call lists the namespace whole (never a listing joined from
 //!   several calls, which could skip one), and otherwise the job's name of
@@ -73,11 +82,13 @@
 //!   running, none counts. **It does not see** a service's start
 //!   through another program than an interpreter or a runtime, a process
 //!   another of the user's processes starts outside the job (the desktop's
-//!   shell asked to open a file, a process made with another parent), nor a
-//!   command whose harness has exited, whose job no running process names,
-//!   nor a service's start once every harness of the user's has exited, nor
-//!   a program a service started before a harness began that is asked later
-//!   to run the subcommand (an already-running daemon's).
+//!   shell asked to open a file, a process made with another parent), a
+//!   command that both detached itself from its line of parents and left
+//!   its harness's job, nor a command whose harness has exited, whose job
+//!   no running process names, nor a service's start once every harness of
+//!   the user's has exited, nor a program a service started before a
+//!   harness began that is asked later to run the subcommand (an
+//!   already-running daemon's).
 //!
 //! Neither is a boundary against a command running with the user's rights:
 //! such a command can write the files these subcommands write. It keeps the
@@ -157,7 +168,6 @@ pub fn moved_stores() -> Option<String> {
 /// The first words of Cineris's subcommands that run no session: a
 /// process of Cineris whose first argument is one of these starts no
 /// session's command.
-#[cfg_attr(windows, allow(dead_code, reason = "Linux's line of parents"))]
 const NO_SESSION: [&str; 11] = [
     "sessions",
     "config",
@@ -175,11 +185,88 @@ const NO_SESSION: [&str; 11] = [
 /// Whether a process of Cineris with these arguments (its program's word
 /// first) runs sessions: the application, a headless run, `serve`, and
 /// anything not told apart (fails closed).
-#[cfg_attr(windows, allow(dead_code, reason = "Linux's line of parents"))]
 fn runs_sessions(arguments: &[String]) -> bool {
     arguments
         .get(1)
         .is_none_or(|first| !NO_SESSION.contains(&first.as_str()))
+}
+
+/// Whether a process is a session's harness, told by its program and its
+/// arguments, as both systems tell it: it is Cineris (`cineris`), and its
+/// arguments are not a subcommand that runs no session ([`runs_sessions`]).
+/// Arguments that cannot be read (`None`) count as running sessions,
+/// failing closed.
+fn runs_cineris_sessions(cineris: bool, arguments: Option<&[String]>) -> bool {
+    cineris && arguments.is_none_or(runs_sessions)
+}
+
+/// The words of a Windows command line, as a Rust program reads its own
+/// arguments from it (`std::env::args`, after the rules of Microsoft's C
+/// runtime): Cineris reads its subcommand so, and a harness's command line
+/// is read here as the harness read it.
+///
+/// - The program's word ends at the first space or tab outside quotes, and a
+///   quote in it only opens or closes quotes.
+/// - Every other word ends at a space or tab outside quotes, and runs of
+///   them are one gap. A quote opens or closes quotes; inside quotes, two
+///   quotes together are one quote character. Backslashes are characters,
+///   but before a quote they are halved, and an odd one left over makes the
+///   quote a character.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's command lines"))]
+fn command_words(line: &str) -> Vec<String> {
+    let blank = |c: &char| *c == ' ' || *c == '\t';
+    let mut chars = line.chars().peekable();
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quoted = false;
+    for c in chars.by_ref() {
+        match c {
+            '"' => quoted = !quoted,
+            ' ' | '\t' if !quoted => break,
+            other => word.push(other),
+        }
+    }
+    words.push(std::mem::take(&mut word));
+    while chars.next_if(blank).is_some() {}
+    quoted = false;
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\t' if !quoted => {
+                words.push(std::mem::take(&mut word));
+                while chars.next_if(blank).is_some() {}
+            }
+            '\\' => {
+                let mut run = 1;
+                while chars.next_if_eq(&'\\').is_some() {
+                    run += 1;
+                }
+                if chars.peek() == Some(&'"') {
+                    word.extend(std::iter::repeat_n('\\', run / 2));
+                    if run % 2 == 1 {
+                        chars.next();
+                        word.push('"');
+                    }
+                } else {
+                    word.extend(std::iter::repeat_n('\\', run));
+                }
+            }
+            '"' if quoted => match chars.peek() {
+                Some('"') => {
+                    chars.next();
+                    word.push('"');
+                }
+                Some(_) => quoted = false,
+                // A quote left open at the end still makes a word, if empty.
+                None => break,
+            },
+            '"' => quoted = true,
+            other => word.push(other),
+        }
+    }
+    if !word.is_empty() || quoted {
+        words.push(word);
+    }
+    words
 }
 
 /// What is known of one process of the line.
@@ -235,7 +322,7 @@ mod sys {
     use std::io;
     use std::os::unix::fs::MetadataExt;
 
-    use super::{Seen, Under, line, runs_sessions};
+    use super::{Seen, Under, line, runs_cineris_sessions};
 
     pub(super) fn mark() -> io::Result<()> {
         Ok(())
@@ -409,16 +496,17 @@ mod sys {
         };
         let name = stat.get(open + 1..close).unwrap_or("");
         let cineris = same_binary(own, pid) || (named(own, name) && file_named(own, pid));
-        // Its arguments, when it is Cineris: one that cannot be read is
-        // taken as running sessions.
-        let harness = cineris
-            && std::fs::read(format!("/proc/{pid}/cmdline")).map_or(true, |line| {
-                let arguments: Vec<String> = line
-                    .split(|byte| *byte == 0)
+        // Its arguments, read only when it is Cineris: arguments that
+        // cannot be read are taken as running sessions.
+        let arguments = cineris
+            .then(|| std::fs::read(format!("/proc/{pid}/cmdline")).ok())
+            .flatten()
+            .map(|line| {
+                line.split(|byte| *byte == 0)
                     .map(|word| String::from_utf8_lossy(word).into_owned())
-                    .collect();
-                runs_sessions(&arguments)
+                    .collect::<Vec<String>>()
             });
+        let harness = runs_cineris_sessions(cineris, arguments.as_deref());
         Seen::Of { parent, harness }
     }
 
@@ -647,19 +735,59 @@ fn line_of(own: u32, describe: impl Fn(u32) -> Described) -> Option<Vec<Listed>>
     Some(line)
 }
 
-/// The line of parents above `own`, each described by opening it: its
-/// parent, its parent's, and so up, through any program, as far as each is
-/// a running process this user may open that was made before the one below
-/// it (a process made after has the id of a parent that has gone), at most
-/// [`LINE_OF_PARENTS`] of them. The harness of a session's command is on
-/// it unless the command detached itself (its parents exited), so its job
-/// is asked by its name first, which no listing can miss (the review of the
-/// start-up's fix: a listing of the namespace that took several calls could
-/// skip it).
+/// Whether a process of the line of parents is a session's harness, told by
+/// its program and its arguments ([`runs_cineris_sessions`]).
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's line of parents"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Runs {
+    /// It is not: another program, or Cineris running a subcommand that
+    /// runs no session.
+    No,
+    /// It is.
+    Sessions,
+    /// What program it runs could not be read: why.
+    Unknown(String),
+}
+
+/// What opening a process of the line of parents tells of it, for
+/// [`parents`].
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's line of parents"))]
+#[derive(Debug, Clone)]
+enum Above {
+    /// It runs, and this user may open it: its parent and when it was made
+    /// (its program's name is not read, and left empty), and whether it is
+    /// a harness, which is not asked of this process itself.
+    Is(Listed, Runs),
+    /// It has gone, or this user may not open it: the line ends.
+    Ended,
+}
+
+/// A process of the line of parents, whose job is asked first, and which
+/// is itself a harness when its program and its arguments say so.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's line of parents"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Parent {
+    pid: u32,
+    made: u64,
+    runs: Runs,
+}
+
+/// The line of parents above `own`, each described by opening it
+/// (`describe(pid, judged)`, which tells whether the process is a harness
+/// only when `judged`: not for `own` itself): its parent, its parent's, and
+/// so up, through any program, as far as each is a running process this
+/// user may open that was made before the one below it (a process made
+/// after has the id of a parent that has gone), at most [`LINE_OF_PARENTS`]
+/// of them, and no further than the first that is a harness by its program
+/// and its arguments. The harness of a session's command is on it unless
+/// the command detached itself (its parents exited), so its job is asked by
+/// its name first, which no listing can miss (the review of the start-up's
+/// fix: a listing of the namespace that took several calls could skip it),
+/// and it is a harness by what it runs whatever its job is.
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
-fn parents(own: u32, describe: impl Fn(u32) -> Described) -> Vec<Listed> {
+fn parents(own: u32, describe: impl Fn(u32, bool) -> Above) -> Vec<Parent> {
     let mut line = Vec::new();
-    let Described::Is(mut below) = describe(own) else {
+    let Above::Is(mut below, _) = describe(own, false) else {
         return line;
     };
     for _ in 0..LINE_OF_PARENTS {
@@ -667,13 +795,21 @@ fn parents(own: u32, describe: impl Fn(u32) -> Described) -> Vec<Listed> {
         if parent == 0 || parent == below.pid {
             break;
         }
-        let Described::Is(process) = describe(parent) else {
+        let Above::Is(process, runs) = describe(parent, true) else {
             break;
         };
         if process.made > below.made {
             break;
         }
-        line.push(process.clone());
+        let harness = runs == Runs::Sessions;
+        line.push(Parent {
+            pid: process.pid,
+            made: process.made,
+            runs,
+        });
+        if harness {
+            break;
+        }
         below = process;
     }
     line
@@ -823,28 +959,48 @@ enum Job {
 /// service started this process for a command (`service`). A job that
 /// holds this process decides at once, and so does a service's start.
 ///
+/// **A process of the line of parents that is a harness by its program and
+/// its arguments decides at once too, whatever this process's place in its
+/// job,** as Linux's line of parents decides (the maintainers' rule for the
+/// third part, with the reviewer: a command can start the subcommand
+/// outside its harness's job, by letting the jobs it is in let it leave
+/// through the handles it can copy from its harness, and can leave the
+/// harness's job with no name by closing the harness's own handle; and a
+/// harness whose mark failed has no job). Its job is asked first, so that
+/// a command in its harness's job is told so.
+///
 /// **A job that cannot be told is kept while the rest are asked,** and
 /// decides only where nothing holds this process: being in a harness's
 /// job wins over another job that cannot be told, met first (step 28's
 /// third pull request: a job made to deny its opening, named for another
 /// running process, made a check of a process in its own harness's job say
 /// "not known"). Both refuse; only the reason given changes. Of several
-/// that cannot be told, the first met is said.
+/// that cannot be told, the first met is said; and so is a process of the
+/// line whose program cannot be read.
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
 fn judged(
-    parents: impl IntoIterator<Item = (u32, u64)>,
+    parents: impl IntoIterator<Item = Parent>,
     listed: impl FnOnce() -> Result<Vec<(u32, u64)>, String>,
     job: impl Fn(u32, u64) -> Job,
     service: impl FnOnce(Option<u64>) -> Under,
 ) -> Under {
     let mut unknown: Option<String> = None;
-    for (pid, made) in parents {
+    for Parent { pid, made, runs } in parents {
         match job(pid, made) {
             Job::Holds(how) => return Under::Session(how),
             Job::Unknown(what) => {
                 unknown.get_or_insert(what);
             }
             Job::None | Job::Elsewhere => {}
+        }
+        match runs {
+            Runs::Sessions => {
+                return Under::Session(format!("process {pid} runs Cineris's sessions"));
+            }
+            Runs::Unknown(what) => {
+                unknown.get_or_insert(what);
+            }
+            Runs::No => {}
         }
     }
     let harnesses = match listed() {
@@ -971,19 +1127,22 @@ mod sys {
     use std::cell::OnceCell;
     use std::io;
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
     use std::ptr;
     use std::sync::OnceLock;
 
     use cineris_base::FileIdentity;
 
-    use super::{Called, Job, Listed, Opened, Under, job_name, started_by_a_service};
+    use super::{Called, Job, Listed, Opened, Runs, Under, job_name, started_by_a_service};
     use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
     use windows_sys::Wdk::Storage::FileSystem::{NtOpenDirectoryObject, NtQueryDirectoryObject};
     use windows_sys::Wdk::System::SystemInformation::{
         NtQuerySystemInformation, SystemProcessInformation,
     };
-    use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
+    use windows_sys::Wdk::System::Threading::{
+        NtQueryInformationProcess, PROCESSINFOCLASS, ProcessBasicInformation,
+        ProcessCommandLineInformation, ProcessImageFileName, ProcessImageInformation,
+    };
     use windows_sys::Win32::Foundation::{
         ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER,
         FALSE, FILETIME, HANDLE, LocalFree, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL,
@@ -1566,17 +1725,20 @@ mod sys {
 
     pub(super) fn under_a_session() -> Under {
         let list = Taken::new();
-        // This binary, read only where a job of a harness's name cannot be
-        // opened.
+        // This binary, read at the first process of the line of parents
+        // whose program is judged, or where a job of a harness's name
+        // cannot be opened; its file's identity only where a program's
+        // name and size do not tell it apart.
         let binary = OnceCell::new();
         // SAFETY: plain call.
         let own = unsafe { GetCurrentProcessId() };
         // The harnesses on its line of parents first, each by its job's
-        // name: a session's command's own harness is there unless it
-        // detached, and no listing's race can hide it.
-        let parents = super::parents(own, lineage);
+        // name and by its program and its arguments: a session's command's
+        // own harness is there unless it detached, no listing's race can
+        // hide it, and its job does not have to hold the command.
+        let parents = super::parents(own, |pid, judged| lineage(pid, judged, &binary));
         super::judged(
-            parents.iter().map(|parent| (parent.pid, parent.made)),
+            parents,
             // Then every running harness, from a listing made whole by one
             // call: a process whose parents exited stays in its harness's
             // job.
@@ -1796,37 +1958,65 @@ mod sys {
     }
 
     /// The process `pid`, opened to ask its parent, its program's name and
-    /// when it was made, as the system's list gives them.
+    /// when it was made, as the system's list gives them. The name is read
+    /// from the path the system keeps for the program (`\Device\…`), and
+    /// not from the path in a drive's letters, which the system makes from
+    /// it: on a hosted runner about 1 µs a process against 17 µs (step 28's
+    /// third pull request). A process with no program's file (the system's
+    /// own) is as one that cannot be opened: only the list names it.
     fn described(pid: u32) -> super::Described {
-        described_as(pid, true)
+        use super::Described;
+        let (process, mut listed) = match opened_with_parent(pid) {
+            Ok(opened) => opened,
+            Err(described) => return described,
+        };
+        let path = match process_text(process.as_raw_handle(), ProcessImageFileName) {
+            Ok(path) if !path.is_empty() => path,
+            _ => return Described::Closed,
+        };
+        let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
+        listed.name = name;
+        Described::Is(listed)
     }
 
-    /// The process `pid`, opened to ask its parent and when it was made, and
-    /// not its program's name, which the line of parents whose jobs are
-    /// asked first does not need: the name is a path the system makes from
-    /// the device's, the dearest of the reads.
-    fn lineage(pid: u32) -> super::Described {
-        described_as(pid, false)
+    /// The process `pid` of the line of parents whose jobs are asked first,
+    /// opened to ask its parent and when it was made, and, when `judged`
+    /// (not this process itself), whether it is a harness by its program
+    /// and its arguments ([`by_program`]), read through the same handle; its
+    /// program's name is not kept.
+    fn lineage(pid: u32, judged: bool, own: &OnceCell<Own>) -> super::Above {
+        let Ok((process, listed)) = opened_with_parent(pid) else {
+            return super::Above::Ended;
+        };
+        let runs = if judged {
+            by_program(process.as_raw_handle(), pid, own)
+        } else {
+            Runs::No
+        };
+        super::Above::Is(listed, runs)
     }
 
-    /// The process `pid` described by opening it, with its program's name
-    /// when `named`, and an empty one otherwise.
-    fn described_as(pid: u32, named: bool) -> super::Described {
+    /// The process `pid`, opened only to ask, with its parent and when it
+    /// was made, and its program's name left empty: `Err`, with what that
+    /// tells, where it has gone or cannot be opened or asked.
+    fn opened_with_parent(pid: u32) -> Result<(OwnedHandle, Listed), super::Described> {
         use super::Described;
         // SAFETY: plain values.
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) };
         if handle.is_null() {
             let error = io::Error::last_os_error();
-            return if error.raw_os_error() == i32::try_from(ERROR_INVALID_PARAMETER).ok() {
-                Described::Gone
-            } else {
-                Described::Closed
-            };
+            return Err(
+                if error.raw_os_error() == i32::try_from(ERROR_INVALID_PARAMETER).ok() {
+                    Described::Gone
+                } else {
+                    Described::Closed
+                },
+            );
         }
         // SAFETY: `handle` was just opened and nothing else owns it.
         let process = unsafe { OwnedHandle::from_raw_handle(handle) };
         let Some(made) = made_at(process.as_raw_handle()) else {
-            return Described::Closed;
+            return Err(Described::Closed);
         };
         // SAFETY: the structure is plain data, for which all zeroes is valid.
         let mut basic: BasicInformation = unsafe { std::mem::zeroed() };
@@ -1842,27 +2032,177 @@ mod sys {
             )
         };
         if status < 0 {
-            return Described::Closed;
+            return Err(Described::Closed);
         }
         let parent = u32::try_from(basic.parent).unwrap_or(u32::MAX);
-        if !named {
-            return Described::Is(Listed {
+        Ok((
+            process,
+            Listed {
                 pid,
                 parent,
                 name: String::new(),
                 made,
-            });
-        }
-        let Ok(path) = image_of(process.as_raw_handle()) else {
-            return Described::Closed;
+            },
+        ))
+    }
+
+    /// Whether the process `handle`, `pid`, of the line of parents is a
+    /// session's harness by its program and its arguments, as Linux's line
+    /// of parents tells one ([`super::runs_cineris_sessions`]): **its
+    /// program is Cineris** ([`named_as_cineris`], or [`same_file`] where
+    /// its image's size is this binary's), read from the path the system
+    /// keeps for it (`\Device\…`), the cheapest read that gives it (about
+    /// 1 µs a process on a hosted runner, where the path in a drive's
+    /// letters cost 17 µs);
+    /// **and its command line,** read only then, is not a subcommand that
+    /// runs no session. A command line that cannot be read counts as
+    /// running sessions; a program that cannot be read is not known. A
+    /// process with no program's file (the system's own) is no harness.
+    fn by_program(handle: HANDLE, pid: u32, own: &OnceCell<Own>) -> Runs {
+        let image = match process_text(handle, ProcessImageFileName) {
+            Ok(image) if image.is_empty() => return Runs::No,
+            Ok(image) => image,
+            Err(error) => {
+                return Runs::Unknown(format!(
+                    "process {pid} of its line of parents: what program it runs could not be \
+                     read: {error}"
+                ));
+            }
         };
-        let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
-        Described::Is(Listed {
-            pid,
-            parent,
-            name,
-            made,
-        })
+        // Opened, where its identity is read, through the root of the
+        // system's namespace of objects, where `\Device\…` is.
+        let path = PathBuf::from(format!(r"\\?\GLOBALROOT{image}"));
+        let own = own.get_or_init(Own::read);
+        let cineris = named_as_cineris(own, &path) || same_file(own, &path, || image_size(handle));
+        let arguments = cineris
+            .then(|| process_text(handle, ProcessCommandLineInformation).ok())
+            .flatten()
+            .map(|line| super::command_words(&line));
+        if super::runs_cineris_sessions(cineris, arguments.as_deref()) {
+            Runs::Sessions
+        } else {
+            Runs::No
+        }
+    }
+
+    /// The room, in eight-byte units, the counted string a process's class
+    /// writes is first asked into: a program's path or a command line of up
+    /// to about a thousand characters, on the stack.
+    const ROOM: usize = 256;
+
+    /// The counted string the class `class` of `NtQueryInformationProcess`
+    /// writes of the process `handle` (its program's path as the system
+    /// keeps it, `\Device\…\cin.exe`; its command line, which takes Windows
+    /// 8.1 or later): asked in a room on the stack, and once more in one as
+    /// large as the call said it needs. Both classes take the limited right
+    /// to ask.
+    fn process_text(handle: HANDLE, class: PROCESSINFOCLASS) -> io::Result<String> {
+        let mut room = [0_u64; ROOM];
+        let mut needed = 0_u32;
+        // SAFETY: `handle` is open with the limited right to ask; the room
+        // is as large as said and aligned for the counted string the call
+        // writes at its start; `needed` is a live `u32`.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                handle,
+                class,
+                room.as_mut_ptr().cast(),
+                u32::try_from(std::mem::size_of_val(&room)).unwrap_or(0),
+                &raw mut needed,
+            )
+        };
+        if status >= 0 {
+            return text_in(&room);
+        }
+        let short = [
+            STATUS_INFO_LENGTH_MISMATCH,
+            STATUS_BUFFER_OVERFLOW,
+            STATUS_BUFFER_TOO_SMALL,
+        ];
+        if !short.contains(&status) || needed == 0 {
+            return Err(io::Error::other(format!("status {status:#010x}")));
+        }
+        let mut larger = vec![0_u64; usize::try_from(needed).unwrap_or(usize::MAX).div_ceil(8)];
+        // SAFETY: as above, in a room as large as the call said it needs.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                handle,
+                class,
+                larger.as_mut_ptr().cast(),
+                u32::try_from(larger.len() * 8).unwrap_or(u32::MAX),
+                &raw mut needed,
+            )
+        };
+        if status < 0 {
+            return Err(io::Error::other(format!("status {status:#010x}")));
+        }
+        text_in(&larger)
+    }
+
+    /// The counted string at the start of `room`, whose text the system
+    /// wrote after it in the same room: read only from within it.
+    fn text_in(room: &[u64]) -> io::Result<String> {
+        // SAFETY: the room is at least as large as the structure, aligned
+        // for it, and the call wrote it.
+        let string: UNICODE_STRING = unsafe { ptr::read(room.as_ptr().cast()) };
+        if string.Buffer.is_null() || string.Length == 0 {
+            return Ok(String::new());
+        }
+        let bytes = room.len() * 8;
+        let units = usize::from(string.Length) / 2;
+        let within = (string.Buffer as usize)
+            .checked_sub(room.as_ptr() as usize)
+            .and_then(|offset| offset.checked_add(units * 2))
+            .is_some_and(|end| end <= bytes);
+        if !within {
+            return Err(io::Error::other("the text was not where it was said to be"));
+        }
+        // SAFETY: the text lies within the room (checked above), which the
+        // call wrote.
+        let text = unsafe { std::slice::from_raw_parts(string.Buffer, units) };
+        Ok(String::from_utf16_lossy(text))
+    }
+
+    /// `SECTION_IMAGE_INFORMATION`, which `windows-sys` does not declare:
+    /// what the system keeps of a process's program as it mapped it. Only
+    /// its file's size is read.
+    #[repr(C)]
+    struct ImageInformation {
+        transfer_address: *mut core::ffi::c_void,
+        zero_bits: u32,
+        maximum_stack_size: usize,
+        committed_stack_size: usize,
+        subsystem_type: u32,
+        subsystem_version: u32,
+        operating_system_version: u32,
+        image_characteristics: u16,
+        dll_characteristics: u16,
+        machine: u16,
+        image_contains_code: u8,
+        image_flags: u8,
+        loader_flags: u32,
+        image_file_size: u32,
+        check_sum: u32,
+    }
+
+    /// The size of the file the process `handle` runs, as the system mapped
+    /// it: the same for every process of one file, which cannot be written
+    /// while it runs. `None` where it cannot be asked.
+    pub(super) fn image_size(handle: HANDLE) -> Option<u32> {
+        // SAFETY: the structure is plain data, for which all zeroes is valid.
+        let mut information: ImageInformation = unsafe { std::mem::zeroed() };
+        // SAFETY: `handle` is open with the limited right to ask, which
+        // this class takes, and the structure is as large as said.
+        let status = unsafe {
+            NtQueryInformationProcess(
+                handle,
+                ProcessImageInformation,
+                (&raw mut information).cast(),
+                u32::try_from(std::mem::size_of::<ImageInformation>()).unwrap_or(0),
+                ptr::null_mut(),
+            )
+        };
+        (status >= 0).then_some(information.image_file_size)
     }
 
     /// The path of the program the process `handle` names runs, as Windows
@@ -1888,23 +2228,27 @@ mod sys {
             .ok_or_else(|| io::Error::other("the path was longer than its room"))
     }
 
-    /// This binary, as the program of a process a job is named for is
-    /// compared with ([`cineris`]): its file, by its volume and its index
-    /// on it, and its file's name, in lower case.
+    /// This binary, as the program of another process is compared with
+    /// ([`cineris`]): its file's name, in lower case; its file, by its
+    /// volume and its index on it, read the first time it is needed; and,
+    /// for the binary this process runs, its image's size.
     #[derive(Debug, Default)]
     pub(super) struct Own {
-        file: Option<FileIdentity>,
+        path: Option<PathBuf>,
+        file: OnceCell<Option<FileIdentity>>,
         name: Option<String>,
+        size: Option<u32>,
     }
 
     impl Own {
-        /// The binary at `path`.
+        /// The binary at `path`, whose image's size is not known.
         pub(super) fn of(path: &Path) -> Self {
             Self {
-                file: FileIdentity::at(path).ok(),
+                path: Some(path.to_path_buf()),
                 name: path
                     .file_name()
                     .map(|name| name.to_string_lossy().to_lowercase()),
+                ..Self::default()
             }
         }
 
@@ -1916,7 +2260,24 @@ mod sys {
             if !super::switches::own_binary() {
                 return Self::default();
             }
-            std::env::current_exe().map_or_else(|_| Self::default(), |exe| Self::of(&exe))
+            std::env::current_exe().map_or_else(
+                |_| Self::default(),
+                |exe| Self {
+                    // SAFETY: the pseudo-handle is always valid, with every
+                    // right.
+                    size: image_size(unsafe { GetCurrentProcess() }),
+                    ..Self::of(&exe)
+                },
+            )
+        }
+
+        /// Its file's identity, read once.
+        fn file(&self) -> Option<FileIdentity> {
+            *self.file.get_or_init(|| {
+                self.path
+                    .as_deref()
+                    .and_then(|path| FileIdentity::at(path).ok())
+            })
         }
     }
 
@@ -1924,23 +2285,47 @@ mod sys {
     /// tells it by `/proc` (where a process's name is its own and its
     /// file's another; on Windows a process's name is its file's): **the
     /// very file this binary is** (`own`: the same volume and index, so a
-    /// hard link of it under any name too), **or a file named as Cineris's
-    /// are,** `cineris.exe`, `cin.exe` or as this binary is, in any case, as
-    /// NTFS folds names. A renamed copy is another file, under another
-    /// name, and is not; a copy under one of those names, wherever it is
-    /// installed, is; and so is any other program given one of them, taken
-    /// for Cineris, which fails closed (a job of its name that cannot be
-    /// opened refuses). A file whose identity cannot be read is told by its
-    /// name alone.
+    /// hard link of it under any name too; [`same_file`]), **or a file
+    /// named as Cineris's are,** `cineris.exe`, `cin.exe` or as this binary
+    /// is, in any case, as NTFS folds names ([`named_as_cineris`]). A
+    /// renamed copy is another file, under another name, and is not; a copy
+    /// under one of those names, wherever it is installed, is; and so is any
+    /// other program given one of them, taken for Cineris, which fails
+    /// closed (a job of its name that cannot be opened refuses, and a
+    /// process of the line of parents is a harness). A file whose identity
+    /// cannot be read is told by its name alone.
     pub(super) fn cineris(own: &Own, image: &Path) -> bool {
-        let named = image.file_name().is_some_and(|name| {
+        named_as_cineris(own, image) || same_file(own, image, || None)
+    }
+
+    /// Whether the file at `image` is named as Cineris's are: `cineris.exe`,
+    /// `cin.exe` or as this binary is, in any case.
+    pub(super) fn named_as_cineris(own: &Own, image: &Path) -> bool {
+        image.file_name().is_some_and(|name| {
             let name = name.to_string_lossy().to_lowercase();
             name == "cineris.exe" || name == "cin.exe" || own.name.as_deref() == Some(name.as_str())
-        });
-        named
-            || own
-                .file
-                .is_some_and(|own| FileIdentity::at(image).ok() == Some(own))
+        })
+    }
+
+    /// Whether the file at `image` is the very file this binary is: the
+    /// same volume, and the same index on it. **A program whose image is of
+    /// another size than this binary's is another file,** and its file is
+    /// not opened (`size`, the program's image's size as its process's
+    /// mapping says, asked only where this binary's is known): opening each
+    /// program of a line of parents of 13 to read its identity cost a
+    /// process's first check about 0.25 ms on a hosted runner, and asking
+    /// each one's size about 9 µs (step 28's third pull request).
+    pub(super) fn same_file(own: &Own, image: &Path, size: impl FnOnce() -> Option<u32>) -> bool {
+        if own.path.is_none() {
+            return false;
+        }
+        if let Some(own) = own.size
+            && size().is_some_and(|theirs| theirs != own)
+        {
+            return false;
+        }
+        own.file()
+            .is_some_and(|own| FileIdentity::at(image).ok() == Some(own))
     }
 
     /// What the process a job of a harness's name that cannot be opened is
@@ -2629,20 +3014,23 @@ mod tests {
             (390, 390, "cmd.exe"),
             (500, 0, "cin.exe"),
         ]);
-        let describe = |pid: u32| match pid {
-            4 | 280 => Described::Closed,
+        let describe = |pid: u32, _judged: bool| match pid {
+            4 | 280 => Above::Ended,
             // Made after the process below it.
-            290 => Described::Is(Listed {
-                pid: 290,
-                parent: 280,
-                name: "cmd.exe".to_owned(),
-                made: 1_000,
-            }),
+            290 => Above::Is(
+                Listed {
+                    pid: 290,
+                    parent: 280,
+                    name: "cmd.exe".to_owned(),
+                    made: 1_000,
+                },
+                Runs::No,
+            ),
             _ => processes
                 .iter()
                 .find(|process| process.pid == pid)
                 .cloned()
-                .map_or(Described::Gone, Described::Is),
+                .map_or(Above::Ended, |process| Above::Is(process, Runs::No)),
         };
         let pids = |own| {
             parents(own, describe)
@@ -2657,15 +3045,131 @@ mod tests {
         assert_eq!(pids(500), [] as [u32; 0], "the idle process");
         assert_eq!(pids(9999), [] as [u32; 0], "itself gone");
         // A line that does not end is read to the bound.
-        let endless = |pid: u32| {
-            Described::Is(Listed {
-                pid,
-                parent: pid + 1,
-                name: "cmd.exe".to_owned(),
-                made: u64::from(u32::MAX - pid),
-            })
+        let endless = |pid: u32, _judged: bool| {
+            Above::Is(
+                Listed {
+                    pid,
+                    parent: pid + 1,
+                    name: "cmd.exe".to_owned(),
+                    made: u64::from(u32::MAX - pid),
+                },
+                Runs::No,
+            )
         };
         assert_eq!(parents(1, endless).len(), LINE_OF_PARENTS);
+    }
+
+    /// The line of parents whose jobs are asked first asks each process
+    /// above this one, and never this one, whether it is a harness by its
+    /// program and its arguments, keeps what each says, and goes no further
+    /// than the first that is: a process of Cineris that runs no session (an
+    /// editor's `cineris config edit`) and one whose program could not be
+    /// read do not end it.
+    #[test]
+    fn the_line_of_parents_ends_at_the_first_harness_by_its_program() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let describe = |pid: u32, judged: bool| {
+            asked.borrow_mut().push((pid, judged));
+            let runs = match pid {
+                90 => Runs::No,
+                80 => Runs::Unknown("unread".to_owned()),
+                70 | 60 => Runs::Sessions,
+                _ => Runs::No,
+            };
+            Above::Is(
+                Listed {
+                    pid,
+                    parent: pid - 10,
+                    name: String::new(),
+                    made: u64::from(pid),
+                },
+                runs,
+            )
+        };
+        let line = parents(100, describe);
+        assert_eq!(
+            line,
+            [
+                Parent {
+                    pid: 90,
+                    made: 90,
+                    runs: Runs::No
+                },
+                Parent {
+                    pid: 80,
+                    made: 80,
+                    runs: Runs::Unknown("unread".to_owned())
+                },
+                Parent {
+                    pid: 70,
+                    made: 70,
+                    runs: Runs::Sessions
+                },
+            ]
+        );
+        assert_eq!(
+            *asked.borrow(),
+            [(100, false), (90, true), (80, true), (70, true)],
+            "this process is not judged, and nothing past the harness is read"
+        );
+    }
+
+    /// The words of a Windows command line are read as a Rust program reads
+    /// its own (Cineris reads its subcommand so): the program's word ends
+    /// at a blank outside quotes, with no escapes; then quotes group,
+    /// backslashes before a quote are halved, an odd one makes it a
+    /// character, and two quotes inside quotes are one.
+    #[test]
+    fn the_words_of_a_windows_command_line_are_read_as_rust_reads_its_own() {
+        for (line, words) in [
+            (r"cin.exe ext list", &["cin.exe", "ext", "list"][..]),
+            (
+                r#""C:\Program Files\Cineris\cin.exe" ext"#,
+                &[r"C:\Program Files\Cineris\cin.exe", "ext"],
+            ),
+            (r"C:\x\cin.exe", &[r"C:\x\cin.exe"]),
+            (r#""C:\a b\"cin.exe ext"#, &[r"C:\a b\cin.exe", "ext"]),
+            ("cin \t  ext\t\tlist  ", &["cin", "ext", "list"]),
+            (r#"cin "ext""#, &["cin", "ext"]),
+            (r#"cin "e"xt"#, &["cin", "ext"]),
+            (r#"cin "ext list""#, &["cin", "ext list"]),
+            (r#"cin "" ext"#, &["cin", "", "ext"]),
+            (r#"cin """#, &["cin", ""]),
+            (r#"cin ""#, &["cin", ""]),
+            (r#"cin \"ext"#, &["cin", "\"ext"]),
+            (r#"cin \\"ext list""#, &["cin", r"\ext list"]),
+            (r#"cin \\\"ext"#, &["cin", "\\\"ext"]),
+            (r"cin a\\b \x", &["cin", r"a\\b", r"\x"]),
+            (r#"cin "a""b" c"#, &["cin", "a\"b", "c"]),
+            (r#"cin "a"""#, &["cin", "a\""]),
+            ("cin", &["cin"]),
+            ("", &[""]),
+        ] {
+            assert_eq!(command_words(line), words, "{line:?}");
+        }
+    }
+
+    /// A process is a harness by its program and its arguments, on both
+    /// systems: it is Cineris, and its first argument is not a subcommand
+    /// that runs no session; arguments that cannot be read count as running
+    /// them. Read from a Windows command line, a quoted subcommand is the
+    /// subcommand, and a word that only looks like one is not.
+    #[test]
+    fn a_harness_is_told_by_its_program_and_its_arguments() {
+        let read = |line: &str| Some(command_words(line));
+        let harness =
+            |cineris, line: Option<Vec<String>>| runs_cineris_sessions(cineris, line.as_deref());
+        assert!(harness(true, read("cin.exe")));
+        assert!(harness(true, read(r#""C:\x y\cineris.exe" -p "hello""#)));
+        assert!(harness(true, read("cin serve --stdio")));
+        assert!(harness(true, read(r#"cin "ext"x"#)), "the word is extx");
+        assert!(harness(true, read("cin EXT list")), "a subcommand's case");
+        assert!(harness(true, None), "arguments that cannot be read");
+        assert!(!harness(true, read("cin.exe ext list")));
+        assert!(!harness(true, read(r#""C:\x y\cin.exe" "config" edit"#)));
+        assert!(!harness(true, read("cin attach")));
+        assert!(!harness(false, read("cin.exe")), "another program");
+        assert!(!harness(false, None), "another program, arguments unread");
     }
 
     /// The Windows check's verdict, from jobs that each say a fixed thing:
@@ -2684,7 +3188,11 @@ mod tests {
                 .map_or(Job::None, |(_, job)| job.clone())
         };
         let under = judged(
-            parents.iter().map(|pid| (*pid, u64::from(*pid) * 10)),
+            parents.iter().map(|pid| Parent {
+                pid: *pid,
+                made: u64::from(*pid) * 10,
+                runs: Runs::No,
+            }),
             || {
                 listed
                     .map(|pids| {
@@ -2784,6 +3292,84 @@ mod tests {
         assert_eq!(
             verdict(&[], Ok(vec![1, 6]), jobs, Under::Nothing).1,
             Some(None)
+        );
+    }
+
+    /// A process of the line of parents that is a harness by its program
+    /// and its arguments makes this process a session's command whatever
+    /// its place in that harness's job: outside it (a command that left
+    /// it), with no job of its name (a job left nameless, a harness whose
+    /// mark failed), or a job that cannot be told; and before anything is
+    /// listed or any service asked. A job that holds this process, met
+    /// first, still says so. One that is no harness (another program, or
+    /// Cineris running a subcommand that runs no session) leaves the verdict
+    /// to the rest; one whose program could not be read is not known, and
+    /// refuses where nothing holds this process (the maintainers' rule for
+    /// the third part, with the reviewer).
+    #[test]
+    fn a_harness_on_the_line_of_parents_is_a_session_whatever_its_job() {
+        let parent = |pid: u32, runs: Runs| Parent {
+            pid,
+            made: u64::from(pid),
+            runs,
+        };
+        let asked = std::cell::Cell::new((false, false));
+        let verdict = |parents: Vec<Parent>, job: Job| {
+            asked.set((false, false));
+            judged(
+                parents,
+                || {
+                    asked.set((true, asked.get().1));
+                    Ok(Vec::new())
+                },
+                |_, _| job.clone(),
+                |_| {
+                    asked.set((asked.get().0, true));
+                    Under::Nothing
+                },
+            )
+        };
+        let harness = || vec![parent(20, Runs::No), parent(10, Runs::Sessions)];
+        for job in [
+            Job::Elsewhere,
+            Job::None,
+            Job::Unknown("cannot be told".to_owned()),
+        ] {
+            assert_eq!(
+                verdict(harness(), job.clone()),
+                Under::Session("process 10 runs Cineris's sessions".to_owned()),
+                "{job:?}"
+            );
+            assert_eq!(asked.get(), (false, false), "nothing listed or asked");
+        }
+        assert_eq!(
+            verdict(harness(), Job::Holds("in its job".to_owned())),
+            Under::Session("in its job".to_owned())
+        );
+        // No harness by its program: as its job says, then the rest.
+        let other = || vec![parent(20, Runs::No), parent(10, Runs::No)];
+        assert_eq!(verdict(other(), Job::Elsewhere), Under::Nothing);
+        assert_eq!(asked.get(), (true, true));
+        assert_eq!(verdict(other(), Job::None), Under::Nothing);
+        // A program that could not be read: not known, unless something
+        // holds this process, or a harness is met further up.
+        let unread = |above: Runs| {
+            vec![
+                parent(20, Runs::Unknown("unread".to_owned())),
+                parent(10, above),
+            ]
+        };
+        assert_eq!(
+            verdict(unread(Runs::No), Job::None),
+            Under::Unknown("unread".to_owned())
+        );
+        assert_eq!(
+            verdict(unread(Runs::Sessions), Job::None),
+            Under::Session("process 10 runs Cineris's sessions".to_owned())
+        );
+        assert_eq!(
+            verdict(unread(Runs::No), Job::Holds("in its job".to_owned())),
+            Under::Session("in its job".to_owned())
         );
     }
 

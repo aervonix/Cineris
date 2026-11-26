@@ -3,6 +3,7 @@ use crate::session::JOB_PREFIX;
 use crate::session::switches::{self, LISTING, OWN_BINARY};
 
 use windows_sys::Win32::System::JobObjects::SetInformationJobObject;
+use windows_sys::Win32::System::Threading::CREATE_BREAKAWAY_FROM_JOB;
 
 /// The right to change a job's limits (`winnt.h`'s
 /// `JOB_OBJECT_SET_ATTRIBUTES`).
@@ -632,6 +633,204 @@ fn sys_a_process_opened_is_described_as_the_list_says() {
         described(u32::MAX - 3),
         super::super::Described::Gone
     ));
+}
+
+/// `program` run with `arguments` and the creation flags `flags`, its
+/// standard input closed: its process's id, its exit code, and what it
+/// wrote. (Its own `cfg(test)`, as [`again`]'s.)
+#[cfg(test)]
+#[allow(
+    clippy::disallowed_types,
+    reason = "a test runs itself again, in a process of its own"
+)]
+fn started(program: &Path, arguments: &[&str], flags: u32) -> (u32, Option<i32>, String) {
+    use std::os::windows::process::CommandExt as _;
+    use std::process::Stdio;
+    let child = std::process::Command::new(program)
+        .args(arguments)
+        .creation_flags(flags)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let ran = child.wait_with_output().unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&ran.stdout),
+        String::from_utf8_lossy(&ran.stderr)
+    );
+    (pid, ran.status.code(), said)
+}
+
+/// This test's own name, by which it runs itself again.
+const OUTSIDE_TEST: &str = "session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program";
+
+/// The roles of that test: a harness whose job lets what it holds leave,
+/// and the check of the command it starts outside it.
+const LEAVING_HARNESS: &str = "cin-session-leaving-harness";
+const OUTSIDE_PROBE: &str = "cin-session-outside-probe";
+
+/// A command its harness started that is not in the harness's job is under
+/// a session's command by its line of parents, when the harness is Cineris
+/// that runs sessions, told by its program and its command line, whatever
+/// the job (the maintainers' rule for the third part, with the reviewer): a
+/// command can copy its harness's handles of the jobs it is in, let them let
+/// what they hold leave, and start the approving subcommand outside them.
+/// The harness here makes its job as `mark` makes it, named for its
+/// process and secured so, but letting what it holds leave, joins it, and
+/// starts the check outside it (`CREATE_BREAKAWAY_FROM_JOB`), which finds
+/// itself outside the job and asks where it stands. Run as `cin.exe` (a
+/// link to this test binary, whose first argument is the test runner's
+/// `--exact`), the harness makes its command a session's; as `cin.exe ext`,
+/// a subcommand that runs no session, and as this test binary, another
+/// program, it does not. Each role runs this test again in a process of
+/// its own.
+#[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test lays out the harness's program"
+)]
+fn sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program() {
+    let arguments: Vec<String> = std::env::args().collect();
+    let has = |role: &str| arguments.iter().any(|argument| argument == role);
+    if has(OUTSIDE_PROBE) {
+        let (own, _) = own_instance();
+        let super::super::Above::Is(itself, _) = lineage(own, false, &OnceCell::new()) else {
+            panic!("this process could not be described");
+        };
+        let harness = itself.parent;
+        let Opened::Made(made) = opened(harness) else {
+            panic!("its harness, process {harness}, could not be opened");
+        };
+        println!(
+            "outside: {:?}",
+            in_the_job_of(harness, made, &OnceCell::new())
+        );
+        println!("probed: {:?}", under_a_session());
+        return;
+    }
+    let exe = std::env::current_exe().unwrap();
+    if has(LEAVING_HARNESS) {
+        let security = OwnerOnly::new().unwrap();
+        let made = job(Some(&own_name()), Some(&security));
+        // SAFETY: the structure is plain data, for which all zeroes is
+        // valid.
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_BREAKAWAY_OK;
+        // SAFETY: `made` is open with every right, and the structure is as
+        // large as said.
+        let set = unsafe {
+            SetInformationJobObject(
+                made.as_raw_handle(),
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                u32::try_from(std::mem::size_of_val(&limits)).unwrap(),
+            )
+        };
+        assert_ne!(set, 0, "{}", io::Error::last_os_error());
+        join(&made);
+        let (_, code, said) = started(
+            &exe,
+            &["--exact", OUTSIDE_TEST, "--nocapture", OUTSIDE_PROBE],
+            CREATE_BREAKAWAY_FROM_JOB,
+        );
+        print!("{said}");
+        assert_eq!(code, Some(0), "{said}");
+        return;
+    }
+    let scratch = cineris_testkit::scratch::Scratch::outside(
+        "cineris-sandbox-session",
+        "sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program",
+    );
+    let cin = scratch.dir("cin").join("cin.exe");
+    if std::fs::hard_link(&exe, &cin).is_err() {
+        std::fs::copy(&exe, &cin).unwrap();
+    }
+    let role = ["--exact", OUTSIDE_TEST, "--nocapture", LEAVING_HARNESS];
+    for (program, first, refused, what) in [
+        (&cin, None, true, "Cineris that runs sessions"),
+        (&cin, Some("ext"), false, "Cineris running `ext`"),
+        (&exe, None, false, "another program"),
+    ] {
+        let mut words: Vec<&str> = first.into_iter().collect();
+        words.extend(role);
+        let (harness, code, said) = started(program, &words, 0);
+        assert_eq!(code, Some(0), "{what}: {said}");
+        assert!(said.contains("outside: Elsewhere"), "{what}: {said}");
+        let probed = if refused {
+            format!("probed: Session(\"process {harness} runs Cineris's sessions\")")
+        } else {
+            "probed: Nothing".to_owned()
+        };
+        assert!(said.contains(&probed), "{what}: {said}");
+    }
+}
+
+/// A program's image's size, as its process's mapping says, is its file's;
+/// the path the system keeps for a process's program (`\Device\…`) and its
+/// command line are read as they are, the command line's words as the
+/// process read its own; and the very file this binary is, reached through
+/// the root of the system's namespace by that path, is told by its
+/// identity. **A program of another size than this binary's is not its
+/// file,** whose identity is then not read, while one of its size, or
+/// whose size is not known, is judged by its identity: the same file under
+/// another name is this binary, a copy is not.
+#[test]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "the test lays out the files it judges"
+)]
+fn sys_a_programs_size_decides_whether_its_file_is_opened() {
+    // SAFETY: the pseudo-handle is always valid, with every right.
+    let own = unsafe { GetCurrentProcess() };
+    let exe = std::env::current_exe().unwrap();
+    let size = image_size(own).expect("this process's image's size could be asked");
+    assert_eq!(u64::from(size), std::fs::metadata(&exe).unwrap().len());
+    let image = process_text(own, ProcessImageFileName).unwrap();
+    let name = exe.file_name().unwrap().to_string_lossy().to_lowercase();
+    assert!(
+        image.starts_with(r"\Device\") && image.to_lowercase().ends_with(&name),
+        "{image}"
+    );
+    let line = process_text(own, ProcessCommandLineInformation).unwrap();
+    let words = crate::session::command_words(&line);
+    let read: Vec<String> = std::env::args().skip(1).collect();
+    assert_eq!(words[1..], read, "{line}");
+    // This binary, by the path the system keeps for it.
+    let this = Own {
+        size: Some(size),
+        ..Own::of(&exe)
+    };
+    let kept = PathBuf::from(format!(r"\\?\GLOBALROOT{image}"));
+    assert!(same_file(&this, &kept, || Some(size)), "{}", kept.display());
+    // The same file under another name, and a copy, in a folder of their
+    // own (on the scratch's volume).
+    let scratch = cineris_testkit::scratch::Scratch::outside(
+        "cineris-sandbox-session",
+        "sys_a_programs_size_decides_whether_its_file_is_opened",
+    );
+    let copied = scratch.dir("copied").join("copied.exe");
+    std::fs::copy(&exe, &copied).unwrap();
+    let linked = scratch.dir("linked").join("linked.exe");
+    std::fs::hard_link(&copied, &linked).unwrap();
+    let again = scratch.dir("again").join("again.exe");
+    std::fs::copy(&exe, &again).unwrap();
+    let of_copied = Own {
+        size: Some(size),
+        ..Own::of(&copied)
+    };
+    assert!(same_file(&of_copied, &linked, || Some(size)), "its size");
+    assert!(same_file(&of_copied, &linked, || None), "no size read");
+    assert!(
+        !same_file(&of_copied, &linked, || Some(size + 1)),
+        "another size: its file is not opened"
+    );
+    assert!(!same_file(&of_copied, &again, || Some(size)), "a copy");
+    // A binary whose own size is not known asks no other's.
+    assert!(same_file(&Own::of(&copied), &linked, || Some(size + 1)));
+    assert!(!same_file(&Own::default(), &linked, || Some(size)));
 }
 
 /// A nul-terminated wide text a call allocated, read and freed.

@@ -1659,7 +1659,7 @@ caught-by:
 rule: On Windows a process opened to read its line of parents is named as the system's list names it, in lower case, so that the interpreters and the services' hosts are told as before.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-in: described_as
+in: described
 find: let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
 replace: let name = path.rsplit('\\').next().unwrap_or(&path).to_owned();
 caught-by:
@@ -1718,17 +1718,18 @@ caught-by:
 rule: On Windows the jobs of the processes of the line of parents are asked first, each by its name, before anything is listed: a session's command's own harness is found there whatever a listing misses.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: let parents = super::parents(own, lineage);
-replace: let parents = super::parents(own, lineage).into_iter().take(0).collect::<Vec<_>>();
+find: let parents = super::parents(own, |pid, judged| lineage(pid, judged, &binary));
+replace: let parents = super::parents(own, |pid, judged| lineage(pid, judged, &binary)).into_iter().take(0).collect::<Vec<_>>();
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_harness_on_the_line_of_parents_is_found_with_nothing_listed
+    cineris-sandbox session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program
 
 [break] session-line-of-parents-stops-at-other-programs
 rule: The line of parents whose jobs are asked first is read through any program, not only the interpreters a service's start is followed through: a harness's command may run under `make` or a test runner.
 file: crates/cineris-sandbox/src/session.rs
 in: parents
-find: line.push(process.clone());
-replace: if !passes_through(&process.name) { break; } line.push(process.clone());
+find: let harness = runs == Runs::Sessions;
+replace: if !passes_through(&process.name) { break; } let harness = runs == Runs::Sessions;
 caught-by:
     cineris-sandbox session::tests::the_line_of_parents_is_read_through_any_program_to_its_end
 
@@ -1790,9 +1791,9 @@ caught-by:
 rule: On Windows a program is Cineris by this very file, its volume and its index, or by its file's name: a renamed copy of the binary is another file, and is not.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-in: cineris
-find: own.file.is_some_and(|own| FileIdentity::at(image).ok() == Some(own))
-replace: own.file.is_some_and(|own| FileIdentity::at(image).is_ok())
+in: same_file
+find: own.file().is_some_and(|own| FileIdentity::at(image).ok() == Some(own))
+replace: own.file().is_some_and(|own| FileIdentity::at(image).is_ok())
 caught-by:
     cineris-sandbox session::sys::tests::sys_cineris_is_told_by_its_file_or_by_its_name
 
@@ -1800,11 +1801,12 @@ caught-by:
 rule: On Windows a program whose file is named `cineris.exe` or `cin.exe`, in any case and wherever it is installed, is Cineris.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-in: cineris
+in: named_as_cineris
 find: name == "cineris.exe" || name == "cin.exe" ||
 replace: false ||
 caught-by:
     cineris-sandbox session::sys::tests::sys_cineris_is_told_by_its_file_or_by_its_name
+    cineris-sandbox session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program
 
 [break] unmarked-headless-run-not-held
 rule: A headless run whose mark of its sessions' commands failed holds its session at `supervised` at most, whatever its configuration says.
@@ -1980,3 +1982,66 @@ find: std::path::Component::Normal(name) => folder = folder.folder(name)?,
 replace: std::path::Component::Normal(_) => folder = Self::open_following(&anchor.join(below))?,
 caught-by:
     cineris-sandbox unfollowed::tests::a_folder_below_a_place_follows_no_link_on_the_way_and_is_known_by_its_identity
+
+# The maintainers' rule for the third part, with the reviewer: on Windows a
+# process of the line of parents that is a harness by its program and its
+# arguments makes the process under it a session's command, whatever its
+# place in that harness's job.
+
+[break] session-ancestor-harness-not-decisive
+rule: A process of the line of parents that is a harness by its program and its arguments makes the process under it a session's command, whatever its place in that harness's job: outside it, with no job of its name, or one that cannot be told.
+file: crates/cineris-sandbox/src/session.rs
+in: judged
+find: Runs::Sessions => { return Under::Session(format!("process {pid} runs Cineris's sessions")); }
+replace: Runs::Sessions => {}
+caught-by:
+    cineris-sandbox session::tests::a_harness_on_the_line_of_parents_is_a_session_whatever_its_job
+
+[break] session-windows-ancestor-asked-membership-only
+rule: On Windows each process of the line of parents above this one is asked whether it is a harness by its program and its arguments, and not only whether this process is in its job: a command its harness started outside its job is refused.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: lineage
+find: let runs = if judged {
+replace: let runs = if false && judged {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program
+
+[break] session-unread-arguments-run-no-session
+rule: A process of Cineris whose arguments cannot be read counts as running sessions, failing closed.
+file: crates/cineris-sandbox/src/session.rs
+in: runs_cineris_sessions
+find: cineris && arguments.is_none_or(runs_sessions)
+replace: cineris && arguments.is_some_and(runs_sessions)
+caught-by:
+    cineris-sandbox session::tests::a_harness_is_told_by_its_program_and_its_arguments
+
+[break] session-windows-harness-arguments-ignored
+rule: On Windows a process of the line of parents that is Cineris is a harness only when its command line is not a subcommand that runs no session: one running `cineris ext` or `cineris config edit` is not.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: by_program
+find: super::runs_cineris_sessions(cineris, arguments.as_deref())
+replace: super::runs_cineris_sessions(cineris, arguments.as_deref().filter(|_| false))
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_command_outside_its_harnesss_job_is_refused_by_its_harnesss_program
+
+[break] session-windows-same-size-not-opened
+rule: On Windows a program whose image is of this binary's size is judged by its file's identity, so that a hard link of this binary under another name is Cineris; only one of another size is passed over without opening its file.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: same_file
+find: size().is_some_and(|theirs| theirs != own)
+replace: size().is_some_and(|theirs| theirs == own)
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_programs_size_decides_whether_its_file_is_opened
+
+[break] session-quoted-subcommand-not-read
+rule: A Windows command line's quoted word is read without its quotes, as the program reads its own: `cin "config" edit` runs no session.
+file: crates/cineris-sandbox/src/session.rs
+in: command_words
+find: '"' => quoted = true,
+replace: '"' => word.push('"'),
+caught-by:
+    cineris-sandbox session::tests::the_words_of_a_windows_command_line_are_read_as_rust_reads_its_own
+    cineris-sandbox session::tests::a_harness_is_told_by_its_program_and_its_arguments
