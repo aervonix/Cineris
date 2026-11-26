@@ -8377,6 +8377,7 @@ caught-by:
 [break] a-calls-end-is-told-before-it-is-marked
 rule: A call is marked ended before its end is told, so that a host call of it still on its way is not served, and its time stops nothing that runs after it.
 file: crates/cineris-ext/src/engine/thread.rs
+occurrence: 2
 find: claim.store(ENDED, Ordering::SeqCst);
 replace: let _ = ENDED;
 caught-by:

@@ -391,9 +391,9 @@ fn read_unfollowed_into(
     let listed = folder
         .entries(MAX_ENTRIES.saturating_sub(*entries_seen))
         .map_err(|error| FolderError::Unreadable {
-        path: prefix.to_owned(),
-        reason: error.to_string(),
-    })?;
+            path: prefix.to_owned(),
+            reason: error.to_string(),
+        })?;
     let mut names: Vec<(String, Kind)> = Vec::new();
     for entry in listed {
         *entries_seen += 1;
@@ -651,8 +651,24 @@ mod tests {
             assert_eq!(unportable(fine), None, "{fine}");
         }
         for refused in [
-            "x.", "x ", "con", "CON.txt", "nul", "aux.js", "com1", "LPT9", "conout$", "CONIN$.x",
-            "com\u{b9}", "a:b", "a?", "a*", "a|b", "a\"b", "a<b", "a\u{1}b",
+            "x.",
+            "x ",
+            "con",
+            "CON.txt",
+            "nul",
+            "aux.js",
+            "com1",
+            "LPT9",
+            "conout$",
+            "CONIN$.x",
+            "com\u{b9}",
+            "a:b",
+            "a?",
+            "a*",
+            "a|b",
+            "a\"b",
+            "a<b",
+            "a\u{1}b",
         ] {
             assert!(unportable(refused).is_some(), "{refused:?}");
         }
@@ -678,7 +694,8 @@ mod tests {
     #[test]
     #[ignore = "a measurement: `cargo xtask perf -p cineris-ext`"]
     fn perf_a_folder_read_through_handles_and_by_paths() {
-        let dir = std::env::temp_dir().join(format!("cineris-ext-perf-read-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("cineris-ext-perf-read-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let ext = dir.join("tracker");
         fs::create_dir_all(ext.join("lib")).unwrap();
