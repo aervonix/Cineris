@@ -744,6 +744,16 @@ fn sys_a_hook_planted_beside_a_folder_no_look_can_list_is_put_back() {
 /// names is recorded, taken for made and removed, so the next `git commit`
 /// runs nothing of it (found by the narrow check of the third security
 /// fix, where both turns ended with no note).
+///
+/// `tools/pre-commit` is first watched by the second command's look after,
+/// through the link, and that look names it only when its change time is
+/// at or after the look before began, less a slack: whether a file the
+/// first command wrote passes that depends on the clock and the file
+/// system, and on runners it has. So the order is made: its change
+/// time is moved while the second command waits to start, its look before
+/// taken, and the file is always named, as one first watched during the
+/// command, to be put back by hand. It is never taken for made: nothing of
+/// it is removed or written over.
 #[test]
 fn sys_a_hooks_folder_made_a_link_to_a_planted_hook_is_taken_away() {
     if !enforcing_here() {
@@ -769,8 +779,13 @@ fn sys_a_hooks_folder_made_a_link_to_a_planted_hook_is_taken_away() {
     world
         .provider
         .push(calls(&[("c2", "shell", json!({"command": "sh two.sh"}))]));
+    world.provider.push(says("Two."));
     let core = world.core_with(|options| options.launcher = Some(launcher()));
-    let shown = world.run(async {
+    // The first command passes; the second waits there, its look before
+    // taken.
+    let starts = cineris_testkit::Hold::new(cineris_core::BEFORE_THE_COMMAND_STARTS).skipping(1);
+    let hook = world.workspace.join("tools/pre-commit");
+    let (shown, ended) = world.run(async {
         let front = Front::start_as(
             &world,
             &core,
@@ -780,17 +795,43 @@ fn sys_a_hooks_folder_made_a_link_to_a_planted_hook_is_taken_away() {
         .await
         .expect("the session starts");
         front.turn("one").await;
-        front.turn("two").await;
+        let mut two = std::pin::pin!(front.turn("two"));
+        starts.drive_until_reached(two.as_mut()).await;
+        // Its mode set as it is: only its change time moves.
+        let mode = std::fs::metadata(&hook).unwrap().permissions();
+        std::fs::set_permissions(&hook, mode).unwrap();
+        starts.release();
+        let ended = two.await;
         let shown: Vec<String> = front.results().iter().map(|one| one.2.clone()).collect();
         front.close().await;
-        shown
+        (shown, ended)
     });
+    // The link is gone, so git's hook name leads nowhere.
     assert!(
         std::fs::symlink_metadata(world.workspace.join(".githooks")).is_err(),
         "{shown:#?}"
     );
     assert!(
-        shown[1].contains("`.githooks` (created)") && shown[1].contains("They were put back"),
+        !world.workspace.join(".githooks/pre-commit").exists(),
+        "{shown:#?}"
+    );
+    // The turn stopped at the command: the model was not asked again.
+    assert_eq!(
+        ended.outcome,
+        cineris_protocol::event::TurnOutcome::Denied,
+        "{shown:#?}"
+    );
+    assert_eq!(world.provider.remaining(), 1, "{shown:#?}");
+    // The link is named as put back, and the hook as to be put back by
+    // hand: never taken for made.
+    assert!(
+        shown[1].contains("These were put back as they were before it: `.githooks` (created).")
+            && shown[1].contains("must be put back by hand: `tools/pre-commit` (modified)."),
+        "{shown:#?}"
+    );
+    assert_eq!(
+        world.read("tools/pre-commit").as_deref(),
+        Some("#!/bin/sh\nevil\n"),
         "{shown:#?}"
     );
 }
