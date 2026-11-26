@@ -15,8 +15,8 @@ use std::sync::Arc;
 use cineris_base::in_code;
 use cineris_config::Env;
 use cineris_core::{
-    Added, Core, CoreOptions, DisableOutcome, ExtensionListed, ExtensionSource,
-    ExtensionsListing, OpError, Project, Removal, Removed, ToAdd, TokioTimer,
+    Added, Core, CoreOptions, DisableOutcome, ExtensionListed, ExtensionSource, ExtensionsListing,
+    OpError, Project, Removal, Removed, ToAdd, TokioTimer,
 };
 use cineris_protocol::ErrorKind;
 
@@ -56,7 +56,10 @@ fn core(name: &str) -> Result<Core, Done> {
 /// The project of the working directory, as a session's would be.
 fn project(name: &str, core: &Core) -> Result<Project, Done> {
     let here = crate::workspace::Here::now().map_err(|error| {
-        say(name, &format!("the working directory could not be read: {error}"));
+        say(
+            name,
+            &format!("the working directory could not be read: {error}"),
+        );
         exit::USAGE
     })?;
     for said in here.passed_over_said() {
@@ -185,9 +188,7 @@ pub(crate) fn ext(command: ExtCommand, name: &'static str) -> Done {
                         say(name, &format!("the runtime did not start: {error}"));
                         exit::INTERNAL
                     })?;
-                let added = runtime
-                    .block_on(core.add_extension(to_add))
-                    .map_err(fail)?;
+                let added = runtime.block_on(core.add_extension(to_add)).map_err(fail)?;
                 out(&added_text(&added));
                 Ok(exit::COMPLETED)
             }
@@ -306,17 +307,17 @@ fn inspected_text(one: &ExtensionListed) -> String {
     ));
     text.push_str(&format!(
         "  pin:      {}\n",
-        one.pin.as_ref().map_or_else(
-            || "none".to_owned(),
-            |(hash, at)| format!("{hash}, {at}")
-        )
+        one.pin
+            .as_ref()
+            .map_or_else(|| "none".to_owned(), |(hash, at)| format!("{hash}, {at}"))
     ));
     text.push_str(&format!("  standing: {}\n", one.standing.words()));
     text.push_str(&format!(
         "  registered: {}\n",
-        one.registered
-            .as_ref()
-            .map_or_else(|| "not in the registration cache".to_owned(), registered_line)
+        one.registered.as_ref().map_or_else(
+            || "not in the registration cache".to_owned(),
+            registered_line
+        )
     ));
     if let Some(words) = &one.words {
         text.push_str("  What it may do:\n");
@@ -462,7 +463,9 @@ fn disabled_text(outcome: &DisableOutcome, wanted: &str, name: &str) -> (String,
             let mut text = if *written {
                 format!("Turned `{code}` off: {key} in `{file}`.\n")
             } else {
-                format!("Your configuration turns `{code}` off already ({key} in `{file}`): nothing was written.\n")
+                format!(
+                    "Your configuration turns `{code}` off already ({key} in `{file}`): nothing was written.\n"
+                )
             };
             if *made {
                 text.push_str(&format!(

@@ -221,13 +221,19 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
             .filter(|entry| entry.name == name)
             .map(Registered::of)
     };
-    for (source, discovered) in [(Source::User, judging.user), (Source::Project, judging.project)]
-    {
+    for (source, discovered) in [
+        (Source::User, judging.user),
+        (Source::Project, judging.project),
+    ] {
         let Some(discovered) = discovered else {
             continue;
         };
         let mut seen: Vec<String> = Vec::new();
-        for found in discovered.found.iter().filter(|found| found.source == source) {
+        for found in discovered
+            .found
+            .iter()
+            .filter(|found| found.source == source)
+        {
             let name = found.manifest.name.clone();
             let definition = definition(found);
             let pin = match (source, &judging.pins, &judging.trust) {
@@ -258,9 +264,7 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
                     "a folder of your own extensions has its name, and the name is yours"
                         .to_owned(),
                 ),
-                Source::Project if !judging.project_trusted => {
-                    ExtensionStanding::ProjectNotTrusted
-                }
+                Source::Project if !judging.project_trusted => ExtensionStanding::ProjectNotTrusted,
                 Source::Project => match &judging.trust {
                     Err(why) => ExtensionStanding::Unjudged(why.clone()),
                     Ok(_) if judging.for_the_run.contains(&definition) => {
@@ -283,7 +287,11 @@ pub(crate) fn judged(judging: &Judging<'_>) -> Vec<ExtensionListed> {
             });
             seen.push(name);
         }
-        for left in discovered.left_out.iter().filter(|left| left.source == source) {
+        for left in discovered
+            .left_out
+            .iter()
+            .filter(|left| left.source == source)
+        {
             let Some(name) = left_out_name(discovered, &left.folder) else {
                 continue;
             };
@@ -635,8 +643,7 @@ impl Core {
         let state = self.state_dir();
         let mut listing = ExtensionsListing::default();
         let home = options.env.home();
-        let file_shown =
-            |path: &Path| in_code(&shown_path(path, home.as_deref())).into_owned();
+        let file_shown = |path: &Path| in_code(&shown_path(path, home.as_deref())).into_owned();
         let pins_read = match &state {
             Some(state) => PinStore::new(state.pins_file(), Arc::clone(&options.clock))
                 .pins()
@@ -733,7 +740,12 @@ impl Core {
         listing.skills_left_out = skills
             .left_out
             .iter()
-            .map(|left| (left.path.clone(), visible(&left.reason.to_string()).into_owned()))
+            .map(|left| {
+                (
+                    left.path.clone(),
+                    visible(&left.reason.to_string()).into_owned(),
+                )
+            })
             .collect();
         Ok(listing)
     }
@@ -751,7 +763,10 @@ impl Core {
     pub fn extension_to_add(&self, project: &Project, path: &Path) -> Result<ToAdd, OpError> {
         let usage = |message: String| error(ErrorKind::Usage, "extension_refused", message);
         let config = self.config_dir().ok_or_else(|| {
-            usage("No configuration directory could be worked out: the home directory is not known.".to_owned())
+            usage(
+                "No configuration directory could be worked out: the home directory is not known."
+                    .to_owned(),
+            )
         })?;
         let source_shown = self.shown(path);
         let (read, _) = Snapshot::read_unfollowed(path);
@@ -762,7 +777,9 @@ impl Core {
                 }
                 other => visible(&other.to_string()).into_owned(),
             };
-            usage(format!("`{source_shown}` cannot be added as an extension: {why}"))
+            usage(format!(
+                "`{source_shown}` cannot be added as an extension: {why}"
+            ))
         })?;
         let manifest = Manifest::of(&snapshot).map_err(|failure| {
             usage(format!(
@@ -807,7 +824,9 @@ impl Core {
         let (replaces, unchanged) = match std::fs::symlink_metadata(&target) {
             Err(_) => (None, false),
             Ok(found) if found.file_type().is_symlink() => (
-                Some(format!("`{destination}`, which is a link (it is unlinked, not followed)")),
+                Some(format!(
+                    "`{destination}`, which is a link (it is unlinked, not followed)"
+                )),
                 false,
             ),
             Ok(found) if found.is_dir() => match Snapshot::read_unfollowed(&target).0 {
@@ -839,7 +858,10 @@ impl Core {
                  it again.",
                 super::found::with_paths_shown(
                     &failure.to_string(),
-                    &[&self.state().map(|state| state.pins_file()).unwrap_or_default()],
+                    &[&self
+                        .state()
+                        .map(|state| state.pins_file())
+                        .unwrap_or_default()],
                     self.inner.options.env.home().as_deref()
                 )
             ))
@@ -851,11 +873,9 @@ impl Core {
             .map(|pin| (pin.hash, pin.at.as_str().to_owned()));
         let mut notes = Vec::new();
         let projects = discover::names(&[Root::project(&resolver.root().to_fs_path())], &resolver);
-        if let Some((_, theirs)) = projects
-            .names
-            .iter()
-            .find(|(source, theirs)| *source == Source::Project && theirs.eq_ignore_ascii_case(&name))
-        {
+        if let Some((_, theirs)) = projects.names.iter().find(|(source, theirs)| {
+            *source == Source::Project && theirs.eq_ignore_ascii_case(&name)
+        }) {
             notes.push(format!(
                 "This project has an extension of its own named `{}`: once yours is added, the \
                  project's is not used, since the name is yours.",
@@ -1025,10 +1045,11 @@ impl Core {
             .and_then(|store| store.pins().ok())
             .is_some_and(|pins| pins.get(&TrustResourceKind::Extension, name).is_some());
         if !mine {
-            let theirs = discover::names(&[Root::project(&resolver.root().to_fs_path())], &resolver)
-                .names
-                .iter()
-                .any(|(source, found)| *source == Source::Project && found == name);
+            let theirs =
+                discover::names(&[Root::project(&resolver.root().to_fs_path())], &resolver)
+                    .names
+                    .iter()
+                    .any(|(source, found)| *source == Source::Project && found == name);
             if theirs {
                 return Ok(DisableOutcome::Project);
             }
@@ -1038,7 +1059,10 @@ impl Core {
             )));
         }
         let file = self.user_config_file().ok_or_else(|| {
-            usage("Your configuration file could not be worked out: the home directory is not known.".to_owned())
+            usage(
+                "Your configuration file could not be worked out: the home directory is not known."
+                    .to_owned(),
+            )
         })?;
         let shown = self.shown(&file);
         let done = cineris_config::write::disable_extension(&file, name).map_err(|failure| {
@@ -1086,7 +1110,10 @@ impl Core {
             return Err(usage(format!("`{code}` cannot be removed: {why}.")));
         }
         let config = self.config_dir().ok_or_else(|| {
-            usage("No configuration directory could be worked out: the home directory is not known.".to_owned())
+            usage(
+                "No configuration directory could be worked out: the home directory is not known."
+                    .to_owned(),
+            )
         })?;
         let root = config.join(discover::USER_FOLDER);
         let target = root.join(name);

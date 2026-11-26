@@ -1248,7 +1248,10 @@ fn a_removed_extensions_gates_hold_until_it_is_turned_off() {
             probe.standing,
             Some(cineris_protocol::methods::ExtensionStanding::Gone)
         );
-        assert_eq!(probe.state, cineris_protocol::methods::ComponentState::Failed);
+        assert_eq!(
+            probe.state,
+            cineris_protocol::methods::ComponentState::Failed
+        );
         assert_eq!(probe.gates.len(), 1, "{status:?}");
         assert_eq!(probe.gates[0].hook, "probe/hook.tool.before");
         assert!(probe.gates[0].why.contains(gone), "{status:?}");

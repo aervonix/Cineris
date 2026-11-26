@@ -272,11 +272,15 @@ pub fn disable_extension(path: &Path, name: &str) -> Result<Disabled, WriteError
         owner_only: made,
         ..cineris_base::AtomicWriteOptions::default()
     };
-    cineris_base::write_atomic(path, text.as_bytes(), &options, &cineris_base::SystemClock::new()).map_err(|error| {
-        WriteError::Failed {
-            path: shown.clone(),
-            error: error.to_string(),
-        }
+    cineris_base::write_atomic(
+        path,
+        text.as_bytes(),
+        &options,
+        &cineris_base::SystemClock::new(),
+    )
+    .map_err(|error| WriteError::Failed {
+        path: shown.clone(),
+        error: error.to_string(),
     })?;
     match std::fs::read_to_string(path) {
         Ok(back) if back == text => Ok(Disabled::Written { made }),
@@ -310,13 +314,19 @@ mod tests {
         let old = "# mine\nmodel.main = \"m\" # kept\n\n[permissions]\nmode = \"supervised\"";
         let text = disabled_text(old, "tracker").unwrap().unwrap();
         assert!(text.starts_with(old), "{text}");
-        assert!(text.ends_with("\n\n[extensions.tracker]\nenabled = false\n"), "{text}");
+        assert!(
+            text.ends_with("\n\n[extensions.tracker]\nenabled = false\n"),
+            "{text}"
+        );
         assert_eq!(enabled(&text, "tracker"), Some(false));
         let dotted = disabled_text(old, "acme.lint").unwrap().unwrap();
         assert!(dotted.contains("[extensions.\"acme.lint\"]\n"), "{dotted}");
         assert_eq!(enabled(&dotted, "acme.lint"), Some(false));
         let table: Table = dotted.parse().unwrap();
-        assert!(table["extensions"].get("acme").is_none(), "one key, not a table");
+        assert!(
+            table["extensions"].get("acme").is_none(),
+            "one key, not a table"
+        );
         // An empty file, and one with other extensions' entries.
         assert_eq!(
             disabled_text("", "x").unwrap().unwrap(),
@@ -333,7 +343,10 @@ mod tests {
             text,
             "[extensions.x]\nenabled  =  false # back on\n\n[model]\nmain = \"m\"\n"
         );
-        assert_eq!(disabled_text("[extensions.x]\nenabled = false\n", "x").unwrap(), None);
+        assert_eq!(
+            disabled_text("[extensions.x]\nenabled = false\n", "x").unwrap(),
+            None
+        );
         for refused in [
             "[extensions.x]\n",
             "extensions = { x = { enabled = true } }\n",

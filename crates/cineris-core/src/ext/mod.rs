@@ -32,7 +32,6 @@
 #[cfg(feature = "scripts")]
 mod exec;
 pub(crate) mod found;
-pub mod manage;
 #[cfg(feature = "scripts")]
 mod hook_command;
 #[cfg(feature = "scripts")]
@@ -40,6 +39,7 @@ mod hook_points;
 pub(crate) mod hooks;
 #[cfg(feature = "scripts")]
 mod host;
+pub mod manage;
 #[cfg(feature = "scripts")]
 mod prompt;
 #[cfg(feature = "scripts")]

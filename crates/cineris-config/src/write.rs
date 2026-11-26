@@ -56,10 +56,10 @@ use crate::import::{ImportedServer, Launch, MAX_SERVERS, settable_name};
 
 pub mod extension;
 
-pub use extension::{Disabled, disable_extension};
 use crate::layer::LayerKind;
 use crate::schema::{CONFIG_VERSION, table_of};
 use crate::validate::{Checked, validate};
+pub use extension::{Disabled, disable_extension};
 
 /// What the first run chose. `None` for a step skipped: its comment then
 /// says how to do it later.

@@ -40,12 +40,12 @@ use cineris_protocol::item::NoticeSource;
 use cineris_protocol::jsonrpc::RequestId;
 use cineris_protocol::lease::{Lease, Level, Rule};
 use cineris_protocol::methods::{
-    ApprovalScope, ClientRole, ConfigGetResult, Empty, InitializeResult,
-    McpStatusResult, ModelsListResult, Op, OpResult, PROTOCOL_VERSION, PeerInfo,
-    PermissionsListResult, PlanResult, QuestionRequest, QuestionResponse,
-    SUPPORTED_PROTOCOL_VERSIONS, ServerCapabilities, ServerRequest, ServerResponse,
-    SessionForkResult, SessionListResult, SessionReadResult, SessionResult, TrustRequest,
-    TrustResponse, UsageGetResult, WorkspaceFilesResult, negotiate_version,
+    ApprovalScope, ClientRole, ConfigGetResult, Empty, InitializeResult, McpStatusResult,
+    ModelsListResult, Op, OpResult, PROTOCOL_VERSION, PeerInfo, PermissionsListResult, PlanResult,
+    QuestionRequest, QuestionResponse, SUPPORTED_PROTOCOL_VERSIONS, ServerCapabilities,
+    ServerRequest, ServerResponse, SessionForkResult, SessionListResult, SessionReadResult,
+    SessionResult, TrustRequest, TrustResponse, UsageGetResult, WorkspaceFilesResult,
+    negotiate_version,
 };
 use cineris_protocol::model::ModelRole;
 use cineris_protocol::session::{SandboxStatus, SessionSettings, SessionSummary};

@@ -460,7 +460,8 @@ mod tests {
     /// add`).
     #[test]
     fn the_read_through_handles_is_the_plain_reads_and_follows_no_link() {
-        let dir = std::env::temp_dir().join(format!("cineris-ext-unfollowed-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("cineris-ext-unfollowed-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let ext = dir.join("ext");
         fs::create_dir_all(ext.join("lib/deep")).unwrap();
@@ -478,7 +479,10 @@ mod tests {
         );
         fs::write(ext.join("lib/big.bin"), vec![b'x'; 2 * 1024 * 1024]).unwrap();
         let (read, bytes) = Snapshot::read_unfollowed(&ext);
-        assert_eq!(read, Err(FolderError::FileTooLarge("lib/big.bin".to_owned())));
+        assert_eq!(
+            read,
+            Err(FolderError::FileTooLarge("lib/big.bin".to_owned()))
+        );
         assert!(bytes < 1024, "refused by its length, unread: {bytes}");
         fs::remove_file(ext.join("lib/big.bin")).unwrap();
         assert_eq!(
@@ -510,7 +514,10 @@ mod tests {
                 Snapshot::read_unfollowed(&dir.join("named")).0,
                 Err(FolderError::Link(String::new()))
             );
-            assert!(Snapshot::read(&dir.join("named")).is_ok(), "the plain read follows it");
+            assert!(
+                Snapshot::read(&dir.join("named")).is_ok(),
+                "the plain read follows it"
+            );
         }
         let _ = fs::remove_dir_all(&dir);
     }
