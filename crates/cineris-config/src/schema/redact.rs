@@ -11,11 +11,25 @@
 //!    text as `[redacted]`. The typed settings keep it as a `Secret`.
 //! 2. **In a reserved section**, whose keys a later step declares and which
 //!    holds anything until then, a value is redacted whole when a key on
-//!    its way names a secret by its look: `env` or `headers`, or a name
-//!    with `token`, `secret`, `password`, `auth` or `credential` in it, or
-//!    a part that is `key` or ends in `apikey` (`api_key`, `X-Api-Key`).
-//!    It is a guess, made on the safe side, and the step that declares the
-//!    section replaces it with the first rule.
+//!    its way names a secret by its look: `env` or `headers`; a name a word
+//!    of which is a credential's by the first run's import's one list
+//!    ([`crate::import::SECRET_ENDINGS`] and
+//!    [`SECRET_WORDS`](crate::import::SECRET_WORDS): `api_key`, `X-Api-Key`,
+//!    `apiKey`, `client_secret`, `passphrase`, `DB_PASS`, `session`), or
+//!    one that holds a word of that list of four letters or more anywhere
+//!    in it (`authToken`, `oauth`, `credentials`), or a part that is `key`
+//!    or ends in `apikey`. It is a guess, made on the safe side, and the
+//!    step that declares the section replaces it with the first rule.
+//!    **A command line in it is shown as the first run's import shows it**
+//!    (since the step 25 fixes, the owner's choice): wherever a reserved
+//!    section holds `args` as a list, `url` or `command` as text (an MCP
+//!    server's, `mcp.servers.<name>.args`), each is shown by the import's
+//!    own rule ([`crate::import`]): a value whose name says it is a
+//!    credential (`--api-key …`, `API_SECRET=…`, `?token=…`), what the
+//!    secret filter's formats know, and an address's user part, with or
+//!    without its scheme, masked, and an argument that is not text masked
+//!    whole. So a token the first run drew `[redacted]`, and imported as it
+//!    is, is `[redacted]` in `config show`, `config/get` and `/config` too.
 //! 3. **In any text, a web address's user part is redacted:**
 //!    `http://user:password@proxy` shows as `http://[redacted]@proxy`.
 
@@ -111,10 +125,15 @@ pub(crate) fn redact_kind(kind: &Kind, value: &Value) -> Value {
 }
 
 /// A value in a reserved section: redacted whole under a key that names a
-/// secret, and otherwise gone into.
+/// secret; a command line shown as the first run's import shows it
+/// ([`command_line`]); and otherwise gone into, a list's entries too (a
+/// table in a list has its keys looked at as any other).
 fn redact_reserved(key: &KeyPath, value: &Value) -> Value {
     if key.parts().iter().any(|part| names_a_secret(part)) {
         return redact_all(value);
+    }
+    if let Some(shown) = command_line(key.last(), value) {
+        return shown;
     }
     match value {
         Value::Table(table) => {
@@ -122,7 +141,51 @@ fn redact_reserved(key: &KeyPath, value: &Value) -> Value {
                 (name.clone(), redact_reserved(&key.child(name), entry))
             })))
         }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| redact_reserved(key, item))
+                .collect(),
+        ),
         _ => value.clone(),
+    }
+}
+
+/// A part of a command line in a reserved section, by the name of its key,
+/// as the first run's import shows it (rule 2): `args` as a list, its
+/// arguments masked by [`crate::import`]'s rule in place, and one that is
+/// not text masked whole; `url` and `command` as text. `None` for anything
+/// else. It goes by the key's name alone, so that an MCP server's command
+/// line is masked at every depth a view shows it (the section, a server's
+/// table, `mcp.servers.<name>.args` a line, a profile's, the section's own
+/// `Debug`), and in any reserved section, on the safe side.
+fn command_line(name: Option<&str>, value: &Value) -> Option<Value> {
+    match (name?, value) {
+        ("args", Value::Array(items)) => {
+            let texts: Vec<String> = items
+                .iter()
+                .map(|item| match item {
+                    Value::String(text) => text.clone(),
+                    _ => cineris_base::redact::MASK.to_owned(),
+                })
+                .collect();
+            let shown = crate::import::shown_args(&texts);
+            Some(Value::Array(
+                items
+                    .iter()
+                    .zip(shown)
+                    .map(|(item, shown)| match item {
+                        Value::String(_) => Value::String(shown),
+                        other => redact_all(other),
+                    })
+                    .collect(),
+            ))
+        }
+        ("url", Value::String(url)) => Some(Value::String(crate::import::shown_address(url))),
+        ("command", Value::String(program)) => {
+            Some(Value::String(crate::import::shown_program(program)))
+        }
+        _ => None,
     }
 }
 
@@ -140,22 +203,22 @@ fn redact_all(value: &Value) -> Value {
     }
 }
 
-/// Whether a key's name looks like it names a secret, or a table of them.
+/// Whether a key's name looks like it names a secret, or a table of them:
+/// by the first run's import's one list (rule 2), read more loosely than
+/// the import reads it, since here a guess errs on the safe side.
 fn names_a_secret(name: &str) -> bool {
+    if crate::import::holds_a_credentials_word(name) {
+        return true;
+    }
     let name = name.to_ascii_lowercase();
     if matches!(name.as_str(), "env" | "headers") {
         return true;
     }
-    if [
-        "token",
-        "secret",
-        "password",
-        "passwd",
-        "auth",
-        "credential",
-    ]
-    .iter()
-    .any(|word| name.contains(word))
+    if crate::import::SECRET_ENDINGS
+        .iter()
+        .chain(crate::import::SECRET_WORDS)
+        .filter(|word| word.len() >= 4)
+        .any(|word| name.contains(word))
     {
         return true;
     }
@@ -283,8 +346,36 @@ mod tests {
         ] {
             assert!(names_a_secret(name), "{name}");
         }
+        // The import's one list, read as a guess reads it (the step 25
+        // fixes): its new words, and a word of it inside a name.
         for name in [
-            "command", "args", "url", "theme", "keymap", "hotkey", "keys", "monkey", "servers",
+            "passphrase",
+            "DB_PASS",
+            "pw",
+            "bearer",
+            "cookie",
+            "sig",
+            "X-Amz-Signature",
+            "session",
+            "credential",
+            "hotkey",
+            "keys",
+        ] {
+            assert!(names_a_secret(name), "{name}");
+        }
+        for name in [
+            "command",
+            "args",
+            "url",
+            "theme",
+            "keymap",
+            "servers",
+            "description",
+            "enabled",
+            "timeout_ms",
+            "expose",
+            "network",
+            "tools",
         ] {
             assert!(!names_a_secret(name), "{name}");
         }

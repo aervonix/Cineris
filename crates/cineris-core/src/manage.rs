@@ -237,6 +237,16 @@ impl Core {
             .map_err(|failure| error(ErrorKind::Auth, "store_failed", failure.to_string()))
     }
 
+    /// The variable every provider's key is read from, the built-in ones'
+    /// and each configured one's, and those a provider's header reads: the
+    /// list a shell command is given none of. The first run gives an
+    /// imported MCP server's header none of them (since the step 25 fixes,
+    /// the review: `anthropic` and `api-key` made `ANTHROPIC_API_KEY`).
+    #[must_use]
+    pub fn provider_key_variables(&self) -> Vec<String> {
+        crate::provider::key_variables(&self.inner.user().settings)
+    }
+
     /// The model the first run writes as `model.main` when `provider` is
     /// chosen: the one the model catalog marks as the provider's default,
     /// a user's own `[models.*]` entry marked so in place of the built-in

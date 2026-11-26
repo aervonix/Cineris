@@ -138,12 +138,32 @@ pub struct McpServer {
     /// The names of the environment variables it is given, each taken from
     /// the variable of the same name once imported.
     pub env: Vec<String>,
-    /// Each header it sends, by name, and the variable its value is taken
-    /// from once imported.
-    pub headers: Vec<(String, String)>,
+    /// Each header it sends, with the variable its value is taken from once
+    /// imported.
+    pub headers: Vec<McpHeader>,
+    /// The host its headers are sent to (its address's), for the row to
+    /// name when a header's variable is set already; `None` for a server
+    /// started as a command.
+    pub host: Option<String>,
     /// Why it cannot be imported, as words to end a row: `holds a
     /// credential in its command`.
     pub refused: Option<String>,
+}
+
+/// A header a server of another client's file sends, as the first run shows
+/// it (since the step 25 fixes, the review): its value was dropped as the
+/// file was read, and is taken from `variable` once imported.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpHeader {
+    /// The header's name.
+    pub name: String,
+    /// The variable its value is taken from: one of its own among the
+    /// servers read, never one of the harness's.
+    pub variable: String,
+    /// Whether `variable` is set in the environment the first run started
+    /// in: its value would then be sent to the server's host, and the row
+    /// says so.
+    pub set: bool,
 }
 
 /// What the steps before the session chose, for the configuration file.

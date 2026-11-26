@@ -52,7 +52,8 @@ use super::{App, LastKey, Pending};
 use crate::app::Open;
 use crate::app::ready::{REPEAT, Readiness, scaled};
 use crate::app::setup::{
-    Answer, Chosen, Found, Imported, Job, KeyStore, McpServer, NotWritten, Providers, Setup, Worker,
+    Answer, Chosen, Found, Imported, Job, KeyStore, McpHeader, McpServer, NotWritten, Providers,
+    Setup, Worker,
 };
 use crate::keys::{Action, Context};
 use crate::secret::{KEYS as KEY_KEYS, KeyEdit, KeyInput, key_box};
@@ -385,6 +386,27 @@ fn provider_rows(providers: &Providers) -> Vec<(String, How)> {
         rows.push((provider.name.clone(), How::Type));
     }
     rows
+}
+
+/// What a server's row says of one of its headers: the variable its value
+/// is taken from; and, when that variable is set already, that its value
+/// would be sent to the server's host (since the step 25 fixes, the review:
+/// `github` and `Token` make `GITHUB_TOKEN`, which most developers have
+/// set, and the row said only `which you set`).
+fn header_row(header: &McpHeader, host: Option<&str>) -> String {
+    let McpHeader {
+        name,
+        variable,
+        set,
+    } = header;
+    if *set {
+        format!(
+            "its {name} header comes from {variable}, which is already set: its value would be              sent to {}",
+            host.unwrap_or("this server")
+        )
+    } else {
+        format!("its {name} header comes from {variable}, which you set")
+    }
 }
 
 impl Imports {
@@ -1797,10 +1819,8 @@ impl App {
                                     view.selected = Some(at);
                                 }
                                 let mut detail = vec![server.shown.clone()];
-                                for (header, variable) in &server.headers {
-                                    detail.push(format!(
-                                        "its {header} header comes from {variable}, which you set"
-                                    ));
+                                for header in &server.headers {
+                                    detail.push(header_row(header, server.host.as_deref()));
                                 }
                                 if !server.env.is_empty() {
                                     detail.push(format!(

@@ -28,13 +28,13 @@ use std::sync::{Mutex, PoisonError};
 
 use cineris_base::Secret;
 use cineris_config::discover::{FoundKind, Scope};
-use cineris_config::import::{ImportedServer, Refusal};
+use cineris_config::import::{HeaderVariables, ImportedServer, Refusal};
 use cineris_config::schema::CompatSettings;
 use cineris_config::write::{FirstRunChoices, Imports, WriteError};
 use cineris_config::{CredentialSource, Env, StoreKind};
 use cineris_core::Core;
 use cineris_tui::app::setup::{
-    Chosen, Found, KeyStore, McpFile, McpServer, NotWritten, Provider, Providers, Setup,
+    Chosen, Found, KeyStore, McpFile, McpHeader, McpServer, NotWritten, Provider, Providers, Setup,
 };
 
 /// Whether the first run is due: the user's configuration file, the one
@@ -228,13 +228,20 @@ impl Setup for ProgramSetup {
             .get(path)
             .cloned()
             .ok_or_else(|| "it was not among the files found".to_owned())?;
-        let servers =
+        let mut servers =
             cineris_config::import::read_servers(&real).map_err(|error| error.to_string())?;
-        let shown = servers.iter().map(shown_server).collect();
-        self.read
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(path.to_owned(), servers);
+        let mut read = self.read.lock().unwrap_or_else(PoisonError::into_inner);
+        name_headers(
+            &mut servers,
+            path,
+            &read,
+            &self.core.provider_key_variables(),
+        );
+        let shown = servers
+            .iter()
+            .map(|server| shown_server(server, &self.env))
+            .collect();
+        read.insert(path.to_owned(), servers);
         Ok(shown)
     }
 
@@ -309,8 +316,32 @@ fn discovered(env: &Env, workspace: &Path) -> Discovered {
     Discovered { found, paths }
 }
 
-/// A server as the first run shows it.
-fn shown_server(server: &ImportedServer) -> McpServer {
+/// Gives each header of `servers`, the servers of the file at `path`, a
+/// variable of its own among every file the first run has read (`read`,
+/// whose rows were drawn, this file's own earlier reading left out) and
+/// none that is a provider's key's (`keys`, the configuration's) or one of
+/// the harness's (since the step 25 fixes, the review: two servers of
+/// another client could be given one variable, and one could be given
+/// `ANTHROPIC_API_KEY`). What the row shows is what is written.
+fn name_headers(
+    servers: &mut [ImportedServer],
+    path: &str,
+    read: &BTreeMap<String, Vec<ImportedServer>>,
+    keys: &[String],
+) {
+    let mut variables = HeaderVariables::new(keys);
+    for (file, others) in read {
+        if file != path {
+            variables.take(others);
+        }
+    }
+    variables.name(servers);
+}
+
+/// A server as the first run shows it, each header saying whether its
+/// variable is set already in `env`, the environment the first run started
+/// in.
+fn shown_server(server: &ImportedServer, env: &Env) -> McpServer {
     McpServer {
         name: server.name.clone(),
         shown: server.shown(),
@@ -319,8 +350,13 @@ fn shown_server(server: &ImportedServer) -> McpServer {
         headers: server
             .headers
             .iter()
-            .map(|header| (header.clone(), server.header_variable(header)))
+            .map(|header| McpHeader {
+                name: header.name.clone(),
+                variable: header.variable.clone(),
+                set: env.get(&header.variable).is_some(),
+            })
             .collect(),
+        host: server.host(),
         refused: server.refused.map(|refusal| {
             match refusal {
                 Refusal::HoldsCredential => "holds a credential in its command",
@@ -465,7 +501,10 @@ mod tests {
             false,
         )
         .unwrap();
-        let shown: Vec<McpServer> = servers.iter().map(shown_server).collect();
+        let shown: Vec<McpServer> = servers
+            .iter()
+            .map(|server| shown_server(server, &Env::empty(cineris_config::Platform::CURRENT)))
+            .collect();
         assert_eq!(
             shown[1].refused.as_deref(),
             Some("holds a credential in its command")
@@ -547,7 +586,7 @@ mod tests {
             false,
         )
         .unwrap();
-        let shown = shown_server(&servers[0]);
+        let shown = shown_server(&servers[0], &Env::empty(Platform::CURRENT));
         assert_eq!(
             shown.refused.as_deref(),
             Some(
@@ -598,6 +637,126 @@ mod tests {
         ));
         assert_eq!(twin.model.as_deref(), Some("claude-sonnet-5-5"));
         assert!(twin.model_shared, "another provider has a model of its id");
+    }
+
+    /// A header's variable is one of its own among every file the first run
+    /// read, and none of a provider's key, the configuration's own
+    /// providers' included; one already set is drawn as set, with the host
+    /// its value would go to, and written as the row showed it; reading a
+    /// file again gives it the same names (the step 25 fixes, the review).
+    #[test]
+    fn a_headers_variable_is_its_own_and_one_already_set_is_flagged() {
+        let scratch = cineris_testkit::Scratch::outside("cineris-cli-unit", "first_run_headers");
+        let home = scratch.dir("home");
+        let mut env = env_at(&home);
+        env.set("GITHUB_TOKEN", "ghp_the_persons_own");
+        let mut dirs = cineris_config::Dirs::from_env(&env);
+        dirs.managed_config = Some(scratch.join("managed/config.toml"));
+        // The user's file is not there yet (the first run is due), so a
+        // provider of the user's own comes from the managed file here.
+        let managed = dirs.managed_config.clone().unwrap();
+        std::fs::create_dir_all(managed.parent().unwrap()).unwrap();
+        std::fs::write(
+            &managed,
+            "[providers.corp]\nprotocol = \"anthropic-messages\"\nbase_url = \
+             \"https://gw.example.com\"\nkey_env = \"CORP_GATEWAY_KEY\"\n",
+        )
+        .unwrap();
+        scratch.file(
+            "home/.claude.json",
+            r#"{"mcpServers": {
+                "github": {"url": "https://mcp.example.org/gh", "headers": {"Token": "x"}},
+                "anthropic": {"url": "https://a.example.net/mcp", "headers": {"api-key": "x"}},
+                "corp": {"url": "https://c.example.net/mcp", "headers": {"gateway-key": "x"}},
+                "my-tracker": {"url": "https://tracker.example.com/mcp",
+                               "headers": {"Authorization": "Bearer one"}}
+            }}"#,
+        );
+        scratch.file(
+            "home/.cursor/mcp.json",
+            r#"{"mcpServers": {
+                "my_tracker": {"url": "https://other.example.net/mcp",
+                               "headers": {"Authorization": "Bearer two"}}
+            }}"#,
+        );
+        let mut options = cineris_core::CoreOptions::new(
+            env.clone(),
+            std::sync::Arc::new(cineris_core::TokioTimer),
+        );
+        options.dirs = Some(dirs.clone());
+        let core = Core::start(options).expect("the core starts");
+        let user = dirs.user_config.clone().unwrap();
+        let setup = ProgramSetup::new(core, env.clone(), scratch.dir("work"), user.clone());
+        let found = setup.discover();
+        assert_eq!(found.user_mcp.len(), 2, "{found:?}");
+        let header = |servers: &[McpServer], name: &str| -> (McpHeader, Option<String>) {
+            let server = servers.iter().find(|server| server.name == name).unwrap();
+            (server.headers[0].clone(), server.host.clone())
+        };
+        // The paths as the person reads them, which on Windows may hold `\`.
+        let file = |ending: &str| {
+            found
+                .user_mcp
+                .iter()
+                .find(|file| file.path.ends_with(ending))
+                .map(|file| file.path.clone())
+                .unwrap()
+        };
+        let (claude_file, cursor_file) = (file(".claude.json"), file("mcp.json"));
+        let claude = setup.read_servers(&claude_file).unwrap();
+        let (github, host) = header(&claude, "github");
+        assert_eq!(github.variable, "GITHUB_TOKEN");
+        assert!(github.set, "the person's own GITHUB_TOKEN is set");
+        assert_eq!(host.as_deref(), Some("mcp.example.org"));
+        let (anthropic, _) = header(&claude, "anthropic");
+        assert_eq!(anthropic.variable, "MCP_ANTHROPIC_API_KEY");
+        assert!(!anthropic.set);
+        let (corp, _) = header(&claude, "corp");
+        assert_eq!(
+            corp.variable, "MCP_CORP_GATEWAY_KEY",
+            "the configuration's own provider's key"
+        );
+        let (first, _) = header(&claude, "my-tracker");
+        assert_eq!(first.variable, "MY_TRACKER_AUTHORIZATION");
+        let cursor = setup.read_servers(&cursor_file).unwrap();
+        let (second, host) = header(&cursor, "my_tracker");
+        assert_eq!(
+            second.variable, "MY_TRACKER_AUTHORIZATION_2",
+            "a server of another file read after it"
+        );
+        assert_eq!(host.as_deref(), Some("other.example.net"));
+        // Read again, a file keeps its names: its own earlier reading does
+        // not take them from it.
+        let again = setup.read_servers(&claude_file).unwrap();
+        assert_eq!(header(&again, "my-tracker").0, first);
+        // What is written is what the rows showed.
+        let chosen = Chosen {
+            imports: Some(Imported {
+                instructions: false,
+                skills: false,
+                servers: vec![
+                    (claude_file.clone(), "my-tracker".to_owned()),
+                    (cursor_file.clone(), "my_tracker".to_owned()),
+                    (claude_file.clone(), "github".to_owned()),
+                    (claude_file.clone(), "anthropic".to_owned()),
+                ],
+            }),
+            ..Chosen::default()
+        };
+        setup.write_config(&chosen).expect("written");
+        let text = std::fs::read_to_string(&user).unwrap();
+        for variable in [
+            "MY_TRACKER_AUTHORIZATION",
+            "MY_TRACKER_AUTHORIZATION_2",
+            "GITHUB_TOKEN",
+            "MCP_ANTHROPIC_API_KEY",
+        ] {
+            assert!(
+                text.contains(&format!("\"{variable}\"")),
+                "{variable}:\n{text}"
+            );
+        }
+        assert!(!text.contains("\"ANTHROPIC_API_KEY\""), "{text}");
     }
 
     #[test]

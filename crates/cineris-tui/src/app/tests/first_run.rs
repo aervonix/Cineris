@@ -19,7 +19,7 @@ use cineris_protocol::session::TrustStanding;
 
 use super::{key, text, type_text};
 use crate::app::setup::{
-    Chosen, Found, Imported, KeyStore, McpFile, McpServer, Provider, Providers,
+    Chosen, Found, Imported, KeyStore, McpFile, McpHeader, McpServer, Provider, Providers,
 };
 use crate::app::{Inbound, Open, Setup, Ticket};
 use crate::testing::{TRICKY, problems};
@@ -63,16 +63,19 @@ fn server(name: &str, shown: &str, refused: Option<&str>) -> McpServer {
         hidden: false,
         env: Vec::new(),
         headers: Vec::new(),
+        host: None,
         refused: refused.map(str::to_owned),
     }
 }
 
 fn fake() -> FakeSetup {
     let mut tracker = server("tracker", "https://tracker.example.com/mcp", None);
-    tracker.headers = vec![(
-        "Authorization".to_owned(),
-        "TRACKER_AUTHORIZATION".to_owned(),
-    )];
+    tracker.headers = vec![McpHeader {
+        name: "Authorization".to_owned(),
+        variable: "TRACKER_AUTHORIZATION".to_owned(),
+        set: false,
+    }];
+    tracker.host = Some("tracker.example.com".to_owned());
     let mut setup = FakeSetup {
         providers: providers(),
         found: Found {
@@ -949,6 +952,52 @@ fn an_mcp_command_is_shown_whole_and_its_credential_masked() {
     assert!(joined.contains("its Authorization header comes from TRACKER_AUTHORIZATION"));
 }
 
+/// A header whose variable is set already says so on its server's row,
+/// and that its value would be sent to the server's host; one not set says
+/// the person sets it (the step 25 fixes, the review: `github` and `Token`
+/// make `GITHUB_TOKEN`, which most developers have set).
+#[test]
+fn a_header_whose_variable_is_set_already_says_where_its_value_would_go() {
+    let mut setup = fake();
+    let servers = setup.servers.get_mut("~/.claude.json").unwrap();
+    let mut github = server("github", "https://mcp.example.org/gh", None);
+    github.headers = vec![McpHeader {
+        name: "Token".to_owned(),
+        variable: "GITHUB_TOKEN".to_owned(),
+        set: true,
+    }];
+    github.host = Some("mcp.example.org".to_owned());
+    servers.push(github);
+    let mut run = Run::new(setup);
+    let _ = run.ready();
+    run.key("s");
+    run.answer();
+    let _ = run.ready();
+    run.moves("down");
+    run.moves("down");
+    run.key("space");
+    run.answer();
+    // The rows' words, whatever wraps them and whatever frames them.
+    let joined: String = run
+        .frame()
+        .join(" ")
+        .chars()
+        .filter(char::is_ascii)
+        .collect();
+    let joined = joined.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        joined.contains(
+            "its Token header comes from GITHUB_TOKEN, which is already set: its value would be \
+             sent to mcp.example.org"
+        ),
+        "{joined}"
+    );
+    assert!(
+        joined.contains("its Authorization header comes from TRACKER_AUTHORIZATION, which you set"),
+        "{joined}"
+    );
+}
+
 /// Every listing the first run shows holds hostile text drawn visible and
 /// within the window: providers, files, servers and their commands, and
 /// the commands found.
@@ -964,7 +1013,12 @@ fn every_listing_holds_hostile_text() {
         setup.found.project_mcp = vec![hostile.clone()];
         let mut server = server(&hostile, &hostile.repeat(5), Some(&hostile));
         server.env = vec![hostile.clone()];
-        server.headers = vec![(hostile.clone(), hostile.clone())];
+        server.headers = vec![McpHeader {
+            name: hostile.clone(),
+            variable: hostile.clone(),
+            set: index % 2 == 0,
+        }];
+        server.host = Some(hostile.clone());
         setup.servers.insert(hostile.clone(), vec![server]);
         let mut run = Run::new(setup);
         let _ = run.ready();

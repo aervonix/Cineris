@@ -30,7 +30,12 @@
 //!   server's name must be settable ([`settable_name`]), two servers picked
 //!   may not share a name, and at most [`MAX_SERVERS`] are written; the
 //!   table read back must hold exactly those servers, each in 13-mcp's
-//!   form ([`WriteError::NotRead`] otherwise).
+//!   form ([`WriteError::NotRead`] otherwise). *Since the step 25 fixes (the
+//!   review):* each header's value is taken from the variable the import
+//!   gave it ([`HeaderVariables`]), and the table read back is refused when
+//!   two headers take theirs from one variable, in any case, or one from a
+//!   variable of the harness's ([`harnesss_variable`]: a provider's key's,
+//!   or one that begins `CINERIS_`).
 //! - **The file appears whole or not at all.** Its text goes to a private
 //!   file of its own beside it, is flushed, and is given the file's name
 //!   by a hard link, which refuses a name that is taken (a rename would
@@ -39,6 +44,8 @@
 //!
 //! [`settable_name`]: crate::import::settable_name
 //! [`MAX_SERVERS`]: crate::import::MAX_SERVERS
+//! [`HeaderVariables`]: crate::import::HeaderVariables
+//! [`harnesss_variable`]: crate::import::harnesss_variable
 
 #![allow(
     clippy::disallowed_methods,
@@ -52,7 +59,7 @@ use std::path::Path;
 use toml::{Table, Value};
 
 use crate::document;
-use crate::import::{ImportedServer, Launch, MAX_SERVERS, settable_name};
+use crate::import::{ImportedServer, Launch, MAX_SERVERS, harnesss_variable, settable_name};
 
 pub mod extension;
 pub mod setting;
@@ -398,7 +405,7 @@ fn server_table(server: &ImportedServer) -> Table {
             server
                 .headers
                 .iter()
-                .map(|name| (name.clone(), variable(server.header_variable(name)))),
+                .map(|header| (header.name.clone(), variable(header.variable.clone()))),
         );
         table.insert("headers".to_owned(), Value::Table(headers));
     }
@@ -466,6 +473,9 @@ fn check_mcp(table: &Table) -> Result<(), WriteError> {
             reference.len() == 1 && reference.get("env").is_some_and(Value::is_str)
         })
     };
+    // The variables headers are taken from, in capitals: one header's each,
+    // and none of the harness's (since the step 25 fixes, the review).
+    let mut header_variables = std::collections::BTreeSet::new();
     for (name, server) in servers {
         if !settable_name(name) {
             return bad("names a server with a name that cannot be a setting's");
@@ -493,6 +503,26 @@ fn check_mcp(table: &Table) -> Result<(), WriteError> {
         }
         if server.contains_key("command") == server.contains_key("url") {
             return bad("holds a server with neither or both of a command and an address");
+        }
+        let variables = server
+            .get("headers")
+            .and_then(Value::as_table)
+            .into_iter()
+            .flat_map(|headers| headers.values())
+            .filter_map(|reference| reference.get("env").and_then(Value::as_str));
+        for variable in variables {
+            if harnesss_variable(variable) {
+                return bad(&format!(
+                    "takes a header from {}, a variable of the harness's own",
+                    cineris_base::visible(variable)
+                ));
+            }
+            if !header_variables.insert(variable.to_ascii_uppercase()) {
+                return bad(&format!(
+                    "takes two headers from one variable, {}",
+                    cineris_base::visible(variable)
+                ));
+            }
         }
     }
     Ok(())
@@ -528,7 +558,10 @@ mod tests {
                 url: "https://tracker.example.com/mcp".to_owned(),
             },
         );
-        tracker.headers = vec!["Authorization".to_owned()];
+        tracker.headers = vec![crate::import::Header {
+            name: "Authorization".to_owned(),
+            variable: "TRACKER_AUTHORIZATION".to_owned(),
+        }];
         FirstRunChoices {
             provider: Some("anthropic".to_owned()),
             model: Some("claude-sonnet-5-5".to_owned()),
@@ -756,6 +789,58 @@ mod tests {
                 .parse()
                 .unwrap();
         assert!(check_mcp(&fine).is_ok());
+    }
+
+    /// Read back, two headers that take their values from one variable, in
+    /// any case, and one that takes it from a variable of the harness's (a
+    /// provider's key's, or one that begins `CINERIS_`), are refused: the
+    /// token set for one host would be sent to the other, or the person's
+    /// key to the server (the step 25 fixes, the review). Two servers that
+    /// take one variable of the environment by its own name, as the other
+    /// client's file had it, are written.
+    #[test]
+    fn two_headers_of_one_variable_or_one_of_the_harnesss_are_refused() {
+        let remote = |name: &str, headers: &str| {
+            format!(
+                "[mcp.servers.{name}]\nurl = \"https://{name}.example.com/mcp\"\nheaders = \
+                 {{ {headers} }}\n"
+            )
+        };
+        for text in [
+            format!(
+                "{}{}",
+                remote("one", "Authorization = { env = \"TRACKER\" }"),
+                remote("two", "Authorization = { env = \"TRACKER\" }")
+            ),
+            format!(
+                "{}{}",
+                remote("one", "Authorization = { env = \"TRACKER\" }"),
+                remote("two", "Authorization = { env = \"tracker\" }")
+            ),
+            remote(
+                "one",
+                "A = { env = \"ONE_TOKEN\" }, B = { env = \"ONE_TOKEN\" }",
+            ),
+            remote("anthropic", "api-key = { env = \"ANTHROPIC_API_KEY\" }"),
+            remote("openai", "api-key = { env = \"openai_api_key\" }"),
+            remote("x", "A = { env = \"CINERIS_CONFIG\" }"),
+        ] {
+            let table: Table = text.parse().unwrap();
+            assert!(check_mcp(&table).is_err(), "{text}");
+        }
+        let shared_env: Table =
+            "[mcp.servers.a]\ncommand = \"run\"\nenv = { GITHUB_TOKEN = { env = \
+                                 \"GITHUB_TOKEN\" } }\n[mcp.servers.b]\ncommand = \"run\"\nenv = { \
+                                 GITHUB_TOKEN = { env = \"GITHUB_TOKEN\" } }\n"
+                .parse()
+                .unwrap();
+        assert!(check_mcp(&shared_env).is_ok());
+        let apart = format!(
+            "{}{}",
+            remote("one", "Authorization = { env = \"ONE_AUTHORIZATION\" }"),
+            remote("two", "Authorization = { env = \"MCP_ANTHROPIC_API_KEY\" }")
+        );
+        assert!(check_mcp(&apart.parse().unwrap()).is_ok());
     }
 
     /// The file appears whole or not at all: while its text is written,
