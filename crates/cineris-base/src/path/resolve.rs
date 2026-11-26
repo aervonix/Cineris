@@ -432,8 +432,8 @@ fn locate(
         }
 
         let candidate = current.join_rel(&RelPath::from_text(style, name.clone()));
-        let found = match std::fs::symlink_metadata(candidate.to_fs_path()) {
-            Ok(found) => found,
+        let is_link = match is_link(&candidate.to_fs_path()) {
+            Ok(is_link) => is_link,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 // A link whose target is not there: writing "through" it
                 // would create a file at a place the path does not show.
@@ -459,7 +459,7 @@ fn locate(
                 });
             }
         };
-        if !found.file_type().is_symlink() {
+        if !is_link {
             current = candidate;
             continue;
         }
@@ -520,8 +520,44 @@ fn locate(
     Ok((real, missing))
 }
 
+/// Whether the name at `path` is a link (a symbolic link, or on Windows a
+/// junction or any other reparse point the standard library takes for
+/// one), looked at without following it: what
+/// `std::fs::symlink_metadata(path)?.file_type().is_symlink()` says, and
+/// its error when it fails.
+///
+/// **On Windows the attributes are read first,** without opening the file
+/// (`GetFileAttributesW`): a name that has no reparse point is no link,
+/// which is the standard library's answer for it, at a third of its cost
+/// on a hosted runner (`docs/steps/ci-budgets-2/answered.md`, "Where a
+/// Windows session's time goes"). A reparse point, and a name whose
+/// attributes cannot be read for any reason, its absence included, are
+/// looked at by `symlink_metadata` as before, so that every answer and
+/// every error is the one it gives.
+fn is_link(path: &Path) -> io::Result<bool> {
+    #[cfg(windows)]
+    if let Ok(attributes) = crate::private::attributes(path)
+        && !attributes.is_reparse_point()
+    {
+        return Ok(false);
+    }
+    std::fs::symlink_metadata(path).map(|found| found.file_type().is_symlink())
+}
+
+/// Whether `path`, which has no link in it, is a directory.
+///
+/// On Windows from its attributes, as [`is_link`] looks, where they show no
+/// reparse point; otherwise, and on Linux, the standard library's
+/// `metadata`, which follows a link at the end.
 fn is_dir(path: &AbsPath) -> bool {
-    std::fs::metadata(path.to_fs_path()).is_ok_and(|metadata| metadata.is_dir())
+    let path = path.to_fs_path();
+    #[cfg(windows)]
+    if let Ok(attributes) = crate::private::attributes(&path)
+        && !attributes.is_reparse_point()
+    {
+        return attributes.is_directory();
+    }
+    std::fs::metadata(&path).is_ok_and(|metadata| metadata.is_dir())
 }
 
 #[cfg(test)]

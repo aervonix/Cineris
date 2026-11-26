@@ -82,7 +82,7 @@ pub use windows::{
 };
 
 #[cfg(windows)]
-pub(crate) use windows::{file_identity, reparse_tag};
+pub(crate) use windows::{attributes, file_identity, reparse_tag};
 
 #[cfg(not(any(unix, windows)))]
 compile_error!("owner-only files are implemented for Unix and for Windows");
