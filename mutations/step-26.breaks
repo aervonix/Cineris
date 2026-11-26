@@ -364,8 +364,8 @@ caught-by:
 rule: Undo does not put a file back through a link: a directory on its way, or the file itself, that is a link now.
 file: crates/cineris-session/src/snapshot.rs
 in: through_a_link
-find: Ok(metadata) if metadata.file_type().is_symlink() => return Ok(true)
-replace: Ok(metadata) if metadata.file_type().is_symlink() => return Ok(false)
+find: Ok(true) => return Ok(true)
+replace: Ok(true) => return Ok(false)
 packages: cineris-session, cineris-core
 caught-by:
     cineris-session snapshot::tests::a_path_reached_through_a_link_is_not_put_back
