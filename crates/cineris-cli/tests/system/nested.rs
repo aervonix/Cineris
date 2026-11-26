@@ -63,7 +63,8 @@ impl Nested {
             let mut text = format!(
                 "@echo off\r\nset ANTHROPIC_API_KEY={}\r\n\"{binary}\" -p hi --output json > \
                  nested.json 2> nested.err\r\nsetlocal\r\nset CINERIS_CONFIG=evil.toml\r\n\
-                 \"{binary}\" -p hi > moved.out 2> moved.err\r\nendlocal\r\n",
+                 \"{binary}\" -p hi > moved.out 2> moved.err\r\n\"{binary}\" -p > bare.out 2> \
+                 bare.err\r\nendlocal\r\n",
                 crate::KEY
             );
             for words in approving(&folder) {
@@ -78,7 +79,7 @@ impl Nested {
             let mut text = format!(
                 "ANTHROPIC_API_KEY='{}' '{binary}' -p hi --output json > nested.json 2> \
                  nested.err\nCINERIS_CONFIG=evil.toml '{binary}' -p hi > moved.out 2> \
-                 moved.err\n",
+                 moved.err\nCINERIS_CONFIG=evil.toml '{binary}' -p > bare.out 2> bare.err\n",
                 crate::KEY
             );
             for words in approving(&folder) {
@@ -185,6 +186,27 @@ fn a_nested_headless_run_with_its_stores_moved_is_refused(world: &Nested) {
         said.contains("CINERIS_CONFIG is set otherwise") && said.contains("was refused"),
         "{said}\n{}",
         shown(&world.run)
+    );
+    // The refusal is all it says: it ends before its core starts, which
+    // would read the configuration the variable names (its standing is
+    // asked beside its start, and waited for before the core: since step
+    // 28's third pull request).
+    assert_eq!(
+        said.lines().filter(|line| !line.trim().is_empty()).count(),
+        1,
+        "{said}"
+    );
+    assert!(
+        world.read("moved.out").is_empty(),
+        "{}",
+        world.read("moved.out")
+    );
+    // With no prompt as well, it says the refusal and not that it has no
+    // prompt: what would end it early waits for its standing.
+    let bare = world.read("bare.err");
+    assert!(
+        bare.contains("was refused") && !bare.contains("no prompt"),
+        "{bare}"
     );
 }
 

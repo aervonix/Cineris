@@ -66,6 +66,10 @@ struct Plan {
     guard: Option<(PathBuf, Vec<OsString>)>,
     log: Option<Arc<LogHandle>>,
     env: Env,
+    /// Whether it runs under a session's command, and its mark, as they
+    /// are being asked: the core thread waits for them, and sets the two
+    /// below, before it starts the core.
+    standing: Standing,
     /// Run under a session's command: its level is at most `read-only`.
     capped: bool,
     /// Could not mark its commands as a session's: what it says of that,
@@ -73,17 +77,83 @@ struct Plan {
     unmarked: Option<String>,
 }
 
+/// What a headless run's standing is: whether it runs under a session's
+/// command and is held to `read-only` ([`crate::nested_run`]), and what its
+/// mark of its sessions' commands said when it failed
+/// ([`crate::mark_sessions`]); or the exit code of a run refused under a
+/// session's command, which has said why.
+type Asked = Result<(bool, Option<String>), u8>;
+
+/// A headless run's standing, asked on a thread of its own from the run's
+/// start while the rest of the start goes on (the prompt, the workspace,
+/// the writer and the core thread with its runtime), and waited for before
+/// anything that depends on it: the core, which reads the configuration,
+/// holds the session at its level and starts processes, is started only
+/// once it is known (since step 28's third pull request: on Windows the
+/// check lists every process of the system, and cost a start about a
+/// millisecond once it was made cheaper; asked in line it was 3 ms).
+struct Standing {
+    thread: Option<std::thread::JoinHandle<Asked>>,
+    known: Option<Asked>,
+}
+
+impl Standing {
+    /// Starts asking. Where no thread can be started, it is asked here.
+    fn ask(name: &'static str, run: &Run) -> Self {
+        let asked = run.clone();
+        match std::thread::Builder::new()
+            .name("cineris-standing".to_owned())
+            .spawn(move || standing(name, &asked))
+        {
+            Ok(thread) => Self {
+                thread: Some(thread),
+                known: None,
+            },
+            Err(_) => Self {
+                thread: None,
+                known: Some(standing(name, run)),
+            },
+        }
+    }
+
+    /// The standing, waited for. A thread that failed leaves it unknown,
+    /// and the run does not go on as if it were not under a session's
+    /// command: it ends, saying so.
+    fn wait(&mut self, name: &str) -> Asked {
+        if let Some(thread) = self.thread.take() {
+            self.known = Some(thread.join().unwrap_or_else(|_| {
+                eprintln!(
+                    "{name}: whether this run is under a session's command could not be told, \
+                     so it does not run"
+                );
+                Err(exit::INTERNAL)
+            }));
+        }
+        self.known.clone().unwrap_or(Err(exit::INTERNAL))
+    }
+}
+
+/// Whether the run is under a session's command, checked before it is
+/// marked: a harness's own mark is a job that holds it, which the check
+/// would take for a session's.
+fn standing(name: &str, run: &Run) -> Asked {
+    let capped = crate::nested_run(name, run)?;
+    Ok((capped, crate::mark_sessions()))
+}
+
 /// Runs a headless prompt. Returns the exit code.
 pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
     let env = Env::from_process();
     let log = start_log(&run, &env, name);
-    let capped = match crate::nested_run(name, &run) {
-        Ok(capped) => capped,
-        Err(code) => return code,
-    };
-    let unmarked = crate::mark_sessions();
+    let standing = std::cell::RefCell::new(Standing::ask(name, &run));
+    // A run refused under a session's command says that, and nothing else:
+    // what would end it before its core starts waits for its standing.
+    let refused = || standing.borrow_mut().wait(name).err();
     let format = run.format;
     let fail = |kind: ErrorKind, code: &str, message: String| {
+        if let Some(code) = refused() {
+            return code;
+        }
         let error = ErrorData::new(kind, code, message);
         finish_early(format, run.quiet, name, &error, started)
     };
@@ -119,7 +189,13 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
             );
         }
     };
-    for said in here.passed_over_said() {
+    let passed_over = here.passed_over_said();
+    if !passed_over.is_empty()
+        && let Some(code) = refused()
+    {
+        return code;
+    }
+    for said in passed_over {
         eprintln!("{name}: {}", crate::visible(&said));
     }
     let crate::workspace::Here {
@@ -153,8 +229,10 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
     let handle = log.clone();
     let quiet = run.quiet;
     let plan = Plan {
-        capped,
-        unmarked,
+        standing: standing.into_inner(),
+        // Set from the standing before the core starts.
+        capped: true,
+        unmarked: None,
         run,
         prompt,
         name,
@@ -258,7 +336,7 @@ async fn race_done(
 
 /// The core thread: a runtime, the core, and the run. Returns the exit code.
 fn core_thread(
-    plan: Plan,
+    mut plan: Plan,
     lines: &mpsc::Sender<String>,
     interrupted: mpsc::UnboundedReceiver<Interrupt>,
 ) -> u8 {
@@ -274,6 +352,18 @@ fn core_thread(
             return exit::INTERNAL;
         }
     };
+    // Its standing, before its core starts: a run refused under a
+    // session's command ends here, having read none of its configuration;
+    // one under a session's command is held to `read-only` from its core's
+    // start; and its sessions' commands are marked before any process
+    // starts, which only the core starts.
+    match plan.standing.wait(plan.name) {
+        Ok((capped, unmarked)) => {
+            plan.capped = capped;
+            plan.unmarked = unmarked;
+        }
+        Err(code) => return code,
+    }
     runtime.block_on(drive(plan, lines, interrupted))
 }
 
