@@ -10,7 +10,7 @@ One record per significant choice. Each says what the options were, what was cho
 | [0002](0002-tui-rendering.md) | Inline rendering with our own line-based renderer, stacked panels; full screen as the alternative | Accepted by the owner; confirmed by the Windows Terminal checklist on 2026-11-13 |
 | [0003](0003-async-runtime.md) | Tokio, current-thread, on a dedicated core thread | Accepted |
 | [0004](0004-http-and-tls.md) | reqwest with rustls and the ring provider | Accepted |
-| [0005](0005-extension-mechanism.md) | Extensions are JavaScript on an embedded QuickJS engine; MCP for process tools; Lua as the fallback | Accepted by the owner. One build check on Windows remains (step 28). |
+| [0005](0005-extension-mechanism.md) | Extensions are JavaScript on an embedded QuickJS engine; MCP for process tools; Lua as the fallback | Accepted by the owner. The build check on Windows passed at the start of step 28; its cost measured again at its close. |
 | [0006](0006-session-storage.md) | Sessions are append-only JSONL files, not a database | Accepted |
 | [0007](0007-configuration-format.md) | Configuration in TOML, layered, with provenance | Accepted |
 | [0008](0008-rpc-protocol.md) | One typed protocol, carried as JSON-RPC over newline-delimited JSON | Accepted |
