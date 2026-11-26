@@ -55,10 +55,12 @@ use windows_sys::Win32::Security::{
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CREATE_NEW, CreateDirectoryW, CreateFileW, FILE_ALL_ACCESS,
-    FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_128, FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FileAttributeTagInfo, FileIdInfo, GetFileInformationByHandle,
-    GetFileInformationByHandleEx, READ_CONTROL,
+    FILE_SHARE_WRITE, FileAttributeTagInfo, FileIdInfo, GetFileAttributesW,
+    GetFileInformationByHandle, GetFileInformationByHandleEx, INVALID_FILE_ATTRIBUTES,
+    READ_CONTROL,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -508,6 +510,52 @@ pub(crate) fn file_identity(file: &File) -> io::Result<(u64, u128)> {
     }
     let index = (u64::from(older.nFileIndexHigh) << 32) | u64::from(older.nFileIndexLow);
     Ok((u64::from(older.dwVolumeSerialNumber), u128::from(index)))
+}
+
+/// The attributes of what is at `path`, read without opening it
+/// (`GetFileAttributesW`), and of a link at its end, not of what the link
+/// leads to: a link's own attributes, with the reparse point's bit set.
+///
+/// For the path resolver's walk ([`crate::path`]), which asks of each name
+/// only whether it is there and whether it may be a link, and which asked
+/// the standard library's `symlink_metadata`. That opens a handle, reads
+/// two of the file's records and closes it: 9.8 µs a name on a hosted
+/// runner, against 3.1 µs for this, and a session's open walks about 180
+/// names (`docs/steps/ci-budgets-2/answered.md`). Like [`reparse_tag`] and
+/// [`file_identity`], a question about a file this module asks for another.
+///
+/// # Errors
+///
+/// What Windows reports when it cannot read them: the name is not there,
+/// or anything else.
+pub(crate) fn attributes(path: &Path) -> io::Result<Attributes> {
+    let name = wide_path(path)?;
+    // SAFETY: `name` is a zero-terminated UTF-16 string, alive for the
+    // call, which only reads it.
+    let found = unsafe { GetFileAttributesW(name.as_ptr()) };
+    if found == INVALID_FILE_ATTRIBUTES {
+        // Read before anything else can change the thread's last error.
+        return Err(io::Error::last_os_error());
+    }
+    Ok(Attributes(found))
+}
+
+/// What [`attributes`] read.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Attributes(u32);
+
+impl Attributes {
+    /// Whether the name is a reparse point: a link, a junction, or a
+    /// placeholder of a cloud or projected file system, which only its tag
+    /// tells apart ([`reparse_tag`]).
+    pub(crate) fn is_reparse_point(self) -> bool {
+        self.0 & FILE_ATTRIBUTE_REPARSE_POINT != 0
+    }
+
+    /// Whether the name is a directory (a junction is one too).
+    pub(crate) fn is_directory(self) -> bool {
+        self.0 & FILE_ATTRIBUTE_DIRECTORY != 0
+    }
 }
 
 /// Reads the owner and the access list of the file or directory at `path`.
