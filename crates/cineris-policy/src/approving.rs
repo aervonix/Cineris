@@ -49,7 +49,33 @@
 //!   the line as `cmd` reads it; and an interpreter's code (`python -c`,
 //!   `perl -e`, `node -e`, an `awk` program, `expect -c`), read as text;
 //! - with PowerShell's `Start-Process`, by its `-FilePath` or first word and
-//!   its `-ArgumentList` or second.
+//!   its `-ArgumentList` or second, and `New-ScheduledTaskAction` by its
+//!   `-Execute` and `-Argument`;
+//! - in what a line feeds a program that runs it (the full review of the
+//!   third part): where a shell, an interpreter, `cmd`, `pwsh -Command -`,
+//!   `Invoke-Expression`, `at`, `batch`, `crontab` or `make -f -` reads its
+//!   input, or `eval`, `source` or `.` runs a substitution, what the line's
+//!   other programs print is read as a line (`echo '…' | sh`, `sh <(echo
+//!   …)`), with `printf`'s `\n` and `\t` read as what they print;
+//! - in the runners of a line that reach a daemon or a service (`at`,
+//!   `crontab`, `systemd-run`, `busctl`, `gdbus`, `dbus-send`, `schtasks`,
+//!   `wmic`, `Invoke-WmiMethod`, `Invoke-CimMethod`,
+//!   `Register-ScheduledTask`, `explorer`), and in the keys `tmux`,
+//!   `screen`, `xdotool`, `ydotool` and `wtype` are told to type, joined;
+//! - in a line one word of a program's flag gives (`flock -c`, `rsync -e`,
+//!   `tar -I` and `--to-command`, `zip -TT`, `nodemon --exec`, `entr -s`,
+//!   `man -P`, an editor's `-c` and `+command`), in `git`'s configuration
+//!   values that are lines (`core.pager`, `core.fsmonitor`, `core.editor`,
+//!   `sequence.editor`, an `alias.*` that begins with `!`; `git` otherwise
+//!   only prints), and in a `sed` script with an `e`;
+//! - by shells and interpreters with a version after their names
+//!   (`python3.12`, `lua5.4`, `bash5`), flag clusters that end in their code
+//!   flag (`-Ic`, `-we`), and the shells `nu`, `xonsh`, `elvish`, `yash`,
+//!   `oksh`, `osh`, `rc` and `hush`; an interpreter's lists and maps are
+//!   words (`["cin","ext","add"]`); PowerShell's arrays, groups and casts are
+//!   a native program's words (`cin ext @('add','C:\x')`);
+//! - with line continuations taken out (`ci\⏎neris`), and look-alike letters
+//!   read as the Latin ones (`ｃｉｎ`, `cın`, `cinerıſ`).
 //!
 //! **A line the analysis cannot model fails closed.** Its quotes and
 //! escapes are taken out as its shell takes them (`\` escapes in POSIX and
@@ -58,12 +84,15 @@
 //! first that the shell expands (`$`, a backtick, `%…%`, `!…!`, `@name`);
 //! where one does, it is refused unless what is written out already fixes a
 //! subcommand that only reads. A line that names Cineris and holds an
-//! approving pair anywhere is refused too.
+//! approving pair anywhere is refused too, and so is a brace expansion or a
+//! word the shell completes that names it (`{cin,} ext add`,
+//! `cin${IFS}ext`). The help or the version alone, with nothing after it,
+//! is a run that reads, however the line was read.
 //!
 //! **What it does not reach:** a name the shell builds (`${X}neris`,
-//! `$(printf ci)neris`), a script file, an encoded PowerShell command, a
-//! copy under another name than the front end knows, `cargo run -p
-//! cineris-cli`. The approving subcommands look at their own line of
+//! `$(printf ci)neris`), a script file or a task made before, an encoded
+//! PowerShell command, a copy under another name than the front end knows,
+//! `cargo run -p cineris-cli`, keys typed into a terminal by its device. The approving subcommands look at their own line of
 //! parents, or the harness's job on Windows, and refuse under a session's
 //! command: that is the backstop (`cineris_sandbox::session`).
 
@@ -473,13 +502,14 @@ fn name_of(word: &str) -> String {
     let last = word.rsplit(['/', '\\']).next().unwrap_or(word);
     // A call's `&`, and a block's or a group's brace or parenthesis, glued
     // to the name.
-    let mut name: String = last
-        .trim_start_matches(['&', '{', '('])
-        .trim_end_matches(['}', ')'])
-        .chars()
-        .filter(|c| !matches!(c, '`' | '^' | '"' | '\''))
-        .collect::<String>()
-        .to_ascii_lowercase();
+    let mut name: String = folded(
+        &last
+            .trim_start_matches(['&', '{', '('])
+            .trim_end_matches(['}', ')'])
+            .chars()
+            .filter(|c| !matches!(c, '`' | '^' | '"' | '\''))
+            .collect::<String>(),
+    );
     if let Some(at) = name.find("::$data") {
         name.truncate(at);
     }
@@ -489,6 +519,52 @@ fn name_of(word: &str) -> String {
         .find_map(|extension| name.strip_suffix(extension))
         .unwrap_or(name);
     name.trim_end_matches(['.', ' ']).to_owned()
+}
+
+/// `text` in lower case, with the letters that look like the Latin ones of
+/// Cineris's names written as those: full-width forms (`ｃｉｎ`), the dotless
+/// and the dotted `i` (`cın`, `CİN`), the long `s` (`cinerıſ`), Cyrillic
+/// and Greek look-alikes, small capitals, Roman numerals and accented
+/// letters; combining marks are dropped (the full review of the third part).
+/// A name written so runs Cineris only through a link of that name, which a
+/// copy under any name reaches too; it is read as Cineris's all the same.
+fn folded(text: &str) -> String {
+    text.chars()
+        .flat_map(char::to_lowercase)
+        .filter_map(|c| match c {
+            '\u{0300}'..='\u{036f}' => None,
+            '\u{ff01}'..='\u{ff5e}' => {
+                char::from_u32(u32::from(c) - 0xfee0).map(|c| c.to_ascii_lowercase())
+            }
+            'ı' | 'ɪ' | 'ɩ' | 'і' | 'ι' | 'ⅰ' | 'ì' | 'í' | 'î' | 'ï' | 'ĩ' | 'ī' => {
+                Some('i')
+            }
+            'ſ' | 'ѕ' | 'ꜱ' | 'ś' | 'š' | 'ş' | 'ș' => Some('s'),
+            'с' | 'ϲ' | 'ᴄ' | 'ⅽ' | 'ç' | 'ć' | 'č' => Some('c'),
+            'е' | 'ᴇ' | 'è' | 'é' | 'ê' | 'ë' | 'ē' | 'ė' | 'ę' | 'ě' => Some('e'),
+            'ո' | 'ɴ' | 'η' | 'ñ' | 'ń' | 'ň' => Some('n'),
+            'ʀ' | 'ŕ' | 'ř' | 'г' => Some('r'),
+            other => Some(other),
+        })
+        .collect()
+}
+
+/// `command` with its line continuations taken out, as its shell joins
+/// them: `\` before a line break in POSIX, `^` in `cmd`, a backtick in
+/// PowerShell, and all of them where the shell is not known (the full
+/// review of the third part: `ci\⏎neris` is `cineris`).
+fn joined(command: &str, shell: ShellSyntax) -> String {
+    let marks: &[&str] = match shell {
+        ShellSyntax::Posix => &["\\\r\n", "\\\n"],
+        ShellSyntax::Cmd => &["^\r\n", "^\n"],
+        ShellSyntax::PowerShell => &["`\r\n", "`\n"],
+        ShellSyntax::Unknown => &["\\\r\n", "\\\n", "^\r\n", "^\n", "`\r\n", "`\n"],
+    };
+    let mut out = command.to_owned();
+    for mark in marks {
+        out = out.replace(mark, "");
+    }
+    out
 }
 
 /// Whether `name` is Cineris's as an 8.3 short name: `cineri~1`.
@@ -567,10 +643,22 @@ fn moved(word: &str, before: Option<&str>) -> Option<String> {
         }
         return None;
     }
+    // PowerShell's drive of the environment: `Set-Item env:HOME x`.
+    if let Some(name) = upper
+        .strip_prefix("ENV:")
+        .or_else(|| upper.strip_prefix("ENV:\\"))
+        && moves_stores(name)
+    {
+        return Some(name.to_owned());
+    }
     let assigned = upper
         .strip_prefix("--UNSET=")
         .map(str::to_owned)
-        .or_else(|| upper.split_once('=').map(|(name, _)| name.to_owned()));
+        .or_else(|| {
+            upper
+                .split_once('=')
+                .map(|(name, _)| name.trim_end_matches('+').to_owned())
+        });
     if let Some(name) = assigned
         && moves_stores(&name)
     {
@@ -748,7 +836,27 @@ const WRAPPERS: &[(&str, &[&str], usize)] = &[
 /// terminal runners among them (they give what they run a terminal): a
 /// name of Cineris at any of their words is a run of it, and a word of
 /// theirs with a blank in it is a line.
-const TERMINALS: [&str; 29] = [
+const TERMINALS: &[&str] = &[
+    // The daemons' and the services' runners of a line (the full review of
+    // the third part): what they start is not the session's command's own
+    // child.
+    "at",
+    "batch",
+    "crontab",
+    "busctl",
+    "gdbus",
+    "dbus-send",
+    "systemd-run",
+    "xdotool",
+    "ydotool",
+    "wtype",
+    "explorer",
+    "schtasks",
+    "wmic",
+    "invoke-wmimethod",
+    "invoke-cimmethod",
+    "register-scheduledtask",
+    "new-scheduledtaskaction",
     "script",
     "tmux",
     "screen",
@@ -784,6 +892,14 @@ const TERMINALS: [&str; 29] = [
 /// is a wrapper.
 fn wrapped(name: &str, words: &[String], program: usize) -> Option<usize> {
     let (_, values, positional) = WRAPPERS.iter().find(|(wrapper, _, _)| *wrapper == name)?;
+    // `flock FILE -c LINE` runs a line: read as one, by its flag.
+    if name == "flock"
+        && words[program + 1..]
+            .iter()
+            .any(|word| word == "-c" || word == "--command")
+    {
+        return None;
+    }
     // `command -v` and `-V` say what a name is, and run nothing.
     if name == "command"
         && words[program + 1..]
@@ -819,30 +935,171 @@ fn wrapped(name: &str, words: &[String], program: usize) -> Option<usize> {
 }
 
 /// The shells, and the programs that run a line after `-c` like one.
-const SHELLS: [&str; 14] = [
+const SHELLS: &[&str] = &[
     "sh", "bash", "dash", "zsh", "ksh", "mksh", "ash", "fish", "csh", "tcsh", "busybox", "script",
-    "su", "runuser",
+    "su", "runuser", "nu", "xonsh", "elvish", "yash", "oksh", "osh", "rc", "hush", "posh", "loksh",
+    "pdksh",
 ];
 
+/// A program's name with a version after it taken off (`python3.12`,
+/// `lua5.4`, `bash5`), and the other names of an interpreter written as its
+/// own (`luajit`, `nodejs`): what the shells and the interpreters are looked
+/// for by.
+fn kind_of(name: &str) -> &str {
+    let bare = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+    match bare {
+        "luajit" => "lua",
+        "nodejs" => "node",
+        "" => name,
+        other => other,
+    }
+}
+
 /// Interpreters whose code a flag gives: read as text, failing closed.
-const INTERPRETERS: [(&str, &[&str]); 16] = [
+const INTERPRETERS: &[(&str, &[&str])] = &[
     ("python", &["-c"]),
-    ("python2", &["-c"]),
-    ("python3", &["-c"]),
     ("pypy", &["-c"]),
-    ("pypy3", &["-c"]),
     ("perl", &["-e", "-E"]),
     ("ruby", &["-e"]),
     ("node", &["-e", "--eval", "-p", "--print"]),
-    ("nodejs", &["-e", "--eval", "-p", "--print"]),
     ("bun", &["-e", "--eval", "-p", "--print"]),
     ("deno", &["eval"]),
-    ("php", &["-r"]),
+    ("php", &["-r", "-B", "-R", "-E"]),
     ("lua", &["-e"]),
     ("osascript", &["-e"]),
     ("expect", &["-c"]),
     ("tclsh", &["-c"]),
+    ("rscript", &["-e"]),
+    ("julia", &["-e", "-E", "--eval", "--print"]),
 ];
+
+/// Whether `flag` gives an interpreter's code in the word after it, by one
+/// of its `flags`: alone, as `deno`'s `eval`, or last in a cluster of short
+/// flags (`-Ic`, `-we`, `-le`, `-pe`).
+fn gives_code(flag: &str, flags: &[&str]) -> bool {
+    if flags.contains(&flag) {
+        return true;
+    }
+    let cluster = flag.len() > 2
+        && flag.starts_with('-')
+        && !flag.starts_with("--")
+        && flag[1..].bytes().all(|byte| byte.is_ascii_alphabetic());
+    cluster
+        && flag
+            .chars()
+            .last()
+            .is_some_and(|last| flags.contains(&format!("-{last}").as_str()))
+}
+
+/// Programs that run a line one of their flags gives, in one word (the
+/// full review of the third part), and how it is read.
+const LINE_FLAGS: &[(&str, &[&str], Line)] = &[
+    ("flock", &["-c", "--command"], Line::Shell),
+    ("rsync", &["-e", "--rsh", "--rsync-path"], Line::Shell),
+    (
+        "tar",
+        &[
+            "-I",
+            "-F",
+            "--use-compress-program",
+            "--to-command",
+            "--info-script",
+            "--new-volume-script",
+        ],
+        Line::Shell,
+    ),
+    ("zip", &["-TT", "--unzip-command"], Line::Shell),
+    ("nodemon", &["--exec", "-x"], Line::Shell),
+    ("entr", &["-s"], Line::Shell),
+    ("man", &["-P", "--pager"], Line::Shell),
+    ("vim", &["-c", "--cmd"], Line::Code),
+    ("vi", &["-c", "--cmd"], Line::Code),
+    ("nvim", &["-c", "--cmd"], Line::Code),
+    ("gvim", &["-c", "--cmd"], Line::Code),
+    ("ex", &["-c", "--cmd"], Line::Code),
+    ("view", &["-c", "--cmd"], Line::Code),
+];
+
+/// The editors whose `+command` word is a command they run.
+const VIMS: [&str; 6] = ["vim", "vi", "nvim", "gvim", "ex", "view"];
+
+/// The keys of `git`'s configuration whose value is a line it runs, beside
+/// any `alias.*` whose value begins with `!`.
+const GIT_LINES: [&str; 8] = [
+    "core.fsmonitor",
+    "core.pager",
+    "core.editor",
+    "core.sshcommand",
+    "sequence.editor",
+    "diff.external",
+    "pager.log",
+    "credential.helper",
+];
+
+/// Whether a `sed` script runs a line: an `e` command, or an `s` command
+/// with the `e` flag. Any other script only edits text, so its words are
+/// not read as lines (a false refusal of the full review).
+fn sed_runs(script: &str) -> bool {
+    let bytes = script.as_bytes();
+    // An `e` command: after the script's start, a separator, an address's
+    // digit or `$`, or a block's brace, then blanks.
+    let command = bytes.iter().enumerate().any(|(at, byte)| {
+        *byte == b'e'
+            && bytes
+                .get(at + 1)
+                .is_none_or(|next| next.is_ascii_whitespace() || *next == b';')
+            && bytes[..at]
+                .iter()
+                .rev()
+                .find(|before| !before.is_ascii_whitespace())
+                .is_none_or(|before| {
+                    before.is_ascii_digit()
+                        || matches!(before, b';' | b'\n' | b'{' | b'}' | b'$' | b',')
+                })
+    });
+    if command {
+        return true;
+    }
+    // `s` commands: the flags after the third delimiter.
+    let mut at = 0;
+    while let Some(found) = script[at..].find('s') {
+        let start = at + found;
+        at = start + 1;
+        let Some(delimiter) = script[start + 1..].chars().next() else {
+            break;
+        };
+        if delimiter.is_alphanumeric() || delimiter.is_whitespace() || delimiter == '\\' {
+            continue;
+        }
+        let mut seen = 0;
+        let mut escaped = false;
+        let mut end = None;
+        for (offset, c) in script[start + 1 + delimiter.len_utf8()..].char_indices() {
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == delimiter {
+                seen += 1;
+                if seen == 2 {
+                    end = Some(start + 1 + delimiter.len_utf8() + offset + c.len_utf8());
+                    break;
+                }
+            }
+        }
+        if let Some(end) = end {
+            let flags: String = script[end..]
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric())
+                .collect();
+            if flags.contains('e') {
+                return true;
+            }
+            at = end;
+        }
+    }
+    false
+}
 
 /// The `awk`s, whose program is their first word that is not an option
 /// ([`awk_program`]).
@@ -863,17 +1120,21 @@ fn line_at(words: &[String], program: usize, at: usize) -> Option<Line> {
     if at <= program {
         return None;
     }
-    let owner = name_of(&words[program]);
-    if SHELLS.contains(&owner.as_str()) || owner == "sg" {
+    let name = name_of(&words[program]);
+    let owner = kind_of(&name);
+    if SHELLS.contains(&owner) || owner == "sg" {
         return (shell_line(words, program) == Some(at)).then_some(Line::Shell);
     }
     let flag = words[at - 1].as_str();
+    if owner == "deno" && flag == "eval" {
+        return Some(Line::Code);
+    }
     // Every flag that gives a line begins with `-`, or with `/` for `cmd`.
     if !flag.starts_with(['-', '/']) {
         return None;
     }
     let lower = flag.to_ascii_lowercase();
-    if matches!(owner.as_str(), "pwsh" | "powershell")
+    if matches!(owner, "pwsh" | "powershell")
         && matches!(lower.as_str(), "-c" | "-command" | "-cmd" | "--command")
     {
         return Some(Line::Shell);
@@ -881,13 +1142,18 @@ fn line_at(words: &[String], program: usize, at: usize) -> Option<Line> {
     if owner == "env" && matches!(flag, "-S" | "--split-string") {
         return Some(Line::Shell);
     }
-    if matches!(owner.as_str(), "nix-shell" | "nix") && matches!(flag, "--run" | "--command") {
+    if matches!(owner, "nix-shell" | "nix") && matches!(flag, "--run" | "--command") {
         return Some(Line::Shell);
     }
-    if let Some((_, flags)) = INTERPRETERS.iter().find(|(name, _)| **name == owner)
-        && flags.contains(&flag)
+    if let Some((_, flags)) = INTERPRETERS.iter().find(|(name, _)| *name == owner)
+        && gives_code(flag, flags)
     {
         return Some(Line::Code);
+    }
+    if let Some((_, flags, line)) = LINE_FLAGS.iter().find(|(name, _, _)| *name == owner)
+        && flags.contains(&flag)
+    {
+        return Some(*line);
     }
     None
 }
@@ -897,8 +1163,8 @@ fn line_at(words: &[String], program: usize, at: usize) -> Option<Line> {
 /// values of `-o`, `-O`, `--rcfile` and `--init-file` are passed over, and
 /// so is the first word of `su`, `runuser` and `sg` (a user, a group).
 fn shell_line(words: &[String], program: usize) -> Option<usize> {
-    let owner = name_of(&words[program]);
-    let mut named = !matches!(owner.as_str(), "su" | "runuser" | "sg");
+    let name = name_of(&words[program]);
+    let mut named = !matches!(kind_of(&name), "su" | "runuser" | "sg");
     let mut lined = false;
     let mut at = program + 1;
     while let Some(word) = words.get(at) {
@@ -987,6 +1253,7 @@ fn pieces(word: &str) -> Vec<&str> {
 fn program_at(words: &[String]) -> usize {
     let assignment = |word: &str| {
         word.split_once('=').is_some_and(|(name, _)| {
+            let name = name.strip_suffix('+').unwrap_or(name);
             !name.is_empty()
                 && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
                 && !name.starts_with(|c: char| c.is_ascii_digit())
@@ -1074,6 +1341,213 @@ const CHANGES_DIRECTORY: [&str; 6] = [
 /// Programs that run a file's lines in this shell, or a line they make.
 const SOURCES: [&str; 3] = ["source", ".", "eval"];
 
+/// Whether the simple command `words` runs text that it does not hold
+/// itself as a line: a shell, an interpreter, `make -f -`, `cmd`, `pwsh`,
+/// `at`, `batch` or `crontab` given no line, no code and no file of its own,
+/// or its standard input as its file, reading what a pipe or a
+/// substitution gives it; a shell whose line is an expansion or that `xargs`
+/// gives its line; `eval`, `source`, `.` and `Invoke-Expression`. Where a
+/// line holds one, what its other programs print is read as a line too
+/// (the full review of the third part: `echo '…' | sh`).
+fn reads_a_line(words: &[String]) -> bool {
+    let mut program = program_at(words);
+    for _ in 0..NESTING {
+        let Some(first) = words.get(program) else {
+            return false;
+        };
+        match wrapped(&name_of(first), words, program) {
+            Some(next) => program = next + program_at(&words[next..]),
+            None => break,
+        }
+    }
+    let Some(first) = words.get(program) else {
+        return false;
+    };
+    let name = name_of(first);
+    let kind = kind_of(&name);
+    let rest = &words[program + 1..];
+    let input = |word: &str| matches!(word, "-" | "/dev/stdin" | "/dev/fd/0" | "/proc/self/fd/0");
+    let positional = |skip: usize| rest.iter().filter(|word| !word.starts_with('-')).nth(skip);
+    if SOURCES.contains(&kind) || first == "." {
+        return true;
+    }
+    match kind {
+        "at" | "batch" | "crontab" | "iex" | "invoke-expression" => return true,
+        "cmd" => {
+            return !rest.iter().any(|word| {
+                let lower = word.to_ascii_lowercase();
+                lower.starts_with("/c") || lower.starts_with("/k")
+            });
+        }
+        "pwsh" | "powershell" => {
+            let lower: Vec<String> = rest.iter().map(|word| word.to_ascii_lowercase()).collect();
+            let given = lower.iter().any(|word| {
+                matches!(
+                    word.as_str(),
+                    "-c" | "-command"
+                        | "-cmd"
+                        | "--command"
+                        | "-f"
+                        | "-file"
+                        | "-e"
+                        | "-ec"
+                        | "-encodedcommand"
+                )
+            }) || lower.iter().any(|word| !word.starts_with('-'));
+            return lower.iter().any(|word| word == "-") || !given;
+        }
+        "make" | "gmake" => {
+            return rest.windows(2).any(|pair| {
+                matches!(pair[0].as_str(), "-f" | "--file" | "--makefile") && input(&pair[1])
+            }) || rest
+                .iter()
+                .any(|word| matches!(word.as_str(), "-f-" | "--file=-" | "--makefile=-"));
+        }
+        _ => {}
+    }
+    if SHELLS.contains(&kind) {
+        if let Some(at) = shell_line(words, program) {
+            return expands(&words[at]);
+        }
+        let lined = rest.iter().any(|word| {
+            word == "--command"
+                || (word.starts_with('-')
+                    && !word.starts_with("--")
+                    && word.len() > 1
+                    && word[1..].bytes().all(|byte| byte.is_ascii_alphabetic())
+                    && word.contains('c'))
+        });
+        let skip = usize::from(matches!(kind, "su" | "runuser" | "sg"));
+        return lined
+            || rest.iter().any(|word| word == "-s")
+            || positional(skip).is_none_or(|word| input(word));
+    }
+    if let Some((_, flags)) = INTERPRETERS
+        .iter()
+        .find(|(interpreter, _)| *interpreter == kind)
+    {
+        if rest.iter().any(|word| gives_code(word, flags)) {
+            return false;
+        }
+        return positional(0).is_none_or(|word| input(word));
+    }
+    false
+}
+
+/// The keys a terminal is told to type, joined as they would be typed:
+/// the words after `tmux`'s and `screen`'s `send-keys`, `send` or `stuff`,
+/// and `xdotool`'s or `ydotool`'s `type`, or all of `wtype`'s, past their
+/// options.
+fn typed(name: &str, words: &[String]) -> String {
+    let from = if name == "wtype" {
+        Some(0)
+    } else {
+        words
+            .iter()
+            .position(|word| matches!(word.as_str(), "send-keys" | "send" | "stuff" | "type"))
+            .map(|at| at + 1)
+    };
+    let Some(mut at) = from else {
+        return String::new();
+    };
+    let mut keys = String::new();
+    while let Some(word) = words.get(at) {
+        if matches!(
+            word.as_str(),
+            "-t" | "-N" | "-c" | "-d" | "-M" | "-m" | "-k" | "-P" | "-s" | "--delay" | "--window"
+        ) {
+            at += 2;
+            continue;
+        }
+        if !(word.starts_with('-') && word.len() > 1) {
+            keys.push_str(word);
+        }
+        at += 1;
+    }
+    keys
+}
+
+/// A brace expansion in `text` (`{cin,}`, `{a..b}`), with no blank in it,
+/// one of whose words is a name of Cineris: `{cin,} ext add` runs it, and
+/// the reading here does not expand braces.
+fn braced_name(text: &str, own: impl Fn(&str) -> bool) -> bool {
+    let mut rest = text;
+    while let Some(open) = rest.find('{') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('}') else {
+            return false;
+        };
+        let inside = &after[..close];
+        if !inside.contains(char::is_whitespace)
+            && (inside.contains(',') || inside.contains(".."))
+            && inside.split([',', '.']).any(&own)
+        {
+            return true;
+        }
+        rest = after;
+    }
+    false
+}
+
+/// Whether `word` names Cineris once what the shell expands in it is taken
+/// for a blank: `cin${IFS}ext`, `$HOME/.local/bin/cin`.
+fn names_through_expansion(word: &str, own: impl Fn(&str) -> bool) -> bool {
+    word.contains('$')
+        && word
+            .replace(['$', '{', '}', '(', ')'], " ")
+            .split_whitespace()
+            .any(own)
+}
+
+/// PowerShell text with its type literals taken out: `[string]'add'` is
+/// the word `add`.
+fn without_casts(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after.find(']') {
+            Some(close)
+                if close > 0
+                    && after[..close]
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_')) =>
+            {
+                rest = &after[close + 1..];
+            }
+            _ => {
+                out.push('[');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Code an interpreter runs, with its lists, maps and blocks taken for
+/// blanks: `["cin","ext","add"]` and `{args:["ext"]}` are read as words.
+fn code_words(text: &str) -> String {
+    text.replace(['[', ']', ',', '{', '}'], " ")
+}
+
+/// `cmd`'s `/c` or `/k` with what follows glued to it (`/ccin`) written as
+/// two words.
+fn cmd_switches(words: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(words.len() + 1);
+    for word in words {
+        let lower = word.to_ascii_lowercase();
+        if (lower.starts_with("/c") || lower.starts_with("/k")) && word.len() > 2 {
+            out.push(word[..2].to_owned());
+            out.push(word[2..].to_owned());
+        } else {
+            out.push(word.clone());
+        }
+    }
+    out
+}
+
 /// Whether `words` (a run's) start a session: `-p`, before `--`.
 fn headless(words: &[String]) -> bool {
     words.iter().take_while(|word| *word != "--").any(|word| {
@@ -1109,6 +1583,9 @@ struct Reader<'a> {
     moved_dir: Cell<bool>,
     /// How many simple commands were read.
     steps: Cell<usize>,
+    /// Whether the line being read runs what another program of it prints
+    /// ([`reads_a_line`]): printers are then no printers.
+    fed: Cell<bool>,
 }
 
 impl<'a> Reader<'a> {
@@ -1124,6 +1601,7 @@ impl<'a> Reader<'a> {
             sources: Cell::new(false),
             moved_dir: Cell::new(false),
             steps: Cell::new(0),
+            fed: Cell::new(false),
         }
     }
 
@@ -1153,11 +1631,12 @@ impl<'a> Reader<'a> {
     /// Whether `text` could name Cineris at all: one of its names in it once
     /// quotes and escapes are out, or a pattern.
     fn mentioned(&self, text: &str) -> bool {
-        let plain: String = unquoted(text)
-            .chars()
-            .filter(|c| !matches!(c, '\\' | '\'' | '"' | '`' | '^'))
-            .flat_map(char::to_lowercase)
-            .collect();
+        let plain: String = folded(
+            &unquoted(text)
+                .chars()
+                .filter(|c| !matches!(c, '\\' | '\'' | '"' | '`' | '^'))
+                .collect::<String>(),
+        );
         self.own
             .names
             .iter()
@@ -1182,11 +1661,24 @@ impl<'a> Reader<'a> {
     /// One that does not is refused only where it approves, widens or is
     /// internal: `grep cineris file` runs nothing of Cineris.
     fn run(&self, rest: &[String], open: bool, placed: bool) -> Option<Refusal> {
-        self.runs.set(true);
         let open = open || self.adds.replace(false);
         // PowerShell's `--%` passes what follows as it is, and is not
-        // itself an argument.
-        let rest: Vec<String> = rest.iter().filter(|word| *word != "--%").cloned().collect();
+        // itself an argument; a group's closing brace after the words
+        // (`{ cin --version }`) is the group's.
+        let mut rest: Vec<String> = rest.iter().filter(|word| *word != "--%").cloned().collect();
+        while rest.last().is_some_and(|word| word == "}") {
+            rest.pop();
+        }
+        // The help or the version alone, and nothing after it: that is all
+        // the program is given, however the line was read, and it runs
+        // nothing (the full review's false refusals).
+        if !open
+            && let [only] = rest.as_slice()
+            && matches!(only.as_str(), "-h" | "--help" | "-V" | "--version")
+        {
+            return None;
+        }
+        self.runs.set(true);
         let exact = self.exact.get() && !rest.iter().any(|word| self.expanded(word));
         // Up to the first word the shell expands: what follows it is not
         // known. After a `--`, every word is the prompt's.
@@ -1222,10 +1714,21 @@ impl<'a> Reader<'a> {
     }
 
     fn note_moved(&self, words: &[String]) {
+        // A shell's own commands that set, unset or export a variable by its
+        // name alone: `export -n HOME`, `unset -v HOME`.
+        let program = words.get(program_at(words)).map(|first| name_of(first));
+        let by_name = program.as_deref().is_some_and(|name| {
+            matches!(
+                name,
+                "export" | "unset" | "declare" | "typeset" | "local" | "readonly" | "setx"
+            )
+        });
         for (at, word) in words.iter().enumerate() {
             let before = at.checked_sub(1).map(|before| words[before].as_str());
             if let Some(name) = moved(word, before) {
                 *self.moved.borrow_mut() = Some(name);
+            } else if by_name && moves_stores(word) {
+                *self.moved.borrow_mut() = Some(word.to_ascii_uppercase());
             }
         }
     }
@@ -1237,7 +1740,8 @@ impl<'a> Reader<'a> {
             return;
         };
         let name = name_of(first);
-        if SOURCES.contains(&name.as_str()) || first == "." {
+        // `direnv`'s `exec` and `allow` read a project's `.envrc`.
+        if SOURCES.contains(&name.as_str()) || first == "." || name == "direnv" {
             self.sources.set(true);
         }
         let env_moves = words[..program]
@@ -1250,20 +1754,28 @@ impl<'a> Reader<'a> {
 
     fn in_parts(&self, parts: &[Part], depth: usize) -> Option<Refusal> {
         let was = self.exact.replace(true);
-        let found = parts.iter().find_map(|part| {
-            let mut words = Vec::new();
-            for word in &part.words {
-                // A comment the analysis left as a word.
-                if !word.quoted && word.text.starts_with('#') {
-                    break;
+        let lines: Vec<Vec<String>> = parts
+            .iter()
+            .map(|part| {
+                let mut words = Vec::new();
+                for word in &part.words {
+                    // A comment the analysis left as a word.
+                    if !word.quoted && word.text.starts_with('#') {
+                        break;
+                    }
+                    if word.glob {
+                        self.globs.borrow_mut().push(word.text.clone());
+                    }
+                    words.push(word.text.clone());
                 }
-                if word.glob {
-                    self.globs.borrow_mut().push(word.text.clone());
-                }
-                words.push(word.text.clone());
-            }
-            self.in_words(&words, depth)
-        });
+                words
+            })
+            .collect();
+        let fed = self
+            .fed
+            .replace(lines.iter().any(|words| reads_a_line(words)));
+        let found = lines.iter().find_map(|words| self.in_words(words, depth));
+        self.fed.set(fed);
         self.exact.set(was);
         found
     }
@@ -1362,11 +1874,31 @@ impl<'a> Reader<'a> {
         }
         // PowerShell's `Start-Process` names its program and its arguments
         // by its own parameters.
-        if matches!(name.as_str(), "start-process" | "saps" | "start") {
+        if matches!(
+            name.as_str(),
+            "start-process" | "saps" | "start" | "new-scheduledtaskaction"
+        ) {
             return self.start_process(&words[program + 1..], depth);
         }
         let terminal = TERMINALS.contains(&name.as_str());
-        let prints = PRINTERS.contains(&name.as_str()) || (name == "cargo" && !runs_cargo);
+        let prints = (PRINTERS.contains(&name.as_str()) || (name == "cargo" && !runs_cargo))
+            && !self.fed.get();
+        if name == "git"
+            && let Some(refusal) = self.git_lines(words, program, depth)
+        {
+            return Some(refusal);
+        }
+        if matches!(
+            name.as_str(),
+            "tmux" | "screen" | "xdotool" | "ydotool" | "wtype"
+        ) {
+            let keys = typed(&name, &words[program + 1..]);
+            if self.mentioned(&keys)
+                && let Some(refusal) = self.read(&keys, Line::Shell, depth)
+            {
+                return Some(refusal);
+            }
+        }
         if name == "parallel" {
             self.adds.set(true);
         }
@@ -1387,8 +1919,11 @@ impl<'a> Reader<'a> {
                 let positional = !word.starts_with('-');
                 let powershell = matches!(name.as_str(), "pwsh" | "powershell");
                 // A word with a blank in it may be a line the program runs
-                // (`sed`'s `e`, a runner's): read as one, but a printer's.
-                let blank = !prints && word.contains(char::is_whitespace);
+                // (`sed`'s `e`, a runner's): read as one, but a printer's,
+                // and a `sed` script's that runs no line.
+                let blank = !prints
+                    && word.contains(char::is_whitespace)
+                    && (name != "sed" || self.fed.get() || sed_runs(word));
                 if ((terminal || blank) && word.contains(char::is_whitespace))
                     || (powershell && positional)
                 {
@@ -1402,6 +1937,14 @@ impl<'a> Reader<'a> {
             if let Some(line) = line
                 && self.mentioned(word)
                 && let Some(refusal) = self.read(word, line, depth)
+            {
+                return Some(refusal);
+            }
+            // An editor's `+command`.
+            if VIMS.contains(&name.as_str())
+                && let Some(command) = word.strip_prefix('+')
+                && self.mentioned(command)
+                && let Some(refusal) = self.read(command, Line::Code, depth)
             {
                 return Some(refusal);
             }
@@ -1440,13 +1983,52 @@ impl<'a> Reader<'a> {
             }
         }
         self.adds.set(false);
-        if name == "cmd"
-            && let Some(flag) = words
-                .iter()
-                .position(|word| matches!(word.to_ascii_lowercase().as_str(), "/c" | "/k"))
+        let switches = if name == "cmd" {
+            cmd_switches(words)
+        } else {
+            Vec::new()
+        };
+        if let Some(flag) = switches
+            .iter()
+            .position(|word| matches!(word.to_ascii_lowercase().as_str(), "/c" | "/k"))
         {
-            let rest = words[flag + 1..].join(" ");
+            let rest = switches[flag + 1..].join(" ");
             if let Some(refusal) = self.in_text(&rest, ShellSyntax::Cmd) {
+                return Some(refusal);
+            }
+        }
+        None
+    }
+
+    /// The lines `git` is told to run by its configuration: the value of a
+    /// key that is a line ([`GIT_LINES`]) or of an `alias.*` that begins
+    /// with `!`, given apart (`git config core.pager LINE`) or after `=`
+    /// (`git -c core.pager=LINE`). `git` otherwise only prints its words:
+    /// a commit's message is no line.
+    fn git_lines(&self, words: &[String], program: usize, depth: usize) -> Option<Refusal> {
+        for (at, word) in words.iter().enumerate().skip(program + 1) {
+            let (key, attached) = match word.split_once('=') {
+                Some((key, value)) => (key.to_ascii_lowercase(), Some(value)),
+                None => (word.to_ascii_lowercase(), None),
+            };
+            let alias = key.starts_with("alias.");
+            if !alias && !GIT_LINES.contains(&key.as_str()) {
+                continue;
+            }
+            let Some(value) = attached.or_else(|| words.get(at + 1).map(String::as_str)) else {
+                continue;
+            };
+            let line = if alias {
+                match value.strip_prefix('!') {
+                    Some(line) => line,
+                    None => continue,
+                }
+            } else {
+                value
+            };
+            if self.mentioned(line)
+                && let Some(refusal) = self.read(line, Line::Shell, depth)
+            {
                 return Some(refusal);
             }
         }
@@ -1485,12 +2067,15 @@ impl<'a> Reader<'a> {
         let mut at = 0;
         while let Some(word) = words.get(at) {
             let lower = word.to_ascii_lowercase();
-            if matches!(lower.as_str(), "-filepath" | "-file" | "-path") {
+            if matches!(lower.as_str(), "-filepath" | "-file" | "-path" | "-execute") {
                 program = words.get(at + 1).cloned();
                 at += 2;
                 continue;
             }
-            if matches!(lower.as_str(), "-argumentlist" | "-args" | "-arguments") {
+            if matches!(
+                lower.as_str(),
+                "-argumentlist" | "-args" | "-arguments" | "-argument"
+            ) {
                 arguments.extend(words.get(at + 1).cloned());
                 at += 2;
                 continue;
@@ -1530,7 +2115,7 @@ impl<'a> Reader<'a> {
             return Some(Refusal::new("cineris", Kind::Hidden));
         }
         match line {
-            Line::Code => self.in_text(text, ShellSyntax::Posix),
+            Line::Code => self.in_text(&code_words(text), ShellSyntax::Posix),
             Line::Shell => {
                 let mut modelled = false;
                 for syntax in [ShellSyntax::Posix, ShellSyntax::PowerShell] {
@@ -1541,20 +2126,31 @@ impl<'a> Reader<'a> {
                         }
                     }
                 }
-                if modelled {
-                    None
-                } else {
-                    self.in_text(text, ShellSyntax::Unknown)
+                if !modelled {
+                    return self.in_text(text, ShellSyntax::Unknown);
                 }
+                // What `printf` or `echo -e` prints of it: `\n` and `\t` are a
+                // line break and a tab between words.
+                if text.contains("\\n") || text.contains("\\t") {
+                    let printed = text.replace("\\n", "\n").replace("\\t", "\t");
+                    return self.in_text(&printed, ShellSyntax::Unknown);
+                }
+                None
             }
         }
     }
 
     /// A line the analysis cannot model, read as text, failing closed.
     fn in_text(&self, text: &str, syntax: ShellSyntax) -> Option<Refusal> {
+        let posix = matches!(syntax, ShellSyntax::Posix | ShellSyntax::Unknown);
+        // A brace's word that names Cineris: `{cin,} ext add`.
+        if posix && braced_name(&plain(text, "\\'\"`"), |word| self.is_own(word)) {
+            return Some(Refusal::new("cineris", Kind::Hidden));
+        }
+        self.note_set_by_dotnet(text);
         let was = self.exact.replace(false);
         let text = braced(&unquoted(text));
-        let found = match syntax {
+        let mut found = match syntax {
             ShellSyntax::Posix => self.in_plain(&plain(&text, "\\'\"`")),
             ShellSyntax::PowerShell => self.in_plain(&plain(&text, "'\"`")),
             ShellSyntax::Cmd => self.in_plain(&plain(&text, "\"^")),
@@ -1562,21 +2158,71 @@ impl<'a> Reader<'a> {
                 .in_plain(&plain(&text, "\\'\"`^"))
                 .or_else(|| self.in_plain(&plain(&text, "'\"`^"))),
         };
+        // PowerShell's arrays and groups are a native program's words:
+        // `cin ext @('add','C:\x')` runs `cin ext add C:\x`.
+        if found.is_none() && matches!(syntax, ShellSyntax::PowerShell | ShellSyntax::Unknown) {
+            let arrays = without_casts(&plain(&text, "'\"`"))
+                .replace("@(", " ")
+                .replace(['(', ')', ','], " ");
+            found = self.in_plain(&arrays);
+        }
+        // `printf`'s and `$'…'`'s escapes, read as what they print: a line
+        // break or a tab between words.
+        if found.is_none() && posix && text.contains(['\\']) {
+            let escapes = text
+                .replace("\\n", "\n")
+                .replace("\\t", "\t")
+                .replace("\\r", "\n");
+            if escapes != text {
+                found = self.in_plain(&plain(&escapes, "\\'\"`"));
+            }
+        }
         self.exact.set(was);
         found
+    }
+
+    /// A store's variable set by .NET in a PowerShell line:
+    /// `[Environment]::SetEnvironmentVariable('HOME', …)`.
+    fn note_set_by_dotnet(&self, text: &str) {
+        let upper = text.to_ascii_uppercase();
+        let Some(at) = upper.find("SETENVIRONMENTVARIABLE(") else {
+            return;
+        };
+        let name: String = upper[at + "SETENVIRONMENTVARIABLE(".len()..]
+            .trim_start_matches([' ', '\'', '"'])
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if moves_stores(&name) {
+            *self.moved.borrow_mut() = Some(name);
+        }
     }
 
     /// Text with its quotes and escapes out.
     fn in_plain(&self, text: &str) -> Option<Refusal> {
         let segments = segments(text);
         let mut named = false;
+        let fed = self.fed.get() || segments.iter().any(|words| reads_a_line(words));
         for words in &segments {
+            let switched;
+            let words = if words
+                .get(program_at(words))
+                .is_some_and(|first| name_of(first) == "cmd")
+            {
+                switched = cmd_switches(words);
+                &switched
+            } else {
+                words
+            };
             self.note_moved(words);
             let program = program_at(words);
             self.note_program(words, program);
             // `Start-Process` by its parameters.
             if words.get(program).is_some_and(|first| {
-                matches!(name_of(first).as_str(), "start-process" | "saps" | "start")
+                matches!(
+                    name_of(first).as_str(),
+                    "start-process" | "saps" | "start" | "new-scheduledtaskaction"
+                )
             }) && let Some(refusal) = self.start_process(&words[program + 1..], DEPTH - 1)
             {
                 return Some(refusal);
@@ -1588,16 +2234,17 @@ impl<'a> Reader<'a> {
             // else, where it approves, widens or is internal.
             let describes =
                 first == "command" && words.iter().any(|word| word == "-v" || word == "-V");
+            let kind = kind_of(first);
             let runs_words = !describes
                 && (TERMINALS.contains(&first)
-                    || SHELLS.contains(&first)
+                    || SHELLS.contains(&kind)
                     || AWKS.contains(&first)
                     || matches!(first, "cmd" | "pwsh" | "powershell" | "env")
                     || INTERPRETERS
                         .iter()
-                        .any(|(interpreter, _)| *interpreter == first)
+                        .any(|(interpreter, _)| *interpreter == kind)
                     || WRAPPERS.iter().any(|(wrapper, _, _)| *wrapper == first));
-            let prints = PRINTERS.contains(&first);
+            let prints = PRINTERS.contains(&first) && !fed;
             if matches!(first, "xargs" | "parallel") {
                 self.adds.set(true);
             }
@@ -1609,6 +2256,10 @@ impl<'a> Reader<'a> {
                     )
                 });
                 let placed = at == program || executes || (runs_words && at > program);
+                // A name of Cineris the shell completes: `cin${IFS}ext`.
+                if placed && names_through_expansion(word, |piece| self.is_own(piece)) {
+                    return Some(Refusal::new("cineris", Kind::Hidden));
+                }
                 if word.contains(['=', '!']) {
                     for (count, (mark, _)) in word.match_indices(['=', '!']).enumerate() {
                         if count >= MARKS {
@@ -1848,8 +2499,19 @@ pub fn refused(command: &str, shell: ShellSyntax, own: Option<&OwnCommands>) -> 
             &fallback
         }
     };
+    let joined = joined(command, shell);
+    if joined != command
+        && let Some(refusal) = refused(&joined, shell, Some(own))
+    {
+        return Some(refusal);
+    }
     let reader = Reader::new(own);
-    if !reader.mentioned(command) {
+    let typing = ["tmux", "screen", "xdotool", "ydotool", "wtype"]
+        .iter()
+        .any(|typer| command.contains(typer));
+    if !reader.mentioned(command)
+        && !(typing && reader.mentioned(&command.replace(char::is_whitespace, "")))
+    {
         return None;
     }
     if command.len() > LONGEST {
