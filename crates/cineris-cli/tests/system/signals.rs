@@ -244,6 +244,13 @@ fn command_stopped_by(signal: impl FnOnce(&Tree), code: i32, test: &str) {
         "the binary was still running {LIMIT:?} after the signal, and was killed:\n{}",
         crate::shown(&run)
     );
+    // Standard error names the command and whose it is before it runs.
+    assert!(
+        run.stderr
+            .contains("Sending `/probe:spin`, the project's extension `probe`'s command."),
+        "{}",
+        run.stderr
+    );
     let record = run.expect_code(code).json();
     assert_eq!(record["outcome"], "interrupted", "{record}");
     assert!(
