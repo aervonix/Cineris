@@ -410,12 +410,16 @@ fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
     let scratch = Scratch::new("win_af_unix");
     scratch.dir("ws");
     let socket = scratch.join("ws").join("socket");
+    // Bound, said, and held until the test closes its input: the socket's
+    // file goes with the socket.
     let bind = format!(
         "$s = [System.Net.Sockets.Socket]::new('Unix', 'Stream', 'Unspecified'); \
-         $s.Bind([System.Net.Sockets.UnixDomainSocketEndPoint]::new('{}')); $s.Dispose()",
+         $s.Bind([System.Net.Sockets.UnixDomainSocketEndPoint]::new('{}')); \
+         [Console]::Out.WriteLine('bound'); [Console]::Out.Flush(); \
+         [void][Console]::In.ReadLine(); $s.Dispose()",
         socket.display().to_string().replace('\'', "''")
     );
-    let made = std::process::Command::new("pwsh")
+    let child = std::process::Command::new("pwsh")
         .args([
             "-NoLogo",
             "-NoProfile",
@@ -423,14 +427,26 @@ fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
             "-Command",
             &bind,
         ])
-        .output();
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn();
+    let Ok(mut child) = child else {
+        assert!(!in_ci(), "PowerShell 7 is not on the CI runner");
+        println!("skipped: no PowerShell 7 here to bind a socket");
+        return;
+    };
+    let mut said = String::new();
+    let _ = std::io::BufRead::read_line(
+        &mut std::io::BufReader::new(child.stdout.take().expect("its output")),
+        &mut said,
+    );
     let reparse = fs::symlink_metadata(&socket)
         .is_ok_and(|found| found.file_attributes() & REPARSE_POINT != 0);
     if !reparse {
-        let said = made.map_or_else(
-            |error| error.to_string(),
-            |made| String::from_utf8_lossy(&made.stderr).into_owned(),
-        );
+        drop(child.stdin.take());
+        let ended = child.wait_with_output().expect("PowerShell ends");
+        let said = format!("{said}{}", String::from_utf8_lossy(&ended.stderr));
         assert!(
             !in_ci(),
             "no socket's file was made on the CI runner: {said}"
@@ -457,6 +473,8 @@ fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
         below.is_err(),
         "nothing is below a socket's file: {below:?}"
     );
+    drop(child.stdin.take());
+    let _ = child.wait();
 }
 
 /// A junction is the kind of directory link any account can make, so it is
