@@ -8357,22 +8357,11 @@ caught-by:
     cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 
 [break] a-hooks-program-has-the-manifests-write-roots
-rule: A hook's program has no write root, whatever its manifest says (the maintainers' call on the early review of the script hooks, M2); a tool's and a command's keep the manifest's, as on `main`, a command's left to the part that wires commands (the full review's L9).
+rule: A hook's program, and a command's, has no write root, whatever the manifest says (the maintainers' calls on the early reviews of the script hooks, M2, and of the custom commands, B); only a tool's keeps the manifest's.
 file: crates/cineris-ext/src/host.rs
 in: serve
-find: if phase == Phase::Hook {
-occurrence: 1
+find: if matches!(phase, Phase::Hook | Phase::Command) {
 replace: if false {
-caught-by:
-    cineris-ext::it engine::a_hooks_program_has_no_write_root_and_a_tools_has_the_manifests
-
-[break] a-commands-program-has-no-write-root
-rule: A command's program keeps the manifest's write roots, as on `main`: only a hook's has none (the full review of the script hooks, L9).
-file: crates/cineris-ext/src/host.rs
-in: serve
-find: if phase == Phase::Hook {
-occurrence: 1
-replace: if phase != Phase::Tool {
 caught-by:
     cineris-ext::it engine::a_hooks_program_has_no_write_root_and_a_tools_has_the_manifests
 
