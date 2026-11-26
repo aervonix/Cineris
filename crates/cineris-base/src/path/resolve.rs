@@ -569,6 +569,132 @@ mod tests {
         AbsPath::parse(path, PathStyle::Windows).unwrap()
     }
 
+    /// The walk's look at a name ([`is_link`], [`is_dir`]) gives what the
+    /// standard library's `symlink_metadata` and `metadata` gave, for every
+    /// kind of name a Windows runner can make (`docs/steps/ci-budgets-2/
+    /// answered.md`): the same answer, or an error of the same kind where
+    /// they fail. A link this machine may not make is skipped away from CI,
+    /// and fails the test on CI, whose runners may.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_walks_look_at_a_name_is_the_standard_librarys() {
+        use std::os::windows::fs::{symlink_dir, symlink_file};
+
+        fn agrees(path: &Path) {
+            let before =
+                std::fs::symlink_metadata(path).map(|found| found.file_type().is_symlink());
+            match (before, is_link(path)) {
+                (Ok(before), Ok(now)) => assert_eq!(before, now, "is a link: {}", path.display()),
+                (Err(before), Err(now)) => {
+                    assert_eq!(
+                        before.kind(),
+                        now.kind(),
+                        "{}: {before} / {now}",
+                        path.display()
+                    );
+                }
+                (before, now) => panic!("{}: {before:?} / {now:?}", path.display()),
+            }
+            let directory = std::fs::metadata(path).is_ok_and(|found| found.is_dir());
+            if let Ok(path) = AbsPath::from_os(path) {
+                assert_eq!(directory, is_dir(&path), "is a directory: {path}");
+            }
+        }
+        fn made(made: std::io::Result<()>) -> bool {
+            match made {
+                Ok(()) => true,
+                Err(error) => {
+                    assert!(std::env::var_os("CI").is_none(), "on CI: {error}");
+                    false
+                }
+            }
+        }
+
+        let dir = std::env::temp_dir().join(format!("cineris-is-link-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder")).unwrap();
+        std::fs::write(dir.join("file.txt"), "x").unwrap();
+        let mut names = vec![
+            dir.clone(),
+            dir.join("folder"),
+            dir.join("file.txt"),
+            // Not there, and a parent that is not there.
+            dir.join("missing.txt"),
+            dir.join("missing").join("file.txt"),
+            // Another case of the same names.
+            dir.join("FOLDER"),
+            dir.join("File.TXT"),
+        ];
+        // Links to a folder, to a file, and to nothing.
+        if made(symlink_dir(dir.join("folder"), dir.join("to-folder"))) {
+            names.push(dir.join("to-folder"));
+            names.push(dir.join("to-folder").join("inside"));
+        }
+        if made(symlink_file(dir.join("file.txt"), dir.join("to-file.txt"))) {
+            names.push(dir.join("to-file.txt"));
+        }
+        if made(symlink_file(dir.join("gone.txt"), dir.join("dangling.txt"))) {
+            names.push(dir.join("dangling.txt"));
+        }
+        // Trailing dots and spaces: a name Windows would read as another
+        // unless the path is in its extended-length form.
+        let verbatim = |name: &str| PathBuf::from(format!(r"\\?\{}\{name}", dir.display()));
+        for name in ["dot.", "space ", "both. "] {
+            std::fs::write(verbatim(name), "x").unwrap();
+            names.push(verbatim(name));
+            names.push(dir.join(name));
+        }
+        // The extended-length form of the others, and a path past 260
+        // characters.
+        names.push(verbatim("folder"));
+        names.push(verbatim("missing.txt"));
+        let long = verbatim(&"d".repeat(120))
+            .join("e".repeat(120))
+            .join("f".repeat(40));
+        std::fs::create_dir_all(&long).unwrap();
+        names.push(long.clone());
+        names.push(long.join("missing.txt"));
+        // Alternate data streams of a file.
+        std::fs::write(dir.join("file.txt:stream"), "x").unwrap();
+        names.push(dir.join("file.txt:stream"));
+        names.push(dir.join("file.txt::$DATA"));
+        names.push(dir.join("file.txt:missing"));
+        // The page file, which no one may open.
+        for page in [r"C:\pagefile.sys", r"D:\pagefile.sys"] {
+            names.push(PathBuf::from(page));
+        }
+        // A short name of the system's program folder, where the volume
+        // makes them.
+        names.push(PathBuf::from(r"C:\PROGRA~1"));
+        // App execution aliases: reparse points that are not links.
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            let aliases = PathBuf::from(local).join("Microsoft").join("WindowsApps");
+            names.extend(
+                std::fs::read_dir(&aliases)
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .take(5)
+                    .map(|entry| entry.path()),
+            );
+        }
+        for name in &names {
+            agrees(name);
+        }
+        // A name below a file: an error to both, as the walk takes it
+        // (a name it finds missing below a file is refused as one under no
+        // directory).
+        let below = dir.join("file.txt").join("below");
+        assert!(std::fs::symlink_metadata(&below).is_err());
+        assert!(is_link(&below).is_err());
+        // Device names, which the resolver refuses as text before it looks
+        // at anything: never taken for a link.
+        for device in [r"\\.\NUL", "NUL", "CON"] {
+            assert!(!is_link(Path::new(device)).unwrap_or(false), "{device}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn only_an_allowed_share_passes_the_share_check() {
         let none = PathOptions::new();
