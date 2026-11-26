@@ -194,6 +194,17 @@ impl Snapshot {
         Self::read_through(Folder::open(folder))
     }
 
+    /// [`Snapshot::read_counted`] of the folder `name` in the root `root`
+    /// holds, opened relative to it and not followed, and everything below
+    /// it through handles as [`Snapshot::read_unfollowed`] reads it: what
+    /// discovery reads an extension with, from the root it listed, so that
+    /// a folder above the root swapped for a link while the root is read
+    /// sends no read through it (the narrow re-check of step 28's managing
+    /// part).
+    pub(crate) fn read_in(root: &HeldRoot, name: &OsStr) -> (Result<Self, FolderError>, u64) {
+        Self::read_through(root.folder().folder(name))
+    }
+
     /// Every file below the folder `opened`, through its handle.
     fn read_through(opened: Result<Folder, Refused>) -> (Result<Self, FolderError>, u64) {
         let mut total = 0_u64;
@@ -372,6 +383,70 @@ fn refusal(refused: Refused, relative: &str) -> FolderError {
             path: relative.to_owned(),
             reason: other.to_string(),
         },
+    }
+}
+
+/// A root of skills or of extensions, held open where it was resolved to,
+/// so that what is listed in it and read from it is the folder that was
+/// judged (the narrow re-check of step 28's managing part: a root opened
+/// again by its path for each read followed a folder above it that had
+/// been swapped for a link, into wherever the link led).
+///
+/// A root in the workspace is opened from the workspace down, by the names
+/// of where it was resolved to, none followed: the workspace is the
+/// person's, and a folder of it on the way that has become a link since is
+/// refused. A root outside it (a user's, where their own link led) is
+/// opened by its path, its own name not followed.
+#[derive(Debug)]
+pub(crate) struct HeldRoot {
+    folder: Folder,
+    /// Where it was resolved to, for the file system's calls.
+    real: std::path::PathBuf,
+    /// The workspace's real location.
+    workspace: std::path::PathBuf,
+    /// The folder's identity, when the system said it.
+    identity: Option<cineris_base::FileIdentity>,
+}
+
+impl HeldRoot {
+    /// Opens the root resolved to `real`, judged against the workspace
+    /// whose real location is `workspace`.
+    pub(crate) fn open(real: &Path, workspace: &Path) -> Result<Self, Refused> {
+        let folder = match cineris_base::strip_location_prefix(real, workspace) {
+            Some(below) => Folder::open_below(workspace, &below)?,
+            None => Folder::open(real)?,
+        };
+        let identity = folder.identity().ok();
+        Ok(Self {
+            folder,
+            real: real.to_path_buf(),
+            workspace: workspace.to_path_buf(),
+            identity,
+        })
+    }
+
+    /// The folder held.
+    pub(crate) fn folder(&self) -> &Folder {
+        &self.folder
+    }
+
+    /// The folder held, to list.
+    pub(crate) fn folder_mut(&mut self) -> &mut Folder {
+        &mut self.folder
+    }
+
+    /// Whether the root's place still leads to the folder held, opened
+    /// again as it was opened: `false` when it cannot be, or is another
+    /// folder (or the system cannot say which). What was read from a root
+    /// that has changed is not taken, and that is said.
+    pub(crate) fn unchanged(&self) -> bool {
+        let Some(held) = self.identity else {
+            return false;
+        };
+        Self::open(&self.real, &self.workspace)
+            .ok()
+            .and_then(|again| again.identity)
+            == Some(held)
     }
 }
 

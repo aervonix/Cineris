@@ -1254,3 +1254,166 @@ fn a_folder_swapped_for_a_link_after_its_look_is_never_read_through() {
         "{found:?}"
     );
 }
+
+/// Makes `link` lead to the folder `target`: a symbolic link, or on Windows,
+/// where an account without the right cannot make one, a junction, the
+/// folder link any account can make (with `mklink /J`, a process). `false`
+/// only where neither can be made.
+fn link_folder(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link).is_ok();
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(target, link).is_ok() || {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("run mklink");
+        made.status.success()
+    };
+    made
+}
+
+/// The scratch folder of the reviewer's case: the project's skill
+/// `deploy`, and the user's own skill of the same name in `~/.claude`,
+/// which only the person's yes to other tools' folders lets a session
+/// read (the narrow re-check of the managing part).
+fn ours_and_the_users(name: &str) -> Scratch {
+    let scratch = Scratch::outside("cineris-ext-unit", name);
+    skill(
+        &scratch,
+        "home/proj/.cineris/skills/deploy",
+        "deploy",
+        "Ours.",
+    );
+    skill(
+        &scratch,
+        "home/.claude/skills/deploy",
+        "deploy",
+        "THE USER'S OWN SKILL",
+    );
+    scratch
+}
+
+/// Swaps the project's `.cineris` for a link to the user's `~/.claude`:
+/// `Err` with why when the folder cannot be moved (on Windows, while a
+/// folder below it is held), `Ok(false)` when no link can be made.
+fn swap_the_projects_folder_for_the_users(scratch: &Scratch) -> Result<bool, std::io::Error> {
+    let dot = scratch.join("home/proj/.cineris");
+    std::fs::rename(&dot, scratch.join("home/proj/.cineris-moved"))?;
+    Ok(link_folder(&scratch.join("home/.claude"), &dot))
+}
+
+/// Puts the project's `.cineris` back where it was, the link taken away.
+fn swap_back(scratch: &Scratch) {
+    let dot = scratch.join("home/proj/.cineris");
+    // A link to a folder is a file on Linux, a folder on Windows.
+    if std::fs::remove_file(&dot).is_err() {
+        std::fs::remove_dir(&dot).unwrap();
+    }
+    std::fs::rename(scratch.join("home/proj/.cineris-moved"), &dot).unwrap();
+}
+
+/// The project's own skill is what was found, and only it: on Windows,
+/// where a folder above a root held cannot be renamed at all, whatever the
+/// swap was.
+fn only_ours(found: &Found, swapped: &Result<bool, std::io::Error>) {
+    match swapped {
+        Ok(linked) => {
+            assert!(*linked, "no link could be made");
+            println!("the folder above the root was swapped for a link");
+        }
+        // On Windows a folder above a root held cannot be renamed.
+        #[cfg(windows)]
+        Err(error) => println!("the folder above the root held was not moved: {error}"),
+        #[cfg(not(windows))]
+        Err(error) => panic!("the folder could not be moved: {error}"),
+    }
+    assert_eq!(
+        listed(found),
+        [("deploy", ".cineris/skills/deploy/SKILL.md")]
+    );
+    assert_eq!(found.skills[0].description, "Ours.");
+    assert!(found.left_out.is_empty(), "{found:?}");
+}
+
+/// The reviewer's case: a folder above a project's root, inside the
+/// workspace, swapped for a link to the user's `~/.claude` after the root
+/// was looked in and before a `SKILL.md` is read, and put back once it is
+/// read, so that what was read is kept: the read is through the root that
+/// was listed, so it is the project's own skill, and the user's is never
+/// read through. On Windows the folder above a root held cannot be renamed
+/// at all.
+#[test]
+fn sys_a_parent_of_the_root_swapped_for_a_link_as_a_skill_is_read_is_never_read_through() {
+    let scratch = ours_and_the_users(
+        "sys_a_parent_of_the_root_swapped_for_a_link_as_a_skill_is_read_is_never_read_through",
+    );
+    let resolver = resolver(&scratch);
+    let reading = cineris_testkit::Hold::new(A_SKILL_IS_READ);
+    let read = cineris_testkit::Hold::new(A_SKILL_WAS_READ);
+    let finding = std::thread::spawn(move || skills::find(&resolver, &Root::standard(false)));
+    reading.reach();
+    let swapped = swap_the_projects_folder_for_the_users(&scratch);
+    reading.release();
+    read.reach();
+    if matches!(swapped, Ok(true)) {
+        swap_back(&scratch);
+    }
+    read.release();
+    let found = finding.join().unwrap();
+    only_ours(&found, &swapped);
+}
+
+/// The same swap, left in place: the root is opened again after its skills
+/// are read, leads elsewhere now, and its skills are left out, said; the
+/// user's is never read through.
+#[test]
+fn sys_a_root_that_changed_as_its_skills_were_read_is_left_out_and_said() {
+    let scratch =
+        ours_and_the_users("sys_a_root_that_changed_as_its_skills_were_read_is_left_out_and_said");
+    let resolver = resolver(&scratch);
+    let hold = cineris_testkit::Hold::new(A_SKILL_IS_READ);
+    let finding = std::thread::spawn(move || skills::find(&resolver, &Root::standard(false)));
+    hold.reach();
+    let swapped = swap_the_projects_folder_for_the_users(&scratch);
+    hold.release();
+    let found = finding.join().unwrap();
+    assert!(
+        !format!("{found:?}").contains("THE USER'S OWN SKILL"),
+        "{found:?}"
+    );
+    if swapped.is_err() {
+        only_ours(&found, &swapped);
+        return;
+    }
+    assert!(swapped.unwrap(), "no link could be made");
+    assert!(found.skills.is_empty(), "{found:?}");
+    assert_eq!(left(&found), [(".cineris/skills", &Reason::Changed)]);
+}
+
+/// The same swap after the root was resolved and judged inside the
+/// workspace, before it is opened: the root is opened from the workspace
+/// down, no name followed, so the link is met and refused, and the root is
+/// left out, said, on every system.
+#[test]
+fn sys_a_parent_of_the_root_swapped_for_a_link_before_it_is_opened_is_never_read_through() {
+    let scratch = ours_and_the_users(
+        "sys_a_parent_of_the_root_swapped_for_a_link_before_it_is_opened_is_never_read_through",
+    );
+    let resolver = resolver(&scratch);
+    let hold = cineris_testkit::Hold::new(A_ROOT_IS_OPENED);
+    let finding = std::thread::spawn(move || skills::find(&resolver, &Root::standard(false)));
+    hold.reach();
+    let swapped = swap_the_projects_folder_for_the_users(&scratch);
+    hold.release();
+    let found = finding.join().unwrap();
+    assert!(swapped.unwrap(), "no link could be made");
+    assert!(
+        !format!("{found:?}").contains("THE USER'S OWN SKILL"),
+        "{found:?}"
+    );
+    assert!(found.skills.is_empty(), "{found:?}");
+    assert_eq!(left(&found), [(".cineris/skills", &Reason::Changed)]);
+}

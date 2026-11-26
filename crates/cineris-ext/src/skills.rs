@@ -27,11 +27,17 @@
 //! - **A skill's folder or its `SKILL.md` reached through a link** is
 //!   followed only where it stays inside its root. A link that leads out, or
 //!   to nothing, is left out with its reason.
-//! - **The file is opened through handles**, after resolving: the root with
-//!   its own name not followed, then each name below it relative to the
-//!   folder before, none followed if it is a link now, and nothing but a
-//!   regular file read at the last (`cineris_sandbox::unfollowed`). What is
-//!   read is what was checked, in its root, whatever was swapped since.
+//! - **The file is opened through handles**, after resolving: the root
+//!   opened once, where it was resolved to (a project's from the workspace
+//!   down, no name followed; a user's by its path, its own name not
+//!   followed), and listed through its handle; then each name below it
+//!   relative to the folder before, none followed if it is a link now, and
+//!   nothing but a regular file read at the last
+//!   (`cineris_sandbox::unfollowed`). What is read is what was checked, in
+//!   the root that was looked in, whatever was swapped since: a folder above
+//!   the root made a link is never followed. The root is opened again after
+//!   its skills are read, and one whose place now leads to another folder,
+//!   or through a link, has its skills left out, said.
 //!
 //! **The front matter** is read by [`FrontMatter::read`], a small reader of
 //! the plain YAML skills are written in, with no YAML library: `key: value`
@@ -75,7 +81,6 @@
 )]
 
 use std::ffi::{OsStr, OsString};
-use std::fs::FileType;
 use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
@@ -83,6 +88,9 @@ use cineris_base::{
     AbsPath, PathError, PathResolver, ResolvedPath, location_within, same_location,
     strip_location_prefix, visible,
 };
+use cineris_sandbox::unfollowed::{Kind, Refused};
+
+use crate::folder::HeldRoot;
 
 /// The file that makes a folder a skill.
 pub const FILE_NAME: &str = "SKILL.md";
@@ -274,6 +282,14 @@ pub enum Reason {
     /// A `SKILL.md` past what its root may read ([`MAX_ROOT_BYTES`]).
     #[error("its folder of skills had 8 MiB of SKILL.md files read before it, and it was not read")]
     PastTheRootsBytes,
+    /// A root whose place no longer led to the folder that was looked in:
+    /// a folder on the way to it became a link, or another folder, after it
+    /// was found. Its skills are not listed.
+    #[error(
+        "it changed while it was read: a folder on the way to it is a link now, which is not \
+         followed, or another folder, and its skills were not taken"
+    )]
+    Changed,
     /// A `SKILL.md` that does not begin with front matter.
     #[error("it has no front matter: a block between two `---` lines at its top")]
     NoFrontMatter,
@@ -338,6 +354,16 @@ pub const A_ROOT_IS_RESOLVED: &str = "skills: a root is resolved";
 /// A point of [`find`]: a `SKILL.md` is about to be read.
 pub const A_SKILL_IS_READ: &str = "skills: a SKILL.md is about to be read";
 
+/// A point of [`find`]: a `SKILL.md` was read, and its front matter is not
+/// yet looked at. A test holds it to put back what it swapped as the file
+/// was read, so that what was read is kept and can be seen.
+pub const A_SKILL_WAS_READ: &str = "skills: a SKILL.md was read, and is not yet looked at";
+
+/// A point of [`find`]: a root was resolved and judged, and is about to be
+/// opened through handles, from the workspace down for a project's. A test
+/// holds it to swap a folder above the root for a link before the open.
+pub const A_ROOT_IS_OPENED: &str = "skills: a root is about to be opened through handles";
+
 /// [`find`], with each place given to `seen` **before** it is looked at or
 /// read, so that the caller can stamp it for a change (the core's
 /// hot-reload): each name on the way to a root as written, looked at
@@ -397,6 +423,7 @@ fn find_within(
                 index,
                 real: &real,
                 shown: &shown,
+                workspace: &places.workspace,
                 left: std::cell::Cell::new(max_root_bytes),
             },
             &mut candidates,
@@ -569,6 +596,8 @@ struct Look<'a> {
     real: &'a AbsPath,
     /// The root as it is shown.
     shown: &'a str,
+    /// The workspace's real location, which a root in it is opened from.
+    workspace: &'a Path,
     /// What the root may still read of its `SKILL.md` files.
     left: std::cell::Cell<u64>,
 }
@@ -667,55 +696,66 @@ fn path_reason(error: PathError) -> Reason {
     }
 }
 
-/// Looks at each entry of one root, by name, up to [`MAX_ENTRIES`].
+/// Looks at each entry of one root, by name, up to [`MAX_ENTRIES`]: the
+/// root opened once, through handles ([`HeldRoot`]), listed through its
+/// handle, and each skill read relative to it; and opened again after, a
+/// root whose place no longer leads to the folder held leaving its skills
+/// out, said.
 fn look_in(
     look: &Look<'_>,
     candidates: &mut Vec<Candidate>,
     left_out: &mut Vec<LeftOut>,
     seen: &mut dyn FnMut(Seen<'_>),
 ) {
-    let entries = match std::fs::read_dir(look.real.to_fs_path()) {
-        Ok(entries) => entries,
-        Err(error) => {
-            left_out.push(LeftOut {
-                path: look.shown.to_owned(),
-                reason: Reason::Unreadable(error.to_string()),
-            });
+    let of_root = |reason: Reason| LeftOut {
+        path: look.shown.to_owned(),
+        reason,
+    };
+    cineris_base::hook::point(A_ROOT_IS_OPENED);
+    let mut held = match HeldRoot::open(&look.real.to_fs_path(), look.workspace) {
+        Ok(held) => held,
+        // Gone since it was resolved: nothing to look in.
+        Err(Refused::NotFound) => return,
+        // A folder on the way to it became a link since it was resolved.
+        Err(Refused::Link | Refused::NotAName) => {
+            left_out.push(of_root(Reason::Changed));
+            return;
+        }
+        Err(Refused::NotAFolder | Refused::NotAFile) => {
+            left_out.push(of_root(Reason::NotAFolder));
+            return;
+        }
+        Err(error @ (Refused::Unsupported | Refused::Io(_))) => {
+            left_out.push(of_root(Reason::Unreadable(error.to_string())));
             return;
         }
     };
-    let mut names: Vec<(OsString, FileType)> = Vec::new();
-    for entry in entries {
-        if names.len() == MAX_ENTRIES {
-            left_out.push(LeftOut {
-                path: look.shown.to_owned(),
-                reason: Reason::TooManyEntries,
-            });
-            break;
+    let mut names: Vec<(OsString, Kind)> = match held.folder_mut().entries(MAX_ENTRIES) {
+        Ok(entries) => entries
+            .into_iter()
+            .map(|entry| (entry.name, entry.kind))
+            .collect(),
+        Err(error) => {
+            left_out.push(of_root(Reason::Unreadable(error.to_string())));
+            return;
         }
-        let kind = entry.and_then(|entry| Ok((entry.file_name(), entry.file_type()?)));
-        match kind {
-            Ok(named) => names.push(named),
-            Err(error) => {
-                left_out.push(LeftOut {
-                    path: look.shown.to_owned(),
-                    reason: Reason::Unreadable(error.to_string()),
-                });
-                break;
-            }
-        }
+    };
+    if names.len() > MAX_ENTRIES {
+        names.truncate(MAX_ENTRIES);
+        left_out.push(of_root(Reason::TooManyEntries));
     }
     names.sort_by(|one, other| one.0.cmp(&other.0));
+    let first = candidates.len();
     for (name, kind) in names {
         // A file beside the skills' folders, a FIFO or a socket: no skill.
-        if !kind.is_dir() && !kind.is_symlink() {
+        if !matches!(kind, Kind::Folder | Kind::Link) {
             continue;
         }
         let named = format!("{}/{}", look.shown, visible(&name.to_string_lossy()));
         // The entry itself, before it is looked into: a `SKILL.md` made in
         // it, or the folder swapped for a link, is a change.
         seen(Seen::Place(&look.real.to_fs_path().join(&name)));
-        match skill_in(look, &name, &named, seen) {
+        match skill_in(look, &held, &name, &named, seen) {
             Ok(Some(skill)) => candidates.push(Candidate {
                 skill,
                 root: look.index,
@@ -724,6 +764,12 @@ fn look_in(
             Err(left) => left_out.push(left),
         }
     }
+    // Looked at again after its skills were read: what was read from a
+    // root whose place now leads elsewhere is not taken.
+    if candidates.len() > first && !held.unchanged() {
+        candidates.truncate(first);
+        left_out.push(of_root(Reason::Changed));
+    }
 }
 
 /// The skill in the folder `name` of a root: `None` when the folder is not
@@ -731,6 +777,7 @@ fn look_in(
 /// and why when it is one that cannot be taken.
 fn skill_in(
     look: &Look<'_>,
+    held: &HeldRoot,
     name: &OsStr,
     named: &str,
     seen: &mut dyn FnMut(Seen<'_>),
@@ -789,11 +836,12 @@ fn skill_in(
     }
     seen(Seen::Place(&file.to_fs_path()));
     cineris_base::hook::point(A_SKILL_IS_READ);
-    let text = match read_capped(&root, &file.to_fs_path(), &look.left) {
+    let text = match read_capped(held, &root, &file.to_fs_path(), &look.left) {
         Ok(Some(text)) => text,
         Ok(None) => return Ok(None),
         Err(reason) => return Err(left(&file_shown, reason)),
     };
+    cineris_base::hook::point(A_SKILL_WAS_READ);
     let Some(front) = FrontMatter::read(&text) else {
         return Err(left(&file_shown, Reason::NoFrontMatter));
     };
@@ -815,24 +863,26 @@ fn skill_in(
 }
 
 /// Reads a `SKILL.md` already resolved to `path`, below the root `root`
-/// (where the root really is), through handles: the root opened with its
-/// own name not followed, and each name below it opened relative to the
-/// folder before it, none followed if it is a link now. What is read is the
-/// file that was checked, in its root, whatever was swapped since: a folder
-/// made a link between the look and the read (to one holding a `SKILL.md`
-/// outside the root, standing for a file such as `~/.ssh/id_ed25519`) is
-/// refused, not read through (the maintainers' addition to the last round
-/// of step 28's third pull request; the names above the root are followed,
-/// as they are for an extension's folder). `None` when it is gone. One
+/// (where the root really is), through handles: from the root `held`, the
+/// one that was listed, each name below it opened relative to the folder
+/// before it, none followed if it is a link now. What is read is the file
+/// that was checked, in the root that was looked in, whatever was swapped
+/// since: a folder made a link between the look and the read (to one
+/// holding a `SKILL.md` outside the root, standing for a file such as
+/// `~/.ssh/id_ed25519`) is refused, not read through (the maintainers'
+/// addition to the last round of step 28's third pull request), and a
+/// folder above the root made one (`.cineris` to `~/.claude`) is never
+/// met, since the root is not opened again by its path (the narrow re-check
+/// of the managing part). `None` when it is gone. One
 /// larger than [`MAX_SKILL_BYTES`] by its length, or than what its root may
 /// still read (`left`), is refused unread; every byte read is taken from
 /// `left`.
 fn read_capped(
+    held: &HeldRoot,
     root: &Path,
     path: &Path,
     left: &std::cell::Cell<u64>,
 ) -> Result<Option<String>, Reason> {
-    use cineris_sandbox::unfollowed::{Folder, Refused};
     let refused = |refused: Refused| match refused {
         Refused::NotFound => None,
         // Swapped for a link since it was resolved.
@@ -853,13 +903,19 @@ fn read_capped(
     let Some((name, folders)) = names.split_last() else {
         return Err(Reason::NotAFile);
     };
-    let opened = Folder::open(root)
-        .and_then(|top| {
-            folders
-                .iter()
-                .try_fold(top, |folder, name| folder.folder(name))
-        })
-        .and_then(|folder| folder.file(name));
+    let opened = match folders.split_first() {
+        // A `SKILL.md` is one folder down at least: one in the root itself
+        // is no skill's.
+        None => return Err(Reason::NotAFile),
+        Some((first, rest)) => held
+            .folder()
+            .folder(first)
+            .and_then(|top| {
+                rest.iter()
+                    .try_fold(top, |folder, name| folder.folder(name))
+            })
+            .and_then(|folder| folder.file(name)),
+    };
     let (file, metadata) = match opened {
         Ok(opened) => opened,
         Err(error) => return refused(error).map_or(Ok(None), Err),

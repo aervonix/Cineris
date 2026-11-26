@@ -2696,7 +2696,7 @@ caught-by:
 rule: A file beside the extensions' folders in a root is passed over without a word: an extension is a folder.
 file: crates/cineris-ext/src/discover.rs
 in: list
-find: (kind.is_dir() || kind.is_symlink()) && name.as_encoded_bytes().first() != Some(&b'.')
+find: matches!(kind, Kind::Folder | Kind::Link) && name.as_encoded_bytes().first() != Some(&b'.')
 replace: name.as_encoded_bytes().first() != Some(&b'.')
 caught-by:
     discover::tests::extensions_are_the_folders_directly_under_each_root_by_name
@@ -2765,7 +2765,7 @@ caught-by:
 rule: An extension's folder reached through a link is refused, as a link inside one is: the folder is read where it is.
 file: crates/cineris-ext/src/discover.rs
 in: extension_in
-find: if kind.is_symlink() {
+find: if kind == Kind::Link {
 replace: if false {
 caught-by:
     discover::tests::an_extension_folder_reached_through_a_link_is_refused
@@ -2873,8 +2873,8 @@ caught-by:
 rule: At most 1024 entries of a root are listed; past them the rest is not looked at, and that is said.
 file: crates/cineris-ext/src/discover.rs
 in: list
-find: if names.len() == MAX_ENTRIES {
-replace: if names.len() == MAX_ENTRIES + 1 {
+find: if names.len() > MAX_ENTRIES {
+replace: if names.len() > MAX_ENTRIES + 1 {
 caught-by:
     discover::tests::a_root_of_more_than_1024_entries_is_looked_at_only_so_far
 
@@ -3947,8 +3947,8 @@ caught-by:
 rule: Each extension's folder is stamped before it is read, so that a change made as it is read is seen at the next look.
 file: crates/cineris-ext/src/discover.rs
 in: extension_in
-find: if !seen(Seen::Extension(root.source, &folder)) { return None; } cineris_base::hook::point(AN_EXTENSION_IS_READ); let (read, read_bytes) = Snapshot::read_counted(&folder);
-replace: cineris_base::hook::point(AN_EXTENSION_IS_READ); let (read, read_bytes) = Snapshot::read_counted(&folder); cineris_base::hook::point(AN_EXTENSION_WAS_READ); if !seen(Seen::Extension(root.source, &folder)) { return None; }
+find: if !seen(Seen::Extension(root.source, &folder)) { return None; } cineris_base::hook::point(AN_EXTENSION_IS_READ); let (read, read_bytes) = Snapshot::read_in(held, name);
+replace: cineris_base::hook::point(AN_EXTENSION_IS_READ); let (read, read_bytes) = Snapshot::read_in(held, name); cineris_base::hook::point(AN_EXTENSION_WAS_READ); if !seen(Seen::Extension(root.source, &folder)) { return None; }
 packages: cineris-core
 caught-by:
     extensions_review::a_file_changed_as_its_folder_is_read_is_seen_at_the_first_turn
@@ -5662,8 +5662,8 @@ caught-by:
 rule: At most 100 entries are looked at in a root, and the rest are said not to have been.
 file: crates/cineris-ext/src/skills.rs
 in: look_in
-find: names.len() == MAX_ENTRIES
-replace: false
+find: if names.len() > MAX_ENTRIES {
+replace: if false {
 caught-by:
     cineris-ext skills::tests::a_root_with_more_than_a_hundred_entries_is_looked_at_only_so_far
 

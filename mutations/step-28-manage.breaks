@@ -1632,8 +1632,8 @@ caught-by:
 rule: A skill's `SKILL.md` is read through handles from its root, following no link below it: a folder swapped for a link to one outside the root between the look and the read is refused, never read through.
 file: crates/cineris-ext/src/skills.rs
 in: read_capped
-find: .try_fold(top, |folder, name| folder.folder(name))
-replace: .try_fold(Folder::open_following(path.parent().unwrap_or(root))?, |folder, _| Ok::<_, Refused>(folder))
+find: Some((first, rest)) => held.folder().folder(first)
+replace: Some((first, rest)) => cineris_sandbox::unfollowed::Folder::open_following(&root.join(first))
 caught-by:
     cineris-ext skills::tests::a_folder_swapped_for_a_link_after_its_look_is_never_read_through
 
@@ -1686,3 +1686,66 @@ replace: if false {
 caught-by:
     cineris-policy approving::tests::the_words_the_runs_of_a_line_read_are_bounded
     cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
+
+# The narrow re-check of the managing part: a folder above a root of skills
+# or of extensions, inside the workspace, swapped for a link between the
+# root's look and its read.
+
+[break] skills-root-opened-again-by-its-path
+rule: A skill's `SKILL.md` is read from the root that was listed, through its handle: never from the root opened again by its path, which follows a folder above it that was swapped for a link.
+os: linux
+file: crates/cineris-ext/src/skills.rs
+in: read_capped
+find: Some((first, rest)) => held.folder().folder(first)
+replace: Some((first, rest)) => cineris_sandbox::unfollowed::Folder::open(root).and_then(|top| top.folder(first))
+caught-by:
+    cineris-ext skills::tests::sys_a_parent_of_the_root_swapped_for_a_link_as_a_skill_is_read_is_never_read_through
+
+[break] skills-root-changed-taken
+rule: A root of skills is opened again after its skills are read, and one whose place no longer leads to the folder held has its skills left out, said.
+os: linux
+file: crates/cineris-ext/src/skills.rs
+in: look_in
+find: if candidates.len() > first && !held.unchanged() {
+replace: if false {
+caught-by:
+    cineris-ext skills::tests::sys_a_root_that_changed_as_its_skills_were_read_is_left_out_and_said
+
+[break] held-root-opened-by-its-path
+rule: A root of skills or of extensions in the workspace is opened from the workspace down, no name followed: a folder above it swapped for a link after the root was judged is refused, never opened through.
+file: crates/cineris-ext/src/folder.rs
+in: HeldRoot::open
+find: Some(below) => Folder::open_below(workspace, &below)?
+replace: Some(_) => Folder::open(real)?
+caught-by:
+    cineris-ext skills::tests::sys_a_parent_of_the_root_swapped_for_a_link_before_it_is_opened_is_never_read_through
+    cineris-ext discover::tests::sys_a_parent_of_the_root_swapped_for_a_link_before_it_is_opened_is_never_read_through
+
+[break] found-read-by-its-path
+rule: An extension's folder is read in the root that was listed, through its handle: never by its path, which follows a folder above the root that was swapped for a link.
+os: linux
+file: crates/cineris-ext/src/discover.rs
+in: extension_in
+find: let (read, read_bytes) = Snapshot::read_in(held, name);
+replace: let (read, read_bytes) = Snapshot::read_counted(&folder);
+caught-by:
+    cineris-ext discover::tests::sys_a_parent_of_the_root_swapped_for_a_link_as_an_extension_is_read_is_never_read_through
+
+[break] found-root-changed-taken
+rule: A root of extensions is opened again after its folders are read, and one whose place no longer leads to the folder held has its extensions left out, said, and is not listed whole.
+os: linux
+file: crates/cineris-ext/src/discover.rs
+in: look_in
+find: if discovered.found.len() > first && !held.unchanged() {
+replace: if false {
+caught-by:
+    cineris-ext discover::tests::sys_a_root_that_changed_as_its_extensions_were_read_is_left_out_and_said
+
+[break] unfollowed-below-follows-a-link
+rule: A folder opened below a place follows no link at any name below it: one swapped for a link is refused.
+file: crates/cineris-sandbox/src/unfollowed.rs
+in: Folder::open_below
+find: std::path::Component::Normal(name) => folder = folder.folder(name)?,
+replace: std::path::Component::Normal(_) => folder = Self::open_following(&anchor.join(below))?,
+caught-by:
+    cineris-sandbox unfollowed::tests::a_folder_below_a_place_follows_no_link_on_the_way_and_is_known_by_its_identity
