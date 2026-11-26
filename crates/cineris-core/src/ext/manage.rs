@@ -1178,6 +1178,224 @@ impl Core {
     }
 }
 
+/// What `extensions/status` says of each extension: of a session, as its
+/// finding loaded it and with the gates it holds; with none, of the user's
+/// own, as a session with no project would find them (since step 28's third
+/// pull request). Blocks.
+pub(crate) fn status(
+    core: &Core,
+    #[cfg(feature = "scripts")] view: Option<&super::found::SessionView>,
+    gates: &[(String, String, String, String)],
+) -> cineris_protocol::methods::ExtensionsStatusResult {
+    use cineris_protocol::methods::{ComponentStatus, ExtensionsStatusResult, HeldGate};
+    let options = &core.inner.options;
+    let home = options.env.home();
+    #[cfg(feature = "scripts")]
+    let (resolver, config, state, project, for_the_run, disabled) = match view {
+        Some(view) => (
+            Some(Arc::clone(&view.resolver)),
+            view.config_dir.clone(),
+            view.state.clone(),
+            view.project.clone(),
+            view.for_the_run.clone(),
+            view.disabled.clone(),
+        ),
+        None => none_of(core),
+    };
+    #[cfg(not(feature = "scripts"))]
+    let (resolver, config, state, project, for_the_run, disabled) = none_of(core);
+    let Some(resolver) = resolver else {
+        return ExtensionsStatusResult {
+            extensions: Vec::new(),
+            problems: Vec::new(),
+        };
+    };
+    let mut problems = Vec::new();
+    let pins = match &state {
+        Some(state) => PinStore::new(state.pins_file(), Arc::clone(&options.clock))
+            .pins()
+            .map_err(|failure| {
+                super::found::with_paths_shown(
+                    &failure.to_string(),
+                    &[&state.pins_file()],
+                    home.as_deref(),
+                )
+            }),
+        None => Ok(UserPins::default()),
+    };
+    let trust = match (&state, &project) {
+        (Some(state), Some(key)) => {
+            cineris_policy::TrustStore::new(state.trust_file(), Arc::clone(&options.clock))
+                .project(key)
+                .map_err(|_| {
+                    format!(
+                        "the trust store `{}` could not be read",
+                        in_code(&shown_path(&state.trust_file(), home.as_deref()))
+                    )
+                })
+        }
+        _ => Ok(ProjectTrust::untrusted()),
+    };
+    for problem in [pins.as_ref().err(), trust.as_ref().err()]
+        .into_iter()
+        .flatten()
+    {
+        problems.push(problem.clone());
+    }
+    let user = config.map(|config| discover::discover(&[Root::user(&config)], &resolver));
+    let project_found = project
+        .as_ref()
+        .map(|_| super::found::in_project(&resolver, &options.clock).0);
+    let cache = state.as_ref().map(|state| {
+        RegistrationCache::new(state.registration_cache_file())
+            .with_clock(Arc::clone(&options.clock))
+            .load()
+    });
+    let listed = judged(&Judging {
+        user: user.as_ref(),
+        project: project_found.as_ref(),
+        project_trusted: project.is_some(),
+        pins: pins.as_ref().map_err(Clone::clone),
+        trust: trust.as_ref().map_err(Clone::clone),
+        for_the_run: &for_the_run,
+        disabled: &disabled,
+        cache: cache.as_ref().map(|loaded| &loaded.cache),
+        confined: false,
+    });
+    let extensions = listed
+        .into_iter()
+        .map(|one| {
+            #[cfg(feature = "scripts")]
+            let (loaded, unloaded) = match view {
+                Some(view) => (
+                    Some(view.loaded.iter().any(|(source, name, hash)| {
+                        *source == one.source && *name == one.name && Some(*hash) == one.hash
+                    })),
+                    view.unloaded
+                        .iter()
+                        .find(|(source, name, _)| *source == one.source && *name == one.name)
+                        .map(|(_, _, why)| why.clone()),
+                ),
+                None => (None, None),
+            };
+            #[cfg(not(feature = "scripts"))]
+            let (loaded, unloaded): (Option<bool>, Option<String>) = (None, None);
+            let (state, error) = component_state(&one.standing, loaded, unloaded);
+            let held: Vec<HeldGate> = gates
+                .iter()
+                .filter(|(extension, ..)| *extension == one.name)
+                .map(|(_, hook, event, why)| HeldGate {
+                    hook: hook.clone(),
+                    event: event.clone(),
+                    why: why.clone(),
+                })
+                .collect();
+            let registered = one.registered.clone().unwrap_or_default();
+            ComponentStatus {
+                name: visible(&one.name).into_owned(),
+                state,
+                tools: u32::try_from(registered.tools.len()).unwrap_or(u32::MAX),
+                error,
+                source: Some(match one.source {
+                    Source::User => cineris_protocol::methods::ExtensionSource::User,
+                    Source::Project => cineris_protocol::methods::ExtensionSource::Project,
+                }),
+                standing: Some(wire_standing(&one.standing)),
+                folder: one.folder.clone(),
+                hash: one.hash.map(|hash| hash.to_string()),
+                commands: registered.commands,
+                hooks: registered.hooks,
+                gates: held,
+            }
+        })
+        .collect();
+    ExtensionsStatusResult {
+        extensions,
+        problems,
+    }
+}
+
+/// The state an extension is in, from its standing and, in a session,
+/// whether the session loaded it (`loaded`) and why its gate refuses where
+/// it stands approved and could not be loaded (`unloaded`).
+pub(crate) fn component_state(
+    standing: &ExtensionStanding,
+    loaded: Option<bool>,
+    unloaded: Option<String>,
+) -> (cineris_protocol::methods::ComponentState, Option<String>) {
+    use cineris_protocol::methods::ComponentState;
+    match (standing, loaded, unloaded) {
+        (_, _, Some(why)) => (ComponentState::Failed, Some(why)),
+        (ExtensionStanding::Approved, Some(true) | None, _) => (ComponentState::Ready, None),
+        // Approved as found, and not loaded yet: at the next turn.
+        (ExtensionStanding::Approved, Some(false), _) => (
+            ComponentState::Starting,
+            Some("approved as it is found now, and loaded at the session's next turn".to_owned()),
+        ),
+        (ExtensionStanding::Changed | ExtensionStanding::NotApproved, ..) => {
+            (ComponentState::NeedsApproval, Some(standing.words()))
+        }
+        (
+            ExtensionStanding::TurnedOff
+            | ExtensionStanding::NotUsed(_)
+            | ExtensionStanding::ProjectNotTrusted,
+            ..,
+        ) => (ComponentState::Disabled, Some(standing.words())),
+        _ => (ComponentState::Failed, Some(standing.words())),
+    }
+}
+
+/// What a status with no session looks in.
+type Lookin = (
+    Option<Arc<cineris_base::PathResolver>>,
+    Option<PathBuf>,
+    Option<cineris_config::StateDir>,
+    Option<cineris_protocol::ProjectKey>,
+    Vec<Definition>,
+    Vec<String>,
+);
+
+/// What a status with no session looks in: the user's own folder, the
+/// core's own configuration, no project.
+fn none_of(core: &Core) -> Lookin {
+    let resolver = core
+        .config_dir()
+        .and_then(|config| core.resolver(&config).ok())
+        .map(Arc::new);
+    let disabled = core
+        .inner
+        .user()
+        .settings
+        .extensions
+        .iter()
+        .filter(|(_, entry)| !entry.enabled)
+        .map(|(name, _)| name.clone())
+        .collect();
+    (
+        resolver,
+        core.config_dir(),
+        core.state_dir(),
+        None,
+        Vec::new(),
+        disabled,
+    )
+}
+
+fn wire_standing(standing: &ExtensionStanding) -> cineris_protocol::methods::ExtensionStanding {
+    use cineris_protocol::methods::ExtensionStanding as Wire;
+    match standing {
+        ExtensionStanding::Approved => Wire::Approved,
+        ExtensionStanding::Changed => Wire::Changed,
+        ExtensionStanding::NotApproved => Wire::NotApproved,
+        ExtensionStanding::TurnedOff => Wire::TurnedOff,
+        ExtensionStanding::Unjudged(_) => Wire::Unjudged,
+        ExtensionStanding::NotUsed(_) => Wire::NotUsed,
+        ExtensionStanding::ProjectNotTrusted => Wire::ProjectNotTrusted,
+        ExtensionStanding::Gone => Wire::Gone,
+        ExtensionStanding::LeftOut(_) => Wire::LeftOut,
+    }
+}
+
 /// `name` as a key of a TOML table's header: bare when it can be, quoted
 /// otherwise (`acme.lint` is one key, `"acme.lint"`).
 fn toml_key(name: &str) -> String {

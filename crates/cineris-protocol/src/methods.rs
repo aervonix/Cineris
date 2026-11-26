@@ -1134,9 +1134,86 @@ pub struct ComponentStatus {
     /// How many tools it provides.
     #[serde(default)]
     pub tools: u32,
-    /// What went wrong, for `failed`.
+    /// What went wrong, for `failed`; why it waits, for `needs_approval`;
+    /// why it is off, for `disabled`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// An extension's: whose it is (since step 28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<ExtensionSource>,
+    /// An extension's: how it stands against its approval, as a session
+    /// judges it (since step 28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub standing: Option<ExtensionStanding>,
+    /// An extension's: its folder, under `~` for the user's and relative to
+    /// the workspace for a project's (since step 28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
+    /// An extension's: the hash of its folder read whole, as it is pinned
+    /// (since step 28).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hash: Option<String>,
+    /// An extension's: the names of its commands (since step 28).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commands: Vec<String>,
+    /// An extension's: its hooks, each its event and the tools it is on
+    /// (since step 28).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<String>,
+    /// An extension's: the gating hooks the session holds of it, failing,
+    /// while it does not stand as it was approved (since step 28).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gates: Vec<HeldGate>,
+}
+
+open_enum! {
+    /// Whose an extension is (since step 28).
+    pub enum ExtensionSource {
+        /// The user's own, in the configuration directory's `extensions`.
+        User => "user",
+        /// The project's, in the workspace's `.cineris/extensions`.
+        Project => "project",
+    }
+}
+
+open_enum! {
+    /// How an extension stands against its approval (since step 28;
+    /// `docs/architecture/12-extensions.md`, the table of how a found
+    /// extension stands).
+    pub enum ExtensionStanding {
+        /// Approved at the hash it is found at.
+        Approved => "approved",
+        /// Approved at another hash: changed since; its gating hooks hold.
+        Changed => "changed",
+        /// Never approved.
+        NotApproved => "not_approved",
+        /// Turned off in the user's configuration.
+        TurnedOff => "turned_off",
+        /// The store that holds its approval cannot be read.
+        Unjudged => "unjudged",
+        /// A project's of a name the user's folder of extensions takes.
+        NotUsed => "not_used",
+        /// A project's, and the project is not trusted.
+        ProjectNotTrusted => "project_not_trusted",
+        /// Pinned, and its folder is gone; its gating hooks hold.
+        Gone => "gone",
+        /// Its folder was found and could not be taken.
+        LeftOut => "left_out",
+    }
+}
+
+/// A gating hook a session holds of an extension that does not stand as it
+/// was approved: on its event, its run fails, refusing what it gates
+/// (since step 28).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HeldGate {
+    /// The hook's name: `<extension>/hook.<event>`.
+    pub hook: String,
+    /// Its event: `tool.before` or `prompt.submit`.
+    pub event: String,
+    /// Why it refuses, with the way out, as the model is told it.
+    pub why: String,
 }
 
 /// The result of `mcp/status`.
@@ -1147,12 +1224,28 @@ pub struct McpStatusResult {
     pub servers: Vec<ComponentStatus>,
 }
 
+/// `extensions/status`
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct ExtensionsStatusParams {
+    /// The session whose extensions are asked about, which the client has
+    /// open (since step 28). Absent: the user's own, as a session with no
+    /// project would find them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<SessionId>,
+}
+
 /// The result of `extensions/status`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ExtensionsStatusResult {
-    /// The extensions.
+    /// The extensions: each the session found, left out or holds a gate
+    /// of, with its standing (since step 28).
     pub extensions: Vec<ComponentStatus>,
+    /// What could not be read, each a sentence: a store of approvals, the
+    /// registration cache, a folder of extensions (since step 28).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub problems: Vec<String>,
 }
 
 // ---------------------------------------------- server → client requests
@@ -1710,7 +1803,7 @@ methods! {
     /// The state of the MCP servers.
     McpStatus(Empty) -> McpStatusResult => "mcp/status",
     /// The state of the extensions.
-    ExtensionsStatus(Empty) -> ExtensionsStatusResult => "extensions/status",
+    ExtensionsStatus(ExtensionsStatusParams) -> ExtensionsStatusResult => "extensions/status",
     /// The custom commands a session may send, and those found and not
     /// used, with why. Only reads.
     CommandsList(CommandsListParams) -> CommandsListResult => "commands/list",

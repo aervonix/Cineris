@@ -95,7 +95,7 @@ use cineris_protocol::methods::{TrustResource, TrustResourceKind};
 use super::watched::Watched;
 
 #[cfg(feature = "scripts")]
-pub(crate) use pipeline::{Finding, start};
+pub(crate) use pipeline::{Finding, SessionView, start};
 
 impl crate::Core {
     /// Ends the session `session`'s finding of its extensions where it
@@ -277,6 +277,13 @@ impl Extensions {
         #[cfg(feature = "scripts")]
         self.held.recheck().await;
         Ok(())
+    }
+
+    /// What the session's finding holds of its extensions, once it has
+    /// settled: `None` before, or with nothing to find.
+    #[cfg(feature = "scripts")]
+    pub(crate) async fn view(&self) -> Option<pipeline::SessionView> {
+        self.held.view().await
     }
 
     /// The session has ended: work still under way for it ends too.
