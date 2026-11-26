@@ -10,8 +10,9 @@
 //! - **On Linux, by the line of parents,** as the RPC server tells its own
 //!   commands (`cineris-rpc`'s `socket::unix`): from this process's parent
 //!   up, each process's `/proc/<pid>/stat`. A process is a session's harness
-//!   when it is Cineris (its name `cineris` or `cin`, or this binary's own,
-//!   or the very file this process runs) and its first argument is not a
+//!   when it is Cineris (the very file this process runs, or a process
+//!   named `cineris` or `cin`, or as this binary is, whose file is named so
+//!   too: never by its name alone) and its first argument is not a
 //!   subcommand that runs no session (`ext`, `config`, `attach` and the
 //!   rest): the application, a headless run and `serve` run sessions. A
 //!   line that cannot be read refuses, as if it reached one. A parent that
@@ -269,6 +270,32 @@ mod sys {
         name == "cineris" || name == "cin" || own.is_some_and(|own| cut(&own) == name)
     }
 
+    /// Whether the file `pid` runs is named as Cineris is (`cineris`, `cin`
+    /// or this binary's own name), its name and its file together: a
+    /// process named `cin` that runs another program (a user's own
+    /// `#!/bin/sh` wrapper of that name, which runs as `/bin/sh`) is not
+    /// Cineris (the full review of the third part). A file that cannot be
+    /// read (another user's process) is taken as Cineris's: what it is is
+    /// not known.
+    fn file_named(pid: u32) -> bool {
+        match std::fs::read_link(format!("/proc/{pid}/exe")) {
+            Ok(file) => {
+                let name = file
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                // A file replaced or removed since it was started.
+                let name = name.strip_suffix(" (deleted)").unwrap_or(&name);
+                let own = std::env::current_exe().ok().and_then(|exe| {
+                    exe.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                });
+                name == "cineris" || name == "cin" || own.is_some_and(|own| own == name)
+            }
+            Err(_) => true,
+        }
+    }
+
     /// Whether `pid` runs the very file this process runs.
     fn same_binary(pid: u32) -> bool {
         let (Ok(own), Ok(theirs)) = (
@@ -306,7 +333,7 @@ mod sys {
             return Seen::Failed;
         };
         let name = stat.get(open + 1..close).unwrap_or("");
-        let cineris = named(name) || same_binary(pid);
+        let cineris = same_binary(pid) || (named(name) && file_named(pid));
         // Its arguments, when it is Cineris: one that cannot be read is
         // taken as running sessions.
         let harness = cineris
@@ -336,6 +363,37 @@ mod sys {
             assert!(super::named(&cut), "{cut}");
             assert!(super::same_binary(std::process::id()));
             assert!(!super::same_binary(1));
+            assert!(super::file_named(std::process::id()));
+        }
+
+        /// A process named as Cineris is whose file is another program's
+        /// (a user's wrapper script named `cin`, run by `/bin/sh`) is not
+        /// Cineris: its name alone is not enough (the full review of the
+        /// third part).
+        #[test]
+        fn sys_a_program_named_cin_that_is_another_is_not_cineris() {
+            use std::os::unix::fs::PermissionsExt as _;
+            let scratch = cineris_testkit::scratch::Scratch::outside(
+                "cineris-sandbox-session",
+                "sys_a_program_named_cin_that_is_another_is_not_cineris",
+            );
+            let script = scratch.join("cin");
+            std::fs::write(&script, "#!/bin/sh\nread -r line\n").unwrap();
+            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let mut child = std::process::Command::new(&script)
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            let pid = child.id();
+            let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap();
+            let seen = super::seen(pid);
+            drop(child.stdin.take());
+            child.wait().unwrap();
+            assert_eq!(comm.trim_end(), "cin");
+            assert!(
+                matches!(seen, super::Seen::Of { harness: false, .. }),
+                "{seen:?}"
+            );
         }
     }
 }
