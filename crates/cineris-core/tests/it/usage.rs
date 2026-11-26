@@ -451,6 +451,25 @@ fn showing_the_statistics_prunes_nothing() {
     assert!(old.exists(), "nothing was deleted");
 }
 
+/// With statistics off a usage report reads them and deletes nothing, a
+/// month past the retention included: nothing is written, so nothing is
+/// pruned either.
+#[test]
+fn a_report_with_statistics_off_prunes_nothing() {
+    let world = World::new("report_off", []);
+    world.user_config("[stats]\nenabled = false\nretention = 1\n");
+    let dir = world.dirs().state.unwrap().join("stats");
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("events-2025-01.jsonl");
+    std::fs::write(&old, "").unwrap();
+    // Aggregates read from their file, which alone may prune: without them
+    // a prune would delete nothing either and the test would hold nothing.
+    std::fs::write(dir.join("aggregates.json"), b"{\"version\":1}").unwrap();
+    let core = world.core();
+    world.run(report(&core, UsageRange::All));
+    assert!(old.exists(), "nothing was deleted with statistics off");
+}
+
 /// A user's catalog entry for a model priced at a dollar a million input
 /// tokens and `output` a million output tokens.
 fn house_model(output: f64) -> String {
