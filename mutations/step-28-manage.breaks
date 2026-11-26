@@ -1630,6 +1630,15 @@ packages: cineris-core, cineris-cli
 caught-by:
     cineris-core::it settings::a_level_change_past_the_cores_cap_is_refused
 
+[break] skills-read-follows-a-link-swapped-in-after-the-look
+rule: A skill's `SKILL.md` is read through handles from its root, following no link below it: a folder swapped for a link to one outside the root between the look and the read is refused, never read through.
+file: crates/cineris-ext/src/skills.rs
+in: read_capped
+find: .try_fold(top, |folder, name| folder.folder(name))
+replace: .try_fold(Folder::open_following(path.parent().unwrap_or(root))?, |folder, _| Ok::<_, Refused>(folder))
+caught-by:
+    cineris-ext skills::tests::a_folder_swapped_for_a_link_after_its_look_is_never_read_through
+
 [break] credentials-lock-waits-without-end
 rule: A change of the credentials file (`cineris auth login`, an approving subcommand) waits for another hold of its lock no longer than the other stores' locks, and is then refused naming the file: a hold that does not end cannot hang it.
 file: crates/cineris-config/src/credentials/file.rs

@@ -1200,3 +1200,57 @@ fn a_root_reads_at_most_its_bytes_of_skills() {
     );
     assert_eq!(MAX_ROOT_BYTES, 8 * 1024 * 1024);
 }
+
+/// A skill's folder swapped for a link after its look, between the check
+/// that its `SKILL.md` is in the root and the read, to a folder outside the
+/// root whose `SKILL.md` stands for a file of the user's such as a private
+/// key: the read goes through handles from the root and follows no link,
+/// so the skill is left out as leading out of its root, and nothing of the
+/// file outside reaches the listing (the maintainers' addition to the last
+/// round of step 28's third pull request).
+#[test]
+fn a_folder_swapped_for_a_link_after_its_look_is_never_read_through() {
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "a_folder_swapped_for_a_link_after_its_look_is_never_read_through",
+    );
+    skill(
+        &scratch,
+        "home/proj/.cineris/skills/alpha",
+        "alpha",
+        "Ours.",
+    );
+    skill(
+        &scratch,
+        "outside/key",
+        "stolen",
+        "What a private key says.",
+    );
+    let root = scratch.join("home/proj/.cineris/skills");
+    let outside = scratch.join("outside/key");
+    let resolver = resolver(&scratch);
+    let hold = cineris_testkit::Hold::new(A_SKILL_IS_READ);
+    let finding = std::thread::spawn(move || skills::find(&resolver, &Root::standard(false)));
+    assert!(hold.wait_reached(std::time::Duration::from_secs(5)));
+    std::fs::remove_dir_all(root.join("alpha")).unwrap();
+    let linked = make_link(&outside, &root.join("alpha"), true);
+    hold.release();
+    let found = finding.join().unwrap();
+    if !linked {
+        // No link can be made here (Windows without the right to).
+        return;
+    }
+    assert!(
+        found.skills.iter().all(|skill| skill.name != "stolen"),
+        "{found:?}"
+    );
+    assert_eq!(
+        found
+            .left_out
+            .iter()
+            .map(|left| (left.path.as_str(), &left.reason))
+            .collect::<Vec<_>>(),
+        [(".cineris/skills/alpha/SKILL.md", &Reason::LinkOut)],
+        "{found:?}"
+    );
+}

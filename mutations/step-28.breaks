@@ -5697,8 +5697,8 @@ caught-by:
 rule: A `SKILL.md` that is a folder, a FIFO or a device is left out with its reason.
 file: crates/cineris-ext/src/skills.rs
 in: read_capped
-find: Err(OpenError::Directory | OpenError::NotAFile) => return Err(Reason::NotAFile)
-replace: Err(OpenError::Directory | OpenError::NotAFile) => return Ok(None)
+find: Refused::NotAFolder | Refused::NotAFile => Some(Reason::NotAFile)
+replace: Refused::NotAFolder | Refused::NotAFile => None
 caught-by:
     cineris-ext skills::tests::a_link_to_nothing_and_a_skill_file_that_is_no_file_are_left_out
 

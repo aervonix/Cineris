@@ -27,9 +27,11 @@
 //! - **A skill's folder or its `SKILL.md` reached through a link** is
 //!   followed only where it stays inside its root. A link that leads out, or
 //!   to nothing, is left out with its reason.
-//! - **The file is opened with [`open_regular`]**, after resolving, which
-//!   refuses a link, a FIFO or a device at the last name, so what is read is
-//!   what was checked.
+//! - **The file is opened through handles**, after resolving: the root with
+//!   its own name not followed, then each name below it relative to the
+//!   folder before, none followed if it is a link now, and nothing but a
+//!   regular file read at the last (`cineris_sandbox::unfollowed`). What is
+//!   read is what was checked, in its root, whatever was swapped since.
 //!
 //! **The front matter** is read by [`FrontMatter::read`], a small reader of
 //! the plain YAML skills are written in, with no YAML library: `key: value`
@@ -78,8 +80,8 @@ use std::io::Read as _;
 use std::path::{Component, Path, PathBuf};
 
 use cineris_base::{
-    AbsPath, OpenError, PathError, PathResolver, ResolvedPath, location_within, open_regular,
-    same_location, strip_location_prefix, visible,
+    AbsPath, PathError, PathResolver, ResolvedPath, location_within, same_location,
+    strip_location_prefix, visible,
 };
 
 /// The file that makes a folder a skill.
@@ -787,7 +789,7 @@ fn skill_in(
     }
     seen(Seen::Place(&file.to_fs_path()));
     cineris_base::hook::point(A_SKILL_IS_READ);
-    let text = match read_capped(&file.to_fs_path(), &look.left) {
+    let text = match read_capped(&root, &file.to_fs_path(), &look.left) {
         Ok(Some(text)) => text,
         Ok(None) => return Ok(None),
         Err(reason) => return Err(left(&file_shown, reason)),
@@ -812,18 +814,55 @@ fn skill_in(
     }))
 }
 
-/// Reads a `SKILL.md` already resolved, opened so that nothing at the last
-/// name but a regular file is read. `None` when it is gone. One larger than
-/// [`MAX_SKILL_BYTES`] by its length, or than what its root may still read
-/// (`left`), is refused unread; every byte read is taken from `left`.
-fn read_capped(path: &Path, left: &std::cell::Cell<u64>) -> Result<Option<String>, Reason> {
-    let (file, metadata) = match open_regular(path) {
-        Ok(opened) => opened,
-        Err(OpenError::NotFound) => return Ok(None),
-        Err(OpenError::Directory | OpenError::NotAFile) => return Err(Reason::NotAFile),
+/// Reads a `SKILL.md` already resolved to `path`, below the root `root`
+/// (where the root really is), through handles: the root opened with its
+/// own name not followed, and each name below it opened relative to the
+/// folder before it, none followed if it is a link now. What is read is the
+/// file that was checked, in its root, whatever was swapped since: a folder
+/// made a link between the look and the read (to one holding a `SKILL.md`
+/// outside the root, standing for a file such as `~/.ssh/id_ed25519`) is
+/// refused, not read through (the maintainers' addition to the last round
+/// of step 28's third pull request; the names above the root are followed,
+/// as they are for an extension's folder). `None` when it is gone. One
+/// larger than [`MAX_SKILL_BYTES`] by its length, or than what its root may
+/// still read (`left`), is refused unread; every byte read is taken from
+/// `left`.
+fn read_capped(
+    root: &Path,
+    path: &Path,
+    left: &std::cell::Cell<u64>,
+) -> Result<Option<String>, Reason> {
+    use cineris_sandbox::unfollowed::{Folder, Refused};
+    let refused = |refused: Refused| match refused {
+        Refused::NotFound => None,
         // Swapped for a link since it was resolved.
-        Err(OpenError::Link) => return Err(Reason::LinkOut),
-        Err(error) => return Err(Reason::Unreadable(error.to_string())),
+        Refused::Link | Refused::NotAName => Some(Reason::LinkOut),
+        Refused::NotAFolder | Refused::NotAFile => Some(Reason::NotAFile),
+        Refused::Unsupported | Refused::Io(_) => Some(Reason::Unreadable(refused.to_string())),
+    };
+    let Some(below) = strip_location_prefix(path, root) else {
+        return Err(Reason::LinkOut);
+    };
+    let mut names = Vec::new();
+    for part in below.components() {
+        match part {
+            Component::Normal(name) => names.push(name.to_owned()),
+            _ => return Err(Reason::LinkOut),
+        }
+    }
+    let Some((name, folders)) = names.split_last() else {
+        return Err(Reason::NotAFile);
+    };
+    let opened = Folder::open(root)
+        .and_then(|top| {
+            folders
+                .iter()
+                .try_fold(top, |folder, name| folder.folder(name))
+        })
+        .and_then(|folder| folder.file(name));
+    let (file, metadata) = match opened {
+        Ok(opened) => opened,
+        Err(error) => return refused(error).map_or(Ok(None), Err),
     };
     // One test of size for the length and for what is read past it.
     let too_large = |len: u64| len > MAX_SKILL_BYTES;
