@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use cineris_base::rng::{Rng, SystemRng};
-use cineris_base::{ContentHash, ContentHasher, OpenError, private};
+use cineris_base::{ContentHash, ContentHasher, FileMode, OpenError, private};
 use cineris_protocol::ids::ArtifactId;
 use cineris_protocol::item::ArtifactRef;
 
@@ -341,6 +341,8 @@ impl DiskStore {
     /// Stores the content of the regular file at `path`, streamed, unless
     /// it is larger than `limit`: then only its hash and size are recorded,
     /// and [`FileVersion::kept`] is false. `None` when there is no file.
+    /// Its mode is recorded too ([`FileVersion::mode`]), read from the
+    /// handle the content is read through.
     ///
     /// **Only a regular file is read, and never more than it held.** A link
     /// is not followed, and a device, a FIFO or a directory is refused, by
@@ -382,9 +384,13 @@ impl DiskStore {
                 return Err(SessionError::io("read the file", path.to_path_buf())(error));
             }
         };
+        // The mode, from the handle that is read: what a rewind that makes
+        // the file again gives it (since the step 25 fixes). One the system
+        // does not report is not known, and the file is still kept.
+        let mode = FileMode::of(&source).ok().flatten();
         opened();
         self.store_stream(&mut source.take(opened_as.len()), limit, path)
-            .map(Some)
+            .map(|version| Some(version.with_mode(mode)))
     }
 
     /// Stores content read from `source` to its end, as
@@ -439,11 +445,7 @@ impl DiskStore {
         let hash = hasher.finish();
         let Some((temporary, file)) = copy else {
             outcome.map_err(SessionError::io("read the content", origin.to_path_buf()))?;
-            return Ok(FileVersion {
-                hash,
-                bytes,
-                kept: false,
-            });
+            return Ok(FileVersion::new(hash, bytes, false));
         };
         let finished = outcome.and_then(|()| if self.sync { file.sync_all() } else { Ok(()) });
         drop(file);
@@ -453,11 +455,7 @@ impl DiskStore {
         } else {
             self.settle_blob(temporary, &hash, finished)?;
         }
-        Ok(FileVersion {
-            hash,
-            bytes,
-            kept: true,
-        })
+        Ok(FileVersion::new(hash, bytes, true))
     }
 
     /// The content stored under a hash, checked against it. `None` when it

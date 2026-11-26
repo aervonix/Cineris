@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use cineris_base::atomic::BEFORE_THE_RENAME;
 use cineris_base::hook::Hold;
-use cineris_base::{AtomicWriteError, AtomicWriteOptions, FakeClock, write_atomic};
+use cineris_base::{AtomicWriteError, AtomicWriteOptions, FakeClock, FileMode, write_atomic};
 
 use crate::Scratch;
 
@@ -343,6 +343,63 @@ mod unix {
         assert_eq!(mode(&target), 0o600);
     }
 
+    /// What the process's umask takes from a new file: what a directory,
+    /// made asking for every bit, lacks.
+    fn umask(scratch: &Scratch) -> u32 {
+        !mode(&scratch.dir("umask-probe")) & 0o777
+    }
+
+    fn putting_back(bits: u32) -> AtomicWriteOptions {
+        AtomicWriteOptions {
+            mode: Some(FileMode::from_bits(bits)),
+            ..options()
+        }
+    }
+
+    /// A file put back as it was (a rewind's put-back, since the step 25
+    /// fixes) is created with the mode it had, less the umask, as any new
+    /// file: a script executable, a private file private. A set-id or
+    /// sticky bit is never given, whatever the mode says.
+    #[test]
+    fn a_file_put_back_is_created_with_the_mode_it_had() {
+        let scratch = Scratch::new("atomic_unix_put_back_new");
+        let clock = FakeClock::default();
+        let umask = umask(&scratch);
+        for bits in [0o755, 0o600, 0o640, 0o700, 0o444, 0o4755, 0o2750, 0o1777] {
+            let target = scratch.join("file");
+            write_atomic(&target, b"back", &putting_back(bits), &clock).unwrap();
+            assert_eq!(mode(&target), bits & 0o777 & !umask, "mode {bits:o}");
+            assert_eq!(fs::read(&target).unwrap(), b"back");
+            assert_eq!(scratch.listing(""), ["file", "umask-probe"]);
+            fs::remove_file(&target).unwrap();
+        }
+    }
+
+    /// Over a file that is still there, the mode put back only narrows it:
+    /// a file a command made readable by others is private again, and a
+    /// file the person made private since is not opened up.
+    #[test]
+    fn a_file_put_back_over_one_still_there_is_never_left_wider() {
+        let scratch = Scratch::new("atomic_unix_put_back_over");
+        let clock = FakeClock::default();
+        for (now, had, left) in [
+            (0o644, 0o600, 0o600),
+            (0o600, 0o644, 0o600),
+            (0o755, 0o644, 0o644),
+            (0o644, 0o755, 0o644),
+            (0o664, 0o640, 0o640),
+            (0o4755, 0o755, 0o4755),
+        ] {
+            let target = scratch.file("file", "now");
+            fs::set_permissions(&target, fs::Permissions::from_mode(now)).unwrap();
+            write_atomic(&target, b"back", &putting_back(had), &clock).unwrap();
+            assert_eq!(mode(&target), left, "{now:o} put back as {had:o}");
+            assert_eq!(fs::read(&target).unwrap(), b"back");
+            assert_eq!(scratch.listing(""), ["file"]);
+            fs::remove_file(&target).unwrap();
+        }
+    }
+
     /// The option means the same whether or not the file was there: a
     /// credentials file someone made by hand, readable by others, is private
     /// once a key has been written into it.
@@ -635,6 +692,45 @@ mod windows {
         drop(reader);
         assert_eq!(fs::read_to_string(&target).unwrap(), "new");
         assert!(clock.sleeps().is_empty());
+    }
+
+    /// A file put back with a private mode (a rewind's put-back of a file
+    /// the person had made private, since the step 25 fixes) is owner-only,
+    /// created or replaced; with any other mode it takes its folder's
+    /// rules, as a new file does.
+    #[test]
+    fn a_file_put_back_private_is_owner_only() {
+        use cineris_base::private::{access_list, is_private};
+
+        let scratch = Scratch::new("atomic_windows_put_back");
+        let clock = FakeClock::default();
+        let private = AtomicWriteOptions {
+            mode: Some(FileMode::PRIVATE),
+            ..options()
+        };
+        let open = AtomicWriteOptions {
+            mode: Some(FileMode::from_bits(0o644)),
+            ..options()
+        };
+
+        let made = scratch.join("made.txt");
+        write_atomic(&made, b"back", &private, &clock).unwrap();
+        let list = access_list(&made).unwrap();
+        assert!(list.is_owner_only(), "{list:?}");
+        assert!(list.is_kept_from_others(), "{list:?}");
+        assert_eq!(fs::read(&made).unwrap(), b"back");
+
+        let over = scratch.file("over.txt", "now");
+        assert!(!is_private(&over).unwrap());
+        write_atomic(&over, b"back", &private, &clock).unwrap();
+        assert!(access_list(&over).unwrap().is_owner_only());
+
+        let plain = scratch.join("plain.txt");
+        write_atomic(&plain, b"back", &open, &clock).unwrap();
+        let list = access_list(&plain).unwrap();
+        assert!(list.inherits, "{list:?}");
+        assert!(!list.is_kept_from_others(), "{list:?}");
+        assert_eq!(scratch.listing(""), ["made.txt", "over.txt", "plain.txt"]);
     }
 
     #[test]

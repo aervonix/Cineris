@@ -137,6 +137,36 @@ impl AccessList {
                 entry.kind == AccessKind::Allow && entry.current_user && !entry.inherited
             })
     }
+
+    /// Whether the object is kept from everyone but the current user, as a
+    /// person keeps a file private on Windows (since the step 25 fixes,
+    /// for a rewind that makes such a file again): it takes nothing from
+    /// its folder, it has an access list, an entry allows the current
+    /// user, and no entry allows anyone else but the SYSTEM account and the
+    /// Administrators group, which reach any file regardless (the module's
+    /// "Who is on the list"). An entry of a kind that is not read counts
+    /// against it. An owner-only file is one; so is a file cut off from its
+    /// folder (`icacls … /inheritance:r`) and left to its user, the system
+    /// and the administrators. Who owns it is not asked: a file made again
+    /// is the current user's.
+    #[must_use]
+    pub fn is_kept_from_others(&self) -> bool {
+        /// The SYSTEM account and the Administrators group.
+        const ALWAYS_THERE: [&str; 2] = ["S-1-5-18", "S-1-5-32-544"];
+        !self.inherits
+            && !self.unrestricted
+            && self
+                .entries
+                .iter()
+                .any(|entry| entry.kind == AccessKind::Allow && entry.current_user)
+            && self.entries.iter().all(|entry| match entry.kind {
+                AccessKind::Deny => true,
+                AccessKind::Allow => {
+                    entry.current_user || ALWAYS_THERE.contains(&entry.trustee.as_str())
+                }
+                AccessKind::Other => false,
+            })
+    }
 }
 
 /// Memory that Windows allocated for its caller and that is given back with
@@ -620,13 +650,27 @@ pub fn access_list(path: &Path) -> io::Result<AccessList> {
         .access_mode(READ_CONTROL)
         .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
         .open(path)?;
+    access_list_of(&object)
+}
+
+/// Reads the owner and the access list of an open file or directory,
+/// through its handle and never its name (since the step 25 fixes: the
+/// mode a checkpoint keeps of a file the editing tools opened,
+/// [`crate::FileMode::of`]). The handle must have the right to read
+/// permissions, which one opened for reading has.
+///
+/// # Errors
+///
+/// When the handle lacks that right, or Windows refuses to report them.
+pub fn access_list_of(object: &File) -> io::Result<AccessList> {
     let user = current_user()?;
 
     let mut owner: PSID = ptr::null_mut();
     let mut list: *mut ACL = ptr::null_mut();
     let mut descriptor: PSECURITY_DESCRIPTOR = ptr::null_mut();
-    // SAFETY: `object` is an open handle with the right to read permissions,
-    // alive for the call. `owner`, `list` and `descriptor` are live,
+    // SAFETY: `object` is an open handle, borrowed, so alive for the call;
+    // one without the right to read permissions makes the call fail with
+    // an error, which is returned below. `owner`, `list` and `descriptor` are live,
     // writable locations for the pointers the call returns. The group and
     // the audit list are not asked for, and their outputs are null.
     let status = unsafe {

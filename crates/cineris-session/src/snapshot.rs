@@ -242,11 +242,7 @@ pub(crate) fn hash_file(path: &std::path::Path) -> Result<Option<FileVersion>> {
     };
     let mut hasher = ContentHasher::new();
     let bytes = io::copy(&mut file.take(opened.len()), &mut hasher).map_err(read_error())?;
-    Ok(Some(FileVersion {
-        hash: hasher.finish(),
-        bytes,
-        kept: true,
-    }))
+    Ok(Some(FileVersion::new(hasher.finish(), bytes, true)))
 }
 
 /// What stands for something at a path that is not a regular file: a hash
@@ -266,11 +262,11 @@ fn not_a_file(path: &std::path::Path, found: &fs::Metadata) -> FileVersion {
     } else {
         "special".to_owned()
     };
-    FileVersion {
-        hash: ContentHash::of(format!("\0cineris: not a regular file\0{what}").as_bytes()),
-        bytes: 0,
-        kept: false,
-    }
+    FileVersion::new(
+        ContentHash::of(format!("\0cineris: not a regular file\0{what}").as_bytes()),
+        0,
+        false,
+    )
 }
 
 /// Where a file a checkpoint names is: inside the workspace for a relative
@@ -616,12 +612,18 @@ pub(crate) fn put_back(
                 ))?;
             }
             // A link that appeared at the file since the look above is
-            // refused, never written through.
+            // refused, never written through. A file made again has the
+            // mode it had, less the umask, from the moment it exists; one
+            // still there is never left wider than it had (since the step
+            // 25 fixes, which found every file made again with the default
+            // mode). A version with no mode recorded (a log from before)
+            // is written as it always was.
             cineris_base::write_atomic(
                 &target,
                 &content,
                 &cineris_base::AtomicWriteOptions {
                     follow_links: false,
+                    mode: version.mode,
                     ..cineris_base::AtomicWriteOptions::default()
                 },
                 clock,

@@ -62,6 +62,7 @@ mod knowledge;
 mod lifecycle;
 mod plan;
 mod provider;
+mod put_back;
 mod redecide;
 mod reload;
 mod rewind_plan;

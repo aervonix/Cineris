@@ -277,11 +277,7 @@ mod tests {
     use super::*;
 
     fn cannot(why: CannotRestore) -> FileRestore {
-        let version = FileVersion {
-            hash: ContentHash::of(b"before"),
-            bytes: 6,
-            kept: true,
-        };
+        let version = FileVersion::new(ContentHash::of(b"before"), 6, true);
         FileRestore {
             path: "a.txt".to_owned(),
             restore: Before::Version(version),

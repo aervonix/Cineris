@@ -1,0 +1,141 @@
+# The step 25 fixes, the put-back's part (docs/steps/step-25-fixes/parts/put-back.md):
+# a file a rewind or an undo makes again has the mode it had.
+
+# ------------------------------------------------- the mode is put back
+
+[break] a-put-back-made-with-the-default-mode
+rule: A file a rewind makes again is made with the mode its checkpoint kept: a removed script comes back executable, a removed private file private.
+file: crates/cineris-session/src/snapshot.rs
+in: put_back
+find: mode: version.mode,
+replace:
+packages: cineris-session,cineris-core
+caught-by:
+    cineris-session::it put_back::unix::a_removed_file_is_made_again_with_the_mode_it_had
+    cineris-session::it put_back::unix::a_file_put_back_over_one_still_there_is_never_left_wider
+    cineris-core::it put_back::sys_an_undo_puts_back_a_removed_script_with_its_execute_bit
+    cineris-core::it put_back::a_private_file_put_back_after_it_was_removed_is_private_again
+
+[break] a-new-file-ignores-the-mode-it-is-given
+rule: A file the write creates with a mode has that mode, less the umask, from the moment its temporary file exists.
+file: crates/cineris-base/src/atomic.rs
+in: create_file
+find: NewFile::Mode(mode) => mode.bits(),
+replace: NewFile::Mode(_) => 0o666,
+packages: cineris-base,cineris-session
+caught-by:
+    cineris-base::it atomic::unix::a_file_put_back_is_created_with_the_mode_it_had
+    cineris-session::it put_back::unix::a_removed_file_is_made_again_with_the_mode_it_had
+
+[break] a-file-written-over-keeps-a-wider-mode
+rule: A file a put-back writes over, still there, loses every permission bit the kept mode lacks: never wider than it was.
+file: crates/cineris-base/src/atomic.rs
+in: kept_permissions
+find: Some(mode) => fs::Permissions::from_mode(now & !(0o777 & !mode.bits())),
+replace: Some(_) => found.permissions(),
+packages: cineris-base,cineris-session
+caught-by:
+    cineris-base::it atomic::unix::a_file_put_back_over_one_still_there_is_never_left_wider
+    cineris-session::it put_back::unix::a_file_put_back_over_one_still_there_is_never_left_wider
+
+[break] a-file-written-over-takes-the-kept-mode-whole
+rule: A file a put-back writes over keeps its own mode where it is narrower than the kept one: one the person made private since is not opened up.
+file: crates/cineris-base/src/atomic.rs
+in: kept_permissions
+find: Some(mode) => fs::Permissions::from_mode(now & !(0o777 & !mode.bits())),
+replace: Some(mode) => fs::Permissions::from_mode((now & !0o777) | mode.bits()),
+packages: cineris-base,cineris-session
+caught-by:
+    cineris-base::it atomic::unix::a_file_put_back_over_one_still_there_is_never_left_wider
+    cineris-session::it put_back::unix::a_file_put_back_over_one_still_there_is_never_left_wider
+
+[break] a-set-id-bit-read-from-a-log
+rule: A mode read from a session log holds the nine permission bits alone: a set-user-id, set-group-id or sticky bit is never put back.
+file: crates/cineris-base/src/mode.rs
+in: FileMode::from_bits
+find: Self(bits & 0o777)
+replace: Self(bits & 0o7777)
+packages: cineris-base,cineris-session
+caught-by:
+    cineris-base mode::tests::only_the_nine_permission_bits_are_held
+    cineris-session entry::tests::a_versions_mode_is_written_only_when_known_and_never_loses_the_version
+    cineris-base::it atomic::unix::a_file_put_back_is_created_with_the_mode_it_had
+
+# ------------------------------------------------- the mode is kept
+
+[break] the-store-keeps-no-mode
+rule: A file's content kept for undo is kept with its mode, read from the handle the content is read through.
+file: crates/cineris-session/src/store.rs
+in: DiskStore::put_opened_file
+find: .map(|version| Some(version.with_mode(mode)))
+replace: .map(Some)
+caught-by:
+    cineris-session::it put_back::unix::a_removed_file_is_made_again_with_the_mode_it_had
+
+[break] the-editing-tools-hand-over-no-mode
+rule: The editing tools hand the checkpoint the mode of the file they read, from its handle.
+file: crates/cineris-tools/src/change.rs
+in: Target::commit
+find: Found::File(existing) => (Some(existing.bytes.as_slice()), existing.mode),
+replace: Found::File(existing) => (Some(existing.bytes.as_slice()), None),
+packages: cineris-core
+caught-by:
+    cineris-core::it put_back::a_private_file_put_back_after_it_was_removed_is_private_again
+
+[break] the-core-drops-the-tools-mode
+rule: The core records the mode an editing tool handed over with the version it keeps.
+file: crates/cineris-core/src/checkpoints.rs
+in: Rounds::before
+find: Before::Version(FileVersion::new(hash, bytes, kept).with_mode(mode))
+replace: Before::Version(FileVersion::new(hash, bytes, kept))
+caught-by:
+    cineris-core::it put_back::a_private_file_put_back_after_it_was_removed_is_private_again
+
+[break] a-commands-change-keeps-no-mode-from-git
+rule: A command's change read from git is kept with the mode git keeps for it: a removed script comes back executable.
+file: crates/cineris-core/src/checkpoints.rs
+in: Rounds::record_changes
+find: Before::Version(version.with_mode(modes.get(path).copied()))
+replace: Before::Version(version)
+caught-by:
+    cineris-core::it put_back::sys_an_undo_puts_back_a_removed_script_with_its_execute_bit
+    cineris-core::it put_back::sys_an_undo_puts_back_a_removed_script_in_a_workspace_below_its_repository
+
+[break] git-modes-asked-from-the-top-of-the-repository
+rule: Git is asked for a file's mode by the workspace's own path (`./` and the path), and names it back from there: a workspace inside its repository finds its files' modes too.
+file: crates/cineris-core/src/checkpoints.rs
+in: Rounds::git_modes
+find: let mut arguments = vec!["ls-tree", "-z", commit, "--"];
+replace: let mut arguments = vec!["ls-tree", "-z", "--full-name", commit, "--"];
+caught-by:
+    cineris-core::it put_back::sys_an_undo_puts_back_a_removed_script_in_a_workspace_below_its_repository
+
+[break] a-links-mode-taken-from-git
+rule: Only a regular file's entry gives a mode: a link, a submodule or a tree gives none.
+file: crates/cineris-core/src/checkpoints.rs
+in: parse_ls_tree
+find: (fields.next()? == "blob" && fields.next().is_some() && !path.is_empty())
+replace: (fields.next().is_some() && !path.is_empty())
+caught-by:
+    cineris-core checkpoints::tests::git_modes_are_read_for_regular_files_alone
+
+# ------------------------------------------------- the log's field
+
+[break] a-mode-that-cannot-be-read-loses-the-version
+rule: A `mode` this build cannot read is no mode, never a reason to read the version as unknown.
+file: crates/cineris-session/src/entry.rs
+in: mode_text::read
+find: _ => None,
+replace: _ => return Err(serde::de::Error::custom("not a mode")),
+caught-by:
+    cineris-session entry::tests::a_versions_mode_is_written_only_when_known_and_never_loses_the_version
+
+[break] no-mode-written-as-null
+rule: A version with no mode is written as it was before the field: no `mode` at all.
+file: crates/cineris-session/src/entry.rs
+in: FileVersion
+find: skip_serializing_if = "Option::is_none", serialize_with = "mode_text::write",
+replace: serialize_with = "mode_text::write",
+caught-by:
+    cineris-session entry::tests::a_versions_mode_is_written_only_when_known_and_never_loses_the_version
+    cineris-session::it put_back::unix::a_version_from_a_log_written_before_modes_is_made_again_as_before

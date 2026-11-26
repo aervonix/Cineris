@@ -650,7 +650,12 @@ fn a_file_too_large_to_keep_for_undo_is_refused_with_another_way() {
 struct BrokenCheckpoints;
 
 impl Checkpoints for BrokenCheckpoints {
-    fn before(&self, _file: &AbsPath, _content: Option<&[u8]>) -> Result<(), CheckpointError> {
+    fn before(
+        &self,
+        _file: &AbsPath,
+        _content: Option<&[u8]>,
+        _mode: Option<cineris_base::FileMode>,
+    ) -> Result<(), CheckpointError> {
         Err(CheckpointError::new("the session's disk is full"))
     }
 

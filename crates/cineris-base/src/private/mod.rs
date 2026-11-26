@@ -14,7 +14,7 @@
 //! | [`is_private`] | Whether only the current user has access to a file or a directory. |
 //! | [`hold_lock`] | Takes the lock that keeps two writers of a stored file apart: the operating system's lock on a private file beside it. |
 //! | [`lock_within`] | The same lock's bounded wait, for a store that opens its lock file itself. |
-//! | [`access_list`] | Windows only: the access list, read back. |
+//! | [`access_list`] | Windows only: the access list, read back; `access_list_of` reads it through an open handle. |
 //! | [`current_user_sid`] | Windows only: the security identifier of the user the process runs as, in text. |
 //!
 //! [`write_atomic`](crate::write_atomic) with
@@ -80,7 +80,8 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    AccessEntry, AccessKind, AccessList, FULL_CONTROL, access_list, current_user_sid,
+    AccessEntry, AccessKind, AccessList, FULL_CONTROL, access_list, access_list_of,
+    current_user_sid,
 };
 
 #[cfg(windows)]

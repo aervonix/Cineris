@@ -39,7 +39,7 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use cineris_base::{AbsPath, ContentHash};
+use cineris_base::{AbsPath, ContentHash, FileMode};
 use cineris_protocol::Part;
 use cineris_sandbox::protect::{Before as Was, Changed, Snapshot};
 use cineris_session::entry::FileVersion;
@@ -179,6 +179,11 @@ impl Rounds {
         let commit = changes.get("base_commit").and_then(Json::as_str);
         let restorable = list("restorable");
         let created = list("created");
+        // What git keeps of their modes, asked once for them all.
+        let modes = match commit {
+            Some(commit) => self.git_modes(commit, &restorable),
+            None => std::collections::HashMap::new(),
+        };
 
         let mut seen: Vec<(AbsPath, Before)> = Vec::new();
         for path in &created {
@@ -200,7 +205,9 @@ impl Rounds {
             let before = match commit {
                 Some(commit) if restorable.contains(&path) => self
                     .earlier_content(commit, path)
-                    .map_or(Before::Unknown, Before::Version),
+                    .map_or(Before::Unknown, |version| {
+                        Before::Version(version.with_mode(modes.get(path).copied()))
+                    }),
                 _ => Before::Unknown,
             };
             seen.push((file, before));
@@ -237,8 +244,10 @@ impl Rounds {
                 continue;
             };
             let recorded = match &changed.before {
-                Was::Absent => self.before(&file, None).is_ok(),
-                Was::File(content) => self.before(&file, Some(content)).is_ok(),
+                // The look before keeps no mode a checkpoint can take: a
+                // protected file made again by an undo has the default one.
+                Was::Absent => self.before(&file, None, None).is_ok(),
+                Was::File(content) => self.before(&file, Some(content), None).is_ok(),
                 Was::Unknown => {
                     self.lock().seen_changed(&file, Before::Unknown);
                     false
@@ -254,13 +263,59 @@ impl Rounds {
         by_hand
     }
 
+    /// The modes git keeps for `paths` at `commit`, by path: a file a
+    /// rewind makes again from git is made as a checkout makes it, an
+    /// executable executable (since the step 25 fixes). One `ls-tree` for
+    /// a few hundred paths. A path git does not name as a regular file, or
+    /// an answer that cannot be read, has none: the file is made with the
+    /// default mode, as before.
+    fn git_modes(
+        &self,
+        commit: &str,
+        paths: &[&str],
+    ) -> std::collections::HashMap<String, FileMode> {
+        /// Paths asked about in one command: well inside any system's limit
+        /// on a command line.
+        const AT_ONCE: usize = 256;
+        let mut modes = std::collections::HashMap::new();
+        if paths.is_empty() || !is_a_commit(commit) {
+            return modes;
+        }
+        for some in paths.chunks(AT_ONCE) {
+            // `./` makes each path relative to the workspace, wherever it is
+            // in its repository, and git names them back relative to it.
+            let named: Vec<String> = some.iter().map(|path| format!("./{path}")).collect();
+            let mut arguments = vec!["ls-tree", "-z", commit, "--"];
+            arguments.extend(named.iter().map(String::as_str));
+            let Ok(output) = self
+                .git
+                .run(&self.root.to_fs_path(), &arguments, LS_TREE_LIMIT)
+            else {
+                continue;
+            };
+            if !output.success {
+                continue;
+            }
+            // An answer cut short keeps its whole records only: a path cut
+            // in the middle could name another file.
+            let whole = if output.truncated {
+                let end = output.stdout.iter().rposition(|&byte| byte == 0);
+                &output.stdout[..end.map_or(0, |at| at + 1)]
+            } else {
+                &output.stdout[..]
+            };
+            modes.extend(parse_ls_tree(whole));
+        }
+        modes
+    }
+
     /// The content of `path` at `commit`, stored. `None` when git cannot
     /// give it, or it is not content the store can keep a record of.
     fn earlier_content(&self, commit: &str, path: &str) -> Option<FileVersion> {
         // A commit and a path are data here, never options: a name that
         // begins with a dash is not one git would take as a flag after
         // `--`, and a commit is a hash the tool read from git itself.
-        if !commit.bytes().all(|byte| byte.is_ascii_hexdigit()) || commit.is_empty() {
+        if !is_a_commit(commit) {
             return None;
         }
         // `./` makes the path relative to the workspace, wherever the
@@ -290,8 +345,38 @@ impl Rounds {
     }
 }
 
+/// The most of `git ls-tree`'s answer read for one group of paths: a line
+/// is its mode, its kind, its object's name and the path.
+const LS_TREE_LIMIT: usize = 1 << 20;
+
+/// Whether `commit` is a commit's name as the shell tool read it from git:
+/// hexadecimal digits, so that it is data and never an option.
+fn is_a_commit(commit: &str) -> bool {
+    !commit.is_empty() && commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// The modes of the regular files in `git ls-tree -z`'s answer, by path:
+/// each record `<mode> <kind> <object>\t<path>` and a NUL. A record cut
+/// short, of another kind, or with a mode that is not a regular file's, is
+/// left out.
+fn parse_ls_tree(answer: &[u8]) -> impl Iterator<Item = (String, FileMode)> + '_ {
+    answer.split(|&byte| byte == 0).filter_map(|record| {
+        let record = std::str::from_utf8(record).ok()?;
+        let (about, path) = record.split_once('\t')?;
+        let mut fields = about.split(' ');
+        let mode = FileMode::from_git(fields.next()?)?;
+        (fields.next()? == "blob" && fields.next().is_some() && !path.is_empty())
+            .then(|| (path.to_owned(), mode))
+    })
+}
+
 impl Checkpoints for Rounds {
-    fn before(&self, file: &AbsPath, content: Option<&[u8]>) -> Result<(), CheckpointError> {
+    fn before(
+        &self,
+        file: &AbsPath,
+        content: Option<&[u8]>,
+        mode: Option<FileMode>,
+    ) -> Result<(), CheckpointError> {
         let before = match content {
             None => Before::Absent,
             // The bytes the tool read are what is kept: no second read of
@@ -306,7 +391,7 @@ impl Checkpoints for Rounds {
                 } else {
                     ContentHash::of(content)
                 };
-                Before::Version(FileVersion { hash, bytes, kept })
+                Before::Version(FileVersion::new(hash, bytes, kept).with_mode(mode))
             }
         };
         // Only the first record of a file in a round counts.
@@ -321,11 +406,7 @@ impl Checkpoints for Rounds {
         self.note_touched(file);
         self.lock().after(
             file,
-            left.map(|left| FileVersion {
-                hash: left.hash,
-                bytes: left.size,
-                kept: true,
-            }),
+            left.map(|left| FileVersion::new(left.hash, left.size, true)),
         );
     }
 }

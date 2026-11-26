@@ -15,6 +15,13 @@
 //!   access list with one entry and inheritance off ([`crate::private`]).
 //!   It is private from the moment its temporary file is created, before
 //!   any content is in it.
+//! - **Or one that puts a file back as it was.** With
+//!   [`mode`](AtomicWriteOptions::mode), a file the write creates has the
+//!   mode the person had (less the umask), from the moment its temporary
+//!   file is created, and a file it replaces is never left wider than it
+//!   (since the step 25 fixes: a rewind's put-back, which gave a file it
+//!   made again the default mode). On Windows a private mode makes the
+//!   file owner-only.
 //! - **A target that could not have been written in place is refused.** A
 //!   rename needs only the right to change the directory, so without this
 //!   it would replace a file its owner had protected. Refused: a file marked
@@ -62,6 +69,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::clock::Clock;
+use crate::mode::FileMode;
 use crate::rng::{Rng, SystemRng};
 
 /// The point of [`write_atomic`] where its new content is complete in its
@@ -89,6 +97,25 @@ pub struct AtomicWriteOptions {
     /// Without it, a new file gets the default permissions and an existing
     /// one keeps its mode.
     pub owner_only: bool,
+    /// The permission bits the file had, for a write that puts a person's
+    /// file back as it was (a rewind's put-back, since the step 25 fixes).
+    /// `None` by default.
+    ///
+    /// - **A file the write creates** is created with them, less the
+    ///   process's umask as for any file a program creates, so never with
+    ///   more: its temporary file has them from the moment it exists. On
+    ///   Windows a private mode ([`FileMode::is_private`]) makes it
+    ///   owner-only, as [`owner_only`](Self::owner_only) does, and any other
+    ///   leaves it its folder's rules.
+    /// - **A file it replaces** keeps its own mode, less any of the nine
+    ///   permission bits these lack: never wider than it is, nor than it
+    ///   was. On Windows a private mode makes it owner-only.
+    /// - A set-user-id, set-group-id or sticky bit is never taken from it:
+    ///   a [`FileMode`] holds the nine permission bits alone.
+    ///
+    /// [`owner_only`](Self::owner_only) comes first: with it the file is
+    /// owner-only whatever this says.
+    pub mode: Option<FileMode>,
     /// Write through a symbolic link under the target's name: replace the
     /// file it points to, and keep the link. On by default.
     ///
@@ -109,6 +136,7 @@ impl Default for AtomicWriteOptions {
         Self {
             sync: true,
             owner_only: false,
+            mode: None,
             follow_links: true,
             retry_waits: [10, 20, 40, 80, 150, 200]
                 .into_iter()
@@ -240,11 +268,15 @@ pub fn write_atomic(
     // The temporary file must never be easier to read than the file it
     // will become. An owner-only file is created owner-only and stays so.
     // Otherwise, when it replaces a file, it starts private and takes that
-    // file's mode once the content is in it.
-    let access = if options.owner_only {
+    // file's mode once the content is in it. A file put back as it was is
+    // created with its mode, which on Windows is owner-only or the folder's.
+    let private_mode = options.mode.is_some_and(FileMode::is_private);
+    let access = if options.owner_only || (cfg!(windows) && private_mode) {
         NewFile::OwnerOnly
     } else if existing.is_some() {
         NewFile::PrivateForNow
+    } else if let Some(mode) = options.mode {
+        NewFile::Mode(mode)
     } else {
         NewFile::Ordinary
     };
@@ -256,9 +288,9 @@ pub fn write_atomic(
         file.write_all(contents)
             .map_err(io_error("write the new content"))?;
         if let Some(found) = &existing
-            && !options.owner_only
+            && access != NewFile::OwnerOnly
         {
-            file.set_permissions(found.permissions())
+            file.set_permissions(kept_permissions(found, options.mode))
                 .map_err(io_error("copy the file's permissions"))?;
         }
         if options.sync {
@@ -302,11 +334,34 @@ pub fn write_atomic(
     Ok(())
 }
 
+/// The permissions a file that replaces `found` is given: `found`'s own,
+/// less the permission bits `mode` lacks when there is one. On Windows
+/// `found`'s own: a private mode has made the file owner-only already.
+fn kept_permissions(found: &fs::Metadata, mode: Option<FileMode>) -> fs::Permissions {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let now = found.permissions().mode();
+        match mode {
+            Some(mode) => fs::Permissions::from_mode(now & !(0o777 & !mode.bits())),
+            None => found.permissions(),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+        found.permissions()
+    }
+}
+
 /// Who may open a temporary file when it is created.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NewFile {
     /// Whoever may open any new file here.
     Ordinary,
+    /// Who the file being put back let open it: these bits, less the umask.
+    /// On Windows this is `Ordinary`: a private mode is `OwnerOnly`.
+    Mode(FileMode),
     /// The owner alone, until the file takes the mode of the one it
     /// replaces. On Windows this is `Ordinary`: the file it replaces has the
     /// directory's access rules, and so does this one.
@@ -346,10 +401,10 @@ fn create_file(path: &Path, access: NewFile) -> io::Result<File> {
         use std::os::unix::fs::OpenOptionsExt;
         // The process's umask still applies to the wider mode, as it does
         // for any file a program creates.
-        open.mode(if access == NewFile::PrivateForNow {
-            0o600
-        } else {
-            0o666
+        open.mode(match access {
+            NewFile::PrivateForNow => 0o600,
+            NewFile::Mode(mode) => mode.bits(),
+            NewFile::Ordinary | NewFile::OwnerOnly => 0o666,
         });
     }
     open.open(path)

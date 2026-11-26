@@ -48,8 +48,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use cineris_base::{
-    AtomicWriteError, AtomicWriteOptions, CancelToken, ContentHash, OpenError, PathResolver,
-    ResolvedPath, write_atomic,
+    AtomicWriteError, AtomicWriteOptions, CancelToken, ContentHash, FileMode, OpenError,
+    PathResolver, ResolvedPath, write_atomic,
 };
 
 use crate::checkpoint::Editing;
@@ -116,6 +116,9 @@ pub(crate) struct Existing {
     pub(crate) bytes: Vec<u8>,
     pub(crate) hash: ContentHash,
     stamp: Stamp,
+    /// Its mode, asked of the handle it was read through: kept with its
+    /// content for undo (since the step 25 fixes).
+    mode: Option<FileMode>,
 }
 
 /// What tells a file from another that has taken its name: enough to see,
@@ -218,6 +221,10 @@ impl Target {
         if metadata.len() > limit {
             return refuse(too_large(shown, metadata.len(), limit));
         }
+        // Asked of the handle that is read. One the system does not report
+        // is not known: the change can still be undone, into a file with
+        // the default mode.
+        let mode = FileMode::of(&file).ok().flatten();
         let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
         // One byte past the limit is enough to know that the file grew
         // past it since its length was asked.
@@ -234,6 +241,7 @@ impl Target {
         Ok(Found::File(Existing {
             hash: ContentHash::of(&bytes),
             stamp: Stamp::of(&metadata),
+            mode,
             bytes,
         }))
     }
@@ -309,13 +317,13 @@ impl Target {
         self.still_as_found(found)?;
 
         let abs = self.path.abs();
-        let before = match found {
-            Found::Missing => None,
-            Found::File(existing) => Some(existing.bytes.as_slice()),
+        let (before, mode) = match found {
+            Found::Missing => (None, None),
+            Found::File(existing) => (Some(existing.bytes.as_slice()), existing.mode),
         };
         env.editing
             .checkpoints
-            .before(abs, before)
+            .before(abs, before, mode)
             .map_err(|error| {
                 ToolResult::error(format!(
                     "What `{shown}` held could not be kept for undo ({error}), so it was not \
@@ -801,6 +809,7 @@ mod tests {
                 modified: None,
                 identity: None,
             },
+            mode: None,
         };
         let refused = target
             .text(&read(MAX_LINES + 1))

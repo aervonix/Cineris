@@ -29,11 +29,11 @@ fn tool_write(
             world.write(path, content);
             round.after(
                 &file,
-                Some(FileVersion {
-                    hash: ContentHash::of(content),
-                    bytes: content.len() as u64,
-                    kept: true,
-                }),
+                Some(FileVersion::new(
+                    ContentHash::of(content),
+                    content.len() as u64,
+                    true,
+                )),
             );
         }
         None => {
@@ -248,11 +248,7 @@ fn rewinding_to_any_turn_puts_every_file_back_as_it_was_then() {
 }
 
 fn version_of(content: &[u8]) -> FileVersion {
-    FileVersion {
-        hash: ContentHash::of(content),
-        bytes: content.len() as u64,
-        kept: true,
-    }
+    FileVersion::new(ContentHash::of(content), content.len() as u64, true)
 }
 
 /// A plan lists its files by name, whatever order the rounds recorded them
