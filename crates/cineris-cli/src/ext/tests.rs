@@ -644,3 +644,91 @@ fn a_folder_set_aside_that_cannot_be_removed_does_not_fail_the_write() {
     assert_eq!(there.hash, hash);
     assert_eq!(aside.len(), 1, "{aside:?}");
 }
+
+/// On Windows, a junction and a directory link are neither followed nor
+/// written through (the early review's L7): one named to `ext add` is
+/// refused; one at the extension's place is replaced by the folder written,
+/// what it leads to untouched; and one at the name a removal deletes is
+/// unlinked, what it leads to untouched.
+#[cfg(windows)]
+#[test]
+fn sys_a_junction_or_a_directory_link_is_neither_followed_nor_written_through() {
+    for kind in ["junction", "symlink"] {
+        let world = World::new(&format!("ext_windows_{kind}"));
+        let elsewhere = world.dir.join("elsewhere");
+        World::extension(&elsewhere, "tracker", "find");
+        let kept = std::fs::read(elsewhere.join("main.js")).unwrap();
+        let make = |link: &Path| {
+            if kind == "junction" {
+                let made = std::process::Command::new("cmd")
+                    .args(["/c", "mklink", "/J"])
+                    .arg(link)
+                    .arg(&elsewhere)
+                    .output()
+                    .unwrap();
+                assert!(made.status.success(), "{made:?}");
+            } else {
+                std::os::windows::fs::symlink_dir(&elsewhere, link).unwrap();
+            }
+        };
+        let untouched = || {
+            assert_eq!(
+                std::fs::read(elsewhere.join("main.js")).unwrap(),
+                kept,
+                "{kind}"
+            );
+        };
+        // Named to `ext add`: refused.
+        let via = world.dir.join("via");
+        make(&via);
+        let refused = world
+            .core
+            .extension_to_add(&world.project, &via)
+            .unwrap_err();
+        assert!(
+            refused.message.contains("link"),
+            "{kind}: {}",
+            refused.message
+        );
+        // At the extension's place: replaced by the folder written.
+        std::fs::create_dir_all(world.users()).unwrap();
+        let place = world.users().join("tracker");
+        make(&place);
+        let source = world.dir.join("src/tracker");
+        World::extension(&source, "tracker", "other");
+        let to_add = world
+            .core
+            .extension_to_add(&world.project, &source)
+            .unwrap();
+        world
+            .runtime
+            .block_on(world.core.add_extension(to_add))
+            .unwrap();
+        assert!(
+            !std::fs::symlink_metadata(&place)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "{kind}: the link is still there"
+        );
+        untouched();
+        // At the name a removal deletes: unlinked.
+        std::fs::remove_dir_all(&place).unwrap();
+        make(&place);
+        let removal = world
+            .core
+            .extension_removal(&world.project, "tracker")
+            .unwrap();
+        assert!(
+            removal.folder.as_ref().is_some_and(|(_, link)| *link),
+            "{kind}: {removal:?}"
+        );
+        let removed = world.core.remove_extension(&removal, true).unwrap();
+        assert!(removed.deleted, "{kind}");
+        assert!(
+            std::fs::symlink_metadata(&place).is_err(),
+            "{kind}: the link is still there"
+        );
+        untouched();
+    }
+}
