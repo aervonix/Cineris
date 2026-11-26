@@ -73,9 +73,11 @@ pub const REPLY_ESCAPE_WAIT: Duration = Duration::from_millis(500);
 /// than 500 ms, before its `[`, which made it the Escape key and typed the
 /// rest (`[?0u`) into the input box; since small fixes II the hold ends
 /// with what came, not after a time of its own. A held ESC that has waited
-/// [`ESCAPE_WAIT`] and is then followed by anything that does not go on as
-/// a reply is the Escape key at once, and what followed comes after it, in
-/// order. And while they are due, a reply whose ESC was taken on its own
+/// [`ESCAPE_WAIT`] and is then followed by what can begin no sequence (a
+/// character, or a second ESC before a whole reply) is the Escape key at
+/// once, and what followed comes after it, in order; one followed by what
+/// may begin a sequence is read with it, and is the Escape key at the hold's
+/// end if that sequence never ends. And while they are due, a reply whose ESC was taken on its own
 /// is the reply, never typed text ([`Decoder`]): a `[` or `]` that may
 /// begin one is held as an ESC is, until what follows says whether it is
 /// one.
@@ -458,7 +460,11 @@ pub struct Terminal<D: Device = System> {
     device: D,
     caps: Capabilities,
     decoder: Decoder,
-    events: VecDeque<Event>,
+    /// Events read and not given yet, each with when its first byte came.
+    events: VecDeque<(Event, Instant)>,
+    /// When the first byte of the event [`next`](Self::next) gave last
+    /// came ([`Self::came`]).
+    came: Instant,
     bytes: Vec<u8>,
     keyboard: bool,
     win32: bool,
@@ -470,6 +476,11 @@ pub struct Terminal<D: Device = System> {
     pending_since: Option<Instant>,
     /// Whether the reply that ends the capability queries has come.
     answered: bool,
+    /// The kept bytes begin with an ESC that waited [`ESCAPE_WAIT`] alone
+    /// before the next byte came, while it was held for the replies: if the
+    /// hold ends with them kept, the ESC is the Escape key and what came
+    /// after it is decoded on its own (the early review of small fixes II).
+    split: bool,
     /// When the capability queries were sent: a lone ESC that comes within
     /// [`REPLIES_DUE`] of it, while `answered` is not yet true, is held for
     /// the replies ([`REPLIES_DUE`] says how).
@@ -477,6 +488,9 @@ pub struct Terminal<D: Device = System> {
     /// When the decoder last had input while inside a paste or a sequence
     /// being dropped: it gives up on it once [`OPEN_WAIT`] has passed.
     open_since: Option<Instant>,
+    /// When what the decoder has open (a paste) began: when the paste's
+    /// first byte came.
+    opened: Option<Instant>,
     /// Whether the alternate screen is on (the viewer, the full-screen
     /// presenter).
     alternate: bool,
@@ -565,14 +579,17 @@ impl<D: Device> Terminal<D> {
             caps,
             decoder,
             events: VecDeque::new(),
+            came: queried,
             bytes: Vec::new(),
             keyboard: false,
             win32: false,
             active: true,
             pending_since: None,
             answered: false,
+            split: false,
             queried,
             open_since: None,
+            opened: None,
             alternate: false,
             mouse: false,
             open_wait,
@@ -751,11 +768,16 @@ impl<D: Device> Terminal<D> {
         self.device.write(&bytes)
     }
 
-    /// Whether events already read wait to be given: a key with another
-    /// behind it came in the same read, typed in one burst.
+    /// Whether input already read waits to be given: a key with another
+    /// behind it came in the same read, typed in one burst. Only a key or a
+    /// paste behind counts (since small fixes II): a reply, a focus report
+    /// or a resize behind an Escape the terminal held does not make it
+    /// typing.
     #[must_use]
     pub fn queued(&self) -> bool {
-        !self.events.is_empty()
+        self.events
+            .iter()
+            .any(|(event, _)| matches!(event, Event::Key(_) | Event::Repeat(_) | Event::Paste(_)))
     }
 
     /// The time now, on the device's clock: a device for tests gives a
@@ -778,22 +800,30 @@ impl<D: Device> Terminal<D> {
     /// When the terminal cannot be read, or has gone.
     pub fn next(&mut self, timeout: Option<Duration>) -> io::Result<Option<Event>> {
         loop {
-            if let Some(event) = self.events.pop_front() {
+            if let Some((event, came)) = self.events.pop_front() {
+                self.came = came;
                 return Ok(Some(event));
             }
             let mut found = Vec::new();
             // What is kept is decoded as it stands once it has waited long
             // enough, whatever cut the earlier waits short: `ESCAPE_WAIT`
-            // after it came, or `REPLY_ESCAPE_WAIT` while the capability
-            // replies are due.
+            // after it came, or, while the capability replies are due,
+            // until they end (`escape_deadline`).
             let left = self.pending_since.map(|since| {
                 self.escape_deadline(since)
                     .saturating_duration_since(self.device.now())
             });
             if left == Some(Duration::ZERO) {
+                if std::mem::take(&mut self.split) {
+                    self.decoder.release_escape(&mut found);
+                }
                 self.decoder.flush(&mut found);
-                self.pending_since = None;
-                self.take(found)?;
+                // All of it came when what was kept came.
+                let since = self
+                    .pending_since
+                    .take()
+                    .unwrap_or_else(|| self.device.now());
+                self.take(found, since, since)?;
                 continue;
             }
             // A paste whose end has not come, or a sequence being dropped,
@@ -806,11 +836,12 @@ impl<D: Device> Terminal<D> {
                 let pasting = self.decoder.open();
                 self.decoder.give_up(&mut found);
                 self.open_since = None;
+                let began = self.opened.take().unwrap_or_else(|| self.device.now());
                 // A paste given up on: what follows of it is its tail.
                 if pasting && found.iter().any(|event| matches!(event, Event::Paste(_))) {
                     self.stalled = Some(self.device.now());
                 }
-                self.take(found)?;
+                self.take(found, began, began)?;
                 continue;
             }
             let own = match (left, open) {
@@ -824,7 +855,11 @@ impl<D: Device> Terminal<D> {
             };
             self.bytes.clear();
             let before = self.device.now();
+            // What the next read's first event began with came earlier when
+            // it began before the read: a paste open, or bytes kept.
+            let began = self.opened.or(self.pending_since);
             let ready = self.device.wait(wait, &mut self.bytes)?;
+            let now = self.device.now();
             // A paste's tail counts the time spent waiting for input, and
             // only that (the review of step 25's second pull request).
             if let Some(waited) = self.paste_tail.as_mut() {
@@ -832,7 +867,6 @@ impl<D: Device> Terminal<D> {
             }
             match ready {
                 Ready::Input => {
-                    let now = self.device.now();
                     self.decoder.set_replies_due(
                         self.held_for_replies(now)
                             || self
@@ -840,17 +874,26 @@ impl<D: Device> Terminal<D> {
                                 .is_some_and(|since| self.held_for_replies(since)),
                     );
                     // An ESC held for the replies, which has waited its own
-                    // wait, and which what came does not go on as a reply:
-                    // it was the Escape key, given before what came.
+                    // wait, and which what came cannot go on as a sequence:
+                    // it was the Escape key, given before what came. One
+                    // that what came may go on as one is held on, and
+                    // remembered as having waited alone.
                     if let Some(since) = self.pending_since
                         && self.held_for_replies(since)
                         && now.saturating_duration_since(since) >= ESCAPE_WAIT
-                        && self.decoder.kept_escape_ends_before(&self.bytes)
                     {
-                        self.decoder.release_escape(&mut found);
+                        if self.decoder.kept_escape_stands_alone(&self.bytes) {
+                            self.decoder.release_escape(&mut found);
+                        } else if self.decoder.kept_lone_escape() {
+                            self.split = true;
+                        }
                     }
                     self.decoder.feed(&self.bytes, &mut found);
                     found = self.pastes(found);
+                    // What was kept was taken, or nothing is kept.
+                    if !found.is_empty() || !self.decoder.pending() {
+                        self.split = false;
+                    }
                     // What is kept now waits its own time: from its arrival,
                     // not from that of something the same read finished.
                     if !self.decoder.pending() {
@@ -859,6 +902,16 @@ impl<D: Device> Terminal<D> {
                         self.pending_since = Some(self.device.now());
                     }
                     self.open_since = self.decoder.open().then(|| self.device.now());
+                    // A paste open: when it began, unless this read ended
+                    // one and began another.
+                    self.opened = self.decoder.open().then(|| {
+                        let ended = found.iter().any(|event| matches!(event, Event::Paste(_)));
+                        match self.opened {
+                            Some(opened) if !ended => opened,
+                            _ if ended => now,
+                            _ => began.unwrap_or(now),
+                        }
+                    });
                 }
                 Ready::Resize => {
                     let (cols, rows) = self.device.size()?;
@@ -874,8 +927,25 @@ impl<D: Device> Terminal<D> {
                 Ready::Timeout if own.is_some() && wait == own => {}
                 Ready::Timeout => return Ok(None),
             }
-            self.take(found)?;
+            let first = match ready {
+                Ready::Input => began.unwrap_or(now),
+                _ => now,
+            };
+            self.take(found, first, now)?;
         }
+    }
+
+    /// When the first byte of the event [`next`](Self::next) gave last
+    /// came (since small fixes II): when it was read, for most; earlier
+    /// for one whose first bytes were kept for what might follow them (an
+    /// ESC, held while the replies to the queries are due) or a paste
+    /// whose first bytes came in an earlier read. Something that takes
+    /// keys judges by it whether it was ready for the key, so that a key
+    /// pressed before it was ready never answers it, however late the key
+    /// was read.
+    #[must_use]
+    pub fn came(&self) -> Instant {
+        self.came
     }
 
     /// What one read gave, with the keys that were a paste made into one
@@ -963,13 +1033,15 @@ impl<D: Device> Terminal<D> {
         !self.answered && at < self.queried + REPLIES_DUE
     }
 
-    /// Queues decoded events, taking in the replies first.
-    fn take(&mut self, found: Vec<Event>) -> io::Result<()> {
-        for event in found {
+    /// Queues decoded events, taking in the replies first: the first came
+    /// at `first`, the others at `rest`.
+    fn take(&mut self, found: Vec<Event>, first: Instant, rest: Instant) -> io::Result<()> {
+        for (index, event) in found.into_iter().enumerate() {
             if let Event::Reply(reply) = &event {
                 self.reply(*reply)?;
             }
-            self.events.push_back(event);
+            self.events
+                .push_back((event, if index == 0 { first } else { rest }));
         }
         Ok(())
     }
@@ -2230,7 +2302,7 @@ mod tests {
         events
     }
 
-    fn typed(text: &str) -> Vec<Event> {
+    fn typed_text(text: &str) -> Vec<Event> {
         text.chars()
             .map(|c| Event::Key(Key::plain(KeyCode::Char(c))))
             .collect()
@@ -2310,7 +2382,7 @@ mod tests {
         let mut terminal = Terminal::with_device(device, caps()).unwrap();
         assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
         let mut want = vec![escape.clone()];
-        want.extend(typed("ab"));
+        want.extend(typed_text("ab"));
         assert_eq!(drain(&mut terminal), want);
 
         let device = script(&[
@@ -2334,7 +2406,7 @@ mod tests {
         ]);
         let mut terminal = Terminal::with_device(device, caps()).unwrap();
         assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
-        let mut want = typed("[a[");
+        let mut want = typed_text("[a[");
         want.push(Event::Reply(Reply::DeviceAttributes));
         assert_eq!(drain(&mut terminal), want);
 
@@ -2350,6 +2422,176 @@ mod tests {
         assert_eq!(*elapsed.lock().unwrap(), REPLIES_DUE);
     }
 
+    /// Each event with when its first byte came ([`Terminal::came`]).
+    fn came(terminal: &mut Terminal<Script>, timeout: Option<Duration>) -> (Event, Duration) {
+        let start = terminal.queried;
+        let event = terminal.next(timeout).unwrap().expect("an event");
+        (event, terminal.came() - start)
+    }
+
+    /// A key is stamped with when its first byte came: when it was read,
+    /// for keys read as they come, each key of a read alike; for an ESC
+    /// held for the replies, when the ESC came, whether what follows
+    /// releases it or the replies' end does, and the keys after it when
+    /// they were read; for a paste split across reads, its first read.
+    #[test]
+    fn each_event_says_when_its_first_byte_came() {
+        let esc = Event::Key(Key::plain(KeyCode::Esc));
+        let letter = |c| Event::Key(Key::plain(KeyCode::Char(c)));
+
+        let device = script(&[(Ready::Input, b"x"), (Ready::Input, b"yz")]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(came(&mut terminal, None), (letter('x'), STEP));
+        assert_eq!(came(&mut terminal, None), (letter('y'), STEP * 2));
+        assert_eq!(came(&mut terminal, None), (letter('z'), STEP * 2));
+
+        let device = script(&[
+            (Ready::Input, b"\x1b"),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"ab"),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
+        let read = STEP + ESCAPE_WAIT * 2 + STEP;
+        assert_eq!(came(&mut terminal, None), (esc.clone(), STEP));
+        assert_eq!(came(&mut terminal, None), (letter('a'), read));
+        assert_eq!(came(&mut terminal, None), (letter('b'), read));
+
+        let device = script(&[(Ready::Input, b"\x1b"), (Ready::Timeout, b"")]);
+        let elapsed = device.elapsed.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(came(&mut terminal, None), (esc, STEP));
+        assert_eq!(*elapsed.lock().unwrap(), REPLIES_DUE, "read at the end");
+
+        let device = script(&[
+            (Ready::Input, b"\x1b[200~first"),
+            (Ready::Input, b" half\x1b[201~"),
+            (Ready::Input, b"k"),
+        ]);
+        let mut terminal = Terminal::with_device(device, trusted()).unwrap();
+        assert_eq!(
+            came(&mut terminal, None),
+            (Event::Paste("first half".to_owned()), STEP)
+        );
+        assert_eq!(came(&mut terminal, None), (letter('k'), STEP * 3));
+    }
+
+    /// A sequence that is not a reply, split after its ESC as a
+    /// pseudo-console splits them while the replies are due, is the
+    /// sequence, never the Escape key and typed text: a focus report, a
+    /// key's sequence, a paste (the early review of small fixes II: a click
+    /// at the start sent a phantom Escape and typed `[I`).
+    #[test]
+    fn a_sequence_split_after_its_escape_while_the_replies_are_due_is_the_sequence() {
+        let cases: [(&[u8], Event); 3] = [
+            (b"[I", Event::Focus(true)),
+            (b"[A", Event::Key(Key::plain(KeyCode::Up))),
+            (b"[200~hi\x1b[201~", Event::Paste("hi".to_owned())),
+        ];
+        for (rest, want) in cases {
+            let device = script(&[
+                (Ready::Input, b"\x1b"),
+                (Ready::Timeout, b""),
+                (Ready::Input, rest),
+            ]);
+            let mut terminal = Terminal::with_device(device, caps()).unwrap();
+            assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
+            assert_eq!(drain(&mut terminal), [want], "{rest:?}");
+        }
+    }
+
+    /// An ESC held for the replies that waited alone before the next byte,
+    /// and whose sequence never ended by the hold's end, is the Escape key,
+    /// and what came after it is decoded on its own: `Esc` then `[`, not
+    /// `Alt+[`; two Escapes are two. Within [`ESCAPE_WAIT`] an ESC and a
+    /// key are `Alt` with the key, as always.
+    #[test]
+    fn an_escape_that_waited_alone_is_the_escape_key_at_the_holds_end() {
+        let escape = Event::Key(Key::plain(KeyCode::Esc));
+        for (rest, after) in [
+            (&b"["[..], Event::Key(Key::plain(KeyCode::Char('[')))),
+            (b"\x1b", escape.clone()),
+        ] {
+            let device = script(&[
+                (Ready::Input, b"\x1b"),
+                (Ready::Timeout, b""),
+                (Ready::Input, rest),
+                (Ready::Timeout, b""),
+            ]);
+            let elapsed = device.elapsed.clone();
+            let mut terminal = Terminal::with_device(device, caps()).unwrap();
+            assert_eq!(terminal.next(Some(Duration::from_secs(1))).unwrap(), None);
+            let mut events = vec![terminal.next(None).unwrap().expect("the hold's end")];
+            events.extend(drain(&mut terminal));
+            assert_eq!(events, [escape.clone(), after], "{rest:?}");
+            assert_eq!(*elapsed.lock().unwrap(), REPLIES_DUE, "{rest:?}");
+        }
+
+        let device = script(&[(Ready::Input, b"\x1b"), (Ready::Input, b"x")]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(
+            drain(&mut terminal),
+            [Event::Key(Key::with(KeyCode::Char('x'), Mods::ALT))]
+        );
+    }
+
+    /// A `[` held for the replies from before they stopped being due is
+    /// still read with what follows it as the reply it begins, when that
+    /// comes after they stopped being due (the early review of small fixes
+    /// II).
+    #[test]
+    fn a_reply_begun_while_the_replies_were_due_ends_as_a_reply_after() {
+        let before = REPLIES_DUE - Duration::from_millis(100);
+        let device = script(&[
+            (Ready::Timeout, b""),
+            (Ready::Input, b"["),
+            (Ready::Timeout, b""),
+            (Ready::Input, b"?0u"),
+        ]);
+        let elapsed = device.elapsed.clone();
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(terminal.next(Some(before)).unwrap(), None);
+        assert_eq!(
+            terminal.next(Some(Duration::from_millis(300))).unwrap(),
+            None
+        );
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Reply(Reply::Keyboard(0)))
+        );
+        assert!(
+            *elapsed.lock().unwrap() > REPLIES_DUE,
+            "after the replies were due"
+        );
+    }
+
+    /// Only a key or a paste behind a key makes it one of keys read
+    /// together: a reply behind an Escape the terminal held does not.
+    #[test]
+    fn only_input_behind_a_key_counts_as_queued() {
+        let device = script(&[
+            (Ready::Input, b"\x1b"),
+            (Ready::Timeout, b""),
+            (Ready::Input, LAST_REPLY),
+        ]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert_eq!(terminal.next(Some(ESCAPE_WAIT * 2)).unwrap(), None);
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Key(Key::plain(KeyCode::Esc)))
+        );
+        assert!(!terminal.queued(), "the reply behind it");
+        assert_eq!(
+            terminal.next(None).unwrap(),
+            Some(Event::Reply(Reply::DeviceAttributes))
+        );
+
+        let device = script(&[(Ready::Input, b"ab")]);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        assert!(terminal.next(None).unwrap().is_some());
+        assert!(terminal.queued(), "a key behind it");
+    }
+
     /// Once the last reply has come, a reply-shaped text is typed text:
     /// nothing is read as a reply without its ESC then.
     #[test]
@@ -2357,7 +2599,7 @@ mod tests {
         let device = script(&[(Ready::Input, LAST_REPLY), (Ready::Input, b"[?0u")]);
         let mut terminal = Terminal::with_device(device, caps()).unwrap();
         answered(&mut terminal);
-        assert_eq!(drain(&mut terminal), typed("[?0u"));
+        assert_eq!(drain(&mut terminal), typed_text("[?0u"));
     }
 
     #[test]

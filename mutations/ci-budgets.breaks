@@ -6,11 +6,11 @@
 # ------------------------------------------------- a lone ESC while replies are due
 
 [break] escape-wait-ignores-the-replies
-rule: While the capability replies are due, a lone ESC waits `REPLY_ESCAPE_WAIT` for the rest of a reply, so that a reply split after its ESC types nothing.
+rule: While the capability replies are due, a lone ESC is held for the rest of a reply (until they end, since small fixes II), so that a reply split after its ESC types nothing.
 file: crates/cineris-term/src/terminal.rs
 in: escape_deadline
-find: let due = !self.answered && since < self.queried + REPLIES_DUE;
-replace: let due = false;
+find: if self.held_for_replies(since) {
+replace: if false {
 caught-by:
     cineris-term terminal::tests::a_reply_split_after_its_escape_while_the_replies_are_due_types_nothing
     cineris-term terminal::tests::a_terminal_entered_again_waits_for_its_own_replies
@@ -19,9 +19,9 @@ caught-by:
 [break] escape-wait-outlives-the-last-reply
 rule: The last reply (the device attributes) ends the longer wait: after it a lone ESC waits `ESCAPE_WAIT`.
 file: crates/cineris-term/src/terminal.rs
-in: escape_deadline
-find: let due = !self.answered && since < self.queried + REPLIES_DUE;
-replace: let due = since < self.queried + REPLIES_DUE;
+in: held_for_replies
+find: !self.answered && at < self.queried + REPLIES_DUE
+replace: at < self.queried + REPLIES_DUE
 caught-by:
     cineris-term terminal::tests::after_the_last_reply_a_split_escape_waits_only_its_own_time
     cineris-term terminal::tests::the_last_reply_ends_the_longer_wait_of_the_next_escape
@@ -30,18 +30,18 @@ caught-by:
 [break] escape-wait-without-an-end
 rule: A terminal that never sends the last reply holds an ESC to the longer wait only within `REPLIES_DUE` of the queries.
 file: crates/cineris-term/src/terminal.rs
-in: escape_deadline
-find: let due = !self.answered && since < self.queried + REPLIES_DUE;
-replace: let due = !self.answered;
+in: held_for_replies
+find: !self.answered && at < self.queried + REPLIES_DUE
+replace: !self.answered
 caught-by:
     cineris-term terminal::tests::with_no_last_reply_the_longer_wait_ends_when_the_replies_are_no_longer_due
 
 [break] escape-wait-counted-from-the-queries
-rule: The longer wait is the ESC's own, counted from when it came, and never more than `REPLY_ESCAPE_WAIT`.
+rule: An ESC that comes just before the replies stop being due is still held `REPLY_ESCAPE_WAIT` after it came (since small fixes II the hold otherwise ends with the replies, and is no longer at most `REPLY_ESCAPE_WAIT`).
 file: crates/cineris-term/src/terminal.rs
 in: escape_deadline
-find: since + if due { REPLY_ESCAPE_WAIT } else { ESCAPE_WAIT }
-replace: if due { self.queried + REPLY_ESCAPE_WAIT } else { since + ESCAPE_WAIT }
+find: (self.queried + REPLIES_DUE).max(since + REPLY_ESCAPE_WAIT)
+replace: self.queried + REPLIES_DUE
 caught-by:
     cineris-term terminal::tests::with_no_last_reply_the_longer_wait_ends_when_the_replies_are_no_longer_due
 
