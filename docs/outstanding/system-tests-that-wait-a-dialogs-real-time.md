@@ -1,8 +1,0 @@
-The binary's system tests of the first run and of dialogs wait the readiness rule's real seconds: 4.4 to 4.8 s for the first run alone, on both systems.
-
-- Area: tooling
-- Owner: the maintainers, then a tooling step
-
-| Item | Who | When |
-|---|---|---|
-| **System tests that wait a dialog's real time.** A dialog and each step of the first run take no key until 0.3 s after their first frame, and no sooner than a second after the key that answered the one before or after input they did not take (`cineris-tui`'s `app/ready.rs`: `GRACE`, `REPEAT`, `QUIET`). `cineris-cli`'s system tests run the real binary, so they wait those times in real time: `first_run::sys_the_first_run_in_an_empty_home_reaches_a_working_session` takes 4.4 s on Linux and 4.8 s on Windows, by its time profile the provider's step 0.37 s, the key's 2.0 s, the imports' 1.0 s and the mode's 1.0 s (`try` 44632578087), and the tests that type through an approval or answer a question after another wait a second each. The rule's times are pinned by `cineris-tui`'s unit tests on a fake clock; the system tests pin the flow. Found by the CI-budgets fix ([steps/ci-budgets/answered.md](../steps/ci-budgets/answered.md)), which did not change it: a shorter time in the binary under the test hooks would change what these tests pin end to end, and some of them type at a person's pace against the real quiet second. **To decide:** whether the system tests that do not test the rule's timing run the binary with its readiness times scaled down by a test hook (about 3.5 s of each system tier, and of Linux's, which is not over its budget), or keep the real times. | The maintainers, then a tooling step | Before the next step that adds a dialog's system test |
