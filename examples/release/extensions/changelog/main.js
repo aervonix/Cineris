@@ -13,20 +13,24 @@ cineris.command({
     "whole history when none is given",
   arguments: ["since"],
   async run({ arguments: { since } }) {
-    // A word that begins with `-` would be read by git as an option.
+    // A word that begins with `-` looks like an option, and is not a
+    // revision: it is refused here, before git is started.
     if (since !== undefined && since.startsWith("-")) {
       throw new Error(`\`${since}\` is not a revision: give a tag, a branch or a commit`);
     }
     const range = since === undefined ? "HEAD" : `${since}..HEAD`;
     // Each commit on a line, its short hash and its subject. `--oneline`
     // rather than a `--format` of its own: on Windows a `%` in an argument
-    // keeps any rule from allowing the line.
+    // keeps any rule from allowing the line. `--end-of-options` comes last
+    // of the options: git reads no word after it as one, so a rule that
+    // allows this line up to it allows no other option (the README's).
     const log = await cineris.exec("git", [
       "log",
       "--no-merges",
       `--max-count=${MOST}`,
       "--oneline",
       "--no-decorate",
+      "--end-of-options",
       range,
     ]);
     if (log.code !== 0) {

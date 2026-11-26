@@ -4,13 +4,16 @@
 //! into the user's `commands/`, and a workspace that is a git repository
 //! with a tag and two commits after it.
 //!
-//! One release, in two headless runs against the scripted model:
-//! `/changelog:draft v0.1.0` (the script command, its `git log` allowed by a
-//! rule as the README says), then `/release-notes 0.2.0` (the command file),
-//! whose model outlines the changelog with `md-outline/outline`, is refused
-//! a file outside its manifest, and then cleans up and pushes through
-//! `shell-gate`'s gate. Each rule is read from what the model was sent, and
-//! judged by its own name.
+//! One release, in two headless runs against the scripted model, with the
+//! rules the READMEs of `release` and `md-outline` offer in the user's
+//! configuration, as they are written there: `/changelog:draft v0.1.0` (the
+//! script command, its `git log` allowed by the README's rule for its line),
+//! then `/release-notes 0.2.0` (the command file), whose model outlines the
+//! changelog with `md-outline/outline`, is refused a file outside its
+//! manifest, and then cleans up and pushes through `shell-gate`'s gate.
+//! Each rule is read from what the model was sent, and judged by its own
+//! name. The forms the gate reads, and the revision the command refuses,
+//! are `cineris-ext`'s `examples` tests, through the engine alone.
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +29,17 @@ fn repository(path: &str) -> PathBuf {
     crates.parent().unwrap().join(path)
 }
 
+/// The rule a README offers, as its `toml` block writes it.
+fn offered_rule(readme: &str) -> String {
+    let text = std::fs::read_to_string(repository(readme)).unwrap();
+    let start = text
+        .find("```toml\n")
+        .unwrap_or_else(|| panic!("{readme} offers no rule"))
+        + "```toml\n".len();
+    let length = text[start..].find("```").unwrap();
+    text[start..start + length].to_owned()
+}
+
 /// The changelog the model outlines: a `#` line in a fenced block is not a
 /// heading.
 const CHANGELOG: &str = "# Changelog\n\n## 0.2.0\n\n### Added\n\n- An outline of a \
@@ -33,7 +47,8 @@ const CHANGELOG: &str = "# Changelog\n\n## 0.2.0\n\n### Added\n\n- An outline of
                          outline of an empty file.\n\n## 0.1.0\n\n- The first release.\n";
 
 /// The shell calls of the release's last step, each with what the gate is
-/// to make of it.
+/// to make of it. The forms the gate reads are `cineris-ext`'s `examples`
+/// tests.
 const SHELL: [(&str, &str); 5] = [
     ("s1", "rm -rf build"),
     ("s2", "git push --force origin main"),
@@ -55,7 +70,12 @@ struct Release {
 impl Release {
     fn run() -> Self {
         // The repository map is background work this test does not need.
-        let machine = Machine::with_config("sys_examples", "index.map = false\n");
+        let config = format!(
+            "index.map = false\n{}{}",
+            offered_rule("examples/release/README.md"),
+            offered_rule("examples/md-outline/README.md")
+        );
+        let machine = Machine::with_config("sys_examples", &config);
         for folder in [
             "examples/md-outline",
             "examples/shell-gate",
@@ -83,7 +103,7 @@ impl Release {
 
         machine.reply_text("Drafted.");
         let before = machine.server.requests().len();
-        let draft = machine.run(&["-p", "/changelog:draft v0.1.0", "--allow", "exec:git log *"]);
+        let draft = machine.run(&["-p", "/changelog:draft v0.1.0"]);
         let draft_sent = sent(&machine, before);
 
         // A response for each step, its calls together.
@@ -103,7 +123,7 @@ impl Release {
         reply_calls(&machine, &shell);
         machine.reply_text("Released.");
         let before = machine.server.requests().len();
-        let notes = machine.run(&["-p", "/release-notes 0.2.0", "--allow", "ext:md-outline/*"]);
+        let notes = machine.run(&["-p", "/release-notes 0.2.0"]);
         let notes_sent = sent(&machine, before);
         Self {
             machine,
@@ -264,10 +284,10 @@ fn sys_the_examples_run_as_their_readmes_say() {
     crate::judge(&world, &rules);
 }
 
-/// `/changelog:draft v0.1.0` runs `git log` through the extension's `exec`
-/// and sends the commits after the tag, newest first, under a line that
-/// says the text is the extension's; the commit the tag names is not among
-/// them.
+/// `/changelog:draft v0.1.0` runs `git log` through the extension's `exec`,
+/// allowed by the rule its README offers for its line alone, and sends the
+/// commits after the tag, newest first, under a line that says the text is
+/// the extension's; the commit the tag names is not among them.
 fn changelog_draft_sends_the_commits_since_the_tag_from_git_log(world: &Release) {
     world.draft.expect_code(0);
     let prompt = prompt(&world.draft_sent);
@@ -324,7 +344,7 @@ fn md_outline_lists_the_headings_of_a_markdown_file(world: &Release) {
 }
 
 /// A path outside the manifest's `read` globs is refused by the manifest,
-/// naming `capabilities.read`, though the rule of the run allows the tool:
+/// naming `capabilities.read`, though the README's rule allows the tool:
 /// nothing of the file is read.
 fn md_outline_is_refused_a_file_outside_its_read_capability(world: &Release) {
     let (text, error) = result(&world.notes_sent, "o2");

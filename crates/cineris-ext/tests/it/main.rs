@@ -1,6 +1,7 @@
 //! Integration tests (tier 2) of the extension host: the folder, the
 //! manifest, the capabilities, the order a host call is checked in, the
-//! engine, and finding skills. No test waits: time is the fake timer's.
+//! engine, the examples' scripts, and finding skills. No test waits: time
+//! is the fake timer's.
 
 #![allow(
     clippy::disallowed_methods,
@@ -13,6 +14,7 @@
 
 mod capability;
 mod engine;
+mod examples;
 mod folder;
 mod manifest;
 mod serve;
