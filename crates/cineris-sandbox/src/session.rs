@@ -50,11 +50,20 @@
 //!   review of the third part, H1, and its narrow re-check, M2'); where which
 //!   host runs the scheduler cannot be asked, any service host counts. Any
 //!   other program ends the line: a terminal or a CI runner a service
-//!   started is not taken for one. **It does not see** a service's start
+//!   started is not taken for one. **Only a start after a harness began
+//!   counts:** the process the service started on the line must have been
+//!   made after the earliest harness of the user's that runs now (a process
+//!   this user may open whose job of sessions' commands is there), so that a
+//!   terminal a logon task opened, or one a service host opened for
+//!   `runas`, before any harness is the person's own; with no harness
+//!   running, none counts. **It does not see** a service's start
 //!   through another program than an interpreter or a runtime, a process
 //!   another of the user's processes starts outside the job (the desktop's
 //!   shell asked to open a file, a process made with another parent), nor a
-//!   command whose harness has exited, whose job no running process names.
+//!   command whose harness has exited, whose job no running process names,
+//!   nor a service's start once every harness of the user's has exited, nor
+//!   a program a service started before a harness began that is asked later
+//!   to run the subcommand (an already-running daemon's).
 //!
 //! Neither is a boundary against a command running with the user's rights:
 //! such a command can write the files these subcommands write. It keeps the
@@ -103,6 +112,14 @@ impl Under {
 /// there already, or the job lets the processes in it leave: the harness
 /// then holds its sessions below `unrestricted`.
 pub fn mark() -> io::Result<()> {
+    // A test build's switch, for the tests of what a harness does when its
+    // mark fails (`cineris_base::hook::mark_fails`): nothing in a build
+    // that is shipped.
+    if cineris_base::hook::mark_fails() {
+        return Err(io::Error::other(
+            "the test hooks' switch made the mark fail",
+        ));
+    }
     sys::mark()
 }
 
@@ -495,12 +512,23 @@ const LINE_OF_PARENTS: usize = 64;
 /// parent that has gone): any other program ends it, so that a person's
 /// terminal, an editor or a CI runner that a service started long before
 /// is not taken for one.
+///
+/// **Only a start after a harness began counts** (the false refusals of the
+/// narrow re-check of the third part): the process the service started on
+/// the line must have been made after `began`, when the earliest harness of
+/// this user that runs now was made, and with no harness running none
+/// counts. A session's command asks a service while its harness runs, so
+/// what the service starts for it is made after; a terminal that a logon
+/// task opened (`taskhostw.exe`, or the scheduler's host, then `cmd`), or
+/// one a service host opened for `runas`, before any harness, is the
+/// person's own, and the subcommands they type in it are theirs.
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
 fn started_by_a_service(
     listed: &[Listed],
     own: u32,
     opened: impl Fn(u32) -> Opened,
     scheduler: Option<u32>,
+    began: Option<u64>,
 ) -> Under {
     let find = |pid: u32| listed.iter().find(|process| process.pid == pid);
     let Opened::Made(mut made) = opened(own) else {
@@ -529,6 +557,10 @@ fn started_by_a_service(
         let schedules =
             name == "svchost.exe" && scheduler.is_none_or(|scheduler| scheduler == parent);
         if SERVICE_STARTERS.contains(&name) || schedules {
+            // `made` is when the process the service started, `at`, was.
+            if began.is_none_or(|began| made <= began) {
+                return Under::Nothing;
+            }
             let which = if schedules && scheduler.is_none() {
                 "a service host, and which service it runs could not be asked"
             } else if schedules {
@@ -537,8 +569,9 @@ fn started_by_a_service(
                 "a service's host of what it starts"
             };
             return Under::Session(format!(
-                "process {parent}, `{name}`, started it or a process above it: {which}, which \
-                 starts what a session's command asks of it outside the session's job"
+                "process {parent}, `{name}`, started it or a process above it while a harness \
+                 ran: {which}, which starts what a session's command asks of it outside the \
+                 session's job"
             ));
         }
         match seen {
@@ -932,6 +965,8 @@ mod sys {
         entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(u32::MAX);
         let mut listed = Vec::new();
         let mut times = HashMap::new();
+        // When the earliest harness of this user that runs now was made.
+        let mut began: Option<u64> = None;
         // SAFETY: `snapshot` is open, and `entry` is a writable entry whose
         // `dwSize` says how large it is.
         let mut more = unsafe { Process32FirstW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
@@ -952,10 +987,12 @@ mod sys {
             // A harness's job is named for its process's instance: one this
             // user may not open (another user's, the system's) is no
             // harness of this process's, whose commands run as its user.
-            if let Opened::Made(made) = seen
-                && let Some(under) = in_the_job_of(pid, made)
-            {
-                return under;
+            if let Opened::Made(made) = seen {
+                match in_the_job_of(pid, made) {
+                    Job::None => {}
+                    Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made))),
+                    Job::Holds(under) => return under,
+                }
             }
             // SAFETY: as for `Process32FirstW`.
             more = unsafe { Process32NextW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
@@ -967,16 +1004,27 @@ mod sys {
             own,
             |pid| times.get(&pid).copied().unwrap_or(Opened::Closed),
             scheduler(),
+            began,
         )
     }
 
+    /// Where this process stands to the job of sessions' commands of the
+    /// process `pid`, made at `made`.
+    enum Job {
+        /// There is no such job: `pid` runs no sessions.
+        None,
+        /// `pid` runs sessions, and this process is not in its job.
+        Elsewhere,
+        /// This process is in it, or that cannot be told.
+        Holds(Under),
+    }
+
     /// Whether this process is in the job of sessions' commands of the
-    /// harness `pid`, made at `made`: `None` when it is not, or there is no
-    /// such job. A job of that name that cannot be opened or asked, for
-    /// any reason but there being none, is not known, which refuses (the
-    /// full review of the third part: a job made to deny its opening must
-    /// not read as no job).
-    fn in_the_job_of(pid: u32, made: u64) -> Option<Under> {
+    /// harness `pid`, made at `made`. A job of that name that cannot be
+    /// opened or asked, for any reason but there being none, is not known,
+    /// which refuses (the full review of the third part: a job made to deny
+    /// its opening must not read as no job).
+    fn in_the_job_of(pid: u32, made: u64) -> Job {
         let name = wide(&job_name(pid, made));
         // SAFETY: plain values, and a name that ends in a nul and lives
         // through the call.
@@ -984,9 +1032,9 @@ mod sys {
         if handle.is_null() {
             let error = io::Error::last_os_error();
             if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() {
-                return None;
+                return Job::None;
             }
-            return Some(Under::Unknown(format!(
+            return Job::Holds(Under::Unknown(format!(
                 "the job of process {pid}'s sessions' commands could not be opened: {error}"
             )));
         }
@@ -999,17 +1047,18 @@ mod sys {
         let asked =
             unsafe { IsProcessInJob(GetCurrentProcess(), job.as_raw_handle(), &raw mut inside) };
         if asked == 0 {
-            return Some(Under::Unknown(format!(
+            return Job::Holds(Under::Unknown(format!(
                 "whether it is in the job of process {pid}'s sessions' commands could not be \
                  asked: {}",
                 io::Error::last_os_error()
             )));
         }
-        (inside != 0).then(|| {
-            Under::Session(format!(
-                "it is in the job of process {pid}'s sessions' commands"
-            ))
-        })
+        if inside == 0 {
+            return Job::Elsewhere;
+        }
+        Job::Holds(Under::Session(format!(
+            "it is in the job of process {pid}'s sessions' commands"
+        )))
     }
 
     #[cfg(test)]
@@ -1147,7 +1196,8 @@ mod tests {
             505 => Opened::Made(2_000),
             _ => Opened::Made(u64::from(pid)),
         };
-        let under = |own, scheduler| started_by_a_service(&processes, own, opened, scheduler);
+        let under =
+            |own, scheduler| started_by_a_service(&processes, own, opened, scheduler, Some(0));
         assert!(
             matches!(under(100, Some(600)), Under::Session(_)),
             "WMI, through cmd"
@@ -1254,7 +1304,7 @@ mod tests {
             _ => Opened::Made(u64::from(pid)),
         };
         // Process 104 runs the task scheduler.
-        let under = |own| started_by_a_service(&processes, own, opened, Some(104));
+        let under = |own| started_by_a_service(&processes, own, opened, Some(104), Some(0));
         for (own, through) in [
             (100, "python"),
             (110, "a versioned python"),
@@ -1283,6 +1333,49 @@ mod tests {
         ] {
             assert!(!passes_through(name), "{name}");
         }
+    }
+
+    /// A service's start counts only when what the service started on the
+    /// line was made after a harness of the user's that runs now began:
+    /// a terminal a logon task opened (the task host, then `cmd`), or one a
+    /// service host opened for `runas` where the scheduler's host could not
+    /// be asked, before any harness, is the person's own; the same opened
+    /// after one began is a session's command; and with no harness running,
+    /// nothing a service started counts (the false refusals of the narrow
+    /// re-check of the third part).
+    #[test]
+    fn a_services_start_counts_only_after_a_running_harness_began() {
+        let processes = listed(&[
+            // A logon task's terminal, made at 50.
+            (300, 50, "cin.exe"),
+            (50, 40, "cmd.exe"),
+            (40, 4, "taskhostw.exe"),
+            // A terminal a service host opened, made at 60.
+            (310, 60, "cin.exe"),
+            (60, 45, "pwsh.exe"),
+            (45, 4, "svchost.exe"),
+            // WMI's start of the subcommand itself, made at 320.
+            (320, 46, "cin.exe"),
+            (46, 4, "wmiprvse.exe"),
+        ]);
+        let opened = |pid: u32| match pid {
+            4 | 40 | 45 | 46 => Opened::Closed,
+            _ => Opened::Made(u64::from(pid)),
+        };
+        let under = |own, scheduler, began| {
+            matches!(
+                started_by_a_service(&processes, own, opened, scheduler, began),
+                Under::Session(_)
+            )
+        };
+        assert!(!under(300, Some(45), Some(100)), "a logon task's terminal");
+        assert!(under(300, Some(45), Some(30)), "a task's, after a harness");
+        assert!(!under(300, Some(45), None), "no harness running");
+        assert!(!under(310, None, Some(100)), "a runas terminal, not asked");
+        assert!(under(310, None, Some(55)), "a service host's, after");
+        assert!(under(320, Some(45), Some(100)), "WMI's, after");
+        assert!(!under(320, Some(45), Some(320)), "WMI's, not after");
+        assert!(!under(320, Some(45), None), "WMI's, no harness running");
     }
 
     /// A harness's job is named for its process's instance: the same id

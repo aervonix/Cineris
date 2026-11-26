@@ -21,6 +21,8 @@ mod confined;
 #[cfg(target_os = "linux")]
 mod helpers;
 mod perf;
+#[cfg(windows)]
+mod session;
 mod tree;
 
 use std::process::Command;

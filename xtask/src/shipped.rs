@@ -399,10 +399,14 @@ fn find_all(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
 /// (`cineris_base::hook::ready_divisor`), which code reads only with the
 /// feature. A shipped binary that holds it could be told to take a dialog's
 /// answer before a person has stopped typing (`docs/steps/ci-budgets-2/
-/// answered.md`, "The dialogs' times in the system tests").
-/// A test holds it to the hook's own constant, which `xtask` reaches only
-/// in its tests.
-const TEST_HOOK_MARKS: [&str; 1] = ["CINERIS_TEST_READY_DIVISOR"];
+/// answered.md`, "The dialogs' times in the system tests"). And the name of
+/// the variable that makes the harness's mark of its sessions' commands
+/// fail (`cineris_base::hook::mark_fails`), for the tests of what a harness
+/// does then (step 28's third pull request): a shipped binary that holds it
+/// is one a variable could hold at `supervised`.
+/// A test holds them to the hook's own constants, which `xtask` reaches
+/// only in its tests.
+const TEST_HOOK_MARKS: [&str; 2] = ["CINERIS_TEST_READY_DIVISOR", "CINERIS_TEST_MARK_FAILS"];
 
 /// The marks of [`TEST_HOOK_MARKS`] that `bytes` holds.
 pub(crate) fn test_hooks_in(bytes: &[u8]) -> Vec<&'static str> {
@@ -596,7 +600,10 @@ mod tests {
         bytes.extend_from_slice(b"\0CINERIS_TEST_READY_DIVISOR\0");
         assert_eq!(super::test_hooks_in(&bytes), ["CINERIS_TEST_READY_DIVISOR"]);
         // The hook's own name, which a test of the binary sets.
-        assert_eq!(super::TEST_HOOK_MARKS, [cineris_testkit::READY_DIVISOR]);
+        assert_eq!(
+            super::TEST_HOOK_MARKS,
+            [cineris_testkit::READY_DIVISOR, cineris_testkit::MARK_FAILS]
+        );
     }
 
     #[test]

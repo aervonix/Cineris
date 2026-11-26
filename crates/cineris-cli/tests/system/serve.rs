@@ -650,3 +650,64 @@ fn sys_serve_socket_serves_on_a_named_pipe() {
     assert_eq!(server.wait().unwrap().code(), Some(0));
     drop(errors);
 }
+
+/// A server whose mark failed (`crate::commands`'s folded test) holds its
+/// sessions at `supervised`, though its configuration says `unrestricted`:
+/// a session is made at no more, a raise past it by `session/set` is
+/// refused with the reason, a change within it is made, and it says so on
+/// standard error.
+pub(crate) fn a_server_whose_mark_failed_refuses_a_raise_past_supervised() {
+    use cineris_protocol::lease::Level;
+    use cineris_protocol::methods::{SessionNewParams, SessionSetParams};
+    use cineris_protocol::session::SessionSettings;
+    use cineris_testkit::conformance::Carrier as _;
+
+    let mut machine = Machine::with_config(
+        "serve-mark-failed",
+        "[permissions]\nmode = \"unrestricted\"\n",
+    );
+    machine.fail_the_mark();
+    let mut served = serve(&machine);
+    served
+        .lines
+        .initialize(conformance::initialize())
+        .expect("initialize");
+    let made = served.lines.call(Op::SessionNew(SessionNewParams {
+        cwd: None,
+        workspace: machine.workspace.to_str().unwrap().to_owned(),
+        settings: SessionSettings::default(),
+        title: None,
+        config: serde_json::Map::new(),
+        ephemeral: true,
+    }));
+    let Ok(OpResult::SessionNew(made)) = made else {
+        panic!("a session: {made:?}");
+    };
+    assert_eq!(made.session.level, Level::Supervised);
+    let set = |level| {
+        Op::SessionSet(SessionSetParams {
+            session_id: made.session.session_id.clone(),
+            settings: SessionSettings {
+                level: Some(level),
+                ..SessionSettings::default()
+            },
+        })
+    };
+    let raised = served
+        .lines
+        .call(set(Level::Unrestricted))
+        .expect_err("a raise past the cap");
+    assert_eq!(raised.code, "unrestricted_not_allowed", "{raised:?}");
+    assert!(
+        raised.message.contains("`supervised` at most"),
+        "{}",
+        raised.message
+    );
+    served
+        .lines
+        .call(set(Level::ReadOnly))
+        .expect("a change within the cap");
+    assert_eq!(served.end(), Some(0), "the server's exit");
+    let said = std::fs::read_to_string(machine.home.join("stderr.txt")).unwrap();
+    assert!(said.contains("could not make a job"), "{said}");
+}

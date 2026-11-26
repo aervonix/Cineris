@@ -109,6 +109,14 @@ pub enum CredentialError {
         /// The link.
         path: PathBuf,
     },
+    /// Another process held the credentials file's lock past the wait
+    /// (`cineris_base::private::LOCK_WAIT`): nothing was changed. The reason
+    /// names the file, under `~` where it is in the home directory.
+    #[error("{reason}")]
+    Busy {
+        /// What happened, and what to do.
+        reason: String,
+    },
     /// The credentials file is not what this version writes. It is left as
     /// it is: nothing is overwritten that was not understood.
     #[error("the credentials file `{path}` cannot be used: {reason}")]
@@ -137,7 +145,7 @@ impl Classified for CredentialError {
             Self::Unavailable { .. } | Self::Link { .. } | Self::Malformed { .. } => {
                 ErrorKind::Config
             }
-            Self::Io { .. } | Self::Store { .. } => ErrorKind::Auth,
+            Self::Io { .. } | Self::Busy { .. } | Self::Store { .. } => ErrorKind::Auth,
         }
     }
 }
