@@ -190,3 +190,17 @@ caught-by:
     app::tests::dialogs::a_key_just_after_a_held_escape_is_read_does_not_answer
     app::tests::dialogs::a_paste_split_across_reads_holds_the_dialog_from_its_end
     app::tests::dialogs::a_held_escape_that_answers_holds_the_next_dialog_from_when_it_was_read
+
+# ------------------------------------------- the protected look's hash arm
+#
+# Found while settling `step-26/protected-change-not-detected`, whose named
+# test reached the hash arm and never the stamp: the hash arm had no break.
+
+[break] protected-hash-change-not-detected
+rule: A protected file too large to keep and hashed by both looks is modified when its hash changed, whatever its size and times say.
+file: crates/cineris-sandbox/src/protect.rs
+in: Entry::change_from
+find: (self.hash != old.hash).then(|| old.before())
+replace: None
+caught-by:
+    cineris-sandbox protect::tests::a_change_that_puts_the_modification_time_back_is_still_found
