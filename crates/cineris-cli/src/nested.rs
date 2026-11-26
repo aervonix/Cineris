@@ -20,7 +20,7 @@
 use std::ffi::OsString;
 use std::sync::Arc;
 
-use cineris_core::approving::{Kind, OwnCommands, Refusal, Standing};
+use cineris_core::approving::{Invocation, Kind, OwnCommands, Refusal, Standing};
 
 use crate::args::{
     AuthCommand, Choice, Command, ConfigCommand, ExtCommand, FLAGS, Format, GUARD, Nested,
@@ -167,9 +167,12 @@ fn closed(command: &Command, written: &[String]) -> bool {
 }
 
 /// The grammar the engine is given: how a run of Cineris with the words
-/// `rest` stands, `open` when more words may follow that only the shell
-/// knows.
-pub(crate) fn grammar(rest: &[String], open: bool) -> Standing {
+/// of `invocation` stands. Where more words follow that only the shell
+/// knows, only what they cannot change is safe; where the words may not be
+/// the program's own (`exact` false), neither the help, the version nor
+/// words it cannot read are.
+pub(crate) fn grammar(invocation: &Invocation<'_>) -> Standing {
+    let (rest, open, exact) = (invocation.words, invocation.open, invocation.exact);
     if let Some(first) = rest.first()
         && (first == SANDBOX || first == GUARD)
     {
@@ -178,8 +181,10 @@ pub(crate) fn grammar(rest: &[String], open: bool) -> Standing {
     let parsed = |words: &[String]| parse(words.iter().map(OsString::from).collect());
     let hidden = || refused(format!("cineris {}", rest.join(" ")), Kind::Hidden);
     match parsed(rest) {
-        // The binary refuses what it cannot read, and does nothing.
-        Err(_) if !open => Standing::Safe,
+        // The binary refuses what it cannot read, and does nothing: where
+        // the words are its own.
+        Err(_) if !open && exact => Standing::Safe,
+        Err(_) if !open => hidden(),
         Err(_) => {
             // An action that takes a word, written out: whatever the word
             // is, it is that action.
@@ -193,6 +198,7 @@ pub(crate) fn grammar(rest: &[String], open: bool) -> Standing {
                 _ => hidden(),
             }
         }
+        Ok(Command::Help(_) | Command::Version) if !exact => hidden(),
         Ok(command) => {
             let standing = standing(&command);
             if !open || standing != Standing::Safe || closed(&command, rest) {

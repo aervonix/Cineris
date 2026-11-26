@@ -11,16 +11,21 @@ fn refuses(line: &str, shell: ShellSyntax) -> bool {
 /// refused, in each syntax given.
 #[test]
 fn the_fallback_refuses_exactly_the_tables_refused_lines() {
+    let mut wrong = Vec::new();
     for (line, shells, refused_too) in CASES {
         for shell in *shells {
-            assert_eq!(
-                refuses(line, *shell),
-                *refused_too,
-                "{line:?} in {shell:?}: {:?}",
-                refused(line, *shell, None)
-            );
+            let refusal = refused(line, *shell, None);
+            if refusal.is_some() != *refused_too {
+                wrong.push(format!("{line:?} in {shell:?}: {refusal:?}"));
+            }
         }
     }
+    assert!(
+        wrong.is_empty(),
+        "{} line(s):\n{}",
+        wrong.len(),
+        wrong.join("\n")
+    );
 }
 
 /// Each reason says what is refused, why, and to run it in one's own
@@ -72,7 +77,8 @@ fn the_front_ends_names_are_cinerises_too() {
 fn the_front_ends_grammar_decides_each_run_found() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let kept = Arc::clone(&seen);
-    let grammar: Grammar = Arc::new(move |rest: &[String], open: bool| {
+    let grammar: Grammar = Arc::new(move |invocation: &Invocation<'_>| {
+        let (rest, open) = (invocation.words, invocation.open);
         kept.lock().unwrap().push((rest.to_vec(), open));
         if rest.first().is_some_and(|word| word == "bad") {
             Standing::Refused(Refusal::new("cineris bad", Kind::Approves))
@@ -97,13 +103,7 @@ fn the_front_ends_grammar_decides_each_run_found() {
 #[test]
 fn a_line_read_too_deep_or_too_often_fails_closed() {
     let own = OwnCommands::new(Vec::new(), None);
-    let reader = Reader {
-        own: &own,
-        work: Cell::new(0),
-        moved: RefCell::new(None),
-        runs: Cell::new(false),
-        adds: Cell::new(false),
-    };
+    let reader = Reader::new(&own);
     assert_eq!(reader.read("cineris --version", Line::Shell, 1), None);
     assert!(
         reader
@@ -123,13 +123,7 @@ fn a_line_read_too_deep_or_too_often_fails_closed() {
 #[test]
 fn a_line_that_never_names_cineris_is_passed_over() {
     let own = OwnCommands::new(Vec::new(), None);
-    let reader = Reader {
-        own: &own,
-        work: Cell::new(0),
-        moved: RefCell::new(None),
-        runs: Cell::new(false),
-        adds: Cell::new(false),
-    };
+    let reader = Reader::new(&own);
     assert!(!reader.mentioned("cargo test --workspace && git status"));
     assert!(reader.mentioned("c\\in'e'ris"));
     assert!(reader.mentioned("ls cin[e]ris"));
@@ -191,4 +185,48 @@ fn each_refusal_names_the_run_it_refuses() {
             "{line:?}"
         );
     }
+}
+
+/// A grammar that panics is not trusted past it: the run is refused, and
+/// the panic goes no further (the re-look at the early review, L5).
+#[test]
+fn a_grammar_that_panics_refuses() {
+    let grammar: Grammar = Arc::new(|_: &Invocation<'_>| panic!("a grammar's own fault"));
+    let own = OwnCommands::new(Vec::new(), Some(grammar));
+    let refusal = refused("cineris ext list", Posix, Some(&own));
+    assert!(
+        matches!(
+            refusal,
+            Some(Refusal {
+                kind: Kind::Hidden,
+                ..
+            })
+        ),
+        "{refusal:?}"
+    );
+}
+
+/// Where the words may not be the program's own (a line read as text, a
+/// pattern), the help or the version is not taken as asked (H2).
+#[test]
+fn the_help_is_safe_only_in_words_that_are_the_programs_own() {
+    assert_eq!(
+        fallback(&["--help".to_owned()], false, true),
+        Standing::Safe
+    );
+    assert!(matches!(
+        fallback(&["--help".to_owned()], false, false),
+        Standing::Refused(Refusal {
+            kind: Kind::Hidden,
+            ..
+        })
+    ));
+    assert!(matches!(
+        fallback(
+            &["ext".to_owned(), "add".to_owned(), "-h".to_owned()],
+            false,
+            false
+        ),
+        Standing::Refused(_)
+    ));
 }

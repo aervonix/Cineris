@@ -88,6 +88,17 @@ pub fn under_a_session() -> Under {
     sys::under_a_session()
 }
 
+/// Under a session's command, a variable of this process that moves where
+/// Cineris's configuration and stores are read from, set otherwise than
+/// for the session that started it (on Linux, by the session's process's
+/// own environment) or than the system's own folders say (on Windows, by
+/// the known folders; `CINERIS_CONFIG` and `CINERIS_DATA_DIR` there by being
+/// set at all). `None` when none is.
+#[must_use]
+pub fn moved_stores() -> Option<String> {
+    sys::moved_stores()
+}
+
 /// The first words of Cineris's subcommands that run no session: a
 /// process of Cineris whose first argument is one of these starts no
 /// session's command.
@@ -177,6 +188,54 @@ mod sys {
 
     pub(super) fn under_a_session() -> Under {
         line(std::os::unix::process::parent_id(), seen)
+    }
+
+    /// The process of the line that runs sessions.
+    fn harness() -> Option<u32> {
+        let mut at = std::os::unix::process::parent_id();
+        for _ in 0..4096 {
+            match seen(at) {
+                Seen::Of { harness: true, .. } => return Some(at),
+                Seen::Of { parent, .. } if parent > 1 && parent != at => at = parent,
+                _ => return None,
+            }
+        }
+        None
+    }
+
+    pub(super) fn moved_stores() -> Option<String> {
+        let names = [
+            "HOME",
+            "XDG_CONFIG_HOME",
+            "XDG_STATE_HOME",
+            "XDG_DATA_HOME",
+            "CINERIS_CONFIG",
+            "CINERIS_DATA_DIR",
+        ];
+        let Some(pid) = harness() else {
+            return names
+                .iter()
+                .find(|name| name.starts_with("CINERIS_") && std::env::var_os(name).is_some())
+                .map(|name| (*name).to_owned());
+        };
+        let Ok(environ) = std::fs::read(format!("/proc/{pid}/environ")) else {
+            return Some("the session's own environment, which could not be read,".to_owned());
+        };
+        let theirs = |wanted: &str| {
+            environ.split(|byte| *byte == 0).find_map(|entry| {
+                let text = String::from_utf8_lossy(entry);
+                text.split_once('=')
+                    .filter(|(name, _)| *name == wanted)
+                    .map(|(_, value)| value.to_owned())
+            })
+        };
+        names
+            .iter()
+            .find(|name| {
+                let mine = std::env::var_os(name).map(|value| value.to_string_lossy().into_owned());
+                mine != theirs(name)
+            })
+            .map(|name| (*name).to_owned())
     }
 
     /// The names a process of Cineris has in `/proc/<pid>/stat`: its own
@@ -275,12 +334,72 @@ mod sys {
     use std::sync::OnceLock;
 
     use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, FALSE};
+    use windows_sys::Win32::System::Com::CoTaskMemFree;
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, OpenJobObjectW,
     };
     use windows_sys::Win32::System::Threading::GetCurrentProcess;
+    use windows_sys::Win32::UI::Shell::{
+        FOLDERID_LocalAppData, FOLDERID_Profile, FOLDERID_RoamingAppData, KF_FLAG_DEFAULT,
+        SHGetKnownFolderPath,
+    };
 
     use super::{JOB_NAME, Under};
+
+    /// A known folder's path, as the system keeps it for this user.
+    fn known(folder: &windows_sys::core::GUID) -> Option<std::path::PathBuf> {
+        use std::os::windows::ffi::OsStringExt;
+        let mut path = std::ptr::null_mut();
+        // SAFETY: `folder` is a live GUID, the flags and the token are
+        // plain (none: this user's), and `path` is a live pointer for the
+        // call to write the system's string's address to.
+        let said = unsafe {
+            SHGetKnownFolderPath(
+                folder,
+                KF_FLAG_DEFAULT as u32,
+                ptr::null_mut(),
+                &raw mut path,
+            )
+        };
+        let found = (said == 0 && !path.is_null()).then(|| {
+            // SAFETY: on success `path` is a nul-terminated string the
+            // system made, read up to its nul.
+            let length = (0..)
+                .take_while(|at| unsafe { *path.add(*at) } != 0)
+                .count();
+            // SAFETY: as above, `length` units of it are there.
+            let units = unsafe { std::slice::from_raw_parts(path, length) };
+            std::path::PathBuf::from(std::ffi::OsString::from_wide(units))
+        });
+        // SAFETY: the string is the system's to free, freed once; a null
+        // pointer is allowed.
+        unsafe { CoTaskMemFree(path.cast()) };
+        found
+    }
+
+    pub(super) fn moved_stores() -> Option<String> {
+        for name in ["CINERIS_CONFIG", "CINERIS_DATA_DIR"] {
+            if std::env::var_os(name).is_some() {
+                return Some(name.to_owned());
+            }
+        }
+        for (name, folder) in [
+            ("USERPROFILE", &FOLDERID_Profile),
+            ("APPDATA", &FOLDERID_RoamingAppData),
+            ("LOCALAPPDATA", &FOLDERID_LocalAppData),
+        ] {
+            let mine = std::env::var_os(name).map(std::path::PathBuf::from);
+            let same = match (mine, known(folder)) {
+                (Some(mine), Some(theirs)) => cineris_base::same_location(&mine, &theirs),
+                (None, _) => true,
+                (Some(_), None) => false,
+            };
+            if !same {
+                return Some(name.to_owned());
+            }
+        }
+        None
+    }
 
     /// The right to ask a job about itself and its processes (`winnt.h`'s
     /// `JOB_OBJECT_QUERY`), which `windows-sys` keeps under a feature of

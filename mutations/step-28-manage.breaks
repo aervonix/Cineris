@@ -244,23 +244,6 @@ caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
     cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
 
-[break] approving-terminal-runner-passed
-rule: A name of Cineris at any word of a terminal runner (`tmux`, `screen`, `ssh`, `socat`, `script`) is a run of it.
-file: crates/cineris-policy/src/approving.rs
-find: if terminal && self.is_own(word) {
-replace: if false {
-caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
-
-[break] approving-clustered-line-flag-passed
-rule: A shell's, `script`'s or `su`'s `-c` clustered with other flags (`-lc`, `-qc`) gives a line, read again.
-file: crates/cineris-policy/src/approving.rs
-in: line_at
-find: if clustered || flag == "--command" {
-replace: if flag == "--command" {
-caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
-
 [break] approving-env-split-string-unread
 rule: `env -S`, attached or not, and `--split-string` give a line, read again.
 file: crates/cineris-policy/src/approving.rs
@@ -282,6 +265,7 @@ caught-by:
 [break] approving-text-after-equals-unread
 rule: The text after an `=` or a `!` in a word (`alias.x=!cineris ...`, `core.pager=...`) is read as a line.
 file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
 find: for (mark, _) in word.match_indices(['=', '!']) {
 replace: for (mark, _) in word.match_indices(['=', '!']).take(0) {
 caught-by:
@@ -299,7 +283,7 @@ caught-by:
 rule: A line the analysis cannot model fails closed: read as text, its quotes and escapes taken out as its shell takes them.
 file: crates/cineris-policy/src/approving.rs
 in: refused
-find: Analysis::NotModelled { .. } => reader.in_text(command, shell)
+find: Analysis::NotModelled { .. } => reader.in_text(&command, shell)
 replace: Analysis::NotModelled { .. } => None
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
@@ -345,8 +329,8 @@ caught-by:
 rule: What follows a word the shell expands is not known: the run is judged as open, safe only after a subcommand that only reads.
 file: crates/cineris-policy/src/approving.rs
 in: Reader::run
-find: Some(at) => (&rest[..at], true)
-replace: Some(at) => (&rest[..at], open)
+find: (Some(at), _) => (rest[..at].to_vec(), true)
+replace: (Some(at), _) => (rest[..at].to_vec(), open)
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
@@ -389,8 +373,8 @@ caught-by:
 rule: The help and the version, before `--`, are safe.
 file: crates/cineris-policy/src/approving.rs
 in: fallback
-find: "-h" | "--help" | "-V" | "--version" => return Standing::Safe
-replace: "-V" | "--version" => return Standing::Safe
+find: "-h" | "--help" | "-V" | "--version" => return help_or()
+replace: "-V" | "--version" => return help_or()
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
@@ -414,8 +398,9 @@ caught-by:
 [break] approving-find-exec-unread
 rule: What `find -exec` runs is a simple command of its own.
 file: crates/cineris-policy/src/approving.rs
-find: if matches!(word.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir") {
-replace: if false {
+in: Reader::in_words
+find: "-exec" | "-execdir" | "-ok" | "-okdir" | "--args"
+replace: "-never"
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
@@ -430,19 +415,13 @@ caught-by:
 [break] approving-xargs-words-known
 rule: A run `xargs` starts takes more words from its input: it is judged as open.
 file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+occurrence: 1
 find: self.adds.set(true);
 replace: let _ = 0;
 packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
-
-[break] approving-text-names-anywhere
-rule: In a line read as text, a whole word names Cineris only at the program's place, or after a wrapper or a runner.
-file: crates/cineris-policy/src/approving.rs
-find: let placed = at == program || (runs_words && at > program);
-replace: let placed = true;
-caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
 [break] approving-pair-in-text-passed
 rule: A line read as text that names Cineris and holds an approving pair anywhere is refused.
@@ -845,3 +824,301 @@ packages: cineris-core,cineris-cli
 caught-by:
     cineris-core assemble::level_tests::a_level_is_capped_at_the_most_given
     cineris-cli::system commands::sys_a_nested_headless_run_is_held_to_read_only_and_says_so
+
+# The second round: the socket's refusal of the hooks' and extensions'
+# programs, the first run's question, and the engine's calls stopped as they
+# start.
+
+[break] socket-own-command-answered
+rule: A peer whose line of parents reaches the server's process is refused: a hook's, an extension's program, a program the model's shell runs.
+os: linux
+file: crates/cineris-rpc/src/socket/unix.rs
+find:
+        return Ok(Accepted::Refused(format!(
+                    "one of the server's own commands (pid {pid})"
+                )));
+replace: {}
+caught-by:
+    cineris-rpc::it socket::sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands
+    cineris-rpc::it socket::sys_one_of_the_servers_own_commands_is_refused
+
+[break] pipe-own-command-answered
+rule: A client in the job of the server's own commands is refused: a hook's, an extension's program, a program the model's shell runs.
+os: windows
+file: crates/cineris-rpc/src/socket/windows.rs
+find: if own {
+replace: if false {
+caught-by:
+    cineris-rpc::it pipe::sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands
+
+[break] first-run-skill-folders-yes-lost
+rule: The first run's answer to the skill folders' question is what is written: a yes reads the user's own without asking.
+file: crates/cineris-tui/src/app/state/first_run.rs
+find: run.chosen.read_skill_folders = yes;
+replace: run.chosen.read_skill_folders = false;
+caught-by:
+    cineris-tui app::tests::first_run::the_first_run_reaches_a_session_made_with_what_was_chosen
+
+[break] call-stopped-as-it-starts-runs
+rule: A call whose runtime is stopped as the call starts runs nothing of its script, and is told it never ran.
+file: crates/cineris-ext/src/engine/thread.rs
+find:
+        cineris_base::hook::point(super::A_CALL_IS_STARTED);
+        if self.stop.load(Ordering::SeqCst) {
+replace:
+        cineris_base::hook::point(super::A_CALL_IS_STARTED);
+        if false {
+caught-by:
+    cineris-ext::it engine::a_call_stopped_as_it_starts_and_one_queued_behind_it_never_run
+
+[break] folder-read-follows-a-swapped-link
+rule: The folder `ext add` reads is opened through handles that follow no link: one swapped for a link between the look and the read is refused.
+file: crates/cineris-ext/src/folder.rs
+find: Self::read_through(Folder::open(folder))
+replace: Self::read_through(Folder::open_following(folder))
+caught-by:
+    cineris-ext folder::tests::a_folder_swapped_for_a_link_after_its_look_is_refused
+
+# The re-look at the early review of the refusal (H1, H2, M1, M2, the lows,
+# and B's moved stores).
+
+[break] approving-any-word-passed
+rule: A name of Cineris at any word of a simple command, past its program's place, is a run of it, refused where it approves, widens or is internal.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+find: !prints && self.is_own(word)
+replace: false && self.is_own(word)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-any-word-takes-the-application
+rule: A name of Cineris that is not at a program's place is not refused as the application or for what follows it: `grep cineris file` runs nothing of it.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: placed || !matches!(refusal.kind, Kind::Application | Kind::Hidden)
+replace: true
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-help-in-text-taken
+rule: The help or the version, in words that may not be the program's own, is not taken as asked.
+file: crates/cineris-policy/src/approving.rs
+in: fallback
+find:
+        if exact {
+            Standing::Safe
+replace:
+        if true {
+            Standing::Safe
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-comment-kept-as-words
+rule: A comment the analysis left as a word is no word of the run.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_parts
+find: if !word.quoted && word.text.starts_with('#') {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-text-comment-kept
+rule: In a line read as text, a comment is left out.
+file: crates/cineris-policy/src/approving.rs
+in: segments
+find: '#' if word.is_empty() => comment = true
+replace: '#' if false => comment = true
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-redirection-target-kept
+rule: In a line read as text, an output's redirection target is no word of the run.
+file: crates/cineris-policy/src/approving.rs
+in: segments
+find:
+        finish(&mut word, &mut words, &mut target);
+                target = true;
+replace:
+        finish(&mut word, &mut words, &mut target);
+                target = false;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-glob-taken-as-known
+rule: A word the analysis says is a pattern is one the shell expands.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_parts
+find: if word.glob {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-cluster-value-passed
+rule: A wrapper's cluster of short options whose last takes a value (`-Eu root`) takes that value.
+file: crates/cineris-policy/src/approving.rs
+in: wrapped
+find: || last.is_some_and(|last| values.contains(&last.as_str()))
+replace: || false
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-shell-cluster-unread
+rule: A shell's line follows its `-c` in a cluster (`-lc`), past options and the values of `-o`.
+file: crates/cineris-policy/src/approving.rs
+in: shell_line
+find: if word == "--command" || (cluster && word.contains('c')) {
+replace: if word == "--command" {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-awk-value-taken-as-program
+rule: An `awk`'s program is past the values of `-v`, `-F` and `-W`.
+file: crates/cineris-policy/src/approving.rs
+in: awk_program
+find: "-v" | "-F" | "-W" | "--assign" | "--field-separator" => at += 2
+replace: "-v" | "-F" | "-W" | "--assign" | "--field-separator" => at += 1
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-directory-change-passed
+rule: A headless run of Cineris after the line changes the directory is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::note_program
+find: self.moved_dir.set(true);
+replace: let _ = 0;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-source-passed
+rule: A run of Cineris in a line that sources a file or evaluates one is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::note_program
+find: self.sources.set(true);
+replace: let _ = 0;
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-attached-unset-passed
+rule: `env -uHOME`, an unset attached to its flag, moves the stores.
+file: crates/cineris-policy/src/approving.rs
+in: moved
+find: .filter(|name| !name.is_empty())
+replace: .filter(|_| false)
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-prompt-after-dashes-hidden
+rule: After `--`, every word of a headless run is its prompt's: what the shell makes of one changes no flag.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: (Some(at), Some(dash)) if dash < at => {
+replace: (Some(at), Some(dash)) if false && dash < at => {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-start-process-words-exact
+rule: `Start-Process`'s argument list is no program's own words: what the grammar cannot read there is not safe.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::start_process
+find:
+        let was = self.exact.replace(false);
+        let mut line = vec![program];
+replace:
+        let was = self.exact.get();
+        let mut line = vec![program];
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
+
+[break] approving-text-after-equals-unread-in-text
+rule: In a line read as text, the text after an `=` or a `!` is read as a line.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: && let Some(refusal) = self.read(text, Line::Shell, DEPTH - 2)
+replace: && let Some(refusal) = None::<Refusal>
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-text-topic-passed
+rule: In a line read as text that names Cineris, `setup`, `serve` or `attach` anywhere is refused.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: matches!(word.to_ascii_lowercase().as_str(), "setup" | "serve" | "attach")
+replace: false
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-printer-names-cineris
+rule: In a line read as text, a name a printer's words hold (`git commit -m …`) is no run, and names nothing.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: if prints && at != program {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-text-exec-not-placed
+rule: In a line read as text, the word after `-exec` is a program's place.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_plain
+find: let placed = at == program || executes || (runs_words && at > program);
+replace: let placed = at == program || (runs_words && at > program);
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-carriage-return-kept
+rule: A carriage return ends a line.
+file: crates/cineris-policy/src/approving.rs
+in: refused
+find: let command = command.replace('\r', "\n");
+replace: let command = command.to_owned();
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] approving-ansi-quotes-kept
+rule: `$'…'`, `$"…"` and an empty `$()` build nothing, and are read as quotes.
+file: crates/cineris-policy/src/approving.rs
+in: unquoted
+find: text.replace("$()", "").replace("$'", "'").replace("$\"", "\"")
+replace: text.to_owned()
+caught-by:
+    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+
+[break] grammar-unread-words-safe
+rule: Where its words may not be the program's own, the CLI's grammar does not take words it cannot read as safe.
+file: crates/cineris-cli/src/nested.rs
+in: grammar
+find: Err(_) if !open && exact => Standing::Safe
+replace: Err(_) if !open => Standing::Safe
+caught-by:
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
+    cineris-cli::bin/cineris nested::tests::the_help_and_unread_words_are_safe_only_as_the_programs_own
+
+[break] nested-run-moved-stores-passed
+rule: A headless run under a session's command with a variable that moves its stores is refused.
+file: crates/cineris-cli/src/main.rs
+in: nested_run
+find: if let Some(moved) = cineris_sandbox::session::moved_stores() {
+replace: if let Some(moved) = None::<String> {
+caught-by:
+    cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused
+
+[break] session-linux-moved-store-same
+rule: On Linux, a store's variable set otherwise than in the session's own environment is moved.
+os: linux
+file: crates/cineris-sandbox/src/session.rs
+find: mine != theirs(name)
+replace: false
+packages: cineris-cli
+caught-by:
+    cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused
+
+[break] session-windows-cineris-variable-passed
+rule: On Windows, `CINERIS_CONFIG` or `CINERIS_DATA_DIR` set at all moves the stores.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: if std::env::var_os(name).is_some() {
+replace: if false {
+packages: cineris-cli
+caught-by:
+    cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused

@@ -703,3 +703,38 @@ fn the_engine_without_a_grammar_refuses_the_tables_lines() {
         }
     }
 }
+
+/// The engine asks the grammar its parts give for each run of Cineris a
+/// line holds, and refuses what that refuses; with none, its fallback
+/// reads the line (the re-look at the early review, L5).
+#[test]
+fn the_engine_asks_the_grammar_it_is_given() {
+    use cineris_policy::approving::{Grammar, Invocation, Kind, OwnCommands, Refusal, Standing};
+    let grammar: Grammar = std::sync::Arc::new(|invocation: &Invocation<'_>| {
+        if invocation.words.first().is_some_and(|word| word == "bad") {
+            Standing::Refused(Refusal::new("cineris bad", Kind::Approves))
+        } else {
+            Standing::Safe
+        }
+    });
+    let own = std::sync::Arc::new(OwnCommands::new(Vec::new(), Some(grammar)));
+    let given = engine_with(|parts| {
+        parts.level = Level::Unrestricted;
+        parts.rules = vec![user(Effect::Exec, "*", RuleAction::Allow)];
+        parts.own_commands = Some(std::sync::Arc::clone(&own));
+    });
+    let outcome = shell(&given, "cineris bad x");
+    assert_eq!(said(&outcome), Deny, "{}", reason(&outcome));
+    assert!(
+        reason(&outcome).contains("`cineris bad`"),
+        "{}",
+        reason(&outcome)
+    );
+    // What the grammar lets through, the fallback would have refused.
+    assert_ne!(said(&shell(&given, "cineris ext add ./x")), Deny);
+    let fallback = engine_with(|parts| {
+        parts.level = Level::Unrestricted;
+        parts.rules = vec![user(Effect::Exec, "*", RuleAction::Allow)];
+    });
+    assert_eq!(said(&shell(&fallback, "cineris ext add ./x")), Deny);
+}
