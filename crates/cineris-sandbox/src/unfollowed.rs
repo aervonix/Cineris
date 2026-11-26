@@ -447,10 +447,10 @@ mod sys {
     };
     use windows_sys::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO,
-        FILE_FLAG_BACKUP_SEMANTICS, FILE_FULL_DIR_INFO,
-        FILE_GENERIC_READ, FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
-        FILE_SHARE_WRITE, FILE_TRAVERSE, FileAttributeTagInfo, FileFullDirectoryInfo,
-        FileFullDirectoryRestartInfo, GetFileInformationByHandleEx, SYNCHRONIZE,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FULL_DIR_INFO, FILE_GENERIC_READ, FILE_LIST_DIRECTORY,
+        FILE_READ_ATTRIBUTES, FILE_SHARE_READ, FILE_SHARE_WRITE, FILE_TRAVERSE,
+        FileAttributeTagInfo, FileFullDirectoryInfo, FileFullDirectoryRestartInfo,
+        GetFileInformationByHandleEx, SYNCHRONIZE,
     };
     use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 
@@ -659,7 +659,12 @@ mod sys {
             let size = (buffer.len() * 8) as u32;
             let bytes = buffer.len() * 8;
             let header = std::mem::offset_of!(FILE_FULL_DIR_INFO, FileName);
-            let bad = || io::Error::new(io::ErrorKind::InvalidData, "a folder's listing ran past its buffer");
+            let bad = || {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "a folder's listing ran past its buffer",
+                )
+            };
             let mut entries = Vec::new();
             let mut class = FileFullDirectoryRestartInfo;
             while entries.len() < most {
@@ -892,11 +897,8 @@ mod tests {
         // Named through the link, with a trailing separator or `.` too
         // (the early review of step 28's third pull request).
         let named = dir.join("named");
-        let trailing = std::path::PathBuf::from(format!(
-            "{}{}",
-            named.display(),
-            std::path::MAIN_SEPARATOR
-        ));
+        let trailing =
+            std::path::PathBuf::from(format!("{}{}", named.display(), std::path::MAIN_SEPARATOR));
         for path in [named.clone(), trailing, named.join(".")] {
             assert!(
                 matches!(Folder::open(&path), Err(Refused::Link)),
@@ -936,9 +938,9 @@ mod tests {
     )]
     fn a_fifo_is_refused_without_waiting() {
         let dir = scratch("fifo");
-        let path = std::ffi::CString::new(
-            std::os::unix::ffi::OsStrExt::as_bytes(dir.join("pipe").as_os_str()),
-        )
+        let path = std::ffi::CString::new(std::os::unix::ffi::OsStrExt::as_bytes(
+            dir.join("pipe").as_os_str(),
+        ))
         .unwrap();
         // SAFETY: a NUL-terminated path and a mode.
         assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);

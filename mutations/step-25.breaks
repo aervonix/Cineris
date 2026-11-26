@@ -2981,6 +2981,7 @@ caught-by:
 rule: enter on a mode is taken only once its row was drawn whole.
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: App::first_run_key
+occurrence: 2
 find: } else if (enter && whole) || letter == Some('s') {
 replace: } else if enter || letter == Some('s') {
 caught-by:
