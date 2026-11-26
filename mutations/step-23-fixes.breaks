@@ -658,7 +658,7 @@ in: Core::end
 find: self.inner.clients.withdraw(Some(session));
 replace:
 caught-by:
-    cineris-core::it asking::an_undos_question_ends_when_its_session_is_closed
+    cineris-core::it asking::an_undos_question_put_as_its_session_ends_is_withdrawn_by_the_end
 
 [break] a-rewind-runs-on-a-closed-session
 rule: A rewind or an undo whose session was closed while it asked changes nothing.

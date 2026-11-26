@@ -77,6 +77,17 @@ const WORKSPACE_FILES: usize = 100_000;
 const PUT_BACK: &str = "Put them back";
 const KEEP: &str = "Keep them as they are";
 
+/// An undo or a rewind has chosen whom to ask whether to put back the files
+/// edited since, and has not put the question yet. An awaited point
+/// ([`cineris_base::hook::await_point!`]), on the operation's task.
+pub const BEFORE_THE_PUT_BACK_IS_ASKED: &str =
+    "core: an undo has chosen whom to ask about the files edited since, and has not asked";
+
+/// A session is to end, and is still in the core's table: a question put
+/// now finds it open, and only its end's withdrawal takes the question
+/// back. An awaited point ([`cineris_base::hook::await_point!`]).
+pub const BEFORE_A_SESSION_ENDS: &str = "core: a session is to end, and is still open";
+
 /// Where a rewind goes back to.
 #[derive(Debug, Clone)]
 enum Back {
@@ -1169,6 +1180,7 @@ impl Core {
     /// Ends a session: its turn is interrupted, its loop ends, and its log
     /// is closed.
     async fn end(&self, session: &SessionId) {
+        cineris_base::hook::await_point!(BEFORE_A_SESSION_ENDS);
         let Some(live) = lock(&self.inner.sessions).remove(session) else {
             return;
         };
@@ -2340,6 +2352,7 @@ impl Core {
         if asked.is_empty() {
             return false;
         }
+        cineris_base::hook::await_point!(BEFORE_THE_PUT_BACK_IS_ASKED);
         let names: Vec<String> = edited
             .iter()
             .map(|path| format!("`{}`", cineris_base::visible(path)))
