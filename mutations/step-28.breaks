@@ -6651,9 +6651,9 @@ caught-by:
 [break] a-refused-entry-lapses
 rule: A hook entry that cannot run is on its event all the same, as a hook that fails: the gate it held does not lapse.
 file: crates/cineris-core/src/ext/hook_points.rs
-in: PointHooks::of
-find: for refused in &hooks.refused {
-replace: for refused in hooks.refused.iter().take(0) {
+in: failing
+find: for refused in refused {
+replace: for refused in refused.iter().take(0) {
 caught-by:
     cineris-core::it hook_wiring::a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back
 

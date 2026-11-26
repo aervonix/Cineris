@@ -240,8 +240,10 @@ pub(crate) struct SessionHooks {
     pub(crate) scripts: Arc<super::ScriptHooks>,
     /// Without the script engine, the gating hooks of each extension that
     /// stands approved, held on their events as hooks that fail, since
-    /// nothing of it runs (`super::without_engine`).
-    #[cfg(not(feature = "scripts"))]
+    /// nothing of it runs (`super::without_engine`). Empty with the engine,
+    /// which holds an extension's gates in `scripts`: kept in both builds,
+    /// so that what puts these on their events is built, and tested, in
+    /// the ordinary one.
     pub(crate) held: Vec<super::without_engine::Held>,
 }
 
@@ -302,26 +304,13 @@ impl SessionHooks {
     /// approved, or, without the script engine, of each that stands
     /// approved: its extension's name, the hook's name, its event and why
     /// it refuses (`extensions/status`).
-    #[cfg(feature = "scripts")]
     pub(crate) fn held_gates(&self) -> Vec<(String, String, String, String)> {
-        self.scripts.held_gates()
-    }
-
-    /// [`Self::held_gates`], without the script engine: those of each
-    /// extension that stands approved.
-    #[cfg(not(feature = "scripts"))]
-    pub(crate) fn held_gates(&self) -> Vec<(String, String, String, String)> {
-        self.held
-            .iter()
-            .map(|held| {
-                (
-                    held.extension.clone(),
-                    held.hook.clone(),
-                    held.event.as_str().to_owned(),
-                    held.why.clone(),
-                )
-            })
-            .collect()
+        #[cfg(feature = "scripts")]
+        let mut gates = self.scripts.held_gates();
+        #[cfg(not(feature = "scripts"))]
+        let mut gates = Vec::new();
+        gates.extend(self.held.iter().map(super::without_engine::Held::listed));
+        gates
     }
 
     /// The hooks on `event` of the session's own (`session.start`,

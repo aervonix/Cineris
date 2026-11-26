@@ -104,29 +104,7 @@ impl PointHooks {
                 });
             }
         }
-        for refused in &hooks.refused {
-            if let Some(event) = refused.event.and_then(loop_event) {
-                on.push(OnEvent {
-                    event,
-                    filter: refused.filter.clone(),
-                    run: Arc::new(Failing::of(refused)),
-                });
-            }
-        }
-        // Without the script engine, what an extension that stands approved
-        // would gate is held, failing.
-        #[cfg(not(feature = "scripts"))]
-        for held in &hooks.held {
-            on.push(OnEvent {
-                event: held.event,
-                filter: held.filter.clone(),
-                run: Arc::new(Failing {
-                    name: held.hook.clone(),
-                    observes: false,
-                    why: held.why.clone(),
-                }),
-            });
-        }
+        on.extend(failing(&hooks.refused, &hooks.held));
         Self {
             on,
             #[cfg(feature = "scripts")]
@@ -151,6 +129,46 @@ impl PointHooks {
     }
 }
 
+/// Each hook that cannot run, on its event as a hook whose run fails, with
+/// why: each entry `refused`, and, without the script engine, each gating
+/// hook `held` of an extension that stands approved (none with the engine,
+/// which holds an extension's gates beside these, `super::ScriptHooks`).
+fn failing(refused: &[Refused], held: &[super::without_engine::Held]) -> Vec<OnEvent> {
+    let mut on = Vec::new();
+    for refused in refused {
+        if let Some(event) = refused.event.and_then(loop_event) {
+            on.push(OnEvent {
+                event,
+                filter: refused.filter.clone(),
+                run: Arc::new(Failing::of(refused)),
+            });
+        }
+    }
+    for held in held {
+        on.push(OnEvent {
+            event: held.event,
+            filter: held.filter.clone(),
+            run: Arc::new(Failing {
+                name: held.hook.clone(),
+                observes: false,
+                why: held.why.clone(),
+            }),
+        });
+    }
+    on
+}
+
+/// The hooks of `on` that are on `event` for `target`: what `wants` and
+/// `matching` read of them.
+fn on_now<'a>(
+    on: &'a [OnEvent],
+    event: LoopEvent,
+    target: Option<ToolTarget<'a>>,
+) -> impl Iterator<Item = &'a OnEvent> {
+    on.iter()
+        .filter(move |hook| hook.event == event && on_target(hook.filter.as_ref(), target))
+}
+
 /// Whether a hook on `filter` (`None`: every tool) is on `target`.
 fn on_target(filter: Option<&Filter>, target: Option<ToolTarget<'_>>) -> bool {
     match (filter, target) {
@@ -166,18 +184,12 @@ fn on_target(filter: Option<&Filter>, target: Option<ToolTarget<'_>>) -> bool {
 impl Hooks for PointHooks {
     fn wants(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> bool {
         (event == LoopEvent::PromptSubmit && self.commands.stop_pending())
-            || self
-                .on
-                .iter()
-                .any(|hook| hook.event == event && on_target(hook.filter.as_ref(), target))
+            || on_now(&self.on, event, target).next().is_some()
             || self.scripts_want(event, target)
     }
 
     fn matching(&self, event: LoopEvent, target: Option<ToolTarget<'_>>) -> Vec<Arc<dyn Hook>> {
-        let mut matched: Vec<Arc<dyn Hook>> = self
-            .on
-            .iter()
-            .filter(|hook| hook.event == event && on_target(hook.filter.as_ref(), target))
+        let mut matched: Vec<Arc<dyn Hook>> = on_now(&self.on, event, target)
             .map(|hook| Arc::clone(&hook.run))
             .collect();
         #[cfg(feature = "scripts")]
@@ -542,5 +554,118 @@ impl crate::Core {
         let (hook, input) = self.hook_at_its_point(session, name, "t_1")?;
         drop(hook.run(&input));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ext::without_engine::Held;
+
+    fn held(hook: &str, event: LoopEvent, tools: Option<&[&str]>, why: &str) -> Held {
+        Held {
+            extension: hook.split('/').next().unwrap_or_default().to_owned(),
+            hook: hook.to_owned(),
+            event,
+            filter: tools.map(|tools| {
+                Filter::new(tools.iter().map(|tool| (*tool).to_owned()).collect()).unwrap()
+            }),
+            why: why.to_owned(),
+        }
+    }
+
+    /// Each gating hook that an extension which stands approved holds in a
+    /// build without the script engine (`super::super::without_engine`) is
+    /// put on its event as a gate whose run fails with why: on the tools it
+    /// names, and, naming none, on every call or every prompt; on no other
+    /// event. The held list is kept in both builds, empty with the engine,
+    /// so that this, which only a build without it fills, is built and
+    /// tested in the ordinary one.
+    #[test]
+    fn a_held_gate_is_on_its_event_and_its_tools_and_refuses_with_why() {
+        let gates = [
+            held(
+                "tracker/hook.tool.before",
+                LoopEvent::ToolBefore,
+                Some(&["list"]),
+                "the extension `tracker` is not loaded",
+            ),
+            held(
+                "tracker/hook.prompt.submit",
+                LoopEvent::PromptSubmit,
+                None,
+                "its gate refuses every prompt",
+            ),
+            held(
+                "gone/hook.tool.before",
+                LoopEvent::ToolBefore,
+                None,
+                "its gate refuses every call",
+            ),
+        ];
+        let on = failing(&[], &gates);
+        let names = |event: LoopEvent, tool: Option<&str>| -> Vec<String> {
+            let target = tool.map(|tool| ToolTarget { tool, names: None });
+            on_now(&on, event, target)
+                .map(|hook| hook.run.name().to_owned())
+                .collect()
+        };
+        assert_eq!(
+            names(LoopEvent::ToolBefore, Some("list")),
+            ["tracker/hook.tool.before", "gone/hook.tool.before"]
+        );
+        assert_eq!(
+            names(LoopEvent::ToolBefore, Some("read")),
+            ["gone/hook.tool.before"]
+        );
+        assert_eq!(
+            names(LoopEvent::PromptSubmit, None),
+            ["tracker/hook.prompt.submit"]
+        );
+        assert!(names(LoopEvent::ToolAfter, Some("list")).is_empty());
+        assert!(names(LoopEvent::TurnEnd, None).is_empty());
+        let input = HookInput::new(
+            LoopEvent::ToolBefore,
+            cineris_protocol::SessionId::new("s_1"),
+            cineris_protocol::TurnId::new("t_1"),
+            cineris_base::AbsPath::parse("/work/app", cineris_base::path::PathStyle::Posix)
+                .unwrap(),
+            HookSubject::TurnEnded {
+                outcome: cineris_protocol::event::TurnOutcome::Completed,
+                error: None,
+            },
+        );
+        for (hook, gate) in on.iter().zip(&gates) {
+            assert!(
+                !hook.run.observes(),
+                "{}: a gate, not an observer",
+                gate.hook
+            );
+            match cineris_testkit::block_on(hook.run.run(&input)) {
+                Heard::Failed(why) => assert_eq!(why, gate.why),
+                other => panic!("{}: {other:?}", gate.hook),
+            }
+        }
+    }
+
+    /// What `extensions/status` lists of a held gate: its extension, its
+    /// name, its event and why it refuses.
+    #[test]
+    fn a_held_gate_is_listed_as_the_status_lists_it() {
+        let gate = held(
+            "tracker/hook.prompt.submit",
+            LoopEvent::PromptSubmit,
+            None,
+            "why",
+        );
+        assert_eq!(
+            gate.listed(),
+            (
+                "tracker".to_owned(),
+                "tracker/hook.prompt.submit".to_owned(),
+                "prompt.submit".to_owned(),
+                "why".to_owned()
+            )
+        );
     }
 }

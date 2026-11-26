@@ -26,7 +26,9 @@
 //! holds the gating hooks of the cache's entries of its name, and a gate on
 //! each gating event its manifest lists; a project's, while the trust store
 //! cannot be read, holds nothing: no repository gates a session by itself,
-//! as with the engine.
+//! as with the engine. One approved for this session by a yes the store
+//! could not keep stands approved all the same, as the session's finding
+//! judges it with the engine, which loads it: it holds its gates.
 //!
 //! What is held is settled as the session opens and kept for it, as its hook
 //! commands are: a change takes effect at the next session. The user is
@@ -79,6 +81,19 @@ pub(crate) struct Held {
     pub(crate) why: String,
 }
 
+impl Held {
+    /// The gate as `extensions/status` lists it: its extension's name, the
+    /// hook's name, its event and why it refuses.
+    pub(crate) fn listed(&self) -> (String, String, String, String) {
+        (
+            self.extension.clone(),
+            self.hook.clone(),
+            self.event.as_str().to_owned(),
+            self.why.clone(),
+        )
+    }
+}
+
 /// What a session without the script engine holds of its extensions, and
 /// what it tells the user of them, once.
 #[derive(Debug, Default)]
@@ -109,6 +124,31 @@ pub(crate) struct SessionView {
 pub(crate) fn not_loaded(standing: &ExtensionStanding) -> Option<String> {
     matches!(standing, ExtensionStanding::Approved)
         .then(|| format!("approved, and not loaded: {NO_SCRIPT_ENGINE}"))
+}
+
+/// What a session without the script engine holds of its extensions, and
+/// what it is told of them, judged from what it opened with (`view`): the
+/// stores of approvals, the folders and the registration cache read as
+/// `extensions/status` reads them. Blocks.
+pub(crate) fn in_session(
+    view: &SessionView,
+    clock: &cineris_base::SharedClock,
+    home: Option<&std::path::Path>,
+) -> Holding {
+    super::manage::judge(
+        &super::manage::JudgedFrom {
+            resolver: &view.resolver,
+            config: view.config_dir.as_deref(),
+            state: view.state.as_ref(),
+            project: view.project.as_ref(),
+            for_the_run: &view.for_the_run,
+            disabled: &view.disabled,
+            clock,
+            home,
+        },
+        holding,
+    )
+    .0
 }
 
 /// What a session without the script engine holds of the extensions

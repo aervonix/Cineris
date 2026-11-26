@@ -358,6 +358,148 @@ fn an_unread_store_holds_the_users_gates_and_no_projects() {
     );
 }
 
+/// The manifest of an extension `name` that may hook `hooks`, as a file.
+fn manifest_file(name: &str, hooks: &str) -> String {
+    format!(
+        "api = 1\nname = \"{name}\"\nversion = \"1\"\nmain = \"main.js\"\n\n[capabilities]\n\
+         hooks = [{hooks}]\n"
+    )
+}
+
+/// What a session without the script engine holds and tells, judged from
+/// its view as it opened (`in_session`), the stores and folders read from
+/// disk as the session reads them: the user's extension pinned, which holds
+/// what the cache keeps it registered, on its tools; and a trusted
+/// project's approved for this session by a yes the trust store could not
+/// keep, while that store cannot be read, which holds a gate on each gating
+/// event its manifest lists, as the shipped build would load it and run its
+/// gates (the review of step 28's close, L1). The user is told once of
+/// each: two lines, each naming its extension and the gate it holds.
+#[test]
+fn a_session_without_the_engine_holds_what_its_view_finds_and_tells_the_user_once() {
+    let scratch = cineris_testkit::Scratch::outside("cineris-core-unit", "without_engine_view");
+    let clock: SharedClock = Arc::new(FakeClock::starting_at("2026-11-26T10:00:00Z").unwrap());
+    let config = scratch.dir("config");
+    scratch.file(
+        "config/extensions/tracker/extension.toml",
+        manifest_file("tracker", "\"tool.before\""),
+    );
+    scratch.file("config/extensions/tracker/main.js", "tracker");
+    let workspace = scratch.dir("work");
+    scratch.file(
+        "work/.cineris/extensions/theirs/extension.toml",
+        manifest_file("theirs", "\"prompt.submit\", \"tool.after\""),
+    );
+    scratch.file("work/.cineris/extensions/theirs/main.js", "theirs");
+    let resolver = Arc::new(
+        cineris_base::PathResolver::new(&workspace, cineris_base::path::PathOptions::new())
+            .unwrap(),
+    );
+    let state = cineris_config::StateDir::new(scratch.dir("state"));
+    let mine =
+        cineris_ext::discover::discover(&[cineris_ext::discover::Root::user(&config)], &resolver);
+    let theirs = crate::ext::found::in_project(&resolver, &clock).0;
+    let ([mine], [theirs]) = (&mine.found[..], &theirs.found[..]) else {
+        panic!("{:?} {:?}", mine.found, theirs.found);
+    };
+    PinStore::new(state.pins_file(), Arc::clone(&clock))
+        .pin(&definition(mine))
+        .unwrap();
+    RegistrationCache::new(state.registration_cache_file())
+        .put(
+            &mine.snapshot.hash(),
+            Entry::new(
+                &mine.manifest,
+                registration(vec![hook("tool.before", &["list"], false)]),
+                None,
+            ),
+        )
+        .unwrap();
+    // A trust store that cannot be read.
+    scratch.file("state/trust.toml", "this is not [a trust store");
+    let view = SessionView {
+        resolver,
+        config_dir: Some(config),
+        state: Some(state),
+        project: Some(ProjectKey::new("p_1")),
+        for_the_run: vec![definition(theirs)],
+        disabled: Vec::new(),
+    };
+    let holding = in_session(&view, &clock, None);
+    assert_eq!(
+        held(&holding),
+        [
+            (
+                "tracker/hook.tool.before",
+                LoopEvent::ToolBefore,
+                Some(vec!["list".to_owned()])
+            ),
+            ("theirs/hook.prompt.submit", LoopEvent::PromptSubmit, None),
+        ]
+    );
+    let [told_mine, told_theirs] = &holding.told[..] else {
+        panic!("{:#?}", holding.told);
+    };
+    assert!(
+        told_mine.starts_with("Your extension `tracker`")
+            && told_mine.contains("Its gate on `tool.before` holds"),
+        "{told_mine}"
+    );
+    assert!(
+        told_theirs.starts_with("This project's extension `theirs`")
+            && told_theirs.contains("Its gate on `prompt.submit` holds")
+            && !told_theirs.contains("cannot be judged"),
+        "{told_theirs}"
+    );
+}
+
+/// A trusted project's extension approved for this session, by a yes the
+/// trust store could not keep, stands approved while that store cannot be
+/// read, its pin the session's: the session's approval is looked at before
+/// the store's error, as the session's finding looks at it, so that
+/// `extensions/status` does not say "cannot be judged" of one the session
+/// loaded (the review of step 28's close, L1). One not approved for the
+/// session still cannot be judged.
+#[test]
+fn an_extension_approved_for_the_session_stands_approved_while_the_trust_store_cannot_be_read() {
+    let approved = found(Source::Project, "theirs", &["prompt.submit"]);
+    let other = found(Source::Project, "other", &["prompt.submit"]);
+    let project = discovered(Source::Project, vec![approved.clone(), other]);
+    let for_the_run = [definition(&approved)];
+    let listed = judged(&Judging {
+        user: None,
+        project: Some(&project),
+        project_trusted: true,
+        pins: Ok(&cineris_policy::UserPins::default()),
+        trust: Err("the trust store is broken".to_owned()),
+        for_the_run: &for_the_run,
+        disabled: &[],
+        cache: None,
+        confined: false,
+    });
+    let standing = |name: &str| {
+        listed
+            .iter()
+            .find(|one| one.name == name)
+            .map(|one| (one.standing.clone(), one.pin.clone()))
+            .unwrap()
+    };
+    assert_eq!(
+        standing("theirs"),
+        (
+            ExtensionStanding::Approved,
+            Some((approved.snapshot.hash(), "for this session".to_owned()))
+        )
+    );
+    assert_eq!(
+        standing("other"),
+        (
+            ExtensionStanding::Unjudged("the trust store is broken".to_owned()),
+            None
+        )
+    );
+}
+
 /// `extensions/status` in a build without the script engine: an extension
 /// approved as it is found is not `ready`, since nothing of it is loaded,
 /// and says why; what does not stand approved says what it said.

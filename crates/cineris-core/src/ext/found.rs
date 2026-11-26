@@ -173,6 +173,13 @@ impl Ready {
 
     /// The finding failed, and why: what every turn's start is told from now
     /// on. A finding that settled already stays settled.
+    #[cfg_attr(
+        not(feature = "scripts"),
+        expect(
+            dead_code,
+            reason = "without the script engine nothing is found to load, so no finding fails"
+        )
+    )]
     fn fail(&self, why: String) {
         if self.done.load(Ordering::SeqCst) {
             return;

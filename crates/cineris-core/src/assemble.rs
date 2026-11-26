@@ -3111,23 +3111,19 @@ pub(crate) fn assemble(
         // stands approved holds its gating hooks, failing: its gates do not
         // lapse because this build cannot run it.
         #[cfg(not(feature = "scripts"))]
-        let holding = {
-            let (holding, _) = crate::ext::manage::judge(
-                &crate::ext::manage::JudgedFrom {
-                    resolver: &without_engine.resolver,
-                    config: without_engine.config_dir.as_deref(),
-                    state: without_engine.state.as_ref(),
-                    project: without_engine.project.as_ref(),
-                    for_the_run: &without_engine.for_the_run,
-                    disabled: &without_engine.disabled,
-                    clock: &clock,
-                    home: env.home().as_deref(),
-                },
-                crate::ext::without_engine::holding,
+        let held = {
+            let holding = crate::ext::without_engine::in_session(
+                &without_engine,
+                &clock,
+                env.home().as_deref(),
             );
             told.extend(holding.told);
             holding.held
         };
+        // With it an extension's gates are held by its hooks' own list
+        // (`ScriptHooks`), as it is loaded or cannot be.
+        #[cfg(feature = "scripts")]
+        let held = Vec::new();
         Arc::new(crate::ext::SessionHooks {
             hooks: in_session.hooks,
             refused: in_session.refused,
@@ -3136,8 +3132,7 @@ pub(crate) fn assemble(
             starting: tokio::sync::Mutex::new(None),
             #[cfg(feature = "scripts")]
             scripts: Arc::clone(&script_hooks),
-            #[cfg(not(feature = "scripts"))]
-            held: holding,
+            held,
         })
     };
     // Sections 6 and 7 of the system prompt: what the session's skills and

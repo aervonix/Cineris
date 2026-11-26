@@ -512,6 +512,14 @@ pub(crate) struct Run<'a> {
     live: &'a Live,
     id: u64,
     pub(crate) cancel: cineris_base::CancelToken,
+    #[cfg_attr(
+        not(feature = "scripts"),
+        expect(
+            dead_code,
+            reason = "a second interrupt kills a script command's programs, and without the \
+                      script engine no script command runs"
+        )
+    )]
     pub(crate) kill: cineris_base::CancelToken,
 }
 
