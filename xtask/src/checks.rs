@@ -71,27 +71,16 @@ const SCRIPTS: &str = "scripts";
 const ENGINE: &str = "rquickjs";
 
 /// `cargo xtask check no-scripts`: the binary with [`SCRIPTS`] off and the
-/// rest of its default features on, checked and not built. First its
-/// dependency graph is asked whether the engine is in it all the same: a
+/// rest of its default features on, linted as the `clippy` step lints the
+/// workspace, warnings denied, and not built. First its dependency graph is
+/// asked whether the engine is in it all the same, for every target: a
 /// crate between the binary and the core that turned the core's `scripts`
-/// on would turn it on for the binary too, and the check would then pass
-/// on a build with the engine.
+/// on, on one system or on all, would turn it on for the binary too, and
+/// the check would then pass on a build with the engine.
 fn without_scripts() -> Result<()> {
     let root = workspace::root();
     let selected = without_scripts_selection(&workspace::metadata(&root)?.packages)?;
-    let mut tree: Vec<String> = [
-        "tree",
-        "--locked",
-        "-e",
-        "normal,build",
-        "--prefix",
-        "none",
-        "--format",
-        "{p}",
-    ]
-    .map(str::to_owned)
-    .into();
-    tree.extend(selected.iter().cloned());
+    let tree = without_scripts_tree(&selected);
     let output = Command::new(workspace::cargo())
         .args(&tree)
         .current_dir(&root)
@@ -105,14 +94,43 @@ fn without_scripts() -> Result<()> {
         return Err(format!(
             "{CLI} without `{SCRIPTS}` still reaches the script engine, `{ENGINE}`: a crate \
              between it and the core turns the core's `{SCRIPTS}` on, where only {CLI}'s own \
-             `{SCRIPTS}` feature may (decision 0005). `cargo tree -i {ENGINE} -e normal,build {}` \
-             shows which",
+             `{SCRIPTS}` feature may (decision 0005). `cargo tree -i {ENGINE} --target all -e \
+             normal,build {}` shows which",
             selected.join(" ")
         ));
     }
-    let mut check: Vec<String> = ["check", "--locked"].map(str::to_owned).into();
-    check.extend(selected);
-    steps::cargo(&check)
+    steps::cargo(&without_scripts_lint(&selected))
+}
+
+/// The arguments of `cargo tree` that list the packages the build
+/// `selected` names reaches, on every target, a package a line.
+fn without_scripts_tree(selected: &[String]) -> Vec<String> {
+    let mut tree: Vec<String> = [
+        "tree",
+        "--locked",
+        "--target",
+        "all",
+        "-e",
+        "normal,build",
+        "--prefix",
+        "none",
+        "--format",
+        "{p}",
+    ]
+    .map(str::to_owned)
+    .into();
+    tree.extend(selected.iter().cloned());
+    tree
+}
+
+/// The arguments of `cargo` that lint the build `selected` names, warnings
+/// denied, as the `clippy` step lints the workspace's: a code path only
+/// that build compiles may not leave a warning.
+fn without_scripts_lint(selected: &[String]) -> Vec<String> {
+    let mut lint: Vec<String> = ["clippy", "--locked"].map(str::to_owned).into();
+    lint.extend(selected.iter().cloned());
+    lint.extend(["--", "-D", "warnings"].map(str::to_owned));
+    lint
 }
 
 /// Whether a listing of `cargo tree --prefix none --format {p}`, a package
@@ -1059,7 +1077,8 @@ mod tests {
 
     use super::{
         CHECK_STEPS, TiersRequest, check, check_step, ci, ci_run, join_comparisons, reaches_engine,
-        selects_packages, test_command, without_scripts_selection,
+        selects_packages, test_command, without_scripts_lint, without_scripts_selection,
+        without_scripts_tree,
     };
     use crate::runs::Source;
     use crate::tiers::Os;
@@ -1119,6 +1138,33 @@ mod tests {
         let refused = without_scripts_selection(&[cli(&["highlight"])]).unwrap_err();
         assert!(refused.contains("do not name `scripts`"), "{refused}");
         assert!(without_scripts_selection(&[]).is_err());
+    }
+
+    /// The build without the script engine is asked about the engine on
+    /// every target, not the host's alone (a dependency of Windows' alone
+    /// that turned the core's `scripts` on would pass a look at Linux's),
+    /// and is linted with warnings denied, as the `clippy` step lints the
+    /// workspace: code only that build compiles may leave no warning (the
+    /// review of step 28's close, L2 and L3).
+    #[test]
+    fn the_build_without_the_engine_is_looked_at_on_every_target_and_linted() {
+        let selected = strings(&["-p", "cineris-cli", "--no-default-features"]);
+        let tree = without_scripts_tree(&selected);
+        assert!(
+            tree.windows(2).any(|pair| pair == ["--target", "all"]),
+            "{tree:?}"
+        );
+        assert!(tree.ends_with(&selected), "{tree:?}");
+        let lint = without_scripts_lint(&selected);
+        assert_eq!(lint[0], "clippy");
+        assert!(
+            lint.ends_with(&strings(&["--", "-D", "warnings"])),
+            "{lint:?}"
+        );
+        assert!(
+            lint.windows(selected.len()).any(|run| run == selected),
+            "{lint:?}"
+        );
     }
 
     /// The engine is told in the graph's listing by its package's name,
