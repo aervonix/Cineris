@@ -755,7 +755,7 @@ enum Runs {
 #[derive(Debug, Clone)]
 enum Above {
     /// It runs, and this user may open it: its parent and when it was made
-    /// (its program's name is not read, and left empty), and whether it is
+    /// (its program's name is not kept, and left empty), and whether it is
     /// a harness, which is not asked of this process itself.
     Is(Listed, Runs),
     /// It has gone, or this user may not open it: the line ends.
@@ -2053,11 +2053,11 @@ mod sys {
     /// its image's size is this binary's), read from the path the system
     /// keeps for it (`\Device\…`), the cheapest read that gives it (about
     /// 1 µs a process on a hosted runner, where the path in a drive's
-    /// letters cost 17 µs);
-    /// **and its command line,** read only then, is not a subcommand that
-    /// runs no session. A command line that cannot be read counts as
-    /// running sessions; a program that cannot be read is not known. A
-    /// process with no program's file (the system's own) is no harness.
+    /// letters cost 17 µs); **and its command line,** read only then, is
+    /// not a subcommand that runs no session. A command line that cannot be
+    /// read counts as running sessions; a program that cannot be read is
+    /// not known. A process with no program's file (the system's own) is no
+    /// harness.
     fn by_program(handle: HANDLE, pid: u32, own: &OnceCell<Own>) -> Runs {
         let image = match process_text(handle, ProcessImageFileName) {
             Ok(image) if image.is_empty() => return Runs::No,

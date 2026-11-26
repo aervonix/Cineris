@@ -521,16 +521,18 @@ replace: false ||
 caught-by:
     cineris-sandbox session::sys::tests::cineris_is_told_by_its_names
 
+# The CLI's nested run no longer catches this one: its harness is on its line
+# of parents, which refuses whatever the job says (the maintainers' rule for
+# the third part). The job holds a command that has left that line.
+
 [break] session-windows-job-not-asked
 rule: On Windows a process in the job of a running harness's own sessions' commands is under a session's command; in any other job it is not.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
 find: if inside == 0 {
 replace: if inside != 0 {
-packages: cineris-sandbox,cineris-cli
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
-    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
 [break] session-windows-harness-unmarked
 rule: On Windows a headless run joins the job of sessions' commands before it starts any process.
