@@ -16,9 +16,23 @@
 //! project's, names compared with ASCII's case folded: its body is sent as
 //! the user's prompt, so a repository must not be able to make the user's
 //! own `/review` send text it chose. A project's command whose name a file
-//! of the user's takes is left out, saying why. Within one folder, files
-//! whose names differ only in case are all left out, on every system: on
-//! Windows they are one name.
+//! of the user's takes is left out, saying why; a file of the user's takes
+//! its name whether it can be used or not (a link, one that is not UTF-8).
+//! When a folder of the user's could not be read whole (it could not be
+//! read, it is not a folder, it holds more than [`MAX_ENTRIES`] entries, an
+//! entry of it could not be read, or its path is not Unicode), no project's
+//! command is used, each said: its name could not be checked against the
+//! user's. A folder of the user's that is not there has no names. Within
+//! one folder, files whose names differ only in case are all left out, on
+//! every system: on Windows they are one name.
+//!
+//! **What a project's command sends is seen in its file.** Its body, and
+//! its arguments' defaults, may hold no character that acts unseen (a
+//! control character other than a line break or a tab, a format character
+//! such as a direction override or a tag character), as a script's
+//! description may not ([`check_description`]); one that does is left out,
+//! the character named as an escape. The user's own are sent as they wrote
+//! them.
 //!
 //! **Bounds**, as the skills' are: at most [`MAX_ENTRIES`] entries looked
 //! at in a root, every entry counting; a file of at most
@@ -42,7 +56,7 @@ use std::path::Path;
 
 use cineris_base::{
     AbsPath, OpenError, PathResolver, ResolvedPath, location_within, open_regular,
-    strip_location_prefix, visible,
+    strip_location_prefix, visible, visible_keeping_after,
 };
 
 use crate::registration::{MAX_ARGUMENTS, check_description, check_name};
@@ -87,6 +101,11 @@ pub struct Root {
     pub owner: Owner,
     /// Where it is, as the session's resolver takes a path.
     pub path: String,
+    /// Whether `path` lost part of the real path, which was not Unicode:
+    /// the resolver takes text, and the text would name another place. Such
+    /// a root is not looked in, and is said to be unreadable; for the
+    /// user's, no project's command is used.
+    pub lossy: bool,
 }
 
 impl Root {
@@ -96,15 +115,19 @@ impl Root {
         Self {
             owner: Owner::Project,
             path: PROJECT_FOLDER.to_owned(),
+            lossy: false,
         }
     }
 
-    /// The user's `<config dir>/commands/`.
+    /// The user's `<config dir>/commands/`, [`lossy`](Self::lossy) when
+    /// its path is not Unicode.
     #[must_use]
     pub fn user(config_dir: &Path) -> Self {
+        let path = config_dir.join(FOLDER);
         Self {
             owner: Owner::User,
-            path: config_dir.join(FOLDER).to_string_lossy().into_owned(),
+            lossy: path.to_str().is_none(),
+            path: path.to_string_lossy().into_owned(),
         }
     }
 }
@@ -209,6 +232,12 @@ pub enum Reason {
         "the user has a command of this name (`{0}`), which is used: a command's text is sent as your own prompt, so a project's command never takes the name of one of yours"
     )]
     TakenByUser(String),
+    /// A project's command, when a folder of the user's could not be read
+    /// whole: its name could not be checked against the user's.
+    #[error(
+        "the user's folder of commands could not be read whole, so no project's command is used: its name could not be checked against the user's, and a project's command never takes the name of one of yours"
+    )]
+    UsersUnread,
 }
 
 /// What [`find`] found.
@@ -230,7 +259,8 @@ impl Found {
 
 /// Looks for commands in `roots` through the session's `resolver`, which
 /// takes `~`, a relative path, `..` and links. The user's are taken over a
-/// project's of the same name (ASCII case folded).
+/// project's of the same name (ASCII case folded); when a folder of the
+/// user's could not be read whole, no project's command is used.
 ///
 /// It reads the folders and the `.md` files in them, and nothing else. It
 /// blocks: call it on the blocking pool.
@@ -246,16 +276,25 @@ pub fn find(resolver: &PathResolver, roots: &[Root]) -> Found {
     let mut commands = Vec::new();
     let mut left_out = Vec::new();
     // Every name a file of the user's takes, folded, whether it could be
-    // used or not.
+    // used or not; and whether every folder of the user's was read whole,
+    // without which a project's command's name cannot be checked against
+    // them (L1 of the early review of step 28's commands).
     let mut users: Vec<(String, String)> = Vec::new();
+    let mut users_whole = true;
     let mut roots = roots.to_vec();
     roots.sort_by_key(|root| root.owner);
     for root in &roots {
-        let Some(real) = open_root(resolver, root, &workspace, &show, &mut left_out) else {
-            continue;
+        let real = match open_root(resolver, root, &workspace, &show, &mut left_out) {
+            Opened::Folder(real) => real,
+            Opened::Absent => continue,
+            Opened::Refused => {
+                users_whole &= root.owner != Owner::User;
+                continue;
+            }
         };
         let mut found = look_in(root.owner, &real, &show, &mut left_out);
         if root.owner == Owner::User {
+            users_whole &= found.whole;
             users.extend(
                 found
                     .names
@@ -264,19 +303,22 @@ pub fn find(resolver: &PathResolver, roots: &[Root]) -> Found {
             );
         } else {
             found.commands.retain(|command| {
-                let folded = command.name.to_ascii_lowercase();
-                match users.iter().find(|(user, _)| *user == folded) {
-                    Some((_, user)) => {
-                        left_out.push(LeftOut {
-                            name: command.name.clone(),
-                            owner: command.owner,
-                            path: command.path.clone(),
-                            reason: Reason::TakenByUser(user.clone()),
-                        });
-                        false
+                let reason = if users_whole {
+                    let folded = command.name.to_ascii_lowercase();
+                    match users.iter().find(|(user, _)| *user == folded) {
+                        Some((_, user)) => Reason::TakenByUser(user.clone()),
+                        None => return true,
                     }
-                    None => true,
-                }
+                } else {
+                    Reason::UsersUnread
+                };
+                left_out.push(LeftOut {
+                    name: command.name.clone(),
+                    owner: command.owner,
+                    path: command.path.clone(),
+                    reason,
+                });
+                false
             });
         }
         commands.extend(found.commands);
@@ -307,15 +349,25 @@ fn shown(owner: Owner, path: &Path, workspace: &Path, home: Option<&Path>) -> St
     visible(&text.unwrap_or_else(|| path.to_string_lossy().into_owned())).into_owned()
 }
 
-/// A root resolved and judged: where it really is, or `None` when there is
-/// nothing to look in (said when it is more than an absent folder).
+/// A root resolved and judged.
+enum Opened {
+    /// A folder to look in, where it really is.
+    Folder(AbsPath),
+    /// Nothing there: no folder, and so no names.
+    Absent,
+    /// Not looked in, and said why: what it holds is not known.
+    Refused,
+}
+
+/// A root resolved and judged: where it really is, nothing there, or
+/// refused (and said).
 fn open_root(
     resolver: &PathResolver,
     root: &Root,
     workspace: &Path,
     show: &dyn Fn(Owner, &Path) -> String,
     left_out: &mut Vec<LeftOut>,
-) -> Option<AbsPath> {
+) -> Opened {
     let left = |left_out: &mut Vec<LeftOut>, path: String, reason: Reason| {
         left_out.push(LeftOut {
             name: String::new(),
@@ -324,20 +376,28 @@ fn open_root(
             reason,
         });
     };
+    if root.lossy {
+        left(
+            left_out,
+            visible(&root.path).into_owned(),
+            Reason::Unreadable("its path is not valid Unicode".to_owned()),
+        );
+        return Opened::Refused;
+    }
     let resolved = match resolver.resolve(&root.path) {
         Ok(resolved) => resolved,
-        Err(cineris_base::PathError::NoHome { .. }) => return None,
+        Err(cineris_base::PathError::NoHome { .. }) => return Opened::Absent,
         Err(error) => {
             left(
                 left_out,
                 visible(&root.path).into_owned(),
                 Reason::Unreadable(error.to_string()),
             );
-            return None;
+            return Opened::Refused;
         }
     };
     if !resolved.exists() {
-        return None;
+        return Opened::Absent;
     }
     let real = resolved.to_fs_path();
     if root.owner == Owner::Project && !location_within(&real, workspace) {
@@ -346,13 +406,13 @@ fn open_root(
             visible(&root.path).into_owned(),
             Reason::OutsideWorkspace,
         );
-        return None;
+        return Opened::Refused;
     }
     match std::fs::metadata(&real) {
-        Ok(metadata) if metadata.is_dir() => Some(resolved.abs().clone()),
+        Ok(metadata) if metadata.is_dir() => Opened::Folder(resolved.abs().clone()),
         Ok(_) => {
             left(left_out, show(root.owner, &real), Reason::NotAFolder);
-            None
+            Opened::Refused
         }
         Err(error) => {
             left(
@@ -360,7 +420,7 @@ fn open_root(
                 show(root.owner, &real),
                 Reason::Unreadable(error.to_string()),
             );
-            None
+            Opened::Refused
         }
     }
 }
@@ -370,6 +430,9 @@ struct InFolder {
     commands: Vec<CommandFile>,
     /// The name of every `.md` file in it, used or not.
     names: Vec<String>,
+    /// Whether every entry of it was looked at: false when it could not be
+    /// read, held more than [`MAX_ENTRIES`], or an entry could not be read.
+    whole: bool,
 }
 
 /// The commands of one folder, by name.
@@ -383,6 +446,7 @@ fn look_in(
     let mut out = InFolder {
         commands: Vec::new(),
         names: Vec::new(),
+        whole: true,
     };
     let left = |left_out: &mut Vec<LeftOut>, name: &str, path: String, reason: Reason| {
         left_out.push(LeftOut {
@@ -401,6 +465,7 @@ fn look_in(
                 show(owner, &folder),
                 Reason::Unreadable(error.to_string()),
             );
+            out.whole = false;
             return out;
         }
     };
@@ -408,6 +473,7 @@ fn look_in(
     for entry in entries {
         if names.len() == MAX_ENTRIES {
             left(left_out, "", show(owner, &folder), Reason::TooManyEntries);
+            out.whole = false;
             break;
         }
         match entry.and_then(|entry| Ok((entry.file_name(), entry.file_type()?))) {
@@ -419,6 +485,7 @@ fn look_in(
                     show(owner, &folder),
                     Reason::Unreadable(error.to_string()),
                 );
+                out.whole = false;
                 break;
             }
         }
@@ -442,6 +509,9 @@ fn look_in(
         if kind.is_dir() {
             continue;
         }
+        // Taken whether the file can be used or not: a user's link, or a
+        // file that is not UTF-8, still keeps a project's command from the
+        // name.
         out.names.push(name.to_owned());
         let shown_path = show(owner, &path);
         if kind.is_symlink() {
@@ -584,6 +654,27 @@ fn parse(name: &str, owner: Owner, path: String, text: &str) -> Result<CommandFi
             }
         }
     }
+    if owner == Owner::Project {
+        // A project's command is sent as the user's own prompt: what it
+        // sends is seen in its file (L4 of the early review of step 28's
+        // commands).
+        if let Some(unseen) = first_unseen(body) {
+            return Err(format!(
+                "its body holds `{unseen}`, {UNSEEN}: a project's command is sent as your own \
+                 prompt, so it may hold nothing you would not see"
+            ));
+        }
+        let hidden = arguments.iter().find_map(|argument: &Argument| {
+            Some((&argument.name, first_unseen(argument.default.as_deref()?)?))
+        });
+        if let Some((name, unseen)) = hidden {
+            return Err(format!(
+                "its `arguments` give `{name}` a default that holds `{unseen}`, {UNSEEN}: a \
+                 project's command is sent as your own prompt, so it may hold nothing you would \
+                 not see"
+            ));
+        }
+    }
     let body = template(body)?;
     for piece in &body {
         if let Piece::Put { name: used, .. } = piece
@@ -614,6 +705,34 @@ fn parse(name: &str, owner: Owner, path: String, text: &str) -> Result<CommandFi
         profile,
         body,
     })
+}
+
+/// What a character that acts unseen is, in a reason.
+const UNSEEN: &str = "a character that acts unseen (a control or a format character)";
+
+/// The first character of `text` that acts unseen, written as an escape
+/// ([`visible`]): what [`check_description`] refuses in a description, a
+/// line break and a tab apart, where a line break is `\n` or `\r\n` (a
+/// checkout on Windows may end its lines so). A `\r` alone is one.
+fn first_unseen(text: &str) -> Option<String> {
+    let keep = ['\n', '\t'];
+    // The character before a line is the line break's `\n`, as in the text.
+    let mut before = None;
+    for line in text.split("\r\n") {
+        let shown = visible_keeping_after(before, line, &keep);
+        if shown != line {
+            // Everything before the first escape is the text as it is.
+            let at = line
+                .bytes()
+                .zip(shown.bytes())
+                .take_while(|(one, other)| one == other)
+                .count();
+            let unseen = line[at..].chars().next()?;
+            return Some(visible(unseen.encode_utf8(&mut [0; 4])).into_owned());
+        }
+        before = Some('\n');
+    }
+    None
 }
 
 /// The `arguments` field: a list of names, each with a default in double

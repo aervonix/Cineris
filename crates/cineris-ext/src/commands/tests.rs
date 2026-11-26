@@ -117,6 +117,59 @@ fn a_commands_file_is_read_strictly() {
     );
 }
 
+/// A project's body, and its arguments' defaults, hold nothing that acts
+/// unseen, the first such character named as an escape; a line break, a
+/// `\r\n` one too, a tab and an emoji's selector are seen. The user's own
+/// are sent as they wrote them.
+#[test]
+fn a_projects_command_holds_nothing_that_acts_unseen() {
+    let project = |text: &str| {
+        parse(
+            "review",
+            Owner::Project,
+            ".cineris/commands/review.md".to_owned(),
+            text,
+        )
+    };
+    for (text, unseen) in [
+        ("Review this\u{202e} file", "\\u{202e}"),
+        ("Do as told.\u{e0049}\u{e0047}", "\\u{e0049}"),
+        ("Red \u{1b}[31m", "\\u{1b}"),
+        ("Over\rwritten", "\\r"),
+        ("Fine\r\nthen \u{200b}{{args}}", "\\u{200b}"),
+        ("Put {{args | \"a\u{2066}\"}}", "\\u{2066}"),
+    ] {
+        let error = project(text).unwrap_err();
+        assert!(
+            error.starts_with(&format!(
+                "its body holds `{unseen}`, a character that acts unseen (a control or a format \
+                 character): a project's command is sent as your own prompt"
+            )),
+            "{text:?}: {error}"
+        );
+        assert!(parsed(text).is_ok(), "the user's own: {text:?}");
+    }
+    let defaulted = "---\narguments: [focus = \"a\u{feff}b\"]\n---\nOn {{focus}}.";
+    let error = project(defaulted).unwrap_err();
+    assert!(
+        error.starts_with(
+            "its `arguments` give `focus` a default that holds `\\u{feff}`, a character that acts \
+             unseen"
+        ),
+        "{error}"
+    );
+    assert_eq!(
+        parsed(defaulted).unwrap().expand("").unwrap(),
+        "On a\u{feff}b."
+    );
+    // What is seen: line breaks of both kinds, a tab, an emoji's selector.
+    let seen = project("Lint:\r\n\t{{args}}\nand ship \u{2764}\u{fe0f}\r\n").unwrap();
+    assert_eq!(
+        seen.expand("all").unwrap(),
+        "Lint:\r\n\tall\nand ship \u{2764}\u{fe0f}\r\n"
+    );
+}
+
 /// What is typed after the name is given to the arguments: by position, by
 /// `name=value`, in quotes; a default from the placeholder over the front
 /// matter's; and what does not fit is refused with a reason.
@@ -187,7 +240,8 @@ fn arguments_are_put_in_and_what_does_not_fit_is_refused() {
 }
 
 /// The user's command of a name is used over a project's (names folded),
-/// and the project's is said not used, naming the user's.
+/// and the project's is said not used, naming the user's; a file of the
+/// user's that cannot be used still holds its name.
 #[test]
 fn the_users_command_wins_over_a_projects_of_the_same_name() {
     let scratch = Scratch::outside(
@@ -195,7 +249,9 @@ fn the_users_command_wins_over_a_projects_of_the_same_name() {
         "commands-the_users_command_wins_over_a_projects_of_the_same_name",
     );
     scratch.file(format!("{USER}/review.md"), "The user's review: {{args}}");
+    scratch.file(format!("{USER}/deploy.md"), [0xff_u8, 0xfe]);
     scratch.file(format!("{PROJECT}/Review.md"), "The project's review.");
+    scratch.file(format!("{PROJECT}/deploy.md"), "The project's deploy.");
     scratch.file(format!("{PROJECT}/lint.md"), "Lint.");
     scratch.file(format!("{PROJECT}/notes.txt"), "Not a command.");
     let found = found(&scratch);
@@ -215,11 +271,90 @@ fn the_users_command_wins_over_a_projects_of_the_same_name() {
     );
     assert_eq!(found.get("lint").unwrap().path, ".cineris/commands/lint.md");
     let left = left(&found);
-    assert_eq!(left.len(), 1, "{left:?}");
-    assert_eq!(left[0].0, ".cineris/commands/Review.md");
+    assert_eq!(left.len(), 3, "{left:?}");
+    assert_eq!(
+        left[0],
+        (
+            "~/.config/cineris/commands/deploy.md".to_owned(),
+            Reason::NotText.to_string()
+        )
+    );
+    assert_eq!(left[1].0, ".cineris/commands/Review.md");
     assert!(
-        left[0].1.contains("a command of this name (`review`)"),
+        left[1].1.contains("a command of this name (`review`)"),
         "{left:?}"
+    );
+    // The user's `deploy.md` is not used, and still holds its name.
+    assert_eq!(
+        left[2],
+        (
+            ".cineris/commands/deploy.md".to_owned(),
+            Reason::TakenByUser("deploy".to_owned()).to_string()
+        )
+    );
+}
+
+/// When a folder of the user's could not be read whole, no project's
+/// command is used, each saying why: its name could not be checked against
+/// the user's. A folder of the user's that is not there has no names.
+#[test]
+fn no_projects_command_is_used_when_the_users_folder_was_not_read_whole() {
+    let scratch = Scratch::outside(
+        "cineris-ext-unit",
+        "commands-no_projects_command_is_used_when_the_users_folder_was_not_read_whole",
+    );
+    scratch.file(format!("{PROJECT}/lint.md"), "Lint.");
+    // No folder of the user's: the project's is used.
+    let found = found(&scratch);
+    assert!(found.get("lint").is_some() && found.left_out.is_empty());
+    // The project's left out, and the user's folder said, with `why`.
+    let refused = |found: &Found, why: &str| {
+        assert!(found.get("lint").is_none(), "{why}");
+        let left = left(found);
+        assert!(
+            left.contains(&(
+                ".cineris/commands/lint.md".to_owned(),
+                Reason::UsersUnread.to_string()
+            )),
+            "{why}: {left:?}"
+        );
+        assert!(
+            left.iter().any(|(_, reason)| reason.contains(why)),
+            "{left:?}"
+        );
+    };
+    // Not a folder.
+    scratch.file(USER, "A file.");
+    refused(&self::found(&scratch), "it is not a folder");
+    // Not readable: the configuration directory is a file.
+    std::fs::remove_dir_all(scratch.join("home/.config/cineris")).unwrap();
+    scratch.file("home/.config/cineris", "A file.");
+    refused(&self::found(&scratch), "it could not be read");
+    // More entries than are looked at: the user's are used, and no
+    // project's, whose name might be past them.
+    std::fs::remove_file(scratch.join("home/.config/cineris")).unwrap();
+    for index in 0..=MAX_ENTRIES {
+        scratch.file(format!("{USER}/u{index:03}.md"), "Mine.");
+    }
+    let found = self::found(&scratch);
+    refused(&found, "more than 100 entries");
+    assert_eq!(found.commands.len(), MAX_ENTRIES);
+    // A path that is not Unicode, which as text would name another place.
+    #[cfg(unix)]
+    let odd = <std::ffi::OsStr as std::os::unix::ffi::OsStrExt>::from_bytes(b"cfg\xff");
+    #[cfg(windows)]
+    let odd = <std::ffi::OsString as std::os::windows::ffi::OsStringExt>::from_wide(&[
+        u16::from(b'c'),
+        0xD800,
+    ]);
+    let config = scratch.join("home").join(odd);
+    assert!(!Root::user(&scratch.join("home/.config/cineris")).lossy);
+    let user = Root::user(&config);
+    assert!(user.lossy);
+    let found = find(&resolver(&scratch), &[Root::project(), user]);
+    refused(
+        &found,
+        "it could not be read: its path is not valid Unicode",
     );
 }
 
@@ -279,8 +414,9 @@ fn a_folder_of_commands_is_read_within_its_bounds() {
     );
 }
 
-/// No link is followed inside a folder of commands, and a project's folder
-/// that is a link out of the workspace is not read.
+/// No link is followed inside a folder of commands, a user's link still
+/// holds its name, and a project's folder that is a link out of the
+/// workspace is not read.
 #[test]
 fn no_link_is_followed_in_a_folder_of_commands() {
     let scratch = Scratch::outside(
@@ -325,6 +461,34 @@ fn no_link_is_followed_in_a_folder_of_commands() {
             Reason::Link.to_string()
         )]
     );
+    // A link of the user's is not followed either, and still holds its
+    // name from a project's command.
+    scratch.file(format!("{PROJECT}/deploy.md"), "The project's deploy.");
+    scratch.dir(USER);
+    assert!(linked(
+        "home/elsewhere/secret.md",
+        &format!("{USER}/deploy.md")
+    ));
+    let found = self::found(&scratch);
+    assert!(found.get("deploy").is_none());
+    assert_eq!(
+        left(&found),
+        [
+            (
+                "~/.config/cineris/commands/deploy.md".to_owned(),
+                Reason::Link.to_string()
+            ),
+            (
+                ".cineris/commands/secret.md".to_owned(),
+                Reason::Link.to_string()
+            ),
+            (
+                ".cineris/commands/deploy.md".to_owned(),
+                Reason::TakenByUser("deploy".to_owned()).to_string()
+            ),
+        ]
+    );
+    std::fs::remove_dir_all(scratch.join(USER)).unwrap();
     // The project's whole folder a link out of the workspace.
     std::fs::remove_dir_all(scratch.join(PROJECT)).unwrap();
     assert!(linked("home/elsewhere", PROJECT));
