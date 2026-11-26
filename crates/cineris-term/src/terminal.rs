@@ -48,7 +48,7 @@ use std::time::{Duration, Instant};
 
 use crate::caps::{Capabilities, Overrides, Platform};
 use crate::inline::Sink;
-use crate::input::{Decoder, Event, KeyCode, Mods, Reply};
+use crate::input::{Decoder, Escaped, Event, KeyCode, Mods, Reply};
 use crate::sys::{self, Ready};
 
 /// How long a lone ESC waits for the rest of a sequence before it is taken
@@ -78,10 +78,16 @@ pub const REPLY_ESCAPE_WAIT: Duration = Duration::from_millis(500);
 /// sequence's introducer (so that a focus report, a key's sequence or a
 /// paste's mark split after its ESC is still what it is); after more, only
 /// the rest of a reply, which a pseudo-console gives a key at a time. When
-/// it ends, the ESC is the Escape key at once, and what was kept after it
-/// and what came are decoded on their own, in order: a person's keys
-/// typed a while apart are those keys, none lost or joined. A held ESC
-/// whose sequence never ends is the Escape key at the hold's end. And while
+/// it ends, an ESC that came alone (or one before a reply's ESC) is the
+/// Escape key at once, and what was kept after it and what came are
+/// decoded on their own, in order; what came together with its ESC (`ESC
+/// P`, two ESCs) is decoded as it stands, as it is once the replies have
+/// come (`Alt+P`, `Alt+Esc`). An ESC that came alone is never joined to
+/// what follows it as `Alt`, nor dropped with it as a sequence that stands
+/// for nothing. So a person's keys typed a while apart are those keys, none
+/// lost or joined; a key's sequence split a second time a while apart is
+/// keys, as it is once the replies have come. A held ESC whose sequence
+/// never ends is the Escape key at the hold's end. And while
 /// they are due, a reply whose ESC was taken on its own is the reply,
 /// never typed text ([`Decoder`]): a `[` or `]` that may begin one is held
 /// as an ESC is, until what follows says whether it is one.
@@ -883,23 +889,40 @@ impl<D: Device> Terminal<D> {
                                 .is_some_and(|since| self.held_for_replies(since)),
                     );
                     // What came a while after the last byte kept behind an
-                    // ESC held for the replies: when it cannot go on from
-                    // the ESC (a person's key, a second Escape), the ESC
-                    // was the Escape key, given before what came, and what
-                    // was kept after it is decoded on its own; when it may
-                    // (a sequence's introducer, the rest of a reply), the
-                    // ESC is held on, and remembered as split.
+                    // ESC held for the replies (`Decoder::after_a_while`):
+                    // when it may go on from the ESC (a sequence's
+                    // introducer after a lone ESC, the rest of a reply), the
+                    // ESC is held on, and a lone one remembered as split;
+                    // when it cannot, the ESC was the Escape key, given
+                    // before what came, or what was kept came together and
+                    // is decoded as it stands.
                     if let Some(since) = self.pending_since
                         && self.held_for_replies(since)
                         && self
                             .kept_at
                             .is_some_and(|at| now.saturating_duration_since(at) >= ESCAPE_WAIT)
                     {
-                        match self.decoder.kept_escape_goes_on(&self.bytes) {
-                            Some(false) => self.decoder.release_escape(&mut found),
-                            Some(true) => self.split = true,
+                        let lone = self.decoder.kept_lone_escape();
+                        match self.decoder.after_a_while(&self.bytes, self.split) {
+                            Some(Escaped::GoesOn) => self.split |= lone,
+                            Some(Escaped::Released) => {
+                                self.decoder.release_escape(&mut found);
+                                // An ESC kept after it came alone too.
+                                self.split = self.decoder.kept_lone_escape();
+                            }
+                            Some(Escaped::Decoded) => {
+                                self.decoder.flush(&mut found);
+                                self.split = false;
+                            }
                             None => {}
                         }
+                    }
+                    // An ESC that came alone is never joined to what comes
+                    // after it as `Alt`, nor dropped with it as a sequence
+                    // that stands for nothing: it is the Escape key.
+                    if self.split && self.decoder.kept_escape_would_join(&self.bytes) {
+                        self.decoder.release_escape(&mut found);
+                        self.split = false;
                     }
                     self.decoder.feed(&self.bytes, &mut found);
                     found = self.pastes(found);
@@ -2283,8 +2306,9 @@ mod tests {
     }
 
     /// The last reply ends the longer wait. An ESC held when the reply comes
-    /// within [`ESCAPE_WAIT`] of it is taken with it, as an ESC before any
-    /// sequence is (Alt); the next ESC waits only [`ESCAPE_WAIT`].
+    /// within [`ESCAPE_WAIT`] of it is the Escape key, then the reply (since
+    /// the second review of small fixes II: it was taken with the reply);
+    /// the next ESC waits only [`ESCAPE_WAIT`].
     #[test]
     fn the_last_reply_ends_the_longer_wait_of_the_next_escape() {
         let device = script(&[
@@ -2295,14 +2319,13 @@ mod tests {
         ]);
         let waits = device.waits.clone();
         let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        let escape = Some(Event::Key(Key::plain(KeyCode::Esc)));
+        assert_eq!(terminal.next(None).unwrap(), escape);
         assert_eq!(
             terminal.next(None).unwrap(),
             Some(Event::Reply(Reply::DeviceAttributes))
         );
-        assert_eq!(
-            terminal.next(None).unwrap(),
-            Some(Event::Key(Key::plain(KeyCode::Esc)))
-        );
+        assert_eq!(terminal.next(None).unwrap(), escape);
         let waits = waits.lock().unwrap().clone();
         assert_eq!(waits.last(), Some(&Some(ESCAPE_WAIT)), "{waits:?}");
     }
@@ -2573,6 +2596,127 @@ mod tests {
         );
     }
 
+    /// What the terminal gives for `chunks` read from the start, while the
+    /// replies are due, each with the time in milliseconds until the next
+    /// is read (a multiple of [`STEP`]); and then until the replies are no
+    /// longer due.
+    fn read_spaced(chunks: &[(&[u8], u64)]) -> Vec<Event> {
+        let mut steps: Vec<(Ready, &[u8])> = Vec::new();
+        for &(chunk, gap) in chunks {
+            steps.push((Ready::Input, chunk));
+            let step = u64::try_from(STEP.as_millis()).unwrap();
+            for _ in 1..gap / step {
+                steps.push((Ready::Woken, b""));
+            }
+        }
+        let mut terminal = Terminal::with_device(script(&steps), caps()).unwrap();
+        let mut events = Vec::new();
+        for _ in 0..steps.len() + 40 {
+            events.extend(terminal.next(Some(Duration::from_millis(100))).unwrap());
+        }
+        events
+    }
+
+    /// A case by its letter: the chunks read, with the time to the next,
+    /// and what they give.
+    type Case<'a> = (&'a str, Vec<(&'a [u8], u64)>, Vec<Event>);
+
+    /// The second review of small fixes II, its cases by letter: what was
+    /// kept and what comes a while after it are never joined, and no key
+    /// is lost. Two ESCs read together, or within [`ESCAPE_WAIT`], are
+    /// `Alt+Esc`, as they are once the replies have come (T), and a key or
+    /// the last reply a while after them is that, on its own (A, B, C,
+    /// C2); `Alt+P` and `Alt+[` read whole are those keys (F, F2); an ESC
+    /// before a whole reply is the Escape key, then the reply (K, P); an
+    /// ESC that came alone is never dropped with what follows it as a
+    /// sequence that stands for nothing (Q, S, as it is after the replies,
+    /// U), while a key's sequence split after its ESC is the key (R).
+    #[test]
+    fn what_was_kept_and_what_comes_a_while_after_it_are_never_joined() {
+        let esc = Event::Key(Key::plain(KeyCode::Esc));
+        let alt = |code| Event::Key(Key::with(code, Mods::ALT));
+        let letter = |c| Event::Key(Key::plain(KeyCode::Char(c)));
+        let attributes = Event::Reply(Reply::DeviceAttributes);
+        let alt_esc = alt(KeyCode::Esc);
+        let cases: Vec<Case> = vec![
+            (
+                "A",
+                vec![(b"\x1b\x1b", 120), (b"x", 120)],
+                vec![alt_esc.clone(), letter('x')],
+            ),
+            (
+                "B",
+                vec![(b"\x1b\x1b", 120), (LAST_REPLY, 120)],
+                vec![alt_esc.clone(), attributes.clone()],
+            ),
+            (
+                "C",
+                vec![(b"\x1b", 20), (b"\x1b", 120), (b"x", 120)],
+                vec![alt_esc.clone(), letter('x')],
+            ),
+            (
+                "C2",
+                vec![(b"\x1b", 20), (b"\x1b", 120), (LAST_REPLY, 120)],
+                vec![alt_esc.clone(), attributes.clone()],
+            ),
+            (
+                "F",
+                vec![(b"\x1bP", 120), (b"x", 120)],
+                vec![alt(KeyCode::Char('P')), letter('x')],
+            ),
+            (
+                "F2",
+                vec![(b"\x1b[", 120), (b"x", 120)],
+                vec![alt(KeyCode::Char('[')), letter('x')],
+            ),
+            (
+                "K",
+                vec![(b"\x1b", 20), (LAST_REPLY, 120)],
+                vec![esc.clone(), attributes.clone()],
+            ),
+            (
+                "P",
+                vec![
+                    (b"\x1b", 20),
+                    (b"\x1b", 120),
+                    (b"[", 120),
+                    (b"?", 120),
+                    (b"0", 120),
+                    (b"u", 120),
+                ],
+                vec![esc.clone(), Event::Reply(Reply::Keyboard(0))],
+            ),
+            (
+                "Q",
+                vec![(b"\x1b", 120), (b"[", 20), (b"x", 120)],
+                vec![esc.clone(), letter('['), letter('x')],
+            ),
+            (
+                "R",
+                vec![(b"\x1b", 120), (b"[", 20), (b"A", 120)],
+                vec![Event::Key(Key::plain(KeyCode::Up))],
+            ),
+            (
+                "S",
+                vec![(b"\x1b", 120), (b"O", 20), (b"x", 120)],
+                vec![esc.clone(), letter('O'), letter('x')],
+            ),
+            (
+                "T",
+                vec![(LAST_REPLY, 120), (b"\x1b\x1b", 120), (b"x", 120)],
+                vec![attributes.clone(), alt_esc, letter('x')],
+            ),
+            (
+                "U",
+                vec![(LAST_REPLY, 120), (b"\x1b", 120), (b"[", 20), (b"x", 120)],
+                vec![attributes, esc, letter('['), letter('x')],
+            ),
+        ];
+        for (name, chunks, want) in cases {
+            assert_eq!(read_spaced(&chunks), want, "{name}");
+        }
+    }
+
     /// A sequence that is not a reply, split after its ESC as a
     /// pseudo-console splits them while the replies are due, is the
     /// sequence, never the Escape key and typed text: a focus report, a
@@ -2605,9 +2749,14 @@ mod tests {
     #[test]
     fn an_escape_that_waited_alone_is_the_escape_key_at_the_holds_end() {
         let escape = Event::Key(Key::plain(KeyCode::Esc));
-        for (rest, after) in [
-            (&b"["[..], Event::Key(Key::plain(KeyCode::Char('[')))),
-            (b"\x1b", escape.clone()),
+        let second = STEP + Duration::from_secs(1) + STEP;
+        for (rest, after, first) in [
+            (
+                &b"["[..],
+                Event::Key(Key::plain(KeyCode::Char('['))),
+                REPLIES_DUE,
+            ),
+            (b"\x1b", escape.clone(), second),
         ] {
             let device = script(&[
                 (Ready::Input, b"\x1b"),
@@ -2618,16 +2767,21 @@ mod tests {
             let elapsed = device.elapsed.clone();
             let mut terminal = Terminal::with_device(device, caps()).unwrap();
             assert_eq!(terminal.next(Some(Duration::from_secs(1))).unwrap(), None);
-            // The first Escape at once before a second ESC, or at the hold's
-            // end before a `[`; what came after it then, or at the hold's
-            // end.
+            // The first Escape at once before a second ESC, when it came,
+            // or at the hold's end before a `[`; what came after it then,
+            // or at the hold's end.
             let mut events = Vec::new();
+            let mut given = Vec::new();
             for _ in 0..4 {
-                if events.len() < 2 {
-                    events.extend(terminal.next(None).unwrap());
+                if events.len() < 2
+                    && let Some(event) = terminal.next(None).unwrap()
+                {
+                    events.push(event);
+                    given.push(*elapsed.lock().unwrap());
                 }
             }
             assert_eq!(events, [escape.clone(), after], "{rest:?}");
+            assert_eq!(given[0], first, "{rest:?}");
             assert_eq!(*elapsed.lock().unwrap(), REPLIES_DUE, "{rest:?}");
         }
 
