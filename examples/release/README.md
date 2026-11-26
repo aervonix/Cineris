@@ -64,7 +64,7 @@ The `*` stands for the words after the options: the revision. It comes after `--
 
 What a repository's own configuration can make git start, this line closes where an option does: `--no-show-signature` keeps git from checking each signed commit's signature, which the configuration can turn on (`log.showSignature`) and run through a program it names (`gpg.program`). What no option closes on every git:
 
-- **A partial clone's fetch.** A repository set up as a partial clone has git fetch an object it lacks from its promisor remote, and the configuration names the program that reaches that remote (the remote's URL, `core.sshCommand`). A revision that names a commit the repository lacks starts it. `git --no-lazy-fetch` stops that from git 2.44 on, and an older git refuses the option, so the extension does not pass it.
+- **A partial clone's fetch.** A repository set up as a partial clone has git fetch an object it lacks from its promisor remote, and the configuration names the program that reaches that remote (the remote's URL, `core.sshCommand`). Any object the walk through the history needs and the repository lacks starts it: in a run with no revision as well as in one whose revision names a commit the repository lacks. `git --no-lazy-fetch` stops that from git 2.45 on, and an older git refuses the option, so the extension does not pass it.
 - **A pager.** git starts the pager the configuration names (`core.pager`, `pager.log`) only when its output is a terminal. Cineris runs git with none, for the extension and for the model's shell.
 
 So in a project you have not trusted, answer the question each time, and allow the line only for a repository you know.
