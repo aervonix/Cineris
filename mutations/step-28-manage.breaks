@@ -1374,13 +1374,11 @@ caught-by:
     cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
 
 [break] approving-braced-name-passed
-rule: A brace expansion one of whose words is a name of Cineris (`{cin,} ext add`) is refused as hidden.
+rule: A brace expansion one of whose words is a name of Cineris (`{cin,} ext add`) is refused as hidden. Since the narrow re-check of the third part (M2'), a line read as text also has its words read as code, a brace and a comma as blanks, which refuses each such line by the subcommand it names, so no line of the table tells this reading's refusal apart: it is kept as a second reading, and the break survives.
 file: crates/cineris-policy/src/approving.rs
 find: if posix && braced_name(&plain(text, "\\'\"`"), |word| self.is_own(word)) {
 replace: if false {
-caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
-    cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+expect: survives
 
 [break] approving-expanded-name-passed
 rule: A word the shell completes that names Cineris at a program's place (`cin${IFS}ext`) is refused as hidden.
