@@ -1,14 +1,18 @@
 //! Whether a process is under a session's command, on Windows, by the real
 //! lookups (`cineris_sandbox::session`): the system's list of processes,
-//! each one's start, and a harness's job found from outside it.
+//! each one's start, a harness's job found from outside it, and one found on
+//! the line of parents alone.
 
 use cineris_sandbox::session::{Under, mark, under_a_session};
 
 /// The roles this binary is run again in by
 /// `sys_a_service_hosts_start_after_a_harness_began_is_under_a_session`: a
 /// harness, a service's host that opens a terminal, the terminal, and an
-/// approving subcommand that asks where it stands.
+/// approving subcommand that asks where it stands; and, by
+/// `sys_a_harness_on_the_line_of_parents_is_found_with_nothing_listed`, a
+/// harness that runs that subcommand itself, with nothing listed.
 const HARNESS: &str = "cin-session-harness";
+const HARNESS_OVER_PROBE: &str = "cin-session-harness-over-probe";
 const HOST: &str = "cin-session-host";
 const TERMINAL: &str = "cin-session-terminal";
 const PROBE: &str = "cin-session-probe";
@@ -63,6 +67,16 @@ fn the_roles_this_binary_is_run_again_in() {
         std::io::stdout().flush().unwrap();
         let _ = std::io::stdin().read_to_end(&mut Vec::new());
         0
+    } else if has(HARNESS_OVER_PROBE) {
+        // It marks itself, then runs the probe with the listing made to
+        // give nothing: the probe can find it only on its line of parents.
+        mark().unwrap();
+        let own = std::env::current_exe().unwrap();
+        let status = in_role(&own, PROBE, &[])
+            .env(cineris_testkit::SESSION_LISTING, "empty")
+            .status()
+            .unwrap();
+        status.code().unwrap_or(99)
     } else if has(HOST) {
         // It opens the terminal, the program after `--`, which starts the
         // probe, the next: and ends as they do.
@@ -81,7 +95,10 @@ fn the_roles_this_binary_is_run_again_in() {
     } else if has(PROBE) {
         match under_a_session() {
             Under::Nothing => 10,
-            Under::Session(_) => 11,
+            Under::Session(how) => {
+                println!("under: {how}");
+                11
+            }
             Under::Unknown(what) => {
                 println!("not known: {what}");
                 12
@@ -147,4 +164,46 @@ fn sys_a_service_hosts_start_after_a_harness_began_is_under_a_session() {
     drop(harness.stdin.take());
     harness.wait().unwrap();
     assert_eq!(code, Some(11), "{said}");
+}
+
+/// A session's command whose harness is on its line of parents is found by
+/// that route alone: with the listing made to give nothing (the test hooks'
+/// `CINERIS_TEST_SESSION_LISTING=empty`, which takes no list of processes
+/// either), an approving subcommand a harness runs is under a session's
+/// command, by its parent's job; run by the test itself, under no harness,
+/// the same is under none. The harness's job is asked by its name on the
+/// line of parents before anything is listed, so no listing's race can hide
+/// it (the review of the start-up's fix: a listing of the namespace that took
+/// several calls could skip it).
+#[test]
+fn sys_a_harness_on_the_line_of_parents_is_found_with_nothing_listed() {
+    use std::io::Read as _;
+    use std::process::Stdio;
+    let own = std::env::current_exe().unwrap();
+    let mut harness = in_role(&own, HARNESS_OVER_PROBE, &[])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = harness.id();
+    let mut said = String::new();
+    let _ = harness.stdout.take().unwrap().read_to_string(&mut said);
+    let code = harness.wait().unwrap().code();
+    assert_eq!(code, Some(11), "{said}");
+    assert!(
+        said.contains(&format!("the job of process {pid}'s sessions' commands")),
+        "{said}"
+    );
+    let alone = in_role(&own, PROBE, &[])
+        .env(cineris_testkit::SESSION_LISTING, "empty")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(
+        alone.status.code(),
+        Some(10),
+        "{}",
+        String::from_utf8_lossy(&alone.stdout)
+    );
 }

@@ -30,12 +30,15 @@
 //!   on (a command's tree, a hook, an extension's runtime, an MCP server) is
 //!   in that job and cannot leave it. A process is under a session's command
 //!   when it is in the job of that name of a process that is running and
-//!   this user may open: the jobs of that prefix in the logon session's
-//!   namespace of objects are tried, each by the instance its name gives
-//!   (where the namespace cannot be listed, the job's name of every process
-//!   of the system's list), and a job of that name that cannot be opened or
-//!   asked, for any reason but there being none, is not known, which
-//!   refuses. Being in any other job (a terminal's, an
+//!   this user may open: first the jobs of the processes of its line of
+//!   parents, each by its own instance, opened by name (its harness is
+//!   there unless it detached); then the jobs of that prefix in the logon
+//!   session's namespace of objects, each by the instance its name gives,
+//!   where one call lists the namespace whole (never a listing joined from
+//!   several calls, which could skip one), and otherwise the job's name of
+//!   every process of the system's list, which one call gives whole. A job
+//!   of that name that cannot be opened or asked, for any reason but there
+//!   being none, is not known, which refuses. Being in any other job (a terminal's, an
 //!   editor's, a CI runner's) is nothing. One job each, and not one shared:
 //!   a process already in a job can join a job only where that job can nest
 //!   in its own, so a job shared by harnesses started under different jobs
@@ -636,6 +639,99 @@ fn line_of(own: u32, describe: impl Fn(u32) -> Described) -> Option<Vec<Listed>>
     Some(line)
 }
 
+/// The line of parents above `own`, each described by opening it: its
+/// parent, its parent's, and so up, through any program, as far as each is
+/// a running process this user may open that was made before the one below
+/// it (a process made after has the id of a parent that has gone), at most
+/// [`LINE_OF_PARENTS`] of them. The harness of a session's command is on
+/// it unless the command detached itself (its parents exited), so its job
+/// is asked by its name first, which no listing can miss (the review of the
+/// start-up's fix: a listing of the namespace that took several calls could
+/// skip it).
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+fn parents(own: u32, describe: impl Fn(u32) -> Described) -> Vec<Listed> {
+    let mut line = Vec::new();
+    let Described::Is(mut below) = describe(own) else {
+        return line;
+    };
+    for _ in 0..LINE_OF_PARENTS {
+        let parent = below.parent;
+        if parent == 0 || parent == below.pid {
+            break;
+        }
+        let Described::Is(process) = describe(parent) else {
+            break;
+        };
+        if process.made > below.made {
+            break;
+        }
+        line.push(process.clone());
+        below = process;
+    }
+    line
+}
+
+/// What one call that lists a directory of objects did with the list it
+/// was given.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Called {
+    /// It put every entry there is in the list: the listing is whole.
+    Whole,
+    /// It put what fitted its room, and more entries follow.
+    Part,
+    /// It failed, for this reason.
+    Failed(String),
+}
+
+/// The rooms, in bytes, a listing of the namespace of objects is asked into:
+/// the first, and the largest, past which it is not asked again. A logon
+/// session's namespace holds a few hundred objects, of about 150 bytes each
+/// as listed (359 on a hosted runner fitted the first), and a busy desktop's
+/// a few thousand, which the largest holds; one built to be larger than
+/// that (a command's own objects, made to slow the check) is not listed
+/// further, and the system's list of processes, which one call gives whole,
+/// is taken in its place: so a namespace no call can hold costs the check
+/// the list (0.6 to 0.8 ms on a hosted runner) and five calls of at most
+/// 1 MiB, and no more memory than the list's own room.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+const ROOMS: (usize, usize) = (64 * 1024, 1024 * 1024);
+
+/// The rooms of the test hooks' listing in parts
+/// (`cineris_base::hook::SessionListing::InParts`): too small for any
+/// logon session's namespace, so that every call leaves entries out.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+const IN_PARTS: (usize, usize) = (64, 512);
+
+/// A listing taken whole by one call. `list(room, from, found)` is one
+/// call, in a room of `room` bytes, from the listing's place `from` (0: its
+/// first entry; the system's count of the entries it has given, which the
+/// call moves on), putting what it lists in `found`. Each call starts at
+/// the first entry, with a list of its own, and the room is doubled after a
+/// call that left entries out, up to `rooms`'s largest; past it, `None`,
+/// and the caller takes a list made whole by one call some other way. A
+/// part is never joined to another call's: the system's place is a count,
+/// so entries removed between two calls shift the rest down, and the next
+/// call skips entries no call gave (the review of the start-up's fix: a
+/// command that keeps making and closing objects of its own could hide its
+/// harness's job so).
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's jobs"))]
+fn in_one_call<T>(
+    rooms: (usize, usize),
+    mut list: impl FnMut(usize, &mut u32, &mut Vec<T>) -> Called,
+) -> Option<Result<Vec<T>, String>> {
+    let (mut room, most) = rooms;
+    loop {
+        let (mut from, mut found) = (0, Vec::new());
+        match list(room, &mut from, &mut found) {
+            Called::Whole => return Some(Ok(found)),
+            Called::Failed(why) => return Some(Err(why)),
+            Called::Part if room < most => room = room.saturating_mul(2).min(most),
+            Called::Part => return None,
+        }
+    }
+}
+
 /// The process instance a job's name in the namespace of objects names,
 /// when it is a harness's job of sessions' commands ([`job_name`], with
 /// its `Local\` taken off, as the namespace lists it): `None` for any other
@@ -752,7 +848,7 @@ mod sys {
     use std::ptr;
     use std::sync::OnceLock;
 
-    use super::{Listed, Opened, Under, job_name, started_by_a_service};
+    use super::{Called, Listed, Opened, Under, job_name, started_by_a_service};
     use windows_sys::Wdk::Foundation::OBJECT_ATTRIBUTES;
     use windows_sys::Wdk::Storage::FileSystem::{NtOpenDirectoryObject, NtQueryDirectoryObject};
     use windows_sys::Wdk::System::SystemInformation::{
@@ -761,7 +857,9 @@ mod sys {
     use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
     use windows_sys::Win32::Foundation::{
         ERROR_ALREADY_EXISTS, ERROR_FILE_NOT_FOUND, ERROR_INVALID_PARAMETER, FALSE, FILETIME,
-        HANDLE, LocalFree, STATUS_INFO_LENGTH_MISMATCH, SetLastError, UNICODE_STRING,
+        HANDLE, LocalFree, STATUS_BUFFER_OVERFLOW, STATUS_BUFFER_TOO_SMALL,
+        STATUS_INFO_LENGTH_MISMATCH, STATUS_MORE_ENTRIES, STATUS_NO_MORE_ENTRIES, SetLastError,
+        UNICODE_STRING,
     };
     use windows_sys::Win32::Security::{
         ACCESS_ALLOWED_ACE, ACL, ACL_REVISION, AddAccessAllowedAce, CreateWellKnownSid,
@@ -1282,28 +1380,81 @@ mod sys {
         listed
     }
 
-    pub(super) fn under_a_session() -> Under {
-        // The system's list of processes, taken once at most, and only
-        // where the cheaper reads cannot answer.
-        let list = std::cell::OnceCell::new();
-        let listed = || {
-            list.get_or_init(processes)
-                .as_ref()
-                .map_err(|error| format!("the system's processes could not be listed: {error}"))
+    /// The system's list of processes, taken once at most in a check, and
+    /// only where the cheaper reads cannot answer.
+    pub(super) type Taken = std::cell::OnceCell<io::Result<Vec<Listed>>>;
+
+    fn listed_in(list: &Taken) -> Result<&[Listed], String> {
+        list.get_or_init(processes)
+            .as_ref()
+            .map(Vec::as_slice)
+            .map_err(|error| format!("the system's processes could not be listed: {error}"))
+    }
+
+    /// Where the running harnesses were found.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub(super) enum Source {
+        /// In the logon session's namespace of objects, listed whole by one
+        /// call.
+        Namespace,
+        /// In the system's list of processes, which one call gives whole.
+        Processes,
+    }
+
+    /// Every running harness that could hold this process, each by the
+    /// process instance its job is named for: the jobs of sessions'
+    /// commands in this logon session's namespace, by their names, where
+    /// one call lists the namespace whole ([`named_jobs`]); otherwise, and
+    /// where the namespace cannot be listed, every process of the system's
+    /// list, each to be tried by its job's name. Never a set joined from
+    /// several calls, which could leave a harness out: what it gives must be
+    /// every one there is, for a process whose harness is not on its line of
+    /// parents, and for when the earliest of them began.
+    pub(super) fn harnesses(list: &Taken) -> Result<(Vec<(u32, u64)>, Source), String> {
+        use cineris_base::hook::SessionListing;
+        let named = match cineris_base::hook::session_listing() {
+            SessionListing::Real => named_jobs(super::ROOMS),
+            SessionListing::InParts => named_jobs(super::IN_PARTS),
+            SessionListing::Empty => return Ok((Vec::new(), Source::Namespace)),
         };
-        // The running harnesses that could hold it: the jobs of sessions'
-        // commands in this logon session's namespace, by their names; where
-        // the namespace cannot be listed, every process of the list, each
-        // tried by its job's name.
-        let harnesses: Vec<(u32, u64)> = match named_jobs() {
-            Ok(named) => named,
-            Err(_) => match listed() {
-                Ok(listed) => listed
-                    .iter()
-                    .map(|process| (process.pid, process.made))
-                    .collect(),
-                Err(error) => return Under::Unknown(error),
-            },
+        match named {
+            Ok(Some(named)) => Ok((named, Source::Namespace)),
+            Ok(None) | Err(_) => {
+                let listed = listed_in(list)?;
+                let every = listed.iter().map(|process| (process.pid, process.made));
+                Ok((every.collect(), Source::Processes))
+            }
+        }
+    }
+
+    pub(super) fn under_a_session() -> Under {
+        let list = Taken::new();
+        // SAFETY: plain call.
+        let own = unsafe { GetCurrentProcessId() };
+        // Each process of the line of parents is opened once in a check,
+        // and what it told kept for the line a service's start is read on.
+        let told = std::cell::RefCell::new(Vec::<(u32, super::Described)>::new());
+        let describe = |pid: u32| {
+            if let Some((_, known)) = told.borrow().iter().find(|(at, _)| *at == pid) {
+                return known.clone();
+            }
+            let known = described(pid);
+            told.borrow_mut().push((pid, known.clone()));
+            known
+        };
+        // The harnesses on its line of parents first, each by its job's
+        // name: a session's command's own harness is there unless it
+        // detached, and no listing's race can hide it.
+        for parent in super::parents(own, describe) {
+            if let Job::Holds(under) = in_the_job_of(parent.pid, parent.made) {
+                return under;
+            }
+        }
+        // Then every running harness, from a listing made whole by one call:
+        // a process whose parents exited stays in its harness's job.
+        let harnesses = match harnesses(&list) {
+            Ok((harnesses, _)) => harnesses,
+            Err(error) => return Under::Unknown(error),
         };
         // When the earliest harness of this user that runs now was made.
         let mut began: Option<u64> = None;
@@ -1314,15 +1465,13 @@ mod sys {
                 Job::Holds(under) => return under,
             }
         }
-        // SAFETY: plain call.
-        let own = unsafe { GetCurrentProcessId() };
         // The line of parents, each process on it opened, or the list where
         // one cannot be; the service manager is asked only where the line
         // reaches a service host.
-        let line = super::line_of(own, described);
+        let line = super::line_of(own, describe);
         let read: &[Listed] = match &line {
             Some(line) => line,
-            None => match listed() {
+            None => match listed_in(&list) {
                 Ok(listed) => listed,
                 Err(error) => return Under::Unknown(error),
             },
@@ -1346,10 +1495,6 @@ mod sys {
         name: UNICODE_STRING,
         kind: UNICODE_STRING,
     }
-
-    /// `ntstatus.h`'s `STATUS_MORE_ENTRIES` and `STATUS_NO_MORE_ENTRIES`.
-    const STATUS_MORE_ENTRIES: i32 = 0x0000_0105;
-    const STATUS_NO_MORE_ENTRIES: i32 = 0x8000_001A_u32.cast_signed();
 
     /// The type's name a job has in a directory of objects.
     const JOB_TYPE: &str = "Job";
@@ -1401,10 +1546,12 @@ mod sys {
     /// read from its name. A few calls, where the system's list of
     /// processes lists every thread too (0.3 ms cold on a hosted runner,
     /// with 359 objects, against 0.6 to 0.8 ms; step 28's third pull
-    /// request). `Err` where the namespace cannot be listed, and in session
-    /// 0, which the services share and whose `Local\` is another directory:
-    /// every process of the list is tried then, as before.
-    fn named_jobs() -> io::Result<Vec<(u32, u64)>> {
+    /// request). The namespace is taken whole by one call, in the rooms
+    /// `rooms` gives ([`super::in_one_call`]): `None` where none of them
+    /// holds it. `Err` where the namespace cannot be listed, and in session
+    /// 0, which the services share and whose `Local\` is another directory.
+    /// The system's list of processes is taken for either.
+    pub(super) fn named_jobs(rooms: (usize, usize)) -> io::Result<Option<Vec<(u32, u64)>>> {
         let session = session_id()?;
         if session == 0 {
             return Err(io::Error::other("session 0's namespace is the services'"));
@@ -1439,57 +1586,68 @@ mod sys {
         }
         // SAFETY: `directory` was just opened and nothing else owns it.
         let directory = unsafe { OwnedHandle::from_raw_handle(directory) };
-        let mut buffer: Vec<u64> = vec![0; 64 * 1024 / 8];
-        let room = u32::try_from(buffer.len() * 8).unwrap_or(0);
-        let mut context = 0_u32;
-        let mut restart = true;
-        let mut found = Vec::new();
-        // Bounded: a namespace that keeps growing as it is listed is not
-        // listed for ever, and the list is taken in its place.
-        for _ in 0..4096 {
+        let listed = super::in_one_call(rooms, |room, from, found| {
+            // Zeroed: the list of entries ends with one of zeroes, which
+            // the read below stops at.
+            let mut buffer: Vec<u64> = vec![0; room / 8];
+            let room = u32::try_from(buffer.len() * 8).unwrap_or(u32::MAX);
             let mut written = 0_u32;
             // SAFETY: the buffer is as large as said and aligned for the
-            // entries; `context` and `written` are live `u32`s.
+            // entries; `from` and `written` are live `u32`s.
             let status = unsafe {
                 NtQueryDirectoryObject(
                     directory.as_raw_handle(),
                     buffer.as_mut_ptr().cast(),
                     room,
                     false,
-                    restart,
-                    &raw mut context,
+                    *from == 0,
+                    from,
                     &raw mut written,
                 )
             };
-            restart = false;
-            if status == STATUS_NO_MORE_ENTRIES {
-                return Ok(found);
-            }
-            if status < 0 {
-                return Err(io::Error::other(format!(
-                    "the namespace of objects could not be listed (status {status:#010x})"
-                )));
-            }
-            let entries = buffer.as_ptr().cast::<DirectoryEntry>();
-            let most = buffer.len() * 8 / std::mem::size_of::<DirectoryEntry>();
-            for at in 0..most {
-                // SAFETY: within the buffer; the list of entries ends with
-                // one of zeroes, before the names they point at.
-                let entry = unsafe { ptr::read_unaligned(entries.add(at)) };
-                if entry.name.Buffer.is_null() {
-                    break;
+            match status {
+                STATUS_NO_MORE_ENTRIES => Called::Whole,
+                // Not even one entry fitted.
+                STATUS_BUFFER_TOO_SMALL | STATUS_BUFFER_OVERFLOW => Called::Part,
+                failed if failed < 0 => Called::Failed(format!(
+                    "the namespace of objects could not be listed (status {failed:#010x})"
+                )),
+                // What fitted, with more entries after it.
+                STATUS_MORE_ENTRIES => {
+                    jobs_in(&buffer, found);
+                    Called::Part
                 }
-                if counted(&entry.kind) == JOB_TYPE
-                    && let Some(harness) = super::harness_named(&counted(&entry.name))
-                {
-                    found.push(harness);
+                _ => {
+                    jobs_in(&buffer, found);
+                    Called::Whole
                 }
             }
-            if status != STATUS_MORE_ENTRIES {
-                return Ok(found);
+        });
+        match listed {
+            None => Ok(None),
+            Some(Ok(found)) => Ok(Some(found)),
+            Some(Err(why)) => Err(io::Error::other(why)),
+        }
+    }
+
+    /// The harnesses' jobs among the entries one call wrote in `buffer`,
+    /// put in `found`.
+    fn jobs_in(buffer: &[u64], found: &mut Vec<(u32, u64)>) {
+        let entries = buffer.as_ptr().cast::<DirectoryEntry>();
+        let most = buffer.len() * 8 / std::mem::size_of::<DirectoryEntry>();
+        for at in 0..most {
+            // SAFETY: within the buffer; the list of entries ends with one
+            // of zeroes, before the names they point at.
+            let entry = unsafe { ptr::read_unaligned(entries.add(at)) };
+            if entry.name.Buffer.is_null() {
+                break;
+            }
+            if counted(&entry.kind) == JOB_TYPE
+                && let Some(harness) = super::harness_named(&counted(&entry.name))
+            {
+                found.push(harness);
             }
         }
-        Err(io::Error::other("the namespace of objects did not end"))
     }
 
     /// `PROCESS_BASIC_INFORMATION`, which `windows-sys` keeps under a
@@ -2082,6 +2240,146 @@ mod tests {
         ] {
             assert_eq!(harness_named(other), None, "{other}");
         }
+    }
+
+    /// A directory of objects listed as the system lists one: a call gives
+    /// the entries from the count it is given (or from the first, at 0) as
+    /// far as `room / 16` of them fit, and moves the count on; `between`
+    /// runs before each call after the first, as a command's own objects
+    /// come and go. The rooms each call was given are kept in `asked`, and a
+    /// listing asked without end fails at its 65th call.
+    fn directory<'a>(
+        mut entries: Vec<u32>,
+        asked: &'a std::cell::RefCell<Vec<usize>>,
+        between: impl Fn(usize, &mut Vec<u32>) + 'a,
+    ) -> impl FnMut(usize, &mut u32, &mut Vec<u32>) -> Called + 'a {
+        move |room: usize, from: &mut u32, found: &mut Vec<u32>| {
+            asked.borrow_mut().push(room);
+            let calls = asked.borrow().len();
+            assert!(calls <= 64, "a listing asked without end: {calls} calls");
+            if calls > 1 {
+                between(calls, &mut entries);
+            }
+            let start = usize::try_from(*from).unwrap().min(entries.len());
+            let rest = &entries[start..];
+            let given = &rest[..(room / 16).min(rest.len())];
+            found.extend_from_slice(given);
+            *from = u32::try_from(start + given.len()).unwrap();
+            if given.len() < rest.len() {
+                Called::Part
+            } else {
+                Called::Whole
+            }
+        }
+    }
+
+    /// A listing that needs more than one call is never joined from its
+    /// calls: each call starts at the first entry, in a room twice the last,
+    /// until one holds it whole. Joined, it would miss the harness's job,
+    /// `7`, which the first call left out and the next skipped once a
+    /// command's object before it was removed between the two (the review of
+    /// the start-up's fix: the system goes on from a count of the entries it
+    /// gave).
+    #[test]
+    fn a_listing_that_needs_more_than_one_call_is_taken_again_whole_and_never_joined() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let list = directory(vec![1, 2, 7, 3, 4, 5], &asked, |calls, entries| {
+            if calls == 2 {
+                entries.remove(0);
+            }
+        });
+        let listed = in_one_call((32, 128), list).unwrap().unwrap();
+        assert_eq!(listed, [2, 7, 3, 4, 5]);
+        assert_eq!(*asked.borrow(), [32, 64, 128]);
+        // One call that holds it is the whole listing.
+        let asked = std::cell::RefCell::new(Vec::new());
+        let list = directory(vec![1, 2, 7], &asked, |_, _| {});
+        assert_eq!(in_one_call((64, 128), list), Some(Ok(vec![1, 2, 7])));
+        assert_eq!(*asked.borrow(), [64]);
+        // A call that fails is the listing's failure.
+        let failed = in_one_call::<u32>((64, 128), |_, _, _| Called::Failed("no".to_owned()));
+        assert_eq!(failed, Some(Err("no".to_owned())));
+    }
+
+    /// A namespace that no room up to the largest holds, as one a command
+    /// keeps growing would be, is given up after the largest, 1 MiB, five
+    /// calls in all: the caller then takes the system's list of processes,
+    /// which one call gives whole.
+    #[test]
+    fn a_listing_no_room_holds_is_given_up_after_the_largest() {
+        let asked = std::cell::RefCell::new(Vec::new());
+        let list = directory((0..1_000_000).collect(), &asked, |_, _| {});
+        assert_eq!(in_one_call(ROOMS, list), None);
+        assert_eq!(
+            *asked.borrow(),
+            [64 * 1024, 128 * 1024, 256 * 1024, 512 * 1024, 1024 * 1024]
+        );
+        // The test hooks' rooms, which no logon session's namespace fits.
+        let asked = std::cell::RefCell::new(Vec::new());
+        let list = directory((0..100).collect(), &asked, |_, _| {});
+        assert_eq!(in_one_call(IN_PARTS, list), None);
+        assert_eq!(*asked.borrow(), [64, 128, 256, 512]);
+    }
+
+    /// The line of parents above a process is read through any program (a
+    /// harness's command may run under `make` or a test runner, not only a
+    /// shell) up to the first process that has gone, that cannot be opened,
+    /// that was made after the one below it (a gone parent's id taken by a
+    /// later process), or that is its own parent or the system's idle
+    /// process, and no further than [`LINE_OF_PARENTS`].
+    #[test]
+    fn the_line_of_parents_is_read_through_any_program_to_its_end() {
+        let processes = listed(&[
+            (100, 90, "cin.exe"),
+            (90, 80, "make.exe"),
+            (80, 70, "cin.exe"),
+            (70, 60, "windowsterminal.exe"),
+            (60, 4, "explorer.exe"),
+            (200, 190, "cin.exe"),
+            (190, 9999, "cmd.exe"),
+            (300, 290, "cin.exe"),
+            (290, 280, "cmd.exe"),
+            (400, 390, "cin.exe"),
+            (390, 390, "cmd.exe"),
+            (500, 0, "cin.exe"),
+        ]);
+        let describe = |pid: u32| match pid {
+            4 | 280 => Described::Closed,
+            // Made after the process below it.
+            290 => Described::Is(Listed {
+                pid: 290,
+                parent: 280,
+                name: "cmd.exe".to_owned(),
+                made: 1_000,
+            }),
+            _ => processes
+                .iter()
+                .find(|process| process.pid == pid)
+                .cloned()
+                .map_or(Described::Gone, Described::Is),
+        };
+        let pids = |own| {
+            parents(own, describe)
+                .iter()
+                .map(|process| process.pid)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(pids(100), [90, 80, 70, 60], "through make, to the closed");
+        assert_eq!(pids(200), [190], "to the gone");
+        assert_eq!(pids(300), [] as [u32; 0], "a parent made later");
+        assert_eq!(pids(400), [390], "its own parent");
+        assert_eq!(pids(500), [] as [u32; 0], "the idle process");
+        assert_eq!(pids(9999), [] as [u32; 0], "itself gone");
+        // A line that does not end is read to the bound.
+        let endless = |pid: u32| {
+            Described::Is(Listed {
+                pid,
+                parent: pid + 1,
+                name: "cmd.exe".to_owned(),
+                made: u64::from(u32::MAX - pid),
+            })
+        };
+        assert_eq!(parents(1, endless).len(), LINE_OF_PARENTS);
     }
 
     /// A harness's job is named for its process's instance: the same id

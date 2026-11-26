@@ -1675,6 +1675,72 @@ replace: failed(SetSecurityDescriptorControl(pointer, SE_DACL_PROTECTED, 0))?;
 caught-by:
     cineris-sandbox session::sys::tests::sys_the_jobs_security_is_its_text
 
+# The review of the start-up's fix: a listing of the named objects joined
+# from several calls could skip a harness's job.
+
+[break] session-listing-joined-from-its-calls
+rule: A listing of the logon session's named objects is taken whole by one call, each call from the first entry: one joined from several calls, each going on from where the last stopped, skips the entries that moved when others were removed between the calls, and could miss a harness's job.
+file: crates/cineris-sandbox/src/session.rs
+in: in_one_call
+find: let (mut room, most) = rooms; loop { let (mut from, mut found) = (0, Vec::new());
+replace: let (mut room, most) = rooms; let (mut from, mut found) = (0, Vec::new()); loop {
+caught-by:
+    cineris-sandbox session::tests::a_listing_that_needs_more_than_one_call_is_taken_again_whole_and_never_joined
+
+[break] session-listing-part-trusted
+rule: A call that listed the named objects and left entries out is never taken for the whole listing: the listing is asked again from its first entry, in a larger room.
+file: crates/cineris-sandbox/src/session.rs
+in: in_one_call
+find: Called::Part if room < most => room = room.saturating_mul(2).min(most)
+replace: Called::Part if room < most => return Some(Ok(found))
+caught-by:
+    cineris-sandbox session::tests::a_listing_that_needs_more_than_one_call_is_taken_again_whole_and_never_joined
+
+[break] session-listing-bound-without-limit
+rule: A listing of the named objects is asked into rooms of at most 1 MiB, and given up past it for the system's list of processes, which one call gives whole: a namespace a command keeps growing is not asked for ever, nor into any room.
+file: crates/cineris-sandbox/src/session.rs
+find: const ROOMS: (usize, usize) = (64 * 1024, 1024 * 1024);
+replace: const ROOMS: (usize, usize) = (64 * 1024, usize::MAX);
+caught-by:
+    cineris-sandbox session::tests::a_listing_no_room_holds_is_given_up_after_the_largest
+
+[break] session-windows-past-the-bound-nothing-listed
+rule: On Windows, where no call up to the largest room lists the named objects whole, the system's list of processes is taken in their place, and a running harness is found there: never an empty or partial set.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: harnesses
+find: Ok(None) | Err(_) => {
+replace: Ok(None) => Ok((Vec::new(), Source::Namespace)), Err(_) => {
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_listing_that_needs_more_than_one_call_takes_the_list_of_processes
+
+[break] session-windows-line-of-parents-not-asked
+rule: On Windows the jobs of the processes of the line of parents are asked first, each by its name, before anything is listed: a session's command's own harness is found there whatever a listing misses.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: for parent in super::parents(own, describe) {
+replace: for parent in super::parents(own, describe).into_iter().take(0) {
+caught-by:
+    cineris-sandbox::it session::sys_a_harness_on_the_line_of_parents_is_found_with_nothing_listed
+
+[break] session-line-of-parents-stops-at-other-programs
+rule: The line of parents whose jobs are asked first is read through any program, not only the interpreters a service's start is followed through: a harness's command may run under `make` or a test runner.
+file: crates/cineris-sandbox/src/session.rs
+in: parents
+find: line.push(process.clone());
+replace: if !passes_through(&process.name) { break; } line.push(process.clone());
+caught-by:
+    cineris-sandbox session::tests::the_line_of_parents_is_read_through_any_program_to_its_end
+
+[break] session-line-of-parents-past-a-later-process
+rule: The line of parents whose jobs are asked stops at a process made after the one below it, which has the id of a parent that has gone.
+file: crates/cineris-sandbox/src/session.rs
+in: parents
+find: if process.made > below.made {
+replace: if process.made > below.made && false {
+caught-by:
+    cineris-sandbox session::tests::the_line_of_parents_is_read_through_any_program_to_its_end
+
 [break] unmarked-headless-run-not-held
 rule: A headless run whose mark of its sessions' commands failed holds its session at `supervised` at most, whatever its configuration says.
 file: crates/cineris-cli/src/headless.rs
