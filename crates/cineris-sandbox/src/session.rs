@@ -44,10 +44,13 @@
 //!   one whose line of parents, through processes of this user, reaches
 //!   WMI's provider host (`WmiPrvSE.exe`, `Win32_Process.Create`), the task
 //!   host (`taskhostw.exe`) or the service host that runs the task
-//!   scheduler (a scheduled task's), which start a process outside the job
-//!   (the full review of the third part, H1); where which host runs the
-//!   scheduler cannot be asked, any service host counts. The line ends at
-//!   the user's desktop (`explorer.exe`). **It does not see** a process
+//!   scheduler (a scheduled task's), directly or through command
+//!   interpreters (`cmd /c`), which start a process outside the job (the
+//!   full review of the third part, H1); where which host runs the scheduler
+//!   cannot be asked, any service host counts. Any other program ends the
+//!   line: a terminal or a CI runner a service started is not taken for
+//!   one. **It does not see** a service's start through another program
+//!   than an interpreter (a script's own interpreter it names), a process
 //!   another of the user's processes starts outside the job (the desktop's
 //!   shell asked to open a file, a process made with another parent), nor a
 //!   command whose harness has exited, whose job no running process names.
@@ -434,6 +437,25 @@ enum Opened {
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
 const SERVICE_STARTERS: [&str; 3] = ["wmiprvse.exe", "taskhostw.exe", "taskeng.exe"];
 
+/// The command interpreters and console hosts a service's start of a
+/// command may pass through (`cmd /c cin …`): the line of parents is
+/// followed up through these alone.
+#[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
+const INTERPRETERS: [&str; 12] = [
+    "cmd.exe",
+    "powershell.exe",
+    "pwsh.exe",
+    "conhost.exe",
+    "openconsole.exe",
+    "wscript.exe",
+    "cscript.exe",
+    "mshta.exe",
+    "rundll32.exe",
+    "forfiles.exe",
+    "bash.exe",
+    "sh.exe",
+];
+
 /// How far up a line of parents is followed on Windows.
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
 const LINE_OF_PARENTS: usize = 64;
@@ -442,12 +464,12 @@ const LINE_OF_PARENTS: usize = 64;
 /// a command asks of it, outside any job (WMI's provider host, the task
 /// host, the service host that runs the task scheduler, `scheduler`: `None`
 /// where it could not be asked, when any service host counts), directly or
-/// through processes of this user (`cmd /c` between): the full review of
-/// the third part, H1. The line is followed up while each process can be
-/// opened, was made before the one below it (a later process may have the
-/// id of a parent that has gone), and is not the user's desktop
-/// (`explorer.exe`), whose processes are the person's; it ends at the first
-/// that cannot be opened, once its name is looked at.
+/// through command interpreters ([`INTERPRETERS`]: `cmd /c cin …`): the
+/// full review of the third part, H1. The line is followed up through
+/// interpreters alone, each made before the one below it (a later process
+/// may have the id of a parent that has gone): any other program ends it,
+/// so that a person's terminal, an editor or a CI runner that a service
+/// started long before is not taken for one.
 #[cfg_attr(not(windows), allow(dead_code, reason = "Windows's services"))]
 fn started_by_a_service(
     listed: &[Listed],
@@ -494,15 +516,12 @@ fn started_by_a_service(
                  starts what a session's command asks of it outside the session's job"
             ));
         }
-        if name == "explorer.exe" {
-            return Under::Nothing;
-        }
         match seen {
-            Opened::Made(then) => {
+            Opened::Made(then) if INTERPRETERS.contains(&name) => {
                 at = parent;
                 made = then;
             }
-            Opened::Closed => return Under::Nothing,
+            _ => return Under::Nothing,
         }
     }
     Under::Nothing
@@ -1064,8 +1083,9 @@ mod tests {
     /// scheduler's service host, directly or through a `cmd /c` of the
     /// user's, is under a session's command (the full review of the third
     /// part, H1); any other service host is not, unless which service the
-    /// scheduler runs in could not be asked; the person's desktop, a process
-    /// that cannot be opened, or a parent made after its child ends the line
+    /// scheduler runs in could not be asked; any program but an interpreter
+    /// (the person's desktop, a CI runner's test runner), a process that
+    /// cannot be opened, or a parent made after its child ends the line
     /// elsewhere.
     #[test]
     fn a_process_a_service_started_for_a_command_is_under_a_session() {
@@ -1088,7 +1108,10 @@ mod tests {
             (505, 4, "wmiprvse.exe"),
             (520, 515, "cin.exe"),
             (515, 4, "sshd.exe"),
-            (530, 9999, "cin.exe"),
+            (540, 535, "cin.exe"),
+            (535, 530, "cargo-nextest.exe"),
+            (530, 600, "svchost.exe"),
+            (550, 9999, "cin.exe"),
             (600, 4, "services.exe"),
             (700, 4, "services.exe"),
         ]);
@@ -1106,10 +1129,11 @@ mod tests {
         assert!(matches!(under(300, None), Under::Session(_)), "not asked: any host");
         assert!(matches!(under(300, Some(0)), Under::Nothing), "no scheduler running");
         assert_eq!(under(400, None), Under::Nothing, "the desktop ends the line");
+        assert_eq!(under(540, None), Under::Nothing, "a runner a service started");
         assert!(matches!(under(500, Some(600)), Under::Session(_)), "the task host");
         assert_eq!(under(510, Some(600)), Under::Nothing, "made after its child");
         assert_eq!(under(520, Some(600)), Under::Nothing, "another user's process");
-        assert_eq!(under(530, Some(600)), Under::Nothing, "a parent that has gone");
+        assert_eq!(under(550, Some(600)), Under::Nothing, "a parent that has gone");
         let Under::Session(how) = under(100, Some(600)) else {
             unreachable!()
         };
