@@ -73,6 +73,22 @@ Nothing above moves Windows' system tier: it is process starts and real waits, n
 - **What it could hide** (the full review's findings). A cost that every test process pays rises with the start, which the start is taken from: a change that added 2 ms to every test's process on Windows would read as a runner 1.33 times slower and divide every tier down, where today it is only taken off (the 15 ms ceiling's warning still says so when the start passes it). `cargo xtask ci --tiers --like-runner` still estimates a slow runner from the raw times. [testing-and-ci.md](../../testing-and-ci.md), "Budgets are enforced", says a slow runner is slower at the tests' work too and that the budget is right to see that; the commit's bullet there contradicts it, and one of the two would go.
 - **Recommendation:** not needed for tier 2 after the changes above; for tier 3 on slow runners the dialogs' hook does most of it (above). If the owner wants the warnings off on slow runners, a judgment by a fixed table of runner speeds read from the start would be safer than a division by it.
 
+## Also settled
+
+- **The start overhead of a shell command on Windows in a release build** (the item `windows-start-overhead-in-release`, which named a `try` command that had never been run): run, and inside the noise of a PowerShell start of about 200 ms ([performance-budgets.md](../../performance-budgets.md), "Starting a shell command"; `try` 45732392743). The item is settled.
+
+## Breaks
+
+`mutations/ci-budgets-2.breaks`, eleven breaks: five of the test kit's directories, and six of the walk's look and the private folders on Windows (`os: windows`), which only a Windows runner runs. With them, the breaks this change moved and the readiness rule's own:
+
+- **On the reference machine** (`cargo xtask mutate`, the step's list with step 26's `undo-writes-through-a-link`, whose code this change rewrote, and the readiness rule's twelve: `step-23-fixes`' five, `step-23`'s two, `step-24-panels/a-held-panel-key-acts-again`, `step-25`'s four, among them `a-workers-answer-wakes-no-frame`, caught by the first run's flow test with the dialogs' times divided): **18 of 18 did what their lists expect**; the six Windows breaks were left to a Windows runner. The breaks the change moved were checked first to apply (`mutate --check`, 4,452 breaks): the readiness rule's six whose code now reads its times through the division, step 26's, and `tooling-w5`'s, `tooling-8`'s and `win-budgets`' (the last two in the droppable commit).
+- **On a Windows runner** (`try` 45736452973, the step's list with the same two): [ci.md](ci.md).
+
+## Stress
+
+- `cargo xtask stress -p cineris-testkit -p cineris-core -p cineris-rpc --count 30` on the reference machine: 912 tests, 30 times each, every one passed every time.
+- The first run's tests with the dialogs' times divided, 40 times over on each system (`try` 45735326703, `stress -p cineris-cli first_run::`): every one passed.
+
 ## Reviews
 
 **An early, focused round on the walk's change** (a reviewer that had not seen the reasoning, as the maintainers asked as soon as the change existed, since the resolver feeds the protected paths' look, the sandbox's roots, trust and the configuration). It found no unsound `unsafe` and no answer that differs on a local drive: the walk passes the extended-length form, which neither call rewrites, and every reparse point and every error but a missing name goes back to `symlink_metadata`.
@@ -99,3 +115,15 @@ Nothing above moves Windows' system tier: it is process starts and real waits, n
 - **Windows' integration tier on an 8 ms runner is about 7 s from its failure line, where 10 s was asked** (52.8 s of 60, `try` 45731497689; rule 11). What is left of Windows' excess there is spread across the core's file-heavy tests, each file operation still dearer than on Linux, with no single cause left on the open's path that a fix keeping its steps and their order could take out. The levers named for later are in the item [main-windows-tiers-over-budget-on-slow-runners](../../outstanding/main-windows-tiers-over-budget-on-slow-runners.md): the walks the open repeats ([their item](../../outstanding/a-sessions-open-walks-the-same-paths-again.md)), the first private folder's security look-ups in each process (about 1.2 ms of each core test on Windows), and the tools' assembly (about 1 ms more on Windows, CPU and allocation). Recommended to the maintainers: merge without the runner-speed commit, and take the walks in step 33's performance pass.
 - **Judging a tier at a usual runner's speed** is the branch's last commit, the owner's to keep or drop (above).
 - **A pull request that touches `cineris-base`** ran its test job in about 270 s on an 8 ms runner, under the five minutes by about 30 s ([ci.md](ci.md)); half of it is the build of every crate, the next lever for the job.
+
+**The second round, on the changes since** (the same bar, and the maintainers' three conditions for the dialogs' hook):
+
+| # | Finding | Verdict | What was done |
+|---|---|---|---|
+| 1 | The record named a "Breaks" section and `try --final`'s tables that were not written yet, and the hook's saving on the runners | Right | Written: "Breaks" and "Stress" above, `try --final`'s tables in [ci.md](ci.md) |
+| 2 | A build of the whole workspace with no `-p` builds the test kit too, which turns `test-hooks` on, so that `cineris` carries the hooks; the shipped builds name their package, and `size` would refuse such a binary, but `pr-size` is not a required check | Right; true of the hooks before this change too | Said in [testing-and-ci.md](../../testing-and-ci.md) ("A build of the whole workspace has the hooks"), with how to build the binary to use. A `default-members` that leaves the test kit out would change what `cargo test` at the root runs, and is not this step's |
+| 3 | The hook was in no public doc, so nothing told a later test not to call `quick_dialogs` where the real second is the point | Right | [testing-and-ci.md](../../testing-and-ci.md), "A dialog's times in a system test" |
+| 4 | `try`'s plain runs of the tests and `--final`'s Linux part may not be told to leave the directories | Not so | `try` makes a run of `test` into `ci --tiers`, and the final run's tests part is `test`: both are `ci`, which is told. An A/B's rounds leave a copy of the `scratch!` directories each, moved aside, within one job |
+| 5 | A binary refused for its test hooks was reported as one with home paths | Right | "Home paths or test hooks", in `size`'s summary and `home-paths`' verdict |
+
+**The verdict on the dialogs' hook:** agreed under the three conditions. No build that is shipped or released can scale the times: `ready_divisor` is a `const fn` returning 1 without the feature, the shipped builds name their package, and `size` refuses a binary that holds the hook. At least one system test on each system answers a dialog at a person's pace (`tui::sys_typing_through_an_approval_over_attach_does_not_answer_it`, and the undo's question). And every run-time read of the three times goes through the division, which keeps the rule's proportions (`QUIET` is still at least `REPEAT`).

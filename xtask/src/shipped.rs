@@ -472,7 +472,7 @@ pub(crate) fn home_paths_command(arguments: &[String]) -> Result<()> {
     if failed.is_empty() {
         Ok(())
     } else {
-        Err(format!("home paths in {}", failed.join(", ")))
+        Err(format!("home paths or test hooks in {}", failed.join(", ")))
     }
 }
 
