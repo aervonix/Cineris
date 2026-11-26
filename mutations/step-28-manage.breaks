@@ -1235,7 +1235,6 @@ find: Ok(limits.BasicLimitInformation.LimitFlags & leave != 0)
 replace: Ok(false)
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_job_that_lets_its_processes_leave_is_told
-    cineris-sandbox session::sys::tests::sys_the_harnesss_job_is_open_by_its_name_only_to_ask
 
 [break] session-windows-denied-job-taken-for-none
 rule: On Windows a harness's job that cannot be opened, for any reason but there being none, is not known, which refuses.

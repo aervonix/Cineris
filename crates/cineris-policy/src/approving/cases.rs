@@ -2007,4 +2007,11 @@ pub const CASES: &[(&str, &[ShellSyntax], bool)] = &[
         &[PowerShell],
         true,
     ),
+    // A shell's or an interpreter's line with no blank in it, which only
+    // the shell's name or the code flag in its cluster reads.
+    ("nu -c cin", &[Posix], true),
+    ("xonsh -c cineris", &[Posix], true),
+    ("yash -c cin", &[Posix], true),
+    ("python3 -Ic 'os.system(\"cin\")'", &[Posix], true),
+    ("ruby -we 'exec(\"cin\")'", &[Posix], true),
 ];
