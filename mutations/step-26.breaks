@@ -171,7 +171,8 @@ in: Entry::change_from
 find: self.stamp != old.stamp
 replace: false
 caught-by:
-    cineris-sandbox protect::tests::a_change_that_puts_the_modification_time_back_is_still_found
+    cineris-sandbox protect::tests::the_stamp_decides_where_neither_content_nor_hash_is_known
+    cineris-sandbox protect::tests::a_file_too_large_to_hash_replaced_with_its_size_and_time_put_back_is_found
 
 [break] protected-names-not-found-below-the-root
 rule: Build configuration is protected at any depth.
