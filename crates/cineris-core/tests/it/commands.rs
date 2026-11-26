@@ -1,16 +1,20 @@
 //! Custom commands in a session (step 28): `commands/list`, and a prompt
 //! that names a command, expanded in the lane before `prompt.submit`
 //! (`docs/architecture/12-extensions.md`, "Tier 1: custom commands").
-//! One world and one session kept in memory each.
+//! One world and one session each, kept in memory unless a test reads its
+//! log.
+
+use std::time::Duration;
 
 use cineris_protocol::error::code;
 use cineris_protocol::item::{CommandSource, PromptCommand};
 use cineris_protocol::methods::{
-    CommandCall, CommandsListParams, CommandsListResult, Op, OpResult, TurnStartParams,
+    CommandCall, CommandsListParams, CommandsListResult, Op, OpResult, TrustResourceKind,
+    TurnStartParams,
 };
 use cineris_protocol::{Item, Part};
 
-use crate::extensions_found::{cache, pin, start, users, write_extension};
+use crate::extensions_found::{cache, clock, pin, start, state, users, write_extension};
 use crate::{Front, World, says};
 
 /// Sends `/name args` as `turn/start` takes a command.
@@ -425,7 +429,9 @@ const RUNS: &str = "cineris.command({ name: 'spin', description: 'Never ends', r
 /// it beside the start. Each ends `command_failed`, interrupted, with nothing
 /// recorded and no turn started. And each run's questions are its own: a
 /// person's "allow once" for one run is not another run's, nor a real
-/// turn's, and no run's question is put as a turn's (`t_`).
+/// turn's, and no run's question is put as a turn's (`t_`); each begins with
+/// the command and whose it is, the user's own here (a question's text, an
+/// approval's summary).
 #[test]
 fn an_interrupt_stops_a_running_command_and_its_questions_are_its_own() {
     let world = World::new(
@@ -507,6 +513,22 @@ fn an_interrupt_stops_a_running_command_and_its_questions_are_its_own() {
                 })
         };
         front.until(|_| question().is_some()).await;
+        let text = front
+            .seen
+            .borrow()
+            .iter()
+            .find_map(|outgoing| match outgoing {
+                cineris_core::Outgoing::Request {
+                    request: cineris_protocol::methods::ServerRequest::Question(asked),
+                    ..
+                } => Some(asked.question.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+        assert!(
+            text.starts_with("The command `/probe:ask` of your extension `probe` asks: Go on?"),
+            "{text}"
+        );
         front.core.early(front.client.id, &interrupt);
         let error = asking.await.unwrap().unwrap_err();
         assert_eq!(
@@ -572,6 +594,257 @@ fn an_interrupt_stops_a_running_command_and_its_questions_are_its_own() {
             "{asked:?}"
         );
         assert!(asked[2].starts_with("t_"), "{asked:?}");
+        let summary = &front.approvals()[0].summary;
+        assert!(
+            summary.starts_with("The command `/probe:peek` of your extension `probe`: "),
+            "{summary}"
+        );
         front.close().await;
     });
+}
+
+/// The commands of the project's extension `probe`: one reads a file that
+/// looks like a secret, which is asked about; one says something; one keeps
+/// a value of the session's; one writes a file its manifest lets it write.
+/// And a tool that keeps its runtime until it is stopped.
+const STOPS: &str = "cineris.command({ name: 'peek', description: 'Reads the secrets', async run() {\n\
+       await cineris.fs.read('.env');\n\
+       return 'peeked';\n\
+     } });\n\
+     cineris.command({ name: 'ok', description: 'Says something', run() { return 'go on'; } });\n\
+     cineris.command({ name: 'keep', description: 'Keeps a value', async run() {\n\
+       await cineris.state.set('kept', 1);\n\
+       return null;\n\
+     } });\n\
+     cineris.command({ name: 'write', description: 'Writes', async run() {\n\
+       await cineris.fs.write('out.txt', 'x');\n\
+       return 'wrote';\n\
+     } });\n\
+     cineris.tool({ name: 'spin', description: 'Never ends', input: { type: 'object' },\n\
+       run() { for (;;) {} } });\n";
+
+/// Writes the user's extension `gate`, a gate on `prompt.submit`, pinned as
+/// it was before it changed: its gate is held as the session opens, and
+/// nothing of it is evaluated.
+fn a_changed_gate(world: &World) {
+    let folder = world.dirs().config.unwrap().join("extensions").join("gate");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("extension.toml"),
+        "api = 1\nname = \"gate\"\nversion = \"1\"\ndescription = \"A gate\"\nmain = \
+         \"main.js\"\n[capabilities]\nhooks = [\"prompt.submit\"]\n",
+    )
+    .unwrap();
+    let gate = "cineris.on('prompt.submit', () => undefined);\n";
+    std::fs::write(folder.join("main.js"), gate).unwrap();
+    cineris_policy::PinStore::new(state(world).pins_file(), clock(world))
+        .pin(&cineris_policy::Definition {
+            kind: TrustResourceKind::Extension,
+            name: "gate".to_owned(),
+            hash: cineris_ext::folder::Snapshot::read(&folder).unwrap().hash(),
+        })
+        .unwrap();
+    std::fs::write(folder.join("main.js"), format!("// changed\n{gate}")).unwrap();
+}
+
+/// Nothing of an extension's command runs where the prompt it would send
+/// would be refused, each refused `command_refused` with why; and a
+/// command's own stop is the session's. The project's extension `probe` is
+/// handed in, as `ext_state` hands one, to a session nobody can be asked
+/// in, whose policy fails on a denial:
+/// - (b) a gate held on `prompt.submit` (the user's `gate`, changed since it
+///   was approved) refuses it; its pin taken away, nothing is held;
+/// - a command's read of a secret, which nobody can be asked about, is
+///   answered with a stop: the command fails, the user is told, and the
+///   turn running then is stopped; the call's summary names the project's
+///   extension;
+/// - (a) that stop, left for the next prompt, refuses the next command, and
+///   is taken by it;
+/// - (c) the running turn stopped, the command after is refused too; the
+///   turn ends denied at its next call, and then a command runs;
+/// - a command's session value is recorded as of no turn, and its
+///   `cineris.fs.write` is refused, though its manifest names the file;
+/// - a command waiting behind its extension's tool (one call at a time a
+///   runtime) spends its own 30 s from when it was asked, and fails at
+///   their end, never having started, the tool going on.
+#[test]
+fn a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions() {
+    let held = cineris_testkit::Gate::new();
+    let world = World::new(
+        "commands_stops",
+        [
+            // The first turn: held until the test lets it go, then a call
+            // that the turn's stop refuses.
+            cineris_testkit::Response::new()
+                .wait(&held)
+                .tool_call("c1", "list", &serde_json::json!({"path": "."}))
+                .end(cineris_protocol::StopReason::ToolCalls),
+            says("Done."),
+            crate::calls(&[(
+                "c2",
+                "tool_call",
+                serde_json::json!({"tool": "probe/spin", "arguments": {}}),
+            )]),
+        ],
+    );
+    world.user_config(
+        "[[permissions.rules]]\neffect = \"ext\"\nmatch = \"probe/spin\"\naction = \"allow\"\n",
+    );
+    world.put(".env", "KEY=1\n");
+    a_changed_gate(&world);
+    let mut probe = crate::ext_exec::extension_running(
+        &world,
+        "probe",
+        "read = [\"**\"]\nwrite = [\"out.txt\"]\n\n[limits]\ntime = 97",
+        STOPS,
+    );
+    probe.source = cineris_ext::source::Source::Project;
+    let core = world.core_with(|options| {
+        options.extensions = vec![probe];
+        options.fail_on_denial = true;
+    });
+    world.run(async {
+        let front = Front::start_as(
+            &world,
+            &core,
+            cineris_core::ClientInfo::headless(),
+            cineris_protocol::session::SessionSettings::default(),
+        )
+        .await
+        .expect("the session starts");
+        let refused = |error: &str, words: &str| {
+            assert!(
+                error.starts_with(&format!("{}: ", code::COMMAND_REFUSED)) && error.contains(words),
+                "{words}: {error}"
+            );
+        };
+        // (b)
+        let error = send(&front, "probe:ok", "").await.unwrap_err();
+        refused(
+            &error,
+            "`/probe:ok` was not run: the extension `gate` holds a gate on `prompt.submit`",
+        );
+        cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world))
+            .unpin(&TrustResourceKind::Extension, "gate")
+            .unwrap();
+
+        // A turn runs, held at its response.
+        front.prompt("first").await;
+        front
+            .until(|seen| {
+                seen.iter().any(|outgoing| {
+                    matches!(
+                        outgoing,
+                        cineris_core::Outgoing::Event(cineris_protocol::SessionEvent {
+                            event: cineris_protocol::event::Event::TurnStarted(_),
+                            ..
+                        })
+                    )
+                })
+            })
+            .await;
+        let error = send(&front, "probe:peek", "").await.unwrap_err();
+        assert!(
+            error.starts_with(code::COMMAND_FAILED)
+                && error.contains("`/probe:peek` was stopped: "),
+            "{error}"
+        );
+        let denials = core.permission_denials(&front.session);
+        assert!(
+            denials.len() == 1
+                && denials[0]
+                    .summary
+                    .starts_with("The command `/probe:peek` of the project's extension `probe`: "),
+            "{denials:?}"
+        );
+        // (a)
+        let error = send(&front, "probe:ok", "").await.unwrap_err();
+        refused(&error, ": The command `/probe:peek` was stopped: ");
+        assert!(
+            error.contains("The prompt was not sent, so that you can look first."),
+            "{error}"
+        );
+        front.drain();
+        assert!(
+            front
+                .notices()
+                .iter()
+                .any(|notice| notice.starts_with("The command `/probe:peek` was stopped: ")),
+            "{:?}",
+            front.notices()
+        );
+        // (c)
+        let error = send(&front, "probe:ok", "").await.unwrap_err();
+        refused(
+            &error,
+            "`/probe:ok` was not run: the running turn was stopped.",
+        );
+        held.open();
+        front.turns(1).await;
+        assert_eq!(
+            front.ends()[0].outcome,
+            cineris_protocol::event::TurnOutcome::Denied,
+            "{:?}",
+            front.ends()
+        );
+        send(&front, "probe:ok", "").await.unwrap();
+        front.turns(2).await;
+        assert!(last_prompt(&front).0.ends_with("\n\ngo on"));
+
+        let error = send(&front, "probe:keep", "").await.unwrap_err();
+        assert!(error.contains("gave no text to send"), "{error}");
+        let error = send(&front, "probe:write", "").await.unwrap_err();
+        assert!(
+            error.starts_with(code::COMMAND_FAILED)
+                && error.contains("`cineris.fs.write` works only in a tool call"),
+            "{error}"
+        );
+
+        // Behind the extension's tool, its runtime's one call at a time.
+        front.prompt("spin").await;
+        world.timer.sleeping_for(Duration::from_secs(97)).await;
+        let runs = cineris_testkit::Hold::new(cineris_core::A_SCRIPT_COMMAND_RUNS);
+        let mut sent = std::pin::pin!(send(&front, "probe:ok", ""));
+        runs.drive_until_reached(sent.as_mut()).await;
+        runs.release();
+        drop(runs);
+        let own = Duration::from_secs(30);
+        for _ in 0..64 {
+            if world.timer.running().contains(&own) {
+                break;
+            }
+            assert!(
+                crate::poll_once(sent.as_mut()).await.is_pending(),
+                "it ended before its time"
+            );
+        }
+        assert!(
+            world.timer.running().contains(&own),
+            "its time did not run from when it was asked: {:?}",
+            world.timer.running()
+        );
+        world.timer.advance(own);
+        let error = sent.await.unwrap_err();
+        assert!(
+            error.contains("`/probe:ok` did not end within its 30 s"),
+            "{error}"
+        );
+        // Withdrawn, never started: the tool goes on until it is stopped.
+        assert!(world.timer.running().contains(&Duration::from_secs(97)));
+        front.interrupt(false).await;
+        front.turns(3).await;
+        front.close().await;
+        let records: Vec<serde_json::Value> = front
+            .log(&world)
+            .into_iter()
+            .filter(|entry| entry["kind"] == "ext")
+            .collect();
+        assert!(
+            records.len() == 1
+                && records[0]["data"]["state"]["key"] == "kept"
+                && records[0]["turn"].is_null(),
+            "{records:?}"
+        );
+    });
+    assert_eq!(world.read("out.txt"), None);
 }

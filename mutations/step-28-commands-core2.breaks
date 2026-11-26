@@ -1,0 +1,109 @@
+# Step 28, its third pull request's first part: custom commands, the core's
+# guards of an extension's command, a second part. Where a command runs
+# nothing (a stop left for the next prompt, a gate held on `prompt.submit`,
+# the running turn stopped), where its own stop goes, its time from when it
+# is asked, its session values of no turn, whose its question says it is,
+# and its `cineris.fs.write`, broken one at a time, with the tests that must
+# fail.
+
+[break] a-command-runs-past-a-stop-left-for-the-next-prompt
+rule: An extension's command is not run while a stop waits for the next prompt: it is refused with the stop, which it takes.
+file: crates/cineris-core/src/commands.rs
+in: run_script
+find: hooks.commands.take_stop()
+replace: None::<String>
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+[break] a-command-runs-past-a-held-prompt-gate
+rule: An extension's command is not run while a gate on `prompt.submit` is held, which would refuse what it sends.
+file: crates/cineris-core/src/commands.rs
+in: run_script
+find: hooks.prompt_gate_held()
+replace: None::<String>
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+[break] a-command-runs-while-the-running-turn-is-stopped
+rule: An extension's command is not run while the turn running is stopped.
+file: crates/cineris-core/src/commands.rs
+in: run_script
+find: policy.stopped_for_hooks(running_number)
+replace: None::<String>
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+[break] a-commands-own-stop-is-not-the-sessions
+rule: A command's own stop (a question answered with a stop) is told, and refuses the next prompt once, as a hook's stop of no turn does.
+file: crates/cineris-core/src/commands.rs
+in: run_script
+find: hooks.commands.command_stopped(&shown, &note);
+replace: let _ = (&shown, &note);
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+[break] a-commands-time-runs-from-its-start
+rule: A command's 30 s run from when it is asked: its wait behind its extension's other call is within them.
+file: crates/cineris-core/src/ext/tools.rs
+in: LoadedExtension::call_command
+find: asked: Some(asked)
+replace: asked: Some(asked).filter(|_| false)
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+[break] a-commands-session-value-names-a-turn
+rule: A command's `cineris.state` session value is recorded as of no turn.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::state_set
+find: .filter(|_| self.phase != Phase::Command)
+replace: .filter(|_| true)
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+[break] a-projects-command-asks-as-yours
+rule: What a command of a project's extension asks says it is the project's extension's.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::asker
+in-string: the project's
+replace: your
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+[break] a-users-command-is-not-said-to-be-theirs
+rule: What a command of the user's own extension asks says it is theirs.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::asker
+in-string: your
+replace: the user's
+caught-by:
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] a-commands-question-does-not-say-whose
+rule: A command's question (`question/ask`) begins with the command and whose it is.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::ask
+in-string: asks: {question}
+replace: {question}
+caught-by:
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] a-commands-approval-does-not-say-whose
+rule: A command's approval (`approval/request`'s summary) begins with the command and whose it is.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::decide
+in-string: {asker}: {summary}
+replace: {summary} ({asker})
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] a-command-may-write
+rule: `cineris.fs.write` is refused in a command, whatever its manifest lets it write: a command runs outside any round, which would record the change.
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: if phase != Phase::Tool {
+replace: if phase == Phase::Hook {
+packages: cineris-ext, cineris-core
+caught-by:
+    cineris-ext::it serve::a_hook_cannot_put_a_question_and_only_a_tool_call_writes
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
