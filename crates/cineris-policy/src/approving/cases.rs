@@ -2014,4 +2014,6 @@ pub const CASES: &[(&str, &[ShellSyntax], bool)] = &[
     ("yash -c cin", &[Posix], true),
     ("python3 -Ic 'os.system(\"cin\")'", &[Posix], true),
     ("ruby -we 'exec(\"cin\")'", &[Posix], true),
+    // An `awk` program with no blank in it, past an option's value.
+    ("awk -v x=1 'BEGIN{system(\"cin\")}'", &[Posix], true),
 ];
