@@ -789,6 +789,35 @@ fn a_reply_split_after_its_escape_never_goes_into_the_key() {
     );
 }
 
+/// An `Esc` the terminal held, pressed in the key step's grace and read
+/// once the step takes keys, does not go back: a step judges a key by when
+/// it was pressed (the full review of small fixes II).
+#[test]
+fn an_escape_pressed_in_the_key_steps_grace_and_read_later_does_not_go_back() {
+    let mut setup = fake();
+    setup.providers.providers[0].variable = None;
+    let mut run = Run::new(setup);
+    let _ = run.ready();
+    run.key("enter");
+    run.now += Duration::from_secs(2);
+    let _ = run.frame();
+    let pressed = run.now + Duration::from_millis(100);
+    run.now += Duration::from_millis(1500);
+    let live = run.frame();
+    assert!(
+        live.iter().any(|row| row.contains("0 characters, hidden")),
+        "{live:#?}"
+    );
+    let esc = cineris_term::Event::Key(crate::keys::parse("esc").expect("a key"));
+    run.app.terminal_pressed(&esc, pressed, run.now);
+    let live = run.frame();
+    assert!(
+        live.iter()
+            .any(|row| row.contains("Paste or type the key for anthropic")),
+        "{live:#?}"
+    );
+}
+
 /// A store that refuses says why and keeps the step; `Esc` goes back to
 /// the providers with nothing kept.
 #[test]

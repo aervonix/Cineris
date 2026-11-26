@@ -1296,6 +1296,28 @@ fn tab_reads_the_transcript_under_a_dialog_and_nothing_read_answers_it() {
     assert_eq!(approvals(&link), 1, "a key after the quiet answers");
 }
 
+/// A `Tab` the terminal held, pressed in the dialog's grace and read once
+/// it takes keys, does not start reading the transcript: it is judged when
+/// it was pressed (the full review of small fixes II).
+#[test]
+fn a_tab_pressed_in_the_grace_and_read_after_it_does_not_start_reading() {
+    use std::time::Duration;
+
+    let now = Instant::now();
+    let (mut app, link) = long_session(Presenter::Fullscreen, 2, now);
+    let asked = now + Duration::from_secs(5);
+    crate::testkit::ask(&mut app, &link, 7, crate::testkit::approval("c_7"), asked);
+    let ready = dialog_wake(&mut app);
+    let read = ready + Duration::from_millis(50);
+    let tab = TermEvent::Key(crate::keys::parse("tab").expect("a key"));
+    app.terminal_pressed(&tab, asked + Duration::from_millis(50), read);
+    let rows = text(&app.screen_frame(read).0);
+    assert!(
+        !rows.iter().any(|row| row.contains("tab goes back")),
+        "{rows:#?}"
+    );
+}
+
 /// `Tab` before the dialog takes keys is not reading: it goes where it was
 /// going, and the dialog is answered as usual once ready (the focused review
 /// of step 25).
