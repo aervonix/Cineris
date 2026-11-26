@@ -152,7 +152,6 @@ One line an item: what it covers and who settles it. It is the place to look fir
 
 ### cineris-term
 
-- [a-late-keyboard-reply-is-typed-into-the-prompt-on-windows](a-late-keyboard-reply-is-typed-into-the-prompt-on-windows.md): A system test of the interactive application timed out once on a hosted Windows runner, on `main`'s tree, because the terminal's late answer to the start-up query of the keyboard protocol was read as typed text and put in the prompt before the key the test sent. Owner: the maintainers, a small-fix session.
 - [a-terminals-reply-typed-into-the-input-box-on-a-busy-windows-machine](a-terminals-reply-typed-into-the-input-box-on-a-busy-windows-machine.md): On a busy Windows machine a reply from the terminal can come slower than the 500 ms the decoder waits for it, and then `[?0u` is typed into the input box as if the user had typed it; one CI flake, and a product bug. Owner: step 32.
 - [function-keys-through-conpty](function-keys-through-conpty.md): A function key sent to the application through the test kit's pseudo-console on a hosted Windows runner never reached it as that key; whether a real Windows Terminal is affected is not known. Owner: step 25.
 - [input-decoder-corners](input-decoder-corners.md): `sys::unix::wait` and `sys::windows::wait` restart their timeout after an interrupted call, stale wake or key release. Owner: step 32.
