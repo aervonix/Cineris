@@ -273,8 +273,7 @@ fn places_on_the_way(path: &Path) -> Option<Vec<PathBuf>> {
                 let next = here.join(&name);
                 let directory = std::fs::canonicalize(&here).unwrap_or_else(|_| here.clone());
                 places.push(directory.join(&name));
-                let is_link = std::fs::symlink_metadata(&next)
-                    .is_ok_and(|metadata| metadata.file_type().is_symlink());
+                let is_link = crate::path::is_link(&next).unwrap_or(false);
                 if is_link {
                     links += 1;
                     if links > MOST_LINKS {

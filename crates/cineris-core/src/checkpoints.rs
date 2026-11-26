@@ -346,7 +346,7 @@ fn reached_through_a_link(root: &AbsPath, file: &AbsPath) -> bool {
     let mut walked = top.clone();
     below.components().any(|part| {
         walked.push(part);
-        std::fs::symlink_metadata(&walked).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        cineris_base::path::is_link(&walked).unwrap_or(false)
     })
 }
 
