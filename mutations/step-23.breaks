@@ -76,7 +76,7 @@ caught-by:
 rule: Typing that carries on through a dialog's arrival never answers it: since the review of step 23 each key it does not take holds it a quiet second (the pause since the key before it was folded into that).
 file: crates/cineris-tui/src/app/ready.rs
 in: Readiness::ready_at
-find: Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
+find: Some(self.typed.map_or(ready, |typed| ready.max(typed + scaled(QUIET))))
 replace: Some(ready)
 caught-by:
     app::tests::typing_that_goes_on_past_the_grace_never_answers_a_dialog
