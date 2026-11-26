@@ -403,19 +403,15 @@ fn find_all(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
 /// the variable that makes the harness's mark of its sessions' commands
 /// fail (`cineris_base::hook::mark_fails`), for the tests of what a harness
 /// does then (step 28's third pull request): a shipped binary that holds it
-/// is one a variable could hold at `supervised`. And the name of the
-/// variable that chooses how the approving subcommands' check lists the
-/// harnesses' jobs on Windows (`cineris_base::hook::session_listing`), for
-/// the tests of its two routes: a shipped binary that holds it is one a
-/// variable could make list nothing, and miss a harness that is not on its
-/// line of parents.
+/// is one a variable could hold at `supervised`. (The switches of the
+/// Windows check's own tests, how it lists the harnesses' jobs and whether
+/// a test binary counts as Cineris's, are read only in `cineris-sandbox`'s
+/// test build, under `#[cfg(test)]`, so no binary built from the workspace
+/// holds them: since step 28's third pull request, which had the first of
+/// them among these before.)
 /// A test holds them to the hook's own constants, which `xtask` reaches
 /// only in its tests.
-const TEST_HOOK_MARKS: [&str; 3] = [
-    "CINERIS_TEST_READY_DIVISOR",
-    "CINERIS_TEST_MARK_FAILS",
-    "CINERIS_TEST_SESSION_LISTING",
-];
+const TEST_HOOK_MARKS: [&str; 2] = ["CINERIS_TEST_READY_DIVISOR", "CINERIS_TEST_MARK_FAILS"];
 
 /// The marks of [`TEST_HOOK_MARKS`] that `bytes` holds.
 pub(crate) fn test_hooks_in(bytes: &[u8]) -> Vec<&'static str> {
@@ -611,11 +607,7 @@ mod tests {
         // The hook's own name, which a test of the binary sets.
         assert_eq!(
             super::TEST_HOOK_MARKS,
-            [
-                cineris_testkit::READY_DIVISOR,
-                cineris_testkit::MARK_FAILS,
-                cineris_testkit::SESSION_LISTING
-            ]
+            [cineris_testkit::READY_DIVISOR, cineris_testkit::MARK_FAILS]
         );
     }
 

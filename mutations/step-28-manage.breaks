@@ -1268,11 +1268,11 @@ caught-by:
     cineris-sandbox session::sys::tests::sys_a_job_that_lets_its_processes_leave_is_told
 
 [break] session-windows-denied-job-taken-for-none
-rule: On Windows a harness's job that cannot be opened, for any reason but there being none, is not known, which refuses.
+rule: On Windows a harness's job that cannot be opened, for any reason but there being none, is not known, which refuses (when the process it is named for is Cineris).
 os: windows
 file: crates/cineris-sandbox/src/session.rs
 in: in_the_job_of
-find: if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() || !harness() {
+find: if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() {
 replace: if true {
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_harnesss_job_that_cannot_be_opened_is_not_known
@@ -1718,10 +1718,10 @@ caught-by:
 rule: On Windows the jobs of the processes of the line of parents are asked first, each by its name, before anything is listed: a session's command's own harness is found there whatever a listing misses.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: for parent in super::parents(own, lineage) {
-replace: for parent in super::parents(own, lineage).into_iter().take(0) {
+find: let parents = super::parents(own, lineage);
+replace: let parents = super::parents(own, lineage).into_iter().take(0).collect::<Vec<_>>();
 caught-by:
-    cineris-sandbox::it session::sys_a_harness_on_the_line_of_parents_is_found_with_nothing_listed
+    cineris-sandbox session::sys::tests::sys_a_harness_on_the_line_of_parents_is_found_with_nothing_listed
 
 [break] session-line-of-parents-stops-at-other-programs
 rule: The line of parents whose jobs are asked first is read through any program, not only the interpreters a service's start is followed through: a harness's command may run under `make` or a test runner.
@@ -1740,6 +1740,71 @@ find: if process.made > below.made {
 replace: if process.made > below.made && false {
 caught-by:
     cineris-sandbox session::tests::the_line_of_parents_is_read_through_any_program_to_its_end
+
+# A Windows flake (2 of 100 stress repeats): a test's job made to deny its
+# opening, named for its own process, made another test's check, run while
+# it stood, refuse.
+
+[break] session-job-not-known-wins-over-one-that-holds
+rule: Being in a harness's job wins over another harness's job that cannot be told, met first: both refuse, and only the reason changes.
+file: crates/cineris-sandbox/src/session.rs
+in: judged
+occurrence: 2
+find: Job::Unknown(what) => { unknown.get_or_insert(what); }
+replace: Job::Unknown(what) => return Under::Unknown(what),
+caught-by:
+    cineris-sandbox session::tests::being_in_a_harnesss_job_wins_over_another_job_that_cannot_be_told
+
+[break] session-windows-other-programs-denied-job-not-known
+rule: On Windows a job of a harness's name that cannot be opened, named for a process that is not Cineris, is passed over: a job made to deny its opening for any other running program does not make the check refuse.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: in_the_job_of
+find: NamedFor::Other => Job::None
+replace: NamedFor::Other => Job::Unknown(cannot)
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_that_cannot_be_opened_named_for_another_program_is_passed_over
+
+[break] session-windows-cineris-denied-job-passed-over
+rule: On Windows a job of a harness's name that cannot be opened, named for a process of Cineris, is not known, which refuses.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: in_the_job_of
+find: NamedFor::Cineris => Job::Unknown(cannot)
+replace: NamedFor::Cineris => Job::None
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_harnesss_job_that_cannot_be_opened_is_not_known
+
+[break] session-windows-owner-may-change-the-job
+rule: On Windows the harness's job's owner may only ask about it, as its user may: the harness's own handle of the job then has no right to change who may open it, so a command that takes that handle cannot make the job unopenable.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: OwnerOnly::new
+find: ACL_REVISION, BY_NAME, owner_sid
+replace: ACL_REVISION, 0x001F_001F, owner_sid
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_command_cannot_make_its_harnesss_job_unopenable
+    cineris-sandbox session::sys::tests::sys_the_jobs_security_is_its_text
+
+[break] session-windows-copy-taken-for-the-same-file
+rule: On Windows a program is Cineris by this very file, its volume and its index, or by its file's name: a renamed copy of the binary is another file, and is not.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: cineris
+find: own.file.is_some_and(|own| FileIdentity::at(image).ok() == Some(own))
+replace: own.file.is_some_and(|own| FileIdentity::at(image).is_ok())
+caught-by:
+    cineris-sandbox session::sys::tests::sys_cineris_is_told_by_its_file_or_by_its_name
+
+[break] session-windows-names-not-told
+rule: On Windows a program whose file is named `cineris.exe` or `cin.exe`, in any case and wherever it is installed, is Cineris.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: cineris
+find: name == "cineris.exe" || name == "cin.exe" ||
+replace: false ||
+caught-by:
+    cineris-sandbox session::sys::tests::sys_cineris_is_told_by_its_file_or_by_its_name
 
 [break] unmarked-headless-run-not-held
 rule: A headless run whose mark of its sessions' commands failed holds its session at `supervised` at most, whatever its configuration says.
