@@ -58,8 +58,8 @@ use windows_sys::Win32::Storage::FileSystem::{
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_REPARSE_POINT,
     FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_ID_128,
     FILE_ID_INFO, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FileAttributeTagInfo,
-    FileIdInfo, GetFileAttributesW, GetFileInformationByHandle, GetFileInformationByHandleEx,
-    INVALID_FILE_ATTRIBUTES, READ_CONTROL,
+    FileIdInfo, GetDriveTypeW, GetFileAttributesW, GetFileInformationByHandle,
+    GetFileInformationByHandleEx, INVALID_FILE_ATTRIBUTES, READ_CONTROL,
 };
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -539,6 +539,50 @@ pub(crate) fn attributes(path: &Path) -> io::Result<Attributes> {
     Ok(Attributes(found))
 }
 
+/// Whether `path` names a place on one of this machine's own fixed disks:
+/// a drive letter, plain (`C:\…`) or in the extended-length form
+/// (`\\?\C:\…`), whose root Windows reports as a fixed disk
+/// (`GetDriveTypeW`). A share, a mapped network drive, a drive Windows
+/// reports as anything else, and a path that names no drive, are not.
+///
+/// [`attributes`] is asked only there: on a share a name's attributes may
+/// be what the system's network client kept from an earlier look (an SMB
+/// client keeps them up to ten seconds), where opening the name asks the
+/// server (found by the early review of CI budgets II). A letter found to be
+/// a fixed disk is remembered for the life of the process: a fixed disk's
+/// letter is not given to a network drive while the disk is there.
+pub(crate) fn on_a_fixed_disk(path: &Path) -> bool {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    /// What `GetDriveTypeW` returns for a fixed disk, `DRIVE_FIXED`.
+    const DRIVE_FIXED: u32 = 3;
+    static FIXED: [AtomicBool; 26] = [const { AtomicBool::new(false) }; 26];
+    let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    let verbatim: Vec<u16> = r"\\?\".encode_utf16().collect();
+    let rest = wide.strip_prefix(verbatim.as_slice()).unwrap_or(&wide);
+    let [letter, colon, separator, ..] = rest else {
+        return false;
+    };
+    let letter = match u8::try_from(*letter) {
+        Ok(letter) if letter.is_ascii_alphabetic() => letter.to_ascii_uppercase(),
+        _ => return false,
+    };
+    if *colon != u16::from(b':') || ![u16::from(b'\\'), u16::from(b'/')].contains(separator) {
+        return false;
+    }
+    let index = usize::from(letter - b'A');
+    if FIXED[index].load(Ordering::Relaxed) {
+        return true;
+    }
+    let root = [u16::from(letter), u16::from(b':'), u16::from(b'\\'), 0];
+    // SAFETY: `root` is a zero-terminated UTF-16 string, alive for the
+    // call, which only reads it.
+    let fixed = unsafe { GetDriveTypeW(root.as_ptr()) } == DRIVE_FIXED;
+    if fixed {
+        FIXED[index].store(true, Ordering::Relaxed);
+    }
+    fixed
+}
+
 /// What [`attributes`] read.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Attributes(u32);
@@ -796,6 +840,28 @@ mod tests {
             ),
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The attributes are asked only on one of the machine's own fixed
+    /// disks: never of a share, a device or a path with no drive, where a
+    /// network client may answer from what it kept.
+    #[test]
+    fn only_a_path_on_a_fixed_disk_has_its_attributes_read() {
+        let system = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_owned());
+        for fixed in [format!("{system}\\"), format!("\\\\?\\{system}\\Windows")] {
+            assert!(on_a_fixed_disk(Path::new(&fixed)), "{fixed}");
+        }
+        for not in [
+            r"\\server\share\file.txt",
+            r"\\?\UNC\server\share\file.txt",
+            r"\\.\NUL",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\file.txt",
+            r"relative\file.txt",
+            r"C:relative.txt",
+            "",
+        ] {
+            assert!(!on_a_fixed_disk(Path::new(not)), "{not}");
+        }
     }
 
     #[test]
