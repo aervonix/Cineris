@@ -181,6 +181,9 @@ pub(crate) enum Command {
     Stats(StatsCommand),
     /// `cineris project …`
     Project(ProjectCommand),
+    /// `cineris ext …`: the user's extensions and the project's (since step
+    /// 28).
+    Ext(ExtCommand),
     /// `cineris serve …`: the RPC server (step 27).
     Serve(Box<Serve>),
     /// `cineris attach …`: the interactive application on a running server
@@ -300,6 +303,26 @@ pub(crate) enum ProjectCommand {
     Path,
 }
 
+/// `cineris ext …`: list, inspect, disable, remove and add extensions
+/// (since step 28's third pull request).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ExtCommand {
+    /// `list`, or nothing: the user's extensions and the project's, each
+    /// with its standing, and the skills.
+    List,
+    /// `inspect NAME`
+    Inspect { name: String },
+    /// `disable NAME`: `[extensions.<name>] enabled = false` in the user's
+    /// configuration.
+    Disable { name: String },
+    /// `remove NAME [--yes]`: unpinned, and its folder deleted on a yes at a
+    /// terminal, or with `--yes` where there is none to ask at.
+    Remove { name: String, yes: bool },
+    /// `add PATH [--yes]`: shown, and approved on a yes at a terminal, or
+    /// with `--yes` where there is none to ask at.
+    Add { path: String, yes: bool },
+}
+
 /// `cineris usage [--range R] [--by G]… [--project KEY] [--json] [--refresh]`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct UsageCommand {
@@ -337,6 +360,7 @@ pub(crate) enum Topic {
     Usage,
     Stats,
     Project,
+    Ext,
     Serve,
     Attach,
 }
@@ -510,6 +534,7 @@ pub(crate) fn parse(arguments: Vec<OsString>) -> Result<Command, UsageError> {
             "usage" => Some(Topic::Usage),
             "stats" => Some(Topic::Stats),
             "project" => Some(Topic::Project),
+            "ext" => Some(Topic::Ext),
             "serve" => Some(Topic::Serve),
             "attach" => Some(Topic::Attach),
             _ => None,
@@ -808,6 +833,9 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
     if topic == Topic::Project {
         return project(parser);
     }
+    if topic == Topic::Ext {
+        return ext(parser);
+    }
     let Some(first) = parser.next()? else {
         return Ok(Command::Help(topic));
     };
@@ -828,6 +856,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
                 Topic::Usage => "usage",
                 Topic::Stats => "stats",
                 Topic::Project => "project",
+                Topic::Ext => "ext",
                 Topic::Serve => "serve",
                 Topic::Attach => "attach",
                 Topic::Main => "",
@@ -949,6 +978,7 @@ fn subcommand(topic: Topic, parser: &mut Parser) -> Result<Command, UsageError> 
         | Topic::Usage
         | Topic::Stats
         | Topic::Project
+        | Topic::Ext
         | Topic::Serve
         | Topic::Attach => Err(wrong(&action)),
     }
@@ -1083,6 +1113,53 @@ fn project(parser: &mut Parser) -> Result<Command, UsageError> {
         }
     };
     Ok(Command::Project(parsed))
+}
+
+/// `cineris ext …`
+fn ext(parser: &mut Parser) -> Result<Command, UsageError> {
+    let help = Ok(Command::Help(Topic::Ext));
+    let action = match parser.next()? {
+        None => return Ok(Command::Ext(ExtCommand::List)),
+        Some(Arg::Short('h') | Arg::Long("help")) => return help,
+        Some(Arg::Value(action)) => action.string()?,
+        Some(other) => return Err(unexpected(&other)),
+    };
+    let mut yes = false;
+    let mut words: Vec<String> = Vec::new();
+    while let Some(argument) = parser.next()? {
+        match argument {
+            Arg::Short('h') | Arg::Long("help") => return help,
+            Arg::Long("yes") if action == "add" || action == "remove" => yes = true,
+            Arg::Value(word) => words.push(word.string()?),
+            other => return Err(unexpected(&other)),
+        }
+    }
+    let one = |what: &str| {
+        <[String; 1]>::try_from(words.clone())
+            .map(|[word]| word)
+            .map_err(|_| UsageError(format!("'ext {action}' takes {what}")))
+    };
+    let parsed = match action.as_str() {
+        "list" if words.is_empty() => ExtCommand::List,
+        "inspect" => ExtCommand::Inspect {
+            name: one("an extension's name")?,
+        },
+        "disable" => ExtCommand::Disable {
+            name: one("an extension's name")?,
+        },
+        "remove" => ExtCommand::Remove {
+            name: one("an extension's name")?,
+            yes,
+        },
+        "add" => ExtCommand::Add {
+            path: one("the folder of the extension")?,
+            yes,
+        },
+        other => {
+            return Err(UsageError(format!("'{other}' is not a subcommand of 'ext'")));
+        }
+    };
+    Ok(Command::Ext(parsed))
 }
 
 /// `cineris usage …`
@@ -1406,6 +1483,57 @@ mod tests {
                 &["project", "forget"],
                 "'forget' is not a subcommand of 'project'",
             ),
+        ] {
+            let Err(UsageError(message)) = parse_words(words) else {
+                panic!("{words:?} was read");
+            };
+            assert!(message.contains(says), "{words:?}: {message}");
+        }
+    }
+
+    /// `ext` reads its five subcommands; `--yes` only where something is
+    /// approved or deleted; each takes one word.
+    #[test]
+    fn ext_reads_its_subcommands_and_says_what_each_takes() {
+        assert_eq!(parse_words(&["ext"]), Ok(Command::Ext(ExtCommand::List)));
+        assert_eq!(
+            parse_words(&["ext", "list"]),
+            Ok(Command::Ext(ExtCommand::List))
+        );
+        assert_eq!(
+            parse_words(&["ext", "inspect", "tracker"]),
+            Ok(Command::Ext(ExtCommand::Inspect {
+                name: "tracker".to_owned()
+            }))
+        );
+        assert_eq!(
+            parse_words(&["ext", "disable", "acme.lint"]),
+            Ok(Command::Ext(ExtCommand::Disable {
+                name: "acme.lint".to_owned()
+            }))
+        );
+        assert_eq!(
+            parse_words(&["ext", "remove", "--yes", "tracker"]),
+            Ok(Command::Ext(ExtCommand::Remove {
+                name: "tracker".to_owned(),
+                yes: true
+            }))
+        );
+        assert_eq!(
+            parse_words(&["ext", "add", "./tracker"]),
+            Ok(Command::Ext(ExtCommand::Add {
+                path: "./tracker".to_owned(),
+                yes: false
+            }))
+        );
+        assert_eq!(parse_words(&["ext", "-h"]), Ok(Command::Help(Topic::Ext)));
+        for (words, says) in [
+            (&["ext", "inspect"][..], "takes an extension's name"),
+            (&["ext", "add"], "takes the folder"),
+            (&["ext", "add", "a", "b"], "takes the folder"),
+            (&["ext", "disable", "--yes", "x"], "unexpected argument '--yes'"),
+            (&["ext", "list", "x"], "'list' is not a subcommand"),
+            (&["ext", "install", "x"], "'install' is not a subcommand of 'ext'"),
         ] {
             let Err(UsageError(message)) = parse_words(words) else {
                 panic!("{words:?} was read");
