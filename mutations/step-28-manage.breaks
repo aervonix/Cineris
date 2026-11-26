@@ -536,8 +536,37 @@ caught-by:
 rule: On Windows a headless run joins the job of sessions' commands before it starts any process.
 os: windows
 file: crates/cineris-cli/src/headless.rs
-find: let unmarked = crate::mark_sessions();
-replace: let unmarked: Option<String> = None;
+in: standing
+find: Ok((capped, crate::mark_sessions()))
+replace: Ok((capped, None))
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] headless-core-starts-before-its-standing
+rule: A headless run's core starts only once its standing is known (since step 28's third pull request it is asked on a thread of its own beside the start): under a session's command the run is held to `read-only` from its core's start.
+file: crates/cineris-cli/src/headless.rs
+in: core_thread
+find: match plan.standing.wait(plan.name) {
+replace: match Ok::<_, u8>((false, None::<String>)) {
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] headless-refused-run-goes-on
+rule: A headless run refused under a session's command ends before its core starts, and reads none of the configuration its moved stores name: the refusal is all it says.
+file: crates/cineris-cli/src/headless.rs
+in: core_thread
+find: Err(code) => return code
+replace: Err(_) => {}
+caught-by:
+    cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
+
+[break] headless-early-end-said-before-its-refusal
+rule: A headless run refused under a session's command says that, and not what else would have ended it before its core: an end before the core waits for its standing.
+file: crates/cineris-cli/src/headless.rs
+in: run
+find: let refused = || standing.borrow_mut().wait(name).err();
+replace: let refused = || None::<u8>;
 caught-by:
     cineris-cli::system nested::sys_cineris_run_by_a_sessions_command_is_held_or_refused
 
@@ -1222,10 +1251,12 @@ caught-by:
 rule: On Windows the harness's job may be opened by its name, by its user and its owner, only to ask about it.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: "D:P(A;;0x{BY_NAME:x};;;{})(A;;0x{BY_NAME:x};;;OW)"
-replace: "D:P(A;;GA;;;{})(A;;GA;;;OW)"
+in: OwnerOnly::new
+find: ACL_REVISION, BY_NAME, user_sid
+replace: ACL_REVISION, 0x001F_001F, user_sid
 caught-by:
     cineris-sandbox session::sys::tests::sys_the_harnesss_job_is_open_by_its_name_only_to_ask
+    cineris-sandbox session::sys::tests::sys_the_jobs_security_is_its_text
 
 [break] session-windows-leaving-not-told
 rule: On Windows a job that lets the processes in it leave is told, and the mark refuses it.
@@ -1240,7 +1271,8 @@ caught-by:
 rule: On Windows a harness's job that cannot be opened, for any reason but there being none, is not known, which refuses.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() {
+in: in_the_job_of
+find: if error.raw_os_error() == i32::try_from(ERROR_FILE_NOT_FOUND).ok() || !harness() {
 replace: if true {
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_harnesss_job_that_cannot_be_opened_is_not_known
@@ -1249,8 +1281,8 @@ caught-by:
 rule: On Linux a process is Cineris by this very file, or by its name and its file's name together, never by its name alone.
 os: linux
 file: crates/cineris-sandbox/src/session.rs
-find: let cineris = same_binary(pid) || (named(name) && file_named(pid));
-replace: let cineris = same_binary(pid) || named(name);
+find: let cineris = same_binary(own, pid) || (named(own, name) && file_named(own, pid));
+replace: let cineris = same_binary(own, pid) || named(own, name);
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_program_named_cin_that_is_another_is_not_cineris
 
@@ -1570,10 +1602,50 @@ caught-by:
 rule: On Windows a running harness of the user's, whose job a process outside it finds, says when harnesses began, which a service's start is weighed against.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made)))
-replace: Job::Elsewhere => {}
+find: began = Some(began.map_or(process.made, |began| began.min(process.made)));
+replace: let _ = began;
 caught-by:
     cineris-sandbox::it session::sys_a_service_hosts_start_after_a_harness_began_is_under_a_session
+
+[break] session-linux-a-name-not-utf8-read-as-another
+rule: On Linux a process of the line whose `stat` is not UTF-8 leaves the line not known, which refuses: its `stat` read in one call keeps the strict reading that `read_to_string` made, so a copy of the harness under such a name does not pass for another program.
+os: linux
+file: crates/cineris-sandbox/src/session.rs
+in: stat_of
+find: String::from_utf8(text).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+replace: Ok(String::from_utf8_lossy(&text).into_owned())
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_name_that_is_not_utf8_leaves_the_line_not_known
+
+[break] session-windows-list-misreads-when-a-process-was-made
+rule: On Windows the system's list of processes, read in one call, gives each process when it was made as `GetProcessTimes` does: a harness's job is named for that count, so a misread one would find no harness.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: records
+find: made.copy_from_slice(&entry.Reserved1[24..32]);
+replace: made.copy_from_slice(&entry.Reserved1[16..24]);
+caught-by:
+    cineris-sandbox session::sys::tests::sys_the_list_of_processes_gives_each_when_it_was_made
+    cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
+
+[break] session-windows-scheduler-asked-always
+rule: On Windows the service manager is asked which host runs the task scheduler only where a line of parents reaches a service host: a headless run's line from a terminal or a runner's step asks it nothing at its start.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: let asked = (name == "svchost.exe").then(&scheduler);
+replace: let asked = Some(scheduler()).filter(|_| name == "svchost.exe");
+caught-by:
+    cineris-sandbox session::tests::the_scheduler_is_asked_only_where_the_line_reaches_a_service_host
+
+[break] session-windows-job-security-inherits
+rule: On Windows the harness's job's security is protected, as its text's `P` made it: nothing is inherited into it.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: OwnerOnly::new
+find: failed(SetSecurityDescriptorControl(pointer, SE_DACL_PROTECTED, SE_DACL_PROTECTED))?;
+replace: failed(SetSecurityDescriptorControl(pointer, SE_DACL_PROTECTED, 0))?;
+caught-by:
+    cineris-sandbox session::sys::tests::sys_the_jobs_security_is_its_text
 
 [break] unmarked-headless-run-not-held
 rule: A headless run whose mark of its sessions' commands failed holds its session at `supervised` at most, whatever its configuration says.
