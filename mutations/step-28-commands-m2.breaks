@@ -1,0 +1,65 @@
+# Step 28, its third pull request's first part: custom commands, the
+# second review's fixes (a command sent through a lane that its session's
+# close did not reach, a command's question still open when the running
+# turn stops, an interrupt's own step that reached commands sent after it,
+# a sent command's run left on the session by a step refused before it
+# began, and a command of an extension not loaded refused with why),
+# broken one at a time, with the tests that must fail.
+
+[break] a-sent-commands-token-is-below-one-nothing-holds
+rule: A command sent through a lane has a token of its own below the session's, which its run holds, so that the session's close and the core's shutdown reach it.
+file: crates/cineris-core/src/commands.rs
+in: sent
+find:
+    crate::core::lock(&live.running_commands).push(Running {
+        id,
+        cancel,
+        kill,
+        lane: true,
+    });
+replace:
+    crate::core::lock(&live.running_commands).push(Running {
+        id,
+        cancel: cancel.child(),
+        kill,
+        lane: true,
+    });
+caught-by:
+    cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions
+
+[break] a-commands-host-call-allowed-after-its-turn-stopped-runs
+rule: A command's host call whose question was open when the turn running as it runs was stopped is refused with that stop once it is allowed.
+file: crates/cineris-core/src/ext/host.rs
+in: CallHost::decide
+find: match self.parts.policy.stopped_for_hooks(self.cx.turn) {
+replace: match None::<String> {
+caught-by:
+    cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
+
+[break] an-interrupts-step-stops-commands-sent-after-it
+rule: An interrupt sent through a lane reaches only the commands sent before it: its own step, run in the lane's order, leaves a command sent behind it to run.
+file: crates/cineris-core/src/commands.rs
+in: interrupt
+find: .filter(|run| !run.lane || run.id < before)
+replace: .filter(|_| true)
+caught-by:
+    cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
+
+[break] a-refused-commands-step-leaves-its-run-on-the-session
+rule: A command's step takes the run put on the session as it was sent before anything can refuse it, so that a step refused before it begins leaves nothing that a later command of the same client and call takes.
+file: crates/cineris-core/src/core.rs
+in: Core::handle_op
+find: let live = self.live(&params.session_id)?;
+replace: let live = self.open_for(client, &params.session_id)?;
+caught-by:
+    cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
+
+[break] an-unloaded-extensions-command-is-refused-without-why
+rule: A command of an extension the session found and does not load is refused with why, as the session was told it: changed since it was approved, or not approved.
+file: crates/cineris-core/src/commands.rs
+in: expand
+find: live.command_hooks.scripts.why_not_loaded(extension)
+replace: None::<String>
+caught-by:
+    cineris-core::it commands::a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions

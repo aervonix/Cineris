@@ -45,13 +45,9 @@ pub const A_COMMAND_IS_TAKEN: &str = "core: a command's run is taken";
 /// The time an extension's command has, from when it is asked, whatever its
 /// manifest gives its tools: it runs while the user waits at the prompt,
 /// inside `turn/start`'s step (the maintainers, after the early review of
-/// the commands). At most [`MAX_COMMAND_TIME`].
+/// the commands).
 #[cfg(feature = "scripts")]
 pub(crate) const COMMAND_TIME: std::time::Duration = std::time::Duration::from_secs(30);
-
-/// The most time an extension's command may be given.
-#[cfg(feature = "scripts")]
-pub(crate) const MAX_COMMAND_TIME: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// A point of a `turn/start` that names an extension's command: its token
 /// is on the session, and its script is about to be called (a point a test
@@ -200,28 +196,46 @@ pub(crate) async fn expand(
         ));
     }
     #[cfg(feature = "scripts")]
-    if let Some((extension, command)) = call.name.split_once(':')
-        && let Some(loaded) = found
+    if let Some((extension, command)) = call.name.split_once(':') {
+        match found
             .scripts
             .iter()
             .find(|loaded| loaded.name() == extension)
-        && let Some(definition) = loaded
-            .approved()
-            .registration
-            .commands
-            .iter()
-            .find(|definition| definition.name == command)
-    {
-        let text = run_script(live, run, loaded, definition, &call.args).await?;
-        return Ok((
-            vec![Part::text(text)],
-            PromptCommand {
-                name: call.name.clone(),
-                source: script_source(loaded.approved().source),
-                extension: Some(loaded.name().to_owned()),
-                args: call.args,
-            },
-        ));
+        {
+            Some(loaded) => {
+                if let Some(definition) = loaded
+                    .approved()
+                    .registration
+                    .commands
+                    .iter()
+                    .find(|definition| definition.name == command)
+                {
+                    let text = run_script(live, run, loaded, definition, &call.args).await?;
+                    return Ok((
+                        vec![Part::text(text)],
+                        PromptCommand {
+                            name: call.name.clone(),
+                            source: script_source(loaded.approved().source),
+                            extension: Some(loaded.name().to_owned()),
+                            args: call.args,
+                        },
+                    ));
+                }
+            }
+            // An extension the session found and does not load: why, as the
+            // session was told it (held, changed, turned off, not approved),
+            // in place of a command it does not know (the review of step
+            // 28's commands).
+            None => {
+                if let Some(why) = live.command_hooks.scripts.why_not_loaded(extension) {
+                    return Err(error(
+                        ErrorKind::Usage,
+                        code::COMMAND_REFUSED,
+                        format!("`{shown}` is not sent: {}", first_lower(&why)),
+                    ));
+                }
+            }
+        }
     }
     if let Some(left) = found
         .files
@@ -445,20 +459,36 @@ pub(crate) struct Sent {
     id: u64,
 }
 
+/// A command's run on the session, from when it was sent or its step began
+/// to its step's end: its number, its tokens, and whether its `turn/start`
+/// came through a lane ([`sent`]) or to the core without one.
+pub(crate) struct Running {
+    id: u64,
+    cancel: cineris_base::CancelToken,
+    kill: cineris_base::CancelToken,
+    lane: bool,
+}
+
 /// A command's `turn/start` from `client`, as it is sent, before it waits
 /// for its turn in the client's lane (`Core::early`): its run's tokens are
 /// put on the session now, so that an interrupt sent behind it, while it
 /// waits there, stops it before its step begins (the review of step 28's
-/// commands). Its step takes them ([`Run::taken`]).
+/// commands). Its step takes them ([`Run::taken`]). `cancel` is the run's
+/// own token, below the session's ([`Run`]).
 pub(crate) fn sent(
     live: &Live,
     client: ClientId,
     call: &CommandCall,
-    parent: &cineris_base::CancelToken,
+    cancel: cineris_base::CancelToken,
 ) {
-    let id = RUN_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tokens = (id, parent.child(), cineris_base::CancelToken::new());
-    crate::core::lock(&live.running_commands).push(tokens);
+    let id = RUN_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let kill = cineris_base::CancelToken::new();
+    crate::core::lock(&live.running_commands).push(Running {
+        id,
+        cancel,
+        kill,
+        lane: true,
+    });
     crate::core::lock(&live.sent_commands).push(Sent {
         client,
         call: call.clone(),
@@ -468,11 +498,16 @@ pub(crate) fn sent(
 
 /// One command sent in a `turn/start`, from the top of its step to its
 /// end: its tokens are on the session, so that an interrupt from any client
-/// that may drive the session cancels it at once, whatever it waits for
-/// (another start, the extensions, `session.start`'s hooks, its script,
-/// a question, a program). Each run has tokens of its own: a fresh child
-/// of `parent` (the session's, so that its close stops it), and one that
-/// kills its programs at once, for a second interrupt.
+/// that may drive the session cancels it at once. Its script, a question
+/// and a program end then; a step still waiting before its script (on
+/// another start, the extensions, `session.start`'s hooks) ends when that
+/// wait does, and sends nothing. Each run has tokens of its own: `cancel`, a
+/// child of the session's token made for it and held here, so that the
+/// session's close and the core's shutdown stop it (a token keeps its
+/// children only while something holds them: one made below a token
+/// nothing holds is reached by nothing above it, the review of step 28's
+/// commands, M2); and one that kills its programs at once, for a second
+/// interrupt.
 pub(crate) struct Run<'a> {
     live: &'a Live,
     id: u64,
@@ -481,11 +516,17 @@ pub(crate) struct Run<'a> {
 }
 
 impl<'a> Run<'a> {
-    /// A run of a command in `live`, its tokens put on the session now.
-    pub(crate) fn start(live: &'a Live, parent: &cineris_base::CancelToken) -> Self {
-        let id = RUN_IDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let (cancel, kill) = (parent.child(), cineris_base::CancelToken::new());
-        crate::core::lock(&live.running_commands).push((id, cancel.clone(), kill.clone()));
+    /// A run of a command in `live` whose token is `cancel`, its tokens put
+    /// on the session now.
+    pub(crate) fn start(live: &'a Live, cancel: cineris_base::CancelToken) -> Self {
+        let id = RUN_IDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let kill = cineris_base::CancelToken::new();
+        crate::core::lock(&live.running_commands).push(Running {
+            id,
+            cancel: cancel.clone(),
+            kill: kill.clone(),
+            lane: false,
+        });
         Self {
             live,
             id,
@@ -498,13 +539,18 @@ impl<'a> Run<'a> {
     /// takes it: the one put on the session when it was sent ([`sent`]),
     /// interrupted already if an interrupt came behind it; the first of
     /// that client's that calls the same, since a lane runs a client's
-    /// operations in the order sent. A new one when none was put there: the
-    /// operation came to the core without a lane (headless mode, a test).
+    /// operations in the order sent. A new one, whose token is `cancel`,
+    /// when none was put there: the operation came to the core without a
+    /// lane (headless mode, a test). Taken at the top of the step, before
+    /// anything can refuse it, so that what was put there is let go on
+    /// every way out of the step: one left would be taken by a later
+    /// `turn/start` of the same client and call, interrupted already if an
+    /// interrupt came meanwhile (the review of step 28's commands, L3).
     pub(crate) fn taken(
         live: &'a Live,
         client: ClientId,
         call: &CommandCall,
-        parent: &cineris_base::CancelToken,
+        cancel: cineris_base::CancelToken,
     ) -> Self {
         let sent = {
             let mut sent = crate::core::lock(&live.sent_commands);
@@ -515,8 +561,8 @@ impl<'a> Run<'a> {
         let tokens = sent.and_then(|id| {
             crate::core::lock(&live.running_commands)
                 .iter()
-                .find(|(run, _, _)| *run == id)
-                .map(|(_, cancel, kill)| (id, cancel.clone(), kill.clone()))
+                .find(|run| run.id == id)
+                .map(|run| (id, run.cancel.clone(), run.kill.clone()))
         });
         match tokens {
             Some((id, cancel, kill)) => Self {
@@ -525,7 +571,7 @@ impl<'a> Run<'a> {
                 cancel,
                 kill,
             },
-            None => Self::start(live, parent),
+            None => Self::start(live, cancel),
         }
     }
 
@@ -543,18 +589,47 @@ impl<'a> Run<'a> {
 
 impl Drop for Run<'_> {
     fn drop(&mut self) {
-        crate::core::lock(&self.live.running_commands).retain(|(id, _, _)| *id != self.id);
+        crate::core::lock(&self.live.running_commands).retain(|run| run.id != self.id);
     }
 }
 
-/// Interrupts every command sent in a `turn/start` of `live` whose step has
-/// not ended: running in its step, or sent and waiting in a lane for its
-/// step to begin ([`sent`]). With `now` it kills their programs at once.
-pub(crate) fn interrupt(live: &Live, now: bool) {
-    for (_, cancel, kill) in crate::core::lock(&live.running_commands).iter() {
-        cancel.cancel();
+/// A `turn/interrupt` from `client`, as it is sent through a lane
+/// (`Core::early`): interrupts every command sent in a `turn/start` of
+/// `live` whose step has not ended, running in its step or sent and
+/// waiting in a lane for its step to begin ([`sent`]), and notes where it
+/// was sent among the runs, for its own step ([`cut_of`]).
+pub(crate) fn interrupt_sent(live: &Live, client: ClientId, now: bool) {
+    let before = RUN_IDS.load(std::sync::atomic::Ordering::SeqCst);
+    crate::core::lock(&live.interrupts_sent).push((client, before));
+    interrupt(live, before, now);
+}
+
+/// Where the `turn/interrupt` of `client` whose step this is was sent among
+/// the runs, taken: the number of the first run sent after it. `None` for
+/// one that came to the core without a lane (headless mode, a test), whose
+/// step reaches every command running then. Taken at the top of the step,
+/// before anything can refuse it, so that none is left for a later one.
+pub(crate) fn cut_of(live: &Live, client: ClientId) -> Option<u64> {
+    let mut sent = crate::core::lock(&live.interrupts_sent);
+    sent.iter()
+        .position(|(one, _)| *one == client)
+        .map(|at| sent.remove(at).1)
+}
+
+/// Interrupts every command of `live` sent in a `turn/start` whose step has
+/// not ended, but one sent through a lane at or after the run numbered
+/// `before`: an interrupt's own step, run in the lane's order, leaves a
+/// command sent behind it to run (the review of step 28's commands, L2).
+/// One that came to the core without a lane is reached whatever its number:
+/// no early look reached it. With `now` it kills their programs at once.
+pub(crate) fn interrupt(live: &Live, before: u64, now: bool) {
+    for run in crate::core::lock(&live.running_commands)
+        .iter()
+        .filter(|run| !run.lane || run.id < before)
+    {
+        run.cancel.cancel();
         if now {
-            kill.cancel();
+            run.kill.cancel();
         }
     }
 }
@@ -718,6 +793,19 @@ fn sentence(clause: &str) -> String {
     if !out.ends_with('.') {
         out.push('.');
     }
+    out
+}
+
+/// Sentences that follow a colon: the first letter in lower case, the rest
+/// as they are.
+#[cfg(feature = "scripts")]
+fn first_lower(sentences: &str) -> String {
+    let mut chars = sentences.chars();
+    let mut out: String = chars
+        .next()
+        .map(|first| first.to_lowercase().collect())
+        .unwrap_or_default();
+    out.push_str(chars.as_str());
     out
 }
 

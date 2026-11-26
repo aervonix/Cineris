@@ -423,12 +423,18 @@ pub(crate) struct Live {
     /// behind the step, and a second one kills their programs
     /// (`crate::commands::Run`; step 28). From when it is sent, for one
     /// that came through a lane (`Core::early`).
-    pub(crate) running_commands: Mutex<Vec<(u64, CancelToken, CancelToken)>>,
+    pub(crate) running_commands: Mutex<Vec<crate::commands::Running>>,
     /// Each command's `turn/start` sent through a lane and not yet taken by
     /// its step, by who sent it and what it calls, with its run's number in
     /// `running_commands` (`crate::commands::sent`; the review of step 28's
     /// commands).
     pub(crate) sent_commands: Mutex<Vec<crate::commands::Sent>>,
+    /// Each `turn/interrupt` sent through a lane and not yet taken by its
+    /// step, by who sent it, with the number of the first run of a command
+    /// sent after it: its step interrupts only the commands sent before it
+    /// (`crate::commands::interrupt_sent`; the review of step 28's
+    /// commands, L2).
+    pub(crate) interrupts_sent: Mutex<Vec<(ClientId, u64)>>,
     /// The session's hook commands (step 28).
     #[cfg(feature = "scripts")]
     pub(crate) command_hooks: Arc<crate::ext::SessionHooks>,
@@ -964,6 +970,7 @@ impl Core {
             turn_start: tokio::sync::Mutex::new(()),
             running_commands: Mutex::new(Vec::new()),
             sent_commands: Mutex::new(Vec::new()),
+            interrupts_sent: Mutex::new(Vec::new()),
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The session's `session.start` hooks, now that it is open: the
@@ -1367,11 +1374,14 @@ impl Core {
                 && let Ok(live) = self.open_for(client, &params.session_id)
                 && self.may_drive(client).is_ok()
             {
+                // The run's own token, a child of the session's that the
+                // run holds: its close reaches it (the review of step 28's
+                // commands, M2).
                 #[cfg(feature = "scripts")]
-                let parent = live.command_hooks.commands.runs_token();
+                let cancel = live.command_hooks.commands.runs_token();
                 #[cfg(not(feature = "scripts"))]
-                let parent = self.inner.options.cancel.clone();
-                crate::commands::sent(&live, client, call, &parent);
+                let cancel = self.inner.options.cancel.child();
+                crate::commands::sent(&live, client, call, cancel);
             }
             return;
         }
@@ -1384,7 +1394,7 @@ impl Core {
         if self.may_drive(client).is_err() {
             return;
         }
-        crate::commands::interrupt(&live, params.now);
+        crate::commands::interrupt_sent(&live, client, params.now);
     }
 
     /// The body of [`Core::handle`].
@@ -1749,23 +1759,26 @@ impl Core {
                 Ok(OpResult::SessionClose(Empty {}))
             }
             Op::TurnStart(params) => {
-                let live = self.open_for(client, &params.session_id)?;
+                let live = self.live(&params.session_id)?;
                 // A command's run is on the session from here, before any
-                // wait or refusal: the one put there as it was sent through
-                // a lane (`Core::early`), interrupted already if an
-                // interrupt was sent behind it, or a new one. An interrupt
-                // from any client that may drive the session, sent while it
-                // waits or runs, stops it (step 28).
+                // wait or refusal, the client's own included: the one put
+                // there as it was sent through a lane (`Core::early`),
+                // interrupted already if an interrupt was sent behind it, or
+                // a new one. Taken first, it is let go on every way out of
+                // the step (the review of step 28's commands, L3). An
+                // interrupt from any client that may drive the session, sent
+                // while it waits or runs, stops it (step 28).
                 #[cfg(feature = "scripts")]
-                let parent = live.command_hooks.commands.runs_token();
+                let cancel = || live.command_hooks.commands.runs_token();
                 #[cfg(not(feature = "scripts"))]
-                let parent = self.inner.options.cancel.clone();
+                let cancel = || self.inner.options.cancel.child();
                 let run = params.command.as_ref().map(|call| {
                     (
-                        crate::commands::Run::taken(&live, client, call, &parent),
+                        crate::commands::Run::taken(&live, client, call, cancel()),
                         call.name.clone(),
                     )
                 });
+                self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
                 // A prompt is text and images: what else a part may be is
                 // the model's or a tool's, never a person's, and a hook is
@@ -1899,11 +1912,21 @@ impl Core {
                 Ok(OpResult::TurnStart(result?))
             }
             Op::TurnInterrupt(params) => {
+                // Where it was sent among the commands' runs, if through a
+                // lane, taken before anything can refuse it.
+                let cut = self
+                    .live(&params.session_id)
+                    .ok()
+                    .and_then(|live| crate::commands::cut_of(&live, client));
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
                 // An extension's command still running in a `turn/start`'s
-                // step is stopped too: it started no turn yet.
-                crate::commands::interrupt(&live, params.now);
+                // step is stopped too: it started no turn yet. Only one sent
+                // before the interrupt: one sent after it, through the same
+                // lane, runs (the review of step 28's commands, L2). One
+                // that came without a lane (headless mode) reaches every
+                // command running now.
+                crate::commands::interrupt(&live, cut.unwrap_or(u64::MAX), params.now);
                 let result = if params.now {
                     live.handle.interrupt_now()
                 } else {

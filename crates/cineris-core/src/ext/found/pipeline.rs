@@ -217,6 +217,10 @@ struct Decided {
     judged: Vec<Source>,
     /// The extensions of those sources that stand approved, at any hash.
     standing: Vec<(Source, String)>,
+    /// Each extension found and not loaded, by where it comes from and its
+    /// name, with what the session is told of why: what a command of it is
+    /// refused with.
+    not_loaded: Vec<(Source, String, String)>,
 }
 
 /// The cache's part of the work, done after the session's extensions are
@@ -457,6 +461,7 @@ impl Held {
             unread,
             judged,
             standing: still_approved,
+            mut not_loaded,
         } = blocking(move || decide(&inputs, project_found))
             .await
             .ok_or_else(|| "the work that finds and judges them did not finish".to_owned())?;
@@ -594,12 +599,14 @@ impl Held {
                 Err(error) => {
                     self.failed.push(hash);
                     // What a script threw, escaped; and said once.
-                    self.tell(format!(
+                    let said = format!(
                         "The extension `{name}` (`{}`) could not be registered, so it is not \
                          loaded: {}",
                         listed.shown,
                         visible(&error.to_string())
-                    ));
+                    );
+                    not_loaded.push((listed.source, listed.manifest.name.clone(), said.clone()));
+                    self.tell(said);
                     // What it registers is known nowhere: each gating event
                     // its manifest lists holds a failing gate (the
                     // maintainers' call).
@@ -644,6 +651,7 @@ impl Held {
         {
             (self.parts.tell)(message.clone());
             if let Some((key, hooks)) = known.iter().find(|(key, _)| key.1 == name) {
+                not_loaded.push((key.0, key.1.clone(), message.clone()));
                 self.scripts
                     .note(key.0, &key.1, key.2, SeenHooks::Registered(hooks.clone()));
                 let held = gate(
@@ -660,6 +668,21 @@ impl Held {
         }
         self.loaded.extend(keys);
         self.hold_gates(&found_gates);
+        // What a command of an extension not loaded is refused with: what the
+        // session was told of it, or why its gates are held (one not found
+        // where it was approved has no other word).
+        for gate in found_gates
+            .iter()
+            .chain(self.unloaded.iter().map(|(_, gate)| gate))
+        {
+            if !not_loaded
+                .iter()
+                .any(|(source, name, _)| *source == gate.source && *name == gate.name)
+            {
+                not_loaded.push((gate.source, gate.name.clone(), sentence(&gate.why)));
+            }
+        }
+        self.scripts.set_not_loaded(not_loaded);
         // Section 7: the text of each extension loaded, as the cache holds
         // it, and only of one the registry took, as the turn will find it:
         // one whose capabilities did not compile is not loaded.
@@ -889,6 +912,9 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
         decided.told.push(sentence(&left.reason));
         if let Some(name) = left.folder.file_name().and_then(|name| name.to_str()) {
             unreadable.push((left.source, name.to_owned(), left.shown.clone()));
+            decided
+                .not_loaded
+                .push((left.source, name.to_owned(), sentence(&left.reason)));
         }
     }
     let users = UserNames::of(user.as_ref());
@@ -949,21 +975,46 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
     for (listed, snapshot) in candidates {
         let name = in_code(&listed.manifest.name).into_owned();
         let definition = listed.definition();
+        // What the session is told of why it is not loaded, kept for a
+        // command of it too.
+        let mut because = |told: &mut Vec<String>, said: String, tell: bool| {
+            if tell {
+                told.push(said.clone());
+            }
+            decided
+                .not_loaded
+                .push((listed.source, listed.manifest.name.clone(), said));
+        };
         let standing = match listed.source {
             Source::User => {
-                // Turned off by the user: not loaded, and nothing asked.
+                // Turned off by the user: not loaded, and nothing asked or
+                // said, but to a command of it.
                 if inputs.disabled.contains(&listed.manifest.name) {
+                    because(
+                        &mut decided.told,
+                        format!(
+                            "Your extension `{name}` (`{}`) is turned off in your \
+                             configuration (`enabled = false`), so it is not loaded.",
+                            listed.shown
+                        ),
+                        false,
+                    );
                     continue;
                 }
                 let Some(pins) = pins
                     .get_or_insert_with(|| user_pins(inputs, &mut decided.told))
                     .as_ref()
                 else {
-                    decided.told.push(format!(
-                        "Your extension `{name}` (`{}`) is not loaded: the pin store, which \
-                         holds what you approved of your own, could not be read (said above).",
-                        listed.shown
-                    ));
+                    because(
+                        &mut decided.told,
+                        format!(
+                            "Your extension `{name}` (`{}`) is not loaded: the pin store, which \
+                             holds what you approved of your own, could not be read (said \
+                             above).",
+                            listed.shown
+                        ),
+                        true,
+                    );
                     pins_unread.push((
                         listed.manifest.name.clone(),
                         listed.shown.clone(),
@@ -976,7 +1027,11 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
             }
             Source::Project => {
                 if users.takes(&listed.manifest.name) {
-                    decided.told.push(taken(&listed, &name, &mine, users.cut()));
+                    because(
+                        &mut decided.told,
+                        taken(&listed, &name, &mine, users.cut()),
+                        true,
+                    );
                     continue;
                 }
                 let standing = project_standing(
@@ -998,7 +1053,7 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                         None,
                         Stand::StoreUnreadable(file),
                     );
-                    decided.told.push(trust_unread_notice(file, &out));
+                    because(&mut decided.told, trust_unread_notice(file, &out), true);
                     store_held.push(gate(
                         Source::Project,
                         &listed.manifest.name,
@@ -1023,9 +1078,8 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                     listed.shown.clone(),
                 ));
             }
-            decided
-                .told
-                .push(not_loaded(&listed, &name, standing, inputs.trust_project));
+            let said = not_loaded(&listed, &name, standing, inputs.trust_project);
+            because(&mut decided.told, said, true);
         }
     }
     // Each that stands approved at another hash than it is found at, or that
@@ -1183,11 +1237,17 @@ fn decide(inputs: &Inputs, project_found: Option<Looked>) -> Decided {
                         decided.missing.push((listed, snapshot));
                     }
                     _ => {
-                        decided.told.push(not_loaded(
+                        let said = not_loaded(
                             &listed,
                             &in_code(&listed.manifest.name),
                             Standing::Changed,
                             inputs.trust_project,
+                        );
+                        decided.told.push(said.clone());
+                        decided.not_loaded.push((
+                            listed.source,
+                            listed.manifest.name.clone(),
+                            said,
                         ));
                         // Changed since the question read it at the hash
                         // approved: its gates are held as any changed one's.

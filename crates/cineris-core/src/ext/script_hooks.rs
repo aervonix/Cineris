@@ -91,6 +91,10 @@ pub(crate) struct ScriptHooks {
     /// The extensions loaded now, whose commands may be sent (since step
     /// 28's commands).
     loaded: Mutex<Vec<Arc<LoadedExtension>>>,
+    /// Each extension found, or standing approved, and not loaded, with
+    /// what the session was told of why: what a command of it is refused
+    /// with (the review of step 28's commands).
+    not_loaded: Mutex<Vec<(cineris_ext::source::Source, String, String)>>,
 }
 
 /// What the session knows each extension it approved registered, at the
@@ -412,7 +416,32 @@ impl ScriptHooks {
             held: Mutex::new(Vec::new()),
             known: Mutex::new(Known::default()),
             loaded: Mutex::new(Vec::new()),
+            not_loaded: Mutex::new(Vec::new()),
         }
+    }
+
+    /// What the session's finding said of each extension it found, or
+    /// stands approved, and does not load, in place of what it said
+    /// before: by where it comes from and its name.
+    pub(crate) fn set_not_loaded(&self, said: Vec<(cineris_ext::source::Source, String, String)>) {
+        *lock(&self.not_loaded) = said;
+    }
+
+    /// Why the extension `name` is not loaded, as the session was told it:
+    /// the user's, whose name it is, before a project's; `None` for one the
+    /// session knows nothing of.
+    pub(crate) fn why_not_loaded(&self, name: &str) -> Option<String> {
+        let said = lock(&self.not_loaded);
+        [
+            cineris_ext::source::Source::User,
+            cineris_ext::source::Source::Project,
+        ]
+        .into_iter()
+        .find_map(|source| {
+            said.iter()
+                .find(|(whose, named, _)| *whose == source && named == name)
+                .map(|(_, _, why)| why.clone())
+        })
     }
 
     /// Puts what `extension` registered on its events: each hook on an

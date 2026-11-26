@@ -344,7 +344,10 @@ impl SessionHandle {
     /// command's text, expanded (since step 28): `command` is carried with
     /// it, untouched, wherever it goes, and its user message records it
     /// ([`UserMessageItem::command`](cineris_protocol::item::UserMessageItem::command)).
-    /// A prompt given back carries no command: its parts are the text.
+    /// A prompt given back carries its command too
+    /// ([`PromptReturnedNotice::command`](cineris_protocol::event::PromptReturnedNotice::command)),
+    /// so that what was typed, not its expanded text, goes back to its
+    /// sender.
     ///
     /// # Errors
     ///
