@@ -198,9 +198,9 @@ fn shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else() {
 }
 
 /// `release`'s `/changelog:draft` gives git the line its README's rule
-/// names, `--end-of-options` before the revision, and with no revision the
-/// whole history; a revision that begins with `-` is refused before git is
-/// started, saying it is not one.
+/// names, `--no-show-signature` and `--end-of-options` before the revision,
+/// and with no revision the whole history; a revision that begins with `-`
+/// is refused before git is started, saying it is not one.
 #[test]
 fn the_changelog_command_runs_its_line_and_refuses_an_option_for_a_revision() {
     let command = Started::of("examples/release/extensions/changelog");
@@ -234,12 +234,13 @@ fn the_changelog_command_runs_its_line_and_refuses_an_option_for_a_revision() {
     assert_eq!(execs.len(), 2, "{execs:?}");
     assert_eq!(
         line(&execs, 0),
-        "exec git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options \
-         v0.1.0..HEAD"
+        "exec git log --no-merges --max-count=200 --oneline --no-decorate --no-show-signature \
+         --end-of-options v0.1.0..HEAD"
     );
     assert_eq!(
         line(&execs, 1),
-        "exec git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options HEAD"
+        "exec git log --no-merges --max-count=200 --oneline --no-decorate --no-show-signature \
+         --end-of-options HEAD"
     );
     for option in ["--output=x", "-p", "--format=%B"] {
         let refused = draft(Some(option)).unwrap_err().to_string();

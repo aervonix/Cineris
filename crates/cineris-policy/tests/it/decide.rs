@@ -182,8 +182,10 @@ fn probe() {
 /// in PowerShell's, and no line with another option, the README's
 /// `--output` (which writes a file) and `-p` (which runs the diff programs
 /// a repository's configuration names) among them, nor the line without
-/// `--end-of-options`, after which git reads no word as an option. An
-/// `exec` rule is the model's shell's too: these are the shell's calls.
+/// `--end-of-options`, after which git reads no word as an option, nor
+/// without `--no-show-signature`, which keeps git from starting the program
+/// a repository's configuration names to check a signature. An `exec` rule
+/// is the model's shell's too: these are the shell's calls.
 #[test]
 fn the_release_examples_rule_allows_its_line_and_no_other_option() {
     let readme = std::fs::read_to_string(
@@ -202,8 +204,8 @@ fn the_release_examples_rule_allows_its_line_and_no_other_option() {
         case.rules = vec![rule.clone()];
         decide(&case).unwrap()
     };
-    let line = "git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options \
-                v0.1.0..HEAD";
+    let line = "git log --no-merges --max-count=200 --oneline --no-decorate --no-show-signature \
+                --end-of-options v0.1.0..HEAD";
     for shell in [ShellSyntax::Posix, ShellSyntax::PowerShell] {
         let text = decided(line, shell);
         assert!(text.contains("decision  ALLOW"), "{shell:?}: {text}");
@@ -211,9 +213,12 @@ fn the_release_examples_rule_allows_its_line_and_no_other_option() {
             "git log --output=build.rs -p HEAD",
             "git log -1 --format=%B --output=build.rs main",
             "git log -p HEAD",
-            "git log --no-merges --max-count=200 --oneline --no-decorate --output=x \
-             --end-of-options HEAD",
-            "git log --no-merges --max-count=200 --oneline --no-decorate v0.1.0..HEAD",
+            "git log --no-merges --max-count=200 --oneline --no-decorate --no-show-signature \
+             --output=x --end-of-options HEAD",
+            "git log --no-merges --max-count=200 --oneline --no-decorate --no-show-signature \
+             v0.1.0..HEAD",
+            "git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options \
+             v0.1.0..HEAD",
         ] {
             let text = decided(wider, shell);
             assert!(
