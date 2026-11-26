@@ -1664,3 +1664,25 @@ replace: text.to_owned()
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
     cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines
+
+# The narrow re-check of the managing part: a line of many names of
+# Cineris, each reading the rest of the line again.
+
+[break] approving-each-name-reads-the-rest-of-the-line
+rule: A run of Cineris is read with at most `RUN_WORDS` words after its name, and one with more is refused wherever it stands: no name reads the rest of the line, so that the pass over a line of many names is linear in it.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: if rest.len() > RUN_WORDS {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_words_the_runs_of_a_line_read_are_bounded
+
+[break] approving-runs-read-without-a-cap
+rule: One check reads at most `MENTIONS` runs of Cineris, every reading of the line counted: past them, the line is refused, so that a line of many short runs is refused soon.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::run
+find: if mentions > MENTIONS {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::the_words_the_runs_of_a_line_read_are_bounded
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon
