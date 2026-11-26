@@ -4275,7 +4275,7 @@ caught-by:
 [break] pinned-trust-command-without-a-launcher
 rule: `cineris permissions trust` judges whether an extension's programs are confined as a session does, with the launcher the sessions are given.
 file: crates/cineris-cli/src/commands.rs
-in: Context::core
+in: Context::start_core
 find: .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)]));
 replace: .map(|exe| (exe, vec![std::ffi::OsString::from(crate::args::SANDBOX)])).filter(|_| false);
 os: linux
