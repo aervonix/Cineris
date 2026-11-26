@@ -587,6 +587,54 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
         "{said}"
     );
 
+    // From a shell the test starts, under the test runner's own jobs on
+    // Windows and its own line of parents on Linux, none a session's, it is
+    // not refused either.
+    let shell = if cfg!(windows) {
+        std::process::Command::new("cmd")
+            .args([
+                "/c",
+                &format!(
+                    "\"{}\" ext add \"{}\" --hash 00",
+                    binary.display(),
+                    folder.display()
+                ),
+            ])
+            .envs(
+                machine
+                    .vars()
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_os_str())),
+            )
+            .current_dir(&machine.workspace)
+            .output()
+            .unwrap()
+    } else {
+        std::process::Command::new("sh")
+            .args([
+                "-c",
+                &format!(
+                    "'{}' ext add '{}' --hash 00",
+                    binary.display(),
+                    folder.display()
+                ),
+            ])
+            .envs(
+                machine
+                    .vars()
+                    .iter()
+                    .map(|(name, value)| (name.as_str(), value.as_os_str())),
+            )
+            .current_dir(&machine.workspace)
+            .output()
+            .unwrap()
+    };
+    let said_there = String::from_utf8_lossy(&shell.stderr);
+    assert!(!said_there.contains("was refused"), "{said_there}");
+    assert!(
+        said_there.contains("is not the hash of what is shown"),
+        "{said_there}"
+    );
     // From the test's own process, which no session started, it is not
     // refused: the hash given is checked, and is not the one shown.
     let own = machine.run(&["ext", "add", &folder.to_string_lossy(), "--hash", "00"]);

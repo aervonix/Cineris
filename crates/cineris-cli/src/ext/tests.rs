@@ -181,6 +181,14 @@ fn an_extension_is_added_listed_turned_off_and_removed() {
         .extension_removal(&world.project, "tracker")
         .unwrap();
     assert!(removal.pin.is_some());
+    // Named in another case, it is the same extension: its pin and its
+    // folder go by the name the folder holds (the early review's L6).
+    let other_case = world
+        .core
+        .extension_removal(&world.project, "TRACKER")
+        .unwrap();
+    assert_eq!(other_case.name, "tracker");
+    assert_eq!(other_case.pin, removal.pin);
     // The one question names the pin and the folder together (the early
     // review's M1), and the hash it is named by is the pin's.
     let question = removal_question(&removal);

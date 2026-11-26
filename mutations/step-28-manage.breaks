@@ -520,13 +520,14 @@ caught-by:
     cineris-sandbox session::sys::tests::cineris_is_told_by_its_names
 
 [break] session-windows-job-not-asked
-rule: On Windows a process in the job of sessions' commands is under a session's command.
+rule: On Windows a process in the job of a running harness's own sessions' commands is under a session's command; in any other job it is not.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: if inside == 0 {
-replace: if true {
-packages: cineris-cli
+find: if inside != 0 {
+replace: if inside == 0 {
+packages: cineris-sandbox,cineris-cli
 caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
     cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
 
 [break] session-windows-harness-unmarked
@@ -1100,3 +1101,50 @@ replace: false
 packages: cineris-cli
 caught-by:
     cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused
+
+[break] remove-takes-the-name-as-typed
+rule: A removal goes by the name its folder holds, or its pin's, whatever its case: its pin and its folder are one extension's.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_removal
+find: .find(|entry| entry.eq_ignore_ascii_case(name))
+replace: .find(|entry| entry == name)
+caught-by:
+    cineris-core ext::manage::tests::a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted
+
+[break] session-windows-one-job-for-all
+rule: On Windows each harness makes a job of its own, named for its process id: a job shared by harnesses started under different jobs could be joined by the first alone.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: let name = wide(&format!("{JOB_PREFIX}{}", std::process::id()));
+replace: let name = wide(JOB_PREFIX);
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
+
+# The early review's L7: the read's own guards, and the write's.
+
+[break] unfollowed-waits-for-a-fifo
+rule: A file is opened without waiting (`O_NONBLOCK`): a FIFO opens at once and is refused as no file.
+os: linux
+file: crates/cineris-sandbox/src/unfollowed.rs
+find: const UNFOLLOWED: i32 = libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC;
+replace: const UNFOLLOWED: i32 = libc::O_NOFOLLOW | libc::O_NOCTTY | libc::O_CLOEXEC;
+caught-by:
+    cineris-sandbox unfollowed::tests::a_fifo_is_refused_without_waiting
+
+[break] unfollowed-windows-shares-delete
+rule: On Windows a folder held for its read is shared without delete: it cannot be renamed or replaced while it is read.
+os: windows
+file: crates/cineris-sandbox/src/unfollowed.rs
+find: const SHARED: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE;
+replace: const SHARED: u32 = FILE_SHARE_READ | FILE_SHARE_WRITE | 4;
+caught-by:
+    cineris-sandbox unfollowed::tests::a_folder_held_cannot_be_renamed
+
+[break] write-folder-writes-in-place
+rule: An extension's folder is written whole or not at all: into a folder of its own beside it, then put in its place.
+file: crates/cineris-core/src/ext/manage.rs
+in: write_folder
+find: let new = beside(target, "new");
+replace: let new = target.to_path_buf();
+caught-by:
+    cineris-core ext::manage::tests::the_folder_is_written_whole_in_place_of_what_was_there

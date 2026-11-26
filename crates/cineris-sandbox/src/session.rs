@@ -20,19 +20,25 @@
 //!   detached itself from the line (its parent exited, and it was handed to
 //!   the system's first process or a subreaper), or one in a namespace of
 //!   processes of its own.
-//! - **On Windows, by the harness's job.** A process that runs sessions
-//!   calls [`mark`] at its start: it makes, or opens, the job
-//!   [`JOB_NAME`] (named in the session's own namespace of objects, so one
-//!   per logon of the user), with no limits and no breakaway, and joins it.
-//!   Every process it starts from then on (a command's tree, a hook, an
-//!   extension's runtime, an MCP server) is in that job and cannot leave
-//!   it. A process in the job is under a session's command, whoever its
-//!   parent was and whether or not that parent is still running. **It does
-//!   not see** a process that a service starts for a command (WMI's
-//!   `Win32_Process.Create`, the task scheduler), which is outside the job.
-//!   And where the job cannot be made or joined (one an elevated Cineris
-//!   made holds the name), the harness says so in its log and runs
-//!   unmarked.
+//! - **On Windows, by the harness's own job.** A process that runs
+//!   sessions calls [`mark`] at its start: it makes a job of its own, named
+//!   [`JOB_PREFIX`] and its process id in the logon session's own namespace
+//!   of objects, with no limits and no breakaway, and joins it. Every
+//!   process it starts from then on (a command's tree, a hook, an
+//!   extension's runtime, an MCP server) is in that job and cannot leave it.
+//!   A process is under a session's command when it is in the job of that
+//!   name of a process that is running: each running process's id is tried.
+//!   Being in any other job (a terminal's, an editor's, a CI runner's) is
+//!   nothing. One job each, and not one shared: a process already in a job
+//!   can join a job only where that job can nest in its own, so a job
+//!   shared by harnesses started under different jobs could be joined by
+//!   the first alone (the baseline of `mutate` on a hosted runner, where
+//!   each test is in a job of its own, showed it). **It does not see** a
+//!   process that a service starts for a command (WMI's
+//!   `Win32_Process.Create`, the task scheduler), which is outside the job,
+//!   nor a command whose harness has exited, whose job no running process
+//!   names. Where the job cannot be made or joined, the harness says so in
+//!   its log and runs unmarked.
 //!
 //! Neither is a boundary against a command running with the user's rights:
 //! such a command can write the files these subcommands write. It keeps the
@@ -40,9 +46,9 @@
 
 use std::io;
 
-/// The name of the job every Windows harness joins: `Local\` is the logon
-/// session's own namespace.
-pub const JOB_NAME: &str = r"Local\Cineris.SessionCommands";
+/// The name of the job a Windows harness makes and joins, before its
+/// process id: `Local\` is the logon session's own namespace.
+pub const JOB_PREFIX: &str = r"Local\Cineris.SessionCommands.";
 
 /// Where this process stands.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +77,7 @@ impl Under {
 }
 
 /// Marks this process as one that runs sessions, before it starts any
-/// process: on Windows it joins [`JOB_NAME`]'s job, and so does everything
+/// process: on Windows it joins a job of its own ([`JOB_PREFIX`]), and so does everything
 /// it starts from then on. On Linux the line of parents serves, and
 /// nothing is done.
 ///
@@ -333,8 +339,12 @@ mod sys {
     use std::ptr;
     use std::sync::OnceLock;
 
-    use super::{JOB_NAME, Under};
-    use windows_sys::Win32::Foundation::{ERROR_FILE_NOT_FOUND, FALSE};
+    use super::{JOB_PREFIX, Under};
+    use windows_sys::Win32::Foundation::{FALSE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW,
+        TH32CS_SNAPPROCESS,
+    };
     use windows_sys::Win32::System::JobObjects::{
         AssignProcessToJobObject, CreateJobObjectW, IsProcessInJob, OpenJobObjectW,
     };
@@ -403,10 +413,9 @@ mod sys {
         if JOB.get().is_some() {
             return Ok(());
         }
-        let name = wide(JOB_NAME);
+        let name = wide(&format!("{JOB_PREFIX}{}", std::process::id()));
         // SAFETY: default security (a handle not inherited) and a name that
-        // ends in a nul and lives through the call. A job of that name made
-        // already (another harness's) is opened, which is what is wanted.
+        // ends in a nul and lives through the call.
         let handle = unsafe { CreateJobObjectW(ptr::null(), name.as_ptr()) };
         if handle.is_null() {
             return Err(io::Error::last_os_error());
@@ -420,6 +429,9 @@ mod sys {
         if unsafe { AssignProcessToJobObject(job.as_raw_handle(), GetCurrentProcess()) } == 0 {
             return Err(io::Error::last_os_error());
         }
+        // A job of this name made already (by a process that had this id
+        // before, whose commands still run) is joined all the same: its
+        // commands and these are a session's alike.
         let _ = JOB.set(job);
         // What it starts is told where its stores are, by a variable it
         // inherits: a nested run under it reads them there, or not at all
@@ -433,37 +445,96 @@ mod sys {
     }
 
     pub(super) fn under_a_session() -> Under {
-        let name = wide(JOB_NAME);
-        // SAFETY: plain values, and a name that ends in a nul and lives
-        // through the call.
-        let handle = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, FALSE, name.as_ptr()) };
-        if handle.is_null() {
-            let error = io::Error::last_os_error();
-            // No harness is running in this logon: nothing is under one.
-            return if error.raw_os_error() == Some(ERROR_FILE_NOT_FOUND as i32) {
-                Under::Nothing
-            } else {
-                Under::Unknown(format!("the sessions' job could not be opened: {error}"))
-            };
-        }
-        // SAFETY: `handle` was just opened and nothing else owns it.
-        let job = unsafe { OwnedHandle::from_raw_handle(handle) };
-        let mut inside = FALSE;
-        // SAFETY: the pseudo-handle has every right, `job` is open with
-        // `JOB_OBJECT_QUERY`, both live through the call, and `inside` is a
-        // live `BOOL`.
-        let asked =
-            unsafe { IsProcessInJob(GetCurrentProcess(), job.as_raw_handle(), &raw mut inside) };
-        if asked == 0 {
+        // SAFETY: the call takes two integers; for a list of processes the
+        // second is not used.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
             return Under::Unknown(format!(
-                "whether it is in the sessions' job could not be asked: {}",
+                "the system's processes could not be listed: {}",
                 io::Error::last_os_error()
             ));
         }
-        if inside == 0 {
-            Under::Nothing
-        } else {
-            Under::Session("it is in the job of Cineris's sessions' commands".to_owned())
+        // SAFETY: `snapshot` was just made and nothing else owns it.
+        let snapshot = unsafe { OwnedHandle::from_raw_handle(snapshot) };
+        // SAFETY: the structure is plain data, for which all zeroes is valid.
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = u32::try_from(std::mem::size_of::<PROCESSENTRY32W>()).unwrap_or(u32::MAX);
+        // SAFETY: `snapshot` is open, and `entry` is a writable entry whose
+        // `dwSize` says how large it is.
+        let mut more = unsafe { Process32FirstW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
+        while more {
+            let pid = entry.th32ProcessID;
+            let name = wide(&format!("{JOB_PREFIX}{pid}"));
+            // SAFETY: plain values, and a name that ends in a nul and lives
+            // through the call.
+            let handle = unsafe { OpenJobObjectW(JOB_OBJECT_QUERY, FALSE, name.as_ptr()) };
+            if !handle.is_null() {
+                // SAFETY: `handle` was just opened and nothing else owns it.
+                let job = unsafe { OwnedHandle::from_raw_handle(handle) };
+                let mut inside = FALSE;
+                // SAFETY: the pseudo-handle has every right, `job` is open
+                // with `JOB_OBJECT_QUERY`, both live through the call, and
+                // `inside` is a live `BOOL`.
+                let asked = unsafe {
+                    IsProcessInJob(GetCurrentProcess(), job.as_raw_handle(), &raw mut inside)
+                };
+                if asked == 0 {
+                    return Under::Unknown(format!(
+                        "whether it is in the job of process {pid}'s sessions' commands could not \
+                         be asked: {}",
+                        io::Error::last_os_error()
+                    ));
+                }
+                if inside != 0 {
+                    return Under::Session(format!(
+                        "it is in the job of process {pid}'s sessions' commands"
+                    ));
+                }
+            }
+            // A name no job holds, or one this user may not open (another
+            // user's, an elevated process's): no session of this process's.
+            // SAFETY: as for `Process32FirstW`.
+            more = unsafe { Process32NextW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
+        }
+        Under::Nothing
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        /// A job of no harness's, unnamed or named, the old shared name
+        /// among them, is no session's: a process in it, as a terminal's,
+        /// an editor's or a CI runner's children are, is under none. Once
+        /// it runs sessions itself, it is in its own job.
+        #[test]
+        fn sys_a_job_of_no_harnesss_is_no_sessions() {
+            for name in [
+                None,
+                Some(r"Local\Cineris.SessionCommands"),
+                Some(r"Local\Other"),
+            ] {
+                let wide_name = name.map(wide);
+                let pointer = wide_name.as_ref().map_or(ptr::null(), |name| name.as_ptr());
+                // SAFETY: default security and a name that ends in a nul, or
+                // none.
+                let handle = unsafe { CreateJobObjectW(ptr::null(), pointer) };
+                assert!(
+                    !handle.is_null(),
+                    "{name:?}: {}",
+                    io::Error::last_os_error()
+                );
+                // SAFETY: `handle` was just made and nothing else owns it.
+                let job = unsafe { OwnedHandle::from_raw_handle(handle) };
+                // SAFETY: as in `mark`.
+                let joined =
+                    unsafe { AssignProcessToJobObject(job.as_raw_handle(), GetCurrentProcess()) };
+                assert_ne!(joined, 0, "{name:?}: {}", io::Error::last_os_error());
+                assert_eq!(under_a_session(), Under::Nothing, "{name:?}");
+                std::mem::forget(job);
+            }
+            mark().unwrap();
+            assert!(matches!(under_a_session(), Under::Session(_)));
         }
     }
 }

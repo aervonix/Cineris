@@ -1343,13 +1343,31 @@ impl Core {
             )
         })?;
         let root = config.join(discover::USER_FOLDER);
-        let target = root.join(name);
         let pins = self.pin_store()?.pins().map_err(|failure| {
             usage(format!(
                 "`{code}` was not removed: {}. Repair or remove the file first.",
                 visible(&failure.to_string())
             ))
         })?;
+        // The name as the folder holds it, or as it is pinned: names that
+        // differ only in case are one name on Windows, where a removal of
+        // `Tracker` deleted `tracker` and left its pin (the early review's
+        // L6). Its pin and its folder go by that one name.
+        let held = std::fs::read_dir(&root)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .find(|entry| entry.eq_ignore_ascii_case(name))
+            .or_else(|| {
+                pins.list()
+                    .iter()
+                    .filter(|pin| pin.kind == TrustResourceKind::Extension)
+                    .map(|pin| pin.name.clone())
+                    .find(|pinned| pinned.eq_ignore_ascii_case(name))
+            });
+        let name = held.as_deref().unwrap_or(name);
+        let target = root.join(name);
         let pin = pins
             .get(&TrustResourceKind::Extension, name)
             .map(|pin| (pin.hash, pin.at.as_str().to_owned()));

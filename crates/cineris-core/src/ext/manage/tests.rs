@@ -275,6 +275,28 @@ fn a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted() {
     std::fs::create_dir_all(root.join("tracker")).unwrap();
     std::fs::create_dir_all(scratch.join("elsewhere/x")).unwrap();
     assert!(within(&root, &root.join("tracker")));
+    // The root and the target as a removal builds them, from the
+    // configuration directory of a core.
+    let env = cineris_config::Env::empty(cineris_config::Platform::CURRENT).with(
+        if cfg!(windows) { "USERPROFILE" } else { "HOME" },
+        scratch.join("home").to_str().unwrap(),
+    );
+    let mut dirs = cineris_config::Dirs::from_env(&env);
+    dirs.config = Some(scratch.join("config"));
+    dirs.managed_config = Some(scratch.join("managed.toml"));
+    let mut options = crate::CoreOptions::new(
+        env,
+        std::sync::Arc::new(cineris_testkit::timer::FakeTimer::manual(
+            &cineris_base::FakeClock::starting_at("2026-11-26T10:00:00Z").unwrap(),
+        )),
+    );
+    options.dirs = Some(dirs);
+    let core = crate::Core::start(options).unwrap();
+    std::fs::create_dir_all(scratch.join("work")).unwrap();
+    let project = core.project(&scratch.join("work")).unwrap();
+    let removal = core.extension_removal(&project, "Tracker").unwrap();
+    assert_eq!(removal.name, "tracker");
+    assert!(within(&removal.root, &removal.target), "{removal:?}");
     assert!(!within(
         &root,
         &root.join("..").join("..").join("elsewhere").join("x")
