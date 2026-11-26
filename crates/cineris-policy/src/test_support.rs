@@ -101,6 +101,7 @@ impl TestParts {
                 locate: Arc::clone(&placeholder),
                 store: None,
                 clock,
+                own_commands: None,
             },
             locate: None,
             placeholder,

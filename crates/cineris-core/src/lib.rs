@@ -93,5 +93,8 @@ pub use cineris_ext::source::Source as ExtensionSource;
 /// The runtime's timer, which the core's options take: the provider layer's
 /// and the process runner's waits are on it.
 pub use cineris_llm::TokioTimer;
+/// The harness's own approving commands, as the permission engine refuses
+/// them: what a front end gives its grammar to (`CoreOptions::own_commands`).
+pub use cineris_policy::approving;
 /// What `cineris stats` found where the aggregates file is.
 pub use cineris_stats::Found as AggregatesFound;

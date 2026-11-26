@@ -50,7 +50,7 @@
 //! | `KeepGate` of the base state | [`Engine::may_store`]. |
 
 pub mod approvals;
-mod approving;
+pub mod approving;
 pub mod command;
 pub mod engine;
 mod expansion;

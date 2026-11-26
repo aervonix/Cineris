@@ -174,6 +174,9 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
     // A script the managed configuration asks about, which the user's rule
     // does not name: it is never started.
     let held = script(&world.dir.join("hooks"), "held", None, "{}");
+    // A program named as Cineris, which the engine refuses to start as the
+    // harness's own approving command, whatever it is.
+    let approver = script(&world.dir.join("bin"), "cineris", None, "{}");
     let file = world.dirs().managed_config.unwrap();
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     std::fs::write(
@@ -210,6 +213,17 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
                 "",
             ),
             entry("bye", "session.end", &fails, "observe = true"),
+            entry(
+                "approver",
+                "compaction.before",
+                &[
+                    approver.display().to_string(),
+                    "ext".to_owned(),
+                    "add".to_owned(),
+                    "x".to_owned(),
+                ],
+                "",
+            ),
         ];
         if scribes {
             for number in 1..=9 {
@@ -286,6 +300,9 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
             for (hook, said) in [
                 ("cap", "a permission rule refuses it"),
                 ("held", "a rule of the managed configuration"),
+                // The harness's own approving command: refused by the
+                // engine itself, and said so (the early review's L5).
+                ("approver", "Cineris refuses `cineris ext add`"),
             ] {
                 let ran = core
                     .run_hook_command(&front.session, hook, turn_end())
@@ -295,6 +312,9 @@ fn a_users_hooks_hold_their_events_and_start_nothing_a_rule_holds_back() {
                     panic!("{hook}: {ran:?}");
                 };
                 assert!(why.contains(said), "{hook}: {why}");
+                if hook == "approver" {
+                    assert!(!why.contains("a permission rule"), "{why}");
+                }
             }
             // An event past its cap.
             let ran = core

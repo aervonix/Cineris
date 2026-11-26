@@ -785,6 +785,7 @@ async fn next_or_signal(
 fn start_core(plan: &Plan) -> Result<Core, OpError> {
     let run = &plan.run;
     let mut options = CoreOptions::new(plan.env.clone(), Arc::new(TokioTimer));
+    options.own_commands = Some(crate::nested::own_commands());
     options.profile.clone_from(&run.common.profile);
     options.overrides = overrides(run);
     for (texts, action) in [

@@ -674,3 +674,32 @@ fn the_harnesss_approving_commands_are_refused_at_every_level_whatever_the_rules
         }
     }
 }
+
+/// The engine built without a front end's grammar refuses, by its built-in
+/// refusal, exactly the lines of the one table marked refused, at
+/// `unrestricted` with allow rules for every command: the fallback is at
+/// least as strict as the grammar the CLI gives (the maintainers'
+/// condition on the early review of step 28's third pull request).
+#[test]
+fn the_engine_without_a_grammar_refuses_the_tables_lines() {
+    for (line, shells, refused_too) in cineris_policy::approving::CASES {
+        for shell_syntax in *shells {
+            let engine = engine_with(|parts| {
+                parts.shell = *shell_syntax;
+                parts.level = Level::Unrestricted;
+                parts.rules = vec![user(Effect::Exec, "*", RuleAction::Allow)];
+                parts.own_commands = None;
+            });
+            let outcome = shell(&engine, line);
+            let built_in = said(&outcome) == Deny
+                && reason(&outcome).starts_with(cineris_policy::approving::REFUSED);
+            assert_eq!(
+                built_in,
+                *refused_too,
+                "{line:?} in {shell_syntax:?}: {:?} {}",
+                said(&outcome),
+                reason(&outcome)
+            );
+        }
+    }
+}
