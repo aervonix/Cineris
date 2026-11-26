@@ -3,6 +3,44 @@
 # prompt that names a command, a command's profile), broken one at a time,
 # with the tests that must fail.
 
+[break] a-commands-run-is-not-on-the-session
+rule: A command's run is on the session from the top of `turn/start`'s step, so that an interrupt sent while it waits or runs reaches it.
+file: crates/cineris-core/src/commands.rs
+in: Run::start
+find: crate::core::lock(&live.running_commands).push((id, cancel.clone(), kill.clone()));
+replace: let _ = (&live.running_commands, id);
+caught-by:
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] a-commands-time-is-its-tools
+rule: An extension's command has 30 s, whatever its manifest gives its tools.
+file: crates/cineris-core/src/commands.rs
+find: pub(crate) const COMMAND_TIME: std::time::Duration = std::time::Duration::from_secs(30);
+replace: pub(crate) const COMMAND_TIME: std::time::Duration = std::time::Duration::from_secs(120);
+caught-by:
+    cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
+
+[break] a-commands-programs-may-write
+rule: A command's programs have no write root, whatever its manifest's `write` says, at `supervised` and at `read-only`.
+os: linux
+file: crates/cineris-ext/src/host.rs
+in: serve
+find: write_roots: if matches!(phase, Phase::Hook | Phase::Command) {
+replace: write_roots: if matches!(phase, Phase::Hook) {
+packages: cineris-ext, cineris-core
+caught-by:
+    cineris-core::it commands::sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them
+
+[break] a-second-interrupt-does-not-kill-a-commands-programs
+rule: A second interrupt kills a command's programs at once.
+os: linux
+file: crates/cineris-core/src/commands.rs
+in: interrupt
+find: kill.cancel();
+replace: let _ = kill;
+caught-by:
+    cineris-core::it commands::sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them
+
 [break] an-early-interrupt-does-not-stop-a-command
 rule: An interrupt stops an extension's command running in `turn/start`'s step the moment it is sent, without waiting behind it.
 file: crates/cineris-core/src/core.rs
@@ -211,7 +249,7 @@ caught-by:
     cineris-core::it commands::an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text
 
 [break] a-commands-profile-is-ignored
-rule: A command that names a settings profile is not sent: its profile is judged and never applied in this build.
+rule: A command that names a settings profile is not sent: its profile is judged and never applied in this build. (Every profile is refused, so the profile breaks below are caught by the refusal's wording.)
 file: crates/cineris-core/src/commands.rs
 in: expand
 find: if let Some(profile) = &command.profile {
@@ -220,7 +258,7 @@ caught-by:
     cineris-core::it commands::file_commands_are_listed_expanded_and_refused_with_reasons
 
 [break] an-untrusted-projects-profile-is-usable
-rule: A command's profile names only a profile of the user's layers, or of a trusted project's.
+rule: A command's profile names only a profile of the user's layers, or of a trusted project's. Caught by the refusal's wording, since every profile is refused.
 file: crates/cineris-core/src/commands.rs
 in: judge_profile
 find: || (trusted && loaded.project_profiles.iter().any(|known| known == name));
