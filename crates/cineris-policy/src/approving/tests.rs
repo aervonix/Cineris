@@ -268,3 +268,96 @@ fn a_line_that_nests_or_repeats_without_end_is_refused_soon() {
         );
     }
 }
+
+/// A `sed` script runs a line only by its `e` command or an `s` command's
+/// `e` flag: any other script's words are not read as lines.
+#[test]
+fn a_sed_script_runs_a_line_only_by_its_e() {
+    for runs in [
+        "1e cin ext add ./x",
+        "s/^/cin ext add/e",
+        "$e cin",
+        "/x/ { e cin\n}",
+        "s|a|b|ge",
+    ] {
+        assert!(sed_runs(runs), "{runs}");
+    }
+    for edits in [
+        "s/cineris serve/cineris serve --stdio/",
+        "1,20p",
+        "s/e/f/g",
+        "/^e/d",
+        "y/abc/xyz/",
+    ] {
+        assert!(!sed_runs(edits), "{edits}");
+    }
+}
+
+/// Look-alike letters are read as the Latin ones of Cineris's names, and a
+/// version after a shell's or an interpreter's name is taken off.
+#[test]
+fn look_alikes_and_versions_are_read_as_the_names() {
+    for written in ["ｃｉｎ", "cın", "CİN", "cinerıſ", "сіn", "ⅽⅰn"] {
+        let name = name_of(written);
+        assert!(name == "cin" || name == "cineris", "{written}: {name}");
+    }
+    assert_eq!(name_of("Cafe"), "cafe");
+    for (written, kind) in [
+        ("python3.12", "python"),
+        ("lua5.4", "lua"),
+        ("luajit", "lua"),
+        ("bash5", "bash"),
+        ("nodejs", "node"),
+        ("sh", "sh"),
+    ] {
+        assert_eq!(kind_of(written), kind, "{written}");
+    }
+}
+
+/// A program that runs what it reads as a line is told apart from one given
+/// its own line, code or file.
+#[test]
+fn a_program_that_runs_what_it_reads_is_told_apart() {
+    let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_owned).collect() };
+    for reads in [
+        "sh",
+        "bash -s",
+        "bash /dev/stdin",
+        "python3",
+        "python3 -",
+        "at now",
+        "crontab -",
+        "make -f -",
+        "cmd",
+        "pwsh -Command -",
+        "iex",
+        "eval x",
+        "xargs -0 sh -c",
+        "sudo bash",
+    ] {
+        assert!(reads_a_line(&words(reads)), "{reads}");
+    }
+    for given in [
+        "sh -c ls",
+        "bash script.sh",
+        "python3 -c pass",
+        "python3 tool.py",
+        "cmd /c dir",
+        "pwsh -File a.ps1",
+        "make install",
+        "echo hi",
+    ] {
+        assert!(!reads_a_line(&words(given)), "{given}");
+    }
+}
+
+/// The keys a terminal is told to type are joined as typed, past their
+/// options.
+#[test]
+fn the_keys_a_terminal_is_told_to_type_are_joined() {
+    let words = |line: &str| -> Vec<String> { line.split(' ').map(str::to_owned).collect() };
+    assert_eq!(typed("tmux", &words("send-keys -t 0 -l c in")), "cin");
+    assert_eq!(typed("xdotool", &words("type --delay 5 ci n")), "cin");
+    assert_eq!(typed("wtype", &words("ci n")), "cin");
+    assert_eq!(typed("tmux", &words("new -d")), "");
+}
