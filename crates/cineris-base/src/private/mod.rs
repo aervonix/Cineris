@@ -69,9 +69,10 @@
     reason = "this is a blocking file primitive; async callers run it on the blocking pool"
 )]
 
-use std::fs::File;
+use std::fs::{File, TryLockError};
 use std::io;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 #[cfg(windows)]
 mod windows;
@@ -241,7 +242,11 @@ pub fn lock_path(file: &Path) -> std::path::PathBuf {
 ///   Linux, `LockFileEx` on Windows, which keep two opens apart in one
 ///   process too), so it goes with its holder however that ends, and there
 ///   is no stale lock to clear. It is held until the returned file is
-///   dropped, and waits while another holds it.
+///   dropped.
+/// - **It waits [`LOCK_WAIT`] at most** while another holds it, and is then
+///   refused, saying which file: a hold that does not end (a session's
+///   command holding a store's lock) cannot hang a person's yes (the full
+///   review of step 28's third pull request).
 /// - **A file system that says it cannot lock gives no lock** (`Ok(None)`),
 ///   and the change goes ahead: two writers are then the user's to keep
 ///   apart, as they were before there was a lock.
@@ -251,9 +256,28 @@ pub fn lock_path(file: &Path) -> std::path::PathBuf {
 /// # Errors
 ///
 /// When the directory or the lock file cannot be made or opened, a link
-/// stands at the lock file's name, or the lock fails for any reason but
-/// the file system's not having locks.
+/// stands at the lock file's name, another process holds the lock past
+/// [`LOCK_WAIT`], or the lock fails for any reason but the file system's
+/// not having locks.
 pub fn hold_lock(file: &Path) -> io::Result<Option<File>> {
+    hold_lock_within(file, LOCK_WAIT)
+}
+
+/// How long [`hold_lock`] waits for another process's hold of the lock:
+/// the store's change it is for is one read and one write of a small file.
+pub const LOCK_WAIT: Duration = Duration::from_secs(10);
+
+/// How often a held lock is tried again while it is waited for.
+const LOCK_RETRY: Duration = Duration::from_millis(20);
+
+/// [`hold_lock`], waiting `wait` at most for another process's hold.
+///
+/// # Errors
+///
+/// As [`hold_lock`]'s, the lock held past `wait` among them: its error's
+/// kind is [`io::ErrorKind::WouldBlock`], and it names the file, under `~`
+/// where it is in the home directory.
+pub fn hold_lock_within(file: &Path, wait: Duration) -> io::Result<Option<File>> {
     if let Some(directory) = file
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -281,9 +305,96 @@ pub fn hold_lock(file: &Path) -> io::Result<Option<File>> {
         }
         Err(error) => return Err(refused(error)),
     };
-    match lock.lock() {
-        Ok(()) => Ok(Some(lock)),
-        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(None),
-        Err(error) => Err(error),
+    let deadline = Instant::now() + wait;
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(Some(lock)),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "a lock held by another process gives no event to wait on; the \
+                              wait is bounded by `wait`"
+                )]
+                std::thread::sleep(LOCK_RETRY);
+            }
+            Err(TryLockError::WouldBlock) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    held_too_long(file, wait),
+                ));
+            }
+            Err(TryLockError::Error(error)) if error.kind() == io::ErrorKind::Unsupported => {
+                return Ok(None);
+            }
+            Err(TryLockError::Error(error)) => return Err(error),
+        }
+    }
+}
+
+/// What a lock held past its wait says: the store's file, under `~` where
+/// it is in the home directory.
+fn held_too_long(file: &Path, wait: Duration) -> String {
+    let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" })
+        .map(std::path::PathBuf::from);
+    format!(
+        "{} is being changed by another process, which held its lock for longer than {} s: \
+         nothing was changed. If a session's command holds it, end that command, then try again",
+        under_home(file, home.as_deref()),
+        wait.as_secs()
+    )
+}
+
+/// `file` as it is shown: under `~` where it is in `home`.
+fn under_home(file: &Path, home: Option<&Path>) -> String {
+    match home.and_then(|home| crate::strip_location_prefix(file, home)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".to_owned(),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => file.display().to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A lock held by another open is waited for no longer than asked, and
+    /// then refused, saying which file; once let go of, it is taken (the
+    /// full review of step 28's third pull request: an endless wait hung a
+    /// person's yes).
+    #[test]
+    fn a_held_lock_is_waited_for_no_longer_than_asked() {
+        let folder = std::env::temp_dir().join(format!(
+            "cineris-base-lock-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let file = folder.join("pins.toml");
+        let held = hold_lock(&file).unwrap().expect("this file system locks");
+        let error = hold_lock_within(&file, Duration::ZERO).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "{error}");
+        let said = error.to_string();
+        assert!(said.contains("pins.toml") && said.contains("0 s"), "{said}");
+        drop(held);
+        assert!(hold_lock_within(&file, Duration::ZERO).unwrap().is_some());
+        let _ = std::fs::remove_dir_all(&folder);
+    }
+
+    /// A file in the home directory is shown under `~`, any other as it is.
+    #[test]
+    fn a_file_in_the_home_directory_is_shown_under_the_tilde() {
+        let home = std::env::temp_dir().join("home");
+        let file = home.join(".local").join("pins.toml");
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(
+            under_home(&file, Some(&home)),
+            format!("~{sep}.local{sep}pins.toml")
+        );
+        assert_eq!(under_home(&home, Some(&home)), "~");
+        assert_eq!(under_home(&file, None), file.display().to_string());
+        let elsewhere = std::env::temp_dir().join("other").join("pins.toml");
+        assert_eq!(
+            under_home(&elsewhere, Some(&home)),
+            elsewhere.display().to_string()
+        );
     }
 }
