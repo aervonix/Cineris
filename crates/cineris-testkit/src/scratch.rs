@@ -327,6 +327,40 @@ pub fn git(directory: &Path, arguments: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
+/// Runs git in `directory` as [`git`] does, with `input` on its standard
+/// input, and returns what it printed, trimmed: for `git fast-import`,
+/// which makes a history of many commits in one process (on a hosted
+/// Windows runner a start of git costs about 50 ms).
+///
+/// # Panics
+///
+/// When git cannot be started or fails, with git's own message.
+pub fn git_with_input(directory: &Path, arguments: &[&str], input: &[u8]) -> String {
+    use std::io::Write as _;
+    cineris_base::hook::started(std::ffi::OsStr::new("git"));
+    let mut child = git_command(directory, arguments)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("git is installed where these tests run");
+    // Written whole and closed before the output is read: what git is
+    // given here is small, and it reads all of it before it says much.
+    child
+        .stdin
+        .take()
+        .expect("git's standard input")
+        .write_all(input)
+        .expect("git takes its input");
+    let output = child.wait_with_output().expect("git ends");
+    assert!(
+        output.status.success(),
+        "git {arguments:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
 /// The variables that make git work on a repository other than the one it
 /// is started in.
 const ELSEWHERE: [&str; 5] = [

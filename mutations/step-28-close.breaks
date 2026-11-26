@@ -1,0 +1,71 @@
+# Step 28's close: the three examples under `examples/`, run as their
+# READMEs say, and the start-up test with them approved. Each rule the
+# examples' tests guard, broken one at a time: in an example's own files,
+# and in the harness's code that the example relies on
+# (docs/steps/28/answered.md, point 10, "3c").
+
+[break] shell-gate-lets-rm-rf-through
+rule: The `shell-gate` example refuses `rm` given both `-r` and `-f`.
+file: examples/shell-gate/main.js
+find: return recursive && force;
+replace: return false;
+packages: cineris-cli
+caught-by:
+    cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
+[break] shell-gate-lets-a-forced-push-through
+rule: The `shell-gate` example refuses `git push --force`.
+file: examples/shell-gate/main.js
+find: word === "--force" ||
+replace: word === "--forced" ||
+packages: cineris-cli
+caught-by:
+    cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
+[break] md-outline-asks-to-read-every-file
+rule: The `md-outline` example's manifest lets it read Markdown files alone, so a read of another file is refused.
+file: examples/md-outline/extension.toml
+find: read = ["**/*.md"]
+replace: read = ["**"]
+packages: cineris-cli
+caught-by:
+    cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
+[break] a-path-no-read-glob-names-is-read
+rule: A path no `read` glob of the manifest names is refused by the manifest, before the host is asked.
+file: crates/cineris-ext/src/capability.rs
+in: Capabilities::read
+find: self.check(path, &self.read, "read", "reading")
+replace: self.check(path, &self.read, "read", "reading").or(Ok(()))
+packages: cineris-ext, cineris-cli
+caught-by:
+    cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
+[break] a-command-files-default-is-not-put-in
+rule: An argument a command file's front matter gives a default is put in with that default when it is not typed.
+file: crates/cineris-ext/src/commands.rs
+in: CommandFile::expand
+find: .or(declared)
+replace: .or(declared.filter(|_| false))
+packages: cineris-ext, cineris-cli
+caught-by:
+    cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
+[break] a-script-commands-arguments-are-not-given
+rule: An extension's command is given its arguments as they were typed.
+file: crates/cineris-core/src/commands.rs
+in: run_script
+find: serde_json::json!({"args": typed.trim(), "arguments": arguments})
+replace: serde_json::json!({"args": typed.trim(), "arguments": arguments.into_iter().filter(|_| false).collect::<serde_json::Map<String, serde_json::Value>>()})
+packages: cineris-cli
+caught-by:
+    cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
+[break] an-extensions-engine-starts-as-it-is-loaded
+rule: An extension's engine is not started until something of it is used: a session that loads it starts no runtime.
+file: crates/cineris-core/src/ext/tools.rs
+in: register
+find: Ok(loaded) => Arc::new(loaded),
+replace: Ok(loaded) => { let loaded = Arc::new(loaded); let eager = Arc::clone(&loaded); tokio::spawn(async move { let _ = eager.runtime(&cineris_ext::engine::StartWatch::default()).await; }); loaded }
+caught-by:
+    cineris-core::it extensions_reload::with_the_examples_approved_no_engine_starts_until_one_is_used

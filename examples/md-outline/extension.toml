@@ -1,0 +1,9 @@
+api = 1
+name = "md-outline"
+version = "1.0.0"
+description = "Outlines a Markdown file: its headings, with their levels and lines"
+main = "main.js"
+
+[capabilities]
+# Markdown files in the workspace, and nothing else.
+read = ["**/*.md"]
