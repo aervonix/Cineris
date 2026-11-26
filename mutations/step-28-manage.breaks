@@ -238,7 +238,7 @@ caught-by:
 [break] approving-wrapper-not-read
 rule: What a wrapper runs (`sudo -u me`, `timeout -s KILL 5`, `xargs -a list`) is a simple command of its own, read past the wrapper's options and their values.
 file: crates/cineris-policy/src/approving.rs
-find: let found = self.in_words(&words[next..], depth);
+find: let found = self.in_words(&words[next..], depth + 1);
 replace: let found = None;
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
@@ -266,8 +266,8 @@ caught-by:
 rule: The text after an `=` or a `!` in a word (`alias.x=!cineris ...`, `core.pager=...`) is read as a line.
 file: crates/cineris-policy/src/approving.rs
 in: Reader::in_words
-find: for (mark, _) in word.match_indices(['=', '!']) {
-replace: for (mark, _) in word.match_indices(['=', '!']).take(0) {
+find: for (count, (mark, _)) in word.match_indices(['=', '!']).enumerate() {
+replace: for (count, (mark, _)) in word.match_indices(['=', '!']).enumerate().take(0) {
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
@@ -391,6 +391,7 @@ caught-by:
 rule: What `find -exec` runs is a simple command of its own.
 file: crates/cineris-policy/src/approving.rs
 in: Reader::in_words
+occurrence: 2
 find: "-exec" | "-execdir" | "-ok" | "-okdir" | "--args"
 replace: "-never"
 caught-by:
@@ -1106,8 +1107,8 @@ caught-by:
 rule: A removal goes by the name its folder holds, or its pin's, whatever its case: its pin and its folder are one extension's.
 file: crates/cineris-core/src/ext/manage.rs
 in: Core::extension_removal
-find: .find(|entry| entry.eq_ignore_ascii_case(name))
-replace: .find(|entry| entry == name)
+find: || (found.is_none() && entry.eq_ignore_ascii_case(name))
+replace: || false
 caught-by:
     cineris-core ext::manage::tests::a_path_that_leads_out_of_the_folder_of_extensions_is_not_deleted
 
@@ -1148,3 +1149,12 @@ find: let new = beside(target, "new");
 replace: let new = target.to_path_buf();
 caught-by:
     cineris-core ext::manage::tests::the_folder_is_written_whole_in_place_of_what_was_there
+
+[break] approving-nesting-unbounded
+rule: One check nests and reads a bounded number of simple commands: past it, a line that names Cineris is refused, and soon.
+file: crates/cineris-policy/src/approving.rs
+in: Reader::in_words
+find: if depth > NESTING || steps > STEPS {
+replace: if false {
+caught-by:
+    cineris-policy approving::tests::a_line_that_nests_or_repeats_without_end_is_refused_soon

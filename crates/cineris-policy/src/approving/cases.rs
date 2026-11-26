@@ -1110,4 +1110,10 @@ pub const CASES: &[(&str, &[ShellSyntax], bool)] = &[
     ("echo x; cineris ext list # a note", &[PowerShell], false),
     ("echo x; cineris ext list > out.txt", &[PowerShell], false),
     ("cmd /c 'cin^eris ext add ./x'", &[PowerShell], true),
+    // The full review's false refusals.
+    ("Copy-Item x $env:USERPROFILE\\bin\\", &[PowerShell], false),
+    ("Test-Path $env:LOCALAPPDATA\\cineris", &[PowerShell], false),
+    ("command -v cineris", &[Posix], false),
+    // `sed`'s and `git`'s words can run a line.
+    ("sed -i '1e cineris ext add ./x' notes.md", &[Posix], true),
 ];

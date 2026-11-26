@@ -237,6 +237,22 @@ const DEPTH: usize = 4;
 /// Cineris is refused.
 const WORK: usize = 64;
 
+/// How deep one check nests simple commands within each other at most (a
+/// wrapper's command, `find -exec`'s, `Start-Process`'s, a line's), and how
+/// many it reads in all: past either, a line that names Cineris is refused.
+/// Without them a line of a thousand `nohup`s overflowed the core thread's
+/// stack (the full review of the third part, M1).
+const NESTING: usize = 24;
+const STEPS: usize = 4096;
+
+/// The longest line that names Cineris this check reads: a longer one is
+/// refused.
+const LONGEST: usize = 32 * 1024;
+
+/// How many of a word's `=` and `!` begin a line read again: past them, the
+/// word is refused (reading each was quadratic in the word).
+const MARKS: usize = 16;
+
 /// The subcommands, by their first word.
 const TOPICS: [&str; 12] = [
     "sessions",
@@ -544,9 +560,12 @@ fn moved(word: &str, before: Option<&str>) -> Option<String> {
             .chars()
             .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
             .collect();
-        if moves_stores(&name) {
+        // Only an assignment moves it: `$env:HOME = …`, not a read of it.
+        let after = upper[at + 5 + name.len()..].trim_start();
+        if moves_stores(&name) && after.starts_with('=') && !after.starts_with("==") {
             return Some(name);
         }
+        return None;
     }
     let assigned = upper
         .strip_prefix("--UNSET=")
@@ -1004,7 +1023,7 @@ fn program_at(words: &[String]) -> usize {
 
 /// Programs whose words are only printed, searched or looked at: a name of
 /// Cineris among them is no run of it.
-const PRINTERS: [&str; 36] = [
+const PRINTERS: [&str; 35] = [
     "echo",
     "printf",
     "grep",
@@ -1025,8 +1044,6 @@ const PRINTERS: [&str; 36] = [
     "file",
     "stat",
     "du",
-    "git",
-    "sed",
     "jq",
     "diff",
     "sort",
@@ -1041,6 +1058,7 @@ const PRINTERS: [&str; 36] = [
     "gc",
     "findstr",
     "get-childitem",
+    "git",
 ];
 
 /// Programs that change the directory what follows runs in.
@@ -1089,6 +1107,8 @@ struct Reader<'a> {
     sources: Cell<bool>,
     /// Whether the line has changed the directory by now.
     moved_dir: Cell<bool>,
+    /// How many simple commands were read.
+    steps: Cell<usize>,
 }
 
 impl<'a> Reader<'a> {
@@ -1103,6 +1123,7 @@ impl<'a> Reader<'a> {
             exact: Cell::new(false),
             sources: Cell::new(false),
             moved_dir: Cell::new(false),
+            steps: Cell::new(0),
         }
     }
 
@@ -1281,6 +1302,11 @@ impl<'a> Reader<'a> {
 
     /// One simple command.
     fn in_words(&self, words: &[String], depth: usize) -> Option<Refusal> {
+        let steps = self.steps.get() + 1;
+        self.steps.set(steps);
+        if depth > NESTING || steps > STEPS {
+            return Some(Refusal::new("cineris", Kind::Hidden));
+        }
         self.note_moved(words);
         if let Some(refusal) = self.env_lines(words, depth) {
             return Some(refusal);
@@ -1298,12 +1324,24 @@ impl<'a> Reader<'a> {
             if name == "xargs" {
                 self.adds.set(true);
             }
-            let found = self.in_words(&words[next..], depth);
+            let found = self.in_words(&words[next..], depth + 1);
             self.adds.set(false);
             return found;
         }
         if matches!(name.as_str(), "find" | "gdb") {
+            let mut runs = 0;
             for (at, word) in words.iter().enumerate() {
+                if matches!(
+                    word.as_str(),
+                    "-exec" | "-execdir" | "-ok" | "-okdir" | "--args"
+                ) {
+                    // A few, as a line has them; past that, the line is
+                    // refused rather than read again for each.
+                    runs += 1;
+                    if runs > MARKS {
+                        return Some(Refusal::new("cineris", Kind::Hidden));
+                    }
+                }
                 if matches!(
                     word.as_str(),
                     "-exec" | "-execdir" | "-ok" | "-okdir" | "--args"
@@ -1312,7 +1350,7 @@ impl<'a> Reader<'a> {
                         .iter()
                         .position(|word| matches!(word.as_str(), ";" | "+" | "\\;"))
                         .map_or(words.len(), |end| at + 1 + end);
-                    if let Some(refusal) = self.in_words(&words[at + 1..end], depth) {
+                    if let Some(refusal) = self.in_words(&words[at + 1..end], depth + 1) {
                         return Some(refusal);
                     }
                 }
@@ -1348,7 +1386,12 @@ impl<'a> Reader<'a> {
             let line = line_at(words, program, at).or_else(|| {
                 let positional = !word.starts_with('-');
                 let powershell = matches!(name.as_str(), "pwsh" | "powershell");
-                if (terminal && word.contains(char::is_whitespace)) || (powershell && positional) {
+                // A word with a blank in it may be a line the program runs
+                // (`sed`'s `e`, a runner's): read as one, but a printer's.
+                let blank = !prints && word.contains(char::is_whitespace);
+                if ((terminal || blank) && word.contains(char::is_whitespace))
+                    || (powershell && positional)
+                {
                     Some(Line::Shell)
                 } else if awk == Some(at) {
                     Some(Line::Code)
@@ -1383,7 +1426,10 @@ impl<'a> Reader<'a> {
                         }
                     }
                 }
-                for (mark, _) in word.match_indices(['=', '!']) {
+                for (count, (mark, _)) in word.match_indices(['=', '!']).enumerate() {
+                    if count >= MARKS {
+                        return Some(Refusal::new("cineris", Kind::Hidden));
+                    }
                     let text = &word[mark + 1..];
                     if self.mentioned(text)
                         && let Some(refusal) = self.read(text, Line::Shell, depth)
@@ -1540,14 +1586,17 @@ impl<'a> Reader<'a> {
             // At the program's place, or anywhere after a program that runs
             // what its words say, a run counts whatever it is; anywhere
             // else, where it approves, widens or is internal.
-            let runs_words = TERMINALS.contains(&first)
-                || SHELLS.contains(&first)
-                || AWKS.contains(&first)
-                || matches!(first, "cmd" | "pwsh" | "powershell" | "env")
-                || INTERPRETERS
-                    .iter()
-                    .any(|(interpreter, _)| *interpreter == first)
-                || WRAPPERS.iter().any(|(wrapper, _, _)| *wrapper == first);
+            let describes =
+                first == "command" && words.iter().any(|word| word == "-v" || word == "-V");
+            let runs_words = !describes
+                && (TERMINALS.contains(&first)
+                    || SHELLS.contains(&first)
+                    || AWKS.contains(&first)
+                    || matches!(first, "cmd" | "pwsh" | "powershell" | "env")
+                    || INTERPRETERS
+                        .iter()
+                        .any(|(interpreter, _)| *interpreter == first)
+                    || WRAPPERS.iter().any(|(wrapper, _, _)| *wrapper == first));
             let prints = PRINTERS.contains(&first);
             if matches!(first, "xargs" | "parallel") {
                 self.adds.set(true);
@@ -1561,7 +1610,10 @@ impl<'a> Reader<'a> {
                 });
                 let placed = at == program || executes || (runs_words && at > program);
                 if word.contains(['=', '!']) {
-                    for (mark, _) in word.match_indices(['=', '!']) {
+                    for (count, (mark, _)) in word.match_indices(['=', '!']).enumerate() {
+                        if count >= MARKS {
+                            return Some(Refusal::new("cineris", Kind::Hidden));
+                        }
                         let text = &word[mark + 1..];
                         if self.mentioned(text)
                             && let Some(refusal) = self.read(text, Line::Shell, DEPTH - 2)
@@ -1799,6 +1851,9 @@ pub fn refused(command: &str, shell: ShellSyntax, own: Option<&OwnCommands>) -> 
     let reader = Reader::new(own);
     if !reader.mentioned(command) {
         return None;
+    }
+    if command.len() > LONGEST {
+        return Some(Refusal::new("cineris", Kind::Hidden));
     }
     // A carriage return ends a line in PowerShell and `cmd`, and the
     // analysis is not trusted to say so: it ends one here everywhere.

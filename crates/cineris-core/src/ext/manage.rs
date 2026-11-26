@@ -1358,7 +1358,11 @@ impl Core {
             .flatten()
             .flatten()
             .map(|entry| entry.file_name().to_string_lossy().into_owned())
-            .find(|entry| entry.eq_ignore_ascii_case(name))
+            .fold(None, |found: Option<String>, entry| {
+                // The exact name before any other case of it.
+                let better = entry == name || (found.is_none() && entry.eq_ignore_ascii_case(name));
+                if better { Some(entry) } else { found }
+            })
             .or_else(|| {
                 pins.list()
                     .iter()
