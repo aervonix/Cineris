@@ -405,41 +405,54 @@ fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
     /// `FILE_ATTRIBUTE_REPARSE_POINT`.
     const REPARSE_POINT: u32 = 0x400;
 
-    let scratch = Scratch::new("win_reparse_not_a_link");
-    // Compressible, and larger than a cluster: the overlay filter leaves a
-    // file it cannot shrink as it is.
-    let file = scratch.file("ws/compressed.bin", &"cineris ".repeat(65_536));
-    let made = std::process::Command::new("compact")
-        .args(["/C", "/EXE:XPRESS4K"])
-        .arg(&file)
-        .output()
-        .expect("run compact");
-    let reparse =
-        fs::symlink_metadata(&file).is_ok_and(|found| found.file_attributes() & REPARSE_POINT != 0);
-    if !reparse {
+    // The overlay filter is a per-volume matter, so try the build's
+    // volume, then the temporary directory's, then the system disk's own:
+    // a hosted runner's workspace disk does not compress, and its system
+    // disk does.
+    let mut volumes = vec![
+        Path::new(env!("CARGO_TARGET_TMPDIR")).to_path_buf(),
+        std::env::temp_dir(),
+    ];
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        volumes.push(Path::new(&local).join("Temp"));
+    }
+    let mut said = Vec::new();
+    for volume in &volumes {
+        let scratch = Scratch::under(volume, "win_reparse_not_a_link");
+        // Compressible, and larger than a cluster: the overlay filter
+        // leaves a file it cannot shrink as it is.
+        let file = scratch.file("ws/compressed.bin", &"cineris ".repeat(65_536));
+        let made = std::process::Command::new("compact")
+            .args(["/C", "/EXE:XPRESS4K"])
+            .arg(&file)
+            .output()
+            .expect("run compact");
+        let reparse = fs::symlink_metadata(&file)
+            .is_ok_and(|found| found.file_attributes() & REPARSE_POINT != 0);
+        if !reparse {
+            said.push(format!(
+                "{}: {}",
+                volume.display(),
+                String::from_utf8_lossy(&made.stdout).trim()
+            ));
+            continue;
+        }
         assert!(
-            !in_ci(),
-            "compact left no reparse point on the CI runner: {}",
-            String::from_utf8_lossy(&made.stdout)
+            !fs::symlink_metadata(&file).unwrap().file_type().is_symlink(),
+            "the standard library takes no overlay file for a link"
         );
-        println!("skipped: this volume does not compress with the overlay filter");
+        assert!(!cineris_base::path::is_link(&file).unwrap());
+
+        let resolver = scratch.resolver("ws");
+        let resolved = resolver.resolve("compressed.bin").unwrap();
+        assert!(resolved.exists());
+        assert!(resolved.is_inside_workspace());
+        assert_eq!(resolved.abs(), &scratch.real("ws/compressed.bin"));
+        assert_eq!(fs::read(resolved.to_fs_path()).unwrap().len(), 8 * 65_536);
         return;
     }
-    assert!(
-        !fs::symlink_metadata(&file)
-            .unwrap()
-            .file_type()
-            .is_symlink(),
-        "the standard library takes no overlay file for a link"
-    );
-    assert!(!cineris_base::path::is_link(&file).unwrap());
-
-    let resolver = scratch.resolver("ws");
-    let resolved = resolver.resolve("compressed.bin").unwrap();
-    assert!(resolved.exists());
-    assert!(resolved.is_inside_workspace());
-    assert_eq!(resolved.abs(), &scratch.real("ws/compressed.bin"));
-    assert_eq!(fs::read(resolved.to_fs_path()).unwrap().len(), 8 * 65_536);
+    assert!(!in_ci(), "no volume of the CI runner compressed the file: {said:?}");
+    println!("skipped: no volume here compresses with the overlay filter: {said:?}");
 }
 
 /// A junction is the kind of directory link any account can make, so it is
