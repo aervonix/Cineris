@@ -1020,9 +1020,13 @@ fn sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands(
         }
     }
     let said = crate::probes_said(&world);
+    // Each probe is given nothing: the server closes its connection
+    // unanswered, or the pipe is not opened for it at all (a hook's on the
+    // hosted runners).
     for probe in ["hook", "exec", "shell"] {
         assert!(
-            said.contains(&format!("{probe} opened True read 0 bytes")),
+            said.contains(&format!("{probe} opened True read 0 bytes"))
+                || said.contains(&format!("{probe} opened False read 0 bytes")),
             "the {probe}'s connection was answered: {said}"
         );
     }
