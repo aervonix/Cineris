@@ -699,7 +699,8 @@ pub(crate) fn a_server_whose_mark_failed_refuses_a_raise_past_supervised() {
         .expect_err("a raise past the cap");
     assert_eq!(raised.code, "unrestricted_not_allowed", "{raised:?}");
     assert!(
-        raised.message.contains("`supervised` at most"),
+        raised.message.contains("`supervised` at most")
+            && raised.message.contains("could not mark its commands"),
         "{}",
         raised.message
     );

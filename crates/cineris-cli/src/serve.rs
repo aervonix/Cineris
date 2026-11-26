@@ -111,6 +111,7 @@ pub(crate) fn run(serve: Serve, name: &'static str) -> u8 {
     );
     if let Some(unmarked) = &unmarked {
         options.level_at_most = Some(crate::UNMARKED_LEVEL);
+        options.level_at_most_why = Some(crate::UNMARKED_WHY.to_owned());
         if !serve.run.quiet {
             eprintln!("{name}: {unmarked}");
         }
