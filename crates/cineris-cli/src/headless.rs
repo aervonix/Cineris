@@ -66,12 +66,18 @@ struct Plan {
     guard: Option<(PathBuf, Vec<OsString>)>,
     log: Option<Arc<LogHandle>>,
     env: Env,
+    /// Run under a session's command: its level is at most `read-only`.
+    capped: bool,
 }
 
 /// Runs a headless prompt. Returns the exit code.
 pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
     let env = Env::from_process();
     let log = start_log(&run, &env, name);
+    let capped = match crate::nested_run(name, &run) {
+        Ok(capped) => capped,
+        Err(code) => return code,
+    };
     crate::mark_sessions();
     let format = run.format;
     let fail = |kind: ErrorKind, code: &str, message: String| {
@@ -144,6 +150,7 @@ pub(crate) fn run(run: Run, name: &'static str, started: Instant) -> u8 {
     let handle = log.clone();
     let quiet = run.quiet;
     let plan = Plan {
+        capped,
         run,
         prompt,
         name,
@@ -643,7 +650,19 @@ fn denials(core: &Core, collector: &Collector) -> Vec<PermissionDenial> {
         .collect()
 }
 
-async fn write_result(front: &mut Front<'_>, result: HeadlessResult) {
+async fn write_result(front: &mut Front<'_>, mut result: HeadlessResult) {
+    if front.plan.capped {
+        front.say(&format!(
+            "{} (`docs/outstanding/{}.md`)",
+            crate::CAPPED,
+            crate::CAPPED_ITEM
+        ));
+        result.capped = Some(cineris_protocol::headless::HeadlessCap {
+            level: cineris_protocol::lease::Level::ReadOnly,
+            reason: crate::CAPPED.to_owned(),
+            item: Some(crate::CAPPED_ITEM.to_owned()),
+        });
+    }
     if let Some(error) = &result.error {
         front.say(&format!(
             "{} ({}: {})",
@@ -786,6 +805,9 @@ fn start_core(plan: &Plan) -> Result<Core, OpError> {
     let run = &plan.run;
     let mut options = CoreOptions::new(plan.env.clone(), Arc::new(TokioTimer));
     options.own_commands = Some(crate::nested::own_commands());
+    if plan.capped {
+        options.level_at_most = Some(cineris_protocol::lease::Level::ReadOnly);
+    }
     options.profile.clone_from(&run.common.profile);
     options.overrides = overrides(run);
     for (texts, action) in [

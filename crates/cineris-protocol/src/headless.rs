@@ -97,6 +97,25 @@ pub struct HeadlessResult {
     /// ended another way before any round of checks ran.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub verification: Option<HeadlessVerification>,
+    /// The run was held to a narrower level than its configuration's, and
+    /// why (since step 28's third pull request: a headless run under a
+    /// session's command is held to `read-only`). Absent when it was not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capped: Option<HeadlessCap>,
+}
+
+/// The level a headless run was held to, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+pub struct HeadlessCap {
+    /// The level it ran at.
+    pub level: crate::lease::Level,
+    /// Why, in words.
+    pub reason: String,
+    /// The open item that names what is left of it, by its file's name in
+    /// `docs/outstanding/`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
 }
 
 /// What the project's checks said of a headless run's turn

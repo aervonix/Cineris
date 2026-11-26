@@ -1469,7 +1469,10 @@ fn engine_parts(
     }
     Parts {
         lease_id,
-        level: settings.permissions.mode.clone(),
+        level: at_most(
+            &settings.permissions.mode,
+            inner.options.level_at_most.as_ref(),
+        ),
         rules,
         approved,
         sandbox_policy: sandbox_grant(inner, loaded, &root, session, state),
@@ -1636,7 +1639,10 @@ pub(crate) fn reloaded_parts(
             .map(|rule| SourcedRule::new(rule, RuleSource::CommandLine)),
     );
     parts.rules = rules;
-    parts.level = loaded.settings.permissions.mode.clone();
+    parts.level = at_most(
+        &loaded.settings.permissions.mode,
+        inner.options.level_at_most.as_ref(),
+    );
     parts.sandbox_policy = sandbox_grant(inner, loaded, &template.workspace, session, state);
     parts.budget = budget(&loaded.settings.limits.session);
     parts.trusted = trusted;
@@ -1845,6 +1851,26 @@ pub(crate) fn programs_confined(
             state,
             inner.sandbox.program(),
         )
+}
+
+/// `level`, or `most` where that is narrower.
+fn at_most(
+    level: &cineris_protocol::lease::Level,
+    most: Option<&cineris_protocol::lease::Level>,
+) -> cineris_protocol::lease::Level {
+    use cineris_protocol::lease::Level;
+    let rank = |level: &Level| match level {
+        Level::ReadOnly => 0,
+        Level::Supervised => 1,
+        Level::Guided => 2,
+        Level::Autonomous => 3,
+        Level::Unrestricted => 4,
+        Level::Unknown(_) => 5,
+    };
+    match most {
+        Some(most) if rank(most) < rank(level) => most.clone(),
+        _ => level.clone(),
+    }
 }
 
 /// What the opening notice of a session whose commands are not confined
@@ -3796,5 +3822,30 @@ mod harness_files_tests {
                 "{unreadable}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod level_tests {
+    use cineris_protocol::lease::Level;
+
+    /// A cap narrows a level wider than it, and leaves a narrower one as it
+    /// is: a headless run under a session's command is at most `read-only`.
+    #[test]
+    fn a_level_is_capped_at_the_most_given() {
+        let read_only = Level::ReadOnly;
+        for level in [
+            Level::Supervised,
+            Level::Autonomous,
+            Level::Unrestricted,
+            Level::Unknown("x".to_owned()),
+        ] {
+            assert_eq!(super::at_most(&level, Some(&read_only)), Level::ReadOnly);
+            assert_eq!(super::at_most(&level, None), level);
+        }
+        assert_eq!(
+            super::at_most(&Level::ReadOnly, Some(&Level::Supervised)),
+            Level::ReadOnly
+        );
     }
 }

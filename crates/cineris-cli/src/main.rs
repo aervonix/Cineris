@@ -147,14 +147,52 @@ pub(crate) fn not_under_a_session(name: &str, what: &str) -> Result<(), u8> {
     match cineris_sandbox::session::under_a_session().refusal() {
         None => Ok(()),
         Some(why) => {
+            let named = if what.is_empty() {
+                format!("`{name}`")
+            } else {
+                format!("`{name} {what}`")
+            };
             eprintln!(
-                "{name}: `{name} {what}` was refused, and nothing was read or written: {why}. It \
+                "{name}: {named} was refused, and nothing was read or written: {why}. It \
                  approves extensions, trusts projects or answers for you, so a session's command \
                  may not run it: run it in your own terminal."
             );
             Err(exit::USAGE)
         }
     }
+}
+
+/// What a headless run held to `read-only` under a session's command is
+/// said to be, on standard error and in its result.
+pub(crate) const CAPPED: &str = "this run is held to `read-only`, whatever its configuration \
+                                 says, because it runs under a session's command, whose own \
+                                 level is not known to it";
+
+/// The open item that names the precise cap, by its file's name.
+pub(crate) const CAPPED_ITEM: &str = "a-nested-run-under-a-session-is-capped-at-read-only";
+
+/// Under a session's command, a headless run carries no flag the CLI's
+/// grammar refuses there, and its level is at most `read-only`: the
+/// session that started it may be at no more, and is not known (the
+/// owner's answer to the early review, B). `Err` with the exit code when it
+/// carries one; `Ok(true)` when it runs capped.
+pub(crate) fn nested_run(name: &str, run: &crate::args::Run) -> Result<bool, u8> {
+    if cineris_sandbox::session::under_a_session()
+        .refusal()
+        .is_none()
+    {
+        return Ok(false);
+    }
+    let command = crate::args::Command::Run(Box::new(run.clone()));
+    if let cineris_core::approving::Standing::Refused(refusal) = crate::nested::standing(&command) {
+        eprintln!(
+            "{name}: `{}` was refused under a session's command: {}",
+            refusal.what,
+            cineris_core::approving::reason(&refusal)
+        );
+        return Err(exit::USAGE);
+    }
+    Ok(true)
 }
 
 /// Writes `text` to standard output. A reader that has gone (`| head`)

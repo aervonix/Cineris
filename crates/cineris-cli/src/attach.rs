@@ -64,6 +64,10 @@ const LOG_END: Duration = Duration::from_millis(300);
 
 /// Runs the interactive application on the server. Returns the exit code.
 pub(crate) fn run(attach: Attach, name: &'static str) -> u8 {
+    // It answers the server's sessions' trust questions and approvals.
+    if let Err(code) = crate::not_under_a_session(name, "attach") {
+        return code;
+    }
     let env = Env::from_process();
     let here = match crate::workspace::Here::now() {
         Ok(here) => here,

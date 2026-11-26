@@ -92,6 +92,11 @@ fn end_deadline(began: Instant, within: Duration, signalled: Option<Instant>) ->
 
 /// Runs the interactive application. Returns the exit code.
 pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
+    // It answers a project's trust question and the approvals: not under a
+    // session's command (the owner's answer to the early review, B).
+    if let Err(code) = crate::not_under_a_session(name, "") {
+        return code;
+    }
     if let Some(flag) = headless_only(&run) {
         eprintln!(
             "{name}: {flag} is for a run with -p; the interactive application does not take it."
