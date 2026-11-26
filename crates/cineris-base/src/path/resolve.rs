@@ -530,16 +530,17 @@ fn locate(
 /// (`GetFileAttributesW`): a name that has no reparse point is no link,
 /// which is the standard library's answer for it, at a third of its cost
 /// on a hosted runner (`docs/steps/ci-budgets-2/answered.md`, "Where a
-/// Windows session's time goes"). A reparse point, and a name whose
-/// attributes cannot be read for any reason, its absence included, are
-/// looked at by `symlink_metadata` as before, so that every answer and
-/// every error is the one it gives.
+/// Windows session's time goes"). A name that is not there is not there to
+/// both, and the error is of the kind `symlink_metadata`'s is, which is
+/// all the walk asks of it. A reparse point, and a name whose attributes
+/// cannot be read for any other reason, are looked at by `symlink_metadata`
+/// as before, so that the answer, or the error, is the one it gives.
 fn is_link(path: &Path) -> io::Result<bool> {
     #[cfg(windows)]
-    if let Ok(attributes) = crate::private::attributes(path)
-        && !attributes.is_reparse_point()
-    {
-        return Ok(false);
+    match crate::private::attributes(path) {
+        Ok(attributes) if !attributes.is_reparse_point() => return Ok(false),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
+        _ => {}
     }
     std::fs::symlink_metadata(path).map(|found| found.file_type().is_symlink())
 }
