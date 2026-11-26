@@ -28,6 +28,7 @@ file: crates/cineris-ext/src/folder.rs
 in: read_unfollowed_into
 find: Kind::Link => return Err(FolderError::Link(relative)),
 replace: Kind::Link => continue,
+packages: cineris-ext, cineris-cli
 caught-by:
     cineris-ext folder::tests::the_read_through_handles_is_the_plain_reads_and_follows_no_link
     cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
@@ -38,6 +39,7 @@ file: crates/cineris-core/src/ext/manage.rs
 in: Core::add_extension
 find: hash: to_add.hash
 replace: hash: ContentHash::of(b"another")
+packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
 
@@ -47,6 +49,7 @@ file: crates/cineris-core/src/ext/manage.rs
 in: Core::extension_to_add
 find: *other != name && other.eq_ignore_ascii_case(&name)
 replace: false && other.eq_ignore_ascii_case(&name)
+packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
 
@@ -92,6 +95,7 @@ file: crates/cineris-core/src/ext/manage.rs
 in: Core::remove_extension
 find: if delete && std::fs::symlink_metadata(&removal.target).is_ok() {
 replace: if std::fs::symlink_metadata(&removal.target).is_ok() {
+packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
 
@@ -101,6 +105,7 @@ file: crates/cineris-core/src/ext/manage.rs
 in: Core::remove_extension
 find: if removal.project_only {
 replace: if false {
+packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
 
@@ -110,6 +115,7 @@ file: crates/cineris-core/src/ext/manage.rs
 in: Core::disable_extension
 find: return Ok(DisableOutcome::Project);
 replace: return Err(usage(String::new()));
+packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris ext::tests::an_extension_is_added_listed_turned_off_and_removed
 
