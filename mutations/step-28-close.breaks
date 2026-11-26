@@ -9,8 +9,9 @@ rule: The `shell-gate` example refuses `rm` given both `-r` and `-f`.
 file: examples/shell-gate/main.js
 find: return recursive && force;
 replace: return false;
-packages: cineris-cli
+packages: cineris-ext, cineris-cli
 caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
     cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
 
 [break] shell-gate-lets-a-forced-push-through
@@ -18,9 +19,107 @@ rule: The `shell-gate` example refuses `git push --force`.
 file: examples/shell-gate/main.js
 find: word === "--force" ||
 replace: word === "--forced" ||
-packages: cineris-cli
+packages: cineris-ext, cineris-cli
 caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
     cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
+# The forms `shell-gate`'s README lists, each read by its hook, run through
+# the engine alone (the review of step 28's close, H2 and L6).
+
+[break] shell-gate-takes-a-long-option-of-rm-whole-only
+rule: The `shell-gate` example reads `rm`'s long options shortened as GNU `rm` takes them (`--rec`, `--f`).
+file: examples/shell-gate/main.js
+find: recursive ||= name !== "" && "recursive".startsWith(name);
+replace: recursive ||= name === "recursive";
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
+
+[break] shell-gate-reads-rms-options-in-one-case
+rule: The `shell-gate` example reads `rm`'s options without regard to case, so that PowerShell's `rm -Recurse -Force` is refused.
+file: examples/shell-gate/main.js
+find: const option = word.toLowerCase();
+replace: const option = word;
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
+
+[break] shell-gate-does-not-read-evals-words-again
+rule: The `shell-gate` example reads the words given to `eval` again as a line.
+file: examples/shell-gate/main.js
+find: if (name === "eval") {
+replace: if (name === "evaluate") {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
+
+[break] shell-gate-does-not-read-a-shells-line-again
+rule: The `shell-gate` example reads the line given to `sh -c` or `bash -c` again.
+file: examples/shell-gate/main.js
+find: } else if (name === "sh" || name === "bash") {
+replace: } else if (name === "sh" && name === "bash") {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
+
+[break] shell-gate-takes-a-git-options-value-for-its-subcommand
+rule: The `shell-gate` example passes over the value of each of git's own options that takes one (`--git-dir`, `--work-tree`, `--namespace`, `--attr-source`), not only `-C` and `-c`'s.
+file: examples/shell-gate/main.js
+find: if (GIT_VALUED.includes(words[next])) {
+replace: if (["-C", "-c"].includes(words[next])) {
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
+
+[break] shell-gate-lets-a-mirror-push-through
+rule: The `shell-gate` example refuses `git push --mirror`, which overwrites every branch of the remote.
+file: examples/shell-gate/main.js
+find: word === "--mirror" ||
+replace: word === "--mirrored" ||
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
+
+[break] shell-gate-reads-no-forced-refspec-in-a-c
+rule: The `shell-gate` example refuses a push whose `-c` sets a `push` refspec that begins with `+`.
+file: examples/shell-gate/main.js
+find: forcedByConfiguration ||= /\.push=\+/i.test(words[next + 1] ?? "");
+replace: forcedByConfiguration ||= false;
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::shell_gate_refuses_the_forms_its_readme_lists_and_nothing_else
+
+# `release`'s `git log`, the rule its README offers for it, and the revision
+# it refuses (the review of step 28's close, H1 and L6).
+
+[break] release-runs-its-line-without-end-of-options
+rule: The `release` example passes `--end-of-options` before the revision, which the rule its README offers ends with.
+file: examples/release/extensions/changelog/main.js
+find: "--end-of-options"
+replace: "--no-color"
+packages: cineris-ext, cineris-cli
+caught-by:
+    cineris-ext::it examples::the_changelog_command_runs_its_line_and_refuses_an_option_for_a_revision
+    cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
+[break] release-readme-offers-a-rule-for-every-git-log
+rule: The rule the `release` example's README offers allows the extension's line alone, and no other option of `git log` (`--output`, `-p`), to the model's shell as to the extension.
+file: examples/release/README.md
+find: match = "git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options *"
+replace: match = "git log *"
+packages: cineris-policy
+caught-by:
+    cineris-policy::it decide::the_release_examples_rule_allows_its_line_and_no_other_option
+
+[break] release-takes-an-option-for-a-revision
+rule: The `release` example refuses a revision that begins with `-` before git is started.
+file: examples/release/extensions/changelog/main.js
+find: since.startsWith("-")
+replace: since.startsWith("-never-")
+packages: cineris-ext
+caught-by:
+    cineris-ext::it examples::the_changelog_command_runs_its_line_and_refuses_an_option_for_a_revision
 
 [break] md-outline-asks-to-read-every-file
 rule: The `md-outline` example's manifest lets it read Markdown files alone, so a read of another file is refused.
@@ -181,3 +280,91 @@ find: matches!(standing, ExtensionStanding::Approved)
 replace: matches!(standing, ExtensionStanding::TurnedOff)
 caught-by:
     cineris-core ext::without_engine::tests::status_says_an_approved_extension_is_not_loaded_without_the_engine
+
+# The session's wiring of a build without the script engine, built and
+# tested in the ordinary build: the held gates on the loop's points, and
+# what the session judges from its view as it opens (the review of step 28's
+# close, M1).
+
+[break] a-held-gate-is-not-put-on-its-event
+rule: Each gating hook an extension that stands approved holds in a build without the script engine is put on its event, as a gate whose run fails with why.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: failing
+find: for held in held {
+replace: for held in held.iter().filter(|_| false) {
+caught-by:
+    cineris-core ext::hook_points::tests::a_held_gate_is_on_its_event_and_its_tools_and_refuses_with_why
+
+[break] a-held-gate-is-on-every-call
+rule: A gating hook held in a build without the script engine is on the tools it names, not on every call.
+file: crates/cineris-core/src/ext/hook_points.rs
+in: failing
+find: filter: held.filter.clone()
+replace: filter: None
+caught-by:
+    cineris-core ext::hook_points::tests::a_held_gate_is_on_its_event_and_its_tools_and_refuses_with_why
+
+[break] a-session-without-the-engine-judges-no-project
+rule: A session without the script engine judges the trusted project's extensions from its view, as the finding would, and holds their gates.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: in_session
+find: project: view.project.as_ref()
+replace: project: None
+caught-by:
+    cineris-core ext::without_engine::tests::a_session_without_the_engine_holds_what_its_view_finds_and_tells_the_user_once
+
+# A project's extension approved for the session while the trust store
+# cannot be read (the review of step 28's close, L1).
+
+[break] a-yes-for-the-session-is-judged-after-the-trust-stores-error
+rule: A trusted project's extension approved for this session stands approved whether or not the trust store can be read, as the session's finding judges it.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: Source::Project if judging.for_the_run.contains(&definition) => {
+replace: Source::Project if judging.trust.is_ok() && judging.for_the_run.contains(&definition) => {
+caught-by:
+    cineris-core ext::without_engine::tests::a_session_without_the_engine_holds_what_its_view_finds_and_tells_the_user_once
+    cineris-core ext::without_engine::tests::an_extension_approved_for_the_session_stands_approved_while_the_trust_store_cannot_be_read
+
+[break] a-yes-for-the-session-has-no-pin-while-the-trust-store-cannot-be-read
+rule: A trusted project's extension approved for this session has the session's pin whether or not the trust store can be read.
+file: crates/cineris-core/src/ext/manage.rs
+in: judged
+find: (Source::Project, _, trust) => judging
+replace: (Source::Project, _, trust) if trust.is_ok() => judging
+caught-by:
+    cineris-core ext::without_engine::tests::an_extension_approved_for_the_session_stands_approved_while_the_trust_store_cannot_be_read
+
+# What `check`'s `no-scripts` step asks and how it judges the build (the
+# review of step 28's close, L2 and L3).
+
+[break] the-build-without-the-engine-is-looked-at-on-the-host-alone
+rule: The check of a build without the script engine asks the dependency graph of every target whether it reaches the engine, not the host's alone.
+file: xtask/src/checks.rs
+in: without_scripts_tree
+find: "--target", "all"
+replace: "--target", "x86_64-unknown-linux-gnu"
+caught-by:
+    checks::tests::the_build_without_the_engine_is_looked_at_on_every_target_and_linted
+
+[break] the-build-without-the-engine-may-warn
+rule: The check of a build without the script engine lints it with warnings denied.
+file: xtask/src/checks.rs
+in: without_scripts_lint
+find: lint.extend(["--", "-D", "warnings"].map(str::to_owned));
+replace:
+caught-by:
+    checks::tests::the_build_without_the_engine_is_looked_at_on_every_target_and_linted
+
+# The conformance scenario of the `release` example checks its own facts,
+# so that a change that broke every carrier alike does not pass for their
+# agreement (the review of step 28's close, L4).
+
+[break] the-release-scenarios-extension-cannot-load
+rule: The conformance scenario of the `release` example checks on one carrier's transcript that its extension is listed, its command listed and the extension ready, not only that the carriers agree.
+file: crates/cineris-testkit/src/conformance.rs
+find: ".cineris/extensions/changelog/main.js"
+replace: ".cineris/extensions/changelog/other.js"
+packages: cineris-rpc
+caught-by:
+    cineris-rpc::it conformance::every_scenario_is_the_same_in_process_and_over_the_wire
