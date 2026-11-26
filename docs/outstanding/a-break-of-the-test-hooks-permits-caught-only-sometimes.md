@@ -1,0 +1,8 @@
+The break `tooling-7/one-let-go-lets-every-thread-go` is caught by its own test only some of the time: a break run can call it not caught, and say so again, with nothing changed.
+
+- Area: cineris-base
+- Owner: the next small-fix session
+
+| Item | Who | When |
+|---|---|---|
+| **What is open.** The break takes `state.permits -= 1;` out of `Shared::may_go` (`crates/cineris-base/src/hook.rs`), so that `let_one_go` would let every stopped thread go, and names `hook::enabled::tests::one_thread_is_let_go_and_the_others_stay` to catch it ([mutations/tooling-7.breaks](../../mutations/tooling-7.breaks)). Run alone with `cargo xtask mutate tooling-7/one-let-go-lets-every-thread-go`, it was not caught by its own test once on `main` at `159f2e05`, and caught by four tests once on step 28's managing part and five times on `main` at `69090915`, which holds that part; in a budgeted run of the breaks the managing part could affect, on the reference machine beside another run, it was not caught by its own test. Nothing in between changed the test or the code it breaks in a way that should decide it, so whether the test sees the extra threads go seems to depend on when they run. Found by step 28's third pull request, whose break runs flagged it, and left for the next small-fix session by the maintainers. **What would close it:** a test that fails on the break every time, whatever the order the threads run in (one that waits for each thread's arrival at the point through the hook's own record, not for the time it takes), or a `caught-by` that names tests that do; then the break run a number of times on its own to show it. | The next small-fix session | Before the first release |
