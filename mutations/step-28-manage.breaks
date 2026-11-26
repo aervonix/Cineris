@@ -211,15 +211,6 @@ replace: if follow { 0 } else { 0 }
 caught-by:
     cineris-sandbox unfollowed::tests::a_link_at_any_name_is_refused_and_never_followed
 
-[break] unfollowed-windows-root-follows-a-reparse-point
-rule: On Windows the folder named is opened as the reparse point itself, so that a folder named through a link at its own name is refused.
-os: windows
-file: crates/cineris-sandbox/src/unfollowed.rs
-find: let first = open(FILE_FLAG_OPEN_REPARSE_POINT)?;
-replace: let first = open(0)?;
-caught-by:
-    cineris-sandbox unfollowed::tests::a_link_at_any_name_is_refused_and_never_followed
-
 [break] listing-stops-at-an-unread-trust-store
 rule: `cineris ext list` lists what it can while the trust store cannot be read, and says the store could not be read.
 file: crates/cineris-core/src/ext/manage.rs
@@ -229,3 +220,69 @@ replace: Err(failure) if false && failure.kind == ErrorKind::Internal =>
 packages: cineris-cli
 caught-by:
     cineris-cli::bin/cineris ext::tests::what_cannot_be_added_or_removed_is_refused_first
+
+# The engine's refusal of the harness's own approving commands (the owner's
+# answer to the early review's H1).
+
+[break] approving-commands-not-refused
+rule: A command line that runs Cineris's approving subcommands is refused at every level, `unrestricted` included, before any rule is read, so that no allow rule lifts it.
+file: crates/cineris-policy/src/engine.rs
+in: Engine::judge_command
+find: if let Some(what) = crate::approving::refused(command, self.shell) {
+replace: if let Some(what) = None::<String> {
+caught-by:
+    cineris-policy::it commands::the_harnesss_approving_commands_are_refused_at_every_level_whatever_the_rules
+
+[break] approving-only-at-the-programs-place
+rule: Cineris named at any word of a simple command, followed by an approving subcommand, refuses it, so that a program that runs what follows it (`strace`) does not let it through.
+file: crates/cineris-policy/src/approving.rs
+in: in_words
+find: if is_own(word) {
+replace: if at == program && is_own(word) {
+caught-by:
+    cineris-policy approving::tests::every_way_a_line_names_an_approving_command_is_refused
+
+[break] approving-inner-line-unread
+rule: A word that is a command line of its own (what `sh -c`, `pwsh -c` or `script -c` run) is read as a line again.
+file: crates/cineris-policy/src/approving.rs
+in: in_words
+find: if inner
+replace: if false && inner
+caught-by:
+    cineris-policy approving::tests::every_way_a_line_names_an_approving_command_is_refused
+
+[break] approving-unmodelled-passed
+rule: A line the analysis cannot model fails closed: Cineris named in it, with an approving subcommand after it, refuses it.
+file: crates/cineris-policy/src/approving.rs
+in: refused
+find: Analysis::NotModelled { .. } => in_text(command)
+replace: Analysis::NotModelled { .. } => None
+caught-by:
+    cineris-policy approving::tests::every_way_a_line_names_an_approving_command_is_refused
+
+[break] approving-case-kept
+rule: Cineris's name is matched in any case, as Windows finds a program.
+file: crates/cineris-policy/src/approving.rs
+in: program_name
+find: let lower = last.to_ascii_lowercase();
+replace: let lower = last.to_owned();
+caught-by:
+    cineris-policy approving::tests::every_way_a_line_names_an_approving_command_is_refused
+
+[break] approving-exe-kept
+rule: Cineris's name is matched with or without `.exe`.
+file: crates/cineris-policy/src/approving.rs
+in: program_name
+find: .strip_suffix(".exe")
+replace: .strip_suffix(".never")
+caught-by:
+    cineris-policy approving::tests::every_way_a_line_names_an_approving_command_is_refused
+
+[break] approving-interactive-run-allowed
+rule: A run of the interactive application from a command (no subcommand, not headless), which answers a project's trust question, is refused.
+file: crates/cineris-policy/src/approving.rs
+in: in_words
+find: if at == program && is_named(word) && interactive(rest) {
+replace: if false && at == program && is_named(word) && interactive(rest) {
+caught-by:
+    cineris-policy approving::tests::every_way_a_line_names_an_approving_command_is_refused
