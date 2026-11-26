@@ -7,8 +7,8 @@
 rule: An interrupt stops an extension's command running in `turn/start`'s step the moment it is sent, without waiting behind it.
 file: crates/cineris-core/src/core.rs
 in: Core::early
-find: command.cancel();
-replace: let _ = command;
+find: crate::commands::interrupt(&live, params.now);
+replace: let _ = (&live, params.now);
 caught-by:
     cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
 
@@ -16,8 +16,8 @@ caught-by:
 rule: `turn/interrupt` stops an extension's command running in `turn/start`'s step, as headless mode sends it beside the start.
 file: crates/cineris-core/src/core.rs
 in: Core::handle_op
-find: command.cancel();
-replace: let _ = command;
+find: crate::commands::interrupt(&live, params.now);
+replace: let _ = (&live, params.now);
 caught-by:
     cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
 
