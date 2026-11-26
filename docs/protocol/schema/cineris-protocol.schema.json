@@ -2642,7 +2642,7 @@
           "type": "array"
         },
         "problems": {
-          "description": "What could not be read, each a sentence: a store of approvals, the\nregistration cache, a folder of extensions (since step 28).",
+          "description": "What could not be read, each a sentence: the user's pins or the trust\nstore, the two stores of approvals (since step 28).",
           "items": {
             "type": "string"
           },

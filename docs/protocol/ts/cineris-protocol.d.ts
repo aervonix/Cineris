@@ -724,7 +724,7 @@ export interface ExtensionsStatusParams {
 export interface ExtensionsStatusResult {
   /** The extensions: each the session found, left out or holds a gate of, with its standing (since step 28). */
   extensions: Array<ComponentStatus>;
-  /** What could not be read, each a sentence: a store of approvals, the registration cache, a folder of extensions (since step 28). */
+  /** What could not be read, each a sentence: the user's pins or the trust store, the two stores of approvals (since step 28). */
   problems?: Array<string>;
 }
 

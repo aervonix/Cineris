@@ -96,7 +96,9 @@
 //! **What it does not reach:** a name the shell builds (`${X}neris`,
 //! `$(printf ci)neris`), a script file or a task made before, an encoded
 //! PowerShell command, a copy under another name than the front end knows,
-//! `cargo run -p cineris-cli`, keys typed into a terminal by its device. The approving subcommands look at their own line of
+//! a `cargo run` that names neither the binary nor its package (`cargo run
+//! --bin cineris` and `-p cineris-cli` are read), keys typed into a terminal
+//! by its device. The approving subcommands look at their own line of
 //! parents, or the harness's job on Windows, and refuse under a session's
 //! command: that is the backstop (`cineris_sandbox::session`).
 
