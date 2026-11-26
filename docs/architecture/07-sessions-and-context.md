@@ -347,7 +347,7 @@ Replaying the newer turns without their reasoning is what makes this valid on pr
 - **A field named `raw` is a provider's block only where a part or a usage record has it.** Under a name the model chose, in a tool call's arguments or in what a tool returned, it is redacted like any other text.
 - **The filter is the core's, and a session reads it each time it writes.** A key the core comes to hold while a session runs (a role is moved to another provider) is masked in that session from then on.
 - **What is kept exactly, and so can hold a secret:** the checkpoint store. It holds the earlier content of every file a tool changed, and the content of every file `read` showed the model, which is what a changed-only re-read is compared with. Both must be the file's bytes, so neither is redacted. The store is owner-only and belongs to the session.
-- `cineris sessions export` applies a stricter pass and shows what it masked. There is no built-in upload or sharing feature.
+- `/export` (since step 25; there is no `cineris sessions export`) writes a session read with the core's mask, then applies a stricter pass of the client's own, and says how many values the file holds masked, as one number ([09-tui.md](09-tui.md), "Exporting a session"). There is no built-in upload or sharing feature.
 
 See [../security.md](../security.md).
 

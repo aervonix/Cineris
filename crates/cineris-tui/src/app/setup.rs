@@ -248,8 +248,9 @@ pub trait Setup: Send + Sync {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotWritten {
     /// A file was at its name when it came to be written, made meanwhile:
-    /// it was left as it is, and it is the configuration from the next
-    /// start. Its path, as the person reads it.
+    /// it was left as it is and is read at once (`config/reload`), what
+    /// was chosen applying over it for the run. Its path, as the person
+    /// reads it.
     Found(String),
     /// It could not be written: a sentence saying why.
     Failed(String),

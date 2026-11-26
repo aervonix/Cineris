@@ -1,0 +1,8 @@
+The provider key's input, at the first run and in `cineris auth login`, drops a key held down, so a held Backspace takes away one character.
+
+- Area: cineris-tui
+- Owner: step 33
+
+| Item | Who | When |
+|---|---|---|
+| **A held key is dropped by the key's input.** The first run's key step (`crates/cineris-tui/src/app/state/first_run.rs`, its `TermEvent::Repeat` arm, lines 1102-1109 at the review's commit, `77ffbbcc`) and `cineris_tui::secret::read_key`, which `auth login` uses (`secret.rs`, lines 286-296, where a repeat falls to `KeyEdit::Nothing`), give `KeyInput` only a press. On a terminal that marks repeats (Windows Terminal's win32 input mode, and the enhanced keyboard protocol, which the terminal layer asks for) every repeat is lost: after `sk-wrong`, one Backspace and seven repeats, the row reads `7 characters, hidden`. Found by the review of step 25 and confirmed by a scratch test it ran against `cineris-tui` (`review25_a_held_backspace_empties_the_keys_input`, kept with the review, not in the repository). **The doc is the specification here, and the code differs from it:** [09-tui.md](../architecture/09-tui.md), "The first run", says a command's edit field takes a key held down "as the key's input does", and the command's field does take one (it reads `TermEvent::Repeat` beside `TermEvent::Key`, in the same function). **Recommendation:** take a repeat as a press in the key's input, except `Enter` and `Esc`, which answer the step and stay unrepeated, as the command's field does. The Windows Terminal check is to hold Backspace in the key's input ([the-windows-terminal-check-of-step-25](the-windows-terminal-check-of-step-25.md)). | Step 33 (terminal) | Before the first release |
