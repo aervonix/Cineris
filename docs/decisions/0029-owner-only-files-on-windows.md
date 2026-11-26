@@ -75,6 +75,10 @@ Accepted by the owner on 2026-11-13.
 
 **How it is tested.** On the Windows CI job, against a real symbolic link to a file, one to a directory, and a real junction, each of which must be refused (`crates/cineris-base/tests/it/nofollow.rs`). The list of tags is a pure function, tested on both OSes. The placeholder case is not tested: a hosted runner has no cloud-synced folder.
 
+## Amended in CI budgets II: and a name's attributes, for the path resolver
+
+`private::windows` gained `attributes`: what `GetFileAttributesW` reads of a name, which opens nothing, and does not follow a link at the end of the path. It is one call that reads a zero-terminated wide string the function owns and returns a number, with a `// SAFETY:` comment; what it returns is read through two questions, whether the name is a reparse point and whether it is a directory, and the module's constants stay in the module. The path resolver's walk asks each name of a path only whether it is there and whether it may be a link, and asked it of `std::fs::symlink_metadata`, which on Windows opens a handle, reads two of the file's records and closes it: 9.8 µs a name on a hosted runner against 3.1 µs for the attributes, and a session's open walks about 180 names on a hosted runner's paths ([steps/ci-budgets-2/answered.md](../steps/ci-budgets-2/answered.md), "Where a Windows session's time goes"). A name with no reparse point is no link to the standard library either; a reparse point, and a name whose attributes cannot be read for a reason other than its absence, are looked at by `symlink_metadata` as before, so that a link is still told by its tag. The rule about where `unsafe` may be written does not change.
+
 ## Revisit when
 
 - The standard library gains a way to read a file's reparse tag. `reparse_tag` is then replaced by that.
