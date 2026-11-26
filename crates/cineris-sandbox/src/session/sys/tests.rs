@@ -19,7 +19,11 @@ fn job(name: Option<&str>, security: Option<&OwnerOnly>) -> OwnedHandle {
     // SAFETY: attributes that live through the call, or none, and a name
     // that ends in a nul, or none.
     let handle = unsafe { CreateJobObjectW(attributes, pointer) };
-    assert!(!handle.is_null(), "{name:?}: {}", io::Error::last_os_error());
+    assert!(
+        !handle.is_null(),
+        "{name:?}: {}",
+        io::Error::last_os_error()
+    );
     // SAFETY: `handle` was just made and nothing else owns it.
     unsafe { OwnedHandle::from_raw_handle(handle) }
 }
@@ -44,7 +48,11 @@ fn join(job: &OwnedHandle) {
 #[test]
 fn sys_a_job_of_no_harnesss_is_no_sessions() {
     let old = format!("{JOB_PREFIX}{}", std::process::id());
-    for name in [None, Some(r"Local\Cineris.SessionCommands"), Some(old.as_str())] {
+    for name in [
+        None,
+        Some(r"Local\Cineris.SessionCommands"),
+        Some(old.as_str()),
+    ] {
         let made = job(name, None);
         join(&made);
         assert_eq!(under_a_session(), Under::Nothing, "{name:?}");
@@ -66,7 +74,13 @@ fn sys_a_job_made_ahead_of_the_harness_is_not_joined() {
     let mut inside = FALSE;
     // SAFETY: `squatted` is open, the pseudo-handle has every right, and
     // `inside` is a live `BOOL`.
-    unsafe { IsProcessInJob(GetCurrentProcess(), squatted.as_raw_handle(), &raw mut inside) };
+    unsafe {
+        IsProcessInJob(
+            GetCurrentProcess(),
+            squatted.as_raw_handle(),
+            &raw mut inside,
+        )
+    };
     assert_eq!(inside, FALSE);
 }
 
@@ -83,7 +97,10 @@ fn sys_the_harnesss_job_is_open_by_its_name_only_to_ask() {
         let error = io::Error::last_os_error();
         assert_eq!(!handle.is_null(), opens, "{rights:#x}: {error}");
         if handle.is_null() {
-            assert_eq!(error.raw_os_error(), i32::try_from(ERROR_ACCESS_DENIED).ok());
+            assert_eq!(
+                error.raw_os_error(),
+                i32::try_from(ERROR_ACCESS_DENIED).ok()
+            );
         } else {
             // SAFETY: just opened, owned by nothing else.
             drop(unsafe { OwnedHandle::from_raw_handle(handle) });
@@ -166,7 +183,11 @@ fn sys_the_task_schedulers_host_is_found_and_a_tests_line_is_no_services() {
         // SAFETY: as above.
         more = unsafe { Process32NextW(snapshot.as_raw_handle(), &raw mut entry) } != 0;
     }
-    let named = |pid: u32| line.iter().find(|(at, _, _)| *at == pid).map(|(_, _, name)| name);
+    let named = |pid: u32| {
+        line.iter()
+            .find(|(at, _, _)| *at == pid)
+            .map(|(_, _, name)| name)
+    };
     assert_eq!(
         named(scheduler).map(String::as_str),
         Some("svchost.exe"),
