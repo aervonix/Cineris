@@ -529,6 +529,10 @@ fn name_of(word: &str) -> String {
 /// A name written so runs Cineris only through a link of that name, which a
 /// copy under any name reaches too; it is read as Cineris's all the same.
 fn folded(text: &str) -> String {
+    // Most names are plain ASCII: lowered as they were before.
+    if text.is_ascii() {
+        return text.to_ascii_lowercase();
+    }
     text.chars()
         .flat_map(char::to_lowercase)
         .filter_map(|c| match c {
