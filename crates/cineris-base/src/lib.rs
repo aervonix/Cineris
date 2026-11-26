@@ -14,6 +14,7 @@
 //! | [`text`] | Width in terminal columns, wrapping and truncation, by grapheme cluster. |
 //! | [`visible`](mod@visible) | [`visible()`]: text from the workspace as the model and a client are shown it, every character that would act unseen (a line break, a bidirectional control, a tag character) written as an escape. |
 //! | [`atomic`] | [`write_atomic`]: replace a file's content in one step. |
+//! | [`mode`] | [`FileMode`]: a file's permission bits, as a rewind that makes the file again puts them back (since the step 25 fixes). |
 //! | [`nofollow`] | [`open_regular`]: open a regular file without following a link and without waiting on a FIFO. |
 //! | [`hash`] | [`ContentHash`]: the hash a piece of content is known by. |
 //! | [`hook`] | [`hook::point`]: a place in library code where a test can make the thread stop, and with the `test-hooks` feature the `Hold` that does it. Nothing at all without the feature. |
@@ -62,6 +63,7 @@ pub mod hash;
 pub mod hook;
 pub mod id;
 pub mod log;
+pub mod mode;
 pub mod nofollow;
 pub mod path;
 pub mod private;
@@ -89,6 +91,7 @@ pub use framing::{FrameDecoder, FrameError, FrameReader, FrameWriter, StreamErro
 pub use git::{GIT_ENV, GIT_HARDENING};
 pub use hash::{ContentHash, ContentHasher};
 pub use id::{IdCounter, IdGenerator};
+pub use mode::FileMode;
 pub use nofollow::{FileIdentity, OpenError, open_regular};
 pub use path::{
     AbsPath, PathError, PathOptions, PathResolver, PathStyle, RelPath, ResolvedPath,

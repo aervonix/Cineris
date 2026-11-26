@@ -13,14 +13,17 @@
 //! given the content the tool based its change on, not a path to read
 //! again: the file is read once, and what is kept for undo is exactly what
 //! the tool replaced, with no moment between two reads in which the file
-//! could have become something else.
+//! could have become something else. With it goes the file's mode, asked
+//! of the handle the bytes were read through ([`FileMode::of`]), so that a
+//! rewind that makes the file again makes it as it was (since the step 25
+//! fixes).
 //!
 //! [`Editing`] is what the two tools that write files are made with: the
 //! seam, the clock their writes wait on, and the largest file they change.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use cineris_base::{AbsPath, ContentHash, SharedClock};
+use cineris_base::{AbsPath, ContentHash, FileMode, SharedClock};
 
 use crate::files::FileSnapshot;
 
@@ -60,7 +63,9 @@ impl CheckpointError {
 pub trait Checkpoints: Send + Sync {
     /// Keeps what `file` held before a tool changes it: `content` is its
     /// bytes as the tool read them, or `None` for a file that does not
-    /// exist and is about to be created.
+    /// exist and is about to be created. `mode` is its permission bits, as
+    /// the handle it was read through reports them ([`FileMode::of`]):
+    /// `None` for a new file, and where they are not known.
     ///
     /// `file` is a real location from the path resolver, never a link. Only
     /// the first record of a file in a tool round counts: that is the state
@@ -69,7 +74,12 @@ pub trait Checkpoints: Send + Sync {
     /// # Errors
     ///
     /// When the content cannot be kept. The tool does not change the file.
-    fn before(&self, file: &AbsPath, content: Option<&[u8]>) -> Result<(), CheckpointError>;
+    fn before(
+        &self,
+        file: &AbsPath,
+        content: Option<&[u8]>,
+        mode: Option<FileMode>,
+    ) -> Result<(), CheckpointError>;
 
     /// Records what the tool left at `file`: the file as it now is, or
     /// `None` when there is no file (one that was to be created, and could
@@ -133,6 +143,8 @@ pub struct Change {
     pub file: AbsPath,
     /// What it held before the first change. `None`: it did not exist.
     pub before: Option<Vec<u8>>,
+    /// Its mode before the first change, where it was known.
+    pub mode: Option<FileMode>,
     /// What the last change left. `None`: a change was announced and no
     /// result has been recorded for it yet.
     pub after: Option<FileSnapshot>,
@@ -175,12 +187,18 @@ impl MemoryCheckpoints {
 }
 
 impl Checkpoints for MemoryCheckpoints {
-    fn before(&self, file: &AbsPath, content: Option<&[u8]>) -> Result<(), CheckpointError> {
+    fn before(
+        &self,
+        file: &AbsPath,
+        content: Option<&[u8]>,
+        mode: Option<FileMode>,
+    ) -> Result<(), CheckpointError> {
         let mut changes = self.lock();
         if !changes.iter().any(|change| change.file.key() == file.key()) {
             changes.push(Change {
                 file: file.clone(),
                 before: content.map(<[u8]>::to_vec),
+                mode,
                 after: None,
             });
         }
@@ -219,11 +237,11 @@ mod tests {
         let checkpoints = MemoryCheckpoints::new();
         let file = AbsPath::parse("/work/a.rs", PathStyle::Posix).unwrap();
         let other = AbsPath::parse("/work/new.rs", PathStyle::Posix).unwrap();
-        checkpoints.before(&file, Some(b"one")).unwrap();
+        checkpoints.before(&file, Some(b"one"), None).unwrap();
         checkpoints.after(&file, Some(&FileSnapshot::of_content(b"two", None)));
-        checkpoints.before(&file, Some(b"two")).unwrap();
+        checkpoints.before(&file, Some(b"two"), None).unwrap();
         checkpoints.after(&file, Some(&FileSnapshot::of_content(b"three", None)));
-        checkpoints.before(&other, None).unwrap();
+        checkpoints.before(&other, None, None).unwrap();
 
         let changes = checkpoints.changes();
         assert_eq!(changes.len(), 2);
@@ -240,14 +258,14 @@ mod tests {
         checkpoints.after(&other, None);
         assert_eq!(checkpoints.changes().len(), 1);
         let third = AbsPath::parse("/work/c.rs", PathStyle::Posix).unwrap();
-        checkpoints.before(&third, Some(b"kept")).unwrap();
+        checkpoints.before(&third, Some(b"kept"), None).unwrap();
         checkpoints.after(&third, Some(&FileSnapshot::of_content(b"kept", None)));
         assert_eq!(checkpoints.changes().len(), 1);
         // A file that is changed and then changed back is not a change.
-        checkpoints.before(&file, Some(b"three")).unwrap();
+        checkpoints.before(&file, Some(b"three"), None).unwrap();
         checkpoints.after(&file, Some(&FileSnapshot::of_content(b"one", None)));
         assert!(checkpoints.changes().is_empty());
-        checkpoints.before(&file, Some(b"one")).unwrap();
+        checkpoints.before(&file, Some(b"one"), None).unwrap();
         checkpoints.clear();
         assert!(checkpoints.changes().is_empty());
     }

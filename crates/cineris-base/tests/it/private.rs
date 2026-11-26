@@ -421,4 +421,90 @@ mod windows {
             "{listed:?}"
         );
     }
+
+    /// What "private" means for a file a rewind makes again (since the step
+    /// 25 fixes): cut off from its folder, and open to no one but the
+    /// current user, the system and the administrators.
+    #[test]
+    fn a_file_is_kept_from_others_only_when_its_own_list_says_so() {
+        let user = cineris_base::private::current_user_sid()
+            .unwrap()
+            .to_owned();
+        let entry = |kind: AccessKind, trustee: &str| cineris_base::private::AccessEntry {
+            kind,
+            current_user: trustee == user,
+            trustee: trustee.to_owned(),
+            rights: FULL_CONTROL,
+            inherited: false,
+        };
+        let list = |inherits: bool, entries| AccessList {
+            owner: user.clone(),
+            owned_by_current_user: true,
+            inherits,
+            unrestricted: false,
+            entries,
+        };
+        let others = "S-1-5-21-1-2-3-1001";
+        let users = "S-1-5-32-545";
+
+        let owner_only = list(false, vec![entry(AccessKind::Allow, &user)]);
+        assert!(owner_only.is_kept_from_others());
+        let with_the_system = list(
+            false,
+            vec![
+                entry(AccessKind::Allow, "S-1-5-18"),
+                entry(AccessKind::Allow, "S-1-5-32-544"),
+                entry(AccessKind::Allow, &user),
+                entry(AccessKind::Deny, users),
+            ],
+        );
+        assert!(with_the_system.is_kept_from_others());
+
+        for (shown, open) in [
+            (
+                "its folder's",
+                list(true, vec![entry(AccessKind::Allow, &user)]),
+            ),
+            (
+                "another user",
+                list(
+                    false,
+                    vec![
+                        entry(AccessKind::Allow, &user),
+                        entry(AccessKind::Allow, others),
+                    ],
+                ),
+            ),
+            (
+                "the users group",
+                list(
+                    false,
+                    vec![
+                        entry(AccessKind::Allow, &user),
+                        entry(AccessKind::Allow, users),
+                    ],
+                ),
+            ),
+            (
+                "not the user",
+                list(false, vec![entry(AccessKind::Allow, "S-1-5-18")]),
+            ),
+            (
+                "an entry not read",
+                list(
+                    false,
+                    vec![
+                        entry(AccessKind::Allow, &user),
+                        entry(AccessKind::Other, ""),
+                    ],
+                ),
+            ),
+            ("none", list(false, Vec::new())),
+        ] {
+            assert!(!open.is_kept_from_others(), "{shown}: {open:?}");
+        }
+        let mut unrestricted = list(false, Vec::new());
+        unrestricted.unrestricted = true;
+        assert!(!unrestricted.is_kept_from_others());
+    }
 }

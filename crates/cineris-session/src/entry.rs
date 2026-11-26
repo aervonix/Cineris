@@ -28,7 +28,7 @@
 
 use std::fmt;
 
-use cineris_base::ContentHash;
+use cineris_base::{ContentHash, FileMode};
 use cineris_protocol::error::{ErrorData, ErrorKind as WireKind, code};
 use cineris_protocol::event::{TurnCompleted, TurnOutcome, Verification};
 use cineris_protocol::ids::{
@@ -732,8 +732,8 @@ impl<'de> Deserialize<'de> for Before {
     }
 }
 
-/// One version of a file: its hash, its size, and whether its content is
-/// in the checkpoint store.
+/// One version of a file: its hash, its size, whether its content is in
+/// the checkpoint store, and its mode where it is known.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileVersion {
     /// The content's hash.
@@ -744,6 +744,77 @@ pub struct FileVersion {
     /// cap is recorded by hash and size only, and cannot be put back.
     #[serde(default = "yes", skip_serializing_if = "is_yes")]
     pub kept: bool,
+    /// The file's permission bits, which a rewind that makes the file again
+    /// gives it (since the step 25 fixes, which found every file made again
+    /// with the default mode: a script no longer executable, a private file
+    /// readable by others). On disk `"mode": "755"`, in octal: on Linux the
+    /// nine permission bits, on Windows `"600"` for a file kept from
+    /// everyone but its user and nothing for any other.
+    ///
+    /// Kept for a `before`: from the handle the file was read through (an
+    /// editing tool's, [`DiskStore::put_file`](crate::DiskStore::put_file)),
+    /// or from git's entry mode for a command's change read from git.
+    /// `None` where it is not known: a log written before the field, a
+    /// file's `after`, a protected path a command changed. Such a file is
+    /// made again as before, with the default mode. A value this build
+    /// cannot read is no mode, never a reason to lose the version: the
+    /// field is optional, and a build from before it skips it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "mode_text::write",
+        deserialize_with = "mode_text::read"
+    )]
+    pub mode: Option<FileMode>,
+}
+
+impl FileVersion {
+    /// A version with no mode recorded: what every version was before the
+    /// step 25 fixes.
+    #[must_use]
+    pub fn new(hash: ContentHash, bytes: u64, kept: bool) -> Self {
+        Self {
+            hash,
+            bytes,
+            kept,
+            mode: None,
+        }
+    }
+
+    /// The same version, with `mode` recorded.
+    #[must_use]
+    pub fn with_mode(self, mode: Option<FileMode>) -> Self {
+        Self { mode, ..self }
+    }
+}
+
+/// A [`FileVersion`]'s `mode` on disk: octal digits in a string.
+mod mode_text {
+    use cineris_base::FileMode;
+    use serde::{Deserialize, Deserializer, Serializer};
+    use serde_json::Value;
+
+    /// `None` is never written: the field is skipped then.
+    pub(super) fn write<S: Serializer>(
+        mode: &Option<FileMode>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match mode {
+            Some(mode) => serializer.serialize_str(&mode.to_octal()),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    /// Anything but a string of octal digits reads as no mode: damage, or
+    /// a form a later build wrote, never a reason to refuse the version.
+    pub(super) fn read<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<FileMode>, D::Error> {
+        Ok(match Value::deserialize(deserializer)? {
+            Value::String(text) => FileMode::from_octal(&text),
+            _ => None,
+        })
+    }
 }
 
 fn yes() -> bool {
@@ -1335,19 +1406,18 @@ mod tests {
                 FileChange {
                     path: "src/a.rs".into(),
                     before: Before::Absent,
-                    after: Some(FileVersion {
-                        hash,
-                        bytes: 1,
-                        kept: true,
-                    }),
+                    after: Some(FileVersion::new(hash, 1, true)),
                 },
                 FileChange {
                     path: "big.bin".into(),
-                    before: Before::Version(FileVersion {
-                        hash,
-                        bytes: 1 << 30,
-                        kept: false,
-                    }),
+                    before: Before::Version(FileVersion::new(hash, 1 << 30, false)),
+                    after: None,
+                },
+                FileChange {
+                    path: "run.sh".into(),
+                    before: Before::Version(
+                        FileVersion::new(hash, 1, true).with_mode(Some(FileMode::from_bits(0o755))),
+                    ),
                     after: None,
                 },
                 FileChange {
@@ -1457,11 +1527,7 @@ mod tests {
             panic!("{:?}", read.body)
         };
         let befores: Vec<Before> = checkpoint.files.iter().map(|file| file.before).collect();
-        let kept = FileVersion {
-            hash,
-            bytes: 1,
-            kept: true,
-        };
+        let kept = FileVersion::new(hash, 1, true);
         assert_eq!(
             befores,
             [
@@ -1481,6 +1547,93 @@ mod tests {
         assert_eq!(written["files"][0]["before"], Value::Null);
         assert_eq!(written["files"][2]["before"], json!("unknown"));
         assert_eq!(written["files"][3]["before"], json!("unknown"));
+    }
+
+    /// A version's mode (since the step 25 fixes) is an optional field:
+    /// written as octal digits only when it is known, read back as it was,
+    /// and anything else in it is no mode, never a version lost. A line
+    /// written before the field reads exactly as it did.
+    #[test]
+    fn a_versions_mode_is_written_only_when_known_and_never_loses_the_version() {
+        let hash = ContentHash::of(b"x");
+        let change = |before: FileVersion| {
+            Body::Checkpoint(Checkpoint {
+                files: vec![FileChange {
+                    path: "run.sh".into(),
+                    before: Before::Version(before),
+                    after: None,
+                }],
+            })
+        };
+        let plain = FileVersion::new(hash, 1, true);
+        let written = round_trip(change(plain));
+        assert_eq!(
+            written["files"][0]["before"],
+            json!({"hash": hash, "bytes": 1}),
+            "no mode, no field: the line is as an older build wrote it"
+        );
+        for (bits, text) in [
+            (0o755, "755"),
+            (0o600, "600"),
+            (0o4755, "755"),
+            (0o7, "007"),
+        ] {
+            let with = plain.with_mode(Some(FileMode::from_bits(bits)));
+            let written = round_trip(change(with));
+            assert_eq!(
+                written["files"][0]["before"]["mode"],
+                json!(text),
+                "{bits:o}"
+            );
+        }
+
+        let line = |before: Value| {
+            let line = json!({"v": 1, "id": "e_0003", "parent": "e_0002",
+                "ts": "2026-11-12T10:15:02Z", "kind": "checkpoint",
+                "files": [{"path": "run.sh", "before": before, "after": null}]});
+            serde_json::to_vec(&line).unwrap()
+        };
+        let before = |before: Value| match decode(&line(before)).unwrap().body {
+            Body::Checkpoint(checkpoint) => checkpoint.files[0].before,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            before(json!({"hash": hash, "bytes": 1, "mode": "755"})),
+            Before::Version(plain.with_mode(Some(FileMode::from_bits(0o755))))
+        );
+        assert_eq!(
+            before(json!({"hash": hash, "bytes": 1, "mode": "4755"})),
+            Before::Version(plain.with_mode(Some(FileMode::from_bits(0o755)))),
+            "a set-id bit is never read from a log"
+        );
+        for odd in [
+            json!(493),
+            json!("rwxr-xr-x"),
+            json!("0x1ed"),
+            json!("99999"),
+            json!(""),
+            json!(null),
+            json!({"bits": 493}),
+            json!([7, 5, 5]),
+        ] {
+            assert_eq!(
+                before(json!({"hash": hash, "bytes": 1, "mode": odd})),
+                Before::Version(plain),
+                "{odd}: no mode, and the version kept"
+            );
+        }
+        // A line from before the field.
+        assert_eq!(
+            before(json!({"hash": hash, "bytes": 1})),
+            Before::Version(plain)
+        );
+        // A field this build does not know in a version is skipped, which is
+        // how a build from before `mode` reads one written with it: the
+        // version, never "unknown".
+        assert_eq!(
+            before(json!({"hash": hash, "bytes": 1, "owner": "someone", "acl": [1]})),
+            Before::Version(plain)
+        );
     }
 
     #[test]

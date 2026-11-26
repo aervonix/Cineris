@@ -630,3 +630,24 @@ fn a_finished_command_is_read_for_the_observer_from_its_payload() {
     assert!(outside.outside && outside.changed);
     assert_eq!(outside.cwd, None);
 }
+
+/// What git keeps of a file's mode, read from `git ls-tree -z` (since the
+/// step 25 fixes): a regular file's alone, by the path git names.
+#[test]
+fn git_modes_are_read_for_regular_files_alone() {
+    use cineris_base::FileMode;
+
+    let answer = b"100755 blob 0a1b\trun.sh\x00100644 blob 2c3d\tsrc/a b.rs\x00\
+120000 blob 4e5f\tlink\x00160000 commit 6a7b\tvendored\x00040000 tree 8c9d\tdocs\x00\
+100755 blob\tno-object\x00100644 blob 0a1b\t\x00garbage\x00\xff\xfe\x00100755 tree 1\tnot-a-blob";
+    let modes: std::collections::HashMap<String, FileMode> = super::parse_ls_tree(answer).collect();
+    assert_eq!(
+        modes,
+        [
+            ("run.sh".to_owned(), FileMode::from_bits(0o777)),
+            ("src/a b.rs".to_owned(), FileMode::from_bits(0o666)),
+        ]
+        .into_iter()
+        .collect()
+    );
+}

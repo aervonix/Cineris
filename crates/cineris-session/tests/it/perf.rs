@@ -82,16 +82,8 @@ fn long_session(world: &World, entries: usize) -> u64 {
                 Body::Checkpoint(Checkpoint {
                     files: vec![FileChange {
                         path: "src/loader.rs".into(),
-                        before: Before::Version(FileVersion {
-                            hash,
-                            bytes: 4000,
-                            kept: true,
-                        }),
-                        after: Some(FileVersion {
-                            hash,
-                            bytes: 4100,
-                            kept: true,
-                        }),
+                        before: Before::Version(FileVersion::new(hash, 4000, true)),
+                        after: Some(FileVersion::new(hash, 4100, true)),
                     }],
                 }),
             )

@@ -19,6 +19,7 @@ mod durability;
 mod index;
 mod perf;
 mod private;
+mod put_back;
 mod snapshot;
 mod store;
 mod tree;
