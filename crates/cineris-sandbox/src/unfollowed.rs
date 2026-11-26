@@ -20,7 +20,12 @@
 //! last are followed as the system follows them (the person named the path),
 //! and its last name is opened relative to them and not followed, a trailing
 //! separator or `.` taken off first: a folder named through a link at its
-//! own name is refused, to be named where it leads.
+//! own name is refused, to be named where it leads. **A folder found below
+//! a place the person named** (a root of skills or of extensions in the
+//! workspace) is opened from that place instead, by its names below it,
+//! none followed ([`Folder::open_below`]): a folder above it swapped for a
+//! link is refused, not read through. [`Folder::identity`] tells whether two
+//! folders held are one.
 //!
 //! These functions block. Callers run them on the blocking pool.
 
@@ -118,6 +123,41 @@ impl Folder {
     /// [`Refused`]: nothing there, or no folder.
     pub fn open_following(path: &Path) -> Result<Self, Refused> {
         sys::open_following(path).map(|inner| Self { inner })
+    }
+
+    /// Opens the folder `below` names relative to `anchor`: `anchor` as the
+    /// system follows its whole path (a place the person named, such as
+    /// the workspace), and each name of `below` from it down opened
+    /// relative to the folder before, none followed (since the narrow
+    /// re-check of step 28's managing part: a folder above a root, inside
+    /// the workspace, swapped for a link between the root's look and its
+    /// read, sent the read through it). `below` empty is the anchor itself.
+    ///
+    /// # Errors
+    ///
+    /// [`Refused`]: nothing there, a link at any name of `below`, no
+    /// folder, or a part of `below` that is not a name (`..`, a root).
+    pub fn open_below(anchor: &Path, below: &Path) -> Result<Self, Refused> {
+        let mut folder = Self::open_following(anchor)?;
+        for part in below.components() {
+            match part {
+                std::path::Component::Normal(name) => folder = folder.folder(name)?,
+                std::path::Component::CurDir => {}
+                _ => return Err(Refused::NotAName),
+            }
+        }
+        Ok(folder)
+    }
+
+    /// What identifies the folder held, wherever its name now leads: its
+    /// device and inode on Linux, its volume's serial number and its file
+    /// index on Windows. Two folders held are one when these are equal.
+    ///
+    /// # Errors
+    ///
+    /// When the system does not say.
+    pub fn identity(&self) -> io::Result<cineris_base::FileIdentity> {
+        self.inner.identity()
     }
 
     /// Every name in the folder but `.` and `..`, in the order the system
@@ -316,6 +356,10 @@ mod sys {
                 return Err(Refused::NotAFile);
             }
             Ok((file, metadata))
+        }
+
+        pub(super) fn identity(&self) -> io::Result<cineris_base::FileIdentity> {
+            cineris_base::FileIdentity::of(&File::from(self.fd.try_clone()?))
         }
 
         /// What `name` is, not following a link: for a listing that does
@@ -653,6 +697,10 @@ mod sys {
             Ok((file, metadata))
         }
 
+        pub(super) fn identity(&self) -> io::Result<FileIdentity> {
+            FileIdentity::of(&File::from(self.handle.try_clone()?))
+        }
+
         pub(super) fn entries(&mut self, most: usize) -> io::Result<Vec<Entry>> {
             // 64 KiB, aligned for the entries, which are on 8-byte bounds.
             let mut buffer = vec![0_u64; 8 * 1024];
@@ -766,6 +814,10 @@ mod sys {
 
         pub(super) fn file(&self, _name: &OsStr) -> Result<(File, Metadata), Refused> {
             Err(Refused::Unsupported)
+        }
+
+        pub(super) fn identity(&self) -> io::Result<cineris_base::FileIdentity> {
+            Err(io::Error::from(io::ErrorKind::Unsupported))
         }
 
         pub(super) fn entries(&mut self, _most: usize) -> io::Result<Vec<Entry>> {
@@ -925,6 +977,59 @@ mod tests {
         let mut root = Folder::open(&dir).unwrap();
         assert_eq!(root.entries(3).unwrap().len(), 4);
         assert_eq!(root.entries(100).unwrap().len(), 10);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder opened below a place follows no link at any name below it,
+    /// and two opens of one folder are one folder by their identity, where
+    /// another is not.
+    ///
+    /// On Windows a symbolic link needs a privilege the CI runner has; the
+    /// link test above says when it skips.
+    #[test]
+    fn a_folder_below_a_place_follows_no_link_on_the_way_and_is_known_by_its_identity() {
+        let dir = scratch("below");
+        std::fs::create_dir_all(dir.join("place/a/b")).unwrap();
+        std::fs::create_dir_all(dir.join("outside/b")).unwrap();
+        let below = Folder::open_below(&dir.join("place"), Path::new("a/b")).unwrap();
+        let again = Folder::open(&dir.join("place/a/b")).unwrap();
+        assert_eq!(below.identity().unwrap(), again.identity().unwrap());
+        let other = Folder::open(&dir.join("outside/b")).unwrap();
+        assert_ne!(below.identity().unwrap(), other.identity().unwrap());
+        // The place itself, with nothing below it.
+        let place = Folder::open_below(&dir.join("place"), Path::new("")).unwrap();
+        assert_eq!(
+            place.identity().unwrap(),
+            Folder::open(&dir.join("place"))
+                .unwrap()
+                .identity()
+                .unwrap()
+        );
+        assert!(matches!(
+            Folder::open_below(&dir.join("place"), Path::new("a/../a/b")),
+            Err(Refused::NotAName)
+        ));
+        drop((below, again, other, place));
+        std::fs::rename(dir.join("place/a"), dir.join("moved")).unwrap();
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(dir.join("outside"), dir.join("place/a"));
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(dir.join("outside"), dir.join("place/a"));
+        if let Err(error) = linked {
+            assert!(
+                std::env::var_os("GITHUB_ACTIONS").is_none(),
+                "the CI runner cannot make a symbolic link: {error}"
+            );
+            println!("skipped: cannot make a symbolic link here ({error})");
+            return;
+        }
+        // Through the link, by its path, the folder outside is reached; from
+        // the place down, it is refused.
+        assert!(Folder::open(&dir.join("place/a/b")).is_ok());
+        assert!(matches!(
+            Folder::open_below(&dir.join("place"), Path::new("a/b")),
+            Err(Refused::Link)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

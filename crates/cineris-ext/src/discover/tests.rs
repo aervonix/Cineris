@@ -1189,3 +1189,180 @@ fn every_name_a_refusal_shows_as_code_cannot_end_its_code() {
         assert!(reason.contains("a\\`. This extension"), "{reason}");
     }
 }
+
+/// Makes `link` lead to the folder `target`: a symbolic link, or on Windows,
+/// where an account without the right cannot make one, a junction, the
+/// folder link any account can make (with `mklink /J`, a process). `false`
+/// only where neither can be made.
+fn link_folder(target: &Path, link: &Path) -> bool {
+    #[cfg(unix)]
+    let made = std::os::unix::fs::symlink(target, link).is_ok();
+    #[cfg(windows)]
+    let made = std::os::windows::fs::symlink_dir(target, link).is_ok() || {
+        let made = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(link)
+            .arg(target)
+            .output()
+            .expect("run mklink");
+        made.status.success()
+    };
+    made
+}
+
+/// The project's extension `tracker`, and the user's own of the same name in
+/// their configuration directory, which holds a file the project's has not
+/// (the narrow re-check of the managing part).
+fn ours_and_the_users(name: &str) -> Scratch {
+    let scratch = Scratch::outside("cineris-ext-unit", name);
+    extension(&scratch, "home/proj/.cineris/extensions/tracker", "tracker");
+    extension(&scratch, "home/cfg/extensions/tracker", "tracker");
+    scratch.file(
+        "home/cfg/extensions/tracker/users-own.txt",
+        "THE USER'S OWN",
+    );
+    scratch
+}
+
+/// Swaps the project's `.cineris` for a link to the user's configuration
+/// directory: `Err` with why when the folder cannot be moved (on Windows,
+/// while a folder below it is held), `Ok(false)` when no link can be made.
+fn swap_the_projects_folder_for_the_users(scratch: &Scratch) -> Result<bool, std::io::Error> {
+    let dot = scratch.join("home/proj/.cineris");
+    std::fs::rename(&dot, scratch.join("home/proj/.cineris-moved"))?;
+    Ok(link_folder(&scratch.join("home/cfg"), &dot))
+}
+
+/// Puts the project's `.cineris` back where it was, the link taken away.
+fn swap_back(scratch: &Scratch) {
+    let dot = scratch.join("home/proj/.cineris");
+    remove_link(&dot);
+    std::fs::rename(scratch.join("home/proj/.cineris-moved"), &dot).unwrap();
+}
+
+/// The project's own extension is what was found, and only it, read from
+/// its own folder: on Windows, where a folder above a root held cannot be
+/// renamed at all, whatever the swap was.
+fn only_ours(discovered: &Discovered, swapped: &Result<bool, std::io::Error>) {
+    match swapped {
+        Ok(linked) => {
+            assert!(*linked, "no link could be made");
+            println!("the folder above the root was swapped for a link");
+        }
+        // On Windows a folder above a root held cannot be renamed.
+        #[cfg(windows)]
+        Err(error) => println!("the folder above the root held was not moved: {error}"),
+        #[cfg(not(windows))]
+        Err(error) => panic!("the folder could not be moved: {error}"),
+    }
+    assert!(
+        !format!("{discovered:?}").contains("users-own.txt"),
+        "{discovered:?}"
+    );
+    assert_eq!(
+        found(discovered),
+        [(Source::Project, "tracker", ".cineris/extensions/tracker")]
+    );
+    assert!(discovered.left_out.is_empty(), "{:?}", left(discovered));
+    assert!(discovered.cut.is_empty());
+}
+
+/// A folder above the project's root, inside the workspace, swapped for a
+/// link to the user's configuration directory as an extension's folder is
+/// about to be read, and put back once it is read, so that what was read is
+/// kept: the folder is read in the root that was listed, so it is the
+/// project's own, and the user's is never read through. On Windows the
+/// folder above a root held cannot be renamed at all.
+#[test]
+fn sys_a_parent_of_the_root_swapped_for_a_link_as_an_extension_is_read_is_never_read_through() {
+    let scratch = ours_and_the_users(
+        "sys_a_parent_of_the_root_swapped_for_a_link_as_an_extension_is_read_is_never_read_through",
+    );
+    let roots = [project(&scratch)];
+    let paths = resolver(&scratch);
+    let reading = cineris_testkit::Hold::new(discover::AN_EXTENSION_IS_READ);
+    let read = cineris_testkit::Hold::new(discover::AN_EXTENSION_WAS_READ);
+    let discovering = std::thread::spawn(move || discover::discover(&roots, &paths));
+    reading.reach();
+    let swapped = swap_the_projects_folder_for_the_users(&scratch);
+    reading.release();
+    read.reach();
+    if matches!(swapped, Ok(true)) {
+        swap_back(&scratch);
+    }
+    read.release();
+    let discovered = discovering.join().unwrap();
+    only_ours(&discovered, &swapped);
+}
+
+/// The same swap, left in place: the root is opened again after its
+/// folders are read, leads elsewhere now, and its extensions are left out,
+/// said, and the root not listed whole; the user's is never read through.
+#[test]
+fn sys_a_root_that_changed_as_its_extensions_were_read_is_left_out_and_said() {
+    let scratch = ours_and_the_users(
+        "sys_a_root_that_changed_as_its_extensions_were_read_is_left_out_and_said",
+    );
+    let roots = [project(&scratch)];
+    let paths = resolver(&scratch);
+    let hold = cineris_testkit::Hold::new(discover::AN_EXTENSION_IS_READ);
+    let discovering = std::thread::spawn(move || discover::discover(&roots, &paths));
+    hold.reach();
+    let swapped = swap_the_projects_folder_for_the_users(&scratch);
+    hold.release();
+    let discovered = discovering.join().unwrap();
+    if swapped.is_err() {
+        only_ours(&discovered, &swapped);
+        return;
+    }
+    assert!(swapped.unwrap(), "no link could be made");
+    assert!(
+        !format!("{discovered:?}").contains("users-own.txt"),
+        "{discovered:?}"
+    );
+    assert!(found(&discovered).is_empty(), "{:?}", found(&discovered));
+    assert!(discovered.cut.contains(&Source::Project));
+    assert!(
+        left(&discovered)
+            .iter()
+            .any(|(_, shown, reason)| *shown == ".cineris/extensions"
+                && reason.contains("changed as it was read")),
+        "{:?}",
+        left(&discovered)
+    );
+}
+
+/// The same swap after the root was resolved and judged inside the
+/// workspace, before it is opened: the root is opened from the workspace
+/// down, no name followed, so the link is met and refused, and the root is
+/// left out, said, and not listed whole, on every system.
+#[test]
+fn sys_a_parent_of_the_root_swapped_for_a_link_before_it_is_opened_is_never_read_through() {
+    let scratch = ours_and_the_users(
+        "sys_a_parent_of_the_root_swapped_for_a_link_before_it_is_opened_is_never_read_through",
+    );
+    let roots = [project(&scratch)];
+    let paths = resolver(&scratch);
+    let hold = cineris_testkit::Hold::new(discover::A_ROOT_IS_OPENED);
+    let discovering = std::thread::spawn(move || discover::discover(&roots, &paths));
+    hold.reach();
+    let swapped = swap_the_projects_folder_for_the_users(&scratch);
+    hold.release();
+    let discovered = discovering.join().unwrap();
+    assert!(swapped.unwrap(), "no link could be made");
+    assert!(
+        !format!("{discovered:?}").contains("users-own.txt"),
+        "{discovered:?}"
+    );
+    assert!(found(&discovered).is_empty(), "{:?}", found(&discovered));
+    assert!(discovered.names.is_empty(), "{:?}", discovered.names);
+    assert!(discovered.cut.contains(&Source::Project));
+    assert!(
+        left(&discovered)
+            .iter()
+            .any(|(_, shown, reason)| *shown == ".cineris/extensions"
+                && reason.contains("a folder on the way to it is a link now")),
+        "{:?}",
+        left(&discovered)
+    );
+}
