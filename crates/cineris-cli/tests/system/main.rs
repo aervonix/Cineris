@@ -168,6 +168,21 @@ impl Machine {
         &self.vars
     }
 
+    /// The binary's dialogs and first-run steps ready in a tenth of their
+    /// times (`cineris_base::hook::READY_DIVISOR`): for a test that answers
+    /// them and does not test the rule's timing, which otherwise waits its
+    /// real seconds (0.3 s after a step is shown, a second after the key
+    /// that answered the one before). The rule keeps its proportions, and
+    /// its own tests are `cineris-tui`'s, on a fake clock; the tests that
+    /// type through a dialog keep the real times (`docs/steps/ci-budgets-2/
+    /// answered.md`, "The dialogs' times in the system tests").
+    pub fn quick_dialogs(&mut self) {
+        self.vars.push((
+            cineris_base::hook::READY_DIVISOR.to_owned(),
+            OsString::from("10"),
+        ));
+    }
+
     /// Where the binary looks, worked out as it works it out.
     pub fn dirs(&self) -> Dirs {
         let mut env = Env::empty(Platform::CURRENT);

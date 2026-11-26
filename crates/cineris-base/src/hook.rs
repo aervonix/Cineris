@@ -238,6 +238,45 @@ pub const fn probed(_program: &std::ffi::OsStr) {}
 #[inline(always)]
 pub const fn starting(_program: &std::ffi::OsStr) {}
 
+/// What a dialog's and the first run's readiness times are divided by: 1,
+/// always, without the `test-hooks` feature, which no build that is shipped
+/// or released has (`cargo xtask size` fails a shipped binary that holds
+/// [`READY_DIVISOR`]'s name). With it, the number in [`READY_DIVISOR`] when
+/// that is 1 to 100, and 1 otherwise: for the binary's system tests that
+/// answer a dialog and do not test the rule's timing, which otherwise wait
+/// its real seconds (`docs/steps/ci-budgets-2/answered.md`, "The dialogs'
+/// times in the system tests").
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+#[must_use]
+pub const fn ready_divisor() -> u32 {
+    1
+}
+
+/// The variable a test sets on the binary it starts to divide the
+/// readiness times by ([`ready_divisor`]). Read only with the `test-hooks`
+/// feature, so that only a build with it holds the name: a constant reaches
+/// a binary only where code reads it.
+pub const READY_DIVISOR: &str = "CINERIS_TEST_READY_DIVISOR";
+
+/// [`ready_divisor`] with the `test-hooks` feature: the variable, read once.
+#[cfg(feature = "test-hooks")]
+#[must_use]
+pub fn ready_divisor() -> u32 {
+    static DIVISOR: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *DIVISOR.get_or_init(|| divisor_from(std::env::var(READY_DIVISOR).ok().as_deref()))
+}
+
+/// The divisor a value of [`READY_DIVISOR`] says: 1 to 100, and 1 for
+/// anything else.
+#[cfg(feature = "test-hooks")]
+fn divisor_from(value: Option<&str>) -> u32 {
+    value
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|divisor| (1..=100).contains(divisor))
+        .unwrap_or(1)
+}
+
 /// What a line of [`probed`] starts with, before the program's name.
 pub const PROBED: &str = "probe>";
 
@@ -1630,6 +1669,31 @@ mod refusal_tests {
         let (passed, stderr) = run_as("verify::sys_a_users_check");
         assert!(passed, "{stderr}");
         assert!(stderr.contains("the start went on"), "{stderr}");
+    }
+}
+
+#[cfg(all(test, feature = "test-hooks"))]
+mod ready_divisor_tests {
+    use super::divisor_from;
+
+    /// The readiness times are divided only by a number a test named, from
+    /// 1 to 100; anything else, the variable's absence included, is 1.
+    #[test]
+    fn the_readiness_times_are_divided_only_by_a_number_a_test_named() {
+        assert_eq!(divisor_from(Some("10")), 10);
+        assert_eq!(divisor_from(Some(" 4 ")), 4);
+        assert_eq!(divisor_from(Some("100")), 100);
+        for one in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("101"),
+            Some("-3"),
+            Some("ten"),
+            Some("2.5"),
+        ] {
+            assert_eq!(divisor_from(one), 1, "{one:?}");
+        }
     }
 }
 

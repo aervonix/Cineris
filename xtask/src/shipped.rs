@@ -394,11 +394,44 @@ fn find_all(bytes: &[u8], needle: &[u8]) -> Vec<usize> {
         .collect()
 }
 
+/// What only a build with `cineris-base`'s `test-hooks` feature holds: the
+/// name of the variable that divides the dialogs' readiness times
+/// (`cineris_base::hook::ready_divisor`), which code reads only with the
+/// feature. A shipped binary that holds it could be told to take a dialog's
+/// answer before a person has stopped typing (`docs/steps/ci-budgets-2/
+/// answered.md`, "The dialogs' times in the system tests").
+/// A test holds it to the hook's own constant, which `xtask` reaches only
+/// in its tests.
+const TEST_HOOK_MARKS: [&str; 1] = ["CINERIS_TEST_READY_DIVISOR"];
+
+/// The marks of [`TEST_HOOK_MARKS`] that `bytes` holds.
+pub(crate) fn test_hooks_in(bytes: &[u8]) -> Vec<&'static str> {
+    TEST_HOOK_MARKS
+        .into_iter()
+        .filter(|mark| {
+            bytes
+                .windows(mark.len())
+                .any(|window| window == mark.as_bytes())
+        })
+        .collect()
+}
+
 /// Fails, saying where, when the file at `path` holds a path under a home
-/// folder or under this build's cargo home.
+/// folder or under this build's cargo home, or a test hook.
 pub(crate) fn check_file(path: &Path) -> Result<()> {
     let bytes =
         fs::read(path).map_err(|error| format!("could not read {}: {error}", path.display()))?;
+    let hooks = test_hooks_in(&bytes);
+    if !hooks.is_empty() {
+        return Err(format!(
+            "{} holds the test hooks (`{}`): it was built with `cineris-base`'s `test-hooks` \
+             feature, which only a test build has. Look for what turned it on outside \
+             `[dev-dependencies]` and the test kit (`cargo xtask rules` checks that).",
+            path.display(),
+            hooks.join("`, `")
+        ));
+    }
+    println!("  hooks    none of the test hooks");
     let own = own_folders();
     let own: Vec<(&str, &Path)> = own
         .iter()
@@ -554,6 +587,16 @@ mod tests {
             "{found:?}"
         );
         assert!(!found.concat().contains("ada"), "{found:?}");
+    }
+
+    #[test]
+    fn a_binary_built_with_the_test_hooks_is_refused() {
+        let mut bytes = b"\x7fELF\0\0".to_vec();
+        assert_eq!(super::test_hooks_in(&bytes), [] as [&str; 0]);
+        bytes.extend_from_slice(b"\0CINERIS_TEST_READY_DIVISOR\0");
+        assert_eq!(super::test_hooks_in(&bytes), ["CINERIS_TEST_READY_DIVISOR"]);
+        // The hook's own name, which a test of the binary sets.
+        assert_eq!(super::TEST_HOOK_MARKS, [cineris_testkit::READY_DIVISOR]);
     }
 
     #[test]

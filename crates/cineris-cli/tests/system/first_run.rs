@@ -78,7 +78,10 @@ fn sys_the_first_run_in_an_empty_home_reaches_a_working_session() {
     let phases = cineris_testkit::Phases::new(
         "sys_the_first_run_in_an_empty_home_reaches_a_working_session",
     );
-    let machine = Machine::new("first_run_empty_home");
+    let mut machine = Machine::new("first_run_empty_home");
+    // The flow, not the rule's timing, which cineris-tui's tests hold on a
+    // fake clock: its steps ready in a tenth of their real times.
+    machine.quick_dialogs();
     let user_config = machine.dirs().user_config.unwrap();
     // A truly empty home: nothing of the machine's own set-up is left in it
     // (the full review of the third pull request).

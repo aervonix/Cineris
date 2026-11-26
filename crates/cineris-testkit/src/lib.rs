@@ -89,6 +89,7 @@ pub mod watch;
 pub use brief::brief;
 pub use built::Built;
 pub use canary::{Printed, assert_never_printed};
+pub use cineris_base::hook::READY_DIVISOR;
 pub use cineris_base::{Clock, FakeClock, Rng, SeededRng};
 pub use exec::{block_on, join};
 pub use gate::Gate;
