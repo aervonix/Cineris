@@ -1,0 +1,149 @@
+# The fixes of step 25's review, the terminal layer: findings 10 and 11,
+# and the emergency restore's mouse-off under the keyboard protocol and the
+# win32 input mode. Record: docs/steps/step-25-fixes/parts/terminal.md.
+
+[break] the-alternate-screen-is-left-with-the-keyboard-flags
+rule: The keyboard protocol's flags pushed on the alternate screen are popped before the program leaves it.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::alternate
+find: bytes.extend_from_slice(KEYBOARD_OFF);
+replace:
+caught-by:
+    cineris-term terminal::tests::the_keyboard_flags_are_left_pushed_on_neither_screen
+    cineris-term terminal::tests::a_resumption_on_the_alternate_screen_pushes_the_flags_on_each_screen_shown
+
+[break] the-alternate-screen-gets-no-keyboard-flags
+rule: The keyboard protocol's flags are pushed on the alternate screen once it is shown, while the protocol is on.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::alternate
+find: bytes.extend_from_slice(KEYBOARD_ON);
+occurrence: 1
+replace:
+caught-by:
+    cineris-term terminal::tests::the_keyboard_flags_are_left_pushed_on_neither_screen
+
+[break] the-main-screen-never-gets-the-flags-of-a-reply-on-the-alternate
+rule: Flags pushed while the alternate screen was shown are pushed on the main screen once it is back.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::alternate
+find: let push_main = self.keyboard && !self.main_keyboard;
+replace: let push_main = false;
+caught-by:
+    cineris-term terminal::tests::the_keyboard_flags_are_left_pushed_on_neither_screen
+
+[break] a-reply-on-the-alternate-screen-is-taken-as-on-the-main
+rule: A push written while the alternate screen is shown is not the main screen's.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::reply
+find: self.main_keyboard = !self.alternate;
+replace: self.main_keyboard = true;
+caught-by:
+    cineris-term terminal::tests::the_keyboard_flags_are_left_pushed_on_neither_screen
+
+[break] the-end-leaves-the-alternate-screen-with-the-keyboard-flags
+rule: Putting the terminal back pops the alternate screen's flags before it leaves the alternate screen.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::end
+find: end.extend_from_slice(KEYBOARD_OFF);
+occurrence: 1
+replace:
+caught-by:
+    cineris-term terminal::tests::the_keyboard_flags_are_left_pushed_on_neither_screen
+
+[break] a-resumption-on-the-alternate-screen-counts-the-main-screen-pushed
+rule: Continued after a stop on the alternate screen, the flags are pushed on the main screen once it is back.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::resume
+find: self.main_keyboard = self.keyboard && !self.alternate;
+replace: self.main_keyboard = self.keyboard;
+caught-by:
+    cineris-term terminal::tests::a_resumption_on_the_alternate_screen_pushes_the_flags_on_each_screen_shown
+
+[break] the-restore-leaves-the-keyboard-flags-on-the-alternate-screen
+rule: The emergency restore with the alternate screen and the keyboard protocol on pops the flags before it leaves the alternate screen.
+file: crates/cineris-term/src/sys/mod.rs
+in-string: \x1b[?1000l\x1b[<u\x1b[?1049l
+occurrence: 1
+replace: \x1b[?1000l\x1b[?1049l
+caught-by:
+    cineris-term sys::tests::the_restore_leaves_no_keyboard_flags_and_no_mouse_on_either_screen
+    cineris-term terminal::tests::the_keyboard_flags_are_left_pushed_on_neither_screen
+
+[break] the-restore-under-win32-leaves-the-keyboard-flags-on-the-alternate-screen
+rule: The same with the win32 input mode on too.
+file: crates/cineris-term/src/sys/mod.rs
+in-string: \x1b[?1000l\x1b[<u\x1b[?1049l
+occurrence: 2
+replace: \x1b[?1000l\x1b[?1049l
+caught-by:
+    cineris-term sys::tests::the_restore_leaves_no_keyboard_flags_and_no_mouse_on_either_screen
+
+[break] the-restore-under-the-keyboard-protocol-leaves-the-mouse-on
+rule: The emergency restore with the alternate screen and the keyboard protocol on turns mouse reporting off.
+file: crates/cineris-term/src/sys/mod.rs
+in-string: \x1b[0m\x1b[?1006l\x1b[?1000l\x1b[<u
+occurrence: 1
+replace: \x1b[0m\x1b[<u
+caught-by:
+    cineris-term sys::tests::the_restore_leaves_no_keyboard_flags_and_no_mouse_on_either_screen
+
+[break] the-restore-under-win32-leaves-the-mouse-on
+rule: The emergency restore with the alternate screen and the win32 input mode on turns mouse reporting off.
+file: crates/cineris-term/src/sys/mod.rs
+in-string: \x1b[?1006l\x1b[?1000l\x1b[?1049l\r\x1b[J\x1b[?9001l
+replace: \x1b[?1049l\r\x1b[J\x1b[?9001l
+caught-by:
+    cineris-term sys::tests::the_restore_leaves_no_keyboard_flags_and_no_mouse_on_either_screen
+
+[break] the-restore-under-both-leaves-the-mouse-on
+rule: The emergency restore with the alternate screen, the keyboard protocol and the win32 input mode on turns mouse reporting off.
+file: crates/cineris-term/src/sys/mod.rs
+in-string: \x1b[0m\x1b[?1006l\x1b[?1000l\x1b[<u
+occurrence: 2
+replace: \x1b[0m\x1b[<u
+caught-by:
+    cineris-term sys::tests::the_restore_leaves_no_keyboard_flags_and_no_mouse_on_either_screen
+
+[break] taking-the-terminal-back-leaves-an-editors-flags-on-the-alternate-screen
+rule: Taking the terminal back from the external editor pops a killed editor's flags on the alternate screen before it leaves it.
+file: crates/cineris-tui/src/external.rs
+in-string: \x1b[<99u\x1b[?1047l
+replace: \x1b[?1047l
+caught-by:
+    cineris-tui external::tests::what_a_killed_editor_left_on_is_turned_off_on_both_screens
+
+[break] the-virtual-terminal-has-one-keyboard-stack
+rule: The test kit's virtual terminal keeps a stack of keyboard flags per screen, as the kitty protocol has it.
+file: crates/cineris-testkit/src/vterm.rs
+in: VTerm::shown_keyboard
+find: if self.modes.alternate { &mut self.alternate_keyboard } else { &mut self.keyboard }
+replace: &mut self.keyboard
+caught-by:
+    cineris-testkit vterm::tests::each_screen_has_a_stack_of_keyboard_flags_of_its_own
+
+[break] leaving-the-alternate-screen-is-marked-before-its-write
+rule: Leaving the alternate screen is marked, with the emergency restore's record, only once its write has succeeded.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::alternate
+find: self.device.write(&bytes)?;
+replace: self.alternate = false; sys::set_alternate(false); self.device.write(&bytes)?;
+caught-by:
+    cineris-term terminal::tests::a_failed_write_turning_the_alternate_screen_or_the_mouse_off_is_tried_again
+
+[break] the-mouse-is-marked-off-before-its-write
+rule: Turning the mouse off is marked only once its write has succeeded.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::set_mouse
+find: self.device.write(sequence)?;
+replace: self.mouse = false; self.device.write(sequence)?;
+caught-by:
+    cineris-term terminal::tests::a_failed_write_turning_the_alternate_screen_or_the_mouse_off_is_tried_again
+
+[break] an-end-that-failed-clears-the-restores-record
+rule: Putting the terminal back clears the emergency restore's record only once its write has succeeded.
+file: crates/cineris-term/src/terminal.rs
+in: Terminal::end
+find: if written.is_ok() {
+replace: if true {
+caught-by:
+    cineris-term terminal::tests::a_failed_write_turning_the_alternate_screen_or_the_mouse_off_is_tried_again

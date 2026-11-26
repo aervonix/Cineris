@@ -280,6 +280,15 @@ pub(crate) const OPEN_WAIT: Duration = Duration::from_secs(2);
 /// dialog never takes as its answer, and a release is dropped (since the
 /// review of step 23). A key that types text still comes as its text,
 /// repeats included.
+///
+/// The protocol's flags are a stack, and each screen has its own: a push
+/// or a pop changes the stack of the screen shown when it is written, and
+/// kitty and ghostty keep the alternate screen's from one use of it to the
+/// next. So the flags are pushed on each screen the program shows while
+/// the protocol is on, and popped before it leaves that screen (since the
+/// fixes of step 25's review, which found them left pushed on the
+/// alternate screen, where the next program that took it got keys it never
+/// asked for).
 const KEYBOARD_ON: &[u8] = b"\x1b[>3u";
 const KEYBOARD_OFF: &[u8] = b"\x1b[<u";
 /// Turns Windows Terminal's win32 input mode on, and off.
@@ -476,7 +485,14 @@ pub struct Terminal<D: Device = System> {
     /// came ([`Self::came`]).
     came: Instant,
     bytes: Vec<u8>,
+    /// Whether the enhanced keyboard protocol is on: its flags are pushed
+    /// on the screen shown ([`KEYBOARD_ON`]).
     keyboard: bool,
+    /// Whether the main screen's stack holds the flags pushed: set by the
+    /// push written while it is shown, and once it is shown again after
+    /// the alternate screen, if the push came while that was (the fixes of
+    /// step 25's review).
+    main_keyboard: bool,
     win32: bool,
     active: bool,
     /// When the decoder began to keep bytes that more input could complete
@@ -596,6 +612,7 @@ impl<D: Device> Terminal<D> {
             came: queried,
             bytes: Vec::new(),
             keyboard: false,
+            main_keyboard: false,
             win32: false,
             active: true,
             pending_since: None,
@@ -665,7 +682,16 @@ impl<D: Device> Terminal<D> {
     /// scrollback and the live region as they were (since step 23). While
     /// it is on, an emergency restore leaves it too, and so does putting the
     /// terminal back. With it the mouse is reported, if the program asked
-    /// for that ([`set_mouse`](Self::set_mouse)), and never without it.
+    /// for that ([`set_mouse`](Self::set_mouse)), and never without it. The
+    /// keyboard protocol's flags, while it is on, are pushed on the
+    /// alternate screen once it is shown and popped before it is left, and
+    /// pushed on the main screen once it is back, if they never were there
+    /// ([`KEYBOARD_ON`]).
+    ///
+    /// Turned off, it is marked off (and the emergency restore's record
+    /// with it) only once the write has succeeded, so that a write that
+    /// failed is tried again by the next call, by putting the terminal back
+    /// and by an emergency restore (since the fixes of step 25's review).
     ///
     /// # Errors
     ///
@@ -674,7 +700,6 @@ impl<D: Device> Terminal<D> {
         if on == self.alternate {
             return Ok(());
         }
-        self.alternate = on;
         // The emergency restore's record says on before the screen is, and
         // off only once it is not: a signal in between finds it on and
         // leaves it, and turns the mouse off with it. On the main screen
@@ -682,23 +707,40 @@ impl<D: Device> Terminal<D> {
         // position saved last), but it never leaves the terminal on the
         // alternate screen, which the other order could.
         if on {
+            self.alternate = true;
             sys::set_alternate(true);
             let mut bytes = ALTERNATE_ON.to_vec();
             if self.mouse {
                 bytes.extend_from_slice(self.mouse_sequence(true));
                 self.decoder.set_mouse(true);
             }
+            if self.keyboard {
+                bytes.extend_from_slice(KEYBOARD_ON);
+            }
             self.device.write(&bytes)
         } else {
             let mut bytes = Vec::new();
             if self.mouse {
                 bytes.extend_from_slice(self.mouse_sequence(false));
-                self.decoder.set_mouse(false);
+            }
+            if self.keyboard {
+                bytes.extend_from_slice(KEYBOARD_OFF);
             }
             bytes.extend_from_slice(ALTERNATE_OFF);
-            let written = self.device.write(&bytes);
+            // Turned on while the alternate screen was shown: the main
+            // screen has not had the flags yet.
+            let push_main = self.keyboard && !self.main_keyboard;
+            if push_main {
+                bytes.extend_from_slice(KEYBOARD_ON);
+            }
+            self.device.write(&bytes)?;
+            self.alternate = false;
+            if self.mouse {
+                self.decoder.set_mouse(false);
+            }
+            self.main_keyboard |= push_main;
             sys::set_alternate(false);
-            written
+            Ok(())
         }
     }
 
@@ -710,7 +752,9 @@ impl<D: Device> Terminal<D> {
     /// the person's. `Shift`
     /// and a drag stay the terminal's selection in the terminals that
     /// report the mouse. Off at the start. Taking effect at once when the
-    /// alternate screen is on.
+    /// alternate screen is on. Turned off, it is marked off only once the
+    /// write has succeeded, so that a write that failed is tried again (the
+    /// fixes of step 25's review).
     ///
     /// # Errors
     ///
@@ -719,16 +763,25 @@ impl<D: Device> Terminal<D> {
         if on == self.mouse {
             return Ok(());
         }
-        self.mouse = on;
         if !self.alternate {
+            self.mouse = on;
             return Ok(());
         }
-        self.decoder.set_mouse(on);
         let sequence = self.mouse_sequence(on);
-        if sequence.is_empty() {
-            return Ok(());
+        if on {
+            self.mouse = true;
+            self.decoder.set_mouse(true);
+            if sequence.is_empty() {
+                return Ok(());
+            }
+            return self.device.write(sequence);
         }
-        self.device.write(sequence)
+        if !sequence.is_empty() {
+            self.device.write(sequence)?;
+        }
+        self.mouse = false;
+        self.decoder.set_mouse(false);
+        Ok(())
     }
 
     /// The mouse's sequence, on or off (since step 25): on only where the
@@ -1096,13 +1149,20 @@ impl<D: Device> Terminal<D> {
                 again.extend_from_slice(self.mouse_sequence(true));
             }
         }
+        // The stop's restore popped the keyboard flags of both screens: they
+        // are pushed again on the screen shown, and on the main screen once
+        // it is shown again (the fixes of step 25's review: pushed here on
+        // the alternate screen, they were popped from the main one).
+        self.main_keyboard = false;
         if self.keyboard {
             again.extend_from_slice(KEYBOARD_ON);
         }
         if self.win32 {
             again.extend_from_slice(WIN32_ON);
         }
-        self.device.write(&again)
+        self.device.write(&again)?;
+        self.main_keyboard = self.keyboard && !self.alternate;
+        Ok(())
     }
 
     fn reply(&mut self, reply: Reply) -> io::Result<()> {
@@ -1111,9 +1171,14 @@ impl<D: Device> Terminal<D> {
         }
         self.caps.apply(&reply);
         if self.caps.keyboard && !self.keyboard {
-            self.keyboard = true;
+            // On the screen shown; on the main screen, if that is the
+            // alternate, once it is back (`alternate`). The emergency
+            // restore's record first: its pop of a stack that holds nothing
+            // of the program's does nothing.
             sys::set_keyboard(true);
             self.device.write(KEYBOARD_ON)?;
+            self.keyboard = true;
+            self.main_keyboard = !self.alternate;
         }
         if self.caps.win32_input && !self.win32 {
             // A mouse asked for by its sequences goes off first: through a
@@ -1164,14 +1229,18 @@ impl<D: Device> Terminal<D> {
             self.drain_replies();
         }
         let mut end = Vec::new();
-        let alternate = std::mem::take(&mut self.alternate);
-        if alternate {
+        // Each screen's keyboard flags popped while it is shown: the
+        // alternate screen's before it is left, the main screen's after.
+        if self.alternate {
             if self.mouse {
                 end.extend_from_slice(self.mouse_sequence(false));
             }
+            if self.keyboard {
+                end.extend_from_slice(KEYBOARD_OFF);
+            }
             end.extend_from_slice(ALTERNATE_OFF);
         }
-        if self.keyboard {
+        if self.keyboard && self.main_keyboard {
             end.extend_from_slice(KEYBOARD_OFF);
         }
         if self.win32 {
@@ -1179,14 +1248,15 @@ impl<D: Device> Terminal<D> {
         }
         end.extend_from_slice(END);
         let written = self.device.write(&end);
-        if alternate {
-            sys::set_alternate(false);
-        }
         self.device.leave();
-        if self.keyboard {
+        // The emergency restore's record is cleared only once what it would
+        // turn off has been (the fixes of step 25's review): a terminal
+        // entered again after an end that failed (the external editor's)
+        // restores it in an emergency.
+        if written.is_ok() {
+            self.alternate = false;
+            sys::set_alternate(false);
             sys::set_keyboard(false);
-        }
-        if self.win32 {
             sys::set_win32(false);
         }
         written
@@ -1304,6 +1374,13 @@ mod tests {
         /// [`STEP`].
         base: Option<Instant>,
         elapsed: Arc<Mutex<Duration>>,
+        /// How many of the next writes are refused, as a terminal another
+        /// process made non-blocking refuses one (`WouldBlock`), with
+        /// nothing of them written.
+        refuse: Arc<Mutex<u32>>,
+        /// Whether a stop writes the emergency restore before the script
+        /// gives [`Ready::Resumed`], as the stop's handler does.
+        stop_restores: bool,
     }
 
     /// How long a step of a script that is not a timeout takes.
@@ -1314,6 +1391,11 @@ mod tests {
             Ok((100, 30))
         }
         fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+            let mut refuse = self.refuse.lock().unwrap();
+            if *refuse > 0 {
+                *refuse -= 1;
+                return Err(io::ErrorKind::WouldBlock.into());
+            }
             self.written.lock().unwrap().extend_from_slice(bytes);
             Ok(())
         }
@@ -1323,6 +1405,12 @@ mod tests {
                 .steps
                 .pop_front()
                 .unwrap_or((Ready::Timeout, Vec::new()));
+            if ready == Ready::Resumed && self.stop_restores {
+                self.written
+                    .lock()
+                    .unwrap()
+                    .extend_from_slice(sys::restore_sequence());
+            }
             *self.elapsed.lock().unwrap() += match ready {
                 Ready::Timeout => timeout.unwrap_or(Duration::ZERO),
                 _ => STEP,
@@ -1905,6 +1993,198 @@ mod tests {
 
     fn holds(bytes: &[u8], part: &[u8]) -> bool {
         bytes.windows(part.len()).any(|w| w == part)
+    }
+
+    /// What `bytes` leave on a terminal that keeps a stack of keyboard
+    /// flags per screen, as the kitty protocol has it (kitty, ghostty).
+    fn on_vterm(bytes: &[u8]) -> cineris_testkit::vterm::VTerm {
+        let mut term = cineris_testkit::vterm::VTerm::new(100, 30);
+        term.feed(bytes);
+        term
+    }
+
+    /// Whether `term` is left as the shell had it: on the main screen, the
+    /// mouse off, and no keyboard flags pushed on either screen.
+    fn left_clean(term: &cineris_testkit::vterm::VTerm, case: &str) {
+        let modes = term.modes();
+        assert!(!modes.alternate, "{case}: the alternate screen is shown");
+        assert!(
+            !modes.mouse && !modes.mouse_sgr,
+            "{case}: the mouse is reported"
+        );
+        assert!(
+            term.main_keyboard().is_empty() && term.alternate_keyboard().is_empty(),
+            "{case}: the main screen's keyboard flags {:?}, the alternate screen's {:?}",
+            term.main_keyboard(),
+            term.alternate_keyboard()
+        );
+    }
+
+    /// The keyboard protocol's flags are pushed on each screen while it is
+    /// shown and popped before it is left: whether the reply came on the
+    /// main screen or on the alternate one (the full screen draws its first
+    /// frame before its first read), and whether the program or the end
+    /// leaves the alternate screen, neither screen's stack holds any once
+    /// the terminal is put back, nor after an emergency restore (the fixes
+    /// of step 25's review, finding 10: the push went to the alternate
+    /// screen and the pop to the main one).
+    #[test]
+    fn the_keyboard_flags_are_left_pushed_on_neither_screen() {
+        for reply_on_alternate in [false, true] {
+            for program_leaves in [true, false] {
+                let case =
+                    format!("reply on the alternate {reply_on_alternate}, left {program_leaves}");
+                let device = script(&[(Ready::Input, b"\x1b[?0u\x1b[?62;22c")]);
+                let written = Arc::clone(&device.written);
+                let mut terminal = Terminal::with_device(device, caps()).unwrap();
+                terminal.set_mouse(true).unwrap();
+                if reply_on_alternate {
+                    terminal.alternate(true).unwrap();
+                }
+                assert_eq!(
+                    terminal.next(None).unwrap(),
+                    Some(Event::Reply(Reply::Keyboard(0)))
+                );
+                terminal.alternate(true).unwrap();
+                let shown = on_vterm(&written.lock().unwrap());
+                assert_eq!(shown.alternate_keyboard(), [3], "{case}");
+                let main: &[u32] = if reply_on_alternate { &[] } else { &[3] };
+                assert_eq!(shown.main_keyboard(), main, "{case}");
+                let mut emergency = written.lock().unwrap().clone();
+                emergency.extend_from_slice(sys::restore_sequence());
+                left_clean(&on_vterm(&emergency), &format!("{case}, an emergency"));
+                if program_leaves {
+                    terminal.alternate(false).unwrap();
+                    let back = on_vterm(&written.lock().unwrap());
+                    assert_eq!(back.main_keyboard(), [3], "{case}: on the main screen");
+                    assert!(back.alternate_keyboard().is_empty(), "{case}");
+                    let mut emergency = written.lock().unwrap().clone();
+                    emergency.extend_from_slice(sys::restore_sequence());
+                    left_clean(&on_vterm(&emergency), &format!("{case}, an emergency"));
+                }
+                terminal.leave().unwrap();
+                left_clean(&on_vterm(&written.lock().unwrap()), &case);
+            }
+        }
+    }
+
+    /// Continued after a stop while the viewer has the alternate screen:
+    /// the stop's restore popped both screens' flags, and the resumption
+    /// pushes them on the alternate screen, then on the main screen once it
+    /// is back, so that neither is left with them and the main screen has
+    /// them while it is shown (the fixes of step 25's review: step 23's
+    /// viewer pushed them on the alternate screen and popped the main one's,
+    /// and back inline `Shift+Enter` sent the prompt).
+    #[test]
+    fn a_resumption_on_the_alternate_screen_pushes_the_flags_on_each_screen_shown() {
+        for reply_on_alternate in [false, true] {
+            let case = format!("reply on the alternate {reply_on_alternate}");
+            let mut device = script(&[
+                (Ready::Input, b"\x1b[?0u\x1b[?62;22c"),
+                (Ready::Resumed, b""),
+            ]);
+            device.stop_restores = true;
+            let written = Arc::clone(&device.written);
+            let mut terminal = Terminal::with_device(device, caps()).unwrap();
+            if reply_on_alternate {
+                terminal.alternate(true).unwrap();
+            }
+            assert_eq!(
+                terminal.next(None).unwrap(),
+                Some(Event::Reply(Reply::Keyboard(0)))
+            );
+            assert_eq!(
+                terminal.next(None).unwrap(),
+                Some(Event::Reply(Reply::DeviceAttributes))
+            );
+            terminal.alternate(true).unwrap();
+            assert_eq!(terminal.next(None).unwrap(), Some(Event::Resumed));
+            let resumed = on_vterm(&written.lock().unwrap());
+            assert!(resumed.modes().alternate, "{case}");
+            assert_eq!(resumed.alternate_keyboard(), [3], "{case}");
+            assert!(
+                resumed.main_keyboard().is_empty(),
+                "{case}: {:?}",
+                resumed.main_keyboard()
+            );
+            terminal.alternate(false).unwrap();
+            let back = on_vterm(&written.lock().unwrap());
+            assert_eq!(back.main_keyboard(), [3], "{case}: on the main screen");
+            assert!(back.alternate_keyboard().is_empty(), "{case}");
+            terminal.leave().unwrap();
+            left_clean(&on_vterm(&written.lock().unwrap()), &case);
+        }
+    }
+
+    /// A write that leaves the alternate screen, or turns the mouse off,
+    /// and fails (a terminal another process made non-blocking refuses it)
+    /// leaves them marked on, the emergency restore's record with them: the
+    /// next call, putting the terminal back and an emergency restore try
+    /// again (the fixes of step 25's review, finding 11: they were marked off
+    /// before the write, and never turned off).
+    #[test]
+    fn a_failed_write_turning_the_alternate_screen_or_the_mouse_off_is_tried_again() {
+        let device = script(&[(Ready::Input, b"\x1b[?0u\x1b[?62;22c")]);
+        let written = Arc::clone(&device.written);
+        let refuse = Arc::clone(&device.refuse);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        terminal.set_mouse(true).unwrap();
+        terminal.alternate(true).unwrap();
+        terminal.next(None).unwrap();
+        *refuse.lock().unwrap() = 1;
+        assert!(terminal.alternate(false).is_err());
+        assert!(terminal.is_alternate() && terminal.mouse());
+        assert!(holds(sys::restore_sequence(), ALTERNATE_OFF));
+        let mut emergency = written.lock().unwrap().clone();
+        emergency.extend_from_slice(sys::restore_sequence());
+        left_clean(&on_vterm(&emergency), "an emergency after the failed write");
+        terminal.leave().unwrap();
+        left_clean(&on_vterm(&written.lock().unwrap()), "the end after it");
+
+        // Left by the program, tried again by the next call.
+        let device = script(&[]);
+        let written = Arc::clone(&device.written);
+        let refuse = Arc::clone(&device.refuse);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        terminal.set_mouse(true).unwrap();
+        terminal.alternate(true).unwrap();
+        *refuse.lock().unwrap() = 1;
+        assert!(terminal.alternate(false).is_err());
+        terminal.alternate(false).unwrap();
+        assert!(!terminal.is_alternate());
+        assert!(!holds(sys::restore_sequence(), ALTERNATE_OFF));
+        left_clean(&on_vterm(&written.lock().unwrap()), "left again");
+        terminal.leave().unwrap();
+
+        // The mouse turned off on the alternate screen.
+        let device = script(&[]);
+        let written = Arc::clone(&device.written);
+        let refuse = Arc::clone(&device.refuse);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        terminal.set_mouse(true).unwrap();
+        terminal.alternate(true).unwrap();
+        *refuse.lock().unwrap() = 1;
+        assert!(terminal.set_mouse(false).is_err());
+        assert!(terminal.mouse(), "marked off though the write failed");
+        terminal.leave().unwrap();
+        let end = written.lock().unwrap().clone();
+        assert!(
+            end.ends_with(&[MOUSE_OFF, ALTERNATE_OFF, END].concat()),
+            "{end:?}"
+        );
+        left_clean(&on_vterm(&end), "the end after the mouse's failed write");
+
+        // The end's own write refused: the emergency restore's record is
+        // kept, so that a terminal entered again (after the external
+        // editor) leaves the alternate screen in an emergency.
+        let device = script(&[]);
+        let refuse = Arc::clone(&device.refuse);
+        let mut terminal = Terminal::with_device(device, caps()).unwrap();
+        terminal.alternate(true).unwrap();
+        *refuse.lock().unwrap() = 1;
+        assert!(terminal.leave().is_err());
+        assert!(holds(sys::restore_sequence(), ALTERNATE_OFF));
+        sys::set_alternate(false);
     }
 
     /// The mouse is reported only with the alternate screen, once the

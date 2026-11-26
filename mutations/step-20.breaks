@@ -165,6 +165,9 @@ rule: The enhanced keyboard protocol, once turned on, is turned off on the way o
 file: crates/cineris-term/src/terminal.rs
 in: Terminal::end
 find: end.extend_from_slice(KEYBOARD_OFF);
+# The main screen's pop; the first is the alternate screen's (the fixes of
+# step 25's review).
+occurrence: 2
 replace:
 caught-by:
     terminal::tests::replies_update_the_capabilities_and_turn_on_the_keyboard_protocol

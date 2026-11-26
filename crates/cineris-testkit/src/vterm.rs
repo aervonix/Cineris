@@ -9,6 +9,16 @@
 //! private modes the terminal layer uses, and the queries it sends. It does
 //! not re-wrap on resize, as xterm does not.
 //!
+//! # The keyboard protocol's flags
+//!
+//! Each screen keeps a stack of the enhanced keyboard protocol's flags of
+//! its own, as the protocol's specification asks: a push (`CSI > flags u`)
+//! or a pop (`CSI < n u`) changes the stack of the screen shown, and the
+//! alternate screen's stack is kept from one use of the screen to the next,
+//! as kitty and ghostty keep it, until a full reset (since the fixes of
+//! step 25's review, which found the flags left on the alternate screen of
+//! those terminals while one stack for both hid it).
+//!
 //! # Watching a frame
 //!
 //! [`VTerm::watch`] starts a record and [`VTerm::report`] ends it. The
@@ -229,7 +239,10 @@ pub struct VTerm {
     top: usize,
     bottom: usize,
     modes: Modes,
+    /// The main screen's stack of keyboard flags.
     keyboard: Vec<u32>,
+    /// The alternate screen's, kept while the main screen is shown.
+    alternate_keyboard: Vec<u32>,
     state: State,
     utf8: Vec<u8>,
     queries: Vec<Query>,
@@ -267,6 +280,7 @@ impl VTerm {
                 mouse_sgr: false,
             },
             keyboard: Vec::new(),
+            alternate_keyboard: Vec::new(),
             state: State::Ground,
             utf8: Vec::new(),
             queries: Vec::new(),
@@ -302,11 +316,41 @@ impl VTerm {
         self.modes
     }
 
-    /// The enhanced keyboard protocol's stack of flags: empty when it is
-    /// off.
+    /// The enhanced keyboard protocol's stack of flags on the screen shown:
+    /// empty when it is off there. Each screen has its own ([module
+    /// documentation](self)): [`main_keyboard`](Self::main_keyboard) and
+    /// [`alternate_keyboard`](Self::alternate_keyboard) are each screen's,
+    /// whichever is shown.
     #[must_use]
     pub fn keyboard(&self) -> &[u32] {
+        if self.modes.alternate {
+            &self.alternate_keyboard
+        } else {
+            &self.keyboard
+        }
+    }
+
+    /// The main screen's stack of keyboard flags, whichever screen is shown.
+    #[must_use]
+    pub fn main_keyboard(&self) -> &[u32] {
         &self.keyboard
+    }
+
+    /// The alternate screen's stack of keyboard flags, whichever screen is
+    /// shown: what the alternate screen keeps for the next program that
+    /// takes it.
+    #[must_use]
+    pub fn alternate_keyboard(&self) -> &[u32] {
+        &self.alternate_keyboard
+    }
+
+    /// The shown screen's stack of keyboard flags, to change.
+    fn shown_keyboard(&mut self) -> &mut Vec<u32> {
+        if self.modes.alternate {
+            &mut self.alternate_keyboard
+        } else {
+            &mut self.keyboard
+        }
     }
 
     /// The window title last set.
@@ -885,11 +929,13 @@ impl VTerm {
                 .queries
                 .push(Query::Mode(u32::try_from(arg(0, 0)).unwrap_or(0))),
             (Some(b'?'), b"", b'u') => self.queries.push(Query::Keyboard),
-            (Some(b'>'), b"", b'u') => self.keyboard.push(u32::try_from(arg(0, 0)).unwrap_or(0)),
+            (Some(b'>'), b"", b'u') => {
+                let flags = u32::try_from(arg(0, 0)).unwrap_or(0);
+                self.shown_keyboard().push(flags);
+            }
             (Some(b'<'), b"", b'u') => {
-                for _ in 0..count {
-                    self.keyboard.pop();
-                }
+                let stack = self.shown_keyboard();
+                stack.truncate(stack.len().saturating_sub(count));
             }
             (Some(b'?'), b"", b'h' | b'l') => {
                 let on = final_byte == b'h';
@@ -1175,6 +1221,33 @@ mod tests {
         t.feed(b"\x1b[<u\x1b[?2026l\x1b]0;a title\x07");
         assert!(t.keyboard().is_empty() && !t.modes().sync);
         assert_eq!(t.title(), "a title");
+    }
+
+    /// Each screen has a stack of keyboard flags of its own, and the
+    /// alternate screen's is kept from one use of it to the next, as kitty
+    /// and ghostty keep it; a full reset empties both (the fixes of step
+    /// 25's review).
+    #[test]
+    fn each_screen_has_a_stack_of_keyboard_flags_of_its_own() {
+        let mut t = term(10, 2, b"\x1b[>1u\x1b[?1049h");
+        assert!(t.keyboard().is_empty(), "the alternate screen's is its own");
+        assert_eq!(t.main_keyboard(), [1]);
+        t.feed(b"\x1b[>3u\x1b[>5u\x1b[<u");
+        assert_eq!(t.keyboard(), [3]);
+        assert_eq!(t.alternate_keyboard(), [3]);
+        // A pop on the main screen leaves the alternate screen's.
+        t.feed(b"\x1b[?1049l\x1b[<u");
+        assert!(t.keyboard().is_empty() && t.main_keyboard().is_empty());
+        assert_eq!(t.alternate_keyboard(), [3], "kept between uses");
+        t.feed(b"\x1b[?1047h");
+        assert_eq!(t.keyboard(), [3], "the same screen, by 1047");
+        t.feed(b"\x1b[<9u");
+        assert!(
+            t.alternate_keyboard().is_empty(),
+            "a pop of more than is there"
+        );
+        t.feed(b"\x1b[>7u\x1b[?1047l\x1b[>1u\x1bc");
+        assert!(t.main_keyboard().is_empty() && t.alternate_keyboard().is_empty());
     }
 
     #[test]
