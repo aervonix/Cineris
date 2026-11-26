@@ -68,7 +68,7 @@ The two runs were on runners of different speed (start 5 and 4 ms on Linux, 6 an
 | 43691694394 | Linux, `advisories`, after the ignore of RUSTSEC-2025-0141 | Passed |
 | 43691696481 | Windows, release build, `test -p cineris-testkit --run-ignored only watch::tests::sys_ --no-capture`, five repeats | Passed; the timeout report's tree 2.27 s after its waits the first time, 0.32 to 0.34 s after |
 | 43671662851 | Windows, `test -p cineris-term -p cineris-tui -p cineris-core -p cineris-agent -p cineris-testkit -p xtask` | Passed |
-| 43671665085 | Both OSes, A/B against `main` at `9ddbf67` before the rebase, five rounds | Windows: tier 2 37.4 s against 37.5 s. Linux ended in its first round on the branch's side, at a flake of `cineris-core`'s base capture ([outstanding/a-base-capture-beside-the-turns-git.md](../../outstanding/a-base-capture-beside-the-turns-git.md)); run again as 43672128881 |
+| 43671665085 | Both OSes, A/B against `main` at `9ddbf67` before the rebase, five rounds | Windows: tier 2 37.4 s against 37.5 s. Linux ended in its first round on the branch's side, at a flake of `cineris-core`'s base capture (`a-base-capture-beside-the-turns-git`); run again as 43672128881 |
 | 43667663980 | Both OSes, A/B of `cineris-llm` alone against `main`, five rounds | 2 min 24 s on Windows, 1 min 20 s on Linux, from start to end of the job |
 | 43663369925, 43663367508 | Tier 2 alone, profiled, on the scratch branch at `6e96c25` | Linux 14.2 s, Windows 21.2 s above the start |
 | 43663690282 | Both OSes, A/A of `main` (the scratch branch at `6e96c25`), three rounds | Windows tier 2 27.1 s (start 8 ms), Linux 10.8 s (start 3 ms) |

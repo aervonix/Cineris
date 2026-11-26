@@ -9,7 +9,7 @@ Item 2: a list of known flaky tests that the tools read. One sentence a line.
   An item that cannot be read names no flake, and a warning says which: a list that is short runs fewer tests again, never more.
   `flaky::tests::every_known_flake_names_a_test_its_crate_has` holds each mark to a function of its crate, so a renamed test is found on the pull request that renames it.
 - **Marked:**
-  - `cineris-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw` ([a-base-capture-beside-the-turns-git](../../../outstanding/a-base-capture-beside-the-turns-git.md));
+  - `cineris-core::it trust::sys_a_project_trusted_in_the_store_is_trusted_while_its_rules_are_the_ones_the_user_saw` (`a-base-capture-beside-the-turns-git`);
   - `cineris-tools::it changes::sys_every_git_the_look_starts_goes_through_its_confinement`, GitTooSlow ([a-git-look-too-slow-on-a-loaded-windows-runner](../../../outstanding/a-git-look-too-slow-on-a-loaded-windows-runner.md));
   - `cineris-index::it outlines::outlining_a_name_of_a_megabyte_takes_little_memory` ([a-memory-peak-test-near-its-limit](../../../outstanding/a-memory-peak-test-near-its-limit.md)).
   The leader-close test is not marked: step 23's third pull request fixed its cause and settled its item.

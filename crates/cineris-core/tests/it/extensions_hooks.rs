@@ -532,7 +532,7 @@ const STOPPED: &str = "cineris.tool({ name: 'ci', run: async () => { \
 
 /// After a stop of the turn from a call's run, the turn's hooks of the
 /// extension run nothing (the maintainers, for hooks: a stopped turn's
-/// hooks do not start; `docs/outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md`).
+/// hooks do not start; `docs/architecture/03-agent-loop.md`, "A stop from a call's run").
 /// With `fail_on_denial`, the extension's tool's write nobody can be asked
 /// about stops the turn through the policy; the call's `tool.after` hooks,
 /// in the same turn, start nothing: neither the one that would read nor the

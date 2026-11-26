@@ -61,4 +61,4 @@ The second part of step 28's hooks ([answered.md](../answered.md), "The design, 
 
 - **`cineris ext disable`, `remove` and `add`** (the third pull request): the way out a held gate names becomes the command.
 - **Older breaks whose lists no longer say how they are caught:** [breaks-whose-lists-no-longer-say-how-they-are-caught](../../../outstanding/breaks-whose-lists-no-longer-say-how-they-are-caught.md).
-- **The policy's guards of a stop from a run,** three breaks of steps 12 and 26: [the-policys-guards-of-a-stop-from-a-run-have-no-test](../../../outstanding/the-policys-guards-of-a-stop-from-a-run-have-no-test.md).
+- **The policy's guards of a stop from a run,** three breaks of steps 12 and 26: `the-policys-guards-of-a-stop-from-a-run-have-no-test`.
