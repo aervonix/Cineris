@@ -5839,7 +5839,7 @@ file: crates/cineris-ext/src/skills.rs
 in: FrontMatter::read
 find: None
 occurrence: 2
-replace: Some(Self { fields: fields_of(&body) })
+replace: { let (fields, repeated, unread) = fields_of(&body); Some(Self { fields, repeated, unread }) }
 caught-by:
     cineris-ext skills::tests::what_is_and_is_not_front_matter
     cineris-ext skills::tests::a_skill_needs_front_matter_with_a_name_and_its_quirks_are_read
