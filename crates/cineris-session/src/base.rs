@@ -388,6 +388,15 @@ impl Git for SystemGit {
     }
 }
 
+/// A capture's thread has taken the base state and handed it to its
+/// [`BaseCapture`], which has it from then on, waiting or not: a test waits
+/// here for the capture to be over, before what must find it done (a
+/// session's close, which waits for it only so long) or must not run beside
+/// it (the turn's own git). A point a test can stop at
+/// ([`cineris_base::hook`]), on the capture's own thread.
+pub const BASE_STATE_HANDED_OVER: &str =
+    "session: the base state is taken and handed to its capture";
+
 /// A base state being taken on its own thread.
 #[derive(Debug)]
 pub struct BaseCapture {
@@ -417,6 +426,7 @@ impl BaseCapture {
                 let state = capture(&root, trusted, &store, &*git, &*clock, &limits, &*gate);
                 // The session may have ended first; then nobody wants it.
                 let _ = sender.send(state);
+                cineris_base::hook::point(BASE_STATE_HANDED_OVER);
             })?;
         Ok(Self { receiver })
     }
@@ -445,6 +455,7 @@ impl BaseCapture {
                 let now = || trusted.load(std::sync::atomic::Ordering::Acquire);
                 let state = capture_with(&root, &now, &store, &*git, &*clock, &limits, &*gate);
                 let _ = sender.send(state);
+                cineris_base::hook::point(BASE_STATE_HANDED_OVER);
             })?;
         Ok(Self { receiver })
     }

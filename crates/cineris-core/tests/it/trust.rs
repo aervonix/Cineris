@@ -31,7 +31,7 @@ use cineris_protocol::methods::{ApprovalChoice, ApprovalDetail};
 use cineris_protocol::model::ModelRole;
 use serde_json::{Value, json};
 
-use crate::{Front, MODEL, OTHER_MODEL, World, calls, says};
+use crate::{BaseCapture, Front, MODEL, OTHER_MODEL, World, calls, says};
 
 const PROTECTED: &str = ".github/workflows/ci.yml";
 
@@ -166,8 +166,15 @@ fn observe(world: &World, change: impl FnOnce(&mut CoreOptions)) -> (Seen, Vec<S
         options.base_capture = true;
         change(options);
     });
+    let capture = BaseCapture::watch();
     world.run(async {
         let front = Front::start(world, &core).await;
+        // The base state is taken before the turn's commands run: their git
+        // (`git status`, and the shell's look at what a command changed)
+        // takes the index's lock, and a capture whose git finds it held
+        // records itself incomplete. Taken, it is there for the close,
+        // whatever the load.
+        capture.taken().await;
         let model = front.state.roles[&ModelRole::Main]
             .model
             .as_str()
