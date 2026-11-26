@@ -4,7 +4,9 @@
 # touches only documentation (`docs/**` and `*.md`, and nothing else) does
 # not. Every other run does: any other pull request, every push to the main
 # branch, every scheduled or manual run. The generated protocol files under
-# `docs/protocol/` count as code, not as documentation.
+# `docs/protocol/` count as code, not as documentation, and so does every
+# file of the examples (`examples/**`), a README's included: the tests read
+# them, and run the rules their READMEs offer.
 #
 # `binary`: whether it can change the shipped binary, for the pull-request
 # size job (docs/testing-and-ci.md, "Each pull request's binary size"). A
@@ -61,6 +63,10 @@ runs:
                 # The same for the configuration schema and reference, which
                 # are generated from the settings in cineris-config.
                 docs/configuration/*) code=true ;;
+                # The examples: the tests copy their files, build one into
+                # the test kit, and take the rules their READMEs offer. None
+                # is in the shipped binary.
+                examples/*) code=true ;;
                 docs/* | *.md) ;;
                 # The files the shipped build and its verdict go through.
                 xtask/src/shipped.rs | xtask/src/nonblocking.rs | xtask/src/steps.rs | \
