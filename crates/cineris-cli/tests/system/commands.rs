@@ -590,16 +590,17 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
     // From a shell the test starts, under the test runner's own jobs on
     // Windows and its own line of parents on Linux, none a session's, it is
     // not refused either.
-    let shell = if cfg!(windows) {
+    #[cfg(windows)]
+    let shell = {
+        use std::os::windows::process::CommandExt as _;
+        // `cmd` reads its own line: given as it is, not quoted again.
         std::process::Command::new("cmd")
-            .args([
-                "/c",
-                &format!(
-                    "\"{}\" ext add \"{}\" --hash 00",
-                    binary.display(),
-                    folder.display()
-                ),
-            ])
+            .arg("/c")
+            .raw_arg(format!(
+                "\"\"{}\" ext add \"{}\" --hash 00\"",
+                binary.display(),
+                folder.display()
+            ))
             .envs(
                 machine
                     .vars()
@@ -609,7 +610,9 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
             .current_dir(&machine.workspace)
             .output()
             .unwrap()
-    } else {
+    };
+    #[cfg(not(windows))]
+    let shell = {
         std::process::Command::new("sh")
             .args([
                 "-c",
