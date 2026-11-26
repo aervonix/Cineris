@@ -1107,4 +1107,7 @@ pub const CASES: &[(&str, &[ShellSyntax], bool)] = &[
     ),
     ("source ./env.sh && cineris -p hi", &[Posix], true),
     ("cineris -p -- \"$TASK\"", &[Posix], false),
+    ("echo x; cineris ext list # a note", &[PowerShell], false),
+    ("echo x; cineris ext list > out.txt", &[PowerShell], false),
+    ("cmd /c 'cin^eris ext add ./x'", &[PowerShell], true),
 ];

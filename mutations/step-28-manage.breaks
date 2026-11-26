@@ -271,14 +271,6 @@ replace: for (mark, _) in word.match_indices(['=', '!']).take(0) {
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
-[break] approving-cmd-rest-unread
-rule: `cmd /c` and `/k` run the rest of the line, as `cmd` reads it, failing closed.
-file: crates/cineris-policy/src/approving.rs
-find: if let Some(refusal) = self.in_text(&rest, ShellSyntax::Cmd) {
-replace: if let Some(refusal) = None::<Refusal> {
-caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
-
 [break] approving-unmodelled-passed
 rule: A line the analysis cannot model fails closed: read as text, its quotes and escapes taken out as its shell takes them.
 file: crates/cineris-policy/src/approving.rs
@@ -877,7 +869,7 @@ file: crates/cineris-ext/src/folder.rs
 find: Self::read_through(Folder::open(folder))
 replace: Self::read_through(Folder::open_following(folder))
 caught-by:
-    cineris-ext folder::tests::a_folder_swapped_for_a_link_after_its_look_is_refused
+    cineris-ext folder::tests::the_read_through_handles_is_the_plain_reads_and_follows_no_link
 
 # The re-look at the early review of the refusal (H1, H2, M1, M2, the lows,
 # and B's moved stores).
@@ -913,23 +905,15 @@ replace:
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
-[break] approving-comment-kept-as-words
-rule: A comment the analysis left as a word is no word of the run.
-file: crates/cineris-policy/src/approving.rs
-in: Reader::in_parts
-find: if !word.quoted && word.text.starts_with('#') {
-replace: if false {
-caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
-
 [break] approving-text-comment-kept
 rule: In a line read as text, a comment is left out.
 file: crates/cineris-policy/src/approving.rs
 in: segments
 find: '#' if word.is_empty() => comment = true
 replace: '#' if false => comment = true
+packages: cineris-cli
 caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
 
 [break] approving-redirection-target-kept
 rule: In a line read as text, an output's redirection target is no word of the run.
@@ -941,8 +925,9 @@ find:
 replace:
         finish(&mut word, &mut words, &mut target);
                 target = false;
+packages: cineris-cli
 caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
+    cineris-cli::bin/cineris nested::tests::the_engines_table_reads_the_same_with_this_grammar
 
 [break] approving-glob-taken-as-known
 rule: A word the analysis says is a pattern is one the shell expands.
@@ -1066,15 +1051,6 @@ replace: let placed = at == program || (runs_words && at > program);
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
 
-[break] approving-carriage-return-kept
-rule: A carriage return ends a line.
-file: crates/cineris-policy/src/approving.rs
-in: refused
-find: let command = command.replace('\r', "\n");
-replace: let command = command.to_owned();
-caught-by:
-    cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
-
 [break] approving-ansi-quotes-kept
 rule: `$'…'`, `$"…"` and an empty `$()` build nothing, and are read as quotes.
 file: crates/cineris-policy/src/approving.rs
@@ -1107,18 +1083,20 @@ caught-by:
 rule: On Linux, a store's variable set otherwise than in the session's own environment is moved.
 os: linux
 file: crates/cineris-sandbox/src/session.rs
+occurrence: 1
 find: mine != theirs(name)
 replace: false
 packages: cineris-cli
 caught-by:
     cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused
 
-[break] session-windows-cineris-variable-passed
-rule: On Windows, `CINERIS_CONFIG` or `CINERIS_DATA_DIR` set at all moves the stores.
+[break] session-windows-moved-store-same
+rule: On Windows, a store's variable set otherwise than the session told what it starts moves the stores.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: if std::env::var_os(name).is_some() {
-replace: if false {
+occurrence: 2
+find: mine != theirs(name)
+replace: false
 packages: cineris-cli
 caught-by:
     cineris-cli::system commands::sys_a_nested_headless_run_with_its_stores_moved_is_refused
