@@ -776,6 +776,12 @@ fn sys_the_guard_ignores_what_stops_a_harness_and_has_its_own_name() {
         ChildSpec::new(&roll, "parent").with_child(ChildSpec::new(&roll, "grandchild").stubborn());
     let mut harness = harness(HARNESS, &child).spawn().expect("start the harness");
     let both = roll.all(&["parent", "grandchild"], LIMIT);
+    // The guard is told by its arguments, which its exec sets up after the
+    // harness's `spawn` of it has returned; it was started just before the
+    // command, and nothing it says shows that its exec is done.
+    until(LIMIT, "the harness's guard to show its arguments", || {
+        !guards_of(harness.id()).is_empty()
+    });
     let guards = guards_of(harness.id());
     assert_eq!(guards.len(), 1, "a harness has one guard");
     let guard = guards[0];
