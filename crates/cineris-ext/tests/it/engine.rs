@@ -1506,12 +1506,13 @@ fn a_cancelled_call_follows_its_program_to_the_end() {
 }
 
 /// A call cancelled just after the thread took it, before it said so, is
-/// stopped as any started call is: its time's grace and the count of
-/// threads left running apply, though the cancel came first (the review
-/// of step 28's fixes: the withdrawal skipped the grace when the thread
-/// won).
+/// stopped as any started call is, its time's grace waited for, though the
+/// cancel came first (the review of step 28's fixes: the withdrawal skipped
+/// the grace when the thread won); and nothing of its script runs (since
+/// step 28's third pull request): a script whose native loop never looks
+/// at the interrupt would otherwise leave its thread running, counted.
 #[test]
-fn a_call_the_thread_took_before_its_cancel_is_stopped_and_counted() {
+fn a_call_the_thread_took_before_its_cancel_runs_nothing_of_its_script() {
     let timer = timer();
     let snapshot = tool(
         "",
@@ -1542,13 +1543,64 @@ fn a_call_the_thread_took_before_its_cancel_is_stopped_and_counted() {
             hold.reach();
             cancel.cancel();
             timer.sleeping_for(cineris_ext::engine::GRACE).await;
+            // Its grace is waited for, and not passed: the thread ends
+            // within it, having run nothing.
             hold.release();
-            timer.advance(cineris_ext::engine::GRACE);
         },
     ));
     assert_eq!(result, Err(CallError::Cancelled));
-    assert!(runtime.was_abandoned());
-    assert_eq!(cineris_ext::engine::abandoned_threads(), before + 1);
+    assert!(
+        !runtime.was_abandoned(),
+        "the call's script ran after its cancel"
+    );
+    assert_eq!(cineris_ext::engine::abandoned_threads(), before);
+}
+
+/// A call stopped as the thread says it started, before its script begins,
+/// runs nothing of it; and a call queued behind it, under the runtime torn
+/// down, never runs and says so, apart from a call whose runtime went while
+/// it ran, so that its caller can take it to a fresh runtime (since step
+/// 28's third pull request: it said the runtime was gone, or its time ran
+/// out). Its runtime then answers a new call afresh.
+#[test]
+fn a_call_stopped_as_it_starts_and_one_queued_behind_it_never_run() {
+    let timer = timer();
+    let snapshot = tool(
+        "",
+        "() => Array.prototype.reverse.call({ length: 2 ** 53 - 1 })",
+    );
+    let runtime = start(&snapshot, &timer).unwrap();
+    let host = FakeHost::new();
+    let capabilities = capabilities(&snapshot);
+    let (first, second) = (CancelToken::new(), CancelToken::new());
+    let before = cineris_ext::engine::abandoned_threads();
+    let hold = cineris_testkit::Hold::new(cineris_ext::engine::A_CALL_IS_STARTED);
+    let context = |cancel| CallContext {
+        host: &host,
+        capabilities: &capabilities,
+        time: TIME,
+        timer: &timer,
+        clock: timer.clock(),
+        cancel,
+        asked: None,
+    };
+    let ((stopped, queued), ()) = block_on(join(
+        join(
+            runtime.call(Target::Tool("t".to_owned()), json!({}), context(&first)),
+            runtime.call(Target::Tool("t".to_owned()), json!({}), context(&second)),
+        ),
+        async {
+            // The thread said the first call started, and has not begun it.
+            hold.reach();
+            first.cancel();
+            timer.sleeping_for(cineris_ext::engine::GRACE).await;
+            hold.release();
+        },
+    ));
+    assert_eq!(stopped, Err(CallError::Cancelled));
+    assert_eq!(queued, Err(CallError::NotRun));
+    assert!(!runtime.was_abandoned(), "the stopped call's script ran");
+    assert_eq!(cineris_ext::engine::abandoned_threads(), before);
 }
 
 /// A runtime of an extension whose other runtime left its thread running

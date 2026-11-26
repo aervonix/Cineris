@@ -406,9 +406,12 @@ impl Work<'_> {
             outbox,
             claim,
         } = invocation;
+        // Queued under a runtime torn down: it never ran, and says so, so
+        // that its caller can take it to a fresh runtime (since step 28's
+        // third pull request; it said its time ran out).
         if self.stop.load(Ordering::SeqCst) {
             self.alive.store(false, Ordering::SeqCst);
-            let _ = outbox.send(FromThread::Done(Err(Failure::Limit(Limit::Time))));
+            let _ = outbox.send(FromThread::Done(Err(Failure::NotRun)));
             return After::TornDown;
         }
         // A call withdrawn before it started (its caller was cancelled
@@ -422,6 +425,18 @@ impl Work<'_> {
         cineris_base::hook::point(super::AFTER_A_CALL_IS_CLAIMED);
         if outbox.send(FromThread::Started).is_err() {
             return After::Goes;
+        }
+        // Stopped as it was taken (its caller cancelled it, or its time was
+        // up, after the claim): nothing of its script runs (since step 28's
+        // third pull request; it began with the stop set, and ran until the
+        // engine's first look at the interrupt, or for ever in a native
+        // loop that never looks).
+        cineris_base::hook::point(super::A_CALL_IS_STARTED);
+        if self.stop.load(Ordering::SeqCst) {
+            claim.store(ENDED, Ordering::SeqCst);
+            self.alive.store(false, Ordering::SeqCst);
+            let _ = outbox.send(FromThread::Done(Err(Failure::NotRun)));
+            return After::TornDown;
         }
         self.shared
             .borrow_mut()

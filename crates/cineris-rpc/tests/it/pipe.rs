@@ -963,6 +963,75 @@ fn sys_one_of_the_servers_own_commands_is_refused() {
     done.recv().unwrap();
 }
 
+/// A hook command and an extension's program (`cineris.exec`) are the
+/// server's own commands: each is started inside the job the server joined
+/// when it bound the pipe, so its connection is closed unanswered, and the
+/// session's first turn is told so by their `session.start` hooks (since
+/// step 28's third pull request).
+#[test]
+fn sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands() {
+    let place = pipe_of("own-hooks");
+    let connect = format!(
+        "    f = open(r'{}', 'r+b', buffering=0)\n    opened = True\n    \
+         f.write(b'{{}}\\n')\n    d = f.read(4096)",
+        name(&place)
+    );
+    let Some((world, core)) = crate::probing("pipe-own-hooks", &connect) else {
+        return;
+    };
+    let listener = bind(&place).unwrap();
+    let (stop, done) = serve(&core, listener, world.serve_options());
+    world
+        .server
+        .push(conformance::anthropic::text(&["Hello."]));
+    let mut lines = client(open(&place).expect("the server's own thread opens the pipe"));
+    lines.initialize(conformance::initialize()).unwrap();
+    let cineris_protocol::methods::OpResult::SessionNew(opened) = lines
+        .call(cineris_protocol::methods::Op::SessionNew(
+            cineris_protocol::methods::SessionNewParams {
+                workspace: world.workspace.to_str().unwrap().to_owned(),
+                settings: cineris_protocol::session::SessionSettings::default(),
+                title: None,
+                config: serde_json::Map::new(),
+                ephemeral: false,
+                cwd: None,
+            },
+        ))
+        .unwrap()
+    else {
+        panic!("not a session");
+    };
+    lines
+        .call(cineris_protocol::methods::Op::TurnStart(
+            cineris_protocol::methods::TurnStartParams {
+                session_id: opened.session.session_id,
+                input: vec![cineris_protocol::Part::text("hi")],
+                delivery: None,
+            },
+        ))
+        .unwrap();
+    loop {
+        if let Some(conformance::Inbound::Event(event)) = lines.next()
+            && matches!(
+                event.event,
+                cineris_protocol::event::Event::TurnCompleted(_)
+            )
+        {
+            break;
+        }
+    }
+    let said = crate::probes_said(&world);
+    for probe in ["hook", "exec"] {
+        assert!(
+            said.contains(&format!("{probe} opened True read 0 bytes")),
+            "the {probe}'s connection was answered: {said}"
+        );
+    }
+    drop(lines);
+    stop.cancel();
+    done.recv().unwrap();
+}
+
 /// Another user cannot open the pipe, while the test's own user is served:
 /// its access list keeps the other user out, and so does its label where
 /// the test runs at a higher integrity than the other user's logon (a
