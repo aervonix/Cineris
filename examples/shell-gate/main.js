@@ -170,12 +170,16 @@ const GIT_VALUED = [
 // the remote), `-f` (alone or among other short options, as in `-uf`), or a
 // refspec that begins with `+`, which forces that one branch; or a push
 // whose `-c` sets a `push` refspec that begins with `+`.
-// `--force-with-lease` and `--force-if-includes` are let through.
+// `--force-with-lease` and `--force-if-includes` are let through. It is
+// read from each word that names `git`, so that `sudo git push --force` is
+// read too, and `sudo -u git git push --force`, where the first is sudo's
+// user.
 function pushesForcefully(words) {
-  const at = words.findIndex((word) => program(word) === "git");
-  if (at < 0) {
-    return false;
-  }
+  return words.some((word, at) => program(word) === "git" && pushesForcefullyAt(words, at));
+}
+
+// Whether the `git` at `at` in `words` is a forced push, as above.
+function pushesForcefullyAt(words, at) {
   // git's own options come before its subcommand, each of `GIT_VALUED`
   // with its value after it.
   let forcedByConfiguration = false;
