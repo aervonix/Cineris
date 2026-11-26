@@ -630,6 +630,24 @@ fn a_panel_key_the_ready_plan_has_no_use_for_goes_to_the_editor() {
     assert_eq!(app.input().focus().focused(), Target::Panel(plan_id(&app)));
 }
 
+/// A key the terminal held, pressed in the panel's grace and read after it,
+/// does not act: a panel judges a key by when it was pressed (the full
+/// review of small fixes II).
+#[test]
+fn a_key_pressed_in_the_panels_grace_and_read_after_it_does_not_act() {
+    let now = Instant::now() + Duration::from_secs(20);
+    let (mut app, link) = with_plan(now);
+    plan_focused(&mut app, now);
+    press(&mut app, "esc", ms(now, 20));
+    press(&mut app, "ctrl+p", ms(now, 5_000));
+    let read = ms(now, 5_000) + GRACE * 2;
+    let _ = app.frame(read);
+    app.drawn(read);
+    let space = TermEvent::Key(parse("space").expect("a key"));
+    app.terminal_pressed(&space, ms(now, 5_000) + GRACE / 2, read);
+    assert!(edits(&link).is_empty(), "a key pressed in its grace acted");
+}
+
 #[test]
 fn moving_and_esc_act_at_once_and_a_key_before_the_grace_is_typed() {
     let now = Instant::now() + Duration::from_secs(20);

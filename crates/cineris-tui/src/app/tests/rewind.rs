@@ -1186,6 +1186,42 @@ fn a_switch_and_a_fork_wait_for_a_rewind_under_way() {
 /// front of the prompt the rewind gives back, for an `Enter` to send. They
 /// hold the question's quiet, as typing does (the review of step 25's
 /// second pull request).
+/// A paste whose first bytes came before the rewind's question was ready,
+/// read once it takes keys, reaches nothing: the question judges it by when
+/// it began (the full review of small fixes II).
+#[test]
+fn a_paste_begun_before_the_question_was_ready_and_read_after_reaches_nothing() {
+    let now = Instant::now();
+    let (mut app, link) = with_history(now);
+    rewind_picker(&mut app, &link, history(), now);
+    key(&mut app, "down", now);
+    key(&mut app, "enter", now);
+    for (ticket, op) in link.take_sent() {
+        match op {
+            Op::SessionRewindPlan(_) => give(
+                &link,
+                ticket,
+                Ok(OpResult::SessionRewindPlan(plan(two_files()))),
+            ),
+            Op::SessionRead(_) => give(&link, ticket, Ok(page(vec![history()[2].clone()], None))),
+            _ => {}
+        }
+    }
+    drain(&mut app, now);
+    let _ = app.frame(now);
+    app.drawn(now);
+    let due = app.deadline().expect("the answers' moment");
+    let _ = app.frame(due);
+    app.drawn(due);
+    let paste = TermEvent::Paste("pasted".to_owned());
+    app.terminal_pressed(&paste, ms(now, 100), due + Duration::from_millis(100));
+    assert_eq!(
+        app.input().editor().expanded(),
+        "",
+        "pasted under the question"
+    );
+}
+
 #[test]
 fn what_is_typed_before_the_question_is_ready_reaches_nothing() {
     let now = Instant::now();
