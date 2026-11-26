@@ -440,8 +440,13 @@ fn showing_the_statistics_prunes_nothing() {
     std::fs::create_dir_all(&dir).unwrap();
     let old = dir.join("events-2025-01.jsonl");
     std::fs::write(&old, "").unwrap();
+    // Aggregates read from their file: only these may prune, so without
+    // them a prune would delete nothing either and the test would hold
+    // nothing.
+    std::fs::write(dir.join("aggregates.json"), b"{\"version\":1}").unwrap();
     let core = world.core();
     let summary = world.run(core.stats_summary()).unwrap();
+    assert_eq!(summary.aggregates, cineris_core::AggregatesFound::Read);
     assert_eq!(summary.months, ["2025-01"]);
     assert!(old.exists(), "nothing was deleted");
 }
