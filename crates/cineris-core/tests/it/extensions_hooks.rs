@@ -1211,8 +1211,9 @@ fn a_removed_extensions_gates_hold_until_it_is_turned_off() {
         front.turn("removed").await;
         let (outcome, text) = last(&front);
         assert_eq!(outcome, "denied", "{text}");
-        let gone = "its folder is gone; if you removed it, turn it off with `[extensions.probe] \
-                    enabled = false` (or, from the next release, `cineris ext remove probe`)";
+        let gone = "its folder is gone; if you removed it, take its approval away with `cineris \
+                    ext remove probe`, or turn it off with `cineris ext disable probe`, which sets \
+                    `[extensions.probe] enabled = false` in your configuration";
         for words in [
             "`probe/hook.tool.before` failed",
             "the extension `probe` cannot be found where it was approved, so its gate refuses it",
@@ -1226,6 +1227,31 @@ fn a_removed_extensions_gates_hold_until_it_is_turned_off() {
              `tool.before` holds, refusing every call it is on: {gone}."
         );
         assert_eq!(told_times(&front, &told), 1, "{:?}", front.notices());
+        // `extensions/status` says the same of the session: gone, its gate
+        // held, and why (since step 28's third pull request).
+        let status = core
+            .handle(
+                front.client.id,
+                cineris_protocol::methods::Op::ExtensionsStatus(
+                    cineris_protocol::methods::ExtensionsStatusParams {
+                        session_id: Some(front.session.clone()),
+                    },
+                ),
+            )
+            .await;
+        let Ok(cineris_protocol::methods::OpResult::ExtensionsStatus(status)) = status else {
+            panic!("{status:?}");
+        };
+        let probe = &status.extensions[0];
+        assert_eq!(probe.name, "probe", "{status:?}");
+        assert_eq!(
+            probe.standing,
+            Some(cineris_protocol::methods::ExtensionStanding::Gone)
+        );
+        assert_eq!(probe.state, cineris_protocol::methods::ComponentState::Failed);
+        assert_eq!(probe.gates.len(), 1, "{status:?}");
+        assert_eq!(probe.gates[0].hook, "probe/hook.tool.before");
+        assert!(probe.gates[0].why.contains(gone), "{status:?}");
         turn_it_off(&world, &front).await;
         front.close().await;
 

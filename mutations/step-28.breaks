@@ -8645,8 +8645,8 @@ caught-by:
 rule: A removed extension's way out names its table as TOML reads it, `[extensions.<name>] enabled = false`, quoted where the name is not a bare key (the re-check of the full review, L-f).
 file: crates/cineris-core/src/ext/script_hooks.rs
 in: way_out
-in-string: turn it off with {table} (or
-replace: turn it off with `enabled = false` (or
+in-string: it off with {disable}, which sets {table}
+replace: it off with {disable}, which sets `enabled = false`
 caught-by:
     cineris-core::it extensions_hooks::an_extensions_gates_hold_while_it_does_not_stand_approved
 

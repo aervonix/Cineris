@@ -21,7 +21,7 @@ export interface ClientMethods {
   /** Re-reads the configuration files, judges the project's trust again, and applies what changed to the open sessions. */
   "config/reload": { params: ConfigReloadParams; result: ConfigReloadResult };
   /** The state of the extensions. */
-  "extensions/status": { params: Empty; result: ExtensionsStatusResult };
+  "extensions/status": { params: ExtensionsStatusParams; result: ExtensionsStatusResult };
   /** The handshake. It must be the first request on a connection. */
   initialize: { params: InitializeParams; result: InitializeResult };
   /** The state of the MCP servers. */
@@ -393,10 +393,24 @@ export type ComponentState = "starting" | "ready" | "failed" | "disabled" | "nee
 
 /** The state of one MCP server or one extension. */
 export interface ComponentStatus {
-  /** What went wrong, for `failed`. */
+  /** An extension's: the names of its commands (since step 28). */
+  commands?: Array<string>;
+  /** What went wrong, for `failed`; why it waits, for `needs_approval`; why it is off, for `disabled`. */
   error?: string | null;
+  /** An extension's: its folder, under `~` for the user's and relative to the workspace for a project's (since step 28). */
+  folder?: string | null;
+  /** An extension's: the gating hooks the session holds of it, failing, while it does not stand as it was approved (since step 28). */
+  gates?: Array<HeldGate>;
+  /** An extension's: the hash of its folder read whole, as it is pinned (since step 28). */
+  hash?: string | null;
+  /** An extension's: its hooks, each its event and the tools it is on (since step 28). */
+  hooks?: Array<string>;
   /** Its configured name. */
   name: string;
+  /** An extension's: whose it is (since step 28). */
+  source?: ExtensionSource | null;
+  /** An extension's: how it stands against its approval, as a session judges it (since step 28). */
+  standing?: ExtensionStanding | null;
   /** Its state. */
   state: ComponentState;
   /** How many tools it provides. */
@@ -694,10 +708,24 @@ export interface Expiry {
 /** When a lease ends. */
 export type ExpiryKind = "never" | "at" | "end_of_task" | "end_of_session";
 
+/** Whose an extension is (since step 28). */
+export type ExtensionSource = "user" | "project" | (string & {});
+
+/** How an extension stands against its approval (since step 28; `docs/architecture/12-extensions.md`, the table of how a found extension stands). */
+export type ExtensionStanding = "approved" | "changed" | "not_approved" | "turned_off" | "unjudged" | "not_used" | "project_not_trusted" | "gone" | "left_out" | (string & {});
+
+/** `extensions/status` */
+export interface ExtensionsStatusParams {
+  /** The session whose extensions are asked about, which the client has open (since step 28). Absent: the user's own, as a session with no project would find them. */
+  session_id?: SessionId | null;
+}
+
 /** The result of `extensions/status`. */
 export interface ExtensionsStatusResult {
-  /** The extensions. */
+  /** The extensions: each the session found, left out or holds a gate of, with its standing (since step 28). */
   extensions: Array<ComponentStatus>;
+  /** What could not be read, each a sentence: a store of approvals, the registration cache, a folder of extensions (since step 28). */
+  problems?: Array<string>;
 }
 
 /** What a lease allows. */
@@ -794,6 +822,16 @@ export interface HeadlessVerification {
   rounds?: number;
   /** The turn's verdict, as `turn.completed` gave it. */
   verdict: Verification;
+}
+
+/** A gating hook a session holds of an extension that does not stand as it was approved: on its event, its run fails, refusing what it gates (since step 28). */
+export interface HeldGate {
+  /** Its event: `tool.before` or `prompt.submit`. */
+  event: string;
+  /** The hook's name: `<extension>/hook.<event>`. */
+  hook: string;
+  /** Why it refuses, with the way out, as the model is told it. */
+  why: string;
 }
 
 /** A hook, named where what it answered shows: a hook that asked, refused or replaced something (since step 28, `docs/architecture/12-extensions.md`, "Tier 3: hooks"). */

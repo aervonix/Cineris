@@ -264,11 +264,12 @@ fn key(name: &str) -> String {
 }
 
 /// The way out of an extension's held gates, and of a hook of it that
-/// cannot run: what approves it again, or turns it off, as the harness has
-/// them now, as it stands (`stand`). The one place that says it, so that the
-/// commands that manage extensions (`cineris ext disable`, `cineris ext
-/// remove` and the rest of the step's third part) are named here once they
-/// are built. `shown` is its folder as the user is shown it, when known.
+/// cannot run: what approves it again, or turns it off, as it stands
+/// (`stand`). The one place that says it: the user's own name the commands
+/// that manage extensions (`cineris ext add <folder>`, `cineris ext disable
+/// <name>`, which writes `[extensions.<name>] enabled = false`, and
+/// `cineris ext remove <name>`; since step 28's third pull request). `shown`
+/// is its folder as the user is shown it, when known.
 pub(crate) fn way_out(
     source: cineris_ext::source::Source,
     name: &str,
@@ -278,14 +279,16 @@ pub(crate) fn way_out(
     use cineris_ext::source::Source;
     let name = in_code(name);
     let add = shown.map_or_else(
-        || "`cineris ext add` with its folder".to_owned(),
+        || "`cineris ext add <folder>`".to_owned(),
         |shown| format!("`cineris ext add {shown}`"),
     );
     let table = format!("`[extensions.{}] enabled = false`", key(&name));
+    let disable = format!("`cineris ext disable {name}`");
+    let remove = format!("`cineris ext remove {name}`");
     match (source, stand) {
         (Source::User, Stand::Unapproved { .. }) => format!(
-            "approve it again as it is now, fixed first if it needs it ({add}), or turn it off: set \
-             {table} in your configuration, which takes effect in the next session"
+            "approve it again as it is now, fixed first if it needs it ({add}), or turn it off \
+             ({disable}, which sets {table} in your configuration, from the next session)"
         ),
         (
             Source::Project,
@@ -308,15 +311,16 @@ pub(crate) fn way_out(
         // Only a new hash or a new process starts it again (the re-check of
         // the full review, L-c).
         (Source::User, Stand::Disabled) => format!(
-            "fix it and approve the fix ({add}), turn it off ({table} in your configuration), or \
-             start Cineris again"
+            "fix it and approve the fix ({add}), turn it off ({disable}, which sets {table} in \
+             your configuration), or start Cineris again"
         ),
         (_, Stand::LetGo) => "wait: it clears within the evaluation time of the starts already \
                                running (or start Cineris again)"
             .to_owned(),
-        (Source::User, Stand::NoneStart) => {
-            format!("turn it off ({table} in your configuration), or start Cineris again")
-        }
+        (Source::User, Stand::NoneStart) => format!(
+            "turn it off ({disable}, which sets {table} in your configuration), or start Cineris \
+             again"
+        ),
         (Source::Project, Stand::NoneStart) => "take the project's trust away (`cineris \
                                                 permissions untrust`), or start Cineris again"
             .to_owned(),
@@ -329,8 +333,8 @@ pub(crate) fn way_out(
         // A deletion may be an unconfined program's, taking a gate away:
         // only the user's word lets it go.
         (Source::User, Stand::Gone) => format!(
-            "its folder is gone; if you removed it, turn it off with {table} (or, from the next \
-             release, `cineris ext remove {name}`)"
+            "its folder is gone; if you removed it, take its approval away with {remove}, or turn \
+             it off with {disable}, which sets {table} in your configuration"
         ),
         (Source::Project, Stand::Gone) => {
             "its folder is gone; if it was removed on purpose, trust \
@@ -614,6 +618,23 @@ impl ScriptHooks {
         }
         *held = next;
         holding
+    }
+
+    /// Each gating hook held of an extension that does not stand as it was
+    /// approved: its extension's name, the hook's name, its event and why it
+    /// refuses (`extensions/status`, since step 28's third pull request).
+    pub(crate) fn held_gates(&self) -> Vec<(String, String, String, String)> {
+        lock(&self.held)
+            .iter()
+            .map(|held| {
+                (
+                    held.extension.clone(),
+                    held.name.clone(),
+                    held.event.as_str().to_owned(),
+                    held.why.clone(),
+                )
+            })
+            .collect()
     }
 
     /// The extensions of `source` the session knows what they registered,
@@ -1248,6 +1269,40 @@ mod tests {
                 && disabled.contains("start Cineris again"),
             "{disabled}"
         );
+    }
+
+    /// The way out of the user's own names the commands that manage them
+    /// (since step 28's third pull request): `ext add` with the folder, or a
+    /// placeholder for it where it is not known; `ext disable`, beside the
+    /// table it writes; and, for one whose folder is gone, `ext remove`.
+    #[test]
+    fn the_way_out_of_the_users_own_names_the_commands() {
+        let unapproved = Stand::Unapproved {
+            trust_project: false,
+        };
+        let shown = way_out(Source::User, "lint", Some("~/x/lint"), unapproved);
+        assert!(shown.contains("`cineris ext add ~/x/lint`"), "{shown}");
+        assert!(
+            shown.contains("`cineris ext disable lint`, which sets `[extensions.lint] enabled = \
+                            false`"),
+            "{shown}"
+        );
+        let unknown = way_out(Source::User, "lint", None, unapproved);
+        assert!(unknown.contains("`cineris ext add <folder>`"), "{unknown}");
+        let gone = way_out(Source::User, "lint", None, Stand::Gone);
+        assert!(
+            gone.contains("`cineris ext remove lint`")
+                && gone.contains("`cineris ext disable lint`")
+                && gone.contains("`[extensions.lint] enabled = false`")
+                && !gone.contains("next release"),
+            "{gone}"
+        );
+        for stand in [Stand::Disabled, Stand::NoneStart] {
+            let said = way_out(Source::User, "lint", None, stand);
+            assert!(said.contains("`cineris ext disable lint`"), "{said}");
+        }
+        let project = way_out(Source::Project, "lint", None, Stand::Gone);
+        assert!(!project.contains("cineris ext"), "{project}");
     }
 
     /// Under `--trust-project` no trust question is shown, so the way out

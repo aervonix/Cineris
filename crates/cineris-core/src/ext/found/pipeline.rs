@@ -360,7 +360,45 @@ async fn first(extensions: &Extensions, finding: Finding) {
     }
 }
 
+/// What a session's finding holds of its extensions, for
+/// `extensions/status` (since step 28's third pull request): what it finds
+/// with, and what it loaded and could not load.
+pub(crate) struct SessionView {
+    pub(crate) resolver: Arc<PathResolver>,
+    pub(crate) config_dir: Option<PathBuf>,
+    pub(crate) state: Option<StateDir>,
+    pub(crate) project: Option<ProjectKey>,
+    pub(crate) for_the_run: Vec<Definition>,
+    pub(crate) disabled: Vec<String>,
+    /// What is loaded, by the hash it was loaded at.
+    pub(crate) loaded: Vec<(Source, String, ContentHash)>,
+    /// What stands approved and could not be loaded, and why its gate
+    /// refuses.
+    pub(crate) unloaded: Vec<(Source, String, String)>,
+}
+
 impl Shared {
+    /// What the session's finding holds, once it has settled.
+    pub(crate) async fn view(&self) -> Option<SessionView> {
+        let held = self.held.lock().await;
+        let held = held.as_ref()?;
+        let inputs = &held.inputs;
+        Some(SessionView {
+            resolver: Arc::clone(&inputs.resolver),
+            config_dir: inputs.config_dir.clone(),
+            state: inputs.state.clone(),
+            project: inputs.project.clone(),
+            for_the_run: inputs.for_the_run.clone(),
+            disabled: inputs.disabled.clone(),
+            loaded: held.loaded.clone(),
+            unloaded: held
+                .unloaded
+                .iter()
+                .map(|((source, name, _), gate)| (*source, name.clone(), gate.why.clone()))
+                .collect(),
+        })
+    }
+
     /// At a turn's start: when what the extensions were found in changed,
     /// they are found and judged again, what no longer stands approved as
     /// it was loaded is withdrawn, and what now stands approved is loaded.

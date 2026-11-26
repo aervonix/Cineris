@@ -40,7 +40,7 @@ use cineris_protocol::item::NoticeSource;
 use cineris_protocol::jsonrpc::RequestId;
 use cineris_protocol::lease::{Lease, Level, Rule};
 use cineris_protocol::methods::{
-    ApprovalScope, ClientRole, ConfigGetResult, Empty, ExtensionsStatusResult, InitializeResult,
+    ApprovalScope, ClientRole, ConfigGetResult, Empty, InitializeResult,
     McpStatusResult, ModelsListResult, Op, OpResult, PROTOCOL_VERSION, PeerInfo,
     PermissionsListResult, PlanResult, QuestionRequest, QuestionResponse,
     SUPPORTED_PROTOCOL_VERSIONS, ServerCapabilities, ServerRequest, ServerResponse,
@@ -2136,9 +2136,40 @@ impl Core {
             Op::McpStatus(_) => Ok(OpResult::McpStatus(McpStatusResult {
                 servers: Vec::new(),
             })),
-            Op::ExtensionsStatus(_) => Ok(OpResult::ExtensionsStatus(ExtensionsStatusResult {
-                extensions: Vec::new(),
-            })),
+            Op::ExtensionsStatus(params) => {
+                // A session's, as its finding loaded them and with the gates
+                // it holds; with none, the user's own (since step 28).
+                #[cfg(feature = "scripts")]
+                let (view, gates) = match &params.session_id {
+                    Some(session) => {
+                        let live = self.open_for(client, session)?;
+                        (
+                            live.extensions.view().await,
+                            live.command_hooks.scripts.held_gates(),
+                        )
+                    }
+                    None => (None, Vec::new()),
+                };
+                #[cfg(not(feature = "scripts"))]
+                let gates: Vec<(String, String, String, String)> = match &params.session_id {
+                    Some(session) => {
+                        self.open_for(client, session)?;
+                        Vec::new()
+                    }
+                    None => Vec::new(),
+                };
+                let core = self.clone();
+                let status = Self::blocking(move || {
+                    Ok(crate::ext::manage::status(
+                        &core,
+                        #[cfg(feature = "scripts")]
+                        view.as_ref(),
+                        &gates,
+                    ))
+                })
+                .await?;
+                Ok(OpResult::ExtensionsStatus(status))
+            }
             Op::Shutdown(_) => {
                 self.may_drive(client)?;
                 self.shutdown().await;
