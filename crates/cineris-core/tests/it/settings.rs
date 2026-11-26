@@ -748,6 +748,43 @@ fn a_level_the_new_model_does_not_have_is_left_behind_and_said() {
     });
 }
 
+/// A core that holds its sessions at a level at most (a harness that could
+/// not mark its commands, since step 28's third pull request) refuses a
+/// raise of a session's level past it by `session/set`, and says why; a
+/// change within it is made.
+#[test]
+fn a_level_change_past_the_cores_cap_is_refused() {
+    let world = World::new("level_cap", [says("Hi.")]);
+    let core = world.core_with(|options| {
+        options.allow_unrestricted = true;
+        options.level_at_most = Some(Level::Supervised);
+    });
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        let raised = set(
+            &front,
+            SessionSettings {
+                level: Some(Level::Unrestricted),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(raised.code, "unrestricted_not_allowed");
+        assert!(raised.message.contains("`supervised` at most"), "{}", raised.message);
+        set(
+            &front,
+            SessionSettings {
+                level: Some(Level::ReadOnly),
+                ..SessionSettings::default()
+            },
+        )
+        .await
+        .unwrap();
+        front.close().await;
+    });
+}
+
 /// Without `allow_unrestricted` (a server not started at `unrestricted`),
 /// a session there is refused however it would come to be: its settings,
 /// an override however spelled, a raise by `session/set`. With it (a
