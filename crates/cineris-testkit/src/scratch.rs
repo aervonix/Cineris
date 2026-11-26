@@ -459,7 +459,11 @@ mod tests {
         drop(second);
         // Nothing of this test's is left for the others of this binary.
         for entry in fs::read_dir(parent).unwrap().flatten() {
-            if entry.file_name().to_string_lossy().starts_with("thrown_away") {
+            if entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("thrown_away")
+            {
                 super::remove_all(&entry.path());
             }
         }
