@@ -1006,6 +1006,7 @@ fn sys_a_hook_and_an_extensions_program_are_refused_as_the_servers_own_commands(
                 session_id: opened.session.session_id,
                 input: vec![cineris_protocol::Part::text("hi")],
                 delivery: None,
+                command: None,
             },
         ))
         .unwrap();

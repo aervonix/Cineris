@@ -184,7 +184,8 @@ fn sys_ctrl_break_interrupts_the_turn_and_exits_143() {
 }
 
 /// The project's extension `probe`, approved with the project as
-/// `permissions trust --with-extensions` approves it: its command `spin`
+/// `permissions trust --extension probe=HASH` approves it, by the hash
+/// `permissions trust` shows: its command `spin`
 /// notes in the project's values that it runs, then runs until it is
 /// stopped. The file the note is kept in, which is there once it runs.
 fn spinning_command(machine: &Machine) -> PathBuf {
@@ -204,8 +205,10 @@ fn spinning_command(machine: &Machine) -> PathBuf {
          } });\n",
     )
     .unwrap();
+    let listed = machine.run(&["permissions", "trust"]);
+    let named = format!("probe={}", crate::shown_hash(&listed.stdout, "`probe` in"));
     machine
-        .run(&["permissions", "trust", "--with-extensions"])
+        .run(&["permissions", "trust", "--extension", &named])
         .expect_code(0);
     // `projects/<project key>/extensions/project-probe.json` in the state
     // directory (`cineris_core::ext::state`).
