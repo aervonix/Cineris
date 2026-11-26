@@ -37,6 +37,31 @@
               helpers are shared between the modules of this one binary"
 )]
 
+/// Runs `rule`, one of the rules a folded test checks, each with a machine
+/// of its own: a rule that fails names itself after the panic's message, so
+/// that the test's failure says which rule broke. Folded by story, so that
+/// one test's start serves its rules, and none waits on another's state.
+pub fn part(name: &str, rule: fn()) {
+    struct Named<'a>(&'a str);
+    impl Drop for Named<'_> {
+        fn drop(&mut self) {
+            if std::thread::panicking() {
+                eprintln!("the rule that failed: `{}`", self.0);
+            }
+        }
+    }
+    let _named = Named(name);
+    rule();
+}
+
+/// Runs each rule named, a function of this binary, as a [`part`] of one
+/// test, in order.
+macro_rules! parts {
+    ($($rule:path),+ $(,)?) => {
+        $(crate::part(stringify!($rule), $rule);)+
+    };
+}
+
 mod commands;
 mod first_run;
 mod live;
@@ -180,6 +205,16 @@ impl Machine {
         self.vars.push((
             cineris_base::hook::READY_DIVISOR.to_owned(),
             OsString::from("10"),
+        ));
+    }
+
+    /// The binary's mark of its sessions' commands made to fail
+    /// (`cineris_base::hook::MARK_FAILS`): what a harness does then, which
+    /// a runner cannot otherwise bring about.
+    pub fn fail_the_mark(&mut self) {
+        self.vars.push((
+            cineris_base::hook::MARK_FAILS.to_owned(),
+            OsString::from("1"),
         ));
     }
 

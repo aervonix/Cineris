@@ -44,6 +44,7 @@
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use cineris_base::{
     AtomicWriteError, AtomicWriteOptions, OpenError, Secret, SharedClock, open_regular, private,
@@ -67,6 +68,8 @@ const HEADER: &str = "# Cineris credentials. Keep this file private.\n\
 pub struct FileStore {
     path: PathBuf,
     clock: SharedClock,
+    /// How long a change waits for another process's hold of the lock.
+    lock_wait: Duration,
 }
 
 impl FileStore {
@@ -77,6 +80,7 @@ impl FileStore {
         Self {
             path: path.into(),
             clock,
+            lock_wait: private::LOCK_WAIT,
         }
     }
 
@@ -246,10 +250,18 @@ impl FileStore {
             }
             Err(error) => return Err(self.open_failed(&path, ACTION, error)),
         };
-        // Blocks while another writer holds it, which is for the length of
-        // one read and one write of a small file.
-        file.lock().map_err(self.io("lock"))?;
-        Ok(file)
+        // Waits while another writer holds it, which is for the length of
+        // one read and one write of a small file, and no longer than the
+        // other stores' locks wait: a hold that does not end (a session's
+        // command holding it) cannot hang `cineris auth login` (the narrow
+        // re-check of step 28's third pull request).
+        match private::lock_within(&file, &self.path, self.lock_wait) {
+            Ok(()) => Ok(file),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Err(CredentialError::Busy {
+                reason: error.to_string(),
+            }),
+            Err(error) => Err(self.io("lock")(error)),
+        }
     }
 }
 
@@ -338,6 +350,55 @@ impl CredentialStore for FileStore {
             Some(Value::Table(providers)) => providers.remove(provider).is_some(),
             _ => false,
         })
+    }
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use std::sync::Arc;
+
+    use cineris_base::FakeClock;
+
+    use super::*;
+
+    /// A change waits for another hold of the credentials file's lock no
+    /// longer than the other stores' locks wait, and is then refused with
+    /// nothing changed, saying which file and what to do: `cineris auth
+    /// login` cannot hang on a hold that does not end (the narrow re-check
+    /// of step 28's third pull request). The wait is none here, so nothing
+    /// really waits; a hold of the lock file's own, open apart, stands for
+    /// another process's.
+    #[test]
+    fn a_change_the_lock_is_held_from_past_its_wait_is_refused_naming_the_file() {
+        let scratch =
+            cineris_testkit::scratch::Scratch::outside("cineris-config-credentials", "held_lock");
+        let path = scratch.join("credentials.toml");
+        let store = FileStore::new(&path, Arc::new(FakeClock::default()));
+        assert_eq!(store.lock_wait, private::LOCK_WAIT);
+        store
+            .set("anthropic", &Secret::new("sk-test-held-0001"))
+            .unwrap();
+        let held = File::open(store.lock_path()).unwrap();
+        held.lock().unwrap();
+        let waiting = FileStore {
+            lock_wait: Duration::ZERO,
+            ..store.clone()
+        };
+        let error = waiting
+            .set("anthropic", &Secret::new("sk-test-held-0002"))
+            .unwrap_err();
+        let said = error.to_string();
+        assert!(matches!(error, CredentialError::Busy { .. }), "{error:?}");
+        assert!(
+            said.contains("credentials.toml") && said.contains("another process"),
+            "{said}"
+        );
+        let kept = store.get("anthropic").unwrap().unwrap();
+        assert_eq!(kept.expose(), "sk-test-held-0001");
+        drop(held);
+        waiting
+            .set("anthropic", &Secret::new("sk-test-held-0002"))
+            .unwrap();
     }
 }
 

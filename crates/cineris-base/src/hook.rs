@@ -277,6 +277,33 @@ fn divisor_from(value: Option<&str>) -> u32 {
         .unwrap_or(1)
 }
 
+/// Whether the harness's own mark of its sessions' commands is to fail
+/// (`cineris_sandbox::session::mark`): never without the `test-hooks`
+/// feature, which no build that is shipped or released has (`cargo xtask
+/// size` fails a shipped binary that holds [`MARK_FAILS`]'s name). With it,
+/// when [`MARK_FAILS`] is set and not empty: for the binary's system tests
+/// of what a harness whose mark failed does (it holds its sessions at
+/// `supervised` and says so), which a runner cannot otherwise bring about.
+#[cfg(not(feature = "test-hooks"))]
+#[inline(always)]
+#[must_use]
+pub const fn mark_fails() -> bool {
+    false
+}
+
+/// The variable a test sets on the binary it starts to make its mark fail
+/// ([`mark_fails`]). Read only with the `test-hooks` feature, so that only a
+/// build with it holds the name.
+pub const MARK_FAILS: &str = "CINERIS_TEST_MARK_FAILS";
+
+/// [`mark_fails`] with the `test-hooks` feature: the variable, set and not
+/// empty.
+#[cfg(feature = "test-hooks")]
+#[must_use]
+pub fn mark_fails() -> bool {
+    std::env::var_os(MARK_FAILS).is_some_and(|value| !value.is_empty())
+}
+
 /// What a line of [`probed`] starts with, before the program's name.
 pub const PROBED: &str = "probe>";
 

@@ -845,6 +845,52 @@ fn sys_a_nested_headless_run_is_held_to_read_only_and_says_so() {
     assert!(machine.workspace.join("nested.txt").exists(), "{record}");
 }
 
+/// A harness whose mark of its sessions' commands failed (on Windows, a job
+/// it could not make or join; here the test hooks' switch) does not run at
+/// full width: each part is a front end, with a machine of its own whose
+/// configuration says `unrestricted` (the coordinator's condition on the
+/// full review's fixes of the third part).
+#[test]
+fn sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so() {
+    parts![
+        a_headless_run_whose_mark_failed_is_held_at_supervised_and_says_so,
+        crate::serve::a_server_whose_mark_failed_refuses_a_raise_past_supervised,
+        crate::tui::the_application_whose_mark_failed_says_so,
+    ];
+}
+
+/// A headless run whose mark failed is held at `supervised`: a write past
+/// the workspace, which its configuration's `unrestricted` would make, is
+/// refused where nobody can be asked; and it says so on standard error and
+/// in its result's `capped`, with no open item.
+fn a_headless_run_whose_mark_failed_is_held_at_supervised_and_says_so() {
+    let mut machine = Machine::with_config(
+        "sys_mark_failed_headless",
+        "[permissions]\nmode = \"unrestricted\"\n",
+    );
+    machine.fail_the_mark();
+    let outside = machine.home.join("outside.txt");
+    machine.reply_tool(
+        "toolu_1",
+        "write",
+        &serde_json::json!({"path": outside.to_str().unwrap(), "content": "x\n"}),
+    );
+    machine.reply_text("Done.");
+    let run = machine.run(&["-p", "write it", "--output", "json"]);
+    let result = run.expect_code(0).json();
+    assert!(!outside.exists(), "{result}");
+    assert_eq!(result["capped"]["level"], "supervised", "{result}");
+    assert!(result["capped"].get("item").is_none(), "{result}");
+    let reason = result["capped"]["reason"].as_str().unwrap_or_default();
+    assert!(reason.contains("could not make a job"), "{result}");
+    assert!(
+        run.stderr
+            .contains("holds its sessions at `supervised` at most"),
+        "{}",
+        shown(&run)
+    );
+}
+
 /// A headless run a session's command starts with a variable that moves
 /// where Cineris's configuration and approvals are read from is refused,
 /// and reads nothing from there (the re-look at the early review, B).

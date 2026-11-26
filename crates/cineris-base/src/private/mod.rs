@@ -13,6 +13,7 @@
 //! | [`create_dir_all`] | Creates a directory, and any missing parents, each one private. |
 //! | [`is_private`] | Whether only the current user has access to a file or a directory. |
 //! | [`hold_lock`] | Takes the lock that keeps two writers of a stored file apart: the operating system's lock on a private file beside it. |
+//! | [`lock_within`] | The same lock's bounded wait, for a store that opens its lock file itself. |
 //! | [`access_list`] | Windows only: the access list, read back. |
 //! | [`current_user_sid`] | Windows only: the security identifier of the user the process runs as, in text. |
 //!
@@ -305,10 +306,30 @@ pub fn hold_lock_within(file: &Path, wait: Duration) -> io::Result<Option<File>>
         }
         Err(error) => return Err(refused(error)),
     };
+    match lock_within(&lock, file, wait) {
+        Ok(()) => Ok(Some(lock)),
+        Err(error) if error.kind() == io::ErrorKind::Unsupported => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Takes the operating system's lock on `lock`, the lock file of the
+/// stored file `file`, waiting `wait` at most for another process's hold:
+/// the wait of [`hold_lock`], for a store that opens its lock file itself
+/// (the credentials file's, the narrow re-check of step 28's third pull
+/// request: `cineris auth login` waited without end).
+///
+/// # Errors
+///
+/// The lock held past `wait`, with the kind [`io::ErrorKind::WouldBlock`]
+/// and a message that names `file`, under `~` where it is in the home
+/// directory; a file system that cannot lock, with the kind
+/// [`io::ErrorKind::Unsupported`]; and any other failure of the lock.
+pub fn lock_within(lock: &File, file: &Path, wait: Duration) -> io::Result<()> {
     let deadline = Instant::now() + wait;
     loop {
         match lock.try_lock() {
-            Ok(()) => return Ok(Some(lock)),
+            Ok(()) => return Ok(()),
             Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
                 #[allow(
                     clippy::disallowed_methods,
@@ -322,9 +343,6 @@ pub fn hold_lock_within(file: &Path, wait: Duration) -> io::Result<Option<File>>
                     io::ErrorKind::WouldBlock,
                     held_too_long(file, wait),
                 ));
-            }
-            Err(TryLockError::Error(error)) if error.kind() == io::ErrorKind::Unsupported => {
-                return Ok(None);
             }
             Err(TryLockError::Error(error)) => return Err(error),
         }

@@ -2203,3 +2203,23 @@ fn sys_function_keys_and_the_arrows_reach_the_application() {
     wait_shows(&mut session, "Describe a task");
     quit(&mut session, &phases);
 }
+
+/// The application whose mark failed (`crate::commands`'s folded test)
+/// says so among its first notices: that it holds its sessions at
+/// `supervised` at most, and why.
+pub(crate) fn the_application_whose_mark_failed_says_so() {
+    let phases = Phases::new("the_application_whose_mark_failed_says_so");
+    let mut machine = Machine::new("tui_mark_failed");
+    machine.fail_the_mark();
+    let mut session = machine.tui(&[]);
+    first_frame(&mut session, &phases);
+    // The notice may wrap: read the screen and its scrollback as one text.
+    let said = |t: &VTerm| {
+        let all = t.history().join(" ");
+        let words: Vec<&str> = all.split_whitespace().collect();
+        let all = words.join(" ");
+        all.contains("could not make a job") && all.contains("at most")
+    };
+    session.wait_for(LIMIT, "the notice of the failed mark", said);
+    quit(&mut session, &phases);
+}

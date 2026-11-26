@@ -525,8 +525,8 @@ caught-by:
 rule: On Windows a process in the job of a running harness's own sessions' commands is under a session's command; in any other job it is not.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: (inside != 0).then(
-replace: (inside == 0).then(
+find: if inside == 0 {
+replace: if inside != 0 {
 packages: cineris-sandbox,cineris-cli
 caught-by:
     cineris-sandbox session::sys::tests::sys_a_job_of_no_harnesss_is_no_sessions
@@ -1549,6 +1549,94 @@ find: let bare = bare.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.')
 replace: let bare = bare.trim_end_matches('.');
 caught-by:
     cineris-sandbox session::tests::a_services_start_through_a_runtime_is_under_a_session_and_a_persons_is_not
+
+[break] session-windows-service-start-before-a-harness-counted
+rule: On Windows a service's start counts only when the process the service started on the line was made after a harness of the user's that runs now began: a terminal a logon task, or a service host for `runas`, opened before any harness is the person's own.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: if began.is_none_or(|began| made <= began) {
+replace: if false {
+caught-by:
+    cineris-sandbox session::tests::a_services_start_counts_only_after_a_running_harness_began
+
+[break] session-windows-service-start-with-no-harness-counted
+rule: On Windows, with no harness of the user's running, nothing a service started counts as a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: started_by_a_service
+find: began.is_none_or(|began| made <= began)
+replace: began.is_some_and(|began| made <= began)
+caught-by:
+    cineris-sandbox session::tests::a_services_start_counts_only_after_a_running_harness_began
+
+[break] session-windows-running-harness-not-noted
+rule: On Windows a running harness of the user's, whose job a process outside it finds, says when harnesses began, which a service's start is weighed against.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made)))
+replace: Job::Elsewhere => {}
+caught-by:
+    cineris-sandbox::it session::sys_a_service_hosts_start_after_a_harness_began_is_under_a_session
+
+[break] unmarked-headless-run-not-held
+rule: A headless run whose mark of its sessions' commands failed holds its session at `supervised` at most, whatever its configuration says.
+file: crates/cineris-cli/src/headless.rs
+in: start_core
+find: options.level_at_most = Some(crate::UNMARKED_LEVEL);
+replace: options.level_at_most = None;
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] unmarked-headless-run-silent
+rule: A headless run whose mark failed says so on standard error.
+file: crates/cineris-cli/src/headless.rs
+in: write_result
+find: front.say(&unmarked);
+replace: let _ = &unmarked;
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] unmarked-headless-result-names-another-level
+rule: A headless run whose mark failed says in its result's `capped` the level it was held at, `supervised`.
+file: crates/cineris-cli/src/headless.rs
+in: write_result
+find: level: crate::UNMARKED_LEVEL
+replace: level: cineris_protocol::lease::Level::ReadOnly
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] unmarked-server-not-held
+rule: A server whose mark failed makes its sessions at `supervised` at most, and refuses a raise past it by `session/set`.
+file: crates/cineris-cli/src/serve.rs
+find: options.level_at_most = Some(crate::UNMARKED_LEVEL);
+replace: options.level_at_most = None;
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] unmarked-application-silent
+rule: The application whose mark failed says so among its first notices.
+file: crates/cineris-cli/src/interactive.rs
+find: notices.extend(unmarked);
+replace: notices.extend(None::<String>);
+caught-by:
+    cineris-cli::system commands::sys_a_harness_whose_mark_failed_holds_its_sessions_at_supervised_and_says_so
+
+[break] credentials-lock-waits-without-end
+rule: A change of the credentials file (`cineris auth login`, an approving subcommand) waits for another hold of its lock no longer than the other stores' locks, and is then refused naming the file: a hold that does not end cannot hang it.
+file: crates/cineris-config/src/credentials/file.rs
+in: FileStore::lock
+find: match private::lock_within(&file, &self.path, self.lock_wait) {
+replace: match file.lock() {
+caught-by:
+    cineris-config credentials::file::lock_tests::a_change_the_lock_is_held_from_past_its_wait_is_refused_naming_the_file
+
+[break] credentials-lock-wait-not-the-stores
+rule: The credentials file's lock waits as long as every other store's lock (`LOCK_WAIT`), no longer.
+file: crates/cineris-config/src/credentials/file.rs
+in: FileStore::new
+find: lock_wait: private::LOCK_WAIT
+replace: lock_wait: Duration::from_secs(60)
+caught-by:
+    cineris-config credentials::file::lock_tests::a_change_the_lock_is_held_from_past_its_wait_is_refused_naming_the_file
 
 [break] approving-native-escaped-quote-kept
 rule: In a native program's words, `\"` is a quote, as a Windows program reads its command line: `[\"cin\",\"ext\",\"add\"]` given to a service is refused.
