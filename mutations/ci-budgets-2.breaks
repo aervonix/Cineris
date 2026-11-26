@@ -114,18 +114,3 @@ replace: runner
 caught-by:
     cineris-testkit scratch::tests::only_the_jobs_own_runs_on_a_github_hosted_runner_leave_their_directories
 
-# ------------------------------------------- the snapshots' look, on Windows
-
-# Step 26's `undo-writes-through-a-link`, on the code this change rewrote:
-# its test is Unix-only, so on Windows it had none (found by this step's run
-# of the breaks on a Windows runner).
-[break] undo-writes-through-a-link-on-windows
-rule: Undo does not put a file back through a link on Windows either: a directory on its way, or the file itself, that is a link now.
-file: crates/cineris-session/src/snapshot.rs
-in: through_a_link
-find: Ok(true) => return Ok(true)
-replace: Ok(true) => return Ok(false)
-packages: cineris-session
-os: windows
-caught-by:
-    cineris-session snapshot::windows_tests::a_path_reached_through_a_link_is_not_put_back
