@@ -204,3 +204,17 @@ find: (self.hash != old.hash).then(|| old.before())
 replace: None
 caught-by:
     cineris-sandbox protect::tests::a_change_that_puts_the_modification_time_back_is_still_found
+
+# ------------------------------------- statistics off prune nothing
+#
+# Found while settling `step-16/showing-the-statistics-prunes`: the usage
+# report's own guard had no break and no test.
+
+[break] a-report-with-statistics-off-prunes
+rule: With statistics off a usage report changes nothing on the disk: nothing is written, so no month is pruned, whatever the retention.
+file: crates/cineris-core/src/usage.rs
+in: report
+find: recording.then_some(retention),
+replace: Some(retention),
+caught-by:
+    cineris-core::it usage::a_report_with_statistics_off_prunes_nothing

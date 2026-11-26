@@ -429,9 +429,11 @@ fn run_with<D: Device>(
     let (cols, rows) = terminal.size()?;
     presenter.resize(cols, rows);
     full.resize(cols, rows);
-    // The terminal may be a new one (after the external editor): it reports
-    // the mouse on the alternate screen when the application wants it.
-    terminal.set_mouse(app.mouse())?;
+    // The terminal may be a new one (after the external editor). It needs
+    // no word of the mouse here: it starts on the main screen, where the
+    // mouse is never reported, and the first frame, drawn before anything
+    // is read, asks for the mouse the application wants before it takes
+    // the alternate screen.
     full.redraw();
     app.resize(usize::from(presenter.width()), usize::from(rows));
     let mut scheduler = Scheduler::new();
