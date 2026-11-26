@@ -276,6 +276,60 @@ fn an_undos_question_ends_when_its_session_is_closed() {
     });
 }
 
+/// A session's end withdraws its open questions, one put after its asker
+/// closed its view too: the undo chose whom to ask while the front still
+/// had the session open, and put its question after the front's close had
+/// left the session's questions (none was open then) and before the
+/// session left the core's table. Only the end's withdrawal reaches that
+/// question: the undo ends as no answer, an answer that comes later is
+/// refused, and the edited file is kept.
+#[test]
+fn an_undos_question_put_as_its_session_ends_is_withdrawn_by_the_end() {
+    let world = changed_world("undo_put_as_ending");
+    let core = world.core();
+    let choosing = cineris_testkit::Hold::new(cineris_core::BEFORE_THE_PUT_BACK_IS_ASKED);
+    let ending = cineris_testkit::Hold::new(cineris_core::BEFORE_A_SESSION_ENDS);
+    world.run(async {
+        let front = Front::start(&world, &core).await;
+        front.turn("change it").await;
+        world.put("a.txt", "edited by hand\n");
+        let (asking, client, op) = (core.clone(), front.client.id, undo(&front));
+        let mut undoing =
+            std::pin::pin!(tokio::spawn(async move { asking.handle(client, op).await }));
+        choosing.drive_until_reached(undoing.as_mut()).await;
+        let mut closing = std::pin::pin!(front.close());
+        ending.drive_until_reached(closing.as_mut()).await;
+        choosing.release();
+        asked(&front).await;
+        let (id, ..) = questions(&front).remove(0);
+        ending.release();
+        closing.await;
+        let late = core.respond(
+            front.client.id,
+            &id,
+            ServerResponse::Question(QuestionResponse {
+                answer: Some("Put them back".to_owned()),
+            }),
+        );
+        assert_eq!(
+            late.map_err(|error| error.code),
+            Err("request_not_open".to_owned()),
+            "the question was left open past its session's end"
+        );
+        let undone = undoing.await.unwrap();
+        assert_eq!(
+            undone.map(|_| ()).map_err(|error| error.code),
+            Err("session_not_open".to_owned())
+        );
+        assert_eq!(world.read("a.txt").as_deref(), Some("edited by hand\n"));
+        assert_eq!(
+            choosing.timed_out() + ending.timed_out(),
+            0,
+            "let go, not timed out"
+        );
+    });
+}
+
 /// The core's end withdraws an undo's open question (the review of step
 /// 23): the undo ends as no answer, and the edited file is kept.
 #[test]

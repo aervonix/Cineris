@@ -65,7 +65,9 @@ pub use crate::checkpoints::{
     AFTER_THE_TURN_IS_STOPPED, BEFORE_THE_COMMAND_STARTS, BEFORE_THE_LOOK_AFTER,
 };
 pub use crate::clients::{ClientId, ClientInfo};
-pub use crate::core::{Client, Core, CoreOptions, OpError};
+pub use crate::core::{
+    BEFORE_A_SESSION_ENDS, BEFORE_THE_PUT_BACK_IS_ASKED, Client, Core, CoreOptions, OpError,
+};
 pub use crate::events::{EventQueue, Outgoing, QUEUE_CAPACITY};
 pub use crate::knowledge::AFTER_THE_RULES;
 pub use crate::manage::{
