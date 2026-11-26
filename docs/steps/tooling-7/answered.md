@@ -50,7 +50,7 @@ The step's branch against `main` (`9baacb6`, with step 23's first part) on one W
 
 `resolve_dir` now finds the deepest folder that exists with a `metadata` call a level and makes one resolver there (the owner's go-ahead, after step 23's first part merged). Timed inside the core as before, one test at a time (`try` 43789358331, a scratch branch of the step's head with the marks): **13 resolvers where there were 27,** 2.1 to 2.9 ms of them where there were 9.2 ms, and `session/new` 9.1 to 11.5 ms where `main` read 20.1 ms (`try` 43780823181). The two runs were on two runners, and this one made each resolver in 0.16 to 0.22 ms where the other took 0.34, so part of the difference is the runner. On one runner, `cineris-core`'s tests with and without the fix (`try` 43788709078, five rounds, the step's branch both sides) moved by +1 ms a test at the median (quartiles −5 and +5 ms): the saving there, 14 resolvers at 0.2 ms, is under the noise of a test. The 115 tests' tier-2 time moved by +0.2 s of 5.7.
 
-In one of that run's rounds two of `cineris-core`'s trust tests failed on the side with the fix ("the command's change is in a checkpoint", beside the known [a-base-capture-beside-the-turns-git](../../outstanding/a-base-capture-beside-the-turns-git.md)). Thirty repeats of the trust tests on Windows with the fix (`try` 43789177397) and thirty without (43789436509) all passed.
+In one of that run's rounds two of `cineris-core`'s trust tests failed on the side with the fix ("the command's change is in a checkpoint", beside the known `a-base-capture-beside-the-turns-git`). Thirty repeats of the trust tests on Windows with the fix (`try` 43789177397) and thirty without (43789436509) all passed.
 
 ## What was built, item by item
 
