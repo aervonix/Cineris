@@ -21,15 +21,19 @@ cineris.command({
     const range = since === undefined ? "HEAD" : `${since}..HEAD`;
     // Each commit on a line, its short hash and its subject. `--oneline`
     // rather than a `--format` of its own: on Windows a `%` in an argument
-    // keeps any rule from allowing the line. `--end-of-options` comes last
-    // of the options: git reads no word after it as one, so a rule that
-    // allows this line up to it allows no other option (the README's).
+    // keeps any rule from allowing the line. `--no-show-signature`: a
+    // repository's configuration can turn on the check of each signed
+    // commit's signature (`log.showSignature`) and name the program git
+    // starts for it (`gpg.program`). `--end-of-options` comes last of the
+    // options: git reads no word after it as one, so a rule that allows this
+    // line up to it allows no other option (the README's).
     const log = await cineris.exec("git", [
       "log",
       "--no-merges",
       `--max-count=${MOST}`,
       "--oneline",
       "--no-decorate",
+      "--no-show-signature",
       "--end-of-options",
       range,
     ]);

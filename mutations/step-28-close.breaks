@@ -103,11 +103,30 @@ caught-by:
     cineris-ext::it examples::the_changelog_command_runs_its_line_and_refuses_an_option_for_a_revision
     cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
 
+[break] release-checks-signatures-as-the-repository-says
+rule: The `release` example passes `--no-show-signature`, so that a repository's configuration cannot have git start a program to check a signature, and the rule its README offers names it.
+file: examples/release/extensions/changelog/main.js
+find: "--no-show-signature"
+replace: "--no-color"
+packages: cineris-ext, cineris-cli
+caught-by:
+    cineris-ext::it examples::the_changelog_command_runs_its_line_and_refuses_an_option_for_a_revision
+    cineris-cli::system examples::sys_the_examples_run_as_their_readmes_say
+
 [break] release-readme-offers-a-rule-for-every-git-log
 rule: The rule the `release` example's README offers allows the extension's line alone, and no other option of `git log` (`--output`, `-p`), to the model's shell as to the extension.
 file: examples/release/README.md
-find: match = "git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options *"
+find: match = "git log --no-merges --max-count=200 --oneline --no-decorate --no-show-signature --end-of-options *"
 replace: match = "git log *"
+packages: cineris-policy
+caught-by:
+    cineris-policy::it decide::the_release_examples_rule_allows_its_line_and_no_other_option
+
+[break] release-readme-offers-a-rule-without-no-show-signature
+rule: The rule the `release` example's README offers is the extension's line word for word, `--no-show-signature` with it.
+file: examples/release/README.md
+find: match = "git log --no-merges --max-count=200 --oneline --no-decorate --no-show-signature --end-of-options *"
+replace: match = "git log --no-merges --max-count=200 --oneline --no-decorate --end-of-options *"
 packages: cineris-policy
 caught-by:
     cineris-policy::it decide::the_release_examples_rule_allows_its_line_and_no_other_option
