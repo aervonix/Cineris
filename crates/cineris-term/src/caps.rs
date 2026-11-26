@@ -130,9 +130,9 @@ const NO_SYNC_TERMS: &[&str] = &["dumb", "linux"];
 impl Capabilities {
     /// The queries sent as the terminal is entered: whether synchronized updates
     /// are supported (DECRQM 2026), whether the win32 input mode is (DECRQM
-    /// 9001), the enhanced keyboard protocol's flags,
-    /// the background colour, and last the device attributes, which every
-    /// terminal answers.
+    /// 9001), whether bracketed paste is set (DECRQM 2004, since step 25),
+    /// the enhanced keyboard protocol's flags, the background colour, and
+    /// last the device attributes, which every terminal answers.
     pub const QUERIES: &'static [u8] =
         b"\x1b[?2026$p\x1b[?9001$p\x1b[?2004$p\x1b[?u\x1b]11;?\x1b\\\x1b[c";
 

@@ -1,0 +1,8 @@
+Rules of step 25 that no test or break holds: two click guards whose breaks no test catches, four rules with a test and no break, and three with no test.
+
+- Area: cineris-tui
+- Owner: step 32
+
+| Item | Who | When |
+|---|---|---|
+| **What the review of step 25 found held by nothing.** **The click guards are not caught:** "a click on a box under an open dialog does nothing" and "a click in the panels' column is not the transcript's" (`crates/cineris-tui/src/app/state/screen.rs`, lines 364-373 at the review's commit, `77ffbbcc`) were each broken with `cargo xtask mutate --break …`, and neither break was caught by any of 780 tests; neither affects a dialog's answers. **A test and no break:** the wipe in `SecretBuf::pop` (`what_is_taken_away_or_emptied_is_zero`, `cineris-base`); the refusal of text outside ASCII for Windows Credential Manager (`the_key_is_trimmed_and_a_store_of_ascii_refuses_other_text`, `cineris-tui`'s `secret.rs`); the configuration writer's `private::create_new` (`the_file_is_made_new_and_never_over_one_that_is_there`, `cineris-config`'s `write.rs`); and the writer's removal of its private file (`the_file_takes_its_name_only_once_it_is_whole`, the same). **No test:** `first_run_due` (`cineris-cli`'s `setup.rs`) counting a dangling link at the configuration's path as a file there; `cineris auth login` refusing when standard input is a terminal and standard output is not; and the first run's wiring of the ASCII rule under `KeyStore::CredentialManager` (Windows only). **Recommendation:** a test for each that has none, a break for each in `mutations/`, and for the click guards a test that fails with each break. | Step 32 (hardening: each mitigation with a named test) | Before the first release |
