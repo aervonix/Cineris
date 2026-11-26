@@ -338,7 +338,10 @@ async fn sent_answering(front: &Front, name: &str) -> Result<(), String> {
 /// A command's programs have no write root, whatever its manifest's `write`
 /// says (the maintainers, after the early review of the commands): one that
 /// writes the workspace fails to, at `supervised` and at `read-only`. And a
-/// second interrupt stops a command whose program runs, at once.
+/// second interrupt (`now`) stops a command whose program runs, at once: its
+/// program ignores the polite signals, so only the kill ends it, and a
+/// grace, on the core's timer, which nothing moves here, would never pass
+/// (the review of step 28's commands, L5).
 #[cfg(target_os = "linux")]
 #[test]
 fn sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them() {
@@ -355,13 +358,17 @@ fn sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them() {
            return 'wrote with ' + ran.code;\n\
          } });\n\
          cineris.command({ name: 'wait', description: 'Waits', async run() {\n\
-           await cineris.exec('sh', ['-c', 'sleep 30']);\n\
+           await cineris.exec('sh', ['-c', \"trap '' TERM INT HUP; sleep 30\"], { timeout: 29000 });\n\
            return 'waited';\n\
          } });\n",
     );
+    // The runner's grace, of a length nothing else waits: the script's own
+    // runtime gives its thread 2 s to stop, as the runner's default does.
+    let grace = Duration::from_secs(7);
     let core = world.core_with(|options| {
         options.launcher = Some(crate::sandbox::launcher());
         options.extensions = vec![probe];
+        options.runner = options.runner.take().map(|runner| runner.with_grace(grace));
     });
     world.run(async {
         let front = Front::start(&world, &core).await;
@@ -412,19 +419,32 @@ fn sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them() {
             ))
             .await
             .unwrap();
+        // Asked about, allowed, and run: its program's own 29 s are on the
+        // timer once the runner drives it.
         let mut sent = std::pin::pin!(sent_answering(&front, "probe:wait"));
-        let mut asked = std::pin::pin!(front.approval());
+        let mut running = std::pin::pin!(world.timer.sleeping_for(Duration::from_secs(29)));
         std::future::poll_fn(|context| {
             assert!(
                 sent.as_mut().poll(context).is_pending(),
-                "it ended before it was asked"
+                "it ended before its program ran"
             );
-            asked.as_mut().poll(context).map(|_| ())
+            running.as_mut().poll(context)
         })
         .await;
-        crate::settle().await;
         front.core.early(front.client.id, &interrupt);
-        let error = sent.await.unwrap_err();
+        let mut grace = std::pin::pin!(world.timer.sleeping_for(grace));
+        let error = std::future::poll_fn(|context| {
+            if let std::task::Poll::Ready(ended) = sent.as_mut().poll(context) {
+                return std::task::Poll::Ready(ended);
+            }
+            assert!(
+                grace.as_mut().poll(context).is_pending(),
+                "the program was stopped politely, its grace running: it was not killed at once"
+            );
+            std::task::Poll::Pending
+        })
+        .await
+        .unwrap_err();
         assert!(error.contains("was interrupted"), "{error}");
         front.close().await;
     });
@@ -673,6 +693,9 @@ fn a_changed_gate(world: &World) {
 /// in, whose policy fails on a denial:
 /// - (b) a gate held on `prompt.submit` (the user's `gate`, changed since it
 ///   was approved) refuses it; its pin taken away, nothing is held;
+/// - (d) a command of an extension found and not loaded is refused with why,
+///   as the session was told it: `gate` changed since it was approved, then,
+///   its pin taken away, not approved (the review of step 28's commands);
 /// - a command's read of a secret, which nobody can be asked about, is
 ///   answered with a stop: the command fails, the user is told, and the
 ///   turn running then is stopped; the call's summary names the project's
@@ -685,7 +708,10 @@ fn a_changed_gate(world: &World) {
 ///   `cineris.fs.write` is refused, though its manifest names the file;
 /// - a command waiting behind its extension's tool (one call at a time a
 ///   runtime) spends its own 30 s from when it was asked, and fails at
-///   their end, never having started, the tool going on.
+///   their end, never having started, the tool going on;
+/// - a command sent through a lane, held before its script as the core shuts
+///   down, ends interrupted: the shutdown reaches its run (the review of step
+///   28's commands, M2).
 #[test]
 fn a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_sessions() {
     let held = cineris_testkit::Gate::new();
@@ -743,6 +769,13 @@ fn a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_
             &error,
             "`/probe:ok` was not run: the extension `gate` holds a gate on `prompt.submit`",
         );
+        // (d)
+        let error = send(&front, "gate:go", "").await.unwrap_err();
+        refused(&error, "`/gate:go` is not sent: your extension `gate` (`");
+        refused(
+            &error,
+            "has changed since you approved it, so it is not loaded.",
+        );
         cineris_policy::PinStore::new(state(&world).pins_file(), clock(&world))
             .unpin(&TrustResourceKind::Extension, "gate")
             .unwrap();
@@ -762,6 +795,9 @@ fn a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_
                 })
             })
             .await;
+        // (d) Its pin taken away, seen as the turn started.
+        let error = send(&front, "gate:go", "").await.unwrap_err();
+        refused(&error, "is not loaded: you have not approved it.");
         let error = send(&front, "probe:peek", "").await.unwrap_err();
         assert!(
             error.starts_with(code::COMMAND_FAILED)
@@ -852,7 +888,36 @@ fn a_command_runs_nothing_where_its_prompt_would_be_refused_and_its_stop_is_the_
         assert!(world.timer.running().contains(&Duration::from_secs(97)));
         front.interrupt(false).await;
         front.turns(3).await;
-        front.close().await;
+        // A command sent through a lane, held before its script, as the core
+        // shuts down: the shutdown reaches its run, which ends interrupted.
+        let ok = Op::TurnStart(TurnStartParams {
+            session_id: front.session.clone(),
+            input: Vec::new(),
+            delivery: None,
+            command: Some(CommandCall {
+                name: "probe:ok".to_owned(),
+                args: String::new(),
+            }),
+        });
+        front.core.early(front.client.id, &ok);
+        let runs = cineris_testkit::Hold::new(cineris_core::A_SCRIPT_COMMAND_RUNS);
+        let mut sent = std::pin::pin!(front.core.handle(front.client.id, ok));
+        runs.drive_until_reached(sent.as_mut()).await;
+        core.shutdown().await;
+        runs.release();
+        drop(runs);
+        let error = sent
+            .await
+            .expect_err("a command ran on after the core shut down");
+        assert_eq!(
+            (error.code.as_str(), error.kind.clone()),
+            (
+                code::COMMAND_FAILED,
+                cineris_protocol::ErrorKind::Interrupted
+            ),
+            "{}",
+            error.message
+        );
         let records: Vec<serde_json::Value> = front
             .log(&world)
             .into_iter()

@@ -489,9 +489,8 @@ impl LoadedExtension {
     /// programs given no write root whatever the manifest's `write` says,
     /// and each refused with the stop of the turn running as it runs, once
     /// that turn is stopped. Its time is `time` (30 s, whatever the manifest
-    /// gives its tools: `crate::commands::COMMAND_TIME`), at most
-    /// `crate::commands::MAX_COMMAND_TIME`, from when it is asked: its wait
-    /// for its runtime and the runtime's start count.
+    /// gives its tools: `crate::commands::COMMAND_TIME`), from when it is
+    /// asked: its wait for its runtime and the runtime's start count.
     ///
     /// # Errors
     ///
@@ -506,7 +505,6 @@ impl LoadedExtension {
         // Its time runs from now, its wait for its runtime's turn and the
         // runtime's start included, as a hook's does.
         let asked = self.parts.clock.monotonic();
-        let time = time.min(crate::commands::MAX_COMMAND_TIME);
         let full_name = format!("{}/command.{command}", self.name());
         let shown = format!("/{}:{command}", self.name());
         let runtime = match self

@@ -153,6 +153,20 @@ impl CallHost<'_> {
             _ => return Err(HostError::Denied("it was not allowed".to_owned())),
         }
         match self.parts.policy.ask_with(planned, Some(how)).await {
+            // A command's question names a run of no turn, which the
+            // policy's look after the answer reads as none: the turn
+            // running as it runs, stopped while the question was open, is
+            // looked at again here, and refuses the call whatever the
+            // answer (the review of step 28's commands, L1).
+            Verdict::Allow if self.phase == Phase::Command && self.cx.turn != 0 => {
+                match self.parts.policy.stopped_for_hooks(self.cx.turn) {
+                    Some(reason) => {
+                        self.found_stopped.store(true, Ordering::SeqCst);
+                        Err(HostError::Stopped(reason))
+                    }
+                    None => Ok(()),
+                }
+            }
             Verdict::Allow => Ok(()),
             Verdict::Deny { note } => Err(HostError::Denied(
                 note.unwrap_or_else(|| "the user refused it".to_owned()),

@@ -7,7 +7,13 @@
 rule: A command's run is on the session from the top of `turn/start`'s step, so that an interrupt sent while it waits or runs reaches it.
 file: crates/cineris-core/src/commands.rs
 in: Run::start
-find: crate::core::lock(&live.running_commands).push((id, cancel.clone(), kill.clone()));
+find:
+    crate::core::lock(&live.running_commands).push(Running {
+        id,
+        cancel: cancel.clone(),
+        kill: kill.clone(),
+        lane: false,
+    });
 replace: let _ = (&live.running_commands, id);
 caught-by:
     cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
@@ -32,20 +38,21 @@ caught-by:
     cineris-core::it commands::sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them
 
 [break] a-second-interrupt-does-not-kill-a-commands-programs
-rule: A second interrupt kills a command's programs at once. It survives: the call's cancel alone already ends its program, since the engine stops a cancelled call's host call and the runner the program, so the kill token only skips what is left of a polite stop, which no test of a command can time apart from it.
+rule: A second interrupt kills a command's programs at once: one that ignores the polite signals is not left to the runner's graces, which run on the core's timer.
 os: linux
 file: crates/cineris-core/src/commands.rs
 in: interrupt
-find: kill.cancel();
-replace: let _ = kill;
-expect: survives
+find: run.kill.cancel();
+replace: let _ = &run.kill;
+caught-by:
+    cineris-core::it commands::sys_a_commands_programs_write_nothing_and_an_interrupt_stops_them
 
 [break] an-early-interrupt-does-not-stop-a-command
 rule: An interrupt stops an extension's command running in `turn/start`'s step the moment it is sent, without waiting behind it.
 file: crates/cineris-core/src/core.rs
 in: Core::early
-find: crate::commands::interrupt(&live, params.now);
-replace: let _ = (&live, params.now);
+find: crate::commands::interrupt_sent(&live, client, params.now);
+replace: let _ = (&live, client, params.now);
 caught-by:
     cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
 
@@ -53,8 +60,8 @@ caught-by:
 rule: `turn/interrupt` stops an extension's command running in `turn/start`'s step, as headless mode sends it beside the start.
 file: crates/cineris-core/src/core.rs
 in: Core::handle_op
-find: crate::commands::interrupt(&live, params.now);
-replace: let _ = (&live, params.now);
+find: crate::commands::interrupt(&live, cut.unwrap_or(u64::MAX), params.now);
+replace: let _ = (&live, cut, params.now);
 caught-by:
     cineris-core::it commands::an_interrupt_stops_a_running_command_and_its_questions_are_its_own
 
@@ -759,8 +766,8 @@ caught-by:
 rule: A command's `turn/start` is on the session from when it is sent through a lane, so that an interrupt sent behind it while it waits there stops it before its script runs.
 file: crates/cineris-core/src/core.rs
 in: Core::early
-find: crate::commands::sent(&live, client, call, &parent);
-replace: let _ = (&live, client, call, &parent);
+find: crate::commands::sent(&live, client, call, cancel);
+replace: let _ = (&live, client, call, cancel);
 caught-by:
     cineris-core::it commands_lane::a_queued_command_is_interrupted_and_a_running_turns_stop_refuses_a_commands_host_calls
 
