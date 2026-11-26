@@ -1602,8 +1602,8 @@ caught-by:
 rule: On Windows a running harness of the user's, whose job a process outside it finds, says when harnesses began, which a service's start is weighed against.
 os: windows
 file: crates/cineris-sandbox/src/session.rs
-find: began = Some(began.map_or(process.made, |began| began.min(process.made)));
-replace: let _ = began;
+find: Job::Elsewhere => began = Some(began.map_or(made, |began| began.min(made)))
+replace: Job::Elsewhere => {}
 caught-by:
     cineris-sandbox::it session::sys_a_service_hosts_start_after_a_harness_began_is_under_a_session
 
@@ -1636,6 +1636,34 @@ find: let asked = (name == "svchost.exe").then(&scheduler);
 replace: let asked = Some(scheduler()).filter(|_| name == "svchost.exe");
 caught-by:
     cineris-sandbox session::tests::the_scheduler_is_asked_only_where_the_line_reaches_a_service_host
+
+[break] session-windows-named-job-read-as-another-instance
+rule: A harness's job found among the logon session's named objects gives back the process instance its name was made for: a misread one would find no harness.
+file: crates/cineris-sandbox/src/session.rs
+in: harness_named
+find: .then_some((pid, made))
+replace: .then_some((pid, made + 1))
+caught-by:
+    cineris-sandbox session::tests::a_harnesss_job_is_known_by_its_name_in_the_namespace
+
+[break] session-line-closed-process-taken-for-its-end
+rule: A line of parents read by opening its processes takes the system's list where it meets one that cannot be opened (a service's host, whose name only the list gives), and never ends there.
+file: crates/cineris-sandbox/src/session.rs
+in: line_of
+find: Described::Closed => return None
+replace: Described::Closed => break
+caught-by:
+    cineris-sandbox session::tests::the_line_is_described_by_opening_each_process_and_the_list_taken_at_a_closed_one
+
+[break] session-windows-described-name-not-lowered
+rule: On Windows a process opened to read its line of parents is named as the system's list names it, in lower case, so that the interpreters and the services' hosts are told as before.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+in: described
+find: let name = path.rsplit('\\').next().unwrap_or(&path).to_lowercase();
+replace: let name = path.rsplit('\\').next().unwrap_or(&path).to_owned();
+caught-by:
+    cineris-sandbox session::sys::tests::sys_a_process_opened_is_described_as_the_list_says
 
 [break] session-windows-job-security-inherits
 rule: On Windows the harness's job's security is protected, as its text's `P` made it: nothing is inherited into it.
