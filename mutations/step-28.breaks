@@ -4437,16 +4437,16 @@ find: let _lock = store_lock::hold(&self.file)
 replace: let _ = store_lock::hold(&self.file)
 caught-by:
     trust::pins::tests::every_change_to_the_pins_is_made_under_their_lock
-    pins::two_writers_at_once_both_keep_their_pins
+    pins::a_writer_between_anothers_read_and_write_waits_and_both_keep_their_pins
 
 [break] pins-lock-let-go-before-the-write
 rule: The lock is held until the write is done: a second writer that reads before the first one's write and writes after it loses the first one's pin.
 file: crates/cineris-policy/src/trust/pins.rs
 in: PinStore::update
-find: if changed { self.write(&file)?; }
-replace: drop(_lock); if changed { self.write(&file)?; }
+find: if changed {
+replace: drop(_lock); if changed {
 caught-by:
-    pins::two_writers_at_once_both_keep_their_pins
+    pins::a_writer_between_anothers_read_and_write_waits_and_both_keep_their_pins
 
 [break] pins-no-lock-taken
 rule: Every change takes the lock, and a lock that cannot be taken stops the change.
@@ -4456,7 +4456,7 @@ find: store_lock::hold(&self.file).map_err
 replace: Ok::<Option<std::fs::File>, io::Error>(None).map_err
 caught-by:
     pins::a_lock_that_cannot_be_taken_stops_every_change_and_no_read
-    pins::two_writers_at_once_both_keep_their_pins
+    pins::a_writer_between_anothers_read_and_write_waits_and_both_keep_their_pins
 
 # ------------------------------------------------------------ one pin for each kind and name
 
