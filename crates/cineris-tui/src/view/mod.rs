@@ -47,7 +47,8 @@ pub mod usage;
 pub mod setup;
 
 pub use blocks::{
-    error, listing, notice, reasoning, reasoning_live, turn_summary, user, user_command,
+    error, listing, notice, reasoning, reasoning_cut, reasoning_live, turn_summary, user,
+    user_command,
 };
 pub use header::{Header, header};
 pub use hint::{Hint, HintRow, RunningKeys, Speed, hint_row};

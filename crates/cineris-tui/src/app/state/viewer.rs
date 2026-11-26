@@ -15,6 +15,7 @@ use std::collections::BTreeSet;
 use std::time::Instant;
 
 use cineris_base::{UtcTime, Zone};
+use cineris_protocol::{ItemId, SessionId};
 use cineris_term::{Button, Key, KeyCode, Line, Mods, Mouse, MouseKind, Wheel};
 
 use super::App;
@@ -76,8 +77,10 @@ pub(super) struct Viewer {
     /// The transcript's view a summary was opened from: `Esc` goes back to
     /// it, not out of the viewer (since step 25).
     behind: Option<Box<Viewer>>,
-    /// A compaction's summary item to read and show (since step 25).
-    wants: Option<String>,
+    /// A compaction's summary item, or a reasoning kept only in part, to
+    /// read and show (since step 25; a reasoning since the fixes of its
+    /// review).
+    wants: Option<SummaryOf>,
     /// The summary asked for, by the stop it was asked at: its read's
     /// ticket, or that it failed. An answer is shown only on this view and
     /// at that stop (since the review of step 25's second pull request).
@@ -85,6 +88,20 @@ pub(super) struct Viewer {
     /// The request shown whole: the width its rows were counted at, and
     /// which of them a frame has shown (since step 25).
     whole_seen: (usize, Vec<bool>),
+}
+
+/// What the viewer reads to show whole: an item of the session the block is
+/// of (since the fixes of the review of step 25, which found a compaction's
+/// summary read from whichever session was open).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(in crate::app) struct SummaryOf {
+    /// The session the item is of.
+    session: SessionId,
+    /// The item.
+    item: ItemId,
+    /// For a reasoning, which of the assistant item's reasoning runs; none
+    /// for a compaction, whose item is the summary.
+    run: Option<usize>,
 }
 
 /// Where a compaction's summary asked for is.
@@ -452,7 +469,7 @@ impl App {
                         },
                         None => ViewerKeys::Summary {
                             label: match block.and_then(|block| self.kept.summary(block)) {
-                                Some(Summary::Compaction(_)) => "summary",
+                                Some(Summary::Compaction { .. }) => "summary",
                                 _ => "reasoning",
                             },
                             read: state.asked.filter(|(stop, _)| *stop == selected).map(
@@ -609,31 +626,34 @@ impl App {
         };
     }
 
-    /// Asks for the compaction's summary the viewer wants, through the link
-    /// (`session/read` with the item's id, since step 25); the keys row
-    /// says it is being read.
+    /// Asks for what the viewer wants shown whole, a compaction's summary or
+    /// a reasoning kept only in part, through the link (`session/read` with
+    /// the item's id, since step 25), of the session its block is of (since
+    /// the fixes of the review of step 25); the keys row says it is being
+    /// read. A session left since is not open on this connection, where
+    /// `session/read` refuses: nothing is asked, and the keys row says it
+    /// could not be read.
     fn read_summary(&mut self, state: &mut Viewer) {
-        let Some(item) = state.wants.take() else {
+        let Some(of) = state.wants.take() else {
             return;
         };
         let Some(stop) = state.selected else {
             return;
         };
-        let Some(session) = self.session.as_ref().map(|state| state.session_id.clone()) else {
+        if !self.is_open(&of.session) {
             state.asked = Some((stop, Asked::Failed));
             return;
-        };
+        }
         let ticket = self.link.send(cineris_protocol::methods::Op::SessionRead(
             cineris_protocol::methods::SessionReadParams {
-                session_id: session.clone(),
-                item_id: Some(cineris_protocol::ItemId::from(item.as_str())),
+                session_id: of.session.clone(),
+                item_id: Some(of.item.clone()),
                 limit: None,
                 cursor: None,
                 redacted: false,
             },
         ));
-        self.pending
-            .insert(ticket, super::Pending::Summary(session));
+        self.pending.insert(ticket, super::Pending::Summary(of));
         state.asked = Some((stop, Asked::Reading(ticket)));
     }
 
@@ -647,6 +667,7 @@ impl App {
     pub(super) fn summary_read(
         &mut self,
         ticket: Ticket,
+        of: &SummaryOf,
         page: &cineris_protocol::methods::SessionReadResult,
     ) {
         let Some(state) = self.viewer.as_mut() else {
@@ -662,14 +683,29 @@ impl App {
         if state.selected != Some(stop) || state.text.is_some() || state.whole.is_some() {
             return;
         }
-        let text = page.items.iter().find_map(|item| match item {
-            cineris_protocol::Item::Summary(summary) => Some(summary.text.clone()),
-            _ => None,
-        });
-        match text {
-            Some(text) => {
-                Self::show_summary(state, "The summary the conversation goes on from", &text);
-            }
+        let shown = match of.run {
+            None => page.items.iter().find_map(|item| match item {
+                cineris_protocol::Item::Summary(summary) => Some((
+                    "The summary the conversation goes on from",
+                    summary.text.clone(),
+                )),
+                _ => None,
+            }),
+            // The run of the item's reasoning the block was (since the fixes
+            // of the review of step 25).
+            Some(run) => page.items.iter().find_map(|item| match item {
+                cineris_protocol::Item::AssistantMessage(message) if message.id == of.item => {
+                    crate::app::items::reasoning_runs(&message.parts)
+                        .into_iter()
+                        .nth(run)
+                        .filter(|text| !text.is_empty())
+                        .map(|text| ("The reasoning, whole", text))
+                }
+                _ => None,
+            }),
+        };
+        match shown {
+            Some((label, text)) => Self::show_summary(state, label, &text),
             None => state.asked = Some((stop, Asked::Failed)),
         }
     }
@@ -720,10 +756,30 @@ impl App {
                     .and_then(|selected| self.kept.stop_block(selected))
                     .and_then(|block| self.kept.summary(block));
                 match summary {
-                    Some(Summary::Reasoning(text)) => {
-                        Self::show_summary(state, "The reasoning, whole", &text);
+                    Some(Summary::Reasoning { text, cut }) => {
+                        let label = if cut {
+                            "The reasoning, as far as it was kept"
+                        } else {
+                            "The reasoning, whole"
+                        };
+                        Self::show_summary(state, label, &text);
                     }
-                    Some(Summary::Compaction(item)) => state.wants = Some(item),
+                    // Kept only in part: read whole from its item (since the
+                    // fixes of the review of step 25).
+                    Some(Summary::ReadReasoning(origin)) => {
+                        state.wants = Some(SummaryOf {
+                            session: origin.session,
+                            item: origin.item,
+                            run: Some(origin.run),
+                        });
+                    }
+                    Some(Summary::Compaction { session, item }) => {
+                        state.wants = Some(SummaryOf {
+                            session,
+                            item: ItemId::from(item.as_str()),
+                            run: None,
+                        });
+                    }
                     None => {
                         if let Some(selected) = state.selected {
                             if !state.open.remove(&selected) {

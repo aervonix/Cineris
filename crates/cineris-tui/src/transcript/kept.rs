@@ -15,12 +15,18 @@
 //! **What a round keeps is bounded:** a finished command's output is kept to
 //! its last [`OUTPUT_KEPT`] bytes, from a line's start, as a running
 //! command's is (the core keeps it whole as an artifact).
+//!
+//! **So is what a reasoning keeps** (since the fixes of the review of step
+//! 25): its words, held once, to their first [`REASONING_KEPT`] bytes, to a
+//! line's end where there is one; the rest is read from its item when the
+//! viewer shows it whole.
 
 use std::ops::Range;
 
+use cineris_protocol::SessionId;
 use cineris_term::Line;
 
-use super::{Block, draw};
+use super::{Block, Origin, Reasoning, draw};
 use crate::markdown::{Flavor, Markdown, Source};
 use crate::view::round::Detail;
 use crate::view::{Look, Placement, Round};
@@ -30,6 +36,18 @@ use crate::view::{Look, Placement, Round};
 /// what it showed before step 25. Reading the whole of a cut output when its
 /// box is opened is not built: `docs/outstanding/a-kept-box-holds-only-the-end-of-its-output.md`.
 pub const OUTPUT_KEPT: usize = 64 * 1024;
+
+/// The most of a finished reasoning's words a kept block holds, from its
+/// start (since the fixes of the review of step 25). What a presenter draws
+/// of a finished reasoning is all of its words, dim and italic at the prose
+/// width (`view::reasoning`), and the inline presenter commits it so, whole,
+/// before it is kept: this bounds only what the viewer and the full screen
+/// draw again. 8 KiB is about a hundred rows at the prose width, two and a
+/// half windows of 40 rows: past that a reasoning is not read in the
+/// transcript, and the viewer shows it whole. Over 200 turns that is at most
+/// 1.6 MB of reasoning kept, and as much again in the full screen's search;
+/// held twice and unbounded, as before the fix, 16 KiB a turn was 6.6 MB.
+pub const REASONING_KEPT: usize = 8 * 1024;
 
 /// A finished block, as kept.
 #[derive(Debug, Clone)]
@@ -125,10 +143,7 @@ impl KeptBlock {
                 format!("{typed} · {whose}\n{text}")
             }
             Piece::Block(Block::Compaction { .. }) => crate::transcript::COMPACTED.to_owned(),
-            Piece::Block(Block::Reasoning(reasoning)) => reasoning
-                .summary
-                .clone()
-                .unwrap_or_else(|| reasoning.text.clone()),
+            Piece::Block(Block::Reasoning(reasoning)) => words(reasoning).to_owned(),
             Piece::Block(Block::Listing { title, lines }) => {
                 let mut text = title.clone();
                 for line in lines {
@@ -185,10 +200,25 @@ pub struct Kept {
 /// (since step 25).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Summary {
-    /// A reasoning's whole text, however much the transcript shows.
-    Reasoning(String),
-    /// A compaction's summary, read by the item's id.
-    Compaction(String),
+    /// A reasoning's words as kept, however much the transcript shows:
+    /// whole, or, when `cut` and where the rest is is not known, their start.
+    Reasoning {
+        /// The words.
+        text: String,
+        /// Whether they are only the start.
+        cut: bool,
+    },
+    /// A reasoning kept only to its start: its whole text is read from its
+    /// item (since the fixes of the review of step 25).
+    ReadReasoning(Origin),
+    /// A compaction's summary, read by the item's id from its session (the
+    /// session since the fixes of the review of step 25).
+    Compaction {
+        /// The session the item is of.
+        session: SessionId,
+        /// The summary item's id.
+        item: String,
+    },
 }
 
 impl Kept {
@@ -212,6 +242,10 @@ impl Kept {
                     bound_output(&mut round);
                     Piece::Block(Block::Round(round))
                 }
+                Block::Reasoning(mut reasoning) => {
+                    bound_reasoning(&mut reasoning);
+                    Piece::Block(Block::Reasoning(reasoning))
+                }
                 block => Piece::Block(block),
             };
             self.push(KeptBlock { piece, gap, after });
@@ -225,14 +259,9 @@ impl Kept {
         }
         let stop = match &kept.piece {
             Piece::Block(Block::Round(_) | Block::Compaction { .. }) => true,
-            Piece::Block(Block::Reasoning(reasoning)) => reasoning
-                .summary
-                .as_deref()
-                .unwrap_or(&reasoning.text)
-                .trim()
-                .chars()
-                .next()
-                .is_some(),
+            Piece::Block(Block::Reasoning(reasoning)) => {
+                words(reasoning).trim().chars().next().is_some()
+            }
             _ => false,
         };
         if stop {
@@ -313,14 +342,35 @@ impl Kept {
     #[must_use]
     pub fn summary(&self, index: usize) -> Option<Summary> {
         match &self.blocks.get(index)?.piece {
-            Piece::Block(Block::Reasoning(reasoning)) => Some(Summary::Reasoning(
-                reasoning
-                    .summary
-                    .clone()
-                    .unwrap_or_else(|| reasoning.text.clone()),
-            )),
-            Piece::Block(Block::Compaction { item }) => Some(Summary::Compaction(item.clone())),
+            Piece::Block(Block::Reasoning(reasoning)) => match &reasoning.origin {
+                Some(origin) if reasoning.cut => Some(Summary::ReadReasoning(origin.clone())),
+                _ => Some(Summary::Reasoning {
+                    text: words(reasoning).to_owned(),
+                    cut: reasoning.cut,
+                }),
+            },
+            Piece::Block(Block::Compaction { item, session }) => Some(Summary::Compaction {
+                session: session.clone(),
+                item: item.clone(),
+            }),
             _ => None,
+        }
+    }
+
+    /// The reasoning of `item` in `session` is no read's to find any more:
+    /// its response was thrown away and tried again (`item.reset`, since the
+    /// fixes of the review of step 25). One kept only in part then shows
+    /// what was kept.
+    pub fn forget_origins(&mut self, session: &SessionId, item: &cineris_protocol::ItemId) {
+        for kept in &mut self.blocks {
+            if let Piece::Block(Block::Reasoning(reasoning)) = &mut kept.piece
+                && reasoning
+                    .origin
+                    .as_ref()
+                    .is_some_and(|origin| origin.session == *session && origin.item == *item)
+            {
+                reasoning.origin = None;
+            }
         }
     }
 
@@ -376,12 +426,48 @@ fn bound_output(round: &mut Round) {
     }
 }
 
+/// The words a reasoning holds: once it has ended, its summary; else what has
+/// streamed.
+fn words(reasoning: &Reasoning) -> &str {
+    reasoning.summary.as_deref().unwrap_or(&reasoning.text)
+}
+
+/// Cuts a finished reasoning's words to their first [`REASONING_KEPT`]
+/// bytes: to the end of the last line that fits, or of the last word where
+/// no line ends, and marks it `cut`. Its `text` is empty once it has ended
+/// (`app::items`), so these are the only words it holds.
+fn bound_reasoning(reasoning: &mut Reasoning) {
+    let Some(words) = reasoning.summary.as_mut() else {
+        return;
+    };
+    if words.len() <= REASONING_KEPT {
+        return;
+    }
+    let mut end = REASONING_KEPT;
+    while !words.is_char_boundary(end) {
+        end -= 1;
+    }
+    let head = &words[..end];
+    // At a line's end in the second half of what fits, or a word's; else
+    // where the bytes run out.
+    let at = head
+        .rfind('\n')
+        .filter(|at| *at >= REASONING_KEPT / 2)
+        .or_else(|| head.rfind(' ').filter(|at| *at >= REASONING_KEPT / 2))
+        .unwrap_or(end);
+    words.truncate(at);
+    let trimmed = words.trim_end().len();
+    words.truncate(trimmed);
+    words.shrink_to_fit();
+    reasoning.cut = true;
+}
+
 fn block_bytes(block: &Block) -> usize {
     match block {
         Block::Header(_) | Block::Summary { .. } => 256,
         Block::User(text) | Block::Notice(text) => text.len(),
         Block::UserCommand { typed, whose, text } => typed.len() + whose.len() + text.len(),
-        Block::Compaction { item } => item.len(),
+        Block::Compaction { item, .. } => item.len(),
         Block::Reasoning(reasoning) => {
             reasoning.text.len() + reasoning.summary.as_ref().map_or(0, String::len)
         }

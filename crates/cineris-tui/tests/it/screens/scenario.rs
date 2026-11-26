@@ -345,6 +345,7 @@ fn turn(transcript: &mut Transcript, through: &str, highlighter: &Highlighter) {
         elapsed: Duration::from_secs(6),
         summary: Some(THOUGHT.to_owned()),
         finished: true,
+        ..Reasoning::default()
     }));
     transcript.push(answer(FIRST));
     if through == "first" {
@@ -941,6 +942,7 @@ pub(crate) fn compose(spec: Spec, background: Rgb) -> Screen {
                 elapsed: Duration::from_secs(3),
                 summary: None,
                 finished: false,
+                ..Reasoning::default()
             }));
             screen.transcript(&mut transcript, 3);
             screen.input_running(false);

@@ -25,13 +25,13 @@ use cineris_protocol::item::{
     UserMessageItem,
 };
 use cineris_protocol::message::Part;
-use cineris_protocol::{CallId, Item, ItemId};
+use cineris_protocol::{CallId, Item, ItemId, SessionId};
 use serde_json::Value;
 
 use super::tools;
 use crate::highlight::Highlighter;
 use crate::markdown::Markdown;
-use crate::transcript::{Block, BlockId, Reasoning, Transcript};
+use crate::transcript::{Block, BlockId, Origin, Reasoning, Transcript};
 use crate::view::{CallState, Detail, Round};
 
 /// The most of a running command's output the interface keeps: the tail,
@@ -44,6 +44,10 @@ pub(crate) const OUTPUT_TAIL: usize = 64 * 1024;
 struct Response {
     /// Its reasoning block while open, and when it began.
     reasoning: Option<(BlockId, Instant)>,
+    /// Every reasoning block it began, in order: how many is the next one's
+    /// run among the item's ([`Origin`]), and which to make unreadable when
+    /// it is tried again.
+    reasonings: Vec<BlockId>,
     /// Its answer block while open.
     answer: Option<BlockId>,
     /// The round of its tool calls.
@@ -223,8 +227,16 @@ impl Mapper {
         }
     }
 
-    /// One event of the session.
-    pub(crate) fn event(&mut self, transcript: &mut Transcript, event: &Event, now: Instant) {
+    /// One event of `session`, the session it came from: a block whose
+    /// whole text the viewer may read again keeps it (since the fixes of the
+    /// review of step 25).
+    pub(crate) fn event(
+        &mut self,
+        transcript: &mut Transcript,
+        event: &Event,
+        session: &SessionId,
+        now: Instant,
+    ) {
         match event {
             Event::ItemStarted(started) => match &started.kind {
                 ItemKind::AssistantMessage => {
@@ -245,7 +257,9 @@ impl Mapper {
                 }
                 _ => {}
             },
-            Event::ItemDelta(delta) => self.delta(transcript, &delta.item_id, &delta.delta, now),
+            Event::ItemDelta(delta) => {
+                self.delta(transcript, &delta.item_id, &delta.delta, session, now);
+            }
             Event::ItemReset(reset) => self.reset(transcript, &reset.item_id, now),
             Event::ItemResync(resync) => {
                 if let Some(response) = self.responses.get_mut(&resync.item_id) {
@@ -255,7 +269,9 @@ impl Mapper {
                     self.resynced.insert(resync.item_id.clone());
                 }
             }
-            Event::ItemCompleted(completed) => self.completed(transcript, &completed.item, now),
+            Event::ItemCompleted(completed) => {
+                self.completed(transcript, &completed.item, session, now);
+            }
             _ => {}
         }
     }
@@ -263,7 +279,13 @@ impl Mapper {
     /// An item a read gave in progress, with what it had then: drawn as
     /// its events would have drawn it, to go on with the events after the
     /// read.
-    pub(crate) fn in_progress(&mut self, transcript: &mut Transcript, item: &Item, now: Instant) {
+    pub(crate) fn in_progress(
+        &mut self,
+        transcript: &mut Transcript,
+        item: &Item,
+        session: &SessionId,
+        now: Instant,
+    ) {
         let mut events = Vec::new();
         let delta = |item_id: &ItemId, delta: Delta| {
             Event::ItemDelta(ItemDelta {
@@ -348,11 +370,18 @@ impl Mapper {
             item => events.push(Event::ItemCompleted(ItemCompleted { item: item.clone() })),
         }
         for event in &events {
-            self.event(transcript, event, now);
+            self.event(transcript, event, session, now);
         }
     }
 
-    fn delta(&mut self, transcript: &mut Transcript, item: &ItemId, delta: &Delta, now: Instant) {
+    fn delta(
+        &mut self,
+        transcript: &mut Transcript,
+        item: &ItemId,
+        delta: &Delta,
+        session: &SessionId,
+        now: Instant,
+    ) {
         match delta {
             Delta::ToolOutput(output) => {
                 let Some(call) = self.results.get(item).cloned() else {
@@ -394,8 +423,14 @@ impl Mapper {
                 }
                 let block = transcript.push(Block::Reasoning(Reasoning {
                     text: text.text.clone(),
+                    origin: Some(Origin {
+                        session: session.clone(),
+                        item: item.clone(),
+                        run: response.reasonings.len(),
+                    }),
                     ..Reasoning::default()
                 }));
+                response.reasonings.push(block);
                 response.reasoning = Some((block, now));
             }
             Delta::Text(text) => {
@@ -510,10 +545,19 @@ impl Mapper {
     /// The response's partial content was thrown away, to be tried again:
     /// what it showed ends where it is, and its calls, which never ran,
     /// are marked so.
+    ///
+    /// What it drew of reasoning is not the item's any more: no read finds
+    /// it (since the fixes of the review of step 25). The application does
+    /// the same for the blocks already kept (`Kept::forget_origins`).
     fn reset(&mut self, transcript: &mut Transcript, item: &ItemId, now: Instant) {
         let Some(response) = self.responses.remove(item) else {
             return;
         };
+        for block in &response.reasonings {
+            if let Some(Block::Reasoning(reasoning)) = transcript.get_mut(*block) {
+                reasoning.origin = None;
+            }
+        }
         self.end_response(transcript, response, now);
         // The retried response streams under the same id, from its start.
         self.responses.insert(item.clone(), Response::default());
@@ -549,7 +593,13 @@ impl Mapper {
         }
     }
 
-    fn completed(&mut self, transcript: &mut Transcript, item: &Item, now: Instant) {
+    fn completed(
+        &mut self,
+        transcript: &mut Transcript,
+        item: &Item,
+        session: &SessionId,
+        now: Instant,
+    ) {
         match item {
             // A command's prompt says which command it came from, and whose
             // (since step 28): its parts are the command's text, expanded.
@@ -579,6 +629,7 @@ impl Mapper {
             Item::Summary(summary) => {
                 transcript.push(Block::Compaction {
                     item: summary.id.as_str().to_owned(),
+                    session: session.clone(),
                 });
             }
             // The other notices are the model's; the events tell the person.
@@ -768,14 +819,58 @@ impl Mapper {
     }
 }
 
-/// Reasoning ends: how long it took, and its text as the summary.
+/// Reasoning ends: how long it took, and its text, trimmed, as the words it
+/// draws. The text is moved, not copied (since the fixes of the review of
+/// step 25, which found every reasoning held twice): one copy is held, sized
+/// to its words.
 fn finish_reasoning(transcript: &mut Transcript, (block, began): (BlockId, Instant), now: Instant) {
-    if let Some(Block::Reasoning(reasoning)) = transcript.get_mut(block) {
+    if let Some(Block::Reasoning(reasoning)) = transcript.get_mut(block)
+        && !reasoning.finished
+    {
         reasoning.elapsed = now.saturating_duration_since(began);
-        let text = reasoning.text.trim();
-        reasoning.summary = (!text.is_empty()).then(|| text.to_owned());
+        let mut text = std::mem::take(&mut reasoning.text);
+        trim_in_place(&mut text);
+        reasoning.summary = (!text.is_empty()).then_some(text);
         reasoning.finished = true;
     }
+}
+
+/// `text` trimmed as `str::trim` trims, in place, and its spare capacity
+/// given back: a streamed text has grown by doubling.
+fn trim_in_place(text: &mut String) {
+    let end = text.trim_end().len();
+    text.truncate(end);
+    let start = text.len() - text.trim_start().len();
+    text.drain(..start);
+    text.shrink_to_fit();
+}
+
+/// An assistant item's reasoning as the transcript drew it (since the fixes
+/// of the review of step 25): one text for each reasoning block its deltas
+/// made, in order, each trimmed as [`finish_reasoning`] trims it. A run is
+/// the reasoning parts that follow one another, with words; an answer's
+/// text or a tool call between two ends the first, as its delta ends the
+/// block (`Mapper::delta`). The viewer reads a reasoning kept only in part
+/// from its item and takes the run its [`Origin`] names.
+pub(crate) fn reasoning_runs(parts: &[Part]) -> Vec<String> {
+    let mut runs = Vec::new();
+    let mut open: Option<String> = None;
+    for part in parts {
+        match part {
+            Part::Reasoning(reasoning) if !reasoning.text.is_empty() => {
+                open.get_or_insert_with(String::new)
+                    .push_str(&reasoning.text);
+            }
+            Part::Text(text) if !text.text.is_empty() => runs.extend(open.take()),
+            Part::ToolCall(_) => runs.extend(open.take()),
+            _ => {}
+        }
+    }
+    runs.extend(open);
+    for run in &mut runs {
+        trim_in_place(run);
+    }
+    runs
 }
 
 fn finish_answer(transcript: &mut Transcript, block: BlockId, _last: &mut String) {

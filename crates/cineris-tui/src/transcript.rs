@@ -22,6 +22,7 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
+use cineris_protocol::{ItemId, SessionId};
 use cineris_term::Line;
 
 use crate::markdown::Markdown;
@@ -64,6 +65,10 @@ pub enum Block {
     Compaction {
         /// The summary item's id.
         item: String,
+        /// The session the item is of, which the viewer reads it from (since
+        /// the fixes of the review of step 25: item ids repeat across
+        /// sessions, and the session open when it is read may be another).
+        session: SessionId,
     },
     /// What a command shows (`/status`, `/config`, `/help`): a title, then
     /// its lines as they are, each cut to the width (since step 23).
@@ -92,17 +97,53 @@ pub enum Block {
 }
 
 /// Reasoning, as it streams and when it has finished.
+///
+/// **One copy of its words is held** (since the fixes of the review of step
+/// 25): `text` while it streams, and `summary` once it has ended, the words
+/// moved there and `text` left empty.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Reasoning {
-    /// The words so far.
+    /// The words so far, while it streams. Empty once it has ended: they
+    /// are then in `summary`.
     pub text: String,
     /// How long it has run.
     pub elapsed: Duration,
-    /// The provider's summary, if it sent one.
+    /// The words a finished reasoning draws: its text, trimmed, moved here
+    /// from `text` when it ended. The protocol gives one text, which is the
+    /// visible reasoning or the provider's own summary of it
+    /// (`ReasoningPart::text`), so this is not a summary the interface
+    /// made. `None` when it had no words. Kept for the viewer and the full
+    /// screen only to its first [`kept::REASONING_KEPT`] bytes (`cut`).
     pub summary: Option<String>,
-    /// Whether it has ended (its item completed), with a summary or
-    /// without one.
+    /// Whether it has ended (its item completed, or the item's next part
+    /// began), with words or without.
     pub finished: bool,
+    /// Where its whole text is in its session, for the viewer to read when
+    /// what was kept is only its start (since the fixes of the review of step
+    /// 25). `None` where no read would find it: a response that was thrown
+    /// away and tried again (`item.reset`) is not the item's content any
+    /// more.
+    pub origin: Option<Origin>,
+    /// Whether `summary` holds only the start of its words: it was kept
+    /// past [`kept::REASONING_KEPT`] bytes (since the fixes of the review of
+    /// step 25). Drawn as what was kept and a row that says so.
+    pub cut: bool,
+}
+
+/// Where a reasoning's whole text is: the session, its assistant item, and
+/// which of the item's reasoning runs it is (since the fixes of the review of
+/// step 25). A response's reasoning becomes a block of its own each time it
+/// begins after an answer or a call began (`app::items`), so one item may
+/// hold several; the viewer reads the item by `session/read` and takes the
+/// run by its number.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Origin {
+    /// The session the item is of.
+    pub session: SessionId,
+    /// The assistant item.
+    pub item: ItemId,
+    /// Which of its reasoning runs, counted from 0.
+    pub run: usize,
 }
 
 /// What a compaction's notice says.
@@ -402,12 +443,20 @@ fn draw(block: &Block, placement: Placement, tick: usize, width: usize, look: &L
         Block::UserCommand { typed, whose, text } => {
             view::user_command(typed, whose, text, width, look)
         }
-        Block::Reasoning(reasoning) if reasoning.finished => view::reasoning(
-            reasoning.summary.as_deref().unwrap_or_default(),
-            reasoning.elapsed,
-            width,
-            look,
-        ),
+        Block::Reasoning(reasoning) if reasoning.finished => {
+            let mut lines = view::reasoning(
+                reasoning.summary.as_deref().unwrap_or_default(),
+                reasoning.elapsed,
+                width,
+                look,
+            );
+            // Only a kept block is ever cut: what the transcript commits is
+            // drawn whole, as before.
+            if reasoning.cut {
+                lines.extend(view::reasoning_cut(width, look));
+            }
+            lines
+        }
         Block::Reasoning(reasoning) => {
             view::reasoning_live(&reasoning.text, reasoning.elapsed, tick, width, look)
         }

@@ -11,7 +11,7 @@ use cineris_protocol::item::{
     ToolResultItem,
 };
 use cineris_protocol::message::{Part, ToolCallPart};
-use cineris_protocol::{CallId, Item, ItemId};
+use cineris_protocol::{CallId, Item, ItemId, SessionId};
 use cineris_term::{ColorDepth, Line};
 use serde_json::json;
 
@@ -42,7 +42,12 @@ impl Rig {
     }
 
     fn event(&mut self, event: Event) {
-        self.mapper.event(&mut self.transcript, &event, self.now);
+        self.mapper.event(
+            &mut self.transcript,
+            &event,
+            &SessionId::from("s_test"),
+            self.now,
+        );
     }
 
     fn later(&mut self, by: Duration) {
@@ -290,6 +295,92 @@ fn an_answer_whose_deltas_stopped_is_completed_from_the_whole_item() {
         rig.mapper.last_answer(),
         "The first part, and the second.\n"
     );
+}
+
+/// Each reasoning block knows where its whole text is: its session, its
+/// item and which of the item's reasoning runs it is, as
+/// `reasoning_runs` reads them from the item; its words are held once,
+/// moved from the stream when it ends; and a response thrown away leaves
+/// its reasoning findable by no read (since the fixes of the review of step
+/// 25).
+#[test]
+fn each_reasoning_knows_its_run_of_its_item_and_holds_its_words_once() {
+    let mut rig = Rig::new();
+    rig.transcript.keep_finished();
+    rig.started("i_1");
+    rig.reasoning("i_1", "  First, the scanner");
+    rig.reasoning("i_1", " and its numbers.\n");
+    rig.text("i_1", "I'll read it.");
+    rig.reasoning("i_1", "Then the parser.");
+    rig.call("i_1", "c_1", "read");
+    rig.reasoning("i_1", "Last, the tests.");
+    let words = |text: &str| {
+        Part::Reasoning(cineris_protocol::message::ReasoningPart {
+            text: text.to_owned(),
+            raw: None,
+        })
+    };
+    let parts = vec![
+        words("  First, the scanner"),
+        words(" and its numbers.\n"),
+        // A provider's block with no words, which no delta drew.
+        words(""),
+        Part::text("I'll read it."),
+        words("Then the parser."),
+        Part::ToolCall(ToolCallPart {
+            id: CallId::from("c_1"),
+            name: "read".to_owned(),
+            arguments: json!({"path": "src/lex.rs"}),
+            raw: None,
+        }),
+        words("Last, the tests."),
+    ];
+    rig.completed(assistant("i_1", parts.clone(), StopReason::ToolCalls));
+    rig.result("i_2", "c_1", "read", ToolOutcome::Success);
+    let _ = rig.frame();
+    let runs = super::reasoning_runs(&parts);
+    assert_eq!(
+        runs,
+        [
+            "First, the scanner and its numbers.",
+            "Then the parser.",
+            "Last, the tests."
+        ]
+    );
+    let finished = |rig: &mut Rig| -> Vec<Reasoning> {
+        rig.transcript
+            .take_finished()
+            .into_iter()
+            .filter_map(|finished| match finished.block {
+                Block::Reasoning(reasoning) => Some(reasoning),
+                _ => None,
+            })
+            .collect()
+    };
+    let kept = finished(&mut rig);
+    assert_eq!(kept.len(), 3, "{kept:#?}");
+    for (n, reasoning) in kept.iter().enumerate() {
+        assert_eq!(
+            reasoning.origin,
+            Some(Origin {
+                session: SessionId::from("s_test"),
+                item: ItemId::from("i_1"),
+                run: n,
+            })
+        );
+        assert!(reasoning.text.is_empty(), "held twice: {reasoning:#?}");
+        assert_eq!(reasoning.summary.as_deref(), Some(runs[n].as_str()));
+    }
+    // A response thrown away: the reasoning it drew is no read's to find.
+    rig.started("i_3");
+    rig.reasoning("i_3", "A first try.");
+    rig.event(Event::ItemReset(ItemRef {
+        item_id: ItemId::from("i_3"),
+    }));
+    let _ = rig.frame();
+    let tried = finished(&mut rig);
+    assert_eq!(tried.len(), 1, "{tried:#?}");
+    assert_eq!(tried[0].origin, None);
 }
 
 #[test]
