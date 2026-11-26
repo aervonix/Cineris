@@ -75,7 +75,8 @@ pub use crate::manage::{
     Trusted,
 };
 pub use crate::policy::{
-    AFTER_THE_LOOK, BEFORE_THE_APPROVAL_IS_OPEN, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE, PermissionDenial,
+    AFTER_THE_LOOK, BEFORE_THE_APPROVAL_IS_OPEN, BEFORE_THE_NEW_LEVEL_IS_IN_FORCE,
+    CHANGING_APPROVALS, PermissionDenial,
 };
 pub use crate::provider::{ANTHROPIC_KEY_ENV, Connector, EFFORT_ALIASES, KeyFound};
 pub use crate::reload::{CHOICE_BEING_KEPT, SKILL_FOLDERS_STAY, TRUST_JUDGED};

@@ -80,8 +80,10 @@ pub struct PermissionDenial {
 
 /// The point inside a change of the approvals or the learned commands, with
 /// the engine in force taken and nothing changed yet: a test holds a
-/// revoke, a record or a hand-over of learned commands there.
-pub(crate) const CHANGING_APPROVALS: &str = "core.policy.changing-approvals";
+/// revoke, a record or a hand-over of learned commands there. A blocking
+/// point ([`cineris_base::hook::point`]): a person's answer is recorded on a
+/// thread of the blocking pool.
+pub const CHANGING_APPROVALS: &str = "core.policy.changing-approvals";
 
 /// The point where another engine is about to be put in force, with the
 /// lock held.

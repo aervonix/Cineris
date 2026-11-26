@@ -241,13 +241,14 @@ caught-by:
     cineris-core policy::tests::each_change_of_the_engine_in_force_holds_the_lock_while_it_works
 
 [break] a-stop-of-the-turn-moves-no-count
-rule: Stopping the turn moves the count of narrowings, so the calls of it that have not started are decided again and stopped. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own, so no test can see this guard alone: it is a second line for a call that would start between the stop and the round's taking of the call's result: a command found to only read runs beside other calls that only read. `StopsWithTurn` holds that window too.
+rule: Stopping the turn moves the count of narrowings, so the calls of it that have not started are decided again and stopped. Since the stop-ends-turn step the call's result is also marked as the stop (`ToolResult::stopping_turn`), which ends the round at that call on its own: this guard is a second line for a call that would start between the stop and the round's taking of the call's result (a command found to only read runs beside other calls). The test holds the command at `AFTER_THE_TURN_IS_STOPPED` while a call allowed just before the stop becomes ready; without the narrowing it starts, and only `StopsWithTurn` refuses it.
 file: crates/cineris-core/src/policy.rs
 in: EnginePolicy::stop_turn
 find: self.in_force.stop();
 replace:
 os: linux
-expect: survives
+caught-by:
+    cineris-core::it sandbox::sys_a_call_ready_when_a_command_stops_the_turn_is_decided_again_as_the_stop
 
 [break] an-answer-recorded-round-the-lock
 rule: A person's answer is recorded through the engine in force, under the lock a change of level holds.
