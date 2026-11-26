@@ -54,11 +54,14 @@ pub fn part(name: &str, rule: fn()) {
     rule();
 }
 
+/// One rule of a folded test that shares a world: its name, and the check.
+pub type Rule<W> = (&'static str, fn(&W));
+
 /// Judges every rule of a folded test that shares one world, `world`, each
 /// by its name: a rule that fails is named, and does not keep the rules
 /// after it from being judged; the test fails at the end, naming each rule
 /// that failed.
-pub fn judge<W>(world: &W, rules: &[(&str, fn(&W))]) {
+pub fn judge<W>(world: &W, rules: &[Rule<W>]) {
     let failed: Vec<&str> = rules
         .iter()
         .filter(|(name, rule)| {
