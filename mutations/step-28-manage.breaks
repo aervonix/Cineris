@@ -1396,8 +1396,8 @@ caught-by:
 rule: A line's continuations are taken out before it is read (`ci\\⏎neris`).
 file: crates/cineris-policy/src/approving.rs
 in: refused
-find: if joined != command
-replace: if false
+find: && joined != command
+replace: && false
 caught-by:
     cineris-policy approving::tests::the_fallback_refuses_exactly_the_tables_refused_lines
     cineris-policy::it commands::the_engine_without_a_grammar_refuses_the_tables_lines

@@ -2499,8 +2499,11 @@ pub fn refused(command: &str, shell: ShellSyntax, own: Option<&OwnCommands>) -> 
             &fallback
         }
     };
-    let joined = joined(command, shell);
-    if joined != command
+    // A line with no line break has no continuation: most are passed over
+    // here, before anything is made of them.
+    if command.contains('\n')
+        && let joined = joined(command, shell)
+        && joined != command
         && let Some(refusal) = refused(&joined, shell, Some(own))
     {
         return Some(refusal);
