@@ -72,15 +72,19 @@ pub const REPLY_ESCAPE_WAIT: Duration = Duration::from_millis(500);
 /// and on a loaded machine its ESC came first more than 50 ms, then more
 /// than 500 ms, before its `[`, which made it the Escape key and typed the
 /// rest (`[?0u`) into the input box; since small fixes II the hold ends
-/// with what came, not after a time of its own. A held ESC that has waited
-/// [`ESCAPE_WAIT`] and is then followed by what can begin no sequence (a
-/// character, or a second ESC before a whole reply) is the Escape key at
-/// once, and what followed comes after it, in order; one followed by what
-/// may begin a sequence is read with it, and is the Escape key at the hold's
-/// end if that sequence never ends. And while they are due, a reply whose ESC was taken on its own
-/// is the reply, never typed text ([`Decoder`]): a `[` or `]` that may
-/// begin one is held as an ESC is, until what follows says whether it is
-/// one.
+/// with what came, not after a time of its own. A byte that comes
+/// [`ESCAPE_WAIT`] or more after the last byte kept behind a held ESC ends
+/// the ESC's claim on it unless it may go on from it: after a lone ESC, a
+/// sequence's introducer (so that a focus report, a key's sequence or a
+/// paste's mark split after its ESC is still what it is); after more, only
+/// the rest of a reply, which a pseudo-console gives a key at a time. When
+/// it ends, the ESC is the Escape key at once, and what was kept after it
+/// and what came are decoded on their own, in order: a person's keys
+/// typed a while apart are those keys, none lost or joined. A held ESC
+/// whose sequence never ends is the Escape key at the hold's end. And while
+/// they are due, a reply whose ESC was taken on its own is the reply,
+/// never typed text ([`Decoder`]): a `[` or `]` that may begin one is held
+/// as an ESC is, until what follows says whether it is one.
 ///
 /// So an Escape (or a `[`, or a `]`) pressed while the replies are due
 /// comes when the device attributes come, at once when another key follows
@@ -476,11 +480,15 @@ pub struct Terminal<D: Device = System> {
     pending_since: Option<Instant>,
     /// Whether the reply that ends the capability queries has come.
     answered: bool,
-    /// The kept bytes begin with an ESC that waited [`ESCAPE_WAIT`] alone
-    /// before the next byte came, while it was held for the replies: if the
-    /// hold ends with them kept, the ESC is the Escape key and what came
-    /// after it is decoded on its own (the early review of small fixes II).
+    /// The kept bytes begin with an ESC held for the replies, and a byte
+    /// came [`ESCAPE_WAIT`] or more after the one before it: if the hold
+    /// ends with them kept, the ESC is the Escape key and what came after
+    /// it is decoded on its own (the reviews of small fixes II).
     split: bool,
+    /// When the last byte kept came: a byte that comes [`ESCAPE_WAIT`] or
+    /// more after it ends a held ESC's claim on what follows, unless it
+    /// goes on as a reply ([`Decoder::kept_escape_goes_on`]).
+    kept_at: Option<Instant>,
     /// When the capability queries were sent: a lone ESC that comes within
     /// [`REPLIES_DUE`] of it, while `answered` is not yet true, is held for
     /// the replies ([`REPLIES_DUE`] says how).
@@ -587,6 +595,7 @@ impl<D: Device> Terminal<D> {
             pending_since: None,
             answered: false,
             split: false,
+            kept_at: None,
             queried,
             open_since: None,
             opened: None,
@@ -873,19 +882,23 @@ impl<D: Device> Terminal<D> {
                                 .pending_since
                                 .is_some_and(|since| self.held_for_replies(since)),
                     );
-                    // An ESC held for the replies, which has waited its own
-                    // wait, and which what came cannot go on as a sequence:
-                    // it was the Escape key, given before what came. One
-                    // that what came may go on as one is held on, and
-                    // remembered as having waited alone.
+                    // What came a while after the last byte kept behind an
+                    // ESC held for the replies: when it cannot go on from
+                    // the ESC (a person's key, a second Escape), the ESC
+                    // was the Escape key, given before what came, and what
+                    // was kept after it is decoded on its own; when it may
+                    // (a sequence's introducer, the rest of a reply), the
+                    // ESC is held on, and remembered as split.
                     if let Some(since) = self.pending_since
                         && self.held_for_replies(since)
-                        && now.saturating_duration_since(since) >= ESCAPE_WAIT
+                        && self
+                            .kept_at
+                            .is_some_and(|at| now.saturating_duration_since(at) >= ESCAPE_WAIT)
                     {
-                        if self.decoder.kept_escape_stands_alone(&self.bytes) {
-                            self.decoder.release_escape(&mut found);
-                        } else if self.decoder.kept_lone_escape() {
-                            self.split = true;
+                        match self.decoder.kept_escape_goes_on(&self.bytes) {
+                            Some(false) => self.decoder.release_escape(&mut found),
+                            Some(true) => self.split = true,
+                            None => {}
                         }
                     }
                     self.decoder.feed(&self.bytes, &mut found);
@@ -894,6 +907,7 @@ impl<D: Device> Terminal<D> {
                     if !found.is_empty() || !self.decoder.pending() {
                         self.split = false;
                     }
+                    self.kept_at = self.decoder.pending().then_some(now);
                     // What is kept now waits its own time: from its arrival,
                     // not from that of something the same read finished.
                     if !self.decoder.pending() {
@@ -2476,6 +2490,89 @@ mod tests {
         assert_eq!(came(&mut terminal, None), (letter('k'), STEP * 3));
     }
 
+    /// What the terminal gives for `chunks` read one after another, from
+    /// the start while the replies are due, each 120 ms after the one
+    /// before; and then until the replies are no longer due.
+    fn read_apart(chunks: &[&[u8]]) -> Vec<Event> {
+        let mut steps: Vec<(Ready, &[u8])> = Vec::new();
+        for chunk in chunks {
+            steps.push((Ready::Input, chunk));
+            steps.push((Ready::Timeout, b""));
+        }
+        let mut terminal = Terminal::with_device(script(&steps), caps()).unwrap();
+        let mut events = Vec::new();
+        for _ in 0..chunks.len() * 2 + 40 {
+            events.extend(terminal.next(Some(Duration::from_millis(100))).unwrap());
+        }
+        events
+    }
+
+    /// A person's keys typed while the replies are due, each a while after
+    /// the one before, come through as those keys, in order, none lost or
+    /// joined: a second Escape is an Escape, a `[` or a letter after an
+    /// Escape is that key, an arrow after it is the arrow (the full review
+    /// of small fixes II).
+    #[test]
+    fn keys_typed_a_while_apart_while_the_replies_are_due_are_those_keys() {
+        let esc = Event::Key(Key::plain(KeyCode::Esc));
+        let letter = |c| Event::Key(Key::plain(KeyCode::Char(c)));
+        let attributes = Event::Reply(Reply::DeviceAttributes);
+        let cases: [(&[&[u8]], Vec<Event>); 5] = [
+            (
+                &[b"\x1b", b"\x1b", LAST_REPLY],
+                vec![esc.clone(), esc.clone(), attributes.clone()],
+            ),
+            (
+                &[b"\x1b", b"[", LAST_REPLY],
+                vec![esc.clone(), letter('['), attributes],
+            ),
+            (
+                &[b"\x1b", b"[", b"x"],
+                vec![esc.clone(), letter('['), letter('x')],
+            ),
+            (
+                &[b"\x1b", b"\x1b", b"x"],
+                vec![esc.clone(), esc.clone(), letter('x')],
+            ),
+            (
+                &[b"\x1b", b"\x1b[A"],
+                vec![esc, Event::Key(Key::plain(KeyCode::Up))],
+            ),
+        ];
+        for (chunks, want) in cases {
+            assert_eq!(read_apart(chunks), want, "{chunks:?}");
+        }
+    }
+
+    /// A reply that comes a key at a time, each key a while after the one
+    /// before, as a pseudo-console gives one on a busy machine, is the
+    /// reply: the rest of a reply goes on from its held ESC however late
+    /// each key of it comes, while the replies are due.
+    #[test]
+    fn a_reply_that_comes_a_key_at_a_time_is_the_reply() {
+        let keyboard: &[&[u8]] = &[b"\x1b", b"[", b"?", b"0", b"u"];
+        assert_eq!(read_apart(keyboard), [Event::Reply(Reply::Keyboard(0))]);
+        let attributes: &[&[u8]] = &[b"\x1b", b"[", b"?", b"6", b"2", b"c"];
+        assert_eq!(
+            read_apart(attributes),
+            [Event::Reply(Reply::DeviceAttributes)]
+        );
+        let background: &[&[u8]] = &[
+            b"\x1b",
+            b"]",
+            b"1",
+            b"1",
+            b";",
+            b"rgb:00/00/00",
+            b"\x1b",
+            b"\\",
+        ];
+        assert_eq!(
+            read_apart(background),
+            [Event::Reply(Reply::Background(0, 0, 0))]
+        );
+    }
+
     /// A sequence that is not a reply, split after its ESC as a
     /// pseudo-console splits them while the replies are due, is the
     /// sequence, never the Escape key and typed text: a focus report, a
@@ -2521,8 +2618,15 @@ mod tests {
             let elapsed = device.elapsed.clone();
             let mut terminal = Terminal::with_device(device, caps()).unwrap();
             assert_eq!(terminal.next(Some(Duration::from_secs(1))).unwrap(), None);
-            let mut events = vec![terminal.next(None).unwrap().expect("the hold's end")];
-            events.extend(drain(&mut terminal));
+            // The first Escape at once before a second ESC, or at the hold's
+            // end before a `[`; what came after it then, or at the hold's
+            // end.
+            let mut events = Vec::new();
+            for _ in 0..4 {
+                if events.len() < 2 {
+                    events.extend(terminal.next(None).unwrap());
+                }
+            }
             assert_eq!(events, [escape.clone(), after], "{rest:?}");
             assert_eq!(*elapsed.lock().unwrap(), REPLIES_DUE, "{rest:?}");
         }
