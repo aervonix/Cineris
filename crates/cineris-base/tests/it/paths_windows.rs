@@ -391,6 +391,57 @@ fn a_directory_link_that_leaves_the_workspace_resolves_outside() {
     );
 }
 
+/// A reparse point that is no link is a plain name to the walk: a file the
+/// system's own `compact /exe` compresses is a reparse point of the
+/// Windows Overlay Filter, as a placeholder of a cloud folder or a file
+/// deduplication left is one of theirs. Its attributes show the reparse
+/// point, the walk asks the standard library, whose answer is that it is no
+/// link (the tag is no name surrogate), and the file resolves as any other
+/// (the early review of CI budgets II). `compact` is a process: hence the
+/// `sys_` name.
+#[test]
+fn sys_a_reparse_point_that_is_no_link_is_a_plain_name() {
+    use std::os::windows::fs::MetadataExt;
+    /// `FILE_ATTRIBUTE_REPARSE_POINT`.
+    const REPARSE_POINT: u32 = 0x400;
+
+    let scratch = Scratch::new("win_reparse_not_a_link");
+    // Compressible, and larger than a cluster: the overlay filter leaves a
+    // file it cannot shrink as it is.
+    let file = scratch.file("ws/compressed.bin", &"cineris ".repeat(65_536));
+    let made = std::process::Command::new("compact")
+        .args(["/C", "/EXE:XPRESS4K"])
+        .arg(&file)
+        .output()
+        .expect("run compact");
+    let reparse =
+        fs::symlink_metadata(&file).is_ok_and(|found| found.file_attributes() & REPARSE_POINT != 0);
+    if !reparse {
+        assert!(
+            !in_ci(),
+            "compact left no reparse point on the CI runner: {}",
+            String::from_utf8_lossy(&made.stdout)
+        );
+        println!("skipped: this volume does not compress with the overlay filter");
+        return;
+    }
+    assert!(
+        !fs::symlink_metadata(&file)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the standard library takes no overlay file for a link"
+    );
+    assert!(!cineris_base::path::is_link(&file).unwrap());
+
+    let resolver = scratch.resolver("ws");
+    let resolved = resolver.resolve("compressed.bin").unwrap();
+    assert!(resolved.exists());
+    assert!(resolved.is_inside_workspace());
+    assert_eq!(resolved.abs(), &scratch.real("ws/compressed.bin"));
+    assert_eq!(fs::read(resolved.to_fs_path()).unwrap().len(), 8 * 65_536);
+}
+
 /// A junction is the kind of directory link any account can make, so it is
 /// the one an untrusted repository or command is most likely to plant. It
 /// is made with `mklink`, which is a process: hence the `sys_` name.

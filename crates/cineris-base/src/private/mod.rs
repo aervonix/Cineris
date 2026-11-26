@@ -82,7 +82,7 @@ pub use windows::{
 };
 
 #[cfg(windows)]
-pub(crate) use windows::{attributes, file_identity, reparse_tag};
+pub(crate) use windows::{attributes, file_identity, on_a_fixed_disk, reparse_tag};
 
 #[cfg(not(any(unix, windows)))]
 compile_error!("owner-only files are implemented for Unix and for Windows");
@@ -148,14 +148,16 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
         let mut missing = Vec::new();
         let mut current = path;
         loop {
-            let looked = match windows::attributes(current) {
-                Ok(attributes) if !attributes.is_reparse_point() => {
+            let attributes =
+                windows::on_a_fixed_disk(current).then(|| windows::attributes(current));
+            let looked = match attributes {
+                Some(Ok(attributes)) if !attributes.is_reparse_point() => {
                     if attributes.is_directory() {
                         break;
                     }
                     return Err(io::ErrorKind::NotADirectory.into());
                 }
-                Err(error) if error.kind() == io::ErrorKind::NotFound => Err(error),
+                Some(Err(error)) if error.kind() == io::ErrorKind::NotFound => Err(error),
                 _ => std::fs::metadata(current),
             };
             match looked {

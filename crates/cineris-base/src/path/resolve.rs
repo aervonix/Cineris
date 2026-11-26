@@ -530,7 +530,9 @@ fn locate(
 /// (`GetFileAttributesW`): a name that has no reparse point is no link,
 /// which is the standard library's answer for it, at a third of its cost
 /// on a hosted runner (`docs/steps/ci-budgets-2/answered.md`, "Where a
-/// Windows session's time goes"). A name that is not there is not there to
+/// Windows session's time goes"), on one of the machine's own fixed disks
+/// (on a share the attributes may be the network client's from an earlier
+/// look, and the name is opened as before). A name that is not there is not there to
 /// both, and the error is of the kind `symlink_metadata`'s is, which is
 /// all the walk asks of it. A reparse point, and a name whose attributes
 /// cannot be read for any other reason, are looked at by `symlink_metadata`
@@ -541,10 +543,12 @@ fn locate(
 /// look and the snapshots'), so that each asks it at the same cost.
 pub fn is_link(path: &Path) -> io::Result<bool> {
     #[cfg(windows)]
-    match crate::private::attributes(path) {
-        Ok(attributes) if !attributes.is_reparse_point() => return Ok(false),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
-        _ => {}
+    if crate::private::on_a_fixed_disk(path) {
+        match crate::private::attributes(path) {
+            Ok(attributes) if !attributes.is_reparse_point() => return Ok(false),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Err(error),
+            _ => {}
+        }
     }
     std::fs::symlink_metadata(path).map(|found| found.file_type().is_symlink())
 }
@@ -557,7 +561,8 @@ pub fn is_link(path: &Path) -> io::Result<bool> {
 fn is_dir(path: &AbsPath) -> bool {
     let path = path.to_fs_path();
     #[cfg(windows)]
-    if let Ok(attributes) = crate::private::attributes(&path)
+    if crate::private::on_a_fixed_disk(&path)
+        && let Ok(attributes) = crate::private::attributes(&path)
         && !attributes.is_reparse_point()
     {
         return attributes.is_directory();
