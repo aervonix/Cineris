@@ -295,6 +295,80 @@ pub struct Decoder {
     /// Whether byte 0x08 is `Backspace`, in a terminal whose Backspace sends
     /// `^H`, rather than `Ctrl+Backspace` (since step 25).
     ctrl_h_backspace: bool,
+    /// Whether the replies to the capability queries are due: then a reply
+    /// whose ESC was taken on its own is still the reply, never typed text
+    /// ([`set_replies_due`](Self::set_replies_due)).
+    replies: bool,
+}
+
+/// What some bytes are to the replies the capability queries ask for
+/// ([`Capabilities::QUERIES`](crate::Capabilities::QUERIES)), read as what
+/// follows a reply's ESC: `CSI ? … $ y`, `CSI ? … u`, `CSI ? … c`, and
+/// `OSC 11 ; … ST`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplyShape {
+    /// A whole reply, this many bytes long.
+    Whole(usize),
+    /// The beginning of one: more input decides.
+    Part,
+    /// No reply, nor the beginning of one.
+    Not,
+}
+
+/// What `bytes`, which follow a reply's ESC (or stand where it was), are to
+/// the replies the capability queries ask for. See [`ReplyShape`].
+pub(crate) fn reply_shape(bytes: &[u8]) -> ReplyShape {
+    let Some(&first) = bytes.first() else {
+        return ReplyShape::Part;
+    };
+    match first {
+        // `[ ?`, digits and `;`, then `u` or `c`, or `$ y`.
+        b'[' => {
+            match bytes.get(1) {
+                None => return ReplyShape::Part,
+                Some(b'?') => {}
+                Some(_) => return ReplyShape::Not,
+            }
+            let mut dollar = false;
+            for (at, &byte) in bytes.iter().enumerate().skip(2) {
+                if at >= LONGEST_SEQUENCE {
+                    return ReplyShape::Not;
+                }
+                match byte {
+                    b'0'..=b'9' | b';' if !dollar => {}
+                    b'$' if !dollar => dollar = true,
+                    b'y' if dollar => return ReplyShape::Whole(at + 1),
+                    b'u' | b'c' if !dollar => return ReplyShape::Whole(at + 1),
+                    _ => return ReplyShape::Not,
+                }
+            }
+            ReplyShape::Part
+        }
+        // `] 1 1 ;`, printable text, then BEL or ESC `\`.
+        b']' => {
+            const START: &[u8] = b"]11;";
+            let head = bytes.len().min(START.len());
+            if bytes[..head] != START[..head] {
+                return ReplyShape::Not;
+            }
+            let mut escape = false;
+            for (at, &byte) in bytes.iter().enumerate().skip(START.len()) {
+                if at >= LONGEST_SEQUENCE {
+                    return ReplyShape::Not;
+                }
+                match byte {
+                    b'\\' if escape => return ReplyShape::Whole(at + 1),
+                    _ if escape => return ReplyShape::Not,
+                    0x07 => return ReplyShape::Whole(at + 1),
+                    0x1b => escape = true,
+                    0x20..=0x7e => {}
+                    _ => return ReplyShape::Not,
+                }
+            }
+            ReplyShape::Part
+        }
+        _ => ReplyShape::Not,
+    }
 }
 
 /// A sequence too long to keep, being dropped until it ends.
@@ -372,6 +446,45 @@ impl Decoder {
     /// record says which key it was, either way.
     pub fn set_ctrl_h_backspace(&mut self, on: bool) {
         self.ctrl_h_backspace = on;
+    }
+
+    /// Reads a reply to the capability queries that comes without its ESC
+    /// as the reply, while `due`: while the replies are due, which the
+    /// [`Terminal`](crate::Terminal) says (since small fixes II). Through a
+    /// pseudo-console a reply comes about a key at a time, and its ESC can
+    /// be taken on its own (the Escape key, or `Alt` with a key typed in
+    /// between); what follows it, `[?0u` or `[?62c`, is then still the
+    /// reply, and is never typed. A `[` or a `]` that may begin one is kept,
+    /// as a lone ESC is, until what follows it says whether it does (the
+    /// reader waits for it as for a lone ESC); it is a key when it does not.
+    /// Off, as at the start, they are keys at once.
+    pub(crate) fn set_replies_due(&mut self, due: bool) {
+        self.replies = due;
+    }
+
+    /// Whether what is kept begins with an ESC that `next`, the input that
+    /// came after it, does not go on as a reply to the capability queries:
+    /// a reply's ESC is followed only by the rest of it ([`reply_shape`]).
+    pub(crate) fn kept_escape_ends_before(&self, next: &[u8]) -> bool {
+        if self.paste.is_some() || self.skipping.is_some() || self.buffer.first() != Some(&0x1b) {
+            return false;
+        }
+        let mut after = self.buffer[1..].to_vec();
+        after.extend_from_slice(next);
+        reply_shape(&after) == ReplyShape::Not
+    }
+
+    /// The kept ESC is the Escape key, given now; what was kept after it is
+    /// decoded on its own, as it would have been had the ESC been given
+    /// when it came. Nothing happens when what is kept does not begin with
+    /// an ESC.
+    pub(crate) fn release_escape(&mut self, events: &mut Vec<Event>) {
+        if self.paste.is_some() || self.skipping.is_some() || self.buffer.first() != Some(&0x1b) {
+            return;
+        }
+        self.buffer.remove(0);
+        events.push(key(KeyCode::Esc));
+        self.decode(events, false);
     }
 
     /// Whether bytes are kept that more input would complete: the reader
@@ -467,6 +580,23 @@ impl Decoder {
                 events.push(Event::Key(Key::with(KeyCode::Backspace, Mods::ALT)));
                 start += 2;
                 continue;
+            }
+            // A reply whose ESC was taken on its own, while the replies are
+            // due: the reply, never typed text (since small fixes II).
+            if self.replies && matches!(self.buffer[start], b'[' | b']') {
+                match reply_shape(&self.buffer[start..]) {
+                    ReplyShape::Whole(used) => {
+                        let mut sequence = vec![0x1b];
+                        sequence.extend_from_slice(&self.buffer[start..start + used]);
+                        if let Step::Done(_, Some(event)) = escape(&sequence, true) {
+                            events.push(event);
+                        }
+                        start += used;
+                        continue;
+                    }
+                    ReplyShape::Part if !flushing => break,
+                    ReplyShape::Part | ReplyShape::Not => {}
+                }
             }
             match step(&self.buffer[start..], flushing) {
                 Step::Done(used, event) => {
@@ -1147,6 +1277,116 @@ mod tests {
         decoder.feed(bytes, &mut events);
         decoder.flush(&mut events);
         events
+    }
+
+    #[test]
+    fn the_shapes_of_the_replies_to_the_queries() {
+        use ReplyShape::{Not, Part, Whole};
+        let cases: &[(&[u8], ReplyShape)] = &[
+            (b"", Part),
+            (b"[", Part),
+            (b"[?", Part),
+            (b"[?0", Part),
+            (b"[?0u", Whole(4)),
+            (b"[?0ux", Whole(4)),
+            (b"[?62;1c", Whole(7)),
+            (b"[?2026;2$", Part),
+            (b"[?2026;2$y", Whole(10)),
+            (b"[A", Not),
+            (b"[1;5A", Not),
+            (b"[?0x", Not),
+            (b"[?0$u", Not),
+            (b"[?0y", Not),
+            (b"a", Not),
+            (b"\x1b[?0u", Not),
+            (b"]", Part),
+            (b"]1", Part),
+            (b"]11;rgb:1e/20/ff", Part),
+            (b"]11;rgb:1e/20/ff\x07", Whole(17)),
+            (b"]11;x\x1b", Part),
+            (b"]11;x\x1b\\", Whole(7)),
+            (b"]11;x\x1bA", Not),
+            (b"]12;", Not),
+            (b"]11;\x01", Not),
+        ];
+        for &(bytes, want) in cases {
+            assert_eq!(reply_shape(bytes), want, "{bytes:?}");
+        }
+        let long = [b"[?".as_slice(), &[b'1'; LONGEST_SEQUENCE]].concat();
+        assert_eq!(reply_shape(&long), Not);
+    }
+
+    /// While the replies are due, a reply that lost its ESC is the reply,
+    /// and its beginning is kept until what follows decides; otherwise, and
+    /// when what follows does not go on as one, they are keys.
+    #[test]
+    fn a_reply_without_its_escape_is_the_reply_only_while_they_are_due() {
+        let mut decoder = Decoder::new();
+        decoder.set_replies_due(true);
+        let mut events = Vec::new();
+        decoder.feed(b"w[?0", &mut events);
+        assert_eq!(events, keys(&[(KeyCode::Char('w'), N)]));
+        assert!(decoder.pending(), "the start of a reply is kept");
+        decoder.feed(b"u[?62c]11;rgb:00/00/00\x07", &mut events);
+        assert_eq!(
+            events[1..],
+            [
+                Event::Reply(Reply::Keyboard(0)),
+                Event::Reply(Reply::DeviceAttributes),
+                Event::Reply(Reply::Background(0, 0, 0)),
+            ]
+        );
+        // Not a reply: keys, at once or when what follows says so.
+        let mut events = Vec::new();
+        decoder.feed(b"[a]x[", &mut events);
+        assert!(decoder.pending());
+        decoder.flush(&mut events);
+        let chars = |text: &str| {
+            text.chars()
+                .map(|c| (KeyCode::Char(c), N))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(events, keys(&chars("[a]x[")));
+        // Not due: typed.
+        decoder.set_replies_due(false);
+        let mut events = Vec::new();
+        decoder.feed(b"[?0u", &mut events);
+        assert_eq!(events, keys(&chars("[?0u")));
+    }
+
+    /// A kept ESC that what came does not go on as a reply is released as
+    /// the Escape key, and what was kept after it is decoded on its own.
+    #[test]
+    fn a_kept_escape_is_released_unless_a_reply_goes_on_from_it() {
+        let mut decoder = Decoder::new();
+        decoder.set_replies_due(true);
+        let mut events = Vec::new();
+        decoder.feed(b"\x1b", &mut events);
+        for goes_on in [&b"["[..], b"[?0", b"]11;"] {
+            assert!(!decoder.kept_escape_ends_before(goes_on), "{goes_on:?}");
+        }
+        for ends in [&b"w"[..], b"[A", b"\x1b[?62c", b"]2"] {
+            assert!(decoder.kept_escape_ends_before(ends), "{ends:?}");
+        }
+        decoder.feed(b"[", &mut events);
+        assert!(!decoder.kept_escape_ends_before(b"?"));
+        decoder.release_escape(&mut events);
+        assert_eq!(events, keys(&[(KeyCode::Esc, N)]));
+        assert!(decoder.pending(), "the `[` after it may begin a reply");
+        decoder.feed(b"x", &mut events);
+        assert_eq!(
+            events,
+            keys(&[
+                (KeyCode::Esc, N),
+                (KeyCode::Char('['), N),
+                (KeyCode::Char('x'), N)
+            ])
+        );
+        // Nothing kept, or no ESC: nothing to release.
+        assert!(!decoder.kept_escape_ends_before(b"w"));
+        let mut none = Vec::new();
+        decoder.release_escape(&mut none);
+        assert_eq!(none, []);
     }
 
     fn keys(list: &[(KeyCode, Mods)]) -> Vec<Event> {
