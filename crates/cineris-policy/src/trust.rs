@@ -107,7 +107,7 @@ use crate::store_lock;
 
 mod pins;
 
-pub use pins::{PinError, PinStore, UserPin, UserPins};
+pub use pins::{BEFORE_THE_PINS_ARE_WRITTEN, PinError, PinStore, UserPin, UserPins};
 
 /// The version of the file's format this build writes.
 const VERSION: u32 = 2;

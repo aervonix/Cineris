@@ -77,6 +77,12 @@ const VERSION: u32 = 1;
 /// The largest file read.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
+/// A point of the store's (`cineris_base::hook`): a change has read the
+/// file and changed it, under the lock, and is about to write it. A test
+/// holds it to bring a second writer in between a read and its write.
+pub const BEFORE_THE_PINS_ARE_WRITTEN: &str =
+    "pins: the file is read and changed, and is about to be written";
+
 /// One thing of the user's own that the user approved: what kind of thing,
 /// its name, the hash of what was approved, and when.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +290,7 @@ impl PinStore {
         let mut file = self.read()?;
         let (answer, changed) = change(&mut file);
         if changed {
+            cineris_base::hook::point(BEFORE_THE_PINS_ARE_WRITTEN);
             self.write(&file)?;
         }
         Ok(answer)

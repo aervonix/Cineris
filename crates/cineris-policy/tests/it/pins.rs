@@ -2,10 +2,11 @@
 //! one pin for each kind and name, read strictly, written owner-only and
 //! atomically under a lock, and closed to every tool.
 
-use std::sync::{Arc, Barrier};
+use std::sync::Arc;
 use std::time::Duration;
 
 use cineris_base::{AtomicWriteError, FakeClock, SharedClock, private};
+use cineris_policy::trust::BEFORE_THE_PINS_ARE_WRITTEN;
 use cineris_policy::{Definition, PinError, PinStore, Standing, UserPins};
 use cineris_protocol::lease::{Effect, Level, RuleAction};
 use cineris_protocol::methods::TrustResourceKind;
@@ -417,41 +418,60 @@ fn every_write_is_owner_only_and_leaves_no_temporary_file() {
 
 /// Two sessions that pin at once both keep their pins: each change holds
 /// the lock from its read to its write, so that neither writes back a file
-/// it read before the other's change. Nothing waits on a clock: the writers
-/// start together and take turns at the lock.
+/// it read before the other's change. The test chooses the order. The
+/// first writer has read the file and is stopped before its write
+/// (`BEFORE_THE_PINS_ARE_WRITTEN`), and the second comes then. The lock is
+/// held, so the second waits for it, reads the file only once the first
+/// has written it, and keeps the first one's pin. Where nothing held the
+/// lock, the second would read the file the first read: the test waits
+/// until it too is stopped before its write, and whichever then writes
+/// last writes back a file without the other's pin, every time. No wait is
+/// on a clock, and none is for a thread in the system's lock, where a test
+/// cannot see it.
 #[test]
-fn two_writers_at_once_both_keep_their_pins() {
-    const WRITERS: usize = 4;
-    const EACH: usize = 6;
+fn a_writer_between_anothers_read_and_write_waits_and_both_keep_their_pins() {
     let scratch = cineris_testkit::scratch!("pins_two_writers");
+    // The folder is there, as after any earlier change.
+    scratch.dir("state");
     let file = scratch.join("state").join("pins.toml");
-    let start = Arc::new(Barrier::new(WRITERS));
-    let writers: Vec<_> = (0..WRITERS)
-        .map(|writer| {
-            // A store of its own for each, as each session has.
-            let store = PinStore::new(&file, clock());
-            let start = Arc::clone(&start);
-            std::thread::spawn(move || {
-                start.wait();
-                for each in 0..EACH {
-                    store
-                        .pin(&extension(&format!("w{writer}-{each}"), "v1"))
-                        .unwrap();
-                }
-            })
-        })
-        .collect();
-    for writer in writers {
-        writer.join().unwrap();
+    let hold = cineris_testkit::Hold::new(BEFORE_THE_PINS_ARE_WRITTEN);
+    // A store of its own for each, as each session has.
+    let writer = |name: &'static str| {
+        let store = PinStore::new(&file, clock());
+        std::thread::spawn(move || store.pin(&extension(name, "v1")).map(drop))
+    };
+    let first = writer("first");
+    hold.reach();
+    // The first has read the file, and has not written it.
+    let kept_out = lock_is_held(&file);
+    let second = writer("second");
+    if !kept_out {
+        // Nothing keeps the second out: it reads what the first read.
+        hold.reach_times(2);
     }
+    hold.release();
+    first.join().unwrap().unwrap();
+    second.join().unwrap().unwrap();
+    assert_eq!(hold.timed_out(), 0, "a writer was let go by the bound");
     let pins = PinStore::new(&file, clock()).pins().unwrap();
     let mut names: Vec<&str> = pins.list().iter().map(|pin| pin.name.as_str()).collect();
     names.sort_unstable();
-    let mut expected: Vec<String> = (0..WRITERS)
-        .flat_map(|writer| (0..EACH).map(move |each| format!("w{writer}-{each}")))
-        .collect();
-    expected.sort_unstable();
-    assert_eq!(names, expected, "a pin was lost");
+    assert_eq!(names, ["first", "second"], "a pin was lost");
+}
+
+/// Whether the lock of the store at `file` is held: a second open of its
+/// lock file cannot take it, as a second session's could not. Both Linux
+/// (`flock`) and Windows (`LockFileEx`) keep two opens of one file apart, in
+/// one process too. No lock file is no lock.
+fn lock_is_held(file: &std::path::Path) -> bool {
+    let Ok(other) = std::fs::File::open(private::lock_path(file)) else {
+        return false;
+    };
+    match other.try_lock() {
+        Ok(()) => false,
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        Err(std::fs::TryLockError::Error(error)) => panic!("{error}"),
+    }
 }
 
 /// A lock that cannot be taken stops every change, and no read: so each
