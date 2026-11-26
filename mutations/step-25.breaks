@@ -2526,7 +2526,7 @@ caught-by:
 rule: A step's first frame takes the key that answered what came before it, a dialog's included: it is ready a key's repeat window after it.
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: App::first_run_drawn
-find: run.ready.not_before(taken + REPEAT);
+find: run.ready.not_before(taken + scaled(REPEAT));
 replace: let _ = taken;
 caught-by:
     cineris-tui app::tests::first_run::the_key_that_answered_a_dialog_holds_the_step_after_it
@@ -2999,7 +2999,7 @@ caught-by:
 rule: After an edit is kept, the step waits a key's repeat window before its next key.
 file: crates/cineris-tui/src/app/state/first_run.rs
 in: App::first_run_key
-find: run.ready.not_before(at + REPEAT);
+find: run.ready.not_before(at + scaled(REPEAT));
 replace:
 caught-by:
     cineris-tui app::tests::first_run::an_edit_kept_picks_only_a_change_and_holds_the_next_enter

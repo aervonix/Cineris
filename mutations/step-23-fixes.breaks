@@ -169,7 +169,7 @@ caught-by:
 rule: If anything reached the editor while a dialog was up, it takes no answer, and shows none, until a second with no input.
 file: crates/cineris-tui/src/app/ready.rs
 in: Readiness::ready_at
-find: Some(self.typed.map_or(ready, |typed| ready.max(typed + QUIET)))
+find: Some(self.typed.map_or(ready, |typed| ready.max(typed + scaled(QUIET))))
 replace: Some(self.typed.map_or(ready, |_| ready))
 caught-by:
     app::tests::dialogs::steady_typing_slower_than_the_pause_never_answers
@@ -388,7 +388,7 @@ caught-by:
 rule: The dialog after one a key answered is ready no sooner than the repeat window after that key.
 file: crates/cineris-tui/src/app/state.rs
 in: App::drawn
-find: dialog.not_before(taken + REPEAT);
+find: dialog.not_before(taken + super::ready::scaled(REPEAT));
 replace: let _ = taken;
 caught-by:
     app::tests::dialogs::a_key_held_after_answering_one_dialog_never_answers_the_next

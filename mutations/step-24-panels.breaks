@@ -31,7 +31,7 @@ caught-by:
 rule: A key held down never acts on a panel: the same key again within the repeat window of one the panel took goes where its press went, nowhere.
 file: crates/cineris-tui/src/app/state/panel.rs
 in: App::panel_holds
-find: repeat || at.saturating_duration_since(last) < REPEAT
+find: repeat || at.saturating_duration_since(last) < super::super::ready::scaled(REPEAT)
 replace: repeat
 caught-by:
     app::tests::panels::a_held_key_keys_read_together_and_a_paste_never_act
