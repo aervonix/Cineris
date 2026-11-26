@@ -35,6 +35,8 @@ pub mod core;
 mod day;
 pub mod events;
 pub mod ext;
+#[cfg(feature = "scripts")]
+pub use commands::A_SCRIPT_COMMAND_RUNS;
 mod instructions;
 mod knowledge;
 mod manage;

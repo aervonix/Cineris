@@ -298,6 +298,7 @@ fn stopping_while_a_held_steer_is_on_its_way_keeps_the_rest_behind_it() {
         Ok(OpResult::TurnInterrupt(TurnInterruptResult {
             interrupted: true,
             undelivered: vec![vec![Part::text("and the docs")]],
+            undelivered_commands: Vec::new(),
         })),
     ));
     drain(&mut app, now);

@@ -419,17 +419,44 @@ async fn in_core(core: &Core, front: &mut Front<'_>) -> u8 {
     } else {
         vec![Part::text(front.plan.prompt.clone())]
     };
-    let started = core
-        .handle(
-            client.id,
-            Op::TurnStart(TurnStartParams {
-                session_id: session.clone(),
-                input,
-                delivery: None,
-                command,
-            }),
-        )
-        .await;
+    let running_command = command.is_some();
+    let mut start = std::pin::pin!(core.handle(
+        client.id,
+        Op::TurnStart(TurnStartParams {
+            session_id: session.clone(),
+            input,
+            delivery: None,
+            command,
+        }),
+    ));
+    // An extension's command runs in the start itself: a signal meanwhile
+    // interrupts it, through the core, and the run ends interrupted, with
+    // nothing sent (step 28).
+    let started = if running_command {
+        match first_or_signal(start.as_mut(), &mut front.interrupted).await {
+            Ok(started) => started,
+            Err(interrupt) => {
+                front.signal.get_or_insert(interrupt.signal);
+                let _ = core
+                    .handle(
+                        client.id,
+                        Op::TurnInterrupt(TurnInterruptParams::new(session.clone())),
+                    )
+                    .await;
+                let _ = start.await;
+                let error = interrupted_error();
+                return finish(
+                    core,
+                    front,
+                    &collector,
+                    Some((TurnOutcome::Interrupted, error)),
+                )
+                .await;
+            }
+        }
+    } else {
+        start.await
+    };
     if let Err(error) = started {
         let outcome = exit::outcome_for_kind(&error.kind);
         return finish(core, front, &collector, Some((outcome, *error))).await;
@@ -635,6 +662,31 @@ enum Next {
 }
 
 /// The next thing for the client, or a signal, whichever comes first.
+/// What `operation` ends with, or the signal that comes first. The
+/// operation is left as it is on a signal, for the caller to finish.
+async fn first_or_signal<T>(
+    mut operation: std::pin::Pin<&mut impl Future<Output = T>>,
+    interrupted: &mut mpsc::UnboundedReceiver<Interrupt>,
+) -> Result<T, Interrupt> {
+    let mut signals_open = true;
+    std::future::poll_fn(|context| {
+        if let std::task::Poll::Ready(done) = operation.as_mut().poll(context) {
+            return std::task::Poll::Ready(Ok(done));
+        }
+        if signals_open {
+            match interrupted.poll_recv(context) {
+                std::task::Poll::Ready(Some(interrupt)) => {
+                    return std::task::Poll::Ready(Err(interrupt));
+                }
+                std::task::Poll::Ready(None) => signals_open = false,
+                std::task::Poll::Pending => {}
+            }
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
+
 async fn next_or_signal(
     queue: &cineris_core::EventQueue,
     interrupted: &mut mpsc::UnboundedReceiver<Interrupt>,

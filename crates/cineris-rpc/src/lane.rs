@@ -34,6 +34,12 @@ pub type Outcome = Result<OpResult, Box<ErrorData>>;
 /// Carries out one operation: the core's `handle`, for one client.
 pub type Run = Arc<dyn Fn(Op) -> Pin<Box<dyn Future<Output = Outcome> + Send>> + Send + Sync>;
 
+/// What an operation does the moment it is sent, before it is routed: the
+/// core's `early`, for one client (since step 28: a `turn/interrupt` stops
+/// an extension's command running in the lane's `turn/start`, which it
+/// would otherwise wait behind). It must not wait.
+pub type Early = Arc<dyn Fn(&Op) + Send + Sync>;
+
 /// Where an operation runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Route {
@@ -169,6 +175,7 @@ pub fn core_gone() -> ErrorData {
 pub struct Dispatcher<T> {
     routes: Routes,
     run: Run,
+    early: Option<Early>,
     done: Arc<dyn Fn(T, Result<OpResult, ErrorData>) + Send + Sync>,
     lane: Option<mpsc::UnboundedSender<(T, Op, bool)>>,
     task: Option<JoinHandle<()>>,
@@ -189,6 +196,16 @@ impl<T: Send + 'static> Dispatcher<T> {
         run: Run,
         done: Arc<dyn Fn(T, Result<OpResult, ErrorData>) + Send + Sync>,
     ) -> Self {
+        Self::start_with(run, None, done)
+    }
+
+    /// [`start`](Self::start), with `early` told of each operation as it
+    /// is sent, before it is routed.
+    pub fn start_with(
+        run: Run,
+        early: Option<Early>,
+        done: Arc<dyn Fn(T, Result<OpResult, ErrorData>) + Send + Sync>,
+    ) -> Self {
         let routes = Routes::default();
         let (lane, written) = mpsc::unbounded_channel();
         let task = tokio::spawn(run_lane(
@@ -200,6 +217,7 @@ impl<T: Send + 'static> Dispatcher<T> {
         Self {
             routes,
             run,
+            early,
             done,
             lane: Some(lane),
             task: Some(task),
@@ -209,6 +227,9 @@ impl<T: Send + 'static> Dispatcher<T> {
     /// Runs `op` where it belongs: in the lane, or on a task of its own
     /// beside it. Never waits.
     pub fn send(&self, ticket: T, op: Op) {
+        if let Some(early) = &self.early {
+            early(&op);
+        }
         match self.routes.route(&op) {
             Route::Lane { write } => {
                 let refused = match &self.lane {

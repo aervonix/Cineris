@@ -418,6 +418,10 @@ pub(crate) struct Live {
     /// One turn's start at a time: the looks at its start and the prompt's
     /// handing to the loop are one step (step 28).
     pub(crate) turn_start: tokio::sync::Mutex<()>,
+    /// The token of the extension's command running in a `turn/start`'s
+    /// step, if one is: an interrupt cancels it without waiting behind it
+    /// (step 28).
+    pub(crate) running_command: Mutex<Option<CancelToken>>,
     /// The session's hook commands (step 28).
     #[cfg(feature = "scripts")]
     pub(crate) command_hooks: Arc<crate::ext::SessionHooks>,
@@ -951,6 +955,7 @@ impl Core {
             #[cfg(feature = "scripts")]
             command_hooks,
             turn_start: tokio::sync::Mutex::new(()),
+            running_command: Mutex::new(None),
         });
         lock(&self.inner.sessions).insert(live.handle.id().clone(), Arc::clone(&live));
         // The session's `session.start` hooks, now that it is open: the
@@ -1334,6 +1339,29 @@ impl Core {
     /// for a person.
     pub fn handle(&self, client: ClientId, op: Op) -> BoxFuture<'_, Result<OpResult, OpError>> {
         Box::pin(self.handle_op(client, op))
+    }
+
+    /// What an operation does the moment it is sent, before it waits for
+    /// its turn in the client's lane (`cineris_rpc::lane`): a
+    /// `turn/interrupt` stops the extension's command running in the
+    /// session's `turn/start` step, which the interrupt would otherwise
+    /// wait behind (since step 28). The interrupt itself then runs in its
+    /// order, as before. Anything else does nothing here, nor does an
+    /// interrupt from a client that may not drive the session, or has not
+    /// opened it. Never waits.
+    pub fn early(&self, client: ClientId, op: &Op) {
+        let Op::TurnInterrupt(params) = op else {
+            return;
+        };
+        let Ok(live) = self.open_for(client, &params.session_id) else {
+            return;
+        };
+        if self.may_drive(client).is_err() {
+            return;
+        }
+        if let Some(command) = lock(&live.running_command).as_ref() {
+            command.cancel();
+        }
     }
 
     /// The body of [`Core::handle`].
@@ -1797,6 +1825,11 @@ impl Core {
             Op::TurnInterrupt(params) => {
                 let live = self.open_for(client, &params.session_id)?;
                 self.may_drive(client)?;
+                // An extension's command still running in a `turn/start`'s
+                // step is stopped too: it started no turn yet.
+                if let Some(command) = lock(&live.running_command).as_ref() {
+                    command.cancel();
+                }
                 let result = if params.now {
                     live.handle.interrupt_now()
                 } else {

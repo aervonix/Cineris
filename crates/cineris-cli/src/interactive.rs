@@ -772,13 +772,19 @@ impl CoreThread {
                     let mut dispatcher = {
                         let core = core.clone();
                         let id = client.id;
+                        // An interrupt stops a command running in the lane at once.
+                        let early: cineris_rpc::lane::Early = {
+                            let core = core.clone();
+                            Arc::new(move |op| core.early(id, op))
+                        };
                         let run: cineris_rpc::lane::Run = Arc::new(move |op| {
                             let core = core.clone();
                             Box::pin(async move { core.handle(id, op).await })
                         });
                         let (done, wake) = (Arc::clone(&thread_done), thread_slot.clone());
-                        Dispatcher::start(
+                        Dispatcher::start_with(
                             run,
+                            Some(early),
                             Arc::new(move |ticket: Ticket, result| {
                                 push(&done, Inbound::Done(ticket, result));
                                 wake.wake();

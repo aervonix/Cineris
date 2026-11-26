@@ -814,6 +814,7 @@ impl Session {
                         prompt.input,
                         prompt.delivery,
                         prompt.ticket,
+                        prompt.command,
                         Vec::new(),
                         hooks::RETURNED_UNASKED.to_owned(),
                     );
@@ -829,6 +830,7 @@ impl Session {
                         prompt.input,
                         prompt.delivery,
                         prompt.ticket,
+                        prompt.command,
                         refused,
                         message.clone(),
                     );
@@ -929,6 +931,7 @@ impl Session {
         parts: Vec<Part>,
         delivery: Option<Delivery>,
         ticket: Option<u64>,
+        command: Option<PromptCommand>,
         refused: Vec<HookReason>,
         message: String,
     ) {
@@ -939,6 +942,7 @@ impl Session {
                 parts,
                 delivery,
                 hooks: refused,
+                command,
                 ticket,
             }),
         );
@@ -1038,6 +1042,7 @@ impl Session {
                         input,
                         steer,
                         ticket,
+                        command,
                         Vec::new(),
                         hooks::RETURNED_UNASKED.to_owned(),
                     );
@@ -1045,7 +1050,7 @@ impl Session {
                 }
                 Some(Submitted::Deny(refused)) => {
                     let message = hooks::refused_prompt(&refused, true);
-                    self.give_back(turn, input, steer, ticket, refused, message);
+                    self.give_back(turn, input, steer, ticket, command, refused, message);
                     return Some(Ok(()));
                 }
                 Some(Submitted::Pass(added)) => context = added,
@@ -1075,11 +1080,16 @@ impl Session {
         let mut kept = Vec::new();
         for pending in rest {
             match pending {
-                Pending::Steer { input, ticket, .. } => self.give_back(
+                Pending::Steer {
+                    input,
+                    ticket,
+                    command,
+                } => self.give_back(
                     turn,
                     input,
                     Some(Delivery::Steer),
                     ticket,
+                    command,
                     Vec::new(),
                     hooks::RETURNED_UNASKED.to_owned(),
                 ),

@@ -459,10 +459,16 @@ impl SessionHandle {
             return TurnInterruptResult::default();
         };
         let mut undelivered = Vec::new();
+        let mut commands = Vec::new();
         let mut settled = Vec::new();
         inbox.pending.retain(|pending| match pending {
-            Pending::Steer { input, ticket, .. } => {
+            Pending::Steer {
+                input,
+                ticket,
+                command,
+            } => {
                 undelivered.push(input.clone());
+                commands.push(command.clone());
                 settled.push(*ticket);
                 false
             }
@@ -477,9 +483,14 @@ impl SessionHandle {
             self.shared.emitter.settled(ticket);
         }
         running.cancel.cancel();
+        // The commands beside the messages only when one came from a command.
+        if commands.iter().all(Option::is_none) {
+            commands.clear();
+        }
         TurnInterruptResult {
             interrupted: true,
             undelivered,
+            undelivered_commands: commands,
         }
     }
 

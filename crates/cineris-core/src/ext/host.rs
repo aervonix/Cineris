@@ -152,7 +152,12 @@ impl CallHost<'_> {
                 // decided again and answered with the stop. (A stop
                 // already in force is what this one says, if there was
                 // one: its reason is the same.)
-                self.parts.policy.stop_turn(self.cx.turn, reason.clone());
+                // A command's runs outside any turn: its stop is its own
+                // call's, and no turn of the session is told it (turn 0 is
+                // also the number of what is of no turn).
+                if self.phase != Phase::Command {
+                    self.parts.policy.stop_turn(self.cx.turn, reason.clone());
+                }
                 Err(HostError::Stopped(reason))
             }
             _ => Err(HostError::Denied("it was not allowed".to_owned())),

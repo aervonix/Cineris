@@ -37,6 +37,12 @@ use toml::Value;
 use crate::clients::ClientId;
 use crate::core::{Core, Live, OpError, error};
 
+/// A point of a `turn/start` that names an extension's command: its token
+/// is on the session, and its script is about to be called (a point a test
+/// can stop at: [`cineris_base::hook`]).
+#[cfg(feature = "scripts")]
+pub const A_SCRIPT_COMMAND_RUNS: &str = "core: an extension's command is about to run";
+
 /// What a session's commands are, found now.
 struct Found {
     files: files::Found,
@@ -279,30 +285,42 @@ async fn run_script(
     let session = live.handle.id().clone();
     let shown = format!("/{}:{}", extension.name(), definition.name);
     // Outside any round: the turn its text will start is not there yet, so
-    // a question it puts names the command in the turn's place.
-    let turn = cineris_protocol::TurnId::new(format!("command_{}", extension.name()));
+    // a question it puts names this run of the command in the turn's place,
+    // by ids of its own ([`run_ids`]).
+    let (turn, call_id, item) = run_ids();
+    // Its own token, which an interrupt cancels without waiting behind the
+    // `turn/start` it runs in ([`crate::Core::early`]).
+    let cancel = hooks.commands.runs_token().child();
+    let _running = Running::start(live, cancel.clone());
+    cineris_base::hook::await_point!(A_SCRIPT_COMMAND_RUNS);
     let cx = RunCx::new(
         Arc::clone(&hooks.paths),
         Arc::clone(hooks.commands.content()),
         Arc::new(FileTable::new()),
     )
-    .with_cancel(hooks.commands.runs_token())
+    .with_cancel(cancel.clone())
     .with_gate(cineris_agent::Policy::read_gate(policy.as_ref()))
     .with_call(CallRef {
         session,
         turn,
-        call_id: cineris_protocol::CallId::new(format!("command_{}", definition.name)),
-        item: cineris_protocol::ItemId::new(format!(
-            "command_{}_{}",
-            extension.name(),
-            definition.name
-        )),
+        call_id,
+        item,
     });
     let failed = |why: String| error(ErrorKind::Tool, code::COMMAND_FAILED, sentence(&why));
-    let value = extension
-        .call_command(&definition.name, input, &cx)
-        .await
-        .map_err(failed)?;
+    let value = match extension.call_command(&definition.name, input, &cx).await {
+        Ok(value) => value,
+        Err(_) if cancel.is_cancelled() => {
+            return Err(error(
+                ErrorKind::Interrupted,
+                code::COMMAND_FAILED,
+                format!(
+                    "`{}` was interrupted, so nothing was sent and no turn started.",
+                    cineris_base::in_code(&shown)
+                ),
+            ));
+        }
+        Err(why) => return Err(failed(why)),
+    };
     let text = match value {
         serde_json::Value::String(text) if !text.trim().is_empty() => text,
         serde_json::Value::String(_) | serde_json::Value::Null => {
@@ -328,6 +346,48 @@ async fn run_script(
         cineris_base::in_code(&shown),
         cineris_base::in_code(extension.name())
     ))
+}
+
+/// The ids a run of an extension's command is known by, in the place of a
+/// turn's and a call's: its question names it, and what a person allows is
+/// kept by them (`EnginePolicy`'s allowed questions, by turn and item).
+/// Each run's are its own, from a count of the process's, so that no run
+/// reuses another's answer; and none begins `t_`, so that none is ever read
+/// as a turn's number: a stop is never recorded for it, nor a question of
+/// it answered as a real turn's.
+#[cfg(feature = "scripts")]
+fn run_ids() -> (
+    cineris_protocol::TurnId,
+    cineris_protocol::CallId,
+    cineris_protocol::ItemId,
+) {
+    static RUNS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let run = RUNS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    (
+        cineris_protocol::TurnId::new(format!("cmd_{run}")),
+        cineris_protocol::CallId::new(format!("cmd_{run}")),
+        cineris_protocol::ItemId::new(format!("cmd_{run}")),
+    )
+}
+
+/// A command running in a session's `turn/start` step, its token on the
+/// session for an interrupt to cancel, until it ends.
+#[cfg(feature = "scripts")]
+struct Running<'a>(&'a Live);
+
+#[cfg(feature = "scripts")]
+impl<'a> Running<'a> {
+    fn start(live: &'a Live, cancel: cineris_base::CancelToken) -> Self {
+        *crate::core::lock(&live.running_command) = Some(cancel);
+        Self(live)
+    }
+}
+
+#[cfg(feature = "scripts")]
+impl Drop for Running<'_> {
+    fn drop(&mut self) {
+        *crate::core::lock(&self.0.running_command) = None;
+    }
 }
 
 /// Why a command that names `profile` is not sent: what the profile would

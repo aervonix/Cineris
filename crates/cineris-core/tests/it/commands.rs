@@ -261,6 +261,134 @@ fn an_extensions_command_runs_and_prompt_submit_sees_the_expanded_text() {
             "the hook did not see the expanded text"
         );
         assert_eq!(last_prompt(&front).0, text, "a refused prompt was recorded");
+        // Given back with its command, to its sender: `/ship` goes back to
+        // the editor, not the text it sent.
+        let returned = front
+            .events()
+            .into_iter()
+            .find_map(|event| match event.event {
+                cineris_protocol::event::Event::Notice(
+                    cineris_protocol::event::Notice::PromptReturned(returned),
+                ) => Some(returned),
+                _ => None,
+            })
+            .expect("the prompt was given back");
+        assert_eq!(
+            returned
+                .command
+                .map(|command| (command.name, command.source)),
+            Some(("ship".to_owned(), CommandSource::Project))
+        );
+        front.close().await;
+    });
+}
+
+/// [`send`], answering "allow once" to the one question the command puts
+/// while it runs, before its `turn/start` has answered.
+async fn sent_answering(front: &Front, name: &str) -> Result<(), String> {
+    let mut sent = std::pin::pin!(send(front, name, ""));
+    let mut approval = std::pin::pin!(front.approval());
+    let mut answered = false;
+    std::future::poll_fn(|context| {
+        if let std::task::Poll::Ready(result) = sent.as_mut().poll(context) {
+            return std::task::Poll::Ready(result);
+        }
+        if !answered && let std::task::Poll::Ready((id, _)) = approval.as_mut().poll(context) {
+            answered = true;
+            front
+                .answer(&id, cineris_protocol::methods::ApprovalChoice::AllowOnce)
+                .unwrap();
+            context.waker().wake_by_ref();
+        }
+        std::task::Poll::Pending
+    })
+    .await
+}
+
+/// An extension that keeps a command running until it is stopped, and one
+/// that reads a file that looks like a secret, which is asked about.
+const RUNS: &str = "cineris.command({ name: 'spin', description: 'Never ends', run() { for (;;) {} } });\n\
+     cineris.command({ name: 'peek', description: 'Reads the secrets', async run() {\n\
+       await cineris.fs.read('.env');\n\
+       return 'peeked';\n\
+     } });\n";
+
+/// A running command is stopped by an interrupt, which does not wait behind
+/// the `turn/start` it runs in: the early look a lane makes as an operation
+/// is sent (`Core::early`), and the interrupt itself, as headless mode sends
+/// it beside the start. Each ends `command_failed`, interrupted, with nothing
+/// recorded and no turn started. And each run's questions are its own: a
+/// person's "allow once" for one run is not another run's, nor a real
+/// turn's, and no run's question is put as a turn's (`t_`).
+#[test]
+fn an_interrupt_stops_a_running_command_and_its_questions_are_its_own() {
+    let world = World::new(
+        "commands_interrupt",
+        [
+            says("One."),
+            says("Two."),
+            crate::calls(&[("r1", "read", serde_json::json!({"path": ".env"}))]),
+            says("Done."),
+        ],
+    );
+    let folder = users(&world);
+    write_extension(&folder, "read = [\"**\"]", "unused");
+    std::fs::write(folder.join("main.js"), RUNS).unwrap();
+    pin(&world, &folder);
+    cache(&world, &folder);
+    world.put(".env", "KEY=1\n");
+    let core = world.core();
+    world.run(async {
+        let front = start(&world, &core).await;
+        let interrupt = Op::TurnInterrupt(cineris_protocol::methods::TurnInterruptParams::new(
+            front.session.clone(),
+        ));
+        for early in [true, false] {
+            let runs = cineris_testkit::Hold::new(cineris_core::A_SCRIPT_COMMAND_RUNS);
+            let mut sent = std::pin::pin!(send(&front, "probe:spin", ""));
+            runs.drive_until_reached(sent.as_mut()).await;
+            runs.release();
+            drop(runs);
+            if early {
+                front.core.early(front.client.id, &interrupt);
+            } else {
+                front.op(interrupt.clone()).await.unwrap();
+            }
+            let error = sent.await.unwrap_err();
+            assert!(
+                error.starts_with(code::COMMAND_FAILED) && error.contains("was interrupted"),
+                "{error}"
+            );
+        }
+        assert!(
+            front.ends().is_empty(),
+            "an interrupted command started a turn"
+        );
+        assert!(
+            !front
+                .items()
+                .iter()
+                .any(|item| matches!(item, Item::UserMessage(_))),
+            "an interrupted command recorded a prompt"
+        );
+
+        for done in 1..=2 {
+            sent_answering(&front, "probe:peek").await.unwrap();
+            front.turns(done).await;
+        }
+        front.answering(crate::Answering::allow_all());
+        front.turn("read the secrets").await;
+        let asked: Vec<String> = front
+            .approvals()
+            .iter()
+            .map(|request| request.turn_id.as_str().to_owned())
+            .collect();
+        assert_eq!(asked.len(), 3, "a run took another's answer: {asked:?}");
+        assert!(
+            asked[0].starts_with("cmd_") && asked[1].starts_with("cmd_") && asked[0] != asked[1],
+            "{asked:?}"
+        );
+        assert!(asked[2].starts_with("t_"), "{asked:?}");
         front.close().await;
     });
 }

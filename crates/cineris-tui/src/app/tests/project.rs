@@ -426,6 +426,7 @@ fn n_turns_an_entry_off_and_e_edits_its_text_in_the_editor() {
                 parts: vec![Part::text("the refused prompt")],
                 delivery: None,
                 hooks: Vec::new(),
+                command: None,
                 ticket: None,
             },
         ),
