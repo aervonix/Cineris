@@ -2029,12 +2029,21 @@ fn no_accepting_key_takes_a_row_not_drawn_whole() {
     assert!(run.scrollback.is_empty(), "no provider chosen");
     run.key("s");
     run.answer();
+    // Past the imports and the skill folders, to the mode.
     let _ = run.ready();
     run.key("s");
     let _ = run.ready();
+    run.key("s");
+    let _ = run.ready();
+    let written = run.written().len();
+    assert!(
+        squash(&run.ready().join(" ")).contains("Mode"),
+        "at the mode: {}",
+        squash(&run.ready().join(" "))
+    );
     run.key("enter");
     run.answer();
-    assert!(run.written().is_empty(), "no mode chosen");
+    assert_eq!(run.written().len(), written, "no mode chosen");
 }
 
 /// What is typed into a command's edit holds a dialog that comes just
