@@ -193,8 +193,10 @@ pub struct CoreOptions {
     /// 28's third pull request). `None`: the engine's fallback reads them.
     pub own_commands: Option<Arc<cineris_policy::approving::OwnCommands>>,
     /// The widest level a session of this core holds, whatever its
-    /// configuration says: a headless run under a session's command is at
-    /// most `read-only` (since step 28's third pull request). `None`: the
+    /// configuration says, and the widest its level may be changed to: a
+    /// headless run under a session's command is at most `read-only`, and a
+    /// harness that could not mark its commands as a session's at most
+    /// `supervised` (since step 28's third pull request). `None`: the
     /// configuration's.
     pub level_at_most: Option<cineris_protocol::lease::Level>,
     /// What the system offers the sandbox, in place of asking it
@@ -483,6 +485,25 @@ impl Inner {
             return Err(unrestricted_not_allowed());
         }
         Ok(())
+    }
+
+    /// Refuses a change of a session's level to one wider than the core
+    /// holds its sessions at ([`CoreOptions::level_at_most`]): a session is
+    /// put together at no more, and is not raised past it later.
+    pub(crate) fn within_the_cap(&self, level: &Level) -> Result<(), OpError> {
+        match &self.options.level_at_most {
+            Some(most) if !cineris_policy::level::no_higher_than(level, most) => Err(error(
+                ErrorKind::Permission,
+                code::UNRESTRICTED_NOT_ALLOWED,
+                format!(
+                    "This harness holds its sessions at `{}` at most, whatever is asked: it \
+                     could not mark its commands as a session's, so the subcommands that \
+                     approve could not see them.",
+                    most.as_str()
+                ),
+            )),
+            _ => Ok(()),
+        }
     }
 
     /// The configuration with no project's layers, as it is in force.
@@ -2500,6 +2521,7 @@ impl Core {
                 // Before anything is made ready: a level the core may not
                 // give refuses the whole request.
                 inner.may_hold(&level)?;
+                inner.within_the_cap(&level)?;
                 new_level = Some(level);
             }
         }

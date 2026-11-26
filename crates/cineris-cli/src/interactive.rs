@@ -131,19 +131,22 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     // report masks too.
     let secrets = Arc::new(SecretFilter::new());
     let log = start_log(&run, &env, &loaded, &secrets);
-    crate::mark_sessions();
+    let unmarked = crate::mark_sessions();
     let logs = StateDir::from_dirs(&Dirs::from_env(&env)).map(|state| state.logs_dir());
     install_panic_hook(logs.clone(), secrets);
 
     // A rule the command line gives that cannot be read stops the program,
     // as it does a headless run: a deny that was mistyped must not be lost.
-    let options = match core_options(&run, &env, &loaded, log.as_ref()) {
+    let mut options = match core_options(&run, &env, &loaded, log.as_ref()) {
         Ok(options) => options,
         Err(message) => {
             eprintln!("{name}: {}", crate::visible(&message));
             return exit::USAGE;
         }
     };
+    if unmarked.is_some() {
+        options.level_at_most = Some(crate::UNMARKED_LEVEL);
+    }
     // The core, on its thread, waited for.
     let core = match CoreThread::start(options) {
         Ok(core) => core,
@@ -162,6 +165,7 @@ pub(crate) fn run(run: Run, name: &'static str, _started: Instant) -> u8 {
     let (keymap, errors) = keymap(&loaded.settings.keys);
     notices.extend(errors);
     notices.extend(here.passed_over_said());
+    notices.extend(unmarked);
     let overrides = overrides(&loaded.settings.terminal);
     let folder = shown_folder(&workspace, env.home().as_deref());
     let open = open(&run, &workspace);

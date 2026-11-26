@@ -126,18 +126,30 @@ fn dispatch(command: Command, name: &'static str, started: Instant) -> u8 {
 }
 
 /// Marks this process as one that runs sessions, before it starts any
-/// process (`cineris_sandbox::session`): on Windows it joins the job of
-/// sessions' commands, which the approving subcommands look for. Where it
-/// cannot, the log says so and the run goes on unmarked.
-pub(crate) fn mark_sessions() {
-    if let Err(error) = cineris_sandbox::session::mark() {
-        tracing::warn!(
-            %error,
-            "this process could not join the job of sessions' commands: the subcommands that \
-             approve will not see its commands as a session's"
-        );
-    }
+/// process (`cineris_sandbox::session`): on Windows it joins a job of its
+/// own for its sessions' commands, which the approving subcommands look
+/// for. Where it cannot, it does not run unmarked at full width: its
+/// sessions are held at [`UNMARKED_LEVEL`] at most, and what it says of that
+/// is returned, for the run to show (the full review of the third part).
+pub(crate) fn mark_sessions() -> Option<String> {
+    let error = cineris_sandbox::session::mark().err()?;
+    tracing::warn!(
+        %error,
+        "this process could not make a job of its own for its sessions' commands"
+    );
+    Some(format!("{UNMARKED} ({error})"))
 }
+
+/// The widest level of a harness that could not mark its commands.
+pub(crate) const UNMARKED_LEVEL: cineris_protocol::lease::Level =
+    cineris_protocol::lease::Level::Supervised;
+
+/// What a harness that could not mark its commands says.
+pub(crate) const UNMARKED: &str = "this harness holds its sessions at `supervised` at most, \
+                                   whatever its configuration says: it could not make a job of \
+                                   its own for its commands, so the subcommands that approve \
+                                   extensions and trust projects could not see them as a \
+                                   session's";
 
 /// `Err` with the exit code when `what`, a subcommand that approves,
 /// trusts or answers for the person, runs under a session's command, or
