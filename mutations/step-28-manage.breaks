@@ -286,3 +286,280 @@ find: if at == program && is_named(word) && interactive(rest) {
 replace: if false && at == program && is_named(word) && interactive(rest) {
 caught-by:
     cineris-policy approving::tests::every_way_a_line_names_an_approving_command_is_refused
+
+# The approving subcommands under a session's command, and approval by the
+# hash shown (the owner's answer to the early review's H1: B, C, M1, E),
+# and the early review's M2, M3, L3 and L4.
+
+[break] session-line-passes-a-harness
+rule: A line of parents that reaches a process of Cineris that runs sessions is under a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: line
+find: Seen::Of { harness: true, .. } => {
+replace: Seen::Of { harness: true, .. } if false => {
+packages: cineris-sandbox,cineris-cli
+caught-by:
+    cineris-sandbox session::tests::a_line_of_parents_reaches_a_harness_ends_elsewhere_or_is_not_known
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] session-unread-line-is-nothing
+rule: A line of parents that cannot be read is taken as under a session's command.
+file: crates/cineris-sandbox/src/session.rs
+in: line
+find: return Under::Unknown(format!("process {at} of its line could not be read"));
+replace: return Under::Nothing;
+caught-by:
+    cineris-sandbox session::tests::a_line_of_parents_reaches_a_harness_ends_elsewhere_or_is_not_known
+
+[break] session-bare-run-runs-no-session
+rule: A process of Cineris with no argument, or one that is not a subcommand that runs no session, runs sessions.
+file: crates/cineris-sandbox/src/session.rs
+in: runs_sessions
+find: .is_none_or(|first| !NO_SESSION.contains(&first.as_str()))
+replace: .is_some_and(|first| !NO_SESSION.contains(&first.as_str()))
+caught-by:
+    cineris-sandbox session::tests::a_process_of_cineris_runs_sessions_unless_it_is_a_subcommand_that_runs_none
+
+[break] session-names-not-told
+rule: On Linux a process of Cineris is told by its names `cineris` and `cin`, beside this binary's own.
+os: linux
+file: crates/cineris-sandbox/src/session.rs
+in: named
+find: name == "cineris" || name == "cin" ||
+replace: false ||
+caught-by:
+    cineris-sandbox session::sys::tests::cineris_is_told_by_its_names
+
+[break] session-windows-job-not-asked
+rule: On Windows a process in the job of sessions' commands is under a session's command.
+os: windows
+file: crates/cineris-sandbox/src/session.rs
+find: if inside == 0 {
+replace: if true {
+packages: cineris-cli
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] session-windows-harness-unmarked
+rule: On Windows a headless run joins the job of sessions' commands before it starts any process.
+os: windows
+file: crates/cineris-cli/src/headless.rs
+find: crate::mark_sessions();
+replace: let _ = 0;
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] ext-add-runs-under-a-session
+rule: `cineris ext add` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/ext.rs
+find: ExtCommand::Add { .. } => crate::not_under_a_session(name, "ext add")?,
+replace: ExtCommand::Add { .. } => {}
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] ext-remove-runs-under-a-session
+rule: `cineris ext remove` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/ext.rs
+find: ExtCommand::Remove { .. } => crate::not_under_a_session(name, "ext remove")?,
+replace: ExtCommand::Remove { .. } => {}
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] ext-disable-runs-under-a-session
+rule: `cineris ext disable` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/ext.rs
+find: ExtCommand::Disable { .. } => crate::not_under_a_session(name, "ext disable")?,
+replace: ExtCommand::Disable { .. } => {}
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] permissions-revoke-runs-under-a-session
+rule: `cineris permissions revoke` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "permissions revoke")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] permissions-trust-runs-under-a-session
+rule: `cineris permissions trust` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "permissions trust")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] permissions-untrust-runs-under-a-session
+rule: `cineris permissions untrust` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "permissions untrust")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] permissions-forget-runs-under-a-session
+rule: `cineris permissions forget` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/commands.rs
+find: crate::not_under_a_session(name, "permissions forget")?;
+replace: let _ = name;
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] setup-runs-under-a-session
+rule: `cineris setup skill-folders` refuses under a session's command, before anything is read.
+file: crates/cineris-cli/src/setup.rs
+find: if let Err(code) = crate::not_under_a_session(name, "setup skill-folders") {
+replace: if let Err(code) = Ok::<(), u8>(()) {
+caught-by:
+    cineris-cli::system commands::sys_an_approving_subcommand_refuses_under_a_sessions_command
+
+[break] hash-given-not-compared
+rule: A `--hash` given that is not the hash of what was shown refuses, at a terminal too.
+file: crates/cineris-cli/src/ext.rs
+in: approved
+find: (Some(given), Some(shown)) if !given.trim().eq_ignore_ascii_case(shown) => {
+replace: (Some(given), Some(shown)) if false && !given.trim().eq_ignore_ascii_case(shown) => {
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_yes_is_the_persons_at_a_terminal_and_the_shown_hash_without_one
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] hash-does-not-approve-without-a-terminal
+rule: With no terminal to ask at, the hash of what was shown approves it.
+file: crates/cineris-cli/src/ext.rs
+in: approved
+find: (Some(_), Some(_)) => Answer::Yes
+replace: (Some(_), Some(_)) => Answer::No
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_yes_is_the_persons_at_a_terminal_and_the_shown_hash_without_one
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] remove-without-a-yes
+rule: `ext remove` unpins and deletes only on its one yes, or the hash shown with no terminal.
+file: crates/cineris-cli/src/ext.rs
+occurrence: 2
+find: if answer != Answer::Yes {
+replace: if false {
+caught-by:
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] disable-of-a-gate-not-asked
+rule: `ext disable` of an extension that holds gates asks first, naming them, and with no terminal needs its pinned version's hash.
+file: crates/cineris-cli/src/ext.rs
+find: if !gates.held.is_empty() || gates.unknown {
+replace: if false {
+caught-by:
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] add-not-evaluated-before-the-question
+rule: `ext add` evaluates the extension before its question, and shows what it registers.
+file: crates/cineris-cli/src/ext.rs
+find: .block_on(core.evaluate_extension(&mut to_add))
+replace: .block_on(async { Ok::<(), OpError>(()) })
+caught-by:
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] tilde-not-expanded
+rule: A leading `~` of `ext add`'s path is the home directory.
+file: crates/cineris-cli/src/ext.rs
+in: expanded
+find: rest.is_empty() || rest.starts_with('/')
+replace: false
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_leading_tilde_is_the_home_directory
+
+[break] trust-named-hash-not-compared
+rule: `permissions trust` refuses an extension or hook named with a hash that is not the one shown.
+file: crates/cineris-cli/src/commands.rs
+in: named_not_shown
+find: Some((_, shown)) if !hash.trim().eq_ignore_ascii_case(shown) => Some(format!(
+replace: Some((_, shown)) if false && !hash.trim().eq_ignore_ascii_case(shown) => Some(format!(
+caught-by:
+    cineris-cli::bin/cineris commands::tests::a_projects_extensions_are_named_by_the_hashes_shown
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+
+[break] trust-approves-what-is-not-named
+rule: With no terminal, `permissions trust` approves only the extensions and hooks named with their hashes.
+file: crates/cineris-cli/src/commands.rs
+find: .filter(|one| is_named(&named_extensions, &one.name))
+replace: .filter(|_| true)
+caught-by:
+    cineris-cli::system commands::sys_permissions_trust_approves_a_projects_extensions_only_with_the_flag_where_none_can_ask
+
+[break] gates-not-told
+rule: An extension's hooks on a gating event are the gates turning it off lets go.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_gates
+find: .is_some_and(cineris_ext::event::Event::gates)
+replace: .is_some_and(|_| false)
+packages: cineris-cli
+caught-by:
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] add-tools-not-shown
+rule: What `ext add` shows names each tool and its description, evaluated before the question.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::evaluate_extension
+find: to_add.tools = registration
+replace: to_add.tools = Vec::new(); let _: Vec<(String, String)> = registration
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::ext_add_shows_what_it_registers_and_its_prompt_before_the_question
+    cineris-cli::system commands::sys_ext_add_disable_and_remove_act_only_on_the_hash_shown
+
+[break] add-prompt-not-shown
+rule: What `ext add` shows holds the whole text the extension adds to the system prompt.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::extension_to_add
+find: .map(|bytes| quoted_shown(&String::from_utf8_lossy(bytes)));
+replace: .map(|_| String::new());
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::ext_add_shows_what_it_registers_and_its_prompt_before_the_question
+
+[break] add-place-not-looked-at-again
+rule: At the yes, the place an extension is written to is looked at again, and anything changed there since is put back as shown.
+file: crates/cineris-core/src/ext/manage.rs
+in: Core::add_extension
+find: let written = !holds_it;
+replace: let written = !holds_it && !to_add.unchanged;
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::the_place_is_looked_at_again_at_the_yes_and_leftovers_are_cleared
+
+[break] leftovers-not-cleared
+rule: A write of an extension's folder removes what an earlier write left beside it.
+file: crates/cineris-core/src/ext/manage.rs
+in: write_folder
+find:     clear_leftovers(target);
+replace:     let _ = target;
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::the_place_is_looked_at_again_at_the_yes_and_leftovers_are_cleared
+
+[break] set-aside-fails-the-write
+rule: Once the new folder is in place the write is done: what was set aside and cannot be removed is said, not an error.
+os: linux
+file: crates/cineris-core/src/ext/manage.rs
+in: write_folder
+find: return Ok(Some((aside, error)));
+replace: return Err(error);
+packages: cineris-cli
+caught-by:
+    cineris-cli::bin/cineris ext::tests::a_folder_set_aside_that_cannot_be_removed_does_not_fail_the_write
+
+[break] users-extension-said-confined-everywhere
+rule: A user's extension, loaded in every workspace, is said confined only where the sandbox is on.
+file: crates/cineris-core/src/ext/found.rs
+in: in_words_where
+find: if !everywhere {
+replace: if false {
+caught-by:
+    cineris-core ext::found::tests::a_users_extension_is_said_confined_only_where_the_sandbox_is_on
+
+[break] sandbox-off-notice-says-no-more
+rule: The opening notice of a session whose commands are not confined says what else runs with the user's rights.
+file: crates/cineris-core/src/assemble.rs
+find: message: format!("{message} {SANDBOX_OFF_TOO}")
+replace: message
+caught-by:
+    cineris-core::it start::a_session_is_refused_at_a_level_that_cannot_be_held_and_told_when_there_is_no_sandbox

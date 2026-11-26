@@ -239,6 +239,25 @@ mod sys {
             });
         Seen::Of { parent, harness }
     }
+
+    #[cfg(test)]
+    mod tests {
+        /// A process of Cineris is told by its own two names and this
+        /// binary's, as the kernel cuts a name; any other name is not.
+        #[test]
+        fn cineris_is_told_by_its_names() {
+            assert!(super::named("cineris") && super::named("cin"));
+            for other in ["bash", "cineris-x", "Cineris", "ci", ""] {
+                assert!(!super::named(other), "{other}");
+            }
+            let own = std::env::current_exe().unwrap();
+            let own = own.file_name().unwrap().to_string_lossy();
+            let cut: String = own.bytes().take(15).map(char::from).collect();
+            assert!(super::named(&cut), "{cut}");
+            assert!(super::same_binary(std::process::id()));
+            assert!(!super::same_binary(1));
+        }
+    }
 }
 
 #[cfg(windows)]

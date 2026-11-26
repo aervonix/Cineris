@@ -500,10 +500,14 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
     let binary = std::path::Path::new(crate::CINERIS);
     let said = machine.workspace.join("said.txt");
     // Each subcommand, one after another, its standard error kept.
-    let subcommands: [&[&str]; 4] = [
+    let subcommands: [&[&str]; 8] = [
         &["ext", "add", &folder.to_string_lossy(), "--hash", "00"],
         &["ext", "remove", "tracker", "--hash", "00"],
+        &["ext", "disable", "tracker"],
         &["permissions", "trust"],
+        &["permissions", "untrust"],
+        &["permissions", "revoke", "a_1"],
+        &["permissions", "forget"],
         &["setup", "skill-folders", "on"],
     ];
     let (script, line) = if cfg!(windows) {
@@ -556,7 +560,11 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
     for what in [
         "`cineris ext add` was refused",
         "`cineris ext remove` was refused",
+        "`cineris ext disable` was refused",
         "`cineris permissions trust` was refused",
+        "`cineris permissions untrust` was refused",
+        "`cineris permissions revoke` was refused",
+        "`cineris permissions forget` was refused",
         "`cineris setup skill-folders` was refused",
     ] {
         assert!(said.contains(what), "{what}: {said}\n{}", shown(&run));
@@ -581,4 +589,113 @@ fn sys_an_approving_subcommand_refuses_under_a_sessions_command() {
         "{}",
         shown(&own)
     );
+}
+
+/// With no terminal to ask at, `ext add`, `remove` and `disable` act only
+/// on the hash of what they show (the owner's answer to the early review
+/// of step 28's third pull request): `add` shows what the script
+/// registers, evaluated before its question, and approves only with the
+/// snapshot's hash; `disable` of one that holds a gate asks first, and
+/// turns it off only with its pinned version's hash; `remove` unpins and
+/// deletes on that hash, and does neither without it.
+#[test]
+fn sys_ext_add_disable_and_remove_act_only_on_the_hash_shown() {
+    let machine = Machine::new("sys_ext_by_hash");
+    let folder = machine.home.join("src").join("guard");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("extension.toml"),
+        "api = 1\nname = \"guard\"\nversion = \"1\"\ndescription = \"Guards.\"\nmain = \
+         \"main.js\"\n[capabilities]\nhooks = [\"tool.before\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        folder.join("main.js"),
+        "cineris.tool({ name: 'look', description: 'Looks around.', input: { type: 'object' }, \
+         async run() { return {}; } });\n\
+         cineris.on('tool.before', { tools: ['shell'] }, async () => ({ decision: 'allow' }));\n",
+    )
+    .unwrap();
+    let path = folder.to_string_lossy().into_owned();
+    let pins = machine.dirs().state.unwrap().join("pins.toml");
+    let pinned = || std::fs::read_to_string(&pins).unwrap_or_default();
+    let kept = machine
+        .dirs()
+        .config
+        .unwrap()
+        .join("extensions")
+        .join("guard");
+    let hash_of = |text: &str, before: &str| -> String {
+        let at = text
+            .find(before)
+            .unwrap_or_else(|| panic!("{before}: {text}"));
+        text[at + before.len()..]
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .collect()
+    };
+
+    // Shown, evaluated, and not approved without the hash.
+    let plain = machine.run(&["ext", "add", &path]);
+    plain.expect_code(2);
+    assert!(
+        plain.stdout.contains("Its tools:") && plain.stdout.contains("\"Looks around.\""),
+        "{}",
+        shown(&plain)
+    );
+    let hash = hash_of(&plain.stdout, "(its hash is ");
+    assert!(
+        plain.stderr.contains(&format!("`--hash {hash}`")),
+        "{}",
+        shown(&plain)
+    );
+    assert!(
+        !kept.exists() && !pinned().contains("guard"),
+        "{}",
+        pinned()
+    );
+    let added = machine.run(&["ext", "add", &path, "--hash", &hash]);
+    added.expect_code(0);
+    assert!(
+        kept.exists() && pinned().contains("guard"),
+        "{}",
+        shown(&added)
+    );
+
+    // Its gate is named, and it is not turned off without the hash.
+    let config = machine.dirs().user_config.unwrap();
+    let before = std::fs::read_to_string(&config).unwrap_or_default();
+    let asked = machine.run(&["ext", "disable", "guard"]);
+    asked.expect_code(2);
+    assert!(
+        asked.stdout.contains("holds gates") && asked.stdout.contains("tool.before on shell"),
+        "{}",
+        shown(&asked)
+    );
+    assert_eq!(std::fs::read_to_string(&config).unwrap_or_default(), before);
+    let wrong = machine.run(&["ext", "disable", "guard", "--hash", "00"]);
+    wrong.expect_code(2);
+    assert_eq!(std::fs::read_to_string(&config).unwrap_or_default(), before);
+    let off = machine.run(&["ext", "disable", "guard", "--hash", &hash]);
+    off.expect_code(0);
+    assert!(
+        std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("enabled = false"),
+        "{}",
+        shown(&off)
+    );
+
+    // Not removed at all without the hash; unpinned and deleted with it.
+    let kept_pin = machine.run(&["ext", "remove", "guard"]);
+    kept_pin.expect_code(2);
+    assert!(
+        kept.exists() && pinned().contains("guard"),
+        "{}",
+        shown(&kept_pin)
+    );
+    let removed = machine.run(&["ext", "remove", "guard", "--hash", &hash]);
+    removed.expect_code(0);
+    assert!(!kept.exists(), "{}", shown(&removed));
+    assert!(!pinned().contains("guard"), "{}", pinned());
 }
