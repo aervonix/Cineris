@@ -128,3 +128,56 @@ in-string: has no script engine
 replace: has a script engine
 caught-by:
     cineris-cli::bin/cineris ext::tests::ext_add_without_the_script_engine_says_the_build_has_none
+
+# A build without the script engine runs the configuration's hook commands
+# through the same seam as the build with it, and holds the gating hooks of
+# each extension that stands approved, since nothing of it runs. The
+# decision is built in every build, and its tests run in the ordinary one
+# (`ext::without_engine`); only a build without the engine puts it in a
+# session.
+
+[break] an-approved-extensions-gate-lapses-without-the-engine
+rule: In a build without the script engine, an extension that stands approved holds its gating hooks on their events, failing: its gates do not lapse because the build cannot run it.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: holding
+find: holding.held.push(Held {
+replace: drop(Held {
+caught-by:
+    cineris-core ext::without_engine::tests::an_approved_extensions_gates_hold_without_the_script_engine
+    cineris-core ext::without_engine::tests::an_unread_store_holds_the_users_gates_and_no_projects
+
+[break] a-changed-extension-gates-by-its-manifest-as-found-without-the-engine
+rule: In a build without the script engine, an extension changed since it was approved, whose approved registration is known nowhere, holds both gates: its manifest as found is the change's.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: gates
+find: None => on_every_call(&one.name, &[Event::PromptSubmit, Event::ToolBefore])
+replace: None => on_every_call(&one.name, &manifest_events())
+caught-by:
+    cineris-core ext::without_engine::tests::an_approved_extensions_gates_hold_without_the_script_engine
+
+[break] an-observer-is-held-as-a-gate-without-the-engine
+rule: In a build without the script engine, an approved extension's observers are no gates, and are not held.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: registered
+find: event.gates() && !definition.observe
+replace: event.gates()
+caught-by:
+    cineris-core ext::without_engine::tests::an_approved_extensions_gates_hold_without_the_script_engine
+
+[break] a-projects-unjudged-extension-gates-without-the-engine
+rule: In a build without the script engine, a project's extension whose trust store cannot be read holds nothing: no repository gates a session by itself.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: gates
+find: ExtensionStanding::Unjudged(_) if one.source == Source::Project => None,
+replace: ExtensionStanding::Unjudged(_) if false => None,
+caught-by:
+    cineris-core ext::without_engine::tests::an_unread_store_holds_the_users_gates_and_no_projects
+
+[break] status-says-ready-without-the-engine
+rule: `extensions/status` in a build without the script engine says an extension approved as it is found is not loaded, and why, never `ready`.
+file: crates/cineris-core/src/ext/without_engine.rs
+in: not_loaded
+find: matches!(standing, ExtensionStanding::Approved)
+replace: matches!(standing, ExtensionStanding::TurnedOff)
+caught-by:
+    cineris-core ext::without_engine::tests::status_says_an_approved_extension_is_not_loaded_without_the_engine

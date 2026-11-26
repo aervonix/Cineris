@@ -41,7 +41,38 @@ use cineris_tools::{
 };
 use serde_json::json;
 
-use super::tools::HostParts;
+/// What every call of a session's extensions, and every start of its hook
+/// commands, is served with.
+pub(crate) struct HostParts {
+    pub(crate) policy: std::sync::Arc<crate::policy::EnginePolicy>,
+    pub(crate) timer: cineris_base::SharedTimer,
+    /// The session's clock, which the timer moves.
+    pub(crate) clock: cineris_base::SharedClock,
+    pub(crate) workspace: cineris_base::path::AbsPath,
+    pub(crate) write: std::sync::Arc<dyn cineris_tools::Tool>,
+    pub(crate) list: std::sync::Arc<dyn cineris_tools::Tool>,
+    pub(crate) search: std::sync::Arc<dyn cineris_tools::Tool>,
+    pub(crate) exec: super::exec::ExecParts,
+    /// What `cineris.http.fetch` makes its requests with.
+    pub(crate) fetcher: cineris_llm::Fetcher,
+    /// Tells the session's front ends something: what `cineris.notify`
+    /// says.
+    pub(crate) tell: std::sync::Arc<dyn Fn(String) + Send + Sync>,
+    /// What the session's extensions keep: `cineris.state`.
+    pub(crate) state: std::sync::Arc<super::ExtState>,
+    /// The project is trusted for the run by the command line
+    /// (`--trust-project`): the way out of a project's extension's gate
+    /// names no trust question, which is not shown then.
+    pub(crate) trust_project: bool,
+}
+
+impl std::fmt::Debug for HostParts {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HostParts")
+            .field("workspace", &self.workspace)
+            .finish_non_exhaustive()
+    }
+}
 
 /// The host for one call of an extension: its tool's call in a round.
 pub(crate) struct CallHost<'a> {

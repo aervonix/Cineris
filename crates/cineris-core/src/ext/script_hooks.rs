@@ -52,7 +52,6 @@
 //!   turn's look, a thread of it left running) fails its hooks' runs the
 //!   same way, with what approves or turns it off.
 
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -73,6 +72,7 @@ use super::hook_command::{
     HookCommands, TURN_END_AT_ONCE, session_input, session_notice, turn_number,
 };
 use super::hook_points::loop_event;
+use super::hooks::named;
 use super::tools::{HookRan, LoadedExtension};
 
 /// The hooks of a session's loaded extensions.
@@ -350,34 +350,6 @@ pub(crate) fn way_out(
             "repair or remove `{file}`, then trust the project again (`cineris permissions trust`)"
         ),
     }
-}
-
-/// Each hook of `definitions` on an event `allowed` lists (`None`: any), with
-/// its place among them and its name: the extension's, `hook.` and the
-/// event, and a number from the second on one event on.
-fn named<'a>(
-    extension: &str,
-    definitions: &'a [cineris_ext::registration::HookDef],
-    allowed: Option<&[Event]>,
-) -> Vec<(usize, String, Event, &'a cineris_ext::registration::HookDef)> {
-    let mut counts: HashMap<Event, usize> = HashMap::new();
-    let mut each = Vec::new();
-    for (index, definition) in definitions.iter().enumerate() {
-        let Some(event) = Event::parse(&definition.event)
-            .filter(|event| allowed.is_none_or(|allowed| allowed.contains(event)))
-        else {
-            continue;
-        };
-        let count = counts.entry(event).or_insert(0);
-        *count += 1;
-        let name = if *count == 1 {
-            format!("{extension}/hook.{}", event.as_str())
-        } else {
-            format!("{extension}/hook.{}.{count}", event.as_str())
-        };
-        each.push((index, name, event, definition));
-    }
-    each
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

@@ -94,6 +94,8 @@ use cineris_protocol::methods::{TrustResource, TrustResourceKind};
 
 use super::watched::Watched;
 
+#[cfg(not(feature = "scripts"))]
+pub(crate) use super::without_engine::SessionView;
 #[cfg(feature = "scripts")]
 pub(crate) use pipeline::{Finding, SessionView, start};
 
@@ -218,10 +220,15 @@ pub(crate) struct Extensions {
     ready: Ready,
     #[cfg(feature = "scripts")]
     held: pipeline::Shared,
+    /// Without the script engine, what the session's extensions were judged
+    /// from as it opened.
+    #[cfg(not(feature = "scripts"))]
+    view: Option<SessionView>,
 }
 
 impl Extensions {
     /// A session with nothing to find.
+    #[cfg(feature = "scripts")]
     pub(crate) fn none() -> Arc<Self> {
         let extensions = Self::default();
         extensions.ready.settle();
@@ -286,6 +293,13 @@ impl Extensions {
         self.held.view().await
     }
 
+    /// What the session's extensions were judged from as it opened: `None`
+    /// with nothing to look in.
+    #[cfg(not(feature = "scripts"))]
+    pub(crate) async fn view(&self) -> Option<SessionView> {
+        self.view.clone()
+    }
+
     /// The session has ended: work still under way for it ends too.
     pub(crate) fn stop(&self) {
         #[cfg(feature = "scripts")]
@@ -298,15 +312,21 @@ impl Extensions {
 #[cfg(feature = "scripts")]
 pub(crate) type Pending = Option<Finding>;
 
-/// Without the script engine, no extension's tool is registered, and there
-/// is nothing to find.
+/// Without the script engine no extension is loaded, and there is nothing
+/// to find: what the session's extensions were judged from as it opened is
+/// kept, for `extensions/status`.
 #[cfg(not(feature = "scripts"))]
-pub(crate) type Pending = ();
+pub(crate) type Pending = Option<SessionView>;
 
 /// Without the script engine there is nothing to find.
 #[cfg(not(feature = "scripts"))]
-pub(crate) fn start(_pending: Pending) -> Arc<Extensions> {
-    Extensions::none()
+pub(crate) fn start(pending: Pending) -> Arc<Extensions> {
+    let extensions = Extensions {
+        view: pending,
+        ..Extensions::default()
+    };
+    extensions.ready.settle();
+    Arc::new(extensions)
 }
 
 /// An extension as the trust question found it, handed to the session

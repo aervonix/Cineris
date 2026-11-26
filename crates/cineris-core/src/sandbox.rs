@@ -588,7 +588,6 @@ impl SessionSandbox {
     /// its manifest's directories. `None` where the sandbox does not
     /// enforce, where a program is started as it is. Blocks: each root is
     /// found where it really is.
-    #[cfg(feature = "scripts")]
     pub(crate) fn extension_launcher(
         &self,
         write_roots: &[PathBuf],

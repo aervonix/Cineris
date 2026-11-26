@@ -322,7 +322,6 @@ pub(crate) struct Assembled {
     /// The session's extensions, to find once its loop runs (step 28).
     pub(crate) extensions: crate::ext::found::Pending,
     /// The session's hook commands (step 28).
-    #[cfg(feature = "scripts")]
     pub(crate) command_hooks: Arc<crate::ext::SessionHooks>,
 }
 
@@ -2954,7 +2953,6 @@ pub(crate) fn assemble(
     // values in the log, given to it once the log is made below, and their
     // `project` values in the state directory. Nothing is read until an
     // extension asks.
-    #[cfg(feature = "scripts")]
     let ext_state = Arc::new(crate::ext::ExtState::new(
         state_dir
             .as_ref()
@@ -2966,8 +2964,8 @@ pub(crate) fn assemble(
     // `tool_call`: registered from what each registered when it was
     // approved, with no engine started (step 28). Those a caller hands in
     // (`CoreOptions::extensions`, a test's) here; those the session finds,
-    // by a task of their own once its loop runs (`ext::found`).
-    #[cfg(feature = "scripts")]
+    // by a task of their own once its loop runs (`ext::found`). Without the
+    // script engine only the hook commands are served with them.
     let ext_parts = {
         let tell_hooks = Arc::clone(&hooks);
         Arc::new(crate::ext::HostParts {
@@ -3025,7 +3023,6 @@ pub(crate) fn assemble(
     };
     // What runs the session's hooks: its hook commands, and the hooks of the
     // extensions it loads, which are put on their events as each is.
-    #[cfg(feature = "scripts")]
     let hook_commands = Arc::new(crate::ext::HookCommands::new(
         Arc::clone(&ext_parts),
         Arc::clone(&content),
@@ -3049,11 +3046,37 @@ pub(crate) fn assemble(
     ) {
         told.push(left_out);
     }
+    // A project's folder of extensions is looked in only while the project
+    // is trusted.
+    let projects_looked_in = matches!(
+        standing,
+        TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
+    );
+    // What a build without the script engine judges the session's
+    // extensions from, as the finding would look: the user's folder, and the
+    // project's while it is trusted.
+    #[cfg(not(feature = "scripts"))]
+    let without_engine = crate::ext::without_engine::SessionView {
+        resolver: Arc::clone(&resolver),
+        config_dir: load.dirs.config.clone(),
+        state: state_dir.clone(),
+        project: projects_looked_in.then(|| project.clone()),
+        for_the_run: for_the_run
+            .as_ref()
+            .map(|run| run.extensions.clone())
+            .unwrap_or_default(),
+        disabled: settings
+            .extensions
+            .iter()
+            .filter(|(_, extension)| !extension.enabled)
+            .map(|(name, _)| name.clone())
+            .collect(),
+    };
     // The session's hook commands (step 28): the user's own, and the
     // project's that are approved as they are now, while it is trusted.
     // The store's reading the trust was worked out from decides a
     // project's; where none was kept (`--trust-project`), it is read now.
-    #[cfg(feature = "scripts")]
+    // They run with the script engine or without it: they are processes.
     let command_hooks = {
         let trusted = matches!(
             standing,
@@ -3084,17 +3107,39 @@ pub(crate) fn assemble(
                 .unwrap_or_default(),
         );
         told.extend(in_session.told);
+        // Without the script engine no extension is loaded, and each that
+        // stands approved holds its gating hooks, failing: its gates do not
+        // lapse because this build cannot run it.
+        #[cfg(not(feature = "scripts"))]
+        let holding = {
+            let (holding, _) = crate::ext::manage::judge(
+                &crate::ext::manage::JudgedFrom {
+                    resolver: &without_engine.resolver,
+                    config: without_engine.config_dir.as_deref(),
+                    state: without_engine.state.as_ref(),
+                    project: without_engine.project.as_ref(),
+                    for_the_run: &without_engine.for_the_run,
+                    disabled: &without_engine.disabled,
+                    clock: &clock,
+                    home: env.home().as_deref(),
+                },
+                crate::ext::without_engine::holding,
+            );
+            told.extend(holding.told);
+            holding.held
+        };
         Arc::new(crate::ext::SessionHooks {
             hooks: in_session.hooks,
             refused: in_session.refused,
             commands: Arc::clone(&hook_commands),
             paths: Arc::clone(&resolver),
             starting: tokio::sync::Mutex::new(None),
+            #[cfg(feature = "scripts")]
             scripts: Arc::clone(&script_hooks),
+            #[cfg(not(feature = "scripts"))]
+            held: holding,
         })
     };
-    #[cfg(not(feature = "scripts"))]
-    drop(stored);
     // Sections 6 and 7 of the system prompt: what the session's skills and
     // extensions give it, settled by the same finding, which the first
     // turn waits for, and answered from memory when the loop asks.
@@ -3106,13 +3151,7 @@ pub(crate) fn assemble(
         config_dir: load.dirs.config.clone(),
         home: env.home(),
         state: state_dir.clone(),
-        // A project's folder of extensions is looked in only while the
-        // project is trusted.
-        project: matches!(
-            standing,
-            TrustStanding::Trusted | TrustStanding::RulesChanged | TrustStanding::ForTheRun
-        )
-        .then(|| project.clone()),
+        project: projects_looked_in.then(|| project.clone()),
         project_found,
         for_the_run: for_the_run
             .as_ref()
@@ -3141,11 +3180,12 @@ pub(crate) fn assemble(
         session_start: None,
         cancel: options.cancel.child(),
     });
-    // Without the script engine there is nothing to load.
+    // Without the script engine there is nothing to load: what the
+    // extensions were judged from is kept, for `extensions/status`.
     #[cfg(not(feature = "scripts"))]
     drop(project_found);
     #[cfg(not(feature = "scripts"))]
-    let extensions = ();
+    let extensions = Some(without_engine);
     let mut toolbox = Toolbox::read_only(Arc::clone(&registry))
         .with(WriteTool::new(editing.clone()))
         .with(EditTool::new(editing))
@@ -3247,7 +3287,6 @@ pub(crate) fn assemble(
         }
     }
     let log: SharedLog = Arc::new(std::sync::Mutex::new(kept));
-    #[cfg(feature = "scripts")]
     ext_state.attach(Arc::clone(&log));
 
     // ------------------------------------------------ the repository index
@@ -3446,13 +3485,10 @@ pub(crate) fn assemble(
         cancel,
         observer: None,
         // The session's hooks, as the loop's points reach them (step 28).
-        #[cfg(feature = "scripts")]
         hooks: Some(cineris_agent::LoopHooks::new(
             Arc::new(crate::ext::PointHooks::of(&command_hooks)),
             Arc::clone(&options.timer),
         )),
-        #[cfg(not(feature = "scripts"))]
-        hooks: None,
     };
 
     let mut notices: Vec<Event> = Vec::new();
@@ -3503,7 +3539,6 @@ pub(crate) fn assemble(
         shell_live,
         repository,
         extensions,
-        #[cfg(feature = "scripts")]
         command_hooks,
     })
 }

@@ -3,8 +3,6 @@
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
-use cineris_base::path::AbsPath;
-use cineris_base::{SharedClock, SharedTimer};
 use cineris_ext::capability::Capabilities;
 use cineris_ext::engine::{CallContext, CallError, ScriptRuntime, Source, Target};
 use cineris_ext::host::Phase;
@@ -16,9 +14,7 @@ use cineris_tools::{
 };
 
 use super::ApprovedExtension;
-use super::exec::ExecParts;
-use super::host;
-use crate::policy::EnginePolicy;
+use super::host::{self, HostParts};
 
 /// Why an extension's runtime could not start.
 #[derive(Debug)]
@@ -51,38 +47,6 @@ impl Refused {
             why,
             stand: Refusal::Plain,
         }
-    }
-}
-
-/// What every call of a session's extensions is served with.
-pub(crate) struct HostParts {
-    pub(crate) policy: Arc<EnginePolicy>,
-    pub(crate) timer: SharedTimer,
-    /// The session's clock, which the timer moves.
-    pub(crate) clock: SharedClock,
-    pub(crate) workspace: AbsPath,
-    pub(crate) write: Arc<dyn Tool>,
-    pub(crate) list: Arc<dyn Tool>,
-    pub(crate) search: Arc<dyn Tool>,
-    pub(crate) exec: ExecParts,
-    /// What `cineris.http.fetch` makes its requests with.
-    pub(crate) fetcher: cineris_llm::Fetcher,
-    /// Tells the session's front ends something: what `cineris.notify`
-    /// says.
-    pub(crate) tell: Arc<dyn Fn(String) + Send + Sync>,
-    /// What the session's extensions keep: `cineris.state`.
-    pub(crate) state: Arc<super::ExtState>,
-    /// The project is trusted for the run by the command line
-    /// (`--trust-project`): the way out of a project's extension's gate
-    /// names no trust question, which is not shown then.
-    pub(crate) trust_project: bool,
-}
-
-impl std::fmt::Debug for HostParts {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HostParts")
-            .field("workspace", &self.workspace)
-            .finish_non_exhaustive()
     }
 }
 
